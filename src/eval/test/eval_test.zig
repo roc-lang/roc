@@ -250,27 +250,27 @@ test "error test - divide by zero" {
 }
 
 test "simple lambda with if-else" {
-    try runExpectI64("(|x| if x > 0 x else 0)(5)", 5, .no_trace);
-    try runExpectI64("(|x| if x > 0 x else 0)(-3)", 0, .no_trace);
+    try runExpectI64("(|x| if x > 0.I64 x else 0.I64)(5.I64)", 5, .no_trace);
+    try runExpectI64("(|x| if x > 0.I64 x else 0.I64)(-3.I64)", 0, .no_trace);
 }
 
 test "crash in else branch inside lambda" {
     // Test crash in else branch evaluated at runtime
     try runExpectError(
-        \\(|x| if x > 0 x else {
+        \\(|x| if x > 0.I64 x else {
         \\    crash "crash in else!"
-        \\    0
-        \\})(-5)
+        \\    0.I64
+        \\})(-5.I64)
     , error.Crash, .no_trace);
 }
 
 test "crash NOT taken when condition true" {
     // Test that crash in else branch is NOT executed when if branch is taken
     try runExpectI64(
-        \\(|x| if x > 0 x else {
+        \\(|x| if x > 0.I64 x else {
         \\    crash "this should not execute"
-        \\    0
-        \\})(10)
+        \\    0.I64
+        \\})(10.I64)
     , 10, .no_trace);
 }
 
@@ -332,63 +332,62 @@ test "tuples" {
 }
 
 test "simple lambdas" {
-    try runExpectI64("(|x| x + 1)(5)", 6, .no_trace);
-    try runExpectI64("(|x| x * 2 + 1)(10)", 21, .no_trace);
-    try runExpectI64("(|x| x - 3)(8)", 5, .no_trace);
-    try runExpectI64("(|x| 100 - x)(25)", 75, .no_trace);
-    try runExpectI64("(|x| 5)(99)", 5, .no_trace);
-    try runExpectI64("(|x| x + x)(7)", 14, .no_trace);
+    try runExpectI64("(|x| x + 1.I64)(5.I64)", 6, .no_trace);
+    try runExpectI64("(|x| x * 2.I64 + 1.I64)(10.I64)", 21, .no_trace);
+    try runExpectI64("(|x| x - 3.I64)(8.I64)", 5, .no_trace);
+    try runExpectI64("(|x| 100.I64 - x)(25.I64)", 75, .no_trace);
+    try runExpectI64("(|x| 5.I64)(99.I64)", 5, .no_trace);
+    try runExpectI64("(|x| x + x)(7.I64)", 14, .no_trace);
 }
 
 test "multi-parameter lambdas" {
-    try runExpectI64("(|x, y| x + y)(3, 4)", 7, .no_trace);
-    // Using smaller numbers to avoid Dec overflow in multiplication
-    try runExpectI64("(|x, y| x * y)(5, 6)", 30, .no_trace);
-    try runExpectI64("(|a, b, c| a + b + c)(1, 2, 3)", 6, .no_trace);
+    try runExpectI64("(|x, y| x + y)(3.I64, 4.I64)", 7, .no_trace);
+    try runExpectI64("(|x, y| x * y)(5.I64, 6.I64)", 30, .no_trace);
+    try runExpectI64("(|a, b, c| a + b + c)(1.I64, 2.I64, 3.I64)", 6, .no_trace);
 }
 
 test "lambdas with if-then bodies" {
-    try runExpectI64("(|x| if x > 0 x else 0)(5)", 5, .no_trace);
-    try runExpectI64("(|x| if x > 0 x else 0)(-3)", 0, .no_trace);
-    try runExpectI64("(|x| if x == 0 1 else x)(0)", 1, .no_trace);
-    try runExpectI64("(|x| if x == 0 1 else x)(42)", 42, .no_trace);
+    try runExpectI64("(|x| if x > 0.I64 x else 0.I64)(5.I64)", 5, .no_trace);
+    try runExpectI64("(|x| if x > 0.I64 x else 0.I64)(-3.I64)", 0, .no_trace);
+    try runExpectI64("(|x| if x == 0.I64 1.I64 else x)(0.I64)", 1, .no_trace);
+    try runExpectI64("(|x| if x == 0.I64 1.I64 else x)(42.I64)", 42, .no_trace);
 }
 
 test "lambdas with unary minus" {
-    try runExpectI64("(|x| -x)(5)", -5, .no_trace);
-    try runExpectI64("(|x| -x)(0)", 0, .no_trace);
-    try runExpectI64("(|x| -x)(-3)", 3, .no_trace);
-    try runExpectI64("(|x| -5)(999)", -5, .no_trace);
-    try runExpectI64("(|x| if True -x else 0)(5)", -5, .no_trace);
-    try runExpectI64("(|x| if True -10 else x)(999)", -10, .no_trace);
+    try runExpectI64("(|x| -x)(5.I64)", -5, .no_trace);
+    try runExpectI64("(|x| -x)(0.I64)", 0, .no_trace);
+    try runExpectI64("(|x| -x)(-3.I64)", 3, .no_trace);
+    try runExpectI64("(|x| -5.I64)(999.I64)", -5, .no_trace);
+    try runExpectI64("(|x| if True -x else 0.I64)(5.I64)", -5, .no_trace);
+    try runExpectI64("(|x| if True -10.I64 else x)(999.I64)", -10, .no_trace);
 }
 
 test "lambdas closures" {
     // Curried functions - lambdas returning lambdas
-    try runExpectI64("(|a| |b| a * b)(5)(10)", 50, .no_trace);
+    try runExpectI64("(|a| |b| a * b)(5.I64)(10.I64)", 50, .no_trace);
     // Triple curried
-    try runExpectI64("(((|a| |b| |c| a + b + c)(100))(20))(3)", 123, .no_trace);
+    try runExpectI64("(((|a| |b| |c| a + b + c)(100.I64))(20.I64))(3.I64)", 123, .no_trace);
     // Multi-param lambda returning lambda
-    try runExpectI64("(|a, b, c| |d| a + b + c + d)(10, 20, 5)(7)", 42, .no_trace);
+    try runExpectI64("(|a, b, c| |d| a + b + c + d)(10.I64, 20.I64, 5.I64)(7.I64)", 42, .no_trace);
     // Nested lambda calls with captures
-    try runExpectI64("(|y| (|x| (|z| x + y + z)(3))(2))(1)", 6, .no_trace);
+    try runExpectI64("(|y| (|x| (|z| x + y + z)(3.I64))(2.I64))(1.I64)", 6, .no_trace);
 }
 
 test "lambdas with capture" {
     try runExpectI64(
         \\{
-        \\    x = 10
+        \\    x = 10.I64
         \\    f = |y| x + y
-        \\    f(5)
+        \\    f(5.I64)
         \\}
     , 15, .no_trace);
 
     try runExpectI64(
         \\{
-        \\    x = 20
-        \\    y = 30
+        \\    x = 20.I64
+        \\    y = 30.I64
         \\    f = |z| x + y + z
-        \\    f(10)
+        \\    f(10.I64)
         \\}
     , 60, .no_trace);
 }
@@ -397,12 +396,12 @@ test "lambdas nested closures" {
     // Nested closures with block locals
     try runExpectI64(
         \\(((|a| {
-        \\    a_loc = a * 2
+        \\    a_loc = a * 2.I64
         \\    |b| {
         \\        b_loc = a_loc + b
         \\        |c| b_loc + c
         \\    }
-        \\})(100))(20))(3)
+        \\})(100.I64))(20.I64))(3.I64)
     , 223, .no_trace);
 }
 

@@ -118,6 +118,11 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         /// Used to find call targets during second pass
         proc_registry: std.AutoHashMap(u48, CompiledProc),
 
+        /// Registry of compiled lambdas by expression ID.
+        /// Used when a lambda is called - we compile it once and reuse.
+        /// Key is @intFromEnum(MonoExprId), value is code start offset.
+        compiled_lambdas: std.AutoHashMap(u32, usize),
+
         /// Pending calls that need to be patched after all procedures are compiled
         pending_calls: std.ArrayList(PendingCall),
 
@@ -246,6 +251,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 .current_recursive_join_point = null,
                 .current_binding_symbol = null,
                 .proc_registry = std.AutoHashMap(u48, CompiledProc).init(allocator),
+                .compiled_lambdas = std.AutoHashMap(u32, usize).init(allocator),
                 .pending_calls = std.ArrayList(PendingCall).empty,
                 .join_point_jumps = std.AutoHashMap(u32, std.ArrayList(JumpRecord)).init(allocator),
                 .join_point_param_layouts = std.AutoHashMap(u32, LayoutIdxSpan).init(allocator),
@@ -261,6 +267,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             self.lambda_bindings.deinit();
             self.join_points.deinit();
             self.proc_registry.deinit();
+            self.compiled_lambdas.deinit();
             self.pending_calls.deinit(self.allocator);
             // Clean up the nested ArrayLists in join_point_jumps
             var it = self.join_point_jumps.valueIterator();
@@ -283,6 +290,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             self.current_recursive_join_point = null;
             self.current_binding_symbol = null;
             self.proc_registry.clearRetainingCapacity();
+            self.compiled_lambdas.clearRetainingCapacity();
             self.pending_calls.clearRetainingCapacity();
             // Clear nested ArrayLists
             var it = self.join_point_jumps.valueIterator();
@@ -536,12 +544,6 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     if (args.len < 1) return Error.UnsupportedExpression;
                     const list_loc = try self.generateExpr(args[0]);
 
-                    std.debug.print("list_len: list_loc={s}\n", .{@tagName(list_loc)});
-                    if (list_loc == .list_stack) {
-                        std.debug.print("  list_stack.struct_offset={}\n", .{list_loc.list_stack.struct_offset});
-                    } else if (list_loc == .stack) {
-                        std.debug.print("  stack offset={}\n", .{list_loc.stack});
-                    }
 
                     // Get base offset from either stack or list_stack location
                     const base_offset: i32 = switch (list_loc) {
@@ -1033,22 +1035,18 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // Check if we have a location for this symbol
             const symbol_key: u48 = @bitCast(symbol);
             if (self.symbol_locations.get(symbol_key)) |loc| {
-                std.debug.print("generateLookup: key={x}, loc={s}\n", .{ symbol_key, @tagName(loc) });
                 return loc;
             }
 
             // Symbol not found - it might be a top-level definition
             if (self.store.getSymbolDef(symbol)) |def_expr_id| {
-                std.debug.print("generateLookup: found symbolDef, generating...\n", .{});
                 // Generate code for the definition
                 const loc = try self.generateExpr(def_expr_id);
-                std.debug.print("generateLookup: def generated, loc={s}\n", .{@tagName(loc)});
                 // Cache the location
                 try self.symbol_locations.put(symbol_key, loc);
                 return loc;
             }
 
-            std.debug.print("generateLookup: symbol not found!\n", .{});
             return Error.LocalNotFound;
         }
 
@@ -4944,7 +4942,6 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         }
                     } else {
                         // Non-mutable: just record the location as before
-                        std.debug.print("bindPattern: non-mutable, symbol_key={x}, loc={s}\n", .{ symbol_key, @tagName(value_loc) });
                         try self.symbol_locations.put(symbol_key, value_loc);
                     }
                 },
@@ -5401,10 +5398,13 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             const fn_expr = self.store.getExpr(call.fn_expr);
 
             return switch (fn_expr) {
-                // Direct lambda call: (|x| x + 1)(5)
+                // Direct lambda call: inline the lambda body at the call site
+                // NOTE: Procedure-based compilation was attempted but nested lambdas need
+                // access to outer scope variables, which requires inlining.
+                // TODO: For non-nested lambdas (top-level defs), use procedure compilation.
                 .lambda => |lambda| try self.generateLambdaCall(lambda, call.args, call.ret_layout),
 
-                // Direct closure call
+                // Direct closure call: inline with captures bound
                 .closure => |closure| try self.generateClosureCall(closure, call.args, call.ret_layout),
 
                 // Chained/curried call: the result of a previous call
@@ -5498,12 +5498,6 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     else => {
                         // Normal argument - just evaluate and bind
                         const arg_loc = try self.generateExpr(arg_id);
-                        std.debug.print("generateLambdaCall: binding normal arg, loc={s}\n", .{@tagName(arg_loc)});
-                        if (arg_loc == .list_stack) {
-                            std.debug.print("  list_stack.struct_offset={}\n", .{arg_loc.list_stack.struct_offset});
-                        } else if (arg_loc == .stack) {
-                            std.debug.print("  stack offset={}\n", .{arg_loc.stack});
-                        }
                         try self.bindPatternWithLayout(param_id, arg_loc, arg_layout);
                     },
                 }
@@ -6273,8 +6267,18 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             const final_expr = self.store.getExpr(block.final_expr);
 
             return switch (final_expr) {
-                .lambda => |lambda| try self.generateLambdaCall(lambda, args_span, ret_layout),
-                .closure => |closure| try self.generateClosureCall(closure, args_span, ret_layout),
+                .lambda => |lambda| blk: {
+                    const code_offset = try self.compileLambdaAsProc(block.final_expr, lambda);
+                    break :blk try self.generateCallToLambda(code_offset, args_span, ret_layout);
+                },
+                .closure => |closure| blk: {
+                    const inner_expr = self.store.getExpr(closure.lambda);
+                    if (inner_expr == .lambda) {
+                        const code_offset = try self.compileLambdaAsProc(closure.lambda, inner_expr.lambda);
+                        break :blk try self.generateCallToLambda(code_offset, args_span, ret_layout);
+                    }
+                    break :blk try self.generateClosureCall(closure, args_span, ret_layout);
+                },
                 else => return Error.UnsupportedExpression,
             };
         }
@@ -6283,24 +6287,28 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         fn generateLookupCall(self: *Self, lookup: anytype, args_span: anytype, ret_layout: layout.Idx) Error!ValueLocation {
             const symbol_key: u48 = @bitCast(lookup.symbol);
 
-            // FIRST: Check if the function was compiled as a procedure (for recursive functions)
-            // This takes priority over inlining because recursive functions MUST be called
-            // as proper procedures with stack frames.
+            // FIRST: Check if the function was compiled as a procedure
             if (self.proc_registry.get(symbol_key)) |proc| {
-                std.debug.print("generateLookupCall: found proc for symbol\n", .{});
                 return try self.generateCallToCompiledProc(proc, args_span, ret_layout);
             }
-
-            // Fall back to inline path for non-recursive closures
 
             // Check if the symbol is bound to a lambda/closure in local scope
             if (self.lambda_bindings.get(symbol_key)) |lambda_expr_id| {
                 const lambda_expr = self.store.getExpr(lambda_expr_id);
-                std.debug.print("generateLookupCall: found lambda_binding, expr={s}\n", .{@tagName(lambda_expr)});
 
                 return switch (lambda_expr) {
-                    .lambda => |lambda| try self.generateLambdaCall(lambda, args_span, ret_layout),
-                    .closure => |closure| try self.generateClosureCallWithSymbol(closure, args_span, ret_layout, lookup.symbol),
+                    .lambda => |lambda| blk: {
+                        const code_offset = try self.compileLambdaAsProc(lambda_expr_id, lambda);
+                        break :blk try self.generateCallToLambda(code_offset, args_span, ret_layout);
+                    },
+                    .closure => |closure| blk: {
+                        const inner_expr = self.store.getExpr(closure.lambda);
+                        if (inner_expr == .lambda) {
+                            const code_offset = try self.compileLambdaAsProc(closure.lambda, inner_expr.lambda);
+                            break :blk try self.generateCallToLambda(code_offset, args_span, ret_layout);
+                        }
+                        break :blk try self.generateClosureCallWithSymbol(closure, args_span, ret_layout, lookup.symbol);
+                    },
                     .block => |block| try self.generateBlockCall(block, args_span, ret_layout),
                     else => return Error.UnsupportedExpression,
                 };
@@ -6309,17 +6317,25 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // Look up the function in top-level definitions
             if (self.store.getSymbolDef(lookup.symbol)) |def_expr_id| {
                 const def_expr = self.store.getExpr(def_expr_id);
-                std.debug.print("generateLookupCall: found symbolDef, expr={s}\n", .{@tagName(def_expr)});
 
                 return switch (def_expr) {
-                    .lambda => |lambda| try self.generateLambdaCall(lambda, args_span, ret_layout),
-                    .closure => |closure| try self.generateClosureCallWithSymbol(closure, args_span, ret_layout, lookup.symbol),
+                    .lambda => |lambda| blk: {
+                        const code_offset = try self.compileLambdaAsProc(def_expr_id, lambda);
+                        break :blk try self.generateCallToLambda(code_offset, args_span, ret_layout);
+                    },
+                    .closure => |closure| blk: {
+                        const inner_expr = self.store.getExpr(closure.lambda);
+                        if (inner_expr == .lambda) {
+                            const code_offset = try self.compileLambdaAsProc(closure.lambda, inner_expr.lambda);
+                            break :blk try self.generateCallToLambda(code_offset, args_span, ret_layout);
+                        }
+                        break :blk try self.generateClosureCallWithSymbol(closure, args_span, ret_layout, lookup.symbol);
+                    },
                     .block => |block| try self.generateBlockCall(block, args_span, ret_layout),
                     else => return Error.UnsupportedExpression,
                 };
             }
 
-            std.debug.print("generateLookupCall: symbol not found!\n", .{});
             return Error.LocalNotFound;
         }
 
@@ -7115,6 +7131,182 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             if (self.proc_registry.getPtr(key)) |entry| {
                 entry.code_end = code_end;
             }
+        }
+
+        /// Compile a lambda expression as a standalone procedure.
+        /// Returns the code offset where the procedure starts.
+        /// If the lambda was already compiled, returns the cached offset.
+        fn compileLambdaAsProc(self: *Self, lambda_expr_id: MonoExprId, lambda: anytype) Error!usize {
+            const key = @intFromEnum(lambda_expr_id);
+
+            // Check if already compiled
+            if (self.compiled_lambdas.get(key)) |code_offset| {
+                return code_offset;
+            }
+
+            // Emit a jump over the lambda code to prevent fall-through
+            // The lambda code is emitted inline, so we need to skip it during normal execution
+            const skip_jump = try self.codegen.emitJump();
+            // Record the start offset (after the jump, this is where calls will land)
+            const code_start = self.codegen.currentOffset();
+
+            // Register before generating (for potential recursive calls)
+            try self.compiled_lambdas.put(key, code_start);
+
+            // Save current stack state
+            const saved_stack_offset = self.codegen.stack_offset;
+
+            // Emit prologue
+            try self.emitPrologue();
+
+            // Bind parameters from argument registers
+            try self.bindLambdaParams(lambda.params);
+
+            // Generate the body
+            const result_loc = try self.generateExpr(lambda.body);
+
+            // Move result to return register if needed
+            try self.moveToReturnRegister(result_loc);
+
+            // Emit epilogue and return
+            try self.emitEpilogue();
+
+            // Restore stack state
+            self.codegen.stack_offset = saved_stack_offset;
+
+            // Patch the skip jump to point here (after the lambda code)
+            const after_lambda = self.codegen.currentOffset();
+            self.codegen.patchJump(skip_jump, after_lambda);
+
+            return code_start;
+        }
+
+        /// Bind lambda parameters from argument registers.
+        /// Similar to bindProcParams but works with pattern spans.
+        fn bindLambdaParams(self: *Self, params: mono.MonoPatternSpan) Error!void {
+            const pattern_ids = self.store.getPatternSpan(params);
+            var reg_idx: u8 = 0;
+
+            for (pattern_ids) |pattern_id| {
+                const pattern = self.store.getPattern(pattern_id);
+                switch (pattern) {
+                    .bind => |bind| {
+                        const symbol_key: u48 = @bitCast(bind.symbol);
+                        const arg_reg = self.getArgumentRegister(reg_idx);
+
+                        // Spill argument to stack slot
+                        const stack_offset = self.codegen.allocStackSlot(8);
+                        try self.codegen.emitStoreStack(.w64, stack_offset, arg_reg);
+
+                        // Record the location
+                        try self.symbol_locations.put(symbol_key, .{ .stack = stack_offset });
+
+                        reg_idx += 1;
+                    },
+                    .wildcard => {
+                        // Skip this argument register
+                        reg_idx += 1;
+                    },
+                    else => {
+                        // For now, skip complex patterns
+                        reg_idx += 1;
+                    },
+                }
+            }
+        }
+
+        /// Move a value to the return register (X0 on aarch64, RAX on x86_64)
+        fn moveToReturnRegister(self: *Self, loc: ValueLocation) Error!void {
+            const ret_reg = self.getReturnRegister();
+            switch (loc) {
+                .general_reg => |reg| {
+                    if (reg != ret_reg) {
+                        try self.codegen.emit.movRegReg(.w64, ret_reg, reg);
+                    }
+                },
+                .stack => |offset| {
+                    try self.codegen.emitLoadStack(.w64, ret_reg, offset);
+                },
+                .immediate_i64 => |val| {
+                    try self.codegen.emitLoadImm(ret_reg, @bitCast(val));
+                },
+                .list_stack => |info| {
+                    // Return pointer to list struct on stack
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.movRegImm64(ret_reg, @bitCast(@as(i64, info.struct_offset)));
+                        try self.codegen.emit.addRegRegReg(.w64, ret_reg, .FP, ret_reg);
+                    } else {
+                        try self.codegen.emit.leaRegMem(ret_reg, .RBP, info.struct_offset);
+                    }
+                },
+                .stack_i128 => |offset| {
+                    // For i128/Dec return values, load both halves
+                    // X0 = low 64 bits, X1 = high 64 bits
+                    try self.codegen.emitLoadStack(.w64, ret_reg, offset);
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emitLoadStack(.w64, .X1, offset + 8);
+                    } else {
+                        try self.codegen.emitLoadStack(.w64, .RDX, offset + 8);
+                    }
+                },
+                .immediate_i128 => |val| {
+                    // Load low 64 bits to X0, high 64 bits to X1
+                    const low: i64 = @truncate(val);
+                    const high: i64 = @truncate(val >> 64);
+                    try self.codegen.emitLoadImm(ret_reg, low);
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emitLoadImm(.X1, high);
+                    } else {
+                        try self.codegen.emitLoadImm(.RDX, high);
+                    }
+                },
+                else => {
+                    // For other types (like float_reg), try to handle appropriately
+                },
+            }
+        }
+
+        /// Generate a call to a compiled lambda procedure.
+        /// Puts arguments in registers and emits a call instruction.
+        fn generateCallToLambda(self: *Self, code_offset: usize, args_span: anytype, ret_layout: layout.Idx) Error!ValueLocation {
+            const args = self.store.getExprSpan(args_span);
+
+            // Put arguments in registers
+            for (args, 0..) |arg_id, i| {
+                const arg_loc = try self.generateExpr(arg_id);
+                const arg_reg = self.getArgumentRegister(@intCast(i));
+
+                switch (arg_loc) {
+                    .general_reg => |reg| {
+                        if (reg != arg_reg) {
+                            try self.codegen.emit.movRegReg(.w64, arg_reg, reg);
+                        }
+                    },
+                    .stack => |offset| {
+                        try self.codegen.emitLoadStack(.w64, arg_reg, offset);
+                    },
+                    .immediate_i64 => |val| {
+                        try self.codegen.emitLoadImm(arg_reg, @bitCast(val));
+                    },
+                    .list_stack => |info| {
+                        // Pass pointer to list struct
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            try self.codegen.emit.movRegImm64(arg_reg, @bitCast(@as(i64, info.struct_offset)));
+                            try self.codegen.emit.addRegRegReg(.w64, arg_reg, .FP, arg_reg);
+                        } else {
+                            try self.codegen.emit.leaRegMem(arg_reg, .RBP, info.struct_offset);
+                        }
+                    },
+                    else => {},
+                }
+            }
+
+            // Emit call to the procedure
+            try self.emitCallToOffset(code_offset);
+
+            // Result is in return register
+            _ = ret_layout;
+            return .{ .general_reg = self.getReturnRegister() };
         }
 
         /// Fixed stack frame size for procedures (includes space for spills)
