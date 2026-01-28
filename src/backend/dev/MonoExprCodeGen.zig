@@ -100,9 +100,6 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         /// Mutable variables need fixed slots so re-bindings can update the value at runtime
         mutable_var_slots: std.AutoHashMap(u48, MutableVarInfo),
 
-        /// Map from MonoSymbol to lambda/closure expression ID (for callable bindings)
-        lambda_bindings: std.AutoHashMap(u48, MonoExprId),
-
         /// Map from JoinPointId to code offset (for recursive closure jumps)
         join_points: std.AutoHashMap(u32, usize),
 
@@ -245,7 +242,6 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 .static_interner = static_interner,
                 .symbol_locations = std.AutoHashMap(u48, ValueLocation).init(allocator),
                 .mutable_var_slots = std.AutoHashMap(u48, MutableVarInfo).init(allocator),
-                .lambda_bindings = std.AutoHashMap(u48, MonoExprId).init(allocator),
                 .join_points = std.AutoHashMap(u32, usize).init(allocator),
                 .current_recursive_symbol = null,
                 .current_recursive_join_point = null,
@@ -264,7 +260,6 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             self.codegen.deinit();
             self.symbol_locations.deinit();
             self.mutable_var_slots.deinit();
-            self.lambda_bindings.deinit();
             self.join_points.deinit();
             self.proc_registry.deinit();
             self.compiled_lambdas.deinit();
@@ -284,7 +279,6 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             self.codegen.reset();
             self.symbol_locations.clearRetainingCapacity();
             self.mutable_var_slots.clearRetainingCapacity();
-            self.lambda_bindings.clearRetainingCapacity();
             self.join_points.clearRetainingCapacity();
             self.current_recursive_symbol = null;
             self.current_recursive_join_point = null;
@@ -471,8 +465,11 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
                 // Function calls and lambdas
                 .call => |call| try self.generateCall(call),
-                .lambda => |lambda| try self.generateLambda(lambda),
-                .closure => |closure| try self.generateClosure(closure),
+                // Lambdas and closures should only appear in call position
+                // (handled by generateCall). Standalone lambda/closure values
+                // are not supported without inlining.
+                .lambda => return Error.UnsupportedExpression,
+                .closure => return Error.UnsupportedExpression,
 
                 // Records
                 .empty_record => .{ .immediate_i64 = 0 },
@@ -4783,88 +4780,16 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
             // Process each statement
             for (stmts) |stmt| {
-                // Check if this is a lambda/closure binding
-                const stmt_expr = self.store.getExpr(stmt.expr);
-
-                switch (stmt_expr) {
-                    .lambda, .closure => {
-                        // Store the expression ID for later invocation
-                        try self.bindLambdaPattern(stmt.pattern, stmt.expr);
-
-                        // If this is a recursive closure, track the symbol for recursive call detection
-                        if (stmt_expr == .closure) {
-                            const closure = stmt_expr.closure;
-                            if (closure.self_recursive == .self_recursive) {
-                                const pattern = self.store.getPattern(stmt.pattern);
-                                if (pattern == .bind) {
-                                    // Track this as a potential recursive symbol
-                                    // The actual recursive context is set up when calling the closure
-                                }
-                            }
-                        }
-                    },
-                    else => {
-                        // Generate code for the expression
-                        const expr_loc = try self.generateExpr(stmt.expr);
-                        // Get the expression's layout (for mutable variable binding with correct size)
-                        const expr_layout = self.getExprLayout(stmt.expr);
-                        // Bind the result to the pattern, using expr layout for mutable vars
-                        try self.bindPatternWithLayout(stmt.pattern, expr_loc, expr_layout);
-                    },
-                }
+                // Generate code for the expression
+                const expr_loc = try self.generateExpr(stmt.expr);
+                // Get the expression's layout (for mutable variable binding with correct size)
+                const expr_layout = self.getExprLayout(stmt.expr);
+                // Bind the result to the pattern, using expr layout for mutable vars
+                try self.bindPatternWithLayout(stmt.pattern, expr_loc, expr_layout);
             }
 
             // Generate the final expression
             return self.generateExpr(block.final_expr);
-        }
-
-        /// Bind a lambda/closure expression ID to a pattern (for later invocation)
-        fn bindLambdaPattern(self: *Self, pattern_id: MonoPatternId, expr_id: MonoExprId) Error!void {
-            // Debug assertion: verify expression is callable
-            if (std.debug.runtime_safety) {
-                const expr = self.store.getExpr(expr_id);
-                std.debug.assert(expr == .lambda or expr == .closure or expr == .block);
-            }
-
-            const pattern = self.store.getPattern(pattern_id);
-
-            switch (pattern) {
-                .bind => |bind| {
-                    const symbol_key: u48 = @bitCast(bind.symbol);
-                    try self.lambda_bindings.put(symbol_key, expr_id);
-                },
-                else => {
-                    // Non-simple bindings for lambdas not supported
-                },
-            }
-        }
-
-        /// Bind a captured value for closure inlining.
-        /// This propagates both symbol locations AND lambda bindings for captured values.
-        fn bindCapturedValue(self: *Self, cap: anytype) Error!void {
-            const symbol_key: u48 = @bitCast(cap.symbol);
-
-            // First, propagate any lambda binding for this captured symbol
-            // This is critical for closures that capture function parameters
-            if (self.lambda_bindings.get(symbol_key) == null) {
-                if (self.store.getSymbolDef(cap.symbol)) |def_expr_id| {
-                    const def_expr = self.store.getExpr(def_expr_id);
-                    switch (def_expr) {
-                        .lambda, .closure, .block => {
-                            try self.lambda_bindings.put(symbol_key, def_expr_id);
-                        },
-                        else => {},
-                    }
-                }
-            }
-
-            // Then, bind the symbol location if not already bound
-            if (self.symbol_locations.get(symbol_key) == null) {
-                if (self.store.getSymbolDef(cap.symbol)) |def_expr_id| {
-                    const loc = try self.generateExpr(def_expr_id);
-                    try self.symbol_locations.put(symbol_key, loc);
-                }
-            }
         }
 
         /// Bind a value to a pattern
@@ -5228,124 +5153,6 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             }
         }
 
-        /// Bind all captured values for a closure
-        fn bindClosureCaptures(self: *Self, closure: anytype) Error!void {
-            const captures = self.store.getCaptures(closure.captures);
-            for (captures) |cap| {
-                const symbol_key: u48 = @bitCast(cap.symbol);
-                if (self.symbol_locations.get(symbol_key) == null) {
-                    // Try to look up the captured value from definitions
-                    if (self.store.getSymbolDef(cap.symbol)) |def_expr_id| {
-                        const loc = try self.generateExpr(def_expr_id);
-                        try self.symbol_locations.put(symbol_key, loc);
-                    }
-                }
-            }
-        }
-
-        /// Generate code for a lambda expression (unevaluated function)
-        /// Lambdas are not executed immediately - they're stored for later invocation
-        fn generateLambda(_: *Self, _: anytype) Error!ValueLocation {
-            // TODO: PLACEHOLDER - Standalone lambda returns 0 instead of closure value
-            //
-            // CURRENT BEHAVIOR:
-            // Returns 0 because our current calling convention inlines lambdas at call
-            // sites. When `(|x| x + 1)(5)` is evaluated, generateCall detects the lambda
-            // and calls generateLambdaCall directly with the body - no closure value needed.
-            //
-            // WHEN THIS MATTERS:
-            // This placeholder breaks when lambdas aren't immediately called:
-            //   f = |x| x + 1    -- f gets 0, not a callable value
-            //   f(5)             -- lookup finds 0, not the lambda body
-            //
-            // PROPER IMPLEMENTATION:
-            // For lambdas that escape their immediate context, we need to:
-            // 1. Allocate a closure struct (even for non-capturing lambdas, for uniformity)
-            // 2. Store a function pointer or lambda index
-            // 3. Return the closure struct address
-            //
-            // This is handled by closure expressions with direct_call representation,
-            // so most lambdas should be wrapped in closures by Lower.zig before we
-            // reach this point. This function is only called for rare edge cases.
-            return .{ .immediate_i64 = 0 };
-        }
-
-        /// Generate code for a closure (lambda with captured environment)
-        /// This creates the actual runtime closure value based on the representation.
-        ///
-        /// Generate code for a closure expression.
-        /// Binds captures and returns closure data for later call.
-        ///
-        /// NOTE: Recursive closures should be compiled as procedures via compileAllProcs()
-        /// BEFORE generating the main expression. This inline path only works for
-        /// non-recursive closures.
-        fn generateClosure(self: *Self, closure: anytype) Error!ValueLocation {
-            // Bind captures and return closure data for inline evaluation
-            switch (closure.representation) {
-                .direct_call => {
-                    // No captures - no runtime representation needed
-                    // The closure is just a reference to the lambda body
-                    return .{ .immediate_i64 = 0 };
-                },
-                .unwrapped_capture => |_| {
-                    // Single capture - the closure IS the captured value
-                    // Zero overhead representation
-                    const captures = self.store.getCaptures(closure.captures);
-                    if (captures.len > 0) {
-                        const cap = captures[0];
-                        const symbol_key: u48 = @bitCast(cap.symbol);
-                        if (self.symbol_locations.get(symbol_key)) |loc| {
-                            return loc;
-                        }
-                        // Try to look up the captured value
-                        if (self.store.getSymbolDef(cap.symbol)) |def_expr_id| {
-                            return try self.generateExpr(def_expr_id);
-                        }
-                    }
-                    return .{ .immediate_i64 = 0 };
-                },
-                .struct_captures => |repr| {
-                    // Multiple captures - bind all captures for inline evaluation
-                    const captures = self.store.getCaptures(repr.captures);
-
-                    // Evaluate all captured values and store them in symbol_locations
-                    // This allows the inlined body to access all captures
-                    var first_loc: ?ValueLocation = null;
-                    for (captures) |cap| {
-                        const symbol_key: u48 = @bitCast(cap.symbol);
-                        if (self.symbol_locations.get(symbol_key)) |loc| {
-                            if (first_loc == null) first_loc = loc;
-                        } else if (self.store.getSymbolDef(cap.symbol)) |def_expr_id| {
-                            const loc = try self.generateExpr(def_expr_id);
-                            try self.symbol_locations.put(symbol_key, loc);
-                            if (first_loc == null) first_loc = loc;
-                        }
-                    }
-
-                    return first_loc orelse .{ .immediate_i64 = 0 };
-                },
-                .enum_dispatch => |repr| {
-                    // Multiple functions, no captures - just return the tag
-                    return .{ .immediate_i64 = repr.tag };
-                },
-                .union_repr => |repr| {
-                    // Multiple functions with captures - bind captures for inline evaluation
-                    // The tag and captures will be used for dispatch at call site
-                    const captures = self.store.getCaptures(repr.captures);
-                    for (captures) |cap| {
-                        const symbol_key: u48 = @bitCast(cap.symbol);
-                        if (self.symbol_locations.get(symbol_key) == null) {
-                            if (self.store.getSymbolDef(cap.symbol)) |def_expr_id| {
-                                const loc = try self.generateExpr(def_expr_id);
-                                try self.symbol_locations.put(symbol_key, loc);
-                            }
-                        }
-                    }
-                    return .{ .immediate_i64 = repr.tag };
-                },
-            }
-        }
-
         /// Get the register used for argument N in the calling convention
         fn getArgumentRegister(_: *Self, index: u8) GeneralReg {
             if (comptime builtin.cpu.arch == .aarch64) {
@@ -5392,423 +5199,39 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             }
         }
 
-        /// Generate code for a function call
+        /// Generate code for a function call (procedure-based, no inlining)
         fn generateCall(self: *Self, call: anytype) Error!ValueLocation {
             // Get the function expression
             const fn_expr = self.store.getExpr(call.fn_expr);
 
             return switch (fn_expr) {
-                // Direct lambda call: inline the lambda body at the call site
-                // NOTE: Procedure-based compilation was attempted but nested lambdas need
-                // access to outer scope variables, which requires inlining.
-                // TODO: For non-nested lambdas (top-level defs), use procedure compilation.
-                .lambda => |lambda| try self.generateLambdaCall(lambda, call.args, call.ret_layout),
+                // Direct lambda call: compile as procedure and emit CALL
+                .lambda => |lambda| {
+                    const offset = try self.compileLambdaAsProc(call.fn_expr, lambda);
+                    return try self.generateCallToLambda(offset, call.args, call.ret_layout);
+                },
 
-                // Direct closure call: inline with captures bound
-                .closure => |closure| try self.generateClosureCall(closure, call.args, call.ret_layout),
+                // Direct closure call: compile inner lambda as procedure
+                .closure => |closure| {
+                    const inner = self.store.getExpr(closure.lambda);
+                    if (inner == .lambda) {
+                        const offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda);
+                        return try self.generateCallToLambda(offset, call.args, call.ret_layout);
+                    }
+                    return Error.UnsupportedExpression;
+                },
 
-                // Chained/curried call: the result of a previous call
-                .call => |inner_call| try self.generateChainedCall(inner_call, call.args, call.ret_layout),
+                // Chained calls not supported without inlining
+                .call => return Error.UnsupportedExpression,
 
-                // Block that returns a lambda
-                .block => |block| try self.generateBlockCall(block, call.args, call.ret_layout),
+                // Block calls not supported without inlining
+                .block => return Error.UnsupportedExpression,
 
                 // Lookup a function and call it
                 .lookup => |lookup| try self.generateLookupCall(lookup, call.args, call.ret_layout),
 
                 else => return Error.UnsupportedExpression,
             };
-        }
-
-        /// Generate code for calling a lambda directly: (|x| x + 1)(5)
-        fn generateLambdaCall(self: *Self, lambda: anytype, args_span: anytype, _: layout.Idx) Error!ValueLocation {
-            // Get the parameter patterns
-            const params = self.store.getPatternSpan(lambda.params);
-            const args = self.store.getExprSpan(args_span);
-
-            // Save old bindings for parameters to restore after inlining.
-            // This prevents nested lambda inlining from clobbering outer scope bindings.
-            const allocator = self.codegen.allocator;
-            var saved_locations = std.AutoHashMap(u48, ?ValueLocation).init(allocator);
-            defer saved_locations.deinit();
-            var saved_lambdas = std.AutoHashMap(u48, ?MonoExprId).init(allocator);
-            defer saved_lambdas.deinit();
-
-            for (params) |param_id| {
-                const param = self.store.getPattern(param_id);
-                if (param == .bind) {
-                    const symbol_key: u48 = @bitCast(param.bind.symbol);
-                    saved_locations.put(symbol_key, self.symbol_locations.get(symbol_key)) catch {};
-                    saved_lambdas.put(symbol_key, self.lambda_bindings.get(symbol_key)) catch {};
-                }
-            }
-
-            // Evaluate each argument and bind to the corresponding parameter
-            for (params, args) |param_id, arg_id| {
-                // Check if the argument is a closure/lambda - if so, bind it for later invocation
-                const arg_expr = self.store.getExpr(arg_id);
-                // Get the argument's layout to pass to pattern binding
-                // This is important for list patterns to use the correct inner element layout
-                // For lambda/closure arguments, get layout from the parameter pattern instead
-                // since getExprLayout returns a closure layout, not the expected record/function layout
-                const arg_layout: ?layout.Idx = blk: {
-                    switch (arg_expr) {
-                        .lambda, .closure => {
-                            // For callable arguments, get layout from the parameter pattern
-                            const param = self.store.getPattern(param_id);
-                            break :blk switch (param) {
-                                .bind => |b| b.layout_idx,
-                                else => null,
-                            };
-                        },
-                        else => break :blk self.getExprLayout(arg_id),
-                    }
-                };
-                switch (arg_expr) {
-                    .lambda, .closure => {
-                        // This is a closure being passed as an argument
-                        // Bind the expression ID so it can be called later
-                        try self.bindLambdaPattern(param_id, arg_id);
-                        // Also evaluate and bind the value (for captures, etc.)
-                        const arg_loc = try self.generateExpr(arg_id);
-                        try self.bindPatternWithLayout(param_id, arg_loc, arg_layout);
-                    },
-                    .lookup => |lookup| {
-                        // Lookup of a symbol - check if it's bound to a lambda/closure
-                        const lookup_symbol_key: u48 = @bitCast(lookup.symbol);
-
-                        // Check lambda_bindings for the looked-up symbol
-                        if (self.lambda_bindings.get(lookup_symbol_key)) |lambda_expr_id| {
-                            // Propagate the lambda binding to the parameter
-                            try self.bindLambdaPattern(param_id, lambda_expr_id);
-                        } else if (self.store.getSymbolDef(lookup.symbol)) |def_expr_id| {
-                            // Check if the definition is a lambda/closure/block
-                            const def_expr = self.store.getExpr(def_expr_id);
-                            switch (def_expr) {
-                                .lambda, .closure, .block => {
-                                    try self.bindLambdaPattern(param_id, def_expr_id);
-                                },
-                                else => {},
-                            }
-                        }
-                        // Evaluate and bind the value
-                        const arg_loc = try self.generateExpr(arg_id);
-                        try self.bindPatternWithLayout(param_id, arg_loc, arg_layout);
-                    },
-                    else => {
-                        // Normal argument - just evaluate and bind
-                        const arg_loc = try self.generateExpr(arg_id);
-                        try self.bindPatternWithLayout(param_id, arg_loc, arg_layout);
-                    },
-                }
-            }
-
-            // Now generate code for the lambda body with arguments bound
-            const result = try self.generateExpr(lambda.body);
-
-            // Restore old bindings to preserve outer scope
-            var saved_locs_iter = saved_locations.iterator();
-            while (saved_locs_iter.next()) |entry| {
-                if (entry.value_ptr.*) |old_loc| {
-                    self.symbol_locations.put(entry.key_ptr.*, old_loc) catch {};
-                } else {
-                    _ = self.symbol_locations.remove(entry.key_ptr.*);
-                }
-            }
-            var saved_lambdas_iter = saved_lambdas.iterator();
-            while (saved_lambdas_iter.next()) |entry| {
-                if (entry.value_ptr.*) |old_lambda| {
-                    self.lambda_bindings.put(entry.key_ptr.*, old_lambda) catch {};
-                } else {
-                    _ = self.lambda_bindings.remove(entry.key_ptr.*);
-                }
-            }
-
-            return result;
-        }
-
-        /// Generate code for calling a closure (lambda with captures)
-        /// This handles the representation-based dispatch and capture unpacking.
-        ///
-        /// INLINING DECISION:
-        /// - If shouldInlineClosure() returns true: inline the lambda body
-        /// - If shouldInlineClosure() returns false: call the emitted function
-        fn generateClosureCall(self: *Self, closure: anytype, args_span: anytype, ret_layout: layout.Idx) Error!ValueLocation {
-            // Inline path: bind captures and inline the lambda body
-            // NOTE: For recursive closures, this will fail. They need to be compiled
-            // as procedures first via compileAllProcs().
-            // Bind the captured values based on representation
-            switch (closure.representation) {
-                .direct_call => {
-                    // No captures to bind
-                },
-                .unwrapped_capture => {
-                    // Single capture - the closure value IS the captured value
-                    const captures = self.store.getCaptures(closure.captures);
-                    if (captures.len > 0) {
-                        try self.bindCapturedValue(captures[0]);
-                    }
-                },
-                .struct_captures => |repr| {
-                    // Multiple captures - unpack from struct
-                    const captures = self.store.getCaptures(repr.captures);
-                    for (captures) |cap| {
-                        try self.bindCapturedValue(cap);
-                    }
-                },
-                .enum_dispatch, .union_repr => {
-                    // Bind captures from scope for inline evaluation
-                    const captures = self.store.getCaptures(closure.captures);
-                    for (captures) |cap| {
-                        try self.bindCapturedValue(cap);
-                    }
-                },
-            }
-
-            // Get the lambda from the closure and call it (inlined)
-            const lambda_expr = self.store.getExpr(closure.lambda);
-
-            return switch (lambda_expr) {
-                .lambda => |lambda| try self.generateRecursiveLambdaCall(lambda, args_span, ret_layout, closure.self_recursive),
-                else => return Error.UnsupportedExpression,
-            };
-        }
-
-        /// Generate a closure call via an emitted function (for non-inlined closures).
-        /// This is used when the closure is bound to a variable or recursive.
-        /// Generate code for calling a closure with symbol tracking for recursion
-        fn generateClosureCallWithSymbol(
-            self: *Self,
-            closure: anytype,
-            args_span: anytype,
-            ret_layout: layout.Idx,
-            symbol: MonoSymbol,
-        ) Error!ValueLocation {
-            // Inline path: bind captures and inline the lambda body
-            // NOTE: For recursive closures, this will fail. They need to be compiled
-            // as procedures first via compileAllProcs().
-
-            // Check for lambda set dispatch (enum_dispatch or union_repr)
-            switch (closure.representation) {
-                .enum_dispatch => |repr| {
-                    // Multiple functions with no captures - generate switch dispatch
-                    return try self.generateEnumDispatchCall(repr.lambda_set, symbol, args_span, ret_layout);
-                },
-                .union_repr => |repr| {
-                    // Multiple functions with captures - generate switch dispatch with captures
-                    return try self.generateUnionReprCall(repr.lambda_set, symbol, args_span, ret_layout);
-                },
-                .direct_call => {},
-                .unwrapped_capture => {
-                    const captures = self.store.getCaptures(closure.captures);
-                    if (captures.len > 0) {
-                        try self.bindCapturedValue(captures[0]);
-                    }
-                },
-                .struct_captures => |repr| {
-                    const captures = self.store.getCaptures(repr.captures);
-                    for (captures) |cap| {
-                        try self.bindCapturedValue(cap);
-                    }
-                },
-            }
-
-            // Get the lambda from the closure and call it with symbol tracking
-            const lambda_expr = self.store.getExpr(closure.lambda);
-
-            return switch (lambda_expr) {
-                .lambda => |lambda| try self.generateRecursiveLambdaCallWithSymbol(
-                    lambda,
-                    args_span,
-                    ret_layout,
-                    closure.self_recursive,
-                    symbol,
-                ),
-                else => return Error.UnsupportedExpression,
-            };
-        }
-
-        /// Generate code for enum dispatch call (multiple non-capturing functions)
-        /// Generates a switch on the runtime tag value to call the correct lambda.
-        fn generateEnumDispatchCall(
-            self: *Self,
-            lambda_set: mono.LambdaSetMemberSpan,
-            symbol: MonoSymbol,
-            args_span: anytype,
-            ret_layout: layout.Idx,
-        ) Error!ValueLocation {
-            const members = self.store.getLambdaSetMembers(lambda_set);
-            if (members.len == 0) {
-                return Error.UnsupportedExpression;
-            }
-
-            // Get the runtime tag value from the symbol's location
-            const symbol_key: u48 = @bitCast(symbol);
-            const tag_loc = self.symbol_locations.get(symbol_key) orelse return Error.LocalNotFound;
-
-            // For 2 functions, use a simple conditional branch (Bool dispatch)
-            if (members.len == 2) {
-                return try self.generateBoolDispatchCall(members, tag_loc, args_span, ret_layout);
-            }
-
-            // For 3+ functions, generate a switch (U8 dispatch)
-            return try self.generateU8DispatchCall(members, tag_loc, args_span, ret_layout);
-        }
-
-        /// Generate code for union_repr call (multiple functions with captures)
-        ///
-        /// TODO: PLACEHOLDER - Delegates to enum_dispatch, ignores capture extraction
-        ///
-        /// DIFFERENCE FROM enum_dispatch:
-        /// enum_dispatch: closures have NO captures, so the tag alone identifies the function
-        /// union_repr: closures HAVE captures, stored in a tagged union alongside the tag
-        ///
-        /// CURRENT BEHAVIOR:
-        /// Delegates to generateEnumDispatchCall, which only handles the tag-based dispatch.
-        /// This works when captures are still bound from the enclosing scope (immediate calls),
-        /// but breaks when the closure escapes and captures need to be loaded from the union.
-        ///
-        /// PROPER IMPLEMENTATION:
-        /// 1. Load the closure pointer from symbol_locations (points to tagged union)
-        /// 2. Load the tag: ldr tag_reg, [closure_ptr]
-        /// 3. Switch on tag (like enum_dispatch)
-        /// 4. FOR EACH BRANCH, before calling the lambda:
-        ///    a. Get that lambda's capture layout from LambdaSetMember.captures
-        ///    b. Load each capture from the union payload:
-        ///       ldr cap_reg, [closure_ptr, #offset]  // offset varies by capture index
-        ///    c. Bind captures to symbol_locations
-        ///    d. Then call the lambda body
-        ///
-        /// This is more complex than enum_dispatch because each lambda in the set may have
-        /// DIFFERENT captures with DIFFERENT layouts. The union payload must be large enough
-        /// to hold the largest capture set, with each lambda knowing its own offsets.
-        fn generateUnionReprCall(
-            self: *Self,
-            lambda_set: mono.LambdaSetMemberSpan,
-            symbol: MonoSymbol,
-            args_span: anytype,
-            ret_layout: layout.Idx,
-        ) Error!ValueLocation {
-            // Delegate to enum_dispatch for now - captures are bound from enclosing scope
-            return try self.generateEnumDispatchCall(lambda_set, symbol, args_span, ret_layout);
-        }
-
-        /// Generate Bool dispatch (2 functions in lambda set)
-        fn generateBoolDispatchCall(
-            self: *Self,
-            members: []const mono.LambdaSetMember,
-            tag_loc: ValueLocation,
-            args_span: anytype,
-            _: layout.Idx,
-        ) Error!ValueLocation {
-            // Allocate result register
-            const result_reg = try self.allocTempGeneral();
-
-            // Get tag into a register
-            const tag_reg = try self.ensureInGeneralReg(tag_loc);
-
-            // Compare tag with zero and branch
-            const else_patch = try self.emitCmpZeroAndJump(tag_reg);
-            self.codegen.freeGeneral(tag_reg);
-
-            // Tag == 0: Call first lambda (members[0])
-            const first_member = members[0];
-            const first_lambda_expr = self.store.getExpr(first_member.lambda_body);
-            if (first_lambda_expr == .lambda) {
-                const result0 = try self.generateLambdaCall(first_lambda_expr.lambda, args_span, .i64);
-                const result0_reg = try self.ensureInGeneralReg(result0);
-                try self.emitMovRegReg(result_reg, result0_reg);
-                self.codegen.freeGeneral(result0_reg);
-            }
-
-            // Jump to end
-            const end_patch = try self.codegen.emitJump();
-
-            // Patch else jump
-            const else_offset = self.codegen.currentOffset();
-            self.codegen.patchJump(else_patch, else_offset);
-
-            // Tag != 0: Call second lambda (members[1])
-            if (members.len > 1) {
-                const second_member = members[1];
-                const second_lambda_expr = self.store.getExpr(second_member.lambda_body);
-                if (second_lambda_expr == .lambda) {
-                    const result1 = try self.generateLambdaCall(second_lambda_expr.lambda, args_span, .i64);
-                    const result1_reg = try self.ensureInGeneralReg(result1);
-                    try self.emitMovRegReg(result_reg, result1_reg);
-                    self.codegen.freeGeneral(result1_reg);
-                }
-            }
-
-            // Patch end jump
-            const end_offset = self.codegen.currentOffset();
-            self.codegen.patchJump(end_patch, end_offset);
-
-            return .{ .general_reg = result_reg };
-        }
-
-        /// Generate U8 dispatch (3+ functions in lambda set)
-        fn generateU8DispatchCall(
-            self: *Self,
-            members: []const mono.LambdaSetMember,
-            tag_loc: ValueLocation,
-            args_span: anytype,
-            _: layout.Idx,
-        ) Error!ValueLocation {
-            // Allocate result register
-            const result_reg = try self.allocTempGeneral();
-
-            // Get tag into a register
-            const tag_reg = try self.ensureInGeneralReg(tag_loc);
-
-            // Generate cascading comparisons for each member
-            var end_patches = std.ArrayList(usize).empty;
-            defer end_patches.deinit(self.allocator);
-
-            for (members, 0..) |member, i| {
-                // Compare tag with member's tag value
-                if (i < members.len - 1) {
-                    // Not the last - need comparison and jump
-                    try self.emitCmpImm(tag_reg, @intCast(member.tag));
-                    const skip_patch = try self.emitJumpIfNotEqual();
-
-                    // Tag matches - call this lambda
-                    const lambda_expr = self.store.getExpr(member.lambda_body);
-                    if (lambda_expr == .lambda) {
-                        const result = try self.generateLambdaCall(lambda_expr.lambda, args_span, .i64);
-                        const res_reg = try self.ensureInGeneralReg(result);
-                        try self.emitMovRegReg(result_reg, res_reg);
-                        self.codegen.freeGeneral(res_reg);
-                    }
-
-                    // Jump to end
-                    const end_patch = try self.codegen.emitJump();
-                    try end_patches.append(self.allocator, end_patch);
-
-                    // Patch skip to here
-                    const skip_offset = self.codegen.currentOffset();
-                    self.codegen.patchJump(skip_patch, skip_offset);
-                } else {
-                    // Last member - default case, no comparison needed
-                    const lambda_expr = self.store.getExpr(member.lambda_body);
-                    if (lambda_expr == .lambda) {
-                        const result = try self.generateLambdaCall(lambda_expr.lambda, args_span, .i64);
-                        const res_reg = try self.ensureInGeneralReg(result);
-                        try self.emitMovRegReg(result_reg, res_reg);
-                        self.codegen.freeGeneral(res_reg);
-                    }
-                }
-            }
-
-            // Patch all end jumps
-            const end_offset = self.codegen.currentOffset();
-            for (end_patches.items) |patch| {
-                self.codegen.patchJump(patch, end_offset);
-            }
-
-            self.codegen.freeGeneral(tag_reg);
-
-            return .{ .general_reg = result_reg };
         }
 
         /// Emit compare immediate instruction
@@ -5890,434 +5313,32 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             }
         }
 
-        /// Generate code for calling a lambda, handling recursive closures with join points
-        fn generateRecursiveLambdaCall(
-            self: *Self,
-            lambda: anytype,
-            args_span: anytype,
-            ret_layout: layout.Idx,
-            self_recursive: SelfRecursive,
-        ) Error!ValueLocation {
-            // Call without symbol tracking (for non-lookup calls)
-            return self.generateRecursiveLambdaCallWithSymbol(lambda, args_span, ret_layout, self_recursive, null);
-        }
-
-        /// Generate code for calling a lambda with full recursion support
-        fn generateRecursiveLambdaCallWithSymbol(
-            self: *Self,
-            lambda: anytype,
-            args_span: anytype,
-            _: layout.Idx,
-            self_recursive: SelfRecursive,
-            symbol: ?MonoSymbol,
-        ) Error!ValueLocation {
-            // Get the parameter patterns and arguments
-            const params = self.store.getPatternSpan(lambda.params);
-            const args = self.store.getExprSpan(args_span);
-
-            // Save old bindings for parameters to restore after inlining.
-            // This prevents nested lambda inlining from clobbering outer scope bindings.
-            const allocator = self.codegen.allocator;
-            var saved_locations = std.AutoHashMap(u48, ?ValueLocation).init(allocator);
-            defer saved_locations.deinit();
-            var saved_lambdas = std.AutoHashMap(u48, ?MonoExprId).init(allocator);
-            defer saved_lambdas.deinit();
-
-            for (params) |param_id| {
-                const param = self.store.getPattern(param_id);
-                if (param == .bind) {
-                    const symbol_key: u48 = @bitCast(param.bind.symbol);
-                    saved_locations.put(symbol_key, self.symbol_locations.get(symbol_key)) catch {};
-                    saved_lambdas.put(symbol_key, self.lambda_bindings.get(symbol_key)) catch {};
-                }
-            }
-
-            // Evaluate each argument and bind to the corresponding parameter
-            for (params, args) |param_id, arg_id| {
-                // Check if the argument is a closure/lambda - if so, bind it for later invocation
-                const arg_expr = self.store.getExpr(arg_id);
-                // Get the argument's layout for correct pattern binding
-                const arg_layout = self.getExprLayout(arg_id);
-                switch (arg_expr) {
-                    .lambda, .closure => {
-                        // This is a closure being passed as an argument
-                        // Bind the expression ID so it can be called later
-                        try self.bindLambdaPattern(param_id, arg_id);
-                        // Also evaluate and bind the value (for captures, etc.)
-                        const arg_loc = try self.generateExpr(arg_id);
-                        try self.bindPatternWithLayout(param_id, arg_loc, arg_layout);
-                    },
-                    .lookup => |lookup| {
-                        // Lookup of a symbol - check if it's bound to a lambda/closure
-                        const lookup_symbol_key: u48 = @bitCast(lookup.symbol);
-
-                        // Check lambda_bindings for the looked-up symbol
-                        if (self.lambda_bindings.get(lookup_symbol_key)) |lambda_expr_id| {
-                            // Propagate the lambda binding to the parameter
-                            try self.bindLambdaPattern(param_id, lambda_expr_id);
-                        } else if (self.store.getSymbolDef(lookup.symbol)) |def_expr_id| {
-                            // Check if the definition is a lambda/closure/block
-                            const def_expr = self.store.getExpr(def_expr_id);
-                            switch (def_expr) {
-                                .lambda, .closure, .block => {
-                                    try self.bindLambdaPattern(param_id, def_expr_id);
-                                },
-                                else => {},
-                            }
-                        }
-                        // Evaluate and bind the value
-                        const arg_loc = try self.generateExpr(arg_id);
-                        try self.bindPatternWithLayout(param_id, arg_loc, arg_layout);
-                    },
-                    else => {
-                        // Normal argument - just evaluate and bind
-                        const arg_loc = try self.generateExpr(arg_id);
-                        try self.bindPatternWithLayout(param_id, arg_loc, arg_layout);
-                    },
-                }
-            }
-
-            // Helper to restore saved bindings
-            const restoreBindings = struct {
-                fn restore(
-                    self_ptr: *Self,
-                    locs: *std.AutoHashMap(u48, ?ValueLocation),
-                    lambdas: *std.AutoHashMap(u48, ?MonoExprId),
-                ) void {
-                    var locs_iter = locs.iterator();
-                    while (locs_iter.next()) |entry| {
-                        if (entry.value_ptr.*) |old_loc| {
-                            self_ptr.symbol_locations.put(entry.key_ptr.*, old_loc) catch {};
-                        } else {
-                            _ = self_ptr.symbol_locations.remove(entry.key_ptr.*);
-                        }
-                    }
-                    var lambdas_iter = lambdas.iterator();
-                    while (lambdas_iter.next()) |entry| {
-                        if (entry.value_ptr.*) |old_lambda| {
-                            self_ptr.lambda_bindings.put(entry.key_ptr.*, old_lambda) catch {};
-                        } else {
-                            _ = self_ptr.lambda_bindings.remove(entry.key_ptr.*);
-                        }
-                    }
-                }
-            }.restore;
-
-            // Check if this is a recursive closure
-            switch (self_recursive) {
-                .not_self_recursive => {
-                    // Non-recursive - just generate the body normally
-                    const result = try self.generateExpr(lambda.body);
-                    restoreBindings(self, &saved_locations, &saved_lambdas);
-                    return result;
-                },
-                .self_recursive => |join_point_id| {
-                    // Recursive closure - set up recursive context
-                    const old_recursive_symbol = self.current_recursive_symbol;
-                    const old_recursive_join_point = self.current_recursive_join_point;
-
-                    // Set up recursive context if we have a symbol
-                    if (symbol) |sym| {
-                        self.current_recursive_symbol = sym;
-                        self.current_recursive_join_point = join_point_id;
-                    }
-
-                    // Record the current code offset as the join point (start of body)
-                    const join_point_offset = self.codegen.currentOffset();
-                    try self.join_points.put(@intFromEnum(join_point_id), join_point_offset);
-
-                    // Generate the body
-                    // NOTE: This inline approach does NOT work for non-tail recursive calls
-                    // like `n * factorial(n-1)`. Proper recursive support requires compiling
-                    // the closure as a procedure first via compileAllProcs().
-                    const result = try self.generateExpr(lambda.body);
-
-                    // Restore old recursive context
-                    self.current_recursive_symbol = old_recursive_symbol;
-                    self.current_recursive_join_point = old_recursive_join_point;
-
-                    // Restore old bindings
-                    restoreBindings(self, &saved_locations, &saved_lambdas);
-
-                    return result;
-                },
-            }
-        }
-
-        /// Generate code for a chained/curried call: ((|a| |b| a * b)(5))(10)
-        fn generateChainedCall(self: *Self, inner_call: anytype, outer_args: anytype, ret_layout: layout.Idx) Error!ValueLocation {
-            // First, execute the inner call to get the resulting lambda/closure
-            const inner_fn_expr = self.store.getExpr(inner_call.fn_expr);
-
-            return switch (inner_fn_expr) {
-                .lambda => |lambda| {
-                    // Get inner call arguments
-                    const inner_args = self.store.getExprSpan(inner_call.args);
-                    const params = self.store.getPatternSpan(lambda.params);
-
-                    // Bind inner arguments to parameters
-                    for (params, inner_args) |param_id, arg_id| {
-                        const arg_loc = try self.generateExpr(arg_id);
-                        try self.bindPattern(param_id, arg_loc);
-                    }
-
-                    // The lambda body should return another lambda
-                    const body_expr = self.store.getExpr(lambda.body);
-
-                    return switch (body_expr) {
-                        .lambda => |inner_lambda| {
-                            // Now call the returned lambda with outer args
-                            return try self.generateLambdaCall(inner_lambda, outer_args, ret_layout);
-                        },
-                        .closure => |inner_closure| {
-                            return try self.generateClosureCall(inner_closure, outer_args, ret_layout);
-                        },
-                        .block => |block| {
-                            // Block that returns a lambda
-                            return try self.generateBlockCall(block, outer_args, ret_layout);
-                        },
-                        else => return Error.UnsupportedExpression,
-                    };
-                },
-                .call => |nested_call| {
-                    // Triple-nested call: (((fn)(arg1))(arg2))(arg3)
-                    // We need to recursively process the inner call first
-                    // The result will be a lambda/closure that we then call with inner_call.args
-                    // and finally with outer_args
-
-                    // Process the innermost call to get the first returned lambda
-                    const nested_fn_expr = self.store.getExpr(nested_call.fn_expr);
-
-                    switch (nested_fn_expr) {
-                        .lambda => |nested_lambda| {
-                            // Bind the nested call's arguments to the nested lambda's parameters
-                            const nested_args = self.store.getExprSpan(nested_call.args);
-                            const nested_params = self.store.getPatternSpan(nested_lambda.params);
-
-                            for (nested_params, nested_args) |param_id, arg_id| {
-                                const arg_loc = try self.generateExpr(arg_id);
-                                try self.bindPattern(param_id, arg_loc);
-                            }
-
-                            // The nested lambda body should return another lambda
-                            const nested_body_expr = self.store.getExpr(nested_lambda.body);
-
-                            switch (nested_body_expr) {
-                                .lambda => |level2_lambda| {
-                                    // Bind inner_call.args to level2 lambda params
-                                    const level2_args = self.store.getExprSpan(inner_call.args);
-                                    const level2_params = self.store.getPatternSpan(level2_lambda.params);
-
-                                    for (level2_params, level2_args) |param_id, arg_id| {
-                                        const arg_loc = try self.generateExpr(arg_id);
-                                        try self.bindPattern(param_id, arg_loc);
-                                    }
-
-                                    // The level2 lambda body should return another lambda
-                                    const level2_body_expr = self.store.getExpr(level2_lambda.body);
-
-                                    switch (level2_body_expr) {
-                                        .lambda => |level3_lambda| {
-                                            // Finally call with outer_args
-                                            return try self.generateLambdaCall(level3_lambda, outer_args, ret_layout);
-                                        },
-                                        .closure => |level3_closure| {
-                                            return try self.generateClosureCall(level3_closure, outer_args, ret_layout);
-                                        },
-                                        .block => |level3_block| {
-                                            return try self.generateBlockCall(level3_block, outer_args, ret_layout);
-                                        },
-                                        else => return Error.UnsupportedExpression,
-                                    }
-                                },
-                                .closure => |level2_closure| {
-                                    // Handle closure that returns another lambda/closure
-                                    // First bind the captures
-                                    try self.bindClosureCaptures(level2_closure);
-
-                                    // Bind inner_call.args to the closure's lambda params
-                                    const lambda_expr = self.store.getExpr(level2_closure.lambda);
-                                    switch (lambda_expr) {
-                                        .lambda => |inner_lambda| {
-                                            const level2_args = self.store.getExprSpan(inner_call.args);
-                                            const level2_params = self.store.getPatternSpan(inner_lambda.params);
-
-                                            for (level2_params, level2_args) |param_id, arg_id| {
-                                                const arg_loc = try self.generateExpr(arg_id);
-                                                try self.bindPattern(param_id, arg_loc);
-                                            }
-
-                                            // The inner lambda body should return another lambda
-                                            const level2_body_expr = self.store.getExpr(inner_lambda.body);
-
-                                            switch (level2_body_expr) {
-                                                .lambda => |level3_lambda| {
-                                                    return try self.generateLambdaCall(level3_lambda, outer_args, ret_layout);
-                                                },
-                                                .closure => |level3_closure| {
-                                                    return try self.generateClosureCall(level3_closure, outer_args, ret_layout);
-                                                },
-                                                .block => |level3_block| {
-                                                    return try self.generateBlockCall(level3_block, outer_args, ret_layout);
-                                                },
-                                                else => return Error.UnsupportedExpression,
-                                            }
-                                        },
-                                        else => return Error.UnsupportedExpression,
-                                    }
-                                },
-                                .block => |level2_block| {
-                                    // Execute block and call resulting lambda with remaining args
-                                    // First execute block statements
-                                    const stmts = self.store.getStmts(level2_block.stmts);
-                                    for (stmts) |stmt| {
-                                        const expr_loc = try self.generateExpr(stmt.expr);
-                                        try self.bindPattern(stmt.pattern, expr_loc);
-                                    }
-
-                                    // Get final expression - should be a lambda/closure
-                                    const block_final = self.store.getExpr(level2_block.final_expr);
-
-                                    switch (block_final) {
-                                        .lambda => |level2_lambda| {
-                                            // Bind inner_call.args to this lambda's params
-                                            const level2_args = self.store.getExprSpan(inner_call.args);
-                                            const level2_params = self.store.getPatternSpan(level2_lambda.params);
-
-                                            for (level2_params, level2_args) |param_id, arg_id| {
-                                                const arg_loc = try self.generateExpr(arg_id);
-                                                try self.bindPattern(param_id, arg_loc);
-                                            }
-
-                                            // Evaluate body - should return lambda for outer_args
-                                            const level2_body_expr = self.store.getExpr(level2_lambda.body);
-
-                                            switch (level2_body_expr) {
-                                                .lambda => |level3_lambda| {
-                                                    return try self.generateLambdaCall(level3_lambda, outer_args, ret_layout);
-                                                },
-                                                .closure => |level3_closure| {
-                                                    return try self.generateClosureCall(level3_closure, outer_args, ret_layout);
-                                                },
-                                                .block => |level3_block| {
-                                                    return try self.generateBlockCall(level3_block, outer_args, ret_layout);
-                                                },
-                                                else => return Error.UnsupportedExpression,
-                                            }
-                                        },
-                                        .closure => |level2_closure| {
-                                            // Bind captures first
-                                            try self.bindClosureCaptures(level2_closure);
-
-                                            // Get the lambda from the closure
-                                            const lambda_expr = self.store.getExpr(level2_closure.lambda);
-                                            switch (lambda_expr) {
-                                                .lambda => |level2_lambda| {
-                                                    // Bind inner_call.args to this lambda's params
-                                                    const level2_args = self.store.getExprSpan(inner_call.args);
-                                                    const level2_params = self.store.getPatternSpan(level2_lambda.params);
-
-                                                    for (level2_params, level2_args) |param_id, arg_id| {
-                                                        const arg_loc = try self.generateExpr(arg_id);
-                                                        try self.bindPattern(param_id, arg_loc);
-                                                    }
-
-                                                    // Evaluate body - should return lambda for outer_args
-                                                    const level2_body_expr = self.store.getExpr(level2_lambda.body);
-
-                                                    switch (level2_body_expr) {
-                                                        .lambda => |level3_lambda| {
-                                                            return try self.generateLambdaCall(level3_lambda, outer_args, ret_layout);
-                                                        },
-                                                        .closure => |level3_closure| {
-                                                            return try self.generateClosureCall(level3_closure, outer_args, ret_layout);
-                                                        },
-                                                        .block => |level3_block| {
-                                                            return try self.generateBlockCall(level3_block, outer_args, ret_layout);
-                                                        },
-                                                        else => return Error.UnsupportedExpression,
-                                                    }
-                                                },
-                                                else => return Error.UnsupportedExpression,
-                                            }
-                                        },
-                                        else => return Error.UnsupportedExpression,
-                                    }
-                                },
-                                else => return Error.UnsupportedExpression,
-                            }
-                        },
-                        else => return Error.UnsupportedExpression,
-                    }
-                },
-                else => return Error.UnsupportedExpression,
-            };
-        }
-
-        /// Generate code for calling the result of a block expression
-        fn generateBlockCall(self: *Self, block: anytype, args_span: anytype, ret_layout: layout.Idx) Error!ValueLocation {
-            // Execute the block statements
-            const stmts = self.store.getStmts(block.stmts);
-            for (stmts) |stmt| {
-                const expr_loc = try self.generateExpr(stmt.expr);
-                try self.bindPattern(stmt.pattern, expr_loc);
-            }
-
-            // The final expression should be a lambda/closure
-            const final_expr = self.store.getExpr(block.final_expr);
-
-            return switch (final_expr) {
-                .lambda => |lambda| blk: {
-                    const code_offset = try self.compileLambdaAsProc(block.final_expr, lambda);
-                    break :blk try self.generateCallToLambda(code_offset, args_span, ret_layout);
-                },
-                .closure => |closure| blk: {
-                    const inner_expr = self.store.getExpr(closure.lambda);
-                    if (inner_expr == .lambda) {
-                        const code_offset = try self.compileLambdaAsProc(closure.lambda, inner_expr.lambda);
-                        break :blk try self.generateCallToLambda(code_offset, args_span, ret_layout);
-                    }
-                    break :blk try self.generateClosureCall(closure, args_span, ret_layout);
-                },
-                else => return Error.UnsupportedExpression,
-            };
-        }
-
-        /// Generate code for calling a looked-up function
+        /// Generate code for calling a looked-up function (procedure-based, no inlining)
         fn generateLookupCall(self: *Self, lookup: anytype, args_span: anytype, ret_layout: layout.Idx) Error!ValueLocation {
             const symbol_key: u48 = @bitCast(lookup.symbol);
 
-            // FIRST: Check if the function was compiled as a procedure
+            // Check if the function was compiled as a procedure
             if (self.proc_registry.get(symbol_key)) |proc| {
                 return try self.generateCallToCompiledProc(proc, args_span, ret_layout);
             }
 
-            // Check if the symbol is bound to a lambda/closure in local scope
-            if (self.lambda_bindings.get(symbol_key)) |lambda_expr_id| {
-                const lambda_expr = self.store.getExpr(lambda_expr_id);
-
-                // Use inlining for lambda calls from lookups.
-                // This is necessary because lambdas may be polymorphic (called with different types),
-                // and procedure-based compilation only works for monomorphic functions.
-                return switch (lambda_expr) {
-                    .lambda => |lambda| try self.generateLambdaCall(lambda, args_span, ret_layout),
-                    .closure => |closure| try self.generateClosureCallWithSymbol(closure, args_span, ret_layout, lookup.symbol),
-                    .block => |block| try self.generateBlockCall(block, args_span, ret_layout),
-                    else => return Error.UnsupportedExpression,
-                };
-            }
-
-            // Look up the function in top-level definitions
+            // Look up the function in top-level definitions and compile as procedure
             if (self.store.getSymbolDef(lookup.symbol)) |def_expr_id| {
                 const def_expr = self.store.getExpr(def_expr_id);
 
-                // Use inlining for lambda calls from top-level definitions.
-                // This is necessary because lambdas may be polymorphic (called with different types),
-                // and procedure-based compilation only works for monomorphic functions.
                 return switch (def_expr) {
-                    .lambda => |lambda| try self.generateLambdaCall(lambda, args_span, ret_layout),
-                    .closure => |closure| try self.generateClosureCallWithSymbol(closure, args_span, ret_layout, lookup.symbol),
-                    .block => |block| try self.generateBlockCall(block, args_span, ret_layout),
+                    .lambda => |lambda| {
+                        const offset = try self.compileLambdaAsProc(def_expr_id, lambda);
+                        return try self.generateCallToLambda(offset, args_span, ret_layout);
+                    },
+                    .closure => |closure| {
+                        const inner = self.store.getExpr(closure.lambda);
+                        if (inner == .lambda) {
+                            const offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda);
+                            return try self.generateCallToLambda(offset, args_span, ret_layout);
+                        }
+                        return Error.UnsupportedExpression;
+                    },
                     else => return Error.UnsupportedExpression,
                 };
             }
