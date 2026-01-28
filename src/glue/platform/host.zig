@@ -803,25 +803,6 @@ fn platform_main(args: [][*:0]u8) !c_int {
 
     const stdout: std.fs.File = .stdout();
 
-    // Create target info for type extraction
-    const target_info = type_extractor.Target.native();
-    stdout.writeAll("Target: ") catch {};
-    switch (target_info.architecture) {
-        .Aarch32 => stdout.writeAll("aarch32") catch {},
-        .Aarch64 => stdout.writeAll("aarch64") catch {},
-        .Wasm32 => stdout.writeAll("wasm32") catch {},
-        .X86x32 => stdout.writeAll("x86") catch {},
-        .X86x64 => stdout.writeAll("x86_64") catch {},
-    }
-    stdout.writeAll("-") catch {};
-    switch (target_info.operating_system) {
-        .Freestanding => stdout.writeAll("freestanding") catch {},
-        .Linux => stdout.writeAll("linux") catch {},
-        .Mac => stdout.writeAll("macos") catch {},
-        .Windows => stdout.writeAll("windows") catch {},
-    }
-    stdout.writeAll("\n") catch {};
-
     // Entry point names from args[entry_point_start_idx..], or default to ["main"] if none provided
     const default_entry_points = [_][]const u8{"main"};
     const entry_point_names: []const []const u8 = if (args.len > entry_point_start_idx) blk: {

@@ -152,7 +152,7 @@ pub const ReplArgs = struct {
     backend: Backend = .interpreter,
 };
 
-/// Arguments for `roc glue`
+/// Arguments for `roc experimental-glue`
 pub const GlueArgs = struct {
     glue_spec: []const u8, // path to the glue spec .roc file (REQUIRED)
     output_dir: []const u8, // path to the output directory for generated glue files (REQUIRED)
@@ -175,7 +175,7 @@ pub fn parse(alloc: mem.Allocator, args: []const []const u8) !CliArgs {
     if (mem.eql(u8, args[0], "fmt")) return try parseFormat(alloc, args[1..]);
     if (mem.eql(u8, args[0], "test")) return parseTest(args[1..]);
     if (mem.eql(u8, args[0], "repl")) return parseRepl(args[1..]);
-    if (mem.eql(u8, args[0], "glue")) return parseGlue(args[1..]);
+    if (mem.eql(u8, args[0], "experimental-glue")) return parseGlue(args[1..]);
     if (mem.eql(u8, args[0], "version")) return parseVersion(args[1..]);
     if (mem.eql(u8, args[0], "docs")) return parseDocs(args[1..]);
     if (mem.eql(u8, args[0], "experimental-lsp")) return parseExperimentalLsp(args[1..]);
@@ -199,7 +199,7 @@ const main_help =
     \\  test             Run all top-level `expect`s in a main module and any modules it imports
     \\  repl             Launch the interactive Read Eval Print Loop (REPL)
     \\  fmt              Format a .roc file or the .roc files contained in a directory using standard Roc formatting
-    \\  glue             Generate native glue code from a Roc platform using a language-specific glue spec
+    \\  experimental-glue Generate native glue code from a Roc platform using a language-specific glue spec
     \\  version          Print the Roc compiler's version
     \\  check            Check the code for problems, but don't build or run it
     \\  docs             Generate documentation for a Roc package or platform
@@ -689,7 +689,7 @@ fn parseGlue(args: []const []const u8) CliArgs {
             return CliArgs{ .help =
             \\Generate glue code from a platform using a glue spec
             \\
-            \\Usage: roc glue [OPTIONS] <GLUE_SPEC> <GLUE_DIR> [ROC_FILE]
+            \\Usage: roc experimental-glue [OPTIONS] <GLUE_SPEC> <GLUE_DIR> [ROC_FILE]
             \\
             \\Arguments:
             \\  <GLUE_SPEC>  The glue spec .roc file that defines how to generate glue code
@@ -708,7 +708,7 @@ fn parseGlue(args: []const []const u8) CliArgs {
             } else if (platform_path == null) {
                 platform_path = arg;
             } else {
-                return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "glue", .arg = arg } } };
+                return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "experimental-glue", .arg = arg } } };
             }
         }
     }
@@ -720,7 +720,7 @@ fn parseGlue(args: []const []const u8) CliArgs {
         \\
         \\Generate glue code from a platform using a glue spec
         \\
-        \\Usage: roc glue [OPTIONS] <GLUE_SPEC> <GLUE_DIR> [ROC_FILE]
+        \\Usage: roc experimental-glue [OPTIONS] <GLUE_SPEC> <GLUE_DIR> [ROC_FILE]
         \\
         \\Arguments:
         \\  <GLUE_SPEC>  The glue spec .roc file that defines how to generate glue code
@@ -740,7 +740,7 @@ fn parseGlue(args: []const []const u8) CliArgs {
         \\
         \\Generate glue code from a platform using a glue spec
         \\
-        \\Usage: roc glue [OPTIONS] <GLUE_SPEC> <GLUE_DIR> [ROC_FILE]
+        \\Usage: roc experimental-glue [OPTIONS] <GLUE_SPEC> <GLUE_DIR> [ROC_FILE]
         \\
         \\Arguments:
         \\  <GLUE_SPEC>  The glue spec .roc file that defines how to generate glue code

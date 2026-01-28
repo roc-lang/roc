@@ -12,9 +12,9 @@ test "glue command with DebugGlue succeeds" {
     const tmp_path = tmp_dir.dir.realpathAlloc(allocator, ".") catch unreachable;
     defer allocator.free(tmp_path);
 
-    // Run: roc glue src/glue/src/DebugGlue.roc <tmp_path> test/fx/platform/main.roc
+    // Run: roc experimental-glue src/glue/src/DebugGlue.roc <tmp_path> test/fx/platform/main.roc
     const result = try util.runRocCommand(allocator, &.{
-        "glue",
+        "experimental-glue",
         "src/glue/src/DebugGlue.roc",
         tmp_path,
         "test/fx/platform/main.roc",
@@ -48,9 +48,9 @@ test "glue command with CGlue generates expected C header" {
     const tmp_path = tmp_dir.dir.realpathAlloc(allocator, ".") catch unreachable;
     defer allocator.free(tmp_path);
 
-    // Run: roc glue src/glue/src/CGlue.roc <tmp_path> test/fx/platform/main.roc
+    // Run: roc experimental-glue src/glue/src/CGlue.roc <tmp_path> test/fx/platform/main.roc
     const result = try util.runRocCommand(allocator, &.{
-        "glue",
+        "experimental-glue",
         "src/glue/src/CGlue.roc",
         tmp_path,
         "test/fx/platform/main.roc",
@@ -120,9 +120,9 @@ test "generated C header compiles with zig cc" {
     const tmp_path = tmp_dir.dir.realpathAlloc(allocator, ".") catch unreachable;
     defer allocator.free(tmp_path);
 
-    // Run: roc glue src/glue/src/CGlue.roc <tmp_path> test/fx/platform/main.roc
+    // Run: roc experimental-glue src/glue/src/CGlue.roc <tmp_path> test/fx/platform/main.roc
     const glue_result = try util.runRocCommand(allocator, &.{
-        "glue",
+        "experimental-glue",
         "src/glue/src/CGlue.roc",
         tmp_path,
         "test/fx/platform/main.roc",
