@@ -93,76 +93,120 @@ pub const SyntaxChecker = struct {
 
     /// Check the file referenced by the URI and return diagnostics grouped by URI.
     pub fn check(self: *SyntaxChecker, uri: []const u8, override_text: ?[]const u8, workspace_root: ?[]const u8) ![]Diagnostics.PublishDiagnostics {
-        std.debug.print("syntax check: uri={s}\n", .{uri});
         _ = workspace_root; // Reserved for future use
 
         self.mutex.lock();
         defer self.mutex.unlock();
-
-        std.debug.print("check: create fresh build env\n", .{});
         const env_handle = try self.createFreshBuildEnv();
         const env = env_handle.envPtr();
 
         var session = try BuildSession.init(self.allocator, env, uri, override_text);
         defer session.deinit();
 
-        self.logDebug(.build, "building {s}", .{session.absolute_path});
-        std.debug.print("syntax check: build {s}\n", .{session.absolute_path});
+        const absolute_path = session.absolute_path;
+        // Check if content has changed using hash comparison
+        // This avoids unnecessary rebuilds on focus/blur events
+        if (override_text) |text| {
+            const new_hash = DependencyGraph.computeContentHash(text);
+            const old_hash = self.dependency_graph.getContentHash(session.absolute_path);
 
-        const drained = session.drained_reports orelse return error.BuildFailed;
-        std.debug.print("syntax check: drained reports={d}\n", .{drained.len});
+            if (old_hash) |existing| {
+                if (std.mem.eql(u8, &existing, &new_hash)) {
+                    self.logDebug(.build, "[INCREMENTAL] SKIP rebuild for {s}: content hash unchanged ({x}...)", .{
+                        session.absolute_path,
+                        new_hash[0..4].*,
+                    });
+                    // Return empty diagnostics array - no changes means no new diagnostics
+                    return &[_]Diagnostics.PublishDiagnostics{};
+                }
+                self.logDebug(.build, "[INCREMENTAL] REBUILD {s}: content hash changed ({x}... -> {x}...)", .{
+                    session.absolute_path,
+                    existing[0..4].*,
+                    new_hash[0..4].*,
+                });
+            } else {
+                self.logDebug(.build, "[INCREMENTAL] INITIAL build for {s}: no previous hash (new hash: {x}...)", .{
+                    session.absolute_path,
+                    new_hash[0..4].*,
+                });
+            }
+
+            // Update the content hash for this module
+            self.dependency_graph.setContentHash(session.absolute_path, new_hash) catch |err| {
+                self.logDebug(.build, "Failed to set content hash: {s}", .{@errorName(err)});
+            };
+        }
 
         // Update dependency graph from successful build
         self.updateDependencyGraph(env);
-
-        if (self.shouldSnapshotBuild(env, session.absolute_path, drained)) {
-            self.storeSnapshotEnv(env_handle, session.absolute_path);
-        }
 
         var publish_list = std.ArrayList(Diagnostics.PublishDiagnostics){};
         errdefer {
             for (publish_list.items) |*set| set.deinit(self.allocator);
             publish_list.deinit(self.allocator);
         }
+        if (session.drained_reports) |drained_reports| {
+            // if the build succeeded, consider snapshotting the BuildEnv for completions
+            if (self.shouldSnapshotBuild(env, session.absolute_path, drained_reports)) {
+                self.storeSnapshotEnv(env_handle, session.absolute_path);
+            }
+            for (drained_reports) |entry| {
+                const mapped_path = if (entry.abs_path.len == 0) session.absolute_path else entry.abs_path;
+                const module_uri = try uri_util.pathToUri(self.allocator, mapped_path);
 
-        for (drained) |entry| {
-            const mapped_path = if (entry.abs_path.len == 0) session.absolute_path else entry.abs_path;
-            const module_uri = try uri_util.pathToUri(self.allocator, mapped_path);
-
-            var diags = std.ArrayList(Diagnostics.Diagnostic){};
-            errdefer {
-                for (diags.items) |diag| {
-                    self.allocator.free(diag.message);
+                var diags = std.ArrayList(Diagnostics.Diagnostic){};
+                errdefer {
+                    for (diags.items) |diag| {
+                        self.allocator.free(diag.message);
+                    }
+                    diags.deinit(self.allocator);
                 }
+
+                for (entry.reports) |*rep| {
+                    const report = rep.*;
+                    //we don't deinit here because BuildSession will free later
+
+                    if (self.shouldSuppressReport(report)) continue;
+
+                    const diag = try self.reportToDiagnostic(report);
+                    try diags.append(self.allocator, diag);
+                }
+                //we also don't don't deinit the entries because buildSession will free them
+                //self.allocator.free(entry.reports);
+
+                try publish_list.append(self.allocator, .{
+                    .uri = module_uri,
+                    .diagnostics = try diags.toOwnedSlice(self.allocator),
+                });
                 diags.deinit(self.allocator);
             }
 
-            // Reports and their backing storage are owned by BuildSession.deinit().
-            // We only read them here to build diagnostics.
-            for (entry.reports) |*rep| {
-                const report = rep.*;
-
-                if (self.shouldSuppressReport(report)) continue;
-
-                const diag = try self.reportToDiagnostic(report);
-                try diags.append(self.allocator, diag);
+            if (publish_list.items.len == 0) {
+                try publish_list.append(self.allocator, .{
+                    .uri = try self.allocator.dupe(u8, uri),
+                    .diagnostics = &.{},
+                });
             }
 
-            try publish_list.append(self.allocator, .{
-                .uri = module_uri,
-                .diagnostics = try diags.toOwnedSlice(self.allocator),
-            });
-            diags.deinit(self.allocator);
-        }
-
-        if (publish_list.items.len == 0) {
+            return publish_list.toOwnedSlice(self.allocator);
+        } else {
+            // No reports drained, return a diagnostic showing the failure to get diagnostics
             try publish_list.append(self.allocator, .{
                 .uri = try self.allocator.dupe(u8, uri),
-                .diagnostics = &.{},
+                .diagnostics = try self.allocator.dupe(Diagnostics.Diagnostic, &.{
+                    .{
+                        .range = .{
+                            .start = .{ .line = 0, .character = 0 },
+                            .end = .{ .line = 0, .character = 1 },
+                        },
+                        .severity = 1,
+                        .source = "roc",
+                        .message = try std.fmt.allocPrint(self.allocator, "Failed to retrieve diagnostics for {s}", .{absolute_path}),
+                    },
+                }),
             });
+            return publish_list.toOwnedSlice(self.allocator);
         }
-
-        return publish_list.toOwnedSlice(self.allocator);
     }
 
     /// Creates a fresh BuildEnv for a new build.
@@ -184,7 +228,7 @@ pub const SyntaxChecker = struct {
         }
 
         // Create a fresh BuildEnv
-        var env = try BuildEnv.init(self.allocator, .single_threaded, 1,roc_target.RocTarget.detectNative());
+        var env = try BuildEnv.init(self.allocator, .single_threaded, 1, roc_target.RocTarget.detectNative());
         env.compiler_version = build_options.compiler_version;
 
         if (self.cache_config.enabled) {
@@ -877,8 +921,7 @@ pub const SyntaxChecker = struct {
 
     /// Helper function to find a module by name and return a DefinitionResult pointing to it
     fn findModuleByName(self: *SyntaxChecker, module_name: []const u8) ?DefinitionResult {
-        const env_handle = self.getModuleLookupEnv()  orelse return null;
-        const env = env_handle.envPtr();
+        const env = self.getModuleLookupEnv() orelse return null;
 
         // Extract the base module name (e.g., "Stdout" from "pf.Stdout")
         const base_name = if (std.mem.lastIndexOf(u8, module_name, ".")) |dot_pos|
@@ -1475,8 +1518,8 @@ pub const SyntaxChecker = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        // Create fresh build env and build the module (like getDefinitionAtPosition)
-        var env = self.createFreshBuildEnv() catch return &[_]SymbolInformation{};
+        // // Create fresh build env and build the module (like getDefinitionAtPosition)
+        // var env = self.createFreshBuildEnv() catch return &[_]SymbolInformation{};
 
         // Set up file provider with source as override text
         var provider_state = OverrideProvider{

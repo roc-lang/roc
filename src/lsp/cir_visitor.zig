@@ -294,6 +294,7 @@ pub fn CirVisitor(comptime Context: type) type {
                 .e_lookup_local,
                 .e_lookup_external,
                 .e_lookup_required,
+                .e_lookup_pending,
                 .e_zero_argument_tag,
                 .e_runtime_error,
                 .e_crash,
