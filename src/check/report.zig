@@ -1976,7 +1976,7 @@ pub const ReportBuilder = struct {
                 D.bytes("has the type:"),
             },
             types.expected_snapshot,
-            &.{D.bytes("But is needs to have the type:")},
+            &.{D.bytes("But I need it to have the type:")},
             types.actual_snapshot,
             &.{
                 // TODO: Once we have nicer type diff hints, use them here
