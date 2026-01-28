@@ -4040,6 +4040,20 @@ test "check type - self recursive function - fibonacci - pass" {
     try checkTypesModule(source, .{ .pass = .{ .def = "fib" } }, "U8 -> U8");
 }
 
+test "check type - mutually recursive functions - constraint propagation" {
+    const source =
+        \\f = |x| { a: x, b: g(x) }
+        \\g = |y| f(y).a
+        \\test = (f ,g)
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "(c -> { a: c, b: c }, c -> c)" },
+        },
+    );
+}
+
 test "check type - self recursive function - fibonacci - fail" {
     const source =
         \\fib = |n| {
