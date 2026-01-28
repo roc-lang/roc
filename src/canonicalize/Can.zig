@@ -2677,18 +2677,36 @@ pub fn validateForChecking(self: *Self) std.mem.Allocator.Error!void {
     switch (self.env.module_kind) {
         .type_module => |*main_type_ident| {
             const main_status = try self.checkMainFunction();
-            const matching_type_ident = self.findMatchingTypeIdent();
+            const matching_type_result = self.findMatchingTypeIdent();
 
-            // Store the matching type ident in module_kind if found
-            if (matching_type_ident) |type_ident| {
-                main_type_ident.* = type_ident;
-                // The main type and associated items are already exposed in canonicalize()
-            }
+            // Check if we found a matching type and whether it's a nominal type
+            const has_valid_type_module = if (matching_type_result) |result| blk: {
+                // Type modules require nominal types (:= or ::), not aliases (:)
+                if (result.kind == .nominal or result.kind == .@"opaque") {
+                    // Store the matching type ident in module_kind
+                    main_type_ident.* = result.ident;
+                    break :blk true;
+                } else {
+                    // Found alias instead of nominal type - emit specific error
+                    const file = self.parse_ir.store.getFile();
+                    const module_name_text = self.env.module_name;
+                    const module_name_ident = try self.env.insertIdent(base.Ident.for_text(module_name_text));
+                    const file_region = self.parse_ir.tokenizedRegionToRegion(file.region);
 
-            // Valid if either we have a valid main! or a matching type declaration
-            const is_valid = (main_status == .valid) or (matching_type_ident != null);
+                    try self.env.pushDiagnostic(.{
+                        .type_module_has_alias_not_nominal = .{
+                            .module_name = module_name_ident,
+                            .region = file_region,
+                        },
+                    });
+                    break :blk false;
+                }
+            } else false;
 
-            if (!is_valid and main_status == .not_found) {
+            // Valid if either we have a valid main! or a valid nominal type declaration
+            const is_valid = (main_status == .valid) or has_valid_type_module;
+
+            if (!is_valid and main_status == .not_found and matching_type_result == null) {
                 // Neither valid main! nor matching type - report helpful error
                 try self.reportTypeModuleOrDefaultAppError();
             }
@@ -12956,9 +12974,15 @@ fn checkMainFunction(self: *Self) std.mem.Allocator.Error!MainFunctionStatus {
     return .not_found;
 }
 
+/// Result from finding a matching type declaration
+const MatchingTypeResult = struct {
+    ident: Ident.Idx,
+    kind: AST.TypeDeclKind,
+};
+
 /// Check if there's a type declaration matching the module name
-/// Find the type declaration matching the module name and return its ident
-fn findMatchingTypeIdent(self: *Self) ?Ident.Idx {
+/// Find the type declaration matching the module name and return its ident and kind
+fn findMatchingTypeIdent(self: *Self) ?MatchingTypeResult {
     const file = self.parse_ir.store.getFile();
     const module_name_text = self.env.module_name;
 
@@ -12973,7 +12997,10 @@ fn findMatchingTypeIdent(self: *Self) ?Ident.Idx {
             const type_name_text = self.env.getIdent(type_name_ident);
 
             if (std.mem.eql(u8, type_name_text, module_name_text)) {
-                return type_name_ident;
+                return .{
+                    .ident = type_name_ident,
+                    .kind = type_decl.kind,
+                };
             }
         }
     }
