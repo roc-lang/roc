@@ -2238,7 +2238,7 @@ fn checkPlatformRequirementsFromCoordinator(
         const app_module = &app_pkg.modules.items[app_root_id];
         const app_path = app_module.path;
 
-        var rb = check.ReportBuilder.init(
+        var rb = try check.ReportBuilder.init(
             ctx.gpa,
             app_root_env,
             app_root_env,
@@ -3886,8 +3886,8 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
     // Report any compile-time crashes
     const has_comptime_crashes = checker.problems.len() > 0;
     if (has_comptime_crashes) {
-        const problem = @import("check").problem;
-        var report_builder = problem.ReportBuilder.init(
+        const problem = check.problem;
+        var report_builder = try ReportBuilder.init(
             ctx.gpa,
             &env,
             &env,

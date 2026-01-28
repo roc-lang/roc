@@ -14,9 +14,13 @@ pub const SnapshotContentIdx = SnapshotContentList.Idx;
 
 const SnapshotContentList = collections.SafeList(SnapshotContent);
 const SnapshotContentIdxSafeList = collections.SafeList(SnapshotContentIdx);
-const SnapshotRecordFieldSafeList = collections.SafeMultiList(SnapshotRecordField);
-const SnapshotTagSafeList = collections.SafeMultiList(SnapshotTag);
 const SnapshotStaticDispatchConstraintSafeList = collections.SafeList(SnapshotStaticDispatchConstraint);
+
+/// A safe list of record fields
+pub const SnapshotRecordFieldSafeList = collections.SafeMultiList(SnapshotRecordField);
+
+/// A safe list of tags
+pub const SnapshotTagSafeList = collections.SafeMultiList(SnapshotTag);
 
 /// The content of a type snapshot, mirroring types.Content for error reporting.
 pub const SnapshotContent = union(enum) {
@@ -600,6 +604,113 @@ pub const Store = struct {
 
     pub fn getContent(self: *const Self, idx: SnapshotContentIdx) SnapshotContent {
         return self.contents.get(idx).*;
+    }
+
+    pub fn getContentUnwrapAlias(self: *const Self, initial_idx: SnapshotContentIdx) SnapshotContent {
+        var idx = initial_idx;
+        while (true) {
+            const content = self.contents.get(idx).*;
+            switch (content) {
+                .alias => |alias| {
+                    idx = alias.backing;
+                },
+                else => return content,
+            }
+        }
+    }
+
+    const RecordFieldSnapshot = union(enum) {
+        not_a_record,
+        empty_record,
+        record: SnapshotRecordFieldSafeList.Range,
+    };
+
+    pub fn gatherRecordFields(
+        self: *const Self,
+        idx: SnapshotContentIdx,
+        gpa: std.mem.Allocator,
+        fields_out: *SnapshotRecordFieldSafeList,
+    ) std.mem.Allocator.Error!RecordFieldSnapshot {
+        const unwrapped = self.getContentUnwrapAlias(idx);
+        switch (unwrapped) {
+            .structure => |s| switch (s) {
+                .record => |record| {
+                    // Gather all fields into fields_out
+                    const fields_out_top: u32 = @intCast(fields_out.items.len);
+                    try self.gatherRecordFieldsHelp(record, gpa, fields_out);
+                    const fields_out_range = fields_out.rangeToEnd(fields_out_top);
+
+                    // Return empty record on base-case
+                    if (fields_out_range.count == 0) {
+                        return .empty_record;
+                    }
+
+                    return RecordFieldSnapshot{ .record = fields_out_range };
+                },
+                .record_unbound => |fields| {
+                    if (fields.count == 0) {
+                        return .empty_record;
+                    }
+
+                    const fields_out_top: u32 = @intCast(fields_out.items.len);
+                    const slice = self.sliceRecordFields(fields);
+                    for (slice.items(.name), slice.items(.content)) |name, content| {
+                        _ = try fields_out.append(gpa, .{ .name = name, .content = content });
+                    }
+                    const fields_out_range = fields_out.rangeToEnd(fields_out_top);
+                    return RecordFieldSnapshot{ .record = fields_out_range };
+                },
+                .empty_record => return .empty_record,
+                else => return .not_a_record,
+            },
+            else => return .not_a_record,
+        }
+    }
+
+    /// Gather all fields from a record, following extension chain.
+    /// Returns a Range into fields buffer.
+    pub fn gatherRecordFieldsHelp(
+        self: *const Store,
+        record: SnapshotRecord,
+        gpa: std.mem.Allocator,
+        fields_out: *SnapshotRecordFieldSafeList,
+    ) std.mem.Allocator.Error!void {
+
+        // Add immediate fields
+        const record_fields = self.sliceRecordFields(record.fields);
+        for (record_fields.items(.name), record_fields.items(.content)) |name, content| {
+            _ = try fields_out.append(gpa, .{ .name = name, .content = content });
+        }
+
+        // Follow extension chain
+        var ext_idx = record.ext;
+        while (true) {
+            const content = self.getContent(ext_idx);
+            switch (content) {
+                .structure => |flat| switch (flat) {
+                    .record => |rec| {
+                        const ext_fields = self.sliceRecordFields(rec.fields);
+                        for (ext_fields.items(.name), ext_fields.items(.content)) |name, field_content| {
+                            _ = try fields_out.append(gpa, .{ .name = name, .content = field_content });
+                        }
+                        ext_idx = rec.ext;
+                    },
+                    .record_unbound => |fields_range| {
+                        const ext_fields = self.sliceRecordFields(fields_range);
+                        for (ext_fields.items(.name), ext_fields.items(.content)) |name, field_content| {
+                            _ = try fields_out.append(gpa, .{ .name = name, .content = field_content });
+                        }
+                        break;
+                    },
+                    .empty_record => break,
+                    else => break,
+                },
+                .alias => |alias| {
+                    ext_idx = alias.backing;
+                },
+                .flex, .rigid, .err, .recursive => break,
+            }
+        }
     }
 
     /// Get the pre-formatted string representation of a tag (e.g., "TagName(a, b)").

@@ -87,6 +87,7 @@ const TagSafeMultiList = Tag.SafeMultiList;
 const TwoTagsSafeList = TwoTags.SafeList;
 
 const Problem = problem_mod.Problem;
+const Context = problem_mod.Context;
 
 /// The result of unification
 pub const Result = union(enum) {
@@ -126,7 +127,7 @@ pub fn unify(
     /// The "actual" variable
     b: Var,
 ) std.mem.Allocator.Error!Result {
-    return unifyWithConf(
+    return unifyInContext(
         module_env,
         types,
         problems,
@@ -136,18 +137,9 @@ pub fn unify(
         occurs_scratch,
         a,
         b,
-        Conf{ .ctx = .anon, .constraint_origin_var = null },
+        Context.none,
     );
 }
-
-/// Conf about a unification, used to improve error messages
-pub const Conf = struct {
-    ctx: Ctx,
-    constraint_origin_var: ?Var,
-
-    /// If the "expect" var comes fro an annotation, or if it's anonymous
-    pub const Ctx = enum { anon, anno };
-};
 
 /// Unify two type variables
 ///
@@ -157,7 +149,7 @@ pub const Conf = struct {
 /// * Merges unified variables so 1 is "root" and the other is "redirect"
 ///
 /// This function accepts a context and optional constraint origin var (for better error reporting)
-pub fn unifyWithConf(
+pub fn unifyInContext(
     module_env: *ModuleEnv,
     types: *types_mod.Store,
     problems: *problem_mod.Store,
@@ -169,7 +161,7 @@ pub fn unifyWithConf(
     a: Var,
     /// The "actual" variable
     b: Var,
-    conf: Conf,
+    context: Context,
 ) std.mem.Allocator.Error!Result {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -195,10 +187,8 @@ pub fn unifyWithConf(
                             .expected_snapshot = expected_snapshot,
                             .actual_var = b,
                             .actual_snapshot = actual_snapshot,
-                            .from_annotation = conf.ctx == .anno,
-                            .constraint_origin_var = conf.constraint_origin_var,
                         },
-                        .detail = null,
+                        .context = context,
                     } };
                 },
             }

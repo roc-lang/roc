@@ -400,7 +400,7 @@ fn generateAllReports(
     // Generate type checking reports
     for (solver.problems.problems.items) |problem| {
         const empty_modules: []const *ModuleEnv = &.{};
-        var report_builder = types_problem_mod.ReportBuilder.init(
+        var report_builder = check.ReportBuilder.init(
             allocator,
             module_env,
             can_ir,
@@ -409,7 +409,7 @@ fn generateAllReports(
             snapshot_path,
             empty_modules,
             &solver.import_mapping,
-        );
+        ) catch continue;
         defer report_builder.deinit();
 
         const report = report_builder.build(problem) catch |err| {

@@ -21,9 +21,9 @@ This **not** method is being called on a value whose type doesn't have that meth
 ```
                                      ^^^^^
 
-The value's type, which does not have a method named **not**, is:
+The value's type, which does not have a method named**not**, is:
 
-    [True, .._others]
+    [True, ..]
 
 **MISSING METHOD**
 This **not** method is being called on a value whose type doesn't have that method:
@@ -33,9 +33,9 @@ This **not** method is being called on a value whose type doesn't have that meth
 ```
                                             ^^^^^^
 
-The value's type, which does not have a method named **not**, is:
+The value's type, which does not have a method named**not**, is:
 
-    [False, .._others]
+    [False, ..]
 
 **MISSING METHOD**
 This **not** method is being called on a value whose type doesn't have that method:
@@ -45,9 +45,9 @@ This **not** method is being called on a value whose type doesn't have that meth
 ```
                                                                     ^^^^^
 
-The value's type, which does not have a method named **not**, is:
+The value's type, which does not have a method named**not**, is:
 
-    [True, .._others]
+    [True, ..]
 
 **MISSING METHOD**
 This **not** method is being called on a value whose type doesn't have that method:
@@ -57,9 +57,9 @@ This **not** method is being called on a value whose type doesn't have that meth
 ```
                                                                              ^^^^^
 
-The value's type, which does not have a method named **not**, is:
+The value's type, which does not have a method named**not**, is:
 
-    [True, .._others]
+    [True, ..]
 
 # TOKENS
 ~~~zig
@@ -117,5 +117,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "([True, .._others], [False, .._others2], Bool, Bool, Error, Error, Bool, Error)"))
+(expr (type "([True, ..], [False, ..], Bool, Bool, Error, Error, Bool, Error)"))
 ~~~

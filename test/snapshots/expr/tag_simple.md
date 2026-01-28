@@ -30,5 +30,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "[MyTag, .._others]"))
+(expr (type "[MyTag, ..]"))
 ~~~
