@@ -16,7 +16,7 @@ const Var = types_mod.Var;
 const Content = types_mod.Content;
 const FlatType = types_mod.FlatType;
 const Ident = base.Ident;
-const target_mod = base.target;
+const RocTarget = @import("roc_target").RocTarget;
 const LayoutStore = layout_mod.Store;
 const Layout = layout_mod.Layout;
 const SizeAlign = layout_mod.SizeAlign;
@@ -26,70 +26,6 @@ const Allocator = std.mem.Allocator;
 
 /// TypeId is an index into the types array
 pub const TypeId = u64;
-
-/// Architecture enum - matches Roc's tag ordering (alphabetical)
-pub const Architecture = enum(u8) {
-    Aarch32 = 0,
-    Aarch64 = 1,
-    Wasm32 = 2,
-    X86x32 = 3,
-    X86x64 = 4,
-
-    /// Get architecture from native build target
-    pub fn native() Architecture {
-        return switch (@import("builtin").cpu.arch) {
-            .aarch64 => .Aarch64,
-            .x86_64 => .X86x64,
-            .wasm32 => .Wasm32,
-            .x86 => .X86x32,
-            .arm => .Aarch32,
-            else => .X86x64, // Default fallback
-        };
-    }
-};
-
-/// OperatingSystem enum - matches Roc's tag ordering (alphabetical)
-pub const OperatingSystem = enum(u8) {
-    Freestanding = 0,
-    Linux = 1,
-    Mac = 2,
-    Windows = 3,
-
-    /// Get OS from native build target
-    pub fn native() OperatingSystem {
-        return switch (@import("builtin").os.tag) {
-            .linux => .Linux,
-            .macos => .Mac,
-            .windows => .Windows,
-            .freestanding => .Freestanding,
-            else => .Linux, // Default fallback
-        };
-    }
-};
-
-/// Target record - matches Roc { architecture : Architecture, operating_system : OperatingSystem }
-pub const Target = struct {
-    architecture: Architecture,
-    operating_system: OperatingSystem,
-
-    /// Create target from the base.target.Target (which only has usize info)
-    /// Uses native arch/os since base.target doesn't have that info
-    pub fn fromBaseTarget(t: target_mod.Target) Target {
-        _ = t; // The base target only has usize info
-        return .{
-            .architecture = Architecture.native(),
-            .operating_system = OperatingSystem.native(),
-        };
-    }
-
-    /// Create native target
-    pub fn native() Target {
-        return .{
-            .architecture = Architecture.native(),
-            .operating_system = OperatingSystem.native(),
-        };
-    }
-};
 
 /// Numeric type variants
 pub const RocNum = enum(u8) {
@@ -258,7 +194,7 @@ pub const ExtractedTypes = struct {
     types_by_name: []NamedType,
     deps: []TypeDependency,
     entrypoints: []EntryPoint,
-    target: Target,
+    target: RocTarget,
 
     pub fn deinit(self: *ExtractedTypes) void {
         self.allocator.free(self.types);
@@ -614,7 +550,7 @@ pub fn extractTypes(
     module_env: *ModuleEnv,
     layout_store: *LayoutStore,
     entry_point_names: []const []const u8,
-    t: target_mod.Target,
+    roc_target: RocTarget,
 ) !ExtractedTypes {
     var ctx = ExtractionContext.init(allocator, module_env, layout_store);
     defer ctx.deinit();
@@ -639,25 +575,6 @@ pub fn extractTypes(
         .types_by_name = try ctx.names.toOwnedSlice(),
         .deps = try ctx.deps.toOwnedSlice(),
         .entrypoints = try entrypoints.toOwnedSlice(),
-        .target = Target.fromBaseTarget(t),
+        .target = roc_target,
     };
-}
-
-test "Architecture.native" {
-    // Basic sanity check - just verify it returns a valid enum value
-    const arch = Architecture.native();
-    _ = @intFromEnum(arch); // This will compile if arch is a valid Architecture
-}
-
-test "OperatingSystem.native" {
-    // Basic sanity check - just verify it returns a valid enum value
-    const os = OperatingSystem.native();
-    _ = @intFromEnum(os); // This will compile if os is a valid OperatingSystem
-}
-
-test "Target.native" {
-    const target = Target.native();
-    // Verify both fields are valid enum values
-    try std.testing.expect(@intFromEnum(target.architecture) <= 4);
-    try std.testing.expect(@intFromEnum(target.operating_system) <= 3);
 }

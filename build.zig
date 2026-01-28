@@ -2998,6 +2998,7 @@ pub fn build(b: *std.Build) void {
         type_extractor_mod.addImport("can", roc_modules.can);
         type_extractor_mod.addImport("types", roc_modules.types);
         type_extractor_mod.addImport("layout", roc_modules.layout);
+        type_extractor_mod.addImport("roc_target", roc_modules.roc_target);
         glue_platform_host_lib.root_module.addImport("type_extractor", type_extractor_mod);
 
         // Copy the glue platform host library to the source directory

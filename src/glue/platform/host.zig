@@ -344,30 +344,6 @@ const RocList = builtins.list.RocList;
 /// TypeId is just a U64 wrapper in Roc
 const TypeId = u64;
 
-/// Architecture enum - matches Roc's tag ordering (alphabetical)
-const Architecture = enum(u8) {
-    Aarch32 = 0,
-    Aarch64 = 1,
-    Wasm32 = 2,
-    X86x32 = 3,
-    X86x64 = 4,
-};
-
-/// OperatingSystem enum - matches Roc's tag ordering (alphabetical)
-const OperatingSystem = enum(u8) {
-    Freestanding = 0,
-    Linux = 1,
-    Mac = 2,
-    Windows = 3,
-};
-
-/// Target record - matches Roc { architecture : Architecture, operating_system : OperatingSystem }
-/// Roc orders record fields alphabetically
-const Target = extern struct {
-    architecture: Architecture,
-    operating_system: OperatingSystem,
-};
-
 /// File record - matches Roc { name : Str, content : Str }
 /// Roc orders record fields alphabetically: content, name
 const File = extern struct {
