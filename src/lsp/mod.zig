@@ -25,6 +25,7 @@ test "lsp tests" {
     std.testing.refAllDecls(@import("test/semantic_tokens_test.zig"));
     std.testing.refAllDecls(@import("test/handler_tests.zig"));
     std.testing.refAllDecls(@import("test/scope_map_test.zig"));
+    std.testing.refAllDecls(@import("test/parse_error_test.zig"));
     std.testing.refAllDecls(@import("dependency_graph.zig"));
     std.testing.refAllDecls(@import("type_utils.zig"));
     std.testing.refAllDecls(@import("cir_visitor.zig"));
