@@ -1302,6 +1302,24 @@ test "for loop - mutable list append" {
     );
 }
 
+// Debug: For loop with closure call (like List.map does)
+test "for loop - with closure transform" {
+    try runExpectListI64(
+        \\{
+        \\    list = [1.I64, 2.I64, 3.I64]
+        \\    identity = |x| x
+        \\    var $result = List.with_capacity(List.len(list))
+        \\    for item in list {
+        \\        $result = List.append($result, identity(item))
+        \\    }
+        \\    $result
+        \\}
+    ,
+        &[_]i64{ 1, 2, 3 },
+        .no_trace,
+    );
+}
+
 // Tests for List.map
 
 test "List.map - basic identity" {

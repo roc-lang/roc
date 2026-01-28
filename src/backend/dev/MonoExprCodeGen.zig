@@ -536,6 +536,13 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     if (args.len < 1) return Error.UnsupportedExpression;
                     const list_loc = try self.generateExpr(args[0]);
 
+                    std.debug.print("list_len: list_loc={s}\n", .{@tagName(list_loc)});
+                    if (list_loc == .list_stack) {
+                        std.debug.print("  list_stack.struct_offset={}\n", .{list_loc.list_stack.struct_offset});
+                    } else if (list_loc == .stack) {
+                        std.debug.print("  stack offset={}\n", .{list_loc.stack});
+                    }
+
                     // Get base offset from either stack or list_stack location
                     const base_offset: i32 = switch (list_loc) {
                         .stack => |off| off,
@@ -1026,18 +1033,22 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // Check if we have a location for this symbol
             const symbol_key: u48 = @bitCast(symbol);
             if (self.symbol_locations.get(symbol_key)) |loc| {
+                std.debug.print("generateLookup: key={x}, loc={s}\n", .{ symbol_key, @tagName(loc) });
                 return loc;
             }
 
             // Symbol not found - it might be a top-level definition
             if (self.store.getSymbolDef(symbol)) |def_expr_id| {
+                std.debug.print("generateLookup: found symbolDef, generating...\n", .{});
                 // Generate code for the definition
                 const loc = try self.generateExpr(def_expr_id);
+                std.debug.print("generateLookup: def generated, loc={s}\n", .{@tagName(loc)});
                 // Cache the location
                 try self.symbol_locations.put(symbol_key, loc);
                 return loc;
             }
 
+            std.debug.print("generateLookup: symbol not found!\n", .{});
             return Error.LocalNotFound;
         }
 
@@ -4933,6 +4944,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         }
                     } else {
                         // Non-mutable: just record the location as before
+                        std.debug.print("bindPattern: non-mutable, symbol_key={x}, loc={s}\n", .{ symbol_key, @tagName(value_loc) });
                         try self.symbol_locations.put(symbol_key, value_loc);
                     }
                 },
@@ -5414,6 +5426,23 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             const params = self.store.getPatternSpan(lambda.params);
             const args = self.store.getExprSpan(args_span);
 
+            // Save old bindings for parameters to restore after inlining.
+            // This prevents nested lambda inlining from clobbering outer scope bindings.
+            const allocator = self.codegen.allocator;
+            var saved_locations = std.AutoHashMap(u48, ?ValueLocation).init(allocator);
+            defer saved_locations.deinit();
+            var saved_lambdas = std.AutoHashMap(u48, ?MonoExprId).init(allocator);
+            defer saved_lambdas.deinit();
+
+            for (params) |param_id| {
+                const param = self.store.getPattern(param_id);
+                if (param == .bind) {
+                    const symbol_key: u48 = @bitCast(param.bind.symbol);
+                    saved_locations.put(symbol_key, self.symbol_locations.get(symbol_key)) catch {};
+                    saved_lambdas.put(symbol_key, self.lambda_bindings.get(symbol_key)) catch {};
+                }
+            }
+
             // Evaluate each argument and bind to the corresponding parameter
             for (params, args) |param_id, arg_id| {
                 // Check if the argument is a closure/lambda - if so, bind it for later invocation
@@ -5469,13 +5498,39 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     else => {
                         // Normal argument - just evaluate and bind
                         const arg_loc = try self.generateExpr(arg_id);
+                        std.debug.print("generateLambdaCall: binding normal arg, loc={s}\n", .{@tagName(arg_loc)});
+                        if (arg_loc == .list_stack) {
+                            std.debug.print("  list_stack.struct_offset={}\n", .{arg_loc.list_stack.struct_offset});
+                        } else if (arg_loc == .stack) {
+                            std.debug.print("  stack offset={}\n", .{arg_loc.stack});
+                        }
                         try self.bindPatternWithLayout(param_id, arg_loc, arg_layout);
                     },
                 }
             }
 
             // Now generate code for the lambda body with arguments bound
-            return self.generateExpr(lambda.body);
+            const result = try self.generateExpr(lambda.body);
+
+            // Restore old bindings to preserve outer scope
+            var saved_locs_iter = saved_locations.iterator();
+            while (saved_locs_iter.next()) |entry| {
+                if (entry.value_ptr.*) |old_loc| {
+                    self.symbol_locations.put(entry.key_ptr.*, old_loc) catch {};
+                } else {
+                    _ = self.symbol_locations.remove(entry.key_ptr.*);
+                }
+            }
+            var saved_lambdas_iter = saved_lambdas.iterator();
+            while (saved_lambdas_iter.next()) |entry| {
+                if (entry.value_ptr.*) |old_lambda| {
+                    self.lambda_bindings.put(entry.key_ptr.*, old_lambda) catch {};
+                } else {
+                    _ = self.lambda_bindings.remove(entry.key_ptr.*);
+                }
+            }
+
+            return result;
         }
 
         /// Generate code for calling a closure (lambda with captures)
@@ -5866,6 +5921,23 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             const params = self.store.getPatternSpan(lambda.params);
             const args = self.store.getExprSpan(args_span);
 
+            // Save old bindings for parameters to restore after inlining.
+            // This prevents nested lambda inlining from clobbering outer scope bindings.
+            const allocator = self.codegen.allocator;
+            var saved_locations = std.AutoHashMap(u48, ?ValueLocation).init(allocator);
+            defer saved_locations.deinit();
+            var saved_lambdas = std.AutoHashMap(u48, ?MonoExprId).init(allocator);
+            defer saved_lambdas.deinit();
+
+            for (params) |param_id| {
+                const param = self.store.getPattern(param_id);
+                if (param == .bind) {
+                    const symbol_key: u48 = @bitCast(param.bind.symbol);
+                    saved_locations.put(symbol_key, self.symbol_locations.get(symbol_key)) catch {};
+                    saved_lambdas.put(symbol_key, self.lambda_bindings.get(symbol_key)) catch {};
+                }
+            }
+
             // Evaluate each argument and bind to the corresponding parameter
             for (params, args) |param_id, arg_id| {
                 // Check if the argument is a closure/lambda - if so, bind it for later invocation
@@ -5911,11 +5983,39 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 }
             }
 
+            // Helper to restore saved bindings
+            const restoreBindings = struct {
+                fn restore(
+                    self_ptr: *Self,
+                    locs: *std.AutoHashMap(u48, ?ValueLocation),
+                    lambdas: *std.AutoHashMap(u48, ?MonoExprId),
+                ) void {
+                    var locs_iter = locs.iterator();
+                    while (locs_iter.next()) |entry| {
+                        if (entry.value_ptr.*) |old_loc| {
+                            self_ptr.symbol_locations.put(entry.key_ptr.*, old_loc) catch {};
+                        } else {
+                            _ = self_ptr.symbol_locations.remove(entry.key_ptr.*);
+                        }
+                    }
+                    var lambdas_iter = lambdas.iterator();
+                    while (lambdas_iter.next()) |entry| {
+                        if (entry.value_ptr.*) |old_lambda| {
+                            self_ptr.lambda_bindings.put(entry.key_ptr.*, old_lambda) catch {};
+                        } else {
+                            _ = self_ptr.lambda_bindings.remove(entry.key_ptr.*);
+                        }
+                    }
+                }
+            }.restore;
+
             // Check if this is a recursive closure
             switch (self_recursive) {
                 .not_self_recursive => {
                     // Non-recursive - just generate the body normally
-                    return self.generateExpr(lambda.body);
+                    const result = try self.generateExpr(lambda.body);
+                    restoreBindings(self, &saved_locations, &saved_lambdas);
+                    return result;
                 },
                 .self_recursive => |join_point_id| {
                     // Recursive closure - set up recursive context
@@ -5941,6 +6041,9 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     // Restore old recursive context
                     self.current_recursive_symbol = old_recursive_symbol;
                     self.current_recursive_join_point = old_recursive_join_point;
+
+                    // Restore old bindings
+                    restoreBindings(self, &saved_locations, &saved_lambdas);
 
                     return result;
                 },
@@ -6184,6 +6287,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // This takes priority over inlining because recursive functions MUST be called
             // as proper procedures with stack frames.
             if (self.proc_registry.get(symbol_key)) |proc| {
+                std.debug.print("generateLookupCall: found proc for symbol\n", .{});
                 return try self.generateCallToCompiledProc(proc, args_span, ret_layout);
             }
 
@@ -6192,6 +6296,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // Check if the symbol is bound to a lambda/closure in local scope
             if (self.lambda_bindings.get(symbol_key)) |lambda_expr_id| {
                 const lambda_expr = self.store.getExpr(lambda_expr_id);
+                std.debug.print("generateLookupCall: found lambda_binding, expr={s}\n", .{@tagName(lambda_expr)});
 
                 return switch (lambda_expr) {
                     .lambda => |lambda| try self.generateLambdaCall(lambda, args_span, ret_layout),
@@ -6204,6 +6309,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // Look up the function in top-level definitions
             if (self.store.getSymbolDef(lookup.symbol)) |def_expr_id| {
                 const def_expr = self.store.getExpr(def_expr_id);
+                std.debug.print("generateLookupCall: found symbolDef, expr={s}\n", .{@tagName(def_expr)});
 
                 return switch (def_expr) {
                     .lambda => |lambda| try self.generateLambdaCall(lambda, args_span, ret_layout),
@@ -6213,6 +6319,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 };
             }
 
+            std.debug.print("generateLookupCall: symbol not found!\n", .{});
             return Error.LocalNotFound;
         }
 
