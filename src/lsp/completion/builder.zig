@@ -1085,6 +1085,109 @@ pub const CompletionBuilder = struct {
 
         return null;
     }
+
+    // =========================================================================
+    // Tag Union Completions
+    // =========================================================================
+
+    /// Add tag completions for a nominal type (e.g., `Color.` → `Red`, `Green`, `Blue`).
+    /// Entry point for `TypeName.` completion on nominal types.
+    ///
+    /// Returns true if tags were found and added, false otherwise.
+    pub fn addTagCompletionsForNominalType(
+        self: *CompletionBuilder,
+        module_env: *ModuleEnv,
+        type_name: []const u8,
+        requesting_module_name: ?[]const u8, // null = same module (always allowed)
+    ) !bool {
+        // Search all_statements for s_nominal_decl matching type_name
+        const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
+        for (statements_slice) |stmt_idx| {
+            const stmt = module_env.store.getStatement(stmt_idx);
+            switch (stmt) {
+                .s_nominal_decl => |nom_decl| {
+                    const header = module_env.store.getTypeHeader(nom_decl.header);
+                    const rel_name = module_env.getIdentText(header.relative_name);
+
+                    if (!std.mem.eql(u8, rel_name, type_name)) continue;
+
+                    // Opaque check: if is_opaque and from another module, skip
+                    if (nom_decl.is_opaque and requesting_module_name != null) {
+                        if (!std.mem.eql(u8, requesting_module_name.?, module_env.module_name)) {
+                            return false;
+                        }
+                    }
+
+                    // Get the backing type annotation
+                    const anno = module_env.store.getTypeAnno(nom_decl.anno);
+                    return try self.addTagsFromTypeAnno(module_env, anno);
+                },
+                else => {},
+            }
+        }
+        return false;
+    }
+
+    /// Extracts tags from a type annotation (handles tag_union directly).
+    fn addTagsFromTypeAnno(
+        self: *CompletionBuilder,
+        module_env: *ModuleEnv,
+        anno: CIR.TypeAnno,
+    ) !bool {
+        switch (anno) {
+            .tag_union => |tu| {
+                const tags_slice = module_env.store.sliceTypeAnnos(tu.tags);
+                for (tags_slice) |tag_anno_idx| {
+                    const tag_anno = module_env.store.getTypeAnno(tag_anno_idx);
+                    switch (tag_anno) {
+                        .tag => |t| {
+                            const tag_name = module_env.getIdentText(t.name);
+                            if (tag_name.len == 0) continue;
+
+                            // Show arity in detail if tag has payload arguments
+                            var detail: ?[]const u8 = null;
+                            const args_slice = module_env.store.sliceTypeAnnos(t.args);
+                            if (args_slice.len > 0) {
+                                detail = std.fmt.allocPrint(self.allocator, "({d} payload{s})", .{
+                                    args_slice.len,
+                                    if (args_slice.len == 1) "" else "s",
+                                }) catch null;
+                            }
+
+                            _ = try self.addItem(.{
+                                .label = tag_name,
+                                .kind = @intFromEnum(CompletionItemKind.enum_member),
+                                .detail = detail,
+                            });
+                        },
+                        else => {},
+                    }
+                }
+                return true;
+            },
+            else => return false,
+        }
+    }
+
+    /// Add ambient/structural tag completions from the module's type store.
+    /// These are tags that appear in expression context without qualification.
+    pub fn addAmbientTagCompletions(
+        self: *CompletionBuilder,
+        module_env: *ModuleEnv,
+    ) !void {
+        // Iterate all tags in the type store
+        const tag_names = module_env.types.tags.items.items(.name);
+        for (tag_names) |name_idx| {
+            const tag_name = module_env.getIdentText(name_idx);
+            if (tag_name.len == 0) continue;
+
+            _ = try self.addItem(.{
+                .label = tag_name,
+                .kind = @intFromEnum(CompletionItemKind.enum_member),
+                .detail = null,
+            });
+        }
+    }
 };
 
 // =========================================================================
