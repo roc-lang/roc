@@ -686,7 +686,7 @@ fn parseGlue(args: []const []const u8) CliArgs {
 
     for (args) |arg| {
         if (isHelpFlag(arg)) {
-            return CliArgs{ .help =
+            return CliArgs{ .help = 
             \\Generate glue code from a platform using a glue spec
             \\
             \\Usage: roc experimental-glue [OPTIONS] <GLUE_SPEC> <GLUE_DIR> [ROC_FILE]
@@ -715,7 +715,7 @@ fn parseGlue(args: []const []const u8) CliArgs {
 
     // glue_spec is required
     if (glue_spec == null) {
-        return CliArgs{ .help =
+        return CliArgs{ .help = 
         \\Error: Missing required argument <GLUE_SPEC>
         \\
         \\Generate glue code from a platform using a glue spec
@@ -735,7 +735,7 @@ fn parseGlue(args: []const []const u8) CliArgs {
 
     // output_dir is required
     if (output_dir == null) {
-        return CliArgs{ .help =
+        return CliArgs{ .help = 
         \\Error: Missing required argument <GLUE_DIR>
         \\
         \\Generate glue code from a platform using a glue spec
