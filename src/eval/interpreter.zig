@@ -7275,24 +7275,37 @@ pub const Interpreter = struct {
                 // (there's only one possible tag), so we can safely use index 0.
                 // For multi-variant unions with out-of-range discriminants, return an error.
                 if (tag_index >= layout_variants.len) {
-                    if (layout_variants.len == 1) {
-                        // Single-variant union: discriminant is irrelevant, use index 0
-                        // This handles the case where the value was created with a narrower
-                        // type that has only one variant, even if the discriminant memory
-                        // contains uninitialized/garbage data.
+                    // The discriminant is out of range for this layout's variant count.
+                    // This typically means the value was created with a wider type (more variants)
+                    // than the current expected type. Return the actual discriminant so the caller
+                    // (pattern matching) can correctly determine this value doesn't match.
+                    //
+                    // For example: if the value is NotFound (discriminant 1) and the expected
+                    // type only has Exit (1 variant with index 0), returning the actual
+                    // discriminant 1 allows pattern matching to correctly fail when trying
+                    // to match Exit against NotFound.
+                    //
+                    // We use variant 0's layout as a placeholder for memory shape, but preserve
+                    // original_tu_layout_idx so that refcounting uses the correct original layout
+                    // to properly incref/decref the actual payload.
+                    if (layout_variants.len >= 1) {
                         const payload_layout = acc.getVariantLayout(0);
+                        // Preserve original tag union layout: use existing original if present,
+                        // otherwise capture current layout's tag union index
+                        const orig_tu_idx = value.original_tu_layout_idx orelse value.layout.data.tag_union.idx;
                         if (payload_layout.tag != .zst) {
                             return .{
-                                .index = 0,
+                                .index = tag_index, // Return actual discriminant, not 0
                                 .payload = StackValue{
                                     .layout = payload_layout,
                                     .ptr = value.ptr,
                                     .is_initialized = true,
                                     .rt_var = value.rt_var,
+                                    .original_tu_layout_idx = orig_tu_idx,
                                 },
                             };
                         } else {
-                            return .{ .index = 0, .payload = null };
+                            return .{ .index = tag_index, .payload = null }; // Return actual discriminant
                         }
                     }
                     return error.TypeMismatch;
@@ -7320,6 +7333,7 @@ pub const Interpreter = struct {
                             .ptr = value.ptr,
                             .is_initialized = true,
                             .rt_var = value.rt_var,
+                            .original_tu_layout_idx = value.original_tu_layout_idx,
                         };
                     } else {
                         payload_value = null;
@@ -7335,6 +7349,7 @@ pub const Interpreter = struct {
                         .ptr = value.ptr,
                         .is_initialized = true,
                         .rt_var = arg_var,
+                        .original_tu_layout_idx = value.original_tu_layout_idx,
                     };
                 } else {
                     // Multiple args: the payload is a tuple at offset 0
@@ -7346,6 +7361,7 @@ pub const Interpreter = struct {
                         .ptr = value.ptr,
                         .is_initialized = true,
                         .rt_var = value.rt_var,
+                        .original_tu_layout_idx = value.original_tu_layout_idx,
                     };
                 }
 
@@ -7378,11 +7394,13 @@ pub const Interpreter = struct {
                 const data_ptr: *anyopaque = @ptrCast(value.getBoxedData().?);
 
                 // Create an unboxed value and recursively extract tag
+                // Propagate original_tu_layout_idx through box unwrapping
                 const unboxed = StackValue{
                     .layout = elem_layout,
                     .ptr = data_ptr,
                     .is_initialized = true,
                     .rt_var = elem_rt_var,
+                    .original_tu_layout_idx = value.original_tu_layout_idx,
                 };
 
                 return self.extractTagValue(unboxed, elem_rt_var);

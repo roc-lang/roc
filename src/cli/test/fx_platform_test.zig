@@ -299,6 +299,22 @@ test "fx platform match with wildcard" {
     try checkTestSuccess(result);
 }
 
+test "fx platform wildcard match on open union" {
+    // Tests that wildcard patterns on open tag unions work correctly.
+    // Bug: When error propagates through open tag unions [Exit(I64), ..],
+    // Err(_) wildcard match was returning 0 instead of the expected value 42.
+    const allocator = testing.allocator;
+
+    const run_result = try runRoc(allocator, "test/fx/wildcard_match_open_union_bug.roc", .{});
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    try checkSuccess(run_result);
+
+    // Verify that the wildcard match worked correctly
+    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "PASS: Wildcard match worked correctly") != null);
+}
+
 test "fx platform dbg missing return value" {
     const allocator = testing.allocator;
 
