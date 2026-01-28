@@ -233,8 +233,8 @@ pub fn compareTypes(
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    fields.items.shrinkRetainingCapacity(0);
-    tags.items.shrinkRetainingCapacity(0);
+    fields.items.clearRetainingCapacity();
+    tags.items.clearRetainingCapacity();
     var hints = HintList{};
 
     const expected = snap_store.getContent(expected_idx);
