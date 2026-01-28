@@ -125,7 +125,11 @@ enclosing_func_name: ?Ident.Idx,
 type_writer: types_mod.TypeWriter,
 
 /// A def + processing data
-const DefProcessed = struct { def_idx: CIR.Def.Idx, status: HasProcessed };
+const DefProcessed = struct {
+    def_idx: CIR.Def.Idx,
+    def_name: ?Ident.Idx,
+    status: HasProcessed,
+};
 
 /// Indicates if something has been processed or not
 const HasProcessed = enum { processed, processing, not_processed };
@@ -1088,7 +1092,11 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
     const defs_slice = self.cir.store.sliceDefs(self.cir.all_defs);
     for (defs_slice) |def_idx| {
         const def = self.cir.store.getDef(def_idx);
-        try self.top_level_ptrns.put(def.pattern, .{ .def_idx = def_idx, .status = .not_processed });
+        try self.top_level_ptrns.put(def.pattern, DefProcessed{
+            .def_idx = def_idx,
+            .def_name = null,
+            .status = .not_processed,
+        });
     }
 
     // Set the rank to be outermost
@@ -1572,7 +1580,11 @@ pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Alloca
     const defs_slice = self.cir.store.sliceDefs(self.cir.all_defs);
     for (defs_slice) |def_idx| {
         const def = self.cir.store.getDef(def_idx);
-        try self.top_level_ptrns.put(def.pattern, .{ .def_idx = def_idx, .status = .not_processed });
+        try self.top_level_ptrns.put(def.pattern, DefProcessed{
+            .def_idx = def_idx,
+            .def_name = null,
+            .status = .not_processed,
+        });
     }
 
     // Set the rank to be outermost
@@ -1617,7 +1629,12 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
     }
 
     // Make as processing
-    try self.top_level_ptrns.put(def.pattern, .{ .def_idx = def_idx, .status = .processing });
+    const def_name = self.getPatternIdent(def.pattern);
+    try self.top_level_ptrns.put(def.pattern, .{
+        .def_idx = def_idx,
+        .def_name = def_name,
+        .status = .processing,
+    });
 
     // Check if this expr is one that should be generalized
     const def_var = ModuleEnv.varFrom(def_idx);
@@ -1636,7 +1653,7 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
 
     // Extract function name from the pattern (for better error messages)
     const saved_func_name = self.enclosing_func_name;
-    self.enclosing_func_name = self.getPatternIdent(def.pattern);
+    self.enclosing_func_name = def_name;
     defer self.enclosing_func_name = saved_func_name;
 
     // Check the annotation, if it exists
@@ -1658,7 +1675,11 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
     _ = try self.unify(def_var, ptrn_var, env);
 
     // Mark as processed
-    try self.top_level_ptrns.put(def.pattern, .{ .def_idx = def_idx, .status = .processed });
+    try self.top_level_ptrns.put(def.pattern, .{
+        .def_idx = def_idx,
+        .def_name = def_name,
+        .status = .processed,
+    });
 }
 
 // create types for type decls //
@@ -3553,7 +3574,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         _ = try self.constraints.append(self.gpa, Constraint{ .eql = .{
                             .expected = pat_var,
                             .actual = expr_var,
-                            .ctx = .none,
+                            .ctx = .{ .recursive_def = .{ .def_name = processing_def.def_name } },
                         } });
 
                         break :blk;
