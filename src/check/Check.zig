@@ -141,13 +141,7 @@ const ScratchStaticDispatchConstraint = struct {
 /// In most cases, we don't defer constraint checking and unify things
 /// immediately. However, there are some cases where it's necessary.
 const Constraint = union(enum) {
-    eql: struct { expected: Var, actual: Var, ctx: Ctx },
-
-    pub const Ctx = union(enum) {
-        anonymous,
-        early_return,
-        try_suffix_return,
-    };
+    eql: struct { expected: Var, actual: Var, ctx: problem.Context },
 
     pub const SafeList = MkSafeList(@This());
 };
@@ -3556,7 +3550,11 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         try self.unifyWith(expr_var, .{ .flex = Flex.init() }, env);
 
                         // Write down this constraint for later validation
-                        _ = try self.constraints.append(self.gpa, Constraint{ .eql = .{ .expected = pat_var, .actual = expr_var, .ctx = .anonymous } });
+                        _ = try self.constraints.append(self.gpa, Constraint{ .eql = .{
+                            .expected = pat_var,
+                            .actual = expr_var,
+                            .ctx = .none,
+                        } });
 
                         break :blk;
                     },
@@ -4161,7 +4159,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 .actual = ret_var,
                 .ctx = switch (ret.context) {
                     .return_expr => .early_return,
-                    .try_suffix => .try_suffix_return,
+                    .try_suffix => .try_operator,
                 },
             } });
 
@@ -5427,12 +5425,7 @@ fn checkConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
         const constraint = self.constraints.get(idx);
         switch (constraint.*) {
             .eql => |eql| {
-                const context: problem.Context = switch (eql.ctx) {
-                    .anonymous => .none,
-                    .early_return => .early_return,
-                    .try_suffix_return => .try_operator,
-                };
-                _ = try self.unifyInContext(eql.expected, eql.actual, env, context);
+                _ = try self.unifyInContext(eql.expected, eql.actual, env, eql.ctx);
             },
         }
     }
