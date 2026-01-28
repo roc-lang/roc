@@ -6296,19 +6296,12 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             if (self.lambda_bindings.get(symbol_key)) |lambda_expr_id| {
                 const lambda_expr = self.store.getExpr(lambda_expr_id);
 
+                // Use inlining for lambda calls from lookups.
+                // This is necessary because lambdas may be polymorphic (called with different types),
+                // and procedure-based compilation only works for monomorphic functions.
                 return switch (lambda_expr) {
-                    .lambda => |lambda| blk: {
-                        const code_offset = try self.compileLambdaAsProc(lambda_expr_id, lambda);
-                        break :blk try self.generateCallToLambda(code_offset, args_span, ret_layout);
-                    },
-                    .closure => |closure| blk: {
-                        const inner_expr = self.store.getExpr(closure.lambda);
-                        if (inner_expr == .lambda) {
-                            const code_offset = try self.compileLambdaAsProc(closure.lambda, inner_expr.lambda);
-                            break :blk try self.generateCallToLambda(code_offset, args_span, ret_layout);
-                        }
-                        break :blk try self.generateClosureCallWithSymbol(closure, args_span, ret_layout, lookup.symbol);
-                    },
+                    .lambda => |lambda| try self.generateLambdaCall(lambda, args_span, ret_layout),
+                    .closure => |closure| try self.generateClosureCallWithSymbol(closure, args_span, ret_layout, lookup.symbol),
                     .block => |block| try self.generateBlockCall(block, args_span, ret_layout),
                     else => return Error.UnsupportedExpression,
                 };
@@ -6318,19 +6311,12 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             if (self.store.getSymbolDef(lookup.symbol)) |def_expr_id| {
                 const def_expr = self.store.getExpr(def_expr_id);
 
+                // Use inlining for lambda calls from top-level definitions.
+                // This is necessary because lambdas may be polymorphic (called with different types),
+                // and procedure-based compilation only works for monomorphic functions.
                 return switch (def_expr) {
-                    .lambda => |lambda| blk: {
-                        const code_offset = try self.compileLambdaAsProc(def_expr_id, lambda);
-                        break :blk try self.generateCallToLambda(code_offset, args_span, ret_layout);
-                    },
-                    .closure => |closure| blk: {
-                        const inner_expr = self.store.getExpr(closure.lambda);
-                        if (inner_expr == .lambda) {
-                            const code_offset = try self.compileLambdaAsProc(closure.lambda, inner_expr.lambda);
-                            break :blk try self.generateCallToLambda(code_offset, args_span, ret_layout);
-                        }
-                        break :blk try self.generateClosureCallWithSymbol(closure, args_span, ret_layout, lookup.symbol);
-                    },
+                    .lambda => |lambda| try self.generateLambdaCall(lambda, args_span, ret_layout),
+                    .closure => |closure| try self.generateClosureCallWithSymbol(closure, args_span, ret_layout, lookup.symbol),
                     .block => |block| try self.generateBlockCall(block, args_span, ret_layout),
                     else => return Error.UnsupportedExpression,
                 };
