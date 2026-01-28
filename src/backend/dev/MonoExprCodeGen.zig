@@ -407,6 +407,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 .field_access => |fa| fa.field_layout,
                 .binop => |binop| binop.result_layout,
                 .call => |call| call.ret_layout,
+                .low_level => |ll| ll.ret_layout,
                 // Literals with known layouts
                 .i64_literal => .i64,
                 .f64_literal => .f64,
@@ -3950,6 +3951,14 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                                 try self.codegen.emitLoadImm(reg, high);
                                 try self.codegen.emitStoreStack(.w64, dest_offset + 8, reg);
                             },
+                            24 => {
+                                // Empty list (immediate 0) being stored as a 24-byte list struct
+                                // An empty list has ptr=0, len=0, capacity=0 (all zeros)
+                                std.debug.assert(val == 0);
+                                try self.codegen.emitStoreStack(.w64, dest_offset, reg);
+                                try self.codegen.emitStoreStack(.w64, dest_offset + 8, reg);
+                                try self.codegen.emitStoreStack(.w64, dest_offset + 16, reg);
+                            },
                             else => unreachable,
                         }
                     } else {
@@ -3965,6 +3974,14 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                                 const high: i64 = if (val < 0) -1 else 0;
                                 try self.codegen.emitLoadImm(reg, high);
                                 try self.codegen.emitStoreStack(.w64, dest_offset + 8, reg);
+                            },
+                            24 => {
+                                // Empty list (immediate 0) being stored as a 24-byte list struct
+                                // An empty list has ptr=0, len=0, capacity=0 (all zeros)
+                                std.debug.assert(val == 0);
+                                try self.codegen.emitStoreStack(.w64, dest_offset, reg);
+                                try self.codegen.emitStoreStack(.w64, dest_offset + 8, reg);
+                                try self.codegen.emitStoreStack(.w64, dest_offset + 16, reg);
                             },
                             else => unreachable,
                         }
@@ -4867,21 +4884,28 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                             // First binding: allocate a fixed slot and copy value there
                             const ls = self.layout_store orelse unreachable;
 
-                            // Determine the size: prefer expr_layout_override (from the expression being bound),
-                            // fall back to value_loc hints, then to pattern's layout.
-                            const size: u32 = if (expr_layout_override) |expr_layout| blk: {
-                                // Use the expression's actual layout for size
-                                const expr_layout_val = ls.getLayout(expr_layout);
-                                const expr_size_align = ls.layoutSizeAlign(expr_layout_val);
-                                break :blk expr_size_align.size;
-                            } else switch (value_loc) {
+                            // Determine the size from value_loc first (most reliable for compound types),
+                            // then fall back to expr_layout_override, then to pattern's layout.
+                            // The value_loc is a more reliable indicator of the actual runtime representation
+                            // because the expression's layout may be incorrectly inferred (e.g., list_with_capacity
+                            // might have a scalar layout in the MonoIR but actually produces a list at runtime).
+                            const size: u32 = switch (value_loc) {
+                                // Compound types have fixed sizes determined by their runtime representation
                                 .stack_i128, .immediate_i128 => 16,
                                 .stack_str => 24,
                                 .list_stack => 24, // Lists are always 24 bytes (ptr, len, capacity)
                                 else => blk: {
-                                    const layout_val = ls.getLayout(bind.layout_idx);
-                                    const size_align = ls.layoutSizeAlign(layout_val);
-                                    break :blk size_align.size;
+                                    // For other types, use expr_layout_override if available
+                                    if (expr_layout_override) |expr_layout| {
+                                        const expr_layout_val = ls.getLayout(expr_layout);
+                                        const expr_size_align = ls.layoutSizeAlign(expr_layout_val);
+                                        break :blk expr_size_align.size;
+                                    } else {
+                                        // Fall back to pattern's layout
+                                        const layout_val = ls.getLayout(bind.layout_idx);
+                                        const size_align = ls.layoutSizeAlign(layout_val);
+                                        break :blk size_align.size;
+                                    }
                                 },
                             };
 

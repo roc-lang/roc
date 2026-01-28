@@ -1285,12 +1285,29 @@ test "List.fold with record accumulator - nested list and record" {
     );
 }
 
+// Debug: Simple for loop with mutable list
+test "for loop - mutable list append" {
+    try runExpectListI64(
+        \\{
+        \\    list = [1.I64, 2.I64, 3.I64]
+        \\    var $result = List.with_capacity(List.len(list))
+        \\    for item in list {
+        \\        $result = List.append($result, item)
+        \\    }
+        \\    $result
+        \\}
+    ,
+        &[_]i64{ 1, 2, 3 },
+        .no_trace,
+    );
+}
+
 // Tests for List.map
 
 test "List.map - basic identity" {
     // Map with identity function
     try runExpectListI64(
-        "List.map([1i64, 2i64, 3i64], |x| x)",
+        "List.map([1.I64, 2.I64, 3.I64], |x| x)",
         &[_]i64{ 1, 2, 3 },
         .no_trace,
     );
