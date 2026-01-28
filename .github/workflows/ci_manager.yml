@@ -1,5 +1,5 @@
 on:
-#  pull_request:
+  pull_request:
 
 # cancel current runs when a new commit is pushed
 concurrency:
