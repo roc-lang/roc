@@ -104,7 +104,10 @@ pub const BuildSession = struct {
         // Drain reports (must be done even on build failure to avoid leaks)
         var drained_reports: ?[]BuildEnv.DrainedModuleReports = null;
         if (build_succeeded) {
-            drained_reports = env.drainReports() catch null;
+            drained_reports = env.drainReports() catch |err| blk: {
+                std.debug.print("build_session: drainReports FAILED for {s}: {s}\n", .{ absolute_path, @errorName(err) });
+                break :blk null;
+            };
         }
 
         return BuildSession{
@@ -214,6 +217,8 @@ const OverrideProvider = struct {
         if (std.mem.eql(u8, path, self.override_path)) {
             return try gpa.dupe(u8, self.override_text);
         }
-        return null;
+        // Fall back to filesystem for all other files so the compiler can resolve
+        // platform modules and package imports without failing on FileNotFound.
+        return FileProvider.filesystem.read(null, path, gpa);
     }
 };

@@ -312,6 +312,7 @@ pub const ScopeMap = struct {
             .e_lookup_local,
             .e_lookup_external,
             .e_lookup_required,
+            .e_lookup_pending,
             .e_empty_list,
             .e_empty_record,
             .e_zero_argument_tag,
