@@ -93,10 +93,10 @@ pub const BuildSession = struct {
 
         // Build
         const build_succeeded = blk: {
-            const build_start = std.time.Timer.start() catch @as(u64, 0);
+            var timer = std.time.Timer.start() catch null;
             env.build(absolute_path) catch |err| {
-                if (build_start != 0) {
-                    const build_elapsed = build_start.read();
+                if (timer) |*t| {
+                    const build_elapsed = t.read();
                     std.debug.print("build_session: build FAILED for {s} ({d}ms): {s}\n", .{
                         absolute_path,
                         build_elapsed / std.time.ns_per_ms,
@@ -107,8 +107,8 @@ pub const BuildSession = struct {
                 }
                 break :blk false;
             };
-            if (build_start != 0) {
-                const build_elapsed = build_start.read();
+            if (timer) |*t| {
+                const build_elapsed = t.read();
                 std.debug.print("build_session: build SUCCEEDED in {d}ms\n", .{build_elapsed / std.time.ns_per_ms});
             } else {
                 std.debug.print("build_session: build SUCCEEDED\n", .{});
@@ -116,27 +116,12 @@ pub const BuildSession = struct {
             break :blk true;
         };
 
-        // Drain reports (must be done even on build failure to avoid leaks)
-        var drained_reports: ?[]BuildEnv.DrainedModuleReports = null;
-        if (build_succeeded) {
-            const drain_start = std.time.Timer.start() catch @as(u64, 0);
-            drained_reports = env.drainReports() catch |err| blk: {
-                if (drain_start != 0) {
-                    const drain_elapsed = drain_start.read();
-                    std.debug.print("build_session: drainReports FAILED ({d}ms): {s}\n", .{
-                        drain_elapsed / std.time.ns_per_ms,
-                        @errorName(err),
-                    });
-                } else {
-                    std.debug.print("build_session: drainReports FAILED: {s}\n", .{@errorName(err)});
-                }
-                break :blk null;
-            };
-            if (drain_start != 0) {
-                const drain_elapsed = drain_start.read();
-                std.debug.print("build_session: drainReports completed in {d}ms\n", .{drain_elapsed / std.time.ns_per_ms});
-            }
-        }
+        // Drain reports regardless of build success to capture parse errors
+        // Parse errors are emitted to the sink even when build fails
+        const drained_reports = env.drainReports() catch |err| blk: {
+            std.debug.print("build_session: drainReports FAILED: {s}\n", .{@errorName(err)});
+            break :blk null;
+        };
 
         return BuildSession{
             .allocator = allocator,
