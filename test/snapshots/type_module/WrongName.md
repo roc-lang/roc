@@ -11,14 +11,14 @@ SomeOtherName := [A, B]
 TYPE MODULE MISSING MATCHING TYPE - WrongName.md:1:1:1:24
 # PROBLEMS
 **TYPE MODULE MISSING MATCHING TYPE**
-Type modules must have a type declaration matching the module name.
+Type modules must have a nominal type declaration matching the module name.
 
-This file is named `WrongName`.roc, but no top-level type declaration named `WrongName` was found.
+This file is named `WrongName`.roc, but no top-level nominal type named `WrongName` was found.
 
-Add either:
-`WrongName := ...` (nominal type)
+Add a nominal type like:
+`WrongName := ...`
 or:
-`WrongName : ...` (type alias)
+`WrongName :: ...` (opaque nominal type)
 **WrongName.md:1:1:1:24:**
 ```roc
 SomeOtherName := [A, B]

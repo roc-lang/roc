@@ -23,14 +23,14 @@ TYPE MODULE MISSING MATCHING TYPE - StructuralMethodError.md:2:1:12:2
 MISSING METHOD - StructuralMethodError.md:11:7:11:12
 # PROBLEMS
 **TYPE MODULE MISSING MATCHING TYPE**
-Type modules must have a type declaration matching the module name.
+Type modules must have a nominal type declaration matching the module name.
 
-This file is named `StructuralMethodError`.roc, but no top-level type declaration named `StructuralMethodError` was found.
+This file is named `StructuralMethodError`.roc, but no top-level nominal type named `StructuralMethodError` was found.
 
-Add either:
-`StructuralMethodError := ...` (nominal type)
+Add a nominal type like:
+`StructuralMethodError := ...`
 or:
-`StructuralMethodError : ...` (type alias)
+`StructuralMethodError :: ...` (opaque nominal type)
 **StructuralMethodError.md:2:1:12:2:**
 ```roc
 Person := {}.{

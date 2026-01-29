@@ -34,35 +34,18 @@ const SnapshotRecordFieldSafeList = snapshot.SnapshotRecordFieldSafeList;
 const SnapshotRecordField = snapshot.SnapshotRecordField;
 const SnapshotTagSafeList = snapshot.SnapshotTagSafeList;
 
-const ByteList = std.array_list.Managed(u8);
-const ByteListRange = struct { start: usize, count: usize };
-
 const Var = types_mod.Var;
 
 const Problem = problem_mod.Problem;
 const Store = problem_mod.Store;
-const ExtraStringIdx = problem_mod.ExtraStringIdx;
-const MissingPatternsRange = problem_mod.MissingPatternsRange;
 
 // Type mismatch types
-const TypeMismatch = problem_mod.TypeMismatch;
 const TypePair = problem_mod.TypePair;
-const IncompatiblePlatformRequirement = problem_mod.IncompatiblePlatformRequirement;
-
-// Function errors
-const FnCallArityMismatch = problem_mod.FnCallArityMismatch;
 
 // Static dispatch errors
-const StaticDispatch = problem_mod.StaticDispatch;
 const DispatcherNotNominal = problem_mod.DispatcherNotNominal;
 const DispatcherDoesNotImplMethod = problem_mod.DispatcherDoesNotImplMethod;
 const TypeDoesNotSupportEquality = problem_mod.TypeDoesNotSupportEquality;
-
-// Number errors
-const NumberDoesNotFit = problem_mod.NumberDoesNotFit;
-const NegativeUnsignedInt = problem_mod.NegativeUnsignedInt;
-const InvalidNumericLiteral = problem_mod.InvalidNumericLiteral;
-const UnusedValue = problem_mod.UnusedValue;
 
 // Match/exhaustiveness errors
 const NonExhaustiveMatch = problem_mod.NonExhaustiveMatch;
@@ -92,7 +75,6 @@ const VarWithSnapshot = problem_mod.VarWithSnapshot;
 
 // Context types for precise error reporting
 const Context = problem_mod.Context;
-const Category = problem_mod.Category;
 
 /// Returns singular form if count is 1, plural form otherwise.
 /// Usage: pluralize(count, "argument", "arguments")
@@ -2800,40 +2782,6 @@ pub const ReportBuilder = struct {
             D.bytes(":=").withAnnotation(.inline_code),
             D.bytes(".").withNoPrecedingSpace(),
         }, self, &report);
-
-        return report;
-    }
-
-    /// Build a report for "invalid number literal" diagnostic
-    fn buildUnimplementedReport(self: *Self, bytes: []const u8, var_: Var, snapshot_idx: SnapshotContentIdx) !Report {
-        var report = Report.init(self.gpa, "UNIMPLEMENTED REPORT", .runtime_error);
-        errdefer report.deinit();
-
-        try D.renderSlice(&.{
-            D.bytes(bytes),
-            D.bytes("error reporting has not been implemented yet!"),
-        }, self, &report);
-        try report.document.addLineBreak();
-
-        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(var_)));
-        const region_info = self.module_env.calcRegionInfo(region.*);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
-        try report.document.addLineBreak();
-
-        try D.renderSlice(&.{
-            D.bytes("The problematic type was:"),
-        }, self, &report);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        const actual_type_str = try report.addOwnedString(self.getFormattedString(snapshot_idx));
-        try report.document.addCodeBlock(actual_type_str);
-        try report.document.addLineBreak();
 
         return report;
     }
