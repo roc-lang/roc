@@ -5,10 +5,10 @@ const SyntaxChecker = @import("../syntax.zig").SyntaxChecker;
 const uri_util = @import("../uri.zig");
 
 fn platformPath(allocator: std.mem.Allocator) ![]u8 {
-    // Get the actual repo root by resolving from CWD
-    const cwd = try std.process.getCwdAlloc(allocator);
-    defer allocator.free(cwd);
-    const path = try std.fs.path.resolve(allocator, &.{ cwd, "test", "str", "platform", "main.roc" });
+    // Resolve from repo root to ensure absolute path
+    const repo_root = try std.fs.cwd().realpathAlloc(allocator, ".");
+    defer allocator.free(repo_root);
+    const path = try std.fs.path.join(allocator, &.{ repo_root, "test", "str", "platform", "main.roc" });
     // Convert backslashes to forward slashes for cross-platform Roc source compatibility
     // Roc interprets backslashes as escape sequences in string literals
     for (path) |*c| {
@@ -27,14 +27,17 @@ test "syntax checker skips rebuild when content unchanged" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
     const contents = try std.fmt.allocPrint(
         allocator,
-        \\module []
+        \\app [main] {{ pf: platform "{s}" }}
         \\
         \\main = "hello"
         \\
     ,
-        .{},
+        .{platform_path},
     );
     defer allocator.free(contents);
 
@@ -82,25 +85,28 @@ test "syntax checker rebuilds when content changes" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
     const contents1 = try std.fmt.allocPrint(
         allocator,
-        \\module []
+        \\app [main] {{ pf: platform "{s}" }}
         \\
         \\main = "hello"
         \\
     ,
-        .{},
+        .{platform_path},
     );
     defer allocator.free(contents1);
 
     const contents2 = try std.fmt.allocPrint(
         allocator,
-        \\module []
+        \\app [main] {{ pf: platform "{s}" }}
         \\
         \\main = "world"
         \\
     ,
-        .{},
+        .{platform_path},
     );
     defer allocator.free(contents2);
 
@@ -234,7 +240,6 @@ test "getDocumentSymbols returns symbols for valid app file" {
     try std.testing.expect(found_helper);
 }
 
-
 test "completion context detects after_record_dot for lowercase identifier" {
     // Test that detectCompletionContext correctly identifies record/method access
     const completion_context = @import("../completion/context.zig");
@@ -319,17 +324,20 @@ test "getCompletionsAtPosition returns basic completions" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
     // Create a simple app with a definition
     const contents = try std.fmt.allocPrint(
         allocator,
-        \\module []
+        \\app [main] {{ pf: platform "{s}" }}
         \\
         \\my_value = "hello"
         \\
         \\main = my_
         \\
     ,
-        .{},
+        .{platform_path},
     );
     defer allocator.free(contents);
 
@@ -365,18 +373,26 @@ test "record field completion works for modules" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
     // First create a clean, valid module file (simpler than app for testing)
     // Explicitly annotate the record type to ensure all fields are known
-    const clean_contents =
-        \\module []
+    const clean_contents = try std.fmt.allocPrint(
+        allocator,
+        \\app [main, get_foo, get_bar] {{ pf: platform "{s}" }}
         \\
-        \\my_record : {{ foo : Str, bar : I64 }}
-        \\my_record = { foo: "hello", bar: 42 }
+        \\MyRecord := {{ foo : Str, bar : I64 }}.{{}}
+        \\my_record : MyRecord
+        \\my_record = {{ foo: "hello", bar: 42 }}
         \\
         \\get_foo = my_record.foo
         \\get_bar = my_record.bar
         \\
-    ;
+    ,
+        .{platform_path},
+    );
+    defer allocator.free(clean_contents);
 
     try tmp.dir.writeFile(.{ .sub_path = "record_completion.roc", .data = clean_contents });
     const file_path = try tmp.dir.realpathAlloc(allocator, "record_completion.roc");
@@ -395,24 +411,29 @@ test "record field completion works for modules" {
     }
 
     // Now test completion with incomplete code (cursor after dot)
-    const incomplete_contents =
-        \\module []
+    const incomplete_contents = try std.fmt.allocPrint(
+        allocator,
+        \\app [main, get_foo] {{ pf: platform "{s}" }}
         \\
-        \\my_record : {{ foo : Str, bar : I64 }}
-        \\my_record = { foo: "hello", bar: 42 }
+        \\MyRecord := {{ foo : Str, bar : I64 }}.{{}}
+        \\my_record : MyRecord
+        \\my_record = {{ foo: "hello", bar: 42 }}
         \\
         \\get_foo = my_record.
         \\
-    ;
+    ,
+        .{platform_path},
+    );
+    defer allocator.free(incomplete_contents);
 
     std.debug.print("Contents:\n{s}\n", .{incomplete_contents});
 
     // Request completion after "my_record."
-    // Line 4: "get_foo = my_record."
+    // Line 6 (0-indexed): "get_foo = my_record."
     // Character positions: g(0) e(1) t(2) _(3) f(4) o(5) o(6) ' '(7) =(8) ' '(9) m(10) y(11) _(12) r(13) e(14) c(15) o(16) r(17) d(18) .(19)
     // So character 20 is right after the dot
-    std.debug.print("Requesting completion at line 4, char 20\n", .{});
-    const result = try checker.getCompletionsAtPosition(uri, incomplete_contents, 4, 20);
+    std.debug.print("Requesting completion at line 6, char 20\n", .{});
+    const result = try checker.getCompletionsAtPosition(uri, incomplete_contents, 6, 20);
 
     if (result) |completion_result| {
         defer {
@@ -454,17 +475,21 @@ test "record completion uses snapshot env when builds fail" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
     const clean_contents = try std.fmt.allocPrint(
         allocator,
-        \\module []
+        \\app [main] {{ pf: platform "{s}" }}
         \\
-        \\my_record : {{ foo : Str, bar : I64 }}
+        \\MyRecord := {{ foo : Str, bar : I64 }}.{{}}
+        \\my_record : MyRecord
         \\my_record = {{ foo: "hello", bar: 42 }}
         \\
         \\main = my_record.foo
         \\
     ,
-        .{},
+        .{platform_path},
     );
     defer allocator.free(clean_contents);
 
@@ -483,20 +508,21 @@ test "record completion uses snapshot env when builds fail" {
 
     const error_contents = try std.fmt.allocPrint(
         allocator,
-        \\module []
+        \\app [main] {{ pf: platform "{s}" }}
         \\
-        \\my_record : {{ foo : Str, bar : I64 }}
+        \\MyRecord := {{ foo : Str, bar : I64 }}.{{}}
+        \\my_record : MyRecord
         \\my_record = {{ foo: "hello", bar: 42 }}
         \\
         \\main = my_record.
         \\broken =
         \\
     ,
-        .{},
+        .{platform_path},
     );
     defer allocator.free(error_contents);
 
-    const result = try checker.getCompletionsAtPosition(uri, error_contents, 4, 17);
+    const result = try checker.getCompletionsAtPosition(uri, error_contents, 6, 18);
 
     if (result) |completion_result| {
         defer {
@@ -530,17 +556,25 @@ test "record field completion with partial field name" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
     // First build with valid code to populate the snapshot env
-    const clean_contents =
-        \\module []
+    const clean_contents = try std.fmt.allocPrint(
+        allocator,
+        \\app [main, get_foo, get_bar] {{ pf: platform "{s}" }}
         \\
-        \\my_record : { foo : Str, bar : I64 }
-        \\my_record = { foo: "hello", bar: 42 }
+        \\MyRecord := {{ foo : Str, bar : I64 }}.{{}}
+        \\my_record : MyRecord
+        \\my_record = {{ foo: "hello", bar: 42 }}
         \\
         \\get_foo = my_record.foo
         \\get_bar = my_record.bar
         \\
-    ;
+    ,
+        .{platform_path},
+    );
+    defer allocator.free(clean_contents);
 
     try tmp.dir.writeFile(.{ .sub_path = "partial_field.roc", .data = clean_contents });
     const file_path = try tmp.dir.realpathAlloc(allocator, "partial_field.roc");
@@ -558,17 +592,22 @@ test "record field completion with partial field name" {
 
     // Now request completion with partial field name "fo"
     // Line 4: "get_foo = my_record.fo"
-    const partial_contents =
-        \\module []
+    const partial_contents = try std.fmt.allocPrint(
+        allocator,
+        \\app [main, get_foo] {{ pf: platform "{s}" }}
         \\
-        \\my_record : { foo : Str, bar : I64 }
-        \\my_record = { foo: "hello", bar: 42 }
+        \\MyRecord := {{ foo : Str, bar : I64 }}.{{}}
+        \\my_record : MyRecord
+        \\my_record = {{ foo: "hello", bar: 42 }}
         \\
         \\get_foo = my_record.fo
         \\
-    ;
+    ,
+        .{platform_path},
+    );
+    defer allocator.free(partial_contents);
 
-    const result = try checker.getCompletionsAtPosition(uri, partial_contents, 4, 22);
+    const result = try checker.getCompletionsAtPosition(uri, partial_contents, 5, 23);
 
     if (result) |completion_result| {
         defer {
@@ -611,10 +650,13 @@ test "static dispatch completion for nominal type methods" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
     // First create clean, working code with complete definition
     const clean_contents = try std.fmt.allocPrint(
         allocator,
-        \\module []
+        \\app [main] {{ pf: platform "{s}" }}
         \\
         \\Basic := [Val(Str)].{{
         \\  to_str : Basic -> Str
@@ -627,7 +669,7 @@ test "static dispatch completion for nominal type methods" {
         \\main = val.to_str()
         \\
     ,
-        .{},
+        .{platform_path},
     );
     defer allocator.free(clean_contents);
 
@@ -655,7 +697,7 @@ test "static dispatch completion for nominal type methods" {
     // User has added a new line "result = val." and is requesting completion
     const incomplete_contents = try std.fmt.allocPrint(
         allocator,
-        \\module []
+        \\app [main] {{ pf: platform "{s}" }}
         \\
         \\Basic := [Val(Str)].{{
         \\  to_str : Basic -> Str
@@ -670,7 +712,7 @@ test "static dispatch completion for nominal type methods" {
         \\result = val.
         \\
     ,
-        .{},
+        .{platform_path},
     );
     defer allocator.free(incomplete_contents);
 
@@ -679,7 +721,7 @@ test "static dispatch completion for nominal type methods" {
     // Request completion after "val."
     // Line 12: "result = val."
     // Character 13 is right after the dot
-    const result = try checker.getCompletionsAtPosition(uri, incomplete_contents, 12, 13);
+    const result = try checker.getCompletionsAtPosition(uri, incomplete_contents, 12, 14);
 
     if (result) |completion_result| {
         defer {
@@ -717,10 +759,13 @@ test "static dispatch completion for chained call" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
     // Create clean, working code so snapshot env has full type info
     const clean_contents = try std.fmt.allocPrint(
         allocator,
-        \\module []
+        \\app [main] {{ pf: platform "{s}" }}
         \\
         \\Basic := [Val(Str)].{{
         \\  step : Basic -> Basic
@@ -733,7 +778,7 @@ test "static dispatch completion for chained call" {
         \\main = val.step()
         \\
     ,
-        .{},
+        .{platform_path},
     );
     defer allocator.free(clean_contents);
 
@@ -754,7 +799,7 @@ test "static dispatch completion for chained call" {
     // Now request completion after the chained call dot
     const incomplete_contents = try std.fmt.allocPrint(
         allocator,
-        \\module []
+        \\app [main] {{ pf: platform "{s}" }}
         \\
         \\Basic := [Val(Str)].{{
         \\  step : Basic -> Basic
@@ -769,13 +814,13 @@ test "static dispatch completion for chained call" {
         \\result = val.step().
         \\
     ,
-        .{},
+        .{platform_path},
     );
     defer allocator.free(incomplete_contents);
 
     // Line 12: "result = val.step()."
-    // Character 20 is right after the dot
-    const result = try checker.getCompletionsAtPosition(uri, incomplete_contents, 12, 20);
+    // Character 21 is right after the dot
+    const result = try checker.getCompletionsAtPosition(uri, incomplete_contents, 12, 21);
 
     if (result) |completion_result| {
         defer {
