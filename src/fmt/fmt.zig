@@ -1068,9 +1068,24 @@ const Formatter = struct {
                 try fmt.pushTokenText(i.token);
             },
             .field_access => |fa| {
+                // Check if left side is a local_dispatch with a plain ident or tag
+                // e.g., `0->M .c` should format as multiline to avoid ambiguity with qualified ident
+                const left_expr = fmt.ast.store.getExpr(fa.left);
+                const needs_newline_before_dot = if (left_expr == .local_dispatch) blk: {
+                    const ld = left_expr.local_dispatch;
+                    const ld_right = fmt.ast.store.getExpr(ld.right);
+                    break :blk ld_right == .ident or ld_right == .tag;
+                } else false;
+
                 _ = try fmt.formatExpr(fa.left);
                 const right_region = fmt.nodeRegion(@intFromEnum(fa.right));
-                if (multiline and try fmt.flushCommentsBefore(right_region.start)) {
+                if (needs_newline_before_dot) {
+                    // Force newline to disambiguate from qualified identifier
+                    // `0->M .c` becomes `0->M\n\t.c` not `0->M.c` (which parses differently)
+                    fmt.curr_indent += 1;
+                    try fmt.ensureNewline();
+                    try fmt.pushIndent();
+                } else if (multiline and try fmt.flushCommentsBefore(right_region.start)) {
                     fmt.curr_indent += 1;
                     try fmt.pushIndent();
                 }
@@ -2923,10 +2938,10 @@ fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const 
 // produces the same output as formatting once.
 
 test "issue 8851: local dispatch with space before field access is idempotent" {
-    // a=0->b .c() should format stably (not progressively strip parens)
+    // a=0->b .c() should format stably with newline to disambiguate
     const result = try moduleFmtsStable(std.testing.allocator, "a=0->b .c()", false);
     defer std.testing.allocator.free(result);
-    try std.testing.expectEqualStrings("a = 0->b().c()\n", result);
+    try std.testing.expectEqualStrings("a = 0->b()\n\t.c()\n", result);
 }
 
 test "issue 8851: local dispatch with chained zero-arg applies is idempotent" {
@@ -2954,10 +2969,18 @@ test "issue 8851: tuple dispatch with chained zero-arg applies is idempotent" {
 }
 
 test "issue 8851: chained field access after local dispatch is idempotent" {
-    // 0->b .c .d() - multiple field accesses
+    // 0->b .c .d() - multiple field accesses, newline to disambiguate
     const result = try moduleFmtsStable(std.testing.allocator, "a=0->b .c .d()", false);
     defer std.testing.allocator.free(result);
-    try std.testing.expectEqualStrings("a = 0->b().c.d()\n", result);
+    try std.testing.expectEqualStrings("a = 0->b()\n\t.c.d()\n", result);
+}
+
+test "issue 8851: local dispatch with uppercase tag (module-like) is idempotent" {
+    // 0->M .c - uppercase identifier parses as tag, not ident
+    // Dispatching to a tag is invalid, newline disambiguates from qualified identifier
+    const result = try moduleFmtsStable(std.testing.allocator, "a=0->M .c", false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("a = 0->M\n\t.c\n", result);
 }
 
 test "issue 8894: typed integer literal formats correctly" {
