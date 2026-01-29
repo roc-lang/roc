@@ -1,3 +1,9 @@
+//! Utilities for extracting module names from file paths.
+//!
+//! This module provides functions to extract the module name from a file path,
+//! which is useful when validating type modules (the module name must match
+//! the type being defined) or displaying error messages.
+
 const std = @import("std");
 
 /// Extract the module name from a file path by taking the basename and
