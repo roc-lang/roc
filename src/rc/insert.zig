@@ -391,6 +391,106 @@ pub const InsertPass = struct {
         }
     }
 
+    /// Mark all symbols used in an expression as consumed.
+    /// This prevents premature decref of values that are still needed.
+    fn markUsedSymbolsAsConsumed(self: *Self, expr_idx: CIR.Expr.Idx) void {
+        const expr = self.module_env.store.getExpr(expr_idx);
+
+        switch (expr) {
+            .e_lookup_local => |local| {
+                // Mark this symbol as consumed
+                if (self.symbol_states.getPtr(local.pattern_idx)) |state| {
+                    state.consumed = true;
+                }
+            },
+            .e_call => |call| {
+                // Check callee and arguments
+                self.markUsedSymbolsAsConsumed(call.func);
+                const args = self.module_env.store.sliceExpr(call.args);
+                for (args) |arg_idx| {
+                    self.markUsedSymbolsAsConsumed(arg_idx);
+                }
+            },
+            .e_block => |block| {
+                // For blocks, only check the final expression (statements have their own scope)
+                self.markUsedSymbolsAsConsumed(block.final_expr);
+            },
+            .e_if => |if_expr| {
+                const branches = self.module_env.store.sliceIfBranches(if_expr.branches);
+                for (branches) |branch_idx| {
+                    const branch = self.module_env.store.getIfBranch(branch_idx);
+                    self.markUsedSymbolsAsConsumed(branch.cond);
+                    self.markUsedSymbolsAsConsumed(branch.body);
+                }
+                self.markUsedSymbolsAsConsumed(if_expr.final_else);
+            },
+            .e_list => |list| {
+                const elems = self.module_env.store.sliceExpr(list.elems);
+                for (elems) |elem_idx| {
+                    self.markUsedSymbolsAsConsumed(elem_idx);
+                }
+            },
+            .e_tuple => |tuple| {
+                const elems = self.module_env.store.sliceExpr(tuple.elems);
+                for (elems) |elem_idx| {
+                    self.markUsedSymbolsAsConsumed(elem_idx);
+                }
+            },
+            .e_record => |record| {
+                const field_idxs = self.module_env.store.sliceRecordFields(record.fields);
+                for (field_idxs) |field_idx| {
+                    const field = self.module_env.store.getRecordField(field_idx);
+                    self.markUsedSymbolsAsConsumed(field.value);
+                }
+                if (record.ext) |ext_expr| {
+                    self.markUsedSymbolsAsConsumed(ext_expr);
+                }
+            },
+            .e_match => |match| {
+                self.markUsedSymbolsAsConsumed(match.cond);
+                const branches = self.module_env.store.sliceMatchBranches(match.branches);
+                for (branches) |branch_idx| {
+                    const branch = self.module_env.store.getMatchBranch(branch_idx);
+                    if (branch.guard) |guard| {
+                        self.markUsedSymbolsAsConsumed(guard);
+                    }
+                    self.markUsedSymbolsAsConsumed(branch.value);
+                }
+            },
+            .e_tag => |tag| {
+                const tag_args = self.module_env.store.sliceExpr(tag.args);
+                for (tag_args) |arg_idx| {
+                    self.markUsedSymbolsAsConsumed(arg_idx);
+                }
+            },
+            .e_closure => |closure| {
+                // Walk captures
+                const capture_idxs = self.module_env.store.sliceCaptures(closure.captures);
+                for (capture_idxs) |capture_idx| {
+                    const capture = self.module_env.store.getCapture(capture_idx);
+                    if (self.symbol_states.getPtr(capture.pattern_idx)) |state| {
+                        state.consumed = true;
+                    }
+                }
+            },
+            .e_binop => |binop| {
+                self.markUsedSymbolsAsConsumed(binop.lhs);
+                self.markUsedSymbolsAsConsumed(binop.rhs);
+            },
+            .e_unary_minus => |unary| {
+                self.markUsedSymbolsAsConsumed(unary.expr);
+            },
+            .e_unary_not => |unary| {
+                self.markUsedSymbolsAsConsumed(unary.expr);
+            },
+            .e_dot_access => |dot| {
+                self.markUsedSymbolsAsConsumed(dot.receiver);
+            },
+            // Literals and other expressions don't contain local symbol references
+            else => {},
+        }
+    }
+
     /// Register a pattern and its introduced symbols.
     /// When expr_idx is provided (for declarations), the layout is computed from the expression's type.
     /// This handles synthetic patterns created by the Monomorphizer that don't have direct type mappings.
@@ -675,14 +775,10 @@ pub const InsertPass = struct {
         if (new_final != block.final_expr) any_changed = true;
 
         // The final expression is the "return value" of the block.
-        // If it's a lookup, that pattern's ownership transfers to the caller,
-        // so mark it as consumed (don't decref it at scope exit).
-        const final_expr_val = self.module_env.store.getExpr(block.final_expr);
-        if (final_expr_val == .e_lookup_local) {
-            if (self.symbol_states.getPtr(final_expr_val.e_lookup_local.pattern_idx)) |state| {
-                state.consumed = true;
-            }
-        }
+        // Any symbols used in the final expression (even nested inside calls/operations)
+        // have their ownership transferred to the caller, so mark them as consumed.
+        // This prevents premature decref of values still needed by the final expression.
+        self.markUsedSymbolsAsConsumed(block.final_expr);
 
         // Insert decrefs for symbols going out of scope that weren't consumed
         for (scope.introduced_patterns.items) |pattern_idx| {

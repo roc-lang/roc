@@ -799,12 +799,13 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
         .e_lambda => |lambda| blk: {
             const params = try self.lowerPatternSpan(module_env, lambda.args);
             const body = try self.lowerExprFromIdx(module_env, lambda.body);
+            const ret_layout = self.getExprLayoutFromIdx(module_env, lambda.body);
             break :blk .{
                 .lambda = .{
                     .fn_layout = .i64, // TODO
                     .params = params,
                     .body = body,
-                    .ret_layout = .i64, // TODO
+                    .ret_layout = ret_layout,
                 },
             };
         },

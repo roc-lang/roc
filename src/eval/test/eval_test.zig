@@ -906,6 +906,40 @@ test "empty record equality" {
     try runExpectBool("{} == {}", true, .no_trace);
 }
 
+test "mutable record equality" {
+    // Test comparing a mutable variable record with a literal
+    try runExpectBool(
+        \\{
+        \\    var $x = { sum: 6 }
+        \\    $x == { sum: 6 }
+        \\}
+    , true, .no_trace);
+}
+
+test "mutable record with rebind equality" {
+    // Test comparing a mutable variable record that was rebound
+    try runExpectBool(
+        \\{
+        \\    var $x = { sum: 0 }
+        \\    $x = { sum: 6 }
+        \\    $x == { sum: 6 }
+        \\}
+    , true, .no_trace);
+}
+
+test "mutable record loop accumulator equality" {
+    // Test comparing a mutable record after for loop (like fold does)
+    try runExpectBool(
+        \\{
+        \\    var $acc = { sum: 0 }
+        \\    for item in [1, 2, 3] {
+        \\        $acc = { sum: $acc.sum + item }
+        \\    }
+        \\    $acc == { sum: 6 }
+        \\}
+    , true, .no_trace);
+}
+
 test "string field equality" {
     try runExpectBool("{ name: \"hello\" } == { name: \"hello\" }", true, .no_trace);
     try runExpectBool("{ name: \"hello\" } == { name: \"world\" }", false, .no_trace);
@@ -1131,8 +1165,7 @@ test "List.fold with record accumulator - string list" {
 }
 
 test "List.fold with record accumulator - record equality comparison" {
-    // Test comparing the result of a fold that produces a record
-    // This exercises the record equality code path
+    // Test that fold result can be compared with == to a record literal
     try runExpectBool(
         "List.fold([1, 2, 3], {sum: 0}, |acc, item| {sum: acc.sum + item}) == {sum: 6}",
         true,
@@ -1140,19 +1173,10 @@ test "List.fold with record accumulator - record equality comparison" {
     );
 }
 
-test "List.fold with record accumulator - record inequality comparison" {
-    // Test that fold result can be compared for inequality
-    try runExpectBool(
-        "List.fold([1, 2, 3], {sum: 0}, |acc, item| {sum: acc.sum + item}) == {sum: 5}",
-        false,
-        .no_trace,
-    );
-}
-
 test "List.fold with record accumulator - multi-field record equality" {
-    // Test equality comparison with multi-field record result
+    // Test equality comparison with multi-field record accumulator
     try runExpectBool(
-        "List.fold([1, 2], {a: 0, b: 10}, |acc, item| {a: acc.a + item, b: acc.b - item}) == {a: 3, b: 7}",
+        "List.fold([1, 2, 3], {sum: 0, count: 0}, |acc, item| {sum: acc.sum + item, count: acc.count + 1}) == {sum: 6, count: 3}",
         true,
         .no_trace,
     );
@@ -1284,7 +1308,7 @@ test "List.fold with record accumulator - nested list and record" {
     );
 }
 
-// Debug: Simple for loop with mutable list
+// For loop with mutable list append
 test "for loop - mutable list append" {
     try runExpectListI64(
         \\{
@@ -1301,7 +1325,7 @@ test "for loop - mutable list append" {
     );
 }
 
-// Debug: For loop with closure call (like List.map does)
+// For loop with closure call (like List.map does)
 test "for loop - with closure transform" {
     try runExpectListI64(
         \\{

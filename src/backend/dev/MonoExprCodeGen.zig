@@ -2621,11 +2621,11 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             const record_idx = stored_layout.data.record.idx.int_idx;
             const record_data = ls.record_data.items.items[record_idx];
             const field_count = record_data.fields.count;
-
             if (field_count == 0) {
                 // Empty records are always equal
                 return .{ .immediate_i64 = if (op == .eq) 1 else 0 };
             }
+
 
             // Get the record size to ensure values are on stack
             const record_size = ls.layoutSizeAlign(stored_layout).size;
@@ -2685,65 +2685,42 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             };
 
             const result_reg = try self.allocTempGeneral();
-            try self.codegen.emitLoadImm(result_reg, 1);
-
             const temp_lhs = try self.allocTempGeneral();
             const temp_rhs = try self.allocTempGeneral();
 
-            // Compare each field at its offset
-            for (0..field_count) |i| {
-                const field_offset = ls.getRecordFieldOffset(stored_layout.data.record.idx, @intCast(i));
-                const field_size = ls.getRecordFieldSize(stored_layout.data.record.idx, @intCast(i));
-                const offset: i32 = @intCast(field_offset);
+            // Compare records field-by-field in 8-byte chunks
+            if (comptime builtin.cpu.arch == .aarch64) {
+                // Initialize result to true (1 for eq, 0 for ne)
+                try self.codegen.emitLoadImm(result_reg, if (op == .eq) @as(i64, 1) else @as(i64, 0));
 
-                // For i128/Dec fields (16 bytes), compare both 8-byte halves
-                const num_chunks: usize = if (field_size > 8) 2 else 1;
-
-                for (0..num_chunks) |chunk| {
-                    const chunk_offset = offset + @as(i32, @intCast(chunk)) * 8;
-
-                    // Load LHS chunk from stack
+                var offset: i32 = 0;
+                while (offset < @as(i32, @intCast(record_size))) {
+                    try self.codegen.emit.ldrRegMemSoff(.w64, temp_lhs, .FP, lhs_stack + offset);
+                    try self.codegen.emit.ldrRegMemSoff(.w64, temp_rhs, .FP, rhs_stack + offset);
+                    try self.codegen.emit.cmpRegReg(.w64, temp_lhs, temp_rhs);
+                    try self.codegen.emit.cset(.w64, temp_lhs, if (op == .eq) .eq else .ne);
+                    // AND results together (for eq: all chunks must match)
                     if (comptime builtin.cpu.arch == .aarch64) {
-                        try self.codegen.emit.ldrRegMemSoff(.w64, temp_lhs, .FP, lhs_stack + chunk_offset);
-                    } else {
-                        try self.codegen.emit.movRegMem(.w64, temp_lhs, .RBP, lhs_stack + chunk_offset);
+                        try self.codegen.emit.andRegRegReg(.w64, result_reg, result_reg, temp_lhs);
                     }
-
-                    // Load RHS chunk from stack
-                    if (comptime builtin.cpu.arch == .aarch64) {
-                        try self.codegen.emit.ldrRegMemSoff(.w64, temp_rhs, .FP, rhs_stack + chunk_offset);
-                    } else {
-                        try self.codegen.emit.movRegMem(.w64, temp_rhs, .RBP, rhs_stack + chunk_offset);
-                    }
-
-                    // Compare
-                    try self.emitCmpRegReg(temp_lhs, temp_rhs);
-
-                    // Update result: result = result AND (lhs == rhs)
-                    const eq_reg = try self.allocTempGeneral();
-                    if (comptime builtin.cpu.arch == .aarch64) {
-                        try self.codegen.emit.cset(.w64, eq_reg, .eq);
-                        try self.codegen.emit.andRegRegReg(.w64, result_reg, result_reg, eq_reg);
-                    } else {
-                        try self.codegen.emit.sete(eq_reg);
-                        try self.codegen.emit.andRegReg(.w64, result_reg, eq_reg);
-                    }
-                    self.codegen.freeGeneral(eq_reg);
+                    offset += 8;
+                }
+            } else {
+                try self.codegen.emitLoadImm(result_reg, if (op == .eq) @as(i64, 1) else @as(i64, 0));
+                var offset: i32 = 0;
+                while (offset < @as(i32, @intCast(record_size))) {
+                    try self.codegen.emit.movRegMem(.w64, temp_lhs, .RBP, lhs_stack + offset);
+                    try self.codegen.emit.movRegMem(.w64, temp_rhs, .RBP, rhs_stack + offset);
+                    try self.codegen.emit.cmpRegReg(.w64, temp_lhs, temp_rhs);
+                    try self.codegen.emit.setcc(if (op == .eq) .equal else .not_equal, temp_lhs);
+                    // AND with 0xFF to get just the byte
+                    try self.codegen.emit.andRegImm32(temp_lhs, 0xFF);
+                    try self.codegen.emit.andRegRegReg(.w64, result_reg, result_reg, temp_lhs);
+                    offset += 8;
                 }
             }
-
             self.codegen.freeGeneral(temp_lhs);
             self.codegen.freeGeneral(temp_rhs);
-
-            // For neq, invert result
-            if (op == .neq) {
-                if (comptime builtin.cpu.arch == .aarch64) {
-                    try self.codegen.emit.eorRegRegImm(.w64, result_reg, result_reg, 1);
-                } else {
-                    try self.codegen.emit.xorRegImm8(.w64, result_reg, 1);
-                }
-            }
-
             return .{ .general_reg = result_reg };
         }
 
@@ -5942,7 +5919,15 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     .lambda => |lambda| {
                         // Check if any argument is a closure - if so, inline the function
                         // so the closure can be properly dispatched
-                        if (try self.anyArgIsClosure(args_span)) {
+                        const has_closure_args = try self.anyArgIsClosure(args_span);
+                        const is_low_level = self.lambdaBodyIsLowLevel(lambda);
+                        if (has_closure_args) {
+                            return try self.inlineLambdaCall(lambda, args_span);
+                        }
+                        // Check if lambda body is a low_level op - if so, inline to avoid
+                        // parameter layout issues (builtins wrapped in lambdas may have
+                        // incorrect generic layouts like zst instead of concrete types like list)
+                        if (is_low_level) {
                             return try self.inlineLambdaCall(lambda, args_span);
                         }
                         // Otherwise compile as a procedure for efficiency
@@ -5954,6 +5939,11 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         if (inner == .lambda) {
                             // Check if any argument is a closure - if so, inline the function
                             if (try self.anyArgIsClosure(args_span)) {
+                                return try self.inlineLambdaCall(inner.lambda, args_span);
+                            }
+                            // Check if lambda body is a low_level op - if so, inline to avoid
+                            // parameter layout issues
+                            if (self.lambdaBodyIsLowLevel(inner.lambda)) {
                                 return try self.inlineLambdaCall(inner.lambda, args_span);
                             }
                             const offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda);
@@ -5980,6 +5970,13 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 }
             }
             return false;
+        }
+
+        /// Check if a lambda's body is a low_level operation.
+        /// Such lambdas should be inlined to avoid parameter layout issues with generic builtins.
+        fn lambdaBodyIsLowLevel(self: *Self, lambda: anytype) bool {
+            const body_expr = self.store.getExpr(lambda.body);
+            return body_expr == .low_level;
         }
 
         /// Check if a lambda needs inlining rather than being compiled as a procedure.
@@ -6244,39 +6241,31 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 const arg_layout = self.getExprLayout(arg_id);
 
                 // Handle i128/Dec arguments (need two registers)
-                if (arg_loc == .stack_i128 or arg_loc == .immediate_i128) {
-                    if (comptime builtin.cpu.arch == .aarch64) {
-                        const low_reg = self.getArgumentRegister(reg_idx);
-                        const high_reg = self.getArgumentRegister(reg_idx + 1);
-                        switch (arg_loc) {
-                            .stack_i128 => |offset| {
+                // Check both the value location AND the argument layout, because
+                // mutable variables store Dec/i128 values as .stack (not .stack_i128)
+                const is_i128_arg = (arg_loc == .stack_i128 or arg_loc == .immediate_i128) or
+                    (arg_loc == .stack and arg_layout != null and
+                    (arg_layout.? == .dec or arg_layout.? == .i128 or arg_layout.? == .u128));
+                if (is_i128_arg) {
+                    const low_reg = self.getArgumentRegister(reg_idx);
+                    const high_reg = self.getArgumentRegister(reg_idx + 1);
+                    switch (arg_loc) {
+                        .stack_i128, .stack => |offset| {
+                            if (comptime builtin.cpu.arch == .aarch64) {
                                 try self.codegen.emitLoadStack(.w64, low_reg, offset);
                                 try self.codegen.emitLoadStack(.w64, high_reg, offset + 8);
-                            },
-                            .immediate_i128 => |val| {
-                                const low: u64 = @truncate(@as(u128, @bitCast(val)));
-                                const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
-                                try self.codegen.emitLoadImm(low_reg, @bitCast(low));
-                                try self.codegen.emitLoadImm(high_reg, @bitCast(high));
-                            },
-                            else => unreachable,
-                        }
-                    } else {
-                        const low_reg = self.getArgumentRegister(reg_idx);
-                        const high_reg = self.getArgumentRegister(reg_idx + 1);
-                        switch (arg_loc) {
-                            .stack_i128 => |offset| {
+                            } else {
                                 try self.codegen.emitLoadStack(.w64, low_reg, offset);
                                 try self.codegen.emitLoadStack(.w64, high_reg, offset + 8);
-                            },
-                            .immediate_i128 => |val| {
-                                const low: u64 = @truncate(@as(u128, @bitCast(val)));
-                                const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
-                                try self.codegen.emitLoadImm(low_reg, @bitCast(low));
-                                try self.codegen.emitLoadImm(high_reg, @bitCast(high));
-                            },
-                            else => unreachable,
-                        }
+                            }
+                        },
+                        .immediate_i128 => |val| {
+                            const low: u64 = @truncate(@as(u128, @bitCast(val)));
+                            const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
+                            try self.codegen.emitLoadImm(low_reg, @bitCast(low));
+                            try self.codegen.emitLoadImm(high_reg, @bitCast(high));
+                        },
+                        else => unreachable,
                     }
                     reg_idx += 2;
                 } else {
@@ -6311,6 +6300,31 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                             try self.codegen.emit.movRegMem(.w64, reg2, .RBP, offset + 16);
                         }
                         reg_idx += 3;
+                    } else if (arg_layout != null and self.layout_store != null) blk: {
+                        // Check if this is a record > 8 bytes that needs multiple registers
+                        const ls = self.layout_store.?;
+                        const layout_val = ls.getLayout(arg_layout.?);
+                        if (layout_val.tag == .record) {
+                            const size = ls.layoutSizeAlign(layout_val).size;
+                            if (size > 8) {
+                                const offset: i32 = switch (arg_loc) {
+                                    .stack => |off| off,
+                                    else => break :blk,
+                                };
+                                const num_regs: u8 = @intCast((size + 7) / 8);
+                                var ri: u8 = 0;
+                                while (ri < num_regs) : (ri += 1) {
+                                    const r = self.getArgumentRegister(reg_idx + ri);
+                                    try self.codegen.emitLoadStack(.w64, r, offset + @as(i32, ri) * 8);
+                                }
+                                reg_idx += num_regs;
+                                continue;
+                            }
+                        }
+                        // Default: single register
+                        const arg_reg = self.getArgumentRegister(reg_idx);
+                        try self.moveToReg(arg_loc, arg_reg);
+                        reg_idx += 1;
                     } else {
                         const arg_reg = self.getArgumentRegister(reg_idx);
                         try self.moveToReg(arg_loc, arg_reg);
@@ -7147,7 +7161,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             const result_loc = try self.generateExpr(lambda.body);
 
             // Move result to return register if needed
-            try self.moveToReturnRegister(result_loc);
+            // Pass the return layout so we can handle records > 8 bytes
+            try self.moveToReturnRegisterWithLayout(result_loc, lambda.ret_layout);
 
             // Emit epilogue and return
             try self.emitEpilogue();
@@ -7304,7 +7319,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                             try self.symbol_locations.put(symbol_key, .{ .stack_i128 = stack_offset });
                             reg_idx += 2;
                         }
-                        // Check if this is a list parameter (24 bytes, 3 registers)
+                        // Check if this is a list or record parameter needing multiple registers
                         else if (self.layout_store) |ls| {
                             if (@intFromEnum(bind.layout_idx) < ls.layouts.len()) {
                                 const layout_val = ls.getLayout(bind.layout_idx);
@@ -7325,6 +7340,22 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                                     } });
                                     reg_idx += 3;
                                     continue;
+                                }
+                                // Record parameters > 8 bytes need multiple registers
+                                if (layout_val.tag == .record) {
+                                    const size = ls.layoutSizeAlign(layout_val).size;
+                                    if (size > 8) {
+                                        const num_regs: u8 = @intCast((size + 7) / 8);
+                                        const stack_offset = self.codegen.allocStackSlot(@intCast(size));
+                                        var ri: u8 = 0;
+                                        while (ri < num_regs) : (ri += 1) {
+                                            const arg_r = self.getArgumentRegister(reg_idx + ri);
+                                            try self.codegen.emitStoreStack(.w64, stack_offset + @as(i32, ri) * 8, arg_r);
+                                        }
+                                        try self.symbol_locations.put(symbol_key, .{ .stack = stack_offset });
+                                        reg_idx += num_regs;
+                                        continue;
+                                    }
                                 }
                             }
                             // Default: single 8-byte value
@@ -7355,6 +7386,42 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         }
 
         /// Move a value to the return register (X0 on aarch64, RAX on x86_64)
+        /// Move a value to the return register(s), using layout information for proper sizing.
+        fn moveToReturnRegisterWithLayout(self: *Self, loc: ValueLocation, ret_layout: layout.Idx) Error!void {
+            // First check if the layout tells us this is a record > 8 bytes
+            if (self.layout_store) |ls| {
+                const layout_val = ls.getLayout(ret_layout);
+                if (layout_val.tag == .record) {
+                    const size_align = ls.layoutSizeAlign(layout_val);
+                    if (size_align.size > 8) {
+                        // Large record - need to return in multiple registers
+                        const stack_offset: i32 = switch (loc) {
+                            .stack => |off| off,
+                            else => {
+                                // For non-stack locations, fall through to regular handling
+                                return self.moveToReturnRegister(loc);
+                            },
+                        };
+                        const num_regs = (size_align.size + 7) / 8;
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            const regs = [_]@TypeOf(GeneralReg.X0){ .X0, .X1, .X2, .X3 };
+                            for (0..@min(num_regs, 4)) |i| {
+                                try self.codegen.emitLoadStack(.w64, regs[i], stack_offset + @as(i32, @intCast(i * 8)));
+                            }
+                        } else {
+                            const regs = [_]@TypeOf(GeneralReg.RAX){ .RAX, .RDX, .RCX, .R8 };
+                            for (0..@min(num_regs, 4)) |i| {
+                                try self.codegen.emitLoadStack(.w64, regs[i], stack_offset + @as(i32, @intCast(i * 8)));
+                            }
+                        }
+                        return;
+                    }
+                }
+            }
+            // Fall back to regular handling
+            return self.moveToReturnRegister(loc);
+        }
+
         fn moveToReturnRegister(self: *Self, loc: ValueLocation) Error!void {
             const ret_reg = self.getReturnRegister();
             switch (loc) {
@@ -7437,6 +7504,39 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             var reg_idx: u8 = 0;
             for (args) |arg_id| {
                 const arg_loc = try self.generateExpr(arg_id);
+                const arg_layout = self.getExprLayout(arg_id);
+
+                // Handle i128/Dec arguments (need two registers)
+                // Check both the value location AND the argument layout, because
+                // mutable variables store Dec/i128 values as .stack (not .stack_i128)
+                const is_i128_arg = (arg_loc == .stack_i128 or arg_loc == .immediate_i128) or
+                    (arg_loc == .stack and arg_layout != null and
+                    (arg_layout.? == .dec or arg_layout.? == .i128 or arg_layout.? == .u128));
+                if (is_i128_arg) {
+                    const low_reg = self.getArgumentRegister(reg_idx);
+                    const high_reg = self.getArgumentRegister(reg_idx + 1);
+                    switch (arg_loc) {
+                        .stack_i128, .stack => |offset| {
+                            if (comptime builtin.cpu.arch == .aarch64) {
+                                try self.codegen.emitLoadStack(.w64, low_reg, offset);
+                                try self.codegen.emitLoadStack(.w64, high_reg, offset + 8);
+                            } else {
+                                try self.codegen.emitLoadStack(.w64, low_reg, offset);
+                                try self.codegen.emitLoadStack(.w64, high_reg, offset + 8);
+                            }
+                        },
+                        .immediate_i128 => |val| {
+                            const low: u64 = @truncate(@as(u128, @bitCast(val)));
+                            const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
+                            try self.codegen.emitLoadImm(low_reg, @bitCast(low));
+                            try self.codegen.emitLoadImm(high_reg, @bitCast(high));
+                        },
+                        else => unreachable,
+                    }
+                    reg_idx += 2;
+                    continue;
+                }
+
                 const arg_reg = self.getArgumentRegister(reg_idx);
 
                 switch (arg_loc) {
@@ -7447,8 +7547,29 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         reg_idx += 1;
                     },
                     .stack => |offset| {
-                        try self.codegen.emitLoadStack(.w64, arg_reg, offset);
-                        reg_idx += 1;
+                        // Check if this is a record > 8 bytes that needs multiple registers
+                        var handled_as_record = false;
+                        if (arg_layout != null and self.layout_store != null) {
+                            const ls = self.layout_store.?;
+                            const layout_val = ls.getLayout(arg_layout.?);
+                            if (layout_val.tag == .record) {
+                                const size = ls.layoutSizeAlign(layout_val).size;
+                                if (size > 8) {
+                                    const num_regs: u8 = @intCast((size + 7) / 8);
+                                    var ri: u8 = 0;
+                                    while (ri < num_regs) : (ri += 1) {
+                                        const r = self.getArgumentRegister(reg_idx + ri);
+                                        try self.codegen.emitLoadStack(.w64, r, offset + @as(i32, ri) * 8);
+                                    }
+                                    reg_idx += num_regs;
+                                    handled_as_record = true;
+                                }
+                            }
+                        }
+                        if (!handled_as_record) {
+                            try self.codegen.emitLoadStack(.w64, arg_reg, offset);
+                            reg_idx += 1;
+                        }
                     },
                     .immediate_i64 => |val| {
                         try self.codegen.emitLoadImm(arg_reg, @bitCast(val));
@@ -7487,7 +7608,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         reg_idx += 3;
                     },
                     .stack_i128, .immediate_i128 => {
-                        // i128 needs 2 registers
+                        // i128 needs 2 registers (handled by is_i128_arg above, but kept for exhaustiveness)
                         const arg_reg0 = self.getArgumentRegister(reg_idx);
                         const arg_reg1 = self.getArgumentRegister(reg_idx + 1);
                         switch (arg_loc) {
@@ -7611,7 +7732,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 }
             }
 
-            // Result is in the return register - mark it as allocated
+            // Result is in the return register - mark it as allocated (generateCallToLambda)
             const ret_reg = self.getReturnRegister();
             self.codegen.markRegisterInUse(ret_reg);
             return .{ .general_reg = ret_reg };
@@ -7999,12 +8120,24 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                             try self.codegen.emitLoadStack(.w64, .RCX, offset + 16);
                         }
                     } else if (value_loc == .stack) {
-                        // Check if this is a list (24 bytes) based on expression layout
+                        // Check expression layout for multi-register returns
                         var is_list = false;
+                        var is_i128 = false;
+                        var is_large_record = false;
+                        var record_size: u32 = 0;
+                        const expr_layout_opt = self.getExprLayout(r.value);
                         if (self.layout_store) |ls| {
-                            if (self.getExprLayout(r.value)) |ret_layout| {
+                            if (expr_layout_opt) |ret_layout| {
                                 const layout_val = ls.getLayout(ret_layout);
                                 is_list = layout_val.tag == .list or layout_val.tag == .list_of_zst;
+                                is_i128 = ret_layout == .i128 or ret_layout == .u128 or ret_layout == .dec;
+                                if (layout_val.tag == .record) {
+                                    const sa = ls.layoutSizeAlign(layout_val);
+                                    if (sa.size > 8) {
+                                        is_large_record = true;
+                                        record_size = sa.size;
+                                    }
+                                }
                             }
                         }
 
@@ -8019,6 +8152,31 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                                 try self.codegen.emitLoadStack(.w64, .RAX, offset);
                                 try self.codegen.emitLoadStack(.w64, .RDX, offset + 8);
                                 try self.codegen.emitLoadStack(.w64, .RCX, offset + 16);
+                            }
+                        } else if (is_i128) {
+                            // i128/Dec return (16 bytes) from .stack location
+                            const offset = value_loc.stack;
+                            if (comptime builtin.cpu.arch == .aarch64) {
+                                try self.codegen.emitLoadStack(.w64, .X0, offset);
+                                try self.codegen.emitLoadStack(.w64, .X1, offset + 8);
+                            } else {
+                                try self.codegen.emitLoadStack(.w64, .RAX, offset);
+                                try self.codegen.emitLoadStack(.w64, .RDX, offset + 8);
+                            }
+                        } else if (is_large_record) {
+                            // Large record return - load into multiple registers
+                            const offset = value_loc.stack;
+                            const num_regs = (record_size + 7) / 8;
+                            if (comptime builtin.cpu.arch == .aarch64) {
+                                const regs = [_]@TypeOf(GeneralReg.X0){ .X0, .X1, .X2, .X3 };
+                                for (0..@min(num_regs, 4)) |i| {
+                                    try self.codegen.emitLoadStack(.w64, regs[i], offset + @as(i32, @intCast(i * 8)));
+                                }
+                            } else {
+                                const regs = [_]@TypeOf(GeneralReg.RAX){ .RAX, .RDX, .RCX, .R8 };
+                                for (0..@min(num_regs, 4)) |i| {
+                                    try self.codegen.emitLoadStack(.w64, regs[i], offset + @as(i32, @intCast(i * 8)));
+                                }
                             }
                         } else {
                             // Normal 64-bit return from stack
