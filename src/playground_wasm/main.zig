@@ -39,7 +39,6 @@ const Check = check.Check;
 const SExprTree = base.SExprTree;
 const ModuleEnv = can.ModuleEnv;
 const Allocator = std.mem.Allocator;
-const problem = check.problem;
 const AST = parse.AST;
 const Repl = repl.Repl;
 const RocOps = builtins.host_abi.RocOps;

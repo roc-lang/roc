@@ -344,6 +344,18 @@ pub const Expr = union(enum) {
         field_name_region: base.Region, // Region of just the field/method name for error reporting
         args: ?Expr.Span, // Optional arguments for method calls (e.g., `fn` in `list.map(fn)`)
     },
+    /// Tuple element access by numeric index.
+    /// Accesses an element of a tuple using dot notation with a numeric index.
+    ///
+    /// ```roc
+    /// point.0       # Access first element
+    /// coords.1      # Access second element
+    /// (1, 2, 3).2   # Access third element of inline tuple
+    /// ```
+    e_tuple_access: struct {
+        tuple: Expr.Idx, // The tuple expression being accessed
+        elem_index: u32, // The 0-based index of the element to access
+    },
     /// Runtime error expression that crashes when executed.
     /// These are inserted during canonicalization when the compiler encounters
     /// semantic errors but continues compilation following the "inform don't block" philosophy.
@@ -1867,6 +1879,23 @@ pub const Expr = union(enum) {
                     }
                     try tree.endNode(args_begin, args_attrs);
                 }
+
+                try tree.endNode(begin, attrs);
+            },
+            .e_tuple_access => |e| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-tuple-access");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+
+                // Push the index as an attribute
+                var buf: [16]u8 = undefined;
+                const index_str = std.fmt.bufPrint(&buf, "{d}", .{e.elem_index}) catch "?";
+                try tree.pushStringPair("index", index_str);
+                const attrs = tree.beginNode();
+
+                // Push the tuple expression
+                try ir.store.getExpr(e.tuple).pushToSExprTree(ir, tree, e.tuple);
 
                 try tree.endNode(begin, attrs);
             },

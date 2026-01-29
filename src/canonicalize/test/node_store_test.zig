@@ -281,6 +281,12 @@ test "NodeStore round trip - Expressions" {
         },
     });
     try expressions.append(gpa, CIR.Expr{
+        .e_tuple_access = .{
+            .tuple = rand_idx(CIR.Expr.Idx),
+            .elem_index = rand.random().int(u32) % 10,
+        },
+    });
+    try expressions.append(gpa, CIR.Expr{
         .e_match = CIR.Expr.Match{
             .cond = rand_idx(CIR.Expr.Idx),
             .branches = CIR.Expr.Match.Branch.Span{ .span = rand_span() },

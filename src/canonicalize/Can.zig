@@ -5530,6 +5530,44 @@ pub fn canonicalizeExpr(
                 .free_vars = free_vars_span,
             };
         },
+        .tuple_access => |tuple_access| {
+            // Tuple element access: tuple.0, tuple.1, etc.
+            const region = self.parse_ir.tokenizedRegionToRegion(tuple_access.region);
+            const free_vars_start = self.scratch_free_vars.top();
+
+            // Canonicalize the tuple expression
+            const can_tuple = try self.canonicalizeExpr(tuple_access.expr) orelse return null;
+
+            // Get the element index from the token
+            const elem_index_str = self.parse_ir.resolve(tuple_access.elem_token);
+            // The token includes the leading dot, so skip it (e.g., ".0" -> "0")
+            const index_str = if (elem_index_str.len > 0 and elem_index_str[0] == '.') elem_index_str[1..] else elem_index_str;
+
+            // Parse the index
+            const elem_index = std.fmt.parseInt(u32, index_str, 10) catch {
+                // Invalid index - this shouldn't happen if the tokenizer is correct
+                const feature = try self.env.insertString("tuple element access with invalid index");
+                const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
+                    .feature = feature,
+                    .region = region,
+                } });
+                return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
+            };
+
+            // Create a tuple access expression
+            const expr_idx = try self.env.addExpr(Expr{
+                .e_tuple_access = .{
+                    .tuple = can_tuple.idx,
+                    .elem_index = elem_index,
+                },
+            }, region);
+
+            const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
+            return CanonicalizedExpr{
+                .idx = expr_idx,
+                .free_vars = free_vars_span,
+            };
+        },
         .local_dispatch => |local_dispatch| {
             // Desugar `arg1->fn(arg2, arg3)` to `fn(arg1, arg2, arg3)`
             // and `arg1->fn` to `fn(arg1)`

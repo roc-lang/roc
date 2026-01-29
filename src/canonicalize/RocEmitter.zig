@@ -262,6 +262,10 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
             }
             try self.write(")");
         },
+        .e_tuple_access => |tuple_access| {
+            try self.emitExpr(tuple_access.tuple);
+            try self.writer().print(".{d}", .{tuple_access.elem_index});
+        },
         .e_if => |if_expr| {
             const branch_indices = self.module_env.store.sliceIfBranches(if_expr.branches);
             for (branch_indices, 0..) |branch_idx, i| {

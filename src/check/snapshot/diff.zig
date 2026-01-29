@@ -11,12 +11,9 @@ const snapshot = @import("../snapshot.zig");
 const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
 const SnapshotContentIdx = snapshot.SnapshotContentIdx;
-const SnapshotContent = snapshot.SnapshotContent;
 const SnapshotFlatType = snapshot.SnapshotFlatType;
 const SnapshotRecordFieldSafeList = snapshot.SnapshotRecordFieldSafeList;
 const SnapshotTagSafeList = snapshot.SnapshotTagSafeList;
-const SnapshotRecordField = snapshot.SnapshotRecordField;
-const SnapshotTag = snapshot.SnapshotTag;
 
 /// Hint about a type mismatch
 pub const Hint = union(enum) {
