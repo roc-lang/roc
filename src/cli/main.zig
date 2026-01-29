@@ -678,7 +678,7 @@ fn mainArgs(allocs: *Allocators, args: []const []const u8) !void {
         .fmt => |format_args| rocFormat(&ctx, format_args),
         .test_cmd => |test_args| try rocTest(&ctx, test_args),
         .repl => |repl_args| rocRepl(&ctx, repl_args),
-        .glue => |glue_args| rocGlue(&ctx, glue_args),
+        .glue => |glue_args| try rocGlue(&ctx, glue_args),
         .version => ctx.io.stdout().print("Roc compiler version {s}\n", .{build_options.compiler_version}),
         .docs => |docs_args| rocDocs(&ctx, docs_args),
         .experimental_lsp => |lsp_args| try lsp.runWithStdIo(allocs.gpa, .{
@@ -4006,7 +4006,7 @@ fn cleanupGlueTempDir(temp_dir: []const u8) void {
 
 /// Print platform glue information for a platform's main.roc file using full compilation path.
 /// This provides resolved types via TypeWriter and discovers hosted functions via e_hosted_lambda detection.
-fn rocGlue(ctx: *CliContext, args: cli_args.GlueArgs) void {
+fn rocGlue(ctx: *CliContext, args: cli_args.GlueArgs) GlueError!void {
     rocGlueInner(ctx, args) catch |err| {
         const stderr = ctx.io.stderr();
         (switch (err) {
@@ -4029,6 +4029,7 @@ fn rocGlue(ctx: *CliContext, args: cli_args.GlueArgs) void {
             error.ProcessFailed => stderr.print("Error: Process failed\n", .{}),
             error.OutOfMemory => stderr.print("Error: Out of memory\n", .{}),
         }) catch {};
+        return err;
     };
 }
 
