@@ -14997,6 +14997,11 @@ pub const Interpreter = struct {
                 const tuple_val = value_stack.pop() orelse return error.Crash;
                 defer tuple_val.decref(&self.runtime_layout_store, roc_ops);
 
+                // Verify the value is actually a tuple
+                if (tuple_val.layout.tag != .tuple) {
+                    return error.TypeMismatch;
+                }
+
                 // Get tuple accessor
                 var accessor = try tuple_val.asTuple(&self.runtime_layout_store);
 
