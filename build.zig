@@ -52,7 +52,7 @@ fn configureBackend(step: *Step.Compile, target: ResolvedTarget) void {
 
 fn isNativeishOrMusl(target: ResolvedTarget) bool {
     return target.result.cpu.arch == builtin.target.cpu.arch and
-        target.query.isNativeOs() and
+        target.result.os.tag == builtin.target.os.tag and
         (target.query.isNativeAbi() or target.result.abi.isMusl());
 }
 
