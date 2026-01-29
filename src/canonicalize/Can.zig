@@ -5729,14 +5729,18 @@ pub fn canonicalizeExpr(
                 .OpDoubleSlash => .div_trunc,
                 .OpAnd => .@"and",
                 .OpOr => .@"or",
-                // OpCaret (^), OpPizza (|>), OpDoubleQuestion (?) are not supported
-                .OpCaret, .OpPizza, .OpDoubleQuestion => {
+                // OpCaret (^), OpPizza (|>) are not supported
+                .OpCaret, .OpPizza => {
                     const feature = try self.env.insertString("unsupported operator");
                     const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
                         .feature = feature,
                         .region = region,
                     } });
                     return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
+                },
+                // OpDoubleQuestion (??) is desugared into a match expression
+                .OpDoubleQuestion => {
+                    return try self.canonicalizeDoubleQuestionOp(e, region, can_lhs, can_rhs, free_vars_start);
                 },
                 else => {
                     // Unknown operator
@@ -6463,6 +6467,199 @@ fn canonicalizeExprOrMalformed(
             .free_vars = DataSpan.empty(),
         };
     };
+}
+
+/// Canonicalize the `??` (double question) operator.
+/// Desugars `expr ?? fallback` into:
+///   match expr {
+///       Ok(#ok) => #ok,
+///       Err(_) => fallback,
+///   }
+fn canonicalizeDoubleQuestionOp(
+    self: *Self,
+    e: AST.BinOp,
+    region: base.Region,
+    can_lhs: CanonicalizedExpr,
+    can_rhs: CanonicalizedExpr,
+    free_vars_start: u32,
+) std.mem.Allocator.Error!CanonicalizedExpr {
+    // Use pre-interned identifiers for the Ok value and tag names
+    const ok_val_ident = self.env.idents.question_ok;
+    const ok_tag_ident = self.env.idents.ok;
+    const err_tag_ident = self.env.idents.err;
+
+    // Look up Try type for nominal wrapping (improves error messages)
+    const try_ident = self.env.idents.@"try";
+    const try_nominal_info: ?struct { import_idx: CIR.Import.Idx, target_node_idx: u16 } = blk: {
+        if (self.scopeLookupTypeBinding(try_ident)) |type_binding_loc| {
+            switch (type_binding_loc.binding.*) {
+                .external_nominal => |ext| {
+                    if (ext.import_idx) |import_idx| {
+                        if (ext.target_node_idx) |target_node_idx| {
+                            break :blk .{ .import_idx = import_idx, .target_node_idx = target_node_idx };
+                        }
+                    }
+                },
+                else => {},
+            }
+        }
+        break :blk null;
+    };
+
+    // Mark the start of scratch match branches
+    const scratch_top = self.env.store.scratchMatchBranchTop();
+
+    // === Branch 1: Ok(#ok) => #ok ===
+    {
+        // Enter a new scope for this branch
+        try self.scopeEnter(self.env.gpa, false);
+        defer self.scopeExit(self.env.gpa) catch {};
+
+        // Create the assign pattern for the Ok value
+        const ok_assign_pattern_idx = try self.env.addPattern(Pattern{
+            .assign = .{ .ident = ok_val_ident },
+        }, region);
+
+        // Introduce the pattern into scope
+        _ = try self.scopeIntroduceInternal(self.env.gpa, .ident, ok_val_ident, ok_assign_pattern_idx, false, true);
+
+        // Create pattern span for Ok tag argument
+        const ok_patterns_start = self.env.store.scratchPatternTop();
+        try self.env.store.addScratchPattern(ok_assign_pattern_idx);
+        const ok_args_span = try self.env.store.patternSpanFrom(ok_patterns_start);
+
+        // Create the Ok tag pattern: Ok(#ok), wrapped in nominal_external if Try type is available
+        const ok_tag_pattern_idx = ok_blk: {
+            const applied_tag_pattern = try self.env.addPattern(Pattern{
+                .applied_tag = .{
+                    .name = ok_tag_ident,
+                    .args = ok_args_span,
+                },
+            }, region);
+
+            if (try_nominal_info) |info| {
+                break :ok_blk try self.env.addPattern(Pattern{
+                    .nominal_external = .{
+                        .module_idx = info.import_idx,
+                        .target_node_idx = info.target_node_idx,
+                        .backing_pattern = applied_tag_pattern,
+                        .backing_type = .tag,
+                    },
+                }, region);
+            }
+            break :ok_blk applied_tag_pattern;
+        };
+
+        // Create branch pattern
+        const branch_pat_scratch_top = self.env.store.scratchMatchBranchPatternTop();
+        const ok_branch_pattern_idx = try self.env.addMatchBranchPattern(Expr.Match.BranchPattern{
+            .pattern = ok_tag_pattern_idx,
+            .degenerate = false,
+        }, region);
+        try self.env.store.addScratchMatchBranchPattern(ok_branch_pattern_idx);
+        const ok_branch_pat_span = try self.env.store.matchBranchPatternSpanFrom(branch_pat_scratch_top);
+
+        // Create the branch body: lookup #ok
+        const ok_lookup_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{
+            .pattern_idx = ok_assign_pattern_idx,
+        } }, region);
+        // Mark the pattern as used
+        try self.used_patterns.put(self.env.gpa, ok_assign_pattern_idx, {});
+
+        // Create the Ok branch
+        const ok_branch_idx = try self.env.addMatchBranch(
+            Expr.Match.Branch{
+                .patterns = ok_branch_pat_span,
+                .value = ok_lookup_idx,
+                .guard = null,
+                .redundant = try self.env.types.fresh(),
+            },
+            region,
+        );
+        try self.env.store.addScratchMatchBranch(ok_branch_idx);
+    }
+
+    // === Branch 2: Err(_) => fallback ===
+    {
+        // Enter a new scope for this branch
+        try self.scopeEnter(self.env.gpa, false);
+        defer self.scopeExit(self.env.gpa) catch {};
+
+        // Create a wildcard pattern for the Err payload (we don't use it)
+        const wildcard_pattern_idx = try self.env.addPattern(Pattern{
+            .underscore = {},
+        }, region);
+
+        // Create pattern span for Err tag argument (the wildcard)
+        const err_patterns_start = self.env.store.scratchPatternTop();
+        try self.env.store.addScratchPattern(wildcard_pattern_idx);
+        const err_args_span = try self.env.store.patternSpanFrom(err_patterns_start);
+
+        // Create the Err tag pattern: Err(_), wrapped in nominal_external if Try type is available
+        const err_tag_pattern_idx = err_blk: {
+            const applied_tag_pattern = try self.env.addPattern(Pattern{
+                .applied_tag = .{
+                    .name = err_tag_ident,
+                    .args = err_args_span,
+                },
+            }, region);
+
+            if (try_nominal_info) |info| {
+                break :err_blk try self.env.addPattern(Pattern{
+                    .nominal_external = .{
+                        .module_idx = info.import_idx,
+                        .target_node_idx = info.target_node_idx,
+                        .backing_pattern = applied_tag_pattern,
+                        .backing_type = .tag,
+                    },
+                }, region);
+            }
+            break :err_blk applied_tag_pattern;
+        };
+
+        // Create branch pattern
+        const branch_pat_scratch_top = self.env.store.scratchMatchBranchPatternTop();
+        const err_branch_pattern_idx = try self.env.addMatchBranchPattern(Expr.Match.BranchPattern{
+            .pattern = err_tag_pattern_idx,
+            .degenerate = false,
+        }, region);
+        try self.env.store.addScratchMatchBranchPattern(err_branch_pattern_idx);
+        const err_branch_pat_span = try self.env.store.matchBranchPatternSpanFrom(branch_pat_scratch_top);
+
+        // Branch value is the fallback expression (already canonicalized as can_rhs)
+        const branch_value_idx = can_rhs.idx;
+
+        // Create the Err branch
+        const err_branch_idx = try self.env.addMatchBranch(
+            Expr.Match.Branch{
+                .patterns = err_branch_pat_span,
+                .value = branch_value_idx,
+                .guard = null,
+                .redundant = try self.env.types.fresh(),
+            },
+            region,
+        );
+        try self.env.store.addScratchMatchBranch(err_branch_idx);
+    }
+
+    // Create span from scratch branches
+    const branches_span = try self.env.store.matchBranchSpanFrom(scratch_top);
+
+    // Create the match expression
+    // Note: is_try_suffix = false since ?? doesn't do early return like ?
+    const match_expr = Expr.Match{
+        .cond = can_lhs.idx,
+        .branches = branches_span,
+        .exhaustive = try self.env.types.fresh(),
+        .is_try_suffix = false,
+    };
+    const expr_idx = try self.env.addExpr(CIR.Expr{ .e_match = match_expr }, region);
+
+    // Combine free vars from both lhs and rhs
+    const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
+    _ = e; // unused, but kept for consistency with other handlers
+
+    return CanonicalizedExpr{ .idx = expr_idx, .free_vars = free_vars_span };
 }
 
 /// Result of canonicalizing a for loop's components
