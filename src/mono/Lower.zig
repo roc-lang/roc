@@ -1284,6 +1284,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                     recv_resolved = recv_type_source_env.types.resolveVar(backing);
                 }
 
+
                 // Determine nominal type
                 const recv_nominal: ?struct { origin: Ident.Idx, ident: Ident.Idx } = switch (recv_resolved.desc.content) {
                     .structure => |s| switch (s) {
@@ -1409,12 +1410,64 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                         .ident_idx = qualified_method,
                     };
 
+                    // Set up type scope for the method call so that the method's
+                    // generic type parameters are mapped to concrete types from the
+                    // call site (e.g., ok_or's `ok` type param → Str).
+                    const old_caller_module = self.type_scope_caller_module;
+                    {
+                        const ext_type_var = ModuleEnv.varFrom(method_def.expr);
+                        const ext_resolved = origin_env.types.resolveVar(ext_type_var);
+
+                        if (ext_resolved.desc.content.unwrapFunc()) |func| {
+                            if (self.type_scope.scopes.items.len == 0) {
+                                try self.type_scope.scopes.append(types.VarMap.init(self.allocator));
+                            }
+                            const scope = &self.type_scope.scopes.items[0];
+
+                            if (self.type_scope_caller_module == null) {
+                                self.type_scope_caller_module = self.current_module_idx;
+                            }
+
+                            const param_vars = origin_env.types.sliceVars(func.args);
+
+                            // Map first parameter (receiver) type
+                            if (param_vars.len > 0) {
+                                const receiver_var = ModuleEnv.varFrom(dot.receiver);
+                                try self.collectTypeMappings(scope, origin_env, param_vars[0], module_env, receiver_var);
+                            }
+
+                            // Map extra argument types
+                            if (dot.args) |extra_args_span| {
+                                const extra_arg_indices = module_env.store.sliceExpr(extra_args_span);
+                                for (extra_arg_indices, 0..) |arg_idx, i| {
+                                    if (i + 1 < param_vars.len) {
+                                        const arg_var = ModuleEnv.varFrom(arg_idx);
+                                        try self.collectTypeMappings(scope, origin_env, param_vars[i + 1], module_env, arg_var);
+                                    }
+                                }
+                            }
+
+                            // Map return type
+                            const caller_return_var = ModuleEnv.varFrom(expr_idx);
+                            try self.collectTypeMappings(scope, origin_env, func.ret, module_env, caller_return_var);
+                        }
+                    }
+
                     const method_symbol_key: u48 = @bitCast(method_symbol);
                     if (!self.lowered_symbols.contains(method_symbol_key)) {
                         try self.lowerExternalDefByIdx(method_symbol, node_idx);
                     }
 
+                    // Compute ret_layout BEFORE clearing type scope, since the
+                    // expression's type var may need type scope mappings to resolve
+                    // generic type parameters (e.g., ok_or's return type `ok` → Str).
                     const ret_layout = self.getExprLayoutFromIdx(module_env, expr_idx);
+
+                    // Clean up type scope after computing layouts
+                    self.type_scope_caller_module = old_caller_module;
+                    if (self.type_scope.scopes.items.len > 0) {
+                        self.type_scope.scopes.items[0].clearRetainingCapacity();
+                    }
 
                     const fn_expr_id = try self.store.addExpr(.{ .lookup = .{
                         .symbol = method_symbol,

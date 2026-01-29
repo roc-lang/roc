@@ -1642,6 +1642,18 @@ test "List.get method dispatch on Try type - issue 8665" {
     , "hello", .no_trace);
 }
 
+test "List.get with list var and when destructure" {
+    // Test List.get with a list VARIABLE and when destructure
+    try runExpectStr(
+        \\{
+        \\    list = ["hello"]
+        \\    when List.get(list, 0) is
+        \\        Ok(val) -> val
+        \\        Err(_) -> "error"
+        \\}
+    , "hello", .no_trace);
+}
+
 test "record destructuring with assignment - regression" {
     // Regression test for GitHub issue #8647
     // Record destructuring should not cause TypeMismatch error during evaluation

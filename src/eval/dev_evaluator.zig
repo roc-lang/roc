@@ -852,6 +852,20 @@ fn getExprLayoutWithTypeEnv(allocator: Allocator, module_env: *ModuleEnv, expr: 
             }
             break :blk LayoutIdx.default_num;
         },
+        .e_lambda => |lambda| blk: {
+            const body_expr = module_env.store.getExpr(lambda.body);
+            break :blk getExprLayoutWithTypeEnv(allocator, module_env, body_expr, type_env);
+        },
+        .e_closure => |closure| blk: {
+            const lambda_expr = module_env.store.getExpr(closure.lambda_idx);
+            switch (lambda_expr) {
+                .e_lambda => |lambda| {
+                    const body_expr = module_env.store.getExpr(lambda.body);
+                    break :blk getExprLayoutWithTypeEnv(allocator, module_env, body_expr, type_env);
+                },
+                else => break :blk LayoutIdx.default_num,
+            }
+        },
         .e_list => list_i64_layout, // List of i64 (most common case for tests)
         else => LayoutIdx.default_num,
     };
@@ -887,6 +901,12 @@ fn getBlockLayout(allocator: Allocator, module_env: *ModuleEnv, block: anytype, 
                 }
 
                 const inferred_layout = getExprLayoutWithTypeEnv(allocator, module_env, decl_expr, type_env);
+                type_env.put(pattern_key, inferred_layout) catch {};
+            },
+            .s_var => |var_stmt| {
+                const pattern_key = @intFromEnum(var_stmt.pattern_idx);
+                const var_expr = module_env.store.getExpr(var_stmt.expr);
+                const inferred_layout = getExprLayoutWithTypeEnv(allocator, module_env, var_expr, type_env);
                 type_env.put(pattern_key, inferred_layout) catch {};
             },
             else => {},

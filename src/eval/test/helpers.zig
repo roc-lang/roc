@@ -193,7 +193,10 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
                 // Decref the heap-allocated string data after copying
                 // This will free the memory when refcount reaches 0
                 // Strings have 1-byte alignment, elements_refcounted = false
-                builtins.utils.decrefDataPtrC(result.bytes, 1, false, @constCast(&dev_eval.roc_ops));
+                // Only decref if the pointer looks valid (non-null and reasonable address)
+                if (result.bytes != null and result.length > 0) {
+                    builtins.utils.decrefDataPtrC(result.bytes, 1, false, @constCast(&dev_eval.roc_ops));
+                }
 
                 break :blk formatted;
             }

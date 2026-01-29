@@ -1566,13 +1566,6 @@ pub const Store = struct {
                         skip_layout_computation = true;
                     } else {
                         // Invalid: recursive type without heap allocation would have infinite size.
-                        const flat = current.desc.content.structure;
-                        if (flat == .nominal_type) {
-                            const nom = flat.nominal_type;
-                            std.debug.print("RECURSIVE TYPE: var={}, module={}, nominal ident_idx={}, origin_idx={}\n", .{ @intFromEnum(current.var_), self.current_module_idx, nom.ident.ident_idx.idx, nom.origin_module.idx });
-                        } else {
-                            std.debug.print("RECURSIVE TYPE: var={}, module={}, flat={s}\n", .{ @intFromEnum(current.var_), self.current_module_idx, @tagName(flat) });
-                        }
                         unreachable;
                     }
                 }
@@ -2243,21 +2236,18 @@ pub const Store = struct {
                             }
                         }
 
-                        // Check if this flex var has a from_numeral constraint, indicating
-                        // it's an unresolved numeric type that should default to Dec.
-                        if (self.hasFromNumeralConstraint(flex.constraints)) {
-                            break :blk Layout.default_num();
-                        }
-
                         // Unconstrained flex vars (like the element type of an empty list)
                         // have no concrete type, so they're zero-sized.
                         if (flex.constraints.isEmpty()) {
                             break :blk Layout.zst();
                         }
 
-                        // Flex vars with constraints (like from_numeral) should have been
-                        // resolved during type checking. If we reach here, there's a bug.
-                        unreachable;
+                        // Flex vars with constraints (from_numeral, method_call, etc.)
+                        // that haven't been resolved to a concrete type default to Dec.
+                        // This handles both numeric literals and polymorphic type vars
+                        // with method dispatch constraints (e.g., elem.to_str() in a
+                        // for loop over an untyped list parameter).
+                        break :blk Layout.default_num();
                     },
                     .rigid => |rigid| blk: {
                         // Only look up in TypeScope if we're doing cross-module resolution.
