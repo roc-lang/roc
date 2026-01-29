@@ -340,14 +340,6 @@ pub const SystemVCodeGen = struct {
         return (size + 15) & ~@as(u32, 15);
     }
 
-    /// Spill a register to the stack and return the stack slot offset.
-    /// This is used to save caller-saved registers before function calls.
-    pub fn spillToStack(self: *Self, reg: GeneralReg) !i32 {
-        const slot = self.allocStack(8);
-        try self.emitStoreStack(.w64, slot, reg);
-        return slot;
-    }
-
     // Function prologue/epilogue
 
     /// Callee-saved registers in the order they should be saved/restored

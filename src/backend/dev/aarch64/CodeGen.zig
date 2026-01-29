@@ -396,25 +396,6 @@ pub const AArch64CodeGen = struct {
         return (size + 15) & ~@as(u32, 15);
     }
 
-    /// Spill a register to the stack and return the stack slot offset.
-    /// This is used to save caller-saved registers before function calls.
-    /// Note: For aarch64 with pre-allocated stack frames, stack_offset is positive
-    /// and grows upward within the frame.
-    pub fn spillToStack(self: *Self, reg: GeneralReg) !i32 {
-        // If stack_offset is positive (aarch64 procedure frame), grow upward
-        // If negative (x86_64 style), grow downward
-        const slot = self.stack_offset;
-        try self.emitStoreStack(.w64, slot, reg);
-        if (self.stack_offset >= 0) {
-            // aarch64 procedure: grow upward within pre-allocated frame
-            self.stack_offset += 16; // 16-byte aligned
-        } else {
-            // Legacy path: grow downward (shouldn't be used anymore for procedures)
-            self.stack_offset -= 16;
-        }
-        return slot;
-    }
-
     // Function prologue/epilogue
 
     /// Callee-saved registers in pairs for saving/restoring

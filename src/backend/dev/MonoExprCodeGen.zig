@@ -506,8 +506,34 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             return null;
         }
 
-        /// Generate code for an expression and return where the result is stored
+        /// Generate code for an expression. The result is ALWAYS in a stable location
+        /// (stack, immediate, lambda_code, closure_value) — never a bare register.
         fn generateExpr(self: *Self, expr_id: MonoExprId) Error!ValueLocation {
+            const loc = try self.generateExprRaw(expr_id);
+            return self.stabilize(loc);
+        }
+
+        /// Spill bare register values to the stack. All other locations pass through.
+        fn stabilize(self: *Self, loc: ValueLocation) Error!ValueLocation {
+            return switch (loc) {
+                .general_reg => |reg| {
+                    const slot = self.codegen.allocStackSlot(8);
+                    try self.codegen.emitStoreStack(.w64, slot, reg);
+                    self.codegen.freeGeneral(reg);
+                    return .{ .stack = slot };
+                },
+                .float_reg => |reg| {
+                    const slot = self.codegen.allocStackSlot(8);
+                    try self.codegen.emitStoreStackF64(slot, reg);
+                    self.codegen.freeFloat(reg);
+                    return .{ .stack = slot };
+                },
+                else => loc,
+            };
+        }
+
+        /// Generate code for an expression (raw — may return bare register locations).
+        fn generateExprRaw(self: *Self, expr_id: MonoExprId) Error!ValueLocation {
             const expr = self.store.getExpr(expr_id);
 
             return switch (expr) {
@@ -1255,32 +1281,10 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
         /// Generate code for a binary operation
         fn generateBinop(self: *Self, binop: anytype) Error!ValueLocation {
-            // Generate code for LHS first
-            var lhs_loc = try self.generateExpr(binop.lhs);
+            // Generate code for LHS first (always stable due to generateExpr wrapper)
+            const lhs_loc = try self.generateExpr(binop.lhs);
 
-            // If LHS is in a register and RHS might involve a call (which clobbers registers),
-            // we need to save LHS to the stack first. This handles cases like `n * factorial(n-1)`
-            // where evaluating the RHS call would clobber the register containing n.
-            if (lhs_loc == .general_reg) {
-                // Check if RHS might involve a call by looking at the expression
-                const rhs_expr = self.store.getExpr(binop.rhs);
-                if (self.exprMightInvolveCall(rhs_expr)) {
-                    // Spill LHS to stack before evaluating RHS
-                    const stack_offset = try self.codegen.spillToStack(lhs_loc.general_reg);
-                    lhs_loc = .{ .stack = stack_offset };
-
-                    // If LHS is a lookup, update the symbol's location so that any
-                    // subsequent lookups of the same symbol (in the RHS) will find
-                    // the spilled value on the stack instead of the stale register.
-                    const lhs_expr = self.store.getExpr(binop.lhs);
-                    if (lhs_expr == .lookup) {
-                        const symbol_key: u48 = @bitCast(lhs_expr.lookup.symbol);
-                        try self.symbol_locations.put(symbol_key, .{ .stack = stack_offset });
-                    }
-                }
-            }
-
-            // Now evaluate RHS (safe even if it involves calls)
+            // Evaluate RHS (safe — LHS is in a stable location, never a bare register)
             const rhs_loc = try self.generateExpr(binop.rhs);
 
             // Check if this is a structural comparison (records/tuples/lists)
@@ -1370,20 +1374,6 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             }
         }
 
-        /// Check if an expression might involve a function call
-        fn exprMightInvolveCall(self: *Self, expr: MonoExpr) bool {
-            return switch (expr) {
-                .call => true,
-                .binop => |b| {
-                    // Recursively check both operands
-                    const lhs_expr = self.store.getExpr(b.lhs);
-                    const rhs_expr = self.store.getExpr(b.rhs);
-                    return self.exprMightInvolveCall(lhs_expr) or self.exprMightInvolveCall(rhs_expr);
-                },
-                else => false,
-            };
-        }
-
         /// Generate integer binary operation
         fn generateIntBinop(
             self: *Self,
@@ -1392,14 +1382,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             rhs_loc: ValueLocation,
             result_layout: layout.Idx,
         ) Error!ValueLocation {
-            // IMPORTANT: Load RHS first to protect its register
-            // If rhs is in a register (e.g., X0 from a function call result)
-            // and lhs is on the stack, loading lhs might allocate X0 and
-            // clobber the rhs value. By loading rhs first, we mark its register
-            // as in use so the allocator won't reuse it.
+            // Load operands into registers
             const rhs_reg = try self.ensureInGeneralReg(rhs_loc);
-
-            // Now load LHS into a register (safe because rhs_reg is protected)
             const lhs_reg = try self.ensureInGeneralReg(lhs_loc);
 
             // Allocate result register
@@ -6909,9 +6893,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 }
             }
 
-            // Result is in the return register - mark it as allocated
             const ret_reg = self.getReturnRegister();
-            self.codegen.markRegisterInUse(ret_reg);
             return .{ .general_reg = ret_reg };
         }
 
@@ -8004,19 +7986,41 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
         /// Generate a call to a compiled lambda procedure.
         /// Puts arguments in registers and emits a call instruction.
+        ///
+        /// Uses a two-pass approach to avoid register clobbering:
+        /// 1. First generate all argument expressions (which may trigger nested calls
+        ///    or allocate temp registers)
+        /// 2. Then load the stable results into argument registers
+        ///
+        /// This prevents a bug where generating arg[1] could clobber argument
+        /// registers (X2-X7) that were already loaded with arg[0]'s data.
         fn generateCallToLambda(self: *Self, code_offset: usize, args_span: anytype, ret_layout: layout.Idx) Error!ValueLocation {
             const args = self.store.getExprSpan(args_span);
 
-            // Put arguments in registers
-            // Track register index separately since some args use multiple registers
-            var reg_idx: u8 = 0;
-            for (args) |arg_id| {
+            // Pass 1: Generate all argument expressions and ensure results are
+            // in stable locations (stack or immediate). This prevents subsequent
+            // arg generation from clobbering earlier results via temp registers.
+            const ArgInfo = struct {
+                loc: ValueLocation,
+                layout_idx: ?layout.Idx,
+            };
+            var arg_infos: [8]ArgInfo = undefined;
+            for (args, 0..) |arg_id, i| {
+                if (i >= 8) break;
                 const arg_loc = try self.generateExpr(arg_id);
                 const arg_layout = self.getExprLayout(arg_id);
 
+                arg_infos[i] = .{ .loc = arg_loc, .layout_idx = arg_layout };
+            }
+
+            // Pass 2: Load all argument values into registers from stable locations
+            var reg_idx: u8 = 0;
+            for (0..args.len) |i| {
+                if (i >= 8) break;
+                const arg_loc = arg_infos[i].loc;
+                const arg_layout = arg_infos[i].layout_idx;
+
                 // Handle i128/Dec arguments (need two registers)
-                // Check both the value location AND the argument layout, because
-                // mutable variables store Dec/i128 values as .stack (not .stack_i128)
                 const is_i128_arg = (arg_loc == .stack_i128 or arg_loc == .immediate_i128) or
                     (arg_loc == .stack and arg_layout != null and
                     (arg_layout.? == .dec or arg_layout.? == .i128 or arg_layout.? == .u128));
@@ -8049,6 +8053,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
                 switch (arg_loc) {
                     .general_reg => |reg| {
+                        // Should not happen after spilling in pass 1, but handle anyway
                         if (reg != arg_reg) {
                             try self.codegen.emit.movRegReg(.w64, arg_reg, reg);
                         }
@@ -8240,9 +8245,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 }
             }
 
-            // Result is in the return register - mark it as allocated (generateCallToLambda)
             const ret_reg = self.getReturnRegister();
-            self.codegen.markRegisterInUse(ret_reg);
             return .{ .general_reg = ret_reg };
         }
 
@@ -8491,13 +8494,11 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                                 } });
                                 reg_idx += 3;
                             } else {
-                                // Normal 64-bit or smaller parameter
+                                // Normal 64-bit or smaller parameter — spill to stack
                                 const arg_reg = self.getArgumentRegister(reg_idx);
-                                try self.symbol_locations.put(symbol_key, .{ .general_reg = arg_reg });
-                                // IMPORTANT: Mark the register as in use so the allocator won't
-                                // reuse it for other values. Without this, loading a literal
-                                // might clobber the parameter value.
-                                self.codegen.markRegisterInUse(arg_reg);
+                                const stack_offset = self.codegen.allocStackSlot(8);
+                                try self.codegen.emitStoreStack(.w64, stack_offset, arg_reg);
+                                try self.symbol_locations.put(symbol_key, .{ .stack = stack_offset });
                                 reg_idx += 1;
                             }
                         }
@@ -8801,12 +8802,11 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                                 } });
                                 reg_idx += 3;
                             } else {
-                                // Use argument registers for parameters
+                                // Normal 64-bit or smaller parameter — spill to stack
                                 const arg_reg = self.getArgumentRegister(reg_idx);
-                                try self.symbol_locations.put(symbol_key, .{ .general_reg = arg_reg });
-                                // Mark the register as in use so it doesn't get allocated for temporaries
-                                // that might clobber the parameter value.
-                                self.codegen.markRegisterInUse(arg_reg);
+                                const stack_offset = self.codegen.allocStackSlot(8);
+                                try self.codegen.emitStoreStack(.w64, stack_offset, arg_reg);
+                                try self.symbol_locations.put(symbol_key, .{ .stack = stack_offset });
                                 reg_idx += 1;
                             }
                         }
