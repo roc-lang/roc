@@ -20,6 +20,8 @@ pub const RocEmitter = @import("RocEmitter.zig");
 pub const Monomorphizer = @import("Monomorphizer.zig");
 /// Closure Transformer - transforms closures with captures into tagged values
 pub const ClosureTransformer = @import("ClosureTransformer.zig");
+/// Node storage for CIR nodes (used internally by ModuleEnv)
+pub const NodeStore = @import("NodeStore.zig");
 
 test "compile tests" {
     std.testing.refAllDecls(@This());
