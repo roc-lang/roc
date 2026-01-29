@@ -168,11 +168,11 @@ pub const CompletionBuilder = struct {
             }
         }
 
-        // Fall back to local module env only when the module name matches.
+        // Fall back to local module env for nominal type associated values.
+        // Don't require module_name to match module_env.module_name - this
+        // handles Record2.ttt where Record2 is a nominal type in the current module.
         if (module_env_opt) |module_env| {
-            if (std.mem.eql(u8, module_env.module_name, module_name)) {
-                try self.addModuleMemberCompletionsFromModuleEnv(module_env, module_name);
-            }
+            try self.addModuleMemberCompletionsFromModuleEnv(module_env, module_name);
         }
     }
 
@@ -1144,15 +1144,8 @@ pub const CompletionBuilder = struct {
                             const tag_name = module_env.getIdentText(t.name);
                             if (tag_name.len == 0) continue;
 
-                            // Show arity in detail if tag has payload arguments
-                            var detail: ?[]const u8 = null;
-                            const args_slice = module_env.store.sliceTypeAnnos(t.args);
-                            if (args_slice.len > 0) {
-                                detail = std.fmt.allocPrint(self.allocator, "({d} payload{s})", .{
-                                    args_slice.len,
-                                    if (args_slice.len == 1) "" else "s",
-                                }) catch null;
-                            }
+                            // Show the tag signature (e.g. "SubVal(Str)") as detail
+                            const detail = self.formatTagSignature(module_env, tag_name, t.args);
 
                             _ = try self.addItem(.{
                                 .label = tag_name,
@@ -1166,6 +1159,121 @@ pub const CompletionBuilder = struct {
                 return true;
             },
             else => return false,
+        }
+    }
+
+    /// Format a tag signature like "SubVal(Str)" or "Cons(a, List(a))".
+    /// Returns null for tags with no arguments.
+    fn formatTagSignature(self: *CompletionBuilder, module_env: *ModuleEnv, tag_name: []const u8, args: CIR.TypeAnno.Span) ?[]const u8 {
+        const args_slice = module_env.store.sliceTypeAnnos(args);
+        if (args_slice.len == 0) return null;
+
+        var buf = std.ArrayList(u8){};
+        buf.appendSlice(self.allocator, tag_name) catch return null;
+        buf.append(self.allocator, '(') catch return null;
+        for (args_slice, 0..) |arg_idx, i| {
+            if (i > 0) buf.appendSlice(self.allocator, ", ") catch return null;
+            const arg_anno = module_env.store.getTypeAnno(arg_idx);
+            self.writeTypeAnno(&buf, module_env, arg_anno);
+        }
+        buf.append(self.allocator, ')') catch return null;
+        return buf.toOwnedSlice(self.allocator) catch null;
+    }
+
+    /// Write a human-readable representation of a TypeAnno to a buffer.
+    fn writeTypeAnno(self: *CompletionBuilder, buf: *std.ArrayList(u8), module_env: *ModuleEnv, anno: CIR.TypeAnno) void {
+        const alloc = self.allocator;
+        switch (anno) {
+            .lookup => |t| {
+                const name = module_env.getIdentText(t.name);
+                buf.appendSlice(alloc, stripBuiltinPrefix(name)) catch return;
+            },
+            .rigid_var => |t| {
+                buf.appendSlice(alloc, module_env.getIdentText(t.name)) catch return;
+            },
+            .rigid_var_lookup => |t| {
+                const ref_anno = module_env.store.getTypeAnno(t.ref);
+                self.writeTypeAnno(buf, module_env, ref_anno);
+            },
+            .apply => |a| {
+                const name = module_env.getIdentText(a.name);
+                buf.appendSlice(alloc, stripBuiltinPrefix(name)) catch return;
+                const apply_args = module_env.store.sliceTypeAnnos(a.args);
+                if (apply_args.len > 0) {
+                    buf.append(alloc, '(') catch return;
+                    for (apply_args, 0..) |arg_idx, i| {
+                        if (i > 0) buf.appendSlice(alloc, ", ") catch return;
+                        const arg_anno = module_env.store.getTypeAnno(arg_idx);
+                        self.writeTypeAnno(buf, module_env, arg_anno);
+                    }
+                    buf.append(alloc, ')') catch return;
+                }
+            },
+            .tag_union => |tu| {
+                buf.append(alloc, '[') catch return;
+                const tags = module_env.store.sliceTypeAnnos(tu.tags);
+                for (tags, 0..) |tag_idx, i| {
+                    if (i > 0) buf.appendSlice(alloc, ", ") catch return;
+                    const tag_anno = module_env.store.getTypeAnno(tag_idx);
+                    self.writeTypeAnno(buf, module_env, tag_anno);
+                }
+                buf.append(alloc, ']') catch return;
+            },
+            .tag => |t| {
+                buf.appendSlice(alloc, module_env.getIdentText(t.name)) catch return;
+                const tag_args = module_env.store.sliceTypeAnnos(t.args);
+                if (tag_args.len > 0) {
+                    buf.append(alloc, '(') catch return;
+                    for (tag_args, 0..) |arg_idx, i| {
+                        if (i > 0) buf.appendSlice(alloc, ", ") catch return;
+                        const arg_anno = module_env.store.getTypeAnno(arg_idx);
+                        self.writeTypeAnno(buf, module_env, arg_anno);
+                    }
+                    buf.append(alloc, ')') catch return;
+                }
+            },
+            .tuple => |t| {
+                buf.append(alloc, '(') catch return;
+                const elems = module_env.store.sliceTypeAnnos(t.elems);
+                for (elems, 0..) |elem_idx, i| {
+                    if (i > 0) buf.appendSlice(alloc, ", ") catch return;
+                    const elem_anno = module_env.store.getTypeAnno(elem_idx);
+                    self.writeTypeAnno(buf, module_env, elem_anno);
+                }
+                buf.append(alloc, ')') catch return;
+            },
+            .record => |r| {
+                buf.append(alloc, '{') catch return;
+                const fields = module_env.store.sliceAnnoRecordFields(r.fields);
+                for (fields, 0..) |field_idx, i| {
+                    if (i > 0) buf.appendSlice(alloc, ", ") catch return;
+                    const field = module_env.store.getAnnoRecordField(field_idx);
+                    buf.appendSlice(alloc, module_env.getIdentText(field.name)) catch return;
+                    buf.appendSlice(alloc, ": ") catch return;
+                    const field_anno = module_env.store.getTypeAnno(field.ty);
+                    self.writeTypeAnno(buf, module_env, field_anno);
+                }
+                buf.append(alloc, '}') catch return;
+            },
+            .@"fn" => |f| {
+                const fn_args = module_env.store.sliceTypeAnnos(f.args);
+                for (fn_args, 0..) |arg_idx, i| {
+                    if (i > 0) buf.appendSlice(alloc, ", ") catch return;
+                    const arg_anno = module_env.store.getTypeAnno(arg_idx);
+                    self.writeTypeAnno(buf, module_env, arg_anno);
+                }
+                buf.appendSlice(alloc, if (f.effectful) " => " else " -> ") catch return;
+                const ret_anno = module_env.store.getTypeAnno(f.ret);
+                self.writeTypeAnno(buf, module_env, ret_anno);
+            },
+            .parens => |p| {
+                buf.append(alloc, '(') catch return;
+                const inner = module_env.store.getTypeAnno(p.anno);
+                self.writeTypeAnno(buf, module_env, inner);
+                buf.append(alloc, ')') catch return;
+            },
+            .underscore => buf.append(alloc, '_') catch return,
+            .malformed => buf.appendSlice(alloc, "?") catch return,
         }
     }
 
@@ -1193,6 +1301,21 @@ pub const CompletionBuilder = struct {
 // =========================================================================
 // Helper Functions
 // =========================================================================
+
+/// Strip "Builtin." and "Num." prefixes for display (e.g. "Builtin.Str" → "Str", "Num.U64" → "U64").
+fn stripBuiltinPrefix(name: []const u8) []const u8 {
+    if (std.mem.startsWith(u8, name, "Builtin.")) {
+        const without_builtin = name[8..];
+        if (std.mem.startsWith(u8, without_builtin, "Num.")) {
+            return without_builtin[4..];
+        }
+        return without_builtin;
+    }
+    if (std.mem.startsWith(u8, name, "Num.")) {
+        return name[4..];
+    }
+    return name;
+}
 
 /// Strip module prefix from a name.
 fn stripModulePrefix(name: []const u8, module_name: []const u8) []const u8 {

@@ -1869,12 +1869,10 @@ pub const SyntaxChecker = struct {
                 // Get completions from the specified module
                 try builder.addModuleMemberCompletions(module_lookup_env, resolved_module_name, module_env_opt);
 
-                // Fallback: for local nominal types, extract tags from the type annotation
-                // (builtins and explicitly exposed items are handled above via addModuleMemberCompletions)
-                if (items.items.len == 0) {
-                    if (module_env_opt) |module_env| {
-                        _ = try builder.addTagCompletionsForNominalType(module_env, module_name, null);
-                    }
+                // Always add tag completions for nominal types, not just as fallback.
+                // This handles e.g. `Record.` where Record is both a module and a nominal type.
+                if (module_env_opt) |module_env| {
+                    _ = try builder.addTagCompletionsForNominalType(module_env, module_name, null);
                 }
             },
             .after_value_dot => |record_access| {
@@ -1957,11 +1955,12 @@ pub const SyntaxChecker = struct {
                 try builder.addTypeCompletionsFromEnv(env);
             },
             .expression => {
-                // General expression context - add local definitions + module names + structural tags
+                // General expression context - add local definitions + module names + structural tags + nominal types
                 if (module_env_opt) |module_env| {
                     try builder.addLocalCompletions(module_env, cursor_offset);
                     try builder.addModuleNameCompletions(module_env);
                     try builder.addAmbientTagCompletions(module_env);
+                    try builder.addTypeCompletions(module_env);
                 }
                 try builder.addModuleNameCompletionsFromEnv(env);
             },
