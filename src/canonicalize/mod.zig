@@ -24,10 +24,13 @@ pub const HostedCompiler = @import("HostedCompiler.zig");
 pub const RocEmitter = @import("RocEmitter.zig");
 /// Closure Transformer - transforms closures with captures into tagged values
 pub const ClosureTransformer = @import("ClosureTransformer.zig");
+/// Node storage for CIR nodes (used internally by ModuleEnv)
+pub const NodeStore = @import("NodeStore.zig");
 /// Lambda Lifter - extracts closure bodies to top-level function definitions
 pub const LambdaLifter = @import("LambdaLifter.zig");
 /// Lambda Set Inference - coordinates cross-module closure handling
 pub const LambdaSetInference = @import("LambdaSetInference.zig");
+
 
 /// Re-export AutoImportedType for callers
 pub const AutoImportedType = Can.AutoImportedType;
