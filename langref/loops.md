@@ -11,7 +11,7 @@ for n in [1, 2, 3, 4] {
 }
 ```
 
-The loop pattern can destructure patterns:
+The item can be destructured inline:
 
 ```roc
 var $total = 0
