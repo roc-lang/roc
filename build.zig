@@ -2322,6 +2322,9 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(test_runner_exe);
 
+    // Store glue test step reference so we can add glue host dependency later
+    var run_glue_test_step: ?*std.Build.Step = null;
+
     // CLI integration tests - run actual roc programs like CI does
     // These tests can run in parallel since each build uses content-hashed shim files
     if (!no_bin) {
@@ -2383,6 +2386,7 @@ pub fn build(b: *std.Build) void {
             run_glue_test.addArgs(run_args);
         }
         run_glue_test.step.dependOn(&install.step);
+        run_glue_test_step = &run_glue_test.step;
         test_cli_step.dependOn(&run_glue_test.step);
     }
 
@@ -3045,6 +3049,11 @@ pub fn build(b: *std.Build) void {
         } else &copy_glue_host.step;
 
         b.getInstallStep().dependOn(final_glue_host_step);
+
+        // Make glue_test depend on the glue host library being built
+        if (run_glue_test_step) |step| {
+            step.dependOn(final_glue_host_step);
+        }
     }
 
     var build_afl = false;
