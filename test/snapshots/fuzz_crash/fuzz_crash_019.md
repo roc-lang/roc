@@ -175,7 +175,6 @@ UNDEFINED VARIABLE - fuzz_crash_019.md:100:11:100:14
 UNDEFINED VARIABLE - fuzz_crash_019.md:102:4:102:6
 UNDEFINED VARIABLE - fuzz_crash_019.md:102:8:102:13
 UNDEFINED VARIABLE - fuzz_crash_019.md:105:2:105:3
-NOT IMPLEMENTED - fuzz_crash_019.md:105:2:105:8
 UNDEFINED VARIABLE - fuzz_crash_019.md:105:55:105:59
 UNDEFINED VARIABLE - fuzz_crash_019.md:105:60:105:64
 UNDEFINED VARIABLE - fuzz_crash_019.md:108:4:108:5
@@ -733,18 +732,6 @@ Is there an `import` or `exposing` missing up-top?
 	b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
 ```
 	^
-
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: unsupported operator
-
-**fuzz_crash_019.md:105:2:105:8:**
-```roc
-	b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
-```
-	^^^^^^
-
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 
 **UNDEFINED VARIABLE**
@@ -1937,7 +1924,26 @@ expect {
 					(s-expr
 						(e-binop (op "or")
 							(e-binop (op "gt")
-								(e-runtime-error (tag "not_implemented"))
+								(e-match
+									(match
+										(cond
+											(e-runtime-error (tag "ident_not_in_scope")))
+										(branches
+											(branch
+												(patterns
+													(pattern (degenerate false)
+														(p-nominal-external (builtin)
+															(p-applied-tag))))
+												(value
+													(e-lookup-local
+														(p-assign (ident "#ok")))))
+											(branch
+												(patterns
+													(pattern (degenerate false)
+														(p-nominal-external (builtin)
+															(p-applied-tag))))
+												(value
+													(e-num (value "12")))))))
 								(e-num (value "5")))
 							(e-binop (op "or")
 								(e-binop (op "and")

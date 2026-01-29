@@ -260,7 +260,6 @@ INVALID ASSIGNMENT TO ITSELF - fuzz_crash_023.md:179:50:179:55
 UNDEFINED VARIABLE - fuzz_crash_023.md:183:3:183:7
 UNDEFINED VARIABLE - fuzz_crash_023.md:185:4:185:10
 UNDEFINED VARIABLE - fuzz_crash_023.md:188:22:188:25
-NOT IMPLEMENTED - fuzz_crash_023.md:188:18:188:32
 UNDEFINED VARIABLE - fuzz_crash_023.md:189:26:189:33
 UNDEFINED VARIABLE - fuzz_crash_023.md:189:34:189:38
 UNDEFINED VARIABLE - fuzz_crash_023.md:190:2:190:14
@@ -804,18 +803,6 @@ Is there an `import` or `exposing` missing up-top?
 	bin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
 ```
 	                    ^^^
-
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: unsupported operator
-
-**fuzz_crash_023.md:188:18:188:32:**
-```roc
-	bin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
-```
-	                ^^^^^^^^^^^^^^
-
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 
 **UNDEFINED VARIABLE**
@@ -2500,7 +2487,28 @@ expect {
 						(p-assign (ident "bin_op_result"))
 						(e-binop (op "or")
 							(e-binop (op "gt")
-								(e-runtime-error (tag "not_implemented"))
+								(e-match
+									(match
+										(cond
+											(e-tag (name "Err")
+												(args
+													(e-runtime-error (tag "ident_not_in_scope")))))
+										(branches
+											(branch
+												(patterns
+													(pattern (degenerate false)
+														(p-nominal-external (builtin)
+															(p-applied-tag))))
+												(value
+													(e-lookup-local
+														(p-assign (ident "#ok")))))
+											(branch
+												(patterns
+													(pattern (degenerate false)
+														(p-nominal-external (builtin)
+															(p-applied-tag))))
+												(value
+													(e-num (value "12")))))))
 								(e-binop (op "mul")
 									(e-num (value "5"))
 									(e-num (value "5"))))
