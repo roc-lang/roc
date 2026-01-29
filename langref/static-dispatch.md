@@ -15,10 +15,19 @@ information at runtime to do the dispatch.)
 
 ## Methods
 
-A _method_ is a function that's associated with a type.
+A _method_ is a function that's associated with a type and are defined in the `.{ }` block after a nominal type:
 
+```roc
+Counter := { value: I64 }.{
+    new : () -> Counter
+    new = || { value: 0 }
 
+    increment : Counter -> Counter
+    increment = |{ value }| { value: value + 1 }
+}
+```
 
-## `where` Clauses
-
-## Aliases
+```roc
+counter : Counter
+counter = Counter.new().increment()
+```
