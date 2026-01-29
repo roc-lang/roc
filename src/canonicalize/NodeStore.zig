@@ -274,7 +274,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// Count of the diagnostic nodes in the ModuleEnv
 pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 65;
 /// Count of the expression nodes in the ModuleEnv
-pub const MODULEENV_EXPR_NODE_COUNT = 43;
+pub const MODULEENV_EXPR_NODE_COUNT = 44;
 /// Count of the statement nodes in the ModuleEnv
 pub const MODULEENV_STATEMENT_NODE_COUNT = 17;
 /// Count of the type annotation nodes in the ModuleEnv
@@ -584,6 +584,15 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             return CIR.Expr{
                 .e_tuple = .{
                     .elems = .{ .span = .{ .start = p.elems_start, .len = p.elems_len } },
+                },
+            };
+        },
+        .expr_tuple_access => {
+            const p = payload.expr_tuple_access;
+            return CIR.Expr{
+                .e_tuple_access = .{
+                    .tuple = @enumFromInt(p.tuple),
+                    .elem_index = p.elem_index,
                 },
             };
         },
@@ -1827,6 +1836,13 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             node.setPayload(.{ .expr_tuple = .{
                 .elems_start = e.elems.span.start,
                 .elems_len = e.elems.span.len,
+            } });
+        },
+        .e_tuple_access => |e| {
+            node.tag = .expr_tuple_access;
+            node.setPayload(.{ .expr_tuple_access = .{
+                .tuple = @intFromEnum(e.tuple),
+                .elem_index = e.elem_index,
             } });
         },
         .e_frac_f32 => |e| {

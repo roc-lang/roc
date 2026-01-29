@@ -56,6 +56,7 @@ pub const Tag = enum {
     // Expressions
     expr_var,
     expr_tuple,
+    expr_tuple_access,
     expr_list,
     expr_empty_list,
     expr_call,
@@ -268,6 +269,7 @@ pub const Payload = extern union {
     expr_pending_lookup: ExprPendingLookup,
     expr_required_lookup: ExprRequiredLookup,
     expr_tuple: ExprTuple,
+    expr_tuple_access: ExprTupleAccess,
     expr_list: ExprList,
     expr_call: ExprCall,
     expr_record: ExprRecord,
@@ -489,6 +491,12 @@ pub const Payload = extern union {
     pub const ExprTuple = extern struct {
         elems_start: u32,
         elems_len: u32,
+        _padding: [4]u8 = .{ 0, 0, 0, 0 },
+    };
+
+    pub const ExprTupleAccess = extern struct {
+        tuple: u32, // Index of the tuple expression being accessed
+        elem_index: u32, // The 0-based index of the element to access
         _padding: [4]u8 = .{ 0, 0, 0, 0 },
     };
 

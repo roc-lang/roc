@@ -10365,6 +10365,9 @@ pub const Interpreter = struct {
         /// collecting more elements or finalize the tuple.
         tuple_collect: TupleCollect,
 
+        /// Access a tuple element by index after tuple is evaluated.
+        tuple_access: TupleAccess,
+
         /// Collect list elements: after evaluating an element, either continue
         /// collecting more elements or finalize the list.
         list_collect: ListCollect,
@@ -10549,6 +10552,13 @@ pub const Interpreter = struct {
             collected_count: usize,
             /// Remaining element expressions to evaluate
             remaining_elems: []const can.CIR.Expr.Idx,
+        };
+
+        pub const TupleAccess = struct {
+            /// The 0-based index of the element to access
+            elem_index: u32,
+            /// The result expression index (for type information)
+            result_expr_idx: can.CIR.Expr.Idx,
         };
 
         pub const ListCollect = struct {
@@ -11975,6 +11985,25 @@ pub const Interpreter = struct {
                         .remaining_elems = elems,
                     } } });
                 }
+            },
+
+            .e_tuple_access => |tuple_access| {
+                const sched_trace = tracy.traceNamed(@src(), "sched.tuple_access");
+                defer sched_trace.end();
+
+                // Schedule tuple_access continuation (to be executed after tuple is evaluated)
+                try work_stack.push(.{ .apply_continuation = .{ .tuple_access = .{
+                    .elem_index = tuple_access.elem_index,
+                    .result_expr_idx = expr_idx,
+                } } });
+
+                // Schedule tuple expression evaluation
+                try work_stack.push(.{
+                    .eval_expr = .{
+                        .expr_idx = tuple_access.tuple,
+                        .expected_rt_var = null, // Infer from tuple expression
+                    },
+                });
             },
 
             // Lists
@@ -14958,6 +14987,45 @@ pub const Interpreter = struct {
                         try value_stack.push(dest);
                     }
                 }
+                return true;
+            },
+            .tuple_access => |ta| {
+                const cont_trace = tracy.traceNamed(@src(), "cont.tuple_access");
+                defer cont_trace.end();
+
+                // Pop the tuple value from the stack
+                const tuple_val = value_stack.pop() orelse return error.Crash;
+                defer tuple_val.decref(&self.runtime_layout_store, roc_ops);
+
+                // Get tuple accessor
+                var accessor = try tuple_val.asTuple(&self.runtime_layout_store);
+
+                // Get element at the specified index
+                const elem_index = ta.elem_index;
+                if (elem_index >= accessor.getElementCount()) {
+                    return error.TupleIndexOutOfBounds;
+                }
+
+                // Get element runtime type from tuple's type
+                const tuple_resolved = self.resolveBaseVar(tuple_val.rt_var);
+                const elem_rt_var = blk: {
+                    if (tuple_resolved.desc.content == .structure and tuple_resolved.desc.content.structure == .tuple) {
+                        const elem_vars = self.runtime_types.sliceVars(tuple_resolved.desc.content.structure.tuple.elems);
+                        if (elem_index < elem_vars.len) {
+                            break :blk elem_vars[elem_index];
+                        }
+                    }
+                    // Fallback - use a fresh type var if we can't determine element type
+                    break :blk try self.runtime_types.fresh();
+                };
+
+                // Read the element value
+                const elem_val = try accessor.getElement(elem_index, elem_rt_var);
+
+                // Push the element value (with incref since we're returning it)
+                elem_val.incref(&self.runtime_layout_store, roc_ops);
+                try value_stack.push(elem_val);
+
                 return true;
             },
             .list_collect => |lc| {

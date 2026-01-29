@@ -1125,6 +1125,14 @@ const Formatter = struct {
             .tuple => |t| {
                 try fmt.formatCollection(region, .round, AST.Expr.Idx, fmt.ast.store.exprSlice(t.items), Formatter.formatExpr);
             },
+            .tuple_access => |ta| {
+                // Format: expr.N (e.g., tuple.0, tuple.1)
+                _ = try fmt.formatExpr(ta.expr);
+                // Get the element index from the token
+                const token_text = fmt.ast.resolve(ta.elem_token);
+                // Token includes leading dot (e.g., ".0")
+                try fmt.pushAll(token_text);
+            },
             .record => |r| {
                 try fmt.push('{');
 

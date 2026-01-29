@@ -311,6 +311,7 @@ pub const DevEvaluator = struct {
             .e_empty_list => try self.generateEmptyListCode(result_layout),
             .e_list => |list| try self.generateListCode(module_env, list, result_layout, env),
             .e_tuple => |tuple| try self.generateTupleCode(module_env, tuple, result_layout, env),
+            .e_tuple_access => return error.NotImplemented, // Tuple access not yet supported in dev evaluator
             .e_record => |rec| try self.generateRecordCode(module_env, rec, result_layout, env),
             // Note: e_empty_record is handled in "Not yet supported" section due to
             // a canonicalizer bug that incorrectly tags some expressions as e_empty_record
