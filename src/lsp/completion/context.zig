@@ -221,9 +221,9 @@ test "detectCompletionContext: after receiver dot" {
 
 test "detectCompletionContext: after receiver dot with nominal constructor" {
     const source = "Record2.SubVal(\"hi\").";
-    const ctx = detectCompletionContext(source, 0, 20);
+    const ctx = detectCompletionContext(source, 0, 21);
     try std.testing.expect(ctx == .after_receiver_dot);
-    try std.testing.expectEqual(@as(u32, 19), ctx.after_receiver_dot.dot_offset);
+    try std.testing.expectEqual(@as(u32, 20), ctx.after_receiver_dot.dot_offset);
     try std.testing.expectEqualStrings("Record2.SubVal", ctx.after_receiver_dot.call_chain.?);
     try std.testing.expectEqual(@as(u32, 0), ctx.after_receiver_dot.chain_start);
 }

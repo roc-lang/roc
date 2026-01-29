@@ -1504,7 +1504,10 @@ pub const SyntaxChecker = struct {
     ) ![]document_symbol_handler.SymbolInformation {
         const SymbolInformation = document_symbol_handler.SymbolInformation;
 
-        const env_handle = self.build_env orelse return &[_]SymbolInformation{};
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        const env_handle = try self.createFreshBuildEnv();
         const env = env_handle.envPtr();
 
         // Convert URI to absolute path to match against module paths
@@ -1514,12 +1517,6 @@ pub const SyntaxChecker = struct {
         const absolute_path = std.fs.cwd().realpathAlloc(allocator, path) catch
             allocator.dupe(u8, path) catch return &[_]SymbolInformation{};
         defer allocator.free(absolute_path);
-
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        // // Create fresh build env and build the module (like getDefinitionAtPosition)
-        // var env = self.createFreshBuildEnv() catch return &[_]SymbolInformation{};
 
         // Set up file provider with source as override text
         var provider_state = OverrideProvider{
