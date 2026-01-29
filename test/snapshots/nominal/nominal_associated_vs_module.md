@@ -17,14 +17,14 @@ useBar = Something
 TYPE MODULE MISSING MATCHING TYPE - nominal_associated_vs_module.md:1:1:7:19
 # PROBLEMS
 **TYPE MODULE MISSING MATCHING TYPE**
-Type modules must have a type declaration matching the module name.
+Type modules must have a nominal type declaration matching the module name.
 
-This file is named `nominal_associated_vs_module`.roc, but no top-level type declaration named `nominal_associated_vs_module` was found.
+This file is named `nominal_associated_vs_module`.roc, but no top-level nominal type named `nominal_associated_vs_module` was found.
 
-Add either:
-`nominal_associated_vs_module := ...` (nominal type)
+Add a nominal type like:
+`nominal_associated_vs_module := ...`
 or:
-`nominal_associated_vs_module : ...` (type alias)
+`nominal_associated_vs_module :: ...` (opaque nominal type)
 **nominal_associated_vs_module.md:1:1:7:19:**
 ```roc
 Foo := [Whatever].{

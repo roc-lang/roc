@@ -1741,6 +1741,14 @@ pub const BuildEnv = struct {
         // Now that order is built, mark ready reports as emitted so they can be drained
         self.sink.lock.lock();
         defer self.sink.lock.unlock();
+        // Mark entries without reports as emitted BEFORE calling tryEmitLocked
+        // so they don't block other entries from being emitted.
+        for (self.sink.entries.items) |*e| {
+            if (e.reports.items.len == 0) {
+                e.ready = true;
+                e.emitted = true;
+            }
+        }
         self.sink.tryEmitLocked();
     }
 
@@ -2309,24 +2317,45 @@ pub const OrderedSink = struct {
             if (!e.emitted) break;
         }
 
-        const count: usize = if (i >= self.drain_cursor) (i - self.drain_cursor) else 0;
-        if (count == 0) {
+        // Count only entries with reports (skip empty entries)
+        var reports_count: usize = 0;
+        {
+            var k: usize = self.drain_cursor;
+            while (k < i) : (k += 1) {
+                const entry_idx = self.order.items[k];
+                const e = &self.entries.items[entry_idx];
+                if (e.reports.items.len > 0) {
+                    reports_count += 1;
+                }
+            }
+        }
+
+        if (reports_count == 0) {
+            self.drain_cursor = i;
             return try gpa.alloc(Drained, 0);
         }
 
-        var out = try gpa.alloc(Drained, count);
+        var out = try gpa.alloc(Drained, reports_count);
         var j: usize = 0;
-        while (j < count) : (j += 1) {
-            const entry_idx = self.order.items[self.drain_cursor + j];
+        var k: usize = self.drain_cursor;
+        while (k < i) : (k += 1) {
+            const entry_idx = self.order.items[k];
             const e = &self.entries.items[entry_idx];
+
+            // Skip entries with no reports
+            if (e.reports.items.len == 0) {
+                e.ready = false;
+                e.emitted = false;
+                continue;
+            }
 
             // Move reports out; reset readiness for potential future appends
             const reps = e.reports.toOwnedSlice() catch {
                 // Back out partially allocated results on failure
-                var k: usize = 0;
-                while (k < j) : (k += 1) {
-                    for (out[k].reports) |*r| r.deinit();
-                    gpa.free(out[k].reports);
+                var m: usize = 0;
+                while (m < j) : (m += 1) {
+                    for (out[m].reports) |*r| r.deinit();
+                    gpa.free(out[m].reports);
                 }
                 gpa.free(out);
                 return error.OutOfMemory;
@@ -2337,6 +2366,7 @@ pub const OrderedSink = struct {
                 .module_name = e.module_name,
                 .reports = reps,
             };
+            j += 1;
 
             // Reinitialize the reports ArrayList since toOwnedSlice() moved ownership
             e.reports = std.array_list.Managed(Report).init(self.gpa);

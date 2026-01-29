@@ -272,7 +272,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 65;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 66;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 44;
 /// Count of the statement nodes in the ModuleEnv
@@ -3318,6 +3318,11 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
             region = r.region;
             node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.module_name) } });
         },
+        .type_module_has_alias_not_nominal => |r| {
+            node.tag = .diag_type_module_has_alias_not_nominal;
+            region = r.region;
+            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.module_name) } });
+        },
         .default_app_missing_main => |r| {
             node.tag = .diag_default_app_missing_main;
             region = r.region;
@@ -3760,6 +3765,10 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .region = store.getRegionAt(node_idx),
         } },
         .diag_type_module_missing_matching_type => return CIR.Diagnostic{ .type_module_missing_matching_type = .{
+            .module_name = @bitCast(payload.diag_single_ident.ident),
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_type_module_has_alias_not_nominal => return CIR.Diagnostic{ .type_module_has_alias_not_nominal = .{
             .module_name = @bitCast(payload.diag_single_ident.ident),
             .region = store.getRegionAt(node_idx),
         } },

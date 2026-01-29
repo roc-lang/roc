@@ -659,6 +659,13 @@ test "NodeStore round trip - Diagnostics" {
     });
 
     try diagnostics.append(gpa, CIR.Diagnostic{
+        .type_module_has_alias_not_nominal = .{
+            .module_name = rand_ident_idx(),
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
         .default_app_missing_main = .{
             .module_name = rand_ident_idx(),
             .region = rand_region(),
