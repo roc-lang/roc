@@ -10,7 +10,6 @@ const ModuleEnv = @import("can").ModuleEnv;
 const collections = @import("collections");
 
 const Check = @import("../Check.zig");
-const problem_mod = @import("../problem.zig");
 const report_mod = @import("../report.zig");
 
 const testing = std.testing;

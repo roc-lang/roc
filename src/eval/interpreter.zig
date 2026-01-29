@@ -7344,8 +7344,62 @@ pub const Interpreter = struct {
                     // This is critical for recursive types where the payload is boxed in memory
                     // even though the type says it's the recursive type directly.
                     const variant_layout = acc.getVariantLayout(tag_index);
+
+                    // For rigid type variables, the variant_layout may be incorrect (e.g., ZST)
+                    // because the layout was computed before type substitution. Check if we have
+                    // a substitution and use its layout instead.
+                    const arg_resolved = self.runtime_types.resolveVar(arg_var);
+                    const effective_layout = blk: {
+                        if (arg_resolved.desc.content == .rigid) {
+                            if (self.rigid_subst.get(arg_resolved.var_)) |subst_var| {
+                                // Use the substituted concrete type's layout
+                                break :blk self.getRuntimeLayout(subst_var) catch variant_layout;
+                            } else {
+                                // No substitution found. For polymorphic functions like List.get,
+                                // the rigid var wasn't properly substituted. As a workaround,
+                                // try to infer the payload layout from the physical tag union layout.
+                                //
+                                // If the tag union has only 2 variants and one is ZST (like [OutOfBounds]),
+                                // then the other variant determines the payload size. We can compute
+                                // a scalar layout based on the payload space in the tag union.
+                                if (variant_layout.tag == .zst) {
+                                    const inner_tu_data = self.runtime_layout_store.getTagUnionData(value.layout.data.tag_union.idx);
+                                    const inner_layout_variants = self.runtime_layout_store.getTagUnionVariants(inner_tu_data);
+                                    // Check the other variant's layout
+                                    var idx: usize = 0;
+                                    while (idx < inner_layout_variants.len) : (idx += 1) {
+                                        if (idx != tag_index) {
+                                            const other_variant = acc.getVariantLayout(idx);
+                                            if (other_variant.tag != .zst) {
+                                                // Found a non-ZST variant - use it for the payload layout
+                                                break :blk other_variant;
+                                            }
+                                        }
+                                    }
+                                    // No luck with other variants - try looking at physical payload size
+                                    // Payload is at offset 0, discriminant is at discriminant_offset,
+                                    // so payload size is discriminant_offset
+                                    const inner_payload_size = inner_tu_data.discriminant_offset;
+                                    if (inner_payload_size > 0 and inner_payload_size <= 16) {
+                                        // Create a scalar int layout for the payload based on size
+                                        const int_precision: types.Int.Precision = switch (inner_payload_size) {
+                                            1 => .u8,
+                                            2 => .u16,
+                                            4 => .u32,
+                                            8 => .u64,
+                                            16 => .u128,
+                                            else => .u64,
+                                        };
+                                        break :blk Layout.int(int_precision);
+                                    }
+                                }
+                            }
+                        }
+                        break :blk variant_layout;
+                    };
+
                     payload_value = StackValue{
-                        .layout = variant_layout,
+                        .layout = effective_layout,
                         .ptr = value.ptr,
                         .is_initialized = true,
                         .rt_var = arg_var,
@@ -10311,6 +10365,9 @@ pub const Interpreter = struct {
         /// collecting more elements or finalize the tuple.
         tuple_collect: TupleCollect,
 
+        /// Access a tuple element by index after tuple is evaluated.
+        tuple_access: TupleAccess,
+
         /// Collect list elements: after evaluating an element, either continue
         /// collecting more elements or finalize the list.
         list_collect: ListCollect,
@@ -10495,6 +10552,13 @@ pub const Interpreter = struct {
             collected_count: usize,
             /// Remaining element expressions to evaluate
             remaining_elems: []const can.CIR.Expr.Idx,
+        };
+
+        pub const TupleAccess = struct {
+            /// The 0-based index of the element to access
+            elem_index: u32,
+            /// The result expression index (for type information)
+            result_expr_idx: can.CIR.Expr.Idx,
         };
 
         pub const ListCollect = struct {
@@ -11921,6 +11985,25 @@ pub const Interpreter = struct {
                         .remaining_elems = elems,
                     } } });
                 }
+            },
+
+            .e_tuple_access => |tuple_access| {
+                const sched_trace = tracy.traceNamed(@src(), "sched.tuple_access");
+                defer sched_trace.end();
+
+                // Schedule tuple_access continuation (to be executed after tuple is evaluated)
+                try work_stack.push(.{ .apply_continuation = .{ .tuple_access = .{
+                    .elem_index = tuple_access.elem_index,
+                    .result_expr_idx = expr_idx,
+                } } });
+
+                // Schedule tuple expression evaluation
+                try work_stack.push(.{
+                    .eval_expr = .{
+                        .expr_idx = tuple_access.tuple,
+                        .expected_rt_var = null, // Infer from tuple expression
+                    },
+                });
             },
 
             // Lists
@@ -14906,6 +14989,45 @@ pub const Interpreter = struct {
                 }
                 return true;
             },
+            .tuple_access => |ta| {
+                const cont_trace = tracy.traceNamed(@src(), "cont.tuple_access");
+                defer cont_trace.end();
+
+                // Pop the tuple value from the stack
+                const tuple_val = value_stack.pop() orelse return error.Crash;
+                defer tuple_val.decref(&self.runtime_layout_store, roc_ops);
+
+                // Get tuple accessor
+                var accessor = try tuple_val.asTuple(&self.runtime_layout_store);
+
+                // Get element at the specified index
+                const elem_index = ta.elem_index;
+                if (elem_index >= accessor.getElementCount()) {
+                    return error.TupleIndexOutOfBounds;
+                }
+
+                // Get element runtime type from tuple's type
+                const tuple_resolved = self.resolveBaseVar(tuple_val.rt_var);
+                const elem_rt_var = blk: {
+                    if (tuple_resolved.desc.content == .structure and tuple_resolved.desc.content.structure == .tuple) {
+                        const elem_vars = self.runtime_types.sliceVars(tuple_resolved.desc.content.structure.tuple.elems);
+                        if (elem_index < elem_vars.len) {
+                            break :blk elem_vars[elem_index];
+                        }
+                    }
+                    // Fallback - use a fresh type var if we can't determine element type
+                    break :blk try self.runtime_types.fresh();
+                };
+
+                // Read the element value
+                const elem_val = try accessor.getElement(elem_index, elem_rt_var);
+
+                // Push the element value (with incref since we're returning it)
+                elem_val.incref(&self.runtime_layout_store, roc_ops);
+                try value_stack.push(elem_val);
+
+                return true;
+            },
             .list_collect => |lc| {
                 const cont_trace = tracy.traceNamed(@src(), "cont.list_collect");
                 defer cont_trace.end();
@@ -16982,9 +17104,11 @@ pub const Interpreter = struct {
                 // Check if we can use low-level numeric comparison based on layout
                 // This handles cases where method dispatch would fail (e.g., polymorphic values)
                 // Only use direct handling when we had to default to Dec due to flex/rigid types
-                const is_numeric_layout = lhs.layout.tag == .scalar and
+                const lhs_is_numeric_layout = lhs.layout.tag == .scalar and
                     (lhs.layout.data.scalar.tag == .int or lhs.layout.data.scalar.tag == .frac);
-                if (is_numeric_layout and defaulted_to_dec) {
+                const rhs_is_numeric_layout = rhs.layout.tag == .scalar and
+                    (rhs.layout.data.scalar.tag == .int or rhs.layout.data.scalar.tag == .frac);
+                if (lhs_is_numeric_layout and rhs_is_numeric_layout and defaulted_to_dec) {
                     // Handle numeric comparisons directly via low-level ops
                     if (ba.method_ident == self.root_env.idents.is_gt) {
                         const result = try self.compareNumericValues(lhs, rhs, .gt);
@@ -17135,7 +17259,7 @@ pub const Interpreter = struct {
 
                 if (nominal_info == null) {
                     // Before failing, check if this is a numeric operation we can handle directly
-                    if (is_numeric_layout) {
+                    if (lhs_is_numeric_layout and rhs_is_numeric_layout) {
                         // Handle numeric arithmetic via type-aware evalNumericBinop as fallback
                         if (ba.method_ident == self.root_env.idents.plus) {
                             const result = try self.evalNumericBinop(.add, lhs, rhs, roc_ops);
@@ -17789,12 +17913,17 @@ pub const Interpreter = struct {
                                     const rhs_value = try self.evalWithExpectedType(rhs_expr_idx, roc_ops, null);
                                     defer rhs_value.decref(&self.runtime_layout_store, roc_ops);
 
-                                    // Use numeric comparison
-                                    const result = try self.compareNumericValues(receiver_value, rhs_value, .eq);
-                                    receiver_value.decref(&self.runtime_layout_store, roc_ops);
-                                    const result_val = try self.makeBoolValue(result);
-                                    try value_stack.push(result_val);
-                                    return true;
+                                    // Check if RHS is also numeric before using numeric comparison
+                                    const rhs_is_numeric = rhs_value.layout.tag == .scalar and
+                                        (rhs_value.layout.data.scalar.tag == .int or rhs_value.layout.data.scalar.tag == .frac);
+                                    if (rhs_is_numeric) {
+                                        // Use numeric comparison
+                                        const result = try self.compareNumericValues(receiver_value, rhs_value, .eq);
+                                        receiver_value.decref(&self.runtime_layout_store, roc_ops);
+                                        const result_val = try self.makeBoolValue(result);
+                                        try value_stack.push(result_val);
+                                        return true;
+                                    }
                                 }
                             }
                             // For non-numeric flex/rigid, try structural equality

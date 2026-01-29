@@ -173,6 +173,10 @@ fn collectExprDependencies(
             }
         },
 
+        .e_tuple_access => |tuple_access| {
+            try collectExprDependencies(cir, tuple_access.tuple, dependencies, allocator);
+        },
+
         .e_tuple => |tuple| {
             for (cir.store.sliceExpr(tuple.elems)) |elem_idx| {
                 try collectExprDependencies(cir, elem_idx, dependencies, allocator);

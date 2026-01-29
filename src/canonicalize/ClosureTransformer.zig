@@ -1077,6 +1077,9 @@ fn exprContainsPatternRef(
             }
             return false;
         },
+        .e_tuple_access => |tuple_access| {
+            return self.exprContainsPatternRef(tuple_access.tuple, target_pattern);
+        },
         .e_match => |match| {
             if (self.exprContainsPatternRef(match.cond, target_pattern)) {
                 return true;
@@ -2287,6 +2290,20 @@ pub fn transformExpr(self: *Self, expr_idx: Expr.Idx) std.mem.Allocator.Error!Ex
 
             return try self.module_env.store.addExpr(Expr{
                 .e_tuple = .{ .elems = new_elems_span },
+            }, base.Region.zero());
+        },
+        .e_tuple_access => |tuple_access| {
+            const new_tuple = try self.transformExpr(tuple_access.tuple);
+
+            if (new_tuple == tuple_access.tuple) {
+                return expr_idx;
+            }
+
+            return try self.module_env.store.addExpr(Expr{
+                .e_tuple_access = .{
+                    .tuple = new_tuple,
+                    .elem_index = tuple_access.elem_index,
+                },
             }, base.Region.zero());
         },
         .e_record => |record| {

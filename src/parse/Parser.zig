@@ -2645,10 +2645,17 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
     if (expr) |e| {
         var expression = try self.parseExprSuffix(start, e);
 
-        while (self.peek() == .NoSpaceDotInt or self.peek() == .NoSpaceDotLowerIdent or self.peek() == .DotLowerIdent or self.peek() == .OpArrow) {
+        while (self.peek() == .NoSpaceDotInt or self.peek() == .DotInt or self.peek() == .NoSpaceDotLowerIdent or self.peek() == .DotLowerIdent or self.peek() == .OpArrow) {
             const tok = self.peek();
-            if (tok == .NoSpaceDotInt) {
-                return try self.pushMalformed(AST.Expr.Idx, .expr_no_space_dot_int, self.pos);
+            if (tok == .NoSpaceDotInt or tok == .DotInt) {
+                // Tuple element access: tuple.0, tuple.1, etc.
+                const elem_token = self.pos;
+                self.advance();
+                expression = try self.store.addExpr(.{ .tuple_access = .{
+                    .expr = expression,
+                    .elem_token = elem_token,
+                    .region = .{ .start = start, .end = self.pos },
+                } });
             } else if (self.peek() == .OpArrow) {
                 const s = self.pos;
                 self.advance();
