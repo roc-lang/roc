@@ -2,7 +2,7 @@
 
 ## `for` Loops
 
-A `for` loop iterates over each element in a list:
+A `for` loop iterates over each item in a list:
 
 ```roc
 var $sum = 0
