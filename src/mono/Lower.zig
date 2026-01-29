@@ -119,6 +119,11 @@ next_join_point_id: u32 = 0,
 /// where the inner list's type var is flex but the expression is clearly a list.
 expr_layout_hints: std.AutoHashMap(types.Var, LayoutIdx),
 
+/// Deferred lambda/closure definitions.
+/// When a block-local s_decl binds a lambda/closure, we defer lowering the body
+/// until call time (when type_scope is populated). Maps pattern_idx → CIR expr_idx.
+deferred_defs: std.AutoHashMap(u32, CIR.Expr.Idx),
+
 /// Initialize a new Lowerer
 pub fn init(
     allocator: Allocator,
@@ -138,6 +143,7 @@ pub fn init(
         .lowered_symbols = std.AutoHashMap(u48, MonoExprId).init(allocator),
         .type_env = std.AutoHashMap(u32, LayoutIdx).init(allocator),
         .expr_layout_hints = std.AutoHashMap(types.Var, LayoutIdx).init(allocator),
+        .deferred_defs = std.AutoHashMap(u32, CIR.Expr.Idx).init(allocator),
     };
 }
 
@@ -148,12 +154,53 @@ pub fn deinit(self: *Self) void {
     self.type_env.deinit();
     self.type_scope.deinit();
     self.expr_layout_hints.deinit();
+    self.deferred_defs.deinit();
 }
 
 /// Get the module environment at the given index
 fn getModuleEnv(self: *const Self, module_idx: u16) ?*ModuleEnv {
     if (module_idx >= self.all_module_envs.len) return null;
     return self.all_module_envs[module_idx];
+}
+
+/// Find the module index for a given origin_module ident (from a NominalType).
+/// Uses the import system of source_env to resolve the origin module name to a module index.
+fn findModuleForOrigin(self: *Self, source_env: *const ModuleEnv, origin_module: Ident.Idx) ?u16 {
+    // Check if origin is source_env itself
+    if (origin_module == source_env.module_name_idx) {
+        for (self.all_module_envs, 0..) |env, idx| {
+            if (env == source_env) return @intCast(idx);
+        }
+    }
+
+    // Use the import system: iterate source_env's imports
+    const import_count: usize = @intCast(source_env.imports.imports.len());
+    for (0..import_count) |i| {
+        const import_idx: CIR.Import.Idx = @enumFromInt(i);
+        if (source_env.imports.getIdentIdx(import_idx)) |import_ident| {
+            if (import_ident == origin_module) {
+                if (source_env.imports.getResolvedModule(import_idx)) |mod_idx| {
+                    return @intCast(mod_idx);
+                }
+            }
+        }
+    }
+
+    // Fallback: compare origin name against resolved module names
+    const origin_name = source_env.getIdent(origin_module);
+    for (0..import_count) |i| {
+        const import_idx: CIR.Import.Idx = @enumFromInt(i);
+        if (source_env.imports.getResolvedModule(import_idx)) |mod_idx| {
+            if (mod_idx < self.all_module_envs.len) {
+                const import_env = self.all_module_envs[mod_idx];
+                if (std.mem.eql(u8, import_env.module_name, origin_name)) {
+                    return @intCast(mod_idx);
+                }
+            }
+        }
+    }
+
+    return null;
 }
 
 /// Create a MonoSymbol from a pattern in the current module
@@ -264,25 +311,29 @@ fn findDefForPattern(self: *Self, module_env: *ModuleEnv, pattern_idx: CIR.Patte
 /// Lower a local definition using its pattern index.
 /// This handles same-module function references (like walk calling walk_help).
 fn lowerLocalDefByPattern(self: *Self, module_env: *ModuleEnv, symbol: MonoSymbol, pattern_idx: CIR.Pattern.Idx) Allocator.Error!void {
-    // Find the definition for this pattern
-    const def_idx = self.findDefForPattern(module_env, pattern_idx) orelse {
-        // Not a top-level definition (e.g., local variable, function parameter)
-        // These are handled by block/statement lowering, not here
-        return;
-    };
-    // Get the definition
-    const def = module_env.store.getDef(def_idx);
-
     // Create symbol key for deduplication
     const symbol_key: u48 = @bitCast(symbol);
 
     // Avoid infinite recursion - check if already lowered
     if (self.lowered_symbols.contains(symbol_key)) return;
 
-    // Debug assertion: verify pattern matches
-    if (std.debug.runtime_safety) {
-        std.debug.assert(def.pattern == pattern_idx);
-    }
+    // Find the CIR expression: check module defs first, then deferred defs
+    const pattern_key = @intFromEnum(pattern_idx);
+    const cir_expr_idx: CIR.Expr.Idx = blk: {
+        if (self.findDefForPattern(module_env, pattern_idx)) |def_idx| {
+            const def = module_env.store.getDef(def_idx);
+            if (std.debug.runtime_safety) std.debug.assert(def.pattern == pattern_idx);
+            break :blk def.expr;
+        }
+        if (self.deferred_defs.get(pattern_key)) |deferred| {
+            break :blk deferred;
+        }
+        return; // Not a top-level or deferred definition
+    };
+
+    // Remove from deferred_defs before lowering to prevent infinite recursion
+    // when the body contains a self-reference (e.g., recursive closures like factorial).
+    _ = self.deferred_defs.remove(pattern_key);
 
     // Set up binding context for recursive closure detection
     const old_binding = self.current_binding_pattern;
@@ -295,7 +346,7 @@ fn lowerLocalDefByPattern(self: *Self, module_env: *ModuleEnv, symbol: MonoSymbo
     }
 
     // Lower the definition's expression
-    const expr_id = self.lowerExprFromIdx(module_env, def.expr) catch {
+    const expr_id = self.lowerExprFromIdx(module_env, cir_expr_idx) catch {
         // If lowering fails, don't register - the lookup will fail at codegen time
         // This matches the behavior of lowerExternalDefByIdx
         return;
@@ -347,6 +398,57 @@ fn getExprLayoutFromIdx(self: *Self, _: *ModuleEnv, expr_idx: CIR.Expr.Idx) Layo
     return ls.addTypeVar(self.current_module_idx, type_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
 }
 
+/// Push a type_scope mapping from the for-loop pattern's type variable to the element
+/// type extracted from the list expression's type. Returns true if a scope was pushed.
+/// The caller must call popForLoopElementTypeScope() after lowering the body.
+fn pushForLoopElementTypeScope(self: *Self, module_env: *const ModuleEnv, list_expr_idx: CIR.Expr.Idx, patt_idx: CIR.Pattern.Idx) bool {
+    const list_type_var = ModuleEnv.varFrom(list_expr_idx);
+    var list_resolved = module_env.types.resolveVar(list_type_var);
+
+    // If the list type is a flex/rigid var, check type_scope for a concrete mapping
+    // (This handles polymorphic functions where the list parameter type is unresolved)
+    var list_type_source_env: *const ModuleEnv = module_env;
+    if (list_resolved.desc.content == .flex or list_resolved.desc.content == .rigid) {
+        if (self.type_scope.lookup(list_resolved.var_)) |mapped| {
+            if (self.type_scope_caller_module) |caller_idx| {
+                list_type_source_env = self.all_module_envs[caller_idx];
+            }
+            list_resolved = list_type_source_env.types.resolveVar(mapped);
+        }
+    }
+
+    if (list_resolved.desc.content != .structure) return false;
+    const structure = list_resolved.desc.content.structure;
+    if (structure != .nominal_type) return false;
+    const nominal = structure.nominal_type;
+    const args = list_type_source_env.types.sliceNominalArgs(nominal);
+    if (args.len == 0) return false;
+
+    const elem_type_var = args[0];
+
+    // Get the pattern's type variable
+    const patt_type_var = ModuleEnv.varFrom(patt_idx);
+    const patt_resolved = module_env.types.resolveVar(patt_type_var);
+
+    // Only add mapping if the pattern's type is unresolved (flex/rigid)
+    if (patt_resolved.desc.content != .flex and patt_resolved.desc.content != .rigid) return false;
+
+    // Push a new scope with the mapping
+    var new_scope = types.VarMap.init(self.allocator);
+    new_scope.put(patt_resolved.var_, elem_type_var) catch return false;
+    self.type_scope.scopes.append(new_scope) catch return false;
+    return true;
+}
+
+/// Pop a type scope that was pushed by pushForLoopElementTypeScope.
+fn popForLoopElementTypeScope(self: *Self) void {
+    if (self.type_scope.scopes.items.len > 0) {
+        var scope = self.type_scope.scopes.items[self.type_scope.scopes.items.len - 1];
+        self.type_scope.scopes.items.len -= 1;
+        scope.deinit();
+    }
+}
+
 /// Get the element layout from the for-loop's LIST expression, not the pattern.
 /// The list expression has type List(T) where T is the concrete element type.
 /// The pattern's type may be a flex variable with constraints that doesn't resolve correctly.
@@ -368,7 +470,8 @@ fn getForLoopElementLayout(self: *Self, list_expr_idx: CIR.Expr.Idx) LayoutIdx {
                     std.debug.assert(args.len > 0); // List must have element type arg
                     const elem_type_var = args[0];
                     // Compute layout for the element type from the list's type arg
-                    return ls.addTypeVar(self.current_module_idx, elem_type_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
+                    const elem_layout = ls.addTypeVar(self.current_module_idx, elem_type_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
+                    return elem_layout;
                 },
                 else => unreachable, // For loop list must be List type
             }
@@ -392,6 +495,92 @@ fn getPatternLayout(self: *Self, pattern_idx: CIR.Pattern.Idx) LayoutIdx {
 
     const ls = self.layout_store orelse unreachable;
     return ls.addTypeVar(self.current_module_idx, type_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
+}
+
+/// Set up layout hints for a local function call.
+/// When a generic function (like `walk`) is called from within the same module,
+/// the function's parameter type variables (rigids from its annotation) may not
+/// be in the type scope. This function pre-computes parameter layouts from the
+/// call arguments so that `getPatternLayout` returns the correct concrete layouts.
+fn setupLocalCallLayoutHints(
+    self: *Self,
+    module_env: *ModuleEnv,
+    lookup_pattern_idx: CIR.Pattern.Idx,
+    call_args: CIR.Expr.Span,
+) Allocator.Error!void {
+    // Find the CIR expression for the definition
+    const def_expr_idx: CIR.Expr.Idx = blk: {
+        if (self.findDefForPattern(module_env, lookup_pattern_idx)) |def_idx| {
+            break :blk module_env.store.getDef(def_idx).expr;
+        }
+        if (self.deferred_defs.get(@intFromEnum(lookup_pattern_idx))) |deferred| {
+            break :blk deferred;
+        }
+        return;
+    };
+
+    // Get the lambda's parameter patterns
+    const def_expr = module_env.store.getExpr(def_expr_idx);
+    const lambda_args: CIR.Pattern.Span = switch (def_expr) {
+        .e_lambda => |l| l.args,
+        .e_closure => |c| blk: {
+            const inner = module_env.store.getExpr(c.lambda_idx);
+            break :blk switch (inner) {
+                .e_lambda => |l| l.args,
+                else => return,
+            };
+        },
+        else => return,
+    };
+
+    const param_pattern_indices = module_env.store.slicePatterns(lambda_args);
+    const arg_indices = module_env.store.sliceExpr(call_args);
+
+    // Also populate the type scope by walking the function's type signature.
+    // This handles nested type variables (e.g., the element type `a` inside `List a`)
+    // that are not directly represented by the parameter patterns.
+    const func_type_var = ModuleEnv.varFrom(def_expr_idx);
+    const func_resolved = module_env.types.resolveVar(func_type_var);
+    if (func_resolved.desc.content.unwrapFunc()) |func| {
+        const param_vars = module_env.types.sliceVars(func.args);
+        const num_type_mappings = @min(param_vars.len, arg_indices.len);
+
+        // Ensure we have a scope
+        if (self.type_scope.scopes.items.len == 0) {
+            try self.type_scope.scopes.append(types.VarMap.init(self.allocator));
+        }
+        const scope = &self.type_scope.scopes.items[0];
+
+        for (0..num_type_mappings) |i| {
+            const param_var = param_vars[i];
+            const arg_idx = arg_indices[i];
+            const caller_arg_var = ModuleEnv.varFrom(arg_idx);
+            try self.collectTypeMappingsWithExpr(scope, module_env, param_var, module_env, caller_arg_var, arg_idx);
+        }
+    }
+
+    const num_mappings = @min(param_pattern_indices.len, arg_indices.len);
+    for (0..num_mappings) |i| {
+        const param_pattern_idx = param_pattern_indices[i];
+        const arg_idx = arg_indices[i];
+
+        // Get the param's type var and resolve it
+        const param_type_var = ModuleEnv.varFrom(param_pattern_idx);
+        const resolved = module_env.types.resolveVar(param_type_var);
+
+        // Only add hints for type vars that are flex or rigid (generic)
+        if (resolved.desc.content != .flex and resolved.desc.content != .rigid) continue;
+
+        // Check if already in the type scope (no need to add a hint)
+        if (self.type_scope.lookup(resolved.var_) != null) continue;
+
+        // Compute the layout from the arg's type
+        const arg_layout = self.getExprLayoutFromIdx(module_env, arg_idx);
+
+        // Store the hint: when this resolved type var is encountered,
+        // use the layout computed from the argument
+        try self.expr_layout_hints.put(resolved.var_, arg_layout);
+    }
 }
 
 /// Set up type scope mappings for an external function call.
@@ -470,6 +659,50 @@ fn setupExternalCallTypeScope(
 
 /// Recursively collect type variable mappings by walking two types in parallel.
 /// Maps rigid vars in ext_type to corresponding parts of caller_type.
+/// Collect resolved rigid type variable representatives from a type, recursing into
+/// structures like List, function types, etc.
+fn collectRigidVars(self: *Self, env: *const ModuleEnv, type_var: types.Var, out: []types.Var, count: *usize) void {
+    if (count.* >= out.len) return;
+    const resolved = env.types.resolveVar(type_var);
+    switch (resolved.desc.content) {
+        .rigid => {
+            // Add this rigid var if not already present
+            for (out[0..count.*]) |existing| {
+                if (existing == resolved.var_) return;
+            }
+            out[count.*] = resolved.var_;
+            count.* += 1;
+        },
+        .structure => |st| switch (st) {
+            .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                const param_vars = env.types.sliceVars(func.args);
+                for (param_vars) |pv| {
+                    self.collectRigidVars(env, pv, out, count);
+                }
+                self.collectRigidVars(env, func.ret, out, count);
+            },
+            .nominal_type => |nt| {
+                const type_args = env.types.sliceNominalArgs(nt);
+                for (type_args) |ta| {
+                    self.collectRigidVars(env, ta, out, count);
+                }
+            },
+            .tuple => |tup| {
+                const elems = env.types.sliceVars(tup.elems);
+                for (elems) |e| {
+                    self.collectRigidVars(env, e, out, count);
+                }
+            },
+            else => {},
+        },
+        .alias => |alias| {
+            const backing = env.types.getAliasBackingVar(alias);
+            self.collectRigidVars(env, backing, out, count);
+        },
+        else => {},
+    }
+}
+
 fn collectTypeMappings(
     self: *Self,
     scope: *types.VarMap,
@@ -530,10 +763,27 @@ fn collectTypeMappingsWithExpr(
                     }
                 }
             }
+            // For nested calls: if the caller's type is also rigid/flex (because the
+            // intermediate function is generic), resolve transitively through the existing
+            // type scope. Otherwise addTypeVar would try to resolve a module N var using
+            // the outermost caller's module (module 0), giving wrong results.
+            if (caller_resolved.desc.content == .rigid or caller_resolved.desc.content == .flex) {
+                if (self.type_scope.lookup(caller_resolved.var_)) |transitive_var| {
+                    try scope.put(ext_resolved.var_, transitive_var);
+                    return;
+                }
+            }
             try scope.put(ext_resolved.var_, caller_resolved.var_);
         },
         .flex => {
             // Flex vars might also need mapping if they're unresolved
+            // Same transitive resolution as rigid vars for nested calls.
+            if (caller_resolved.desc.content == .rigid or caller_resolved.desc.content == .flex) {
+                if (self.type_scope.lookup(caller_resolved.var_)) |transitive_var| {
+                    try scope.put(ext_resolved.var_, transitive_var);
+                    return;
+                }
+            }
             try scope.put(ext_resolved.var_, caller_resolved.var_);
         },
         .structure => |st| {
@@ -740,6 +990,12 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                 const lookup = fn_expr.e_lookup_external;
                 try self.setupExternalCallTypeScope(module_env, lookup, call.args, expr_idx);
             }
+            // For local function calls, set up layout hints so generic parameters
+            // get the correct concrete layouts from the call arguments.
+            if (fn_expr == .e_lookup_local) {
+                const lookup = fn_expr.e_lookup_local;
+                try self.setupLocalCallLayoutHints(module_env, lookup.pattern_idx, call.args);
+            }
             // Clean up type scope after this expression, whether we exit normally or break early
             defer if (is_external_call) {
                 self.type_scope_caller_module = old_caller_module;
@@ -765,22 +1021,32 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                     }
                 }
                 // Convert CIR LowLevel ops to MonoExpr LowLevel ops
-                const mono_op: ir.MonoExpr.LowLevel = switch (ll.op) {
+                // Using the CALL expression's type for ret_layout (not the lambda's rigid type vars)
+                // because the lambda's type vars are from the builtin definition and may not be
+                // in the type scope. The call expression's type IS resolved through the caller's context.
+                const mono_op: ?ir.MonoExpr.LowLevel = switch (ll.op) {
                     .list_len => .list_len,
                     .list_is_empty => .list_is_empty,
-                    else => {
-                        std.debug.print("UNHANDLED LOW-LEVEL OP in Lower.zig: {s}\n", .{@tagName(ll.op)});
-                        unreachable;
-                    },
+                    .list_get_unsafe => .list_get,
+                    .list_append => .list_append,
+                    .list_append_unsafe => .list_append,
+                    .list_concat => .list_concat,
+                    .list_with_capacity => .list_with_capacity,
+                    .list_drop_at => .list_drop_first,
+                    .list_sublist => .list_take_first,
+                    else => null,
                 };
-                const args = try self.lowerExprSpan(module_env, call.args);
-                break :blk .{
-                    .low_level = .{
-                        .op = mono_op,
-                        .args = args,
-                        .ret_layout = self.getExprLayoutFromIdx(module_env, expr_idx),
-                    },
-                };
+                if (mono_op) |op| {
+                    const args = try self.lowerExprSpan(module_env, call.args);
+                    break :blk .{
+                        .low_level = .{
+                            .op = op,
+                            .args = args,
+                            .ret_layout = self.computeLayoutFromExprIdx(module_env, expr_idx) orelse LayoutIdx.default_num,
+                        },
+                    };
+                }
+                // Fall through to general call handling for unhandled low-level ops
             }
 
             const fn_id = try self.lowerExprFromIdx(module_env, call.func);
@@ -826,7 +1092,6 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
 
             // Detect if this closure is recursive (references itself)
             const recursion_info = self.detectClosureRecursion(module_env, closure.lambda_idx);
-
 
             // If this is a recursive closure bound to a variable, create a MonoProc
             // so it can be compiled as a separate procedure with proper stack frame.
@@ -996,8 +1261,192 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                 // Fall through to handle as external call lookup if not a known method
             }
 
-            // Handle field access (no args) for list properties
-            if (is_list_receiver and dot.args == null) {
+            // Handle method calls on non-list nominal types (e.g., n.to_str() where n : U64)
+            if (dot.args != null and !is_list_receiver) {
+                const receiver_type_var = ModuleEnv.varFrom(dot.receiver);
+                var recv_resolved = module_env.types.resolveVar(receiver_type_var);
+                var recv_type_source_env: *const ModuleEnv = module_env;
+
+                // Check type_scope for concrete mapping (polymorphic calls)
+                if (recv_resolved.desc.content == .flex or recv_resolved.desc.content == .rigid) {
+                    if (self.type_scope.lookup(recv_resolved.var_)) |mapped| {
+                        if (self.type_scope_caller_module) |caller_idx| {
+                            recv_type_source_env = self.all_module_envs[caller_idx];
+                        }
+                        recv_resolved = recv_type_source_env.types.resolveVar(mapped);
+                    }
+                }
+
+                // Follow aliases
+                while (recv_resolved.desc.content == .alias) {
+                    const al = recv_resolved.desc.content.alias;
+                    const backing = recv_type_source_env.types.getAliasBackingVar(al);
+                    recv_resolved = recv_type_source_env.types.resolveVar(backing);
+                }
+
+                // Determine nominal type
+                const recv_nominal: ?struct { origin: Ident.Idx, ident: Ident.Idx } = switch (recv_resolved.desc.content) {
+                    .structure => |s| switch (s) {
+                        .nominal_type => |nom| .{
+                            .origin = nom.origin_module,
+                            .ident = nom.ident.ident_idx,
+                        },
+                        else => null,
+                    },
+                    .flex => |flex| fi: {
+                        if (!flex.constraints.isEmpty()) {
+                            const constraints = recv_type_source_env.types.sliceStaticDispatchConstraints(flex.constraints);
+                            for (constraints) |constraint| {
+                                if (constraint.origin == .from_numeral) {
+                                    break :fi .{
+                                        .origin = recv_type_source_env.idents.builtin_module,
+                                        .ident = recv_type_source_env.idents.dec_type,
+                                    };
+                                }
+                            }
+                        }
+                        break :fi null;
+                    },
+                    .rigid => |rigid| ri: {
+                        if (!rigid.constraints.isEmpty()) {
+                            for (recv_type_source_env.types.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
+                                if (constraint.origin == .from_numeral) {
+                                    break :ri .{
+                                        .origin = recv_type_source_env.idents.builtin_module,
+                                        .ident = recv_type_source_env.idents.dec_type,
+                                    };
+                                }
+                            }
+                        }
+                        break :ri null;
+                    },
+                    else => null,
+                };
+
+                if (recv_nominal) |rn| {
+                    const origin_module_idx = self.findModuleForOrigin(recv_type_source_env, rn.origin) orelse {
+                        std.debug.print("e_dot_access method dispatch: could not find origin module\n", .{});
+                        unreachable;
+                    };
+                    const origin_env = self.all_module_envs[origin_module_idx];
+
+                    const qualified_method = origin_env.lookupMethodIdentFromTwoEnvsConst(
+                        recv_type_source_env, rn.ident,
+                        module_env, dot.field_name,
+                    ) orelse {
+                        std.debug.print("e_dot_access method dispatch: method lookup failed for {s}.{s}\n", .{ recv_type_source_env.getIdent(rn.ident), field_name });
+                        unreachable;
+                    };
+
+                    const node_idx = origin_env.getExposedNodeIndexById(qualified_method) orelse {
+                        std.debug.print("e_dot_access method dispatch: no exposed node for method\n", .{});
+                        unreachable;
+                    };
+
+                    // Check if the method definition is a low-level lambda
+                    const method_def_idx: CIR.Def.Idx = @enumFromInt(node_idx);
+                    const method_def = origin_env.store.getDef(method_def_idx);
+                    const method_expr = origin_env.store.getExpr(method_def.expr);
+
+                    if (method_expr == .e_low_level_lambda) {
+                        const ll = method_expr.e_low_level_lambda;
+                        // Emit the low-level op directly as a MonoIR expression
+                        const CIRLowLevel = CIR.Expr.LowLevel;
+                        break :blk switch (ll.op) {
+                            CIRLowLevel.u8_to_str => .{ .int_to_str = .{ .value = receiver, .int_precision = .u8 } },
+                            CIRLowLevel.i8_to_str => .{ .int_to_str = .{ .value = receiver, .int_precision = .i8 } },
+                            CIRLowLevel.u16_to_str => .{ .int_to_str = .{ .value = receiver, .int_precision = .u16 } },
+                            CIRLowLevel.i16_to_str => .{ .int_to_str = .{ .value = receiver, .int_precision = .i16 } },
+                            CIRLowLevel.u32_to_str => .{ .int_to_str = .{ .value = receiver, .int_precision = .u32 } },
+                            CIRLowLevel.i32_to_str => .{ .int_to_str = .{ .value = receiver, .int_precision = .i32 } },
+                            CIRLowLevel.u64_to_str => .{ .int_to_str = .{ .value = receiver, .int_precision = .u64 } },
+                            CIRLowLevel.i64_to_str => .{ .int_to_str = .{ .value = receiver, .int_precision = .i64 } },
+                            CIRLowLevel.u128_to_str => .{ .int_to_str = .{ .value = receiver, .int_precision = .u128 } },
+                            CIRLowLevel.i128_to_str => .{ .int_to_str = .{ .value = receiver, .int_precision = .i128 } },
+                            CIRLowLevel.dec_to_str => .{ .dec_to_str = receiver },
+                            CIRLowLevel.f32_to_str => .{ .float_to_str = .{ .value = receiver, .float_precision = .f32 } },
+                            CIRLowLevel.f64_to_str => .{ .float_to_str = .{ .value = receiver, .float_precision = .f64 } },
+                            else => ll_fallback: {
+                                // For other low-level ops, fall back to regular function call
+                                const method_symbol = MonoSymbol{
+                                    .module_idx = origin_module_idx,
+                                    .ident_idx = qualified_method,
+                                };
+                                const method_symbol_key: u48 = @bitCast(method_symbol);
+                                if (!self.lowered_symbols.contains(method_symbol_key)) {
+                                    try self.lowerExternalDefByIdx(method_symbol, node_idx);
+                                }
+                                const ll_ret_layout = self.getExprLayoutFromIdx(module_env, expr_idx);
+                                const ll_fn_expr_id = try self.store.addExpr(.{ .lookup = .{
+                                    .symbol = method_symbol,
+                                    .layout_idx = .i64,
+                                } }, region);
+                                const ll_extra_args = module_env.store.sliceExpr(dot.args.?);
+                                var ll_all_args = std.ArrayList(ir.MonoExprId).empty;
+                                defer ll_all_args.deinit(self.allocator);
+                                try ll_all_args.append(self.allocator, receiver);
+                                for (ll_extra_args) |arg_idx| {
+                                    const lowered_arg = try self.lowerExprFromIdx(module_env, arg_idx);
+                                    try ll_all_args.append(self.allocator, lowered_arg);
+                                }
+                                const ll_args_span = try self.store.addExprSpan(ll_all_args.items);
+                                break :ll_fallback .{
+                                    .call = .{
+                                        .fn_expr = ll_fn_expr_id,
+                                        .fn_layout = .i64,
+                                        .args = ll_args_span,
+                                        .ret_layout = ll_ret_layout,
+                                        .called_via = .apply,
+                                    },
+                                };
+                            },
+                        };
+                    }
+
+                    // Regular function method - lower as external definition + call
+                    const method_symbol = MonoSymbol{
+                        .module_idx = origin_module_idx,
+                        .ident_idx = qualified_method,
+                    };
+
+                    const method_symbol_key: u48 = @bitCast(method_symbol);
+                    if (!self.lowered_symbols.contains(method_symbol_key)) {
+                        try self.lowerExternalDefByIdx(method_symbol, node_idx);
+                    }
+
+                    const ret_layout = self.getExprLayoutFromIdx(module_env, expr_idx);
+
+                    const fn_expr_id = try self.store.addExpr(.{ .lookup = .{
+                        .symbol = method_symbol,
+                        .layout_idx = .i64,
+                    } }, region);
+
+                    // Build args: receiver is first arg, then any extra args
+                    const extra_args = module_env.store.sliceExpr(dot.args.?);
+                    var all_args = std.ArrayList(ir.MonoExprId).empty;
+                    defer all_args.deinit(self.allocator);
+                    try all_args.append(self.allocator, receiver);
+                    for (extra_args) |arg_idx| {
+                        const lowered_arg = try self.lowerExprFromIdx(module_env, arg_idx);
+                        try all_args.append(self.allocator, lowered_arg);
+                    }
+                    const args_span = try self.store.addExprSpan(all_args.items);
+
+                    break :blk .{
+                        .call = .{
+                            .fn_expr = fn_expr_id,
+                            .fn_layout = .i64,
+                            .args = args_span,
+                            .ret_layout = ret_layout,
+                            .called_via = .apply,
+                        },
+                    };
+                }
+            }
+
+            // Handle field access (no args) or zero-arg method calls for list properties
+            const has_no_extra_args = dot.args == null or (if (dot.args) |as| module_env.store.sliceExpr(as).len == 0 else false);
+            if (is_list_receiver and has_no_extra_args) {
                 if (std.mem.eql(u8, field_name, "len")) {
                     // Convert list.len to low_level list_len operation
                     const args = try self.store.addExprSpan(&[_]ir.MonoExprId{receiver});
@@ -1100,15 +1549,12 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                 }
             } else 0; // TODO: proper discriminant lookup for other tags with args
 
-            // For zero-argument tags like True/False, use zero_arg_tag
-            if (args_slice.len == 0 and (std.mem.eql(u8, tag_name_text, "True") or
-                std.mem.eql(u8, tag_name_text, "False") or
-                std.ascii.eqlIgnoreCase(tag_name_text, "true") or
-                std.ascii.eqlIgnoreCase(tag_name_text, "false")))
-            {
+            // For zero-argument tags, use zero_arg_tag
+            if (args_slice.len == 0) {
+                const tag_layout = self.computeLayoutFromExprIdx(module_env, expr_idx) orelse LayoutIdx.default_num;
                 break :blk .{ .zero_arg_tag = .{
                     .discriminant = discriminant,
-                    .union_layout = .bool,
+                    .union_layout = tag_layout,
                 } };
             }
 
@@ -1164,7 +1610,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             break :blk .{
                 .when = .{
                     .value = cond,
-                    .value_layout = .i64, // TODO
+                    .value_layout = self.getExprLayoutFromIdx(module_env, match_expr.cond),
                     .branches = branches,
                     .result_layout = self.getExprLayoutFromIdx(module_env, expr_idx),
                 },
@@ -1314,6 +1760,47 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             const func_type = expr_resolved.desc.content.unwrapFunc();
             const ls = self.layout_store orelse unreachable;
 
+            // Low-level lambdas from builtins have their own rigid type variables that
+            // may not be in the type scope (which was set up for the enclosing function).
+            // Add mappings by matching rigid var names against existing scope entries.
+            if (func_type != null and self.type_scope.scopes.items.len > 0) {
+                const ft = func_type.?;
+                const scope = &self.type_scope.scopes.items[0];
+                // Collect rigid vars from the lambda's function type (params + return)
+                var lambda_rigids: [8]types.Var = undefined;
+                var n_rigids: usize = 0;
+                const ft_params = module_env.types.sliceVars(ft.args);
+                for (ft_params) |pv| {
+                    self.collectRigidVars(module_env, pv, &lambda_rigids, &n_rigids);
+                }
+                self.collectRigidVars(module_env, ft.ret, &lambda_rigids, &n_rigids);
+                // For each unmapped rigid, find a scope entry with the same name
+                for (lambda_rigids[0..n_rigids]) |rigid_var| {
+                    if (scope.get(rigid_var) != null) continue; // already mapped
+                    const rigid_resolved = module_env.types.resolveVar(rigid_var);
+                    const rigid_name = if (rigid_resolved.desc.content == .rigid) rigid_resolved.desc.content.rigid.name else continue;
+                    // Search existing scope entries for a rigid with the same name
+                    const rigid_name_text = module_env.getIdent(rigid_name);
+                    var it = scope.iterator();
+                    while (it.next()) |entry| {
+                        const ext_var = entry.key_ptr.*;
+                        const ext_resolved = module_env.types.resolveVar(ext_var);
+                        if (ext_resolved.desc.content == .rigid) {
+                            const ext_name_text = module_env.getIdent(ext_resolved.desc.content.rigid.name);
+                            if (std.mem.eql(u8, rigid_name_text, ext_name_text)) {
+                                // Same name - add mapping from lambda's rigid to the same caller var
+                                scope.put(rigid_var, entry.value_ptr.*) catch {};
+                                // Invalidate layout cache for this var since it may have been
+                                // cached as opaquePtr from container processing
+                                const cache_key = layout_mod.ModuleVarKey{ .module_idx = self.current_module_idx, .var_ = rigid_var };
+                                _ = ls.layouts_by_module_var.remove(cache_key);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
             var param_idx: usize = 0;
             for (param_patterns) |patt_idx| {
                 const symbol = self.patternToSymbol(patt_idx);
@@ -1343,12 +1830,19 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             }
             const args_span = try self.store.addExprSpan(arg_list.items);
 
+            // Use the function's RETURN type for ret_layout, not the function type itself
+            const ret_layout = if (func_type) |ft| ret_blk: {
+                const ret_var = ft.ret;
+                break :ret_blk ls.addTypeVar(self.current_module_idx, ret_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
+            } else
+                self.getExprLayoutFromIdx(module_env, expr_idx);
+
             // Create the low-level call as the body
             const body_id = try self.store.addExpr(.{
                 .low_level = .{
                     .op = mono_op,
                     .args = args_span,
-                    .ret_layout = self.getExprLayoutFromIdx(module_env, expr_idx),
+                    .ret_layout = ret_layout,
                 },
             }, region);
 
@@ -1357,7 +1851,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                     .fn_layout = .i64, // TODO: compute proper function layout
                     .params = params,
                     .body = body_id,
-                    .ret_layout = self.getExprLayoutFromIdx(module_env, expr_idx),
+                    .ret_layout = ret_layout,
                 },
             };
         },
@@ -1438,8 +1932,16 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             // Lower the element pattern
             const elem_pattern = try self.lowerPattern(module_env, for_expr.patt);
 
+            // Push a type scope mapping from the element pattern's type variable
+            // to the list's element type, so method dispatch (e.g., elem.to_str())
+            // can resolve the receiver's type.
+            const pushed_scope = self.pushForLoopElementTypeScope(module_env, for_expr.expr, for_expr.patt);
+
             // Lower the body expression
             const body = try self.lowerExprFromIdx(module_env, for_expr.body);
+
+            // Pop the type scope if we pushed one
+            if (pushed_scope) self.popForLoopElementTypeScope();
 
             // Get element layout from the list expression's type (not the pattern)
             const elem_layout = self.getForLoopElementLayout(for_expr.expr);
@@ -1452,6 +1954,147 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                     .body = body,
                 },
             };
+        },
+
+        .e_type_var_dispatch => |tvd| blk: {
+            // Type variable dispatch: Thing.method(args) where Thing is a type var alias.
+            // Resolve the type variable to find the concrete nominal type, then look up the method.
+
+            // Step 1: Get the type variable from the alias statement
+            const stmt = module_env.store.getStatement(tvd.type_var_alias_stmt);
+            const type_var_binding = stmt.s_type_var_alias;
+            const type_var = ModuleEnv.varFrom(type_var_binding.type_var_anno);
+            var resolved = module_env.types.resolveVar(type_var);
+
+            const method_name_str = module_env.getIdent(tvd.method_name);
+
+            // Step 2: If flex/rigid, check type_scope for concrete mapping (polymorphic calls)
+            var type_source_env: *const ModuleEnv = module_env;
+            if (resolved.desc.content == .flex or resolved.desc.content == .rigid) {
+                if (self.type_scope.lookup(resolved.var_)) |mapped| {
+                    if (self.type_scope_caller_module) |caller_idx| {
+                        type_source_env = self.all_module_envs[caller_idx];
+                    }
+                    resolved = type_source_env.types.resolveVar(mapped);
+                }
+            }
+
+            // Follow aliases to get to the underlying type
+            while (resolved.desc.content == .alias) {
+                const alias = resolved.desc.content.alias;
+                const backing = type_source_env.types.getAliasBackingVar(alias);
+                resolved = type_source_env.types.resolveVar(backing);
+            }
+
+            // Step 3: Determine the concrete nominal type
+            const nominal_info: ?struct { origin: Ident.Idx, ident: Ident.Idx } = switch (resolved.desc.content) {
+                .structure => |s| switch (s) {
+                    .nominal_type => |nom| .{
+                        .origin = nom.origin_module,
+                        .ident = nom.ident.ident_idx,
+                    },
+                    else => null,
+                },
+                .flex => |flex| fi: {
+                    if (!flex.constraints.isEmpty()) {
+                        for (type_source_env.types.sliceStaticDispatchConstraints(flex.constraints)) |constraint| {
+                            if (constraint.origin == .from_numeral) {
+                                break :fi .{
+                                    .origin = type_source_env.idents.builtin_module,
+                                    .ident = type_source_env.idents.dec_type,
+                                };
+                            }
+                        }
+                    }
+                    break :fi null;
+                },
+                .rigid => |rigid| ri: {
+                    if (!rigid.constraints.isEmpty()) {
+                        for (type_source_env.types.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
+                            if (constraint.origin == .from_numeral) {
+                                break :ri .{
+                                    .origin = type_source_env.idents.builtin_module,
+                                    .ident = type_source_env.idents.dec_type,
+                                };
+                            }
+                        }
+                    }
+                    break :ri null;
+                },
+                else => null,
+            };
+
+            const info = nominal_info orelse {
+                std.debug.print("e_type_var_dispatch: could not resolve to nominal/opaque type, content={s}\n", .{@tagName(resolved.desc.content)});
+                unreachable;
+            };
+
+            const origin_name = type_source_env.getIdent(info.origin);
+            const ident_name = type_source_env.getIdent(info.ident);
+
+            // Step 4: Find origin module index via imports
+            const origin_module_idx = self.findModuleForOrigin(type_source_env, info.origin) orelse {
+                std.debug.print("e_type_var_dispatch: could not find origin module\n", .{});
+                unreachable;
+            };
+            const origin_env = self.all_module_envs[origin_module_idx];
+
+            // Step 5: Look up method in origin module (cross-ident-store lookup)
+            const qualified_method = origin_env.lookupMethodIdentFromTwoEnvsConst(
+                type_source_env, info.ident,
+                module_env, tvd.method_name,
+            ) orelse {
+                std.debug.print("e_type_var_dispatch: method lookup failed for origin={s} ident={s} method={s}\n", .{ origin_name, ident_name, method_name_str });
+                unreachable;
+            };
+
+            // Get the node index for the method definition
+            const node_idx = origin_env.getExposedNodeIndexById(qualified_method) orelse {
+                std.debug.print("e_type_var_dispatch: no exposed node for method\n", .{});
+                unreachable;
+            };
+
+            // Step 6: Lower as external definition + lookup/call
+            const symbol = MonoSymbol{
+                .module_idx = origin_module_idx,
+                .ident_idx = qualified_method,
+            };
+
+            const symbol_key: u48 = @bitCast(symbol);
+            if (!self.lowered_symbols.contains(symbol_key)) {
+                try self.lowerExternalDefByIdx(symbol, node_idx);
+            }
+
+            const method_layout = self.getExprLayoutFromIdx(module_env, expr_idx);
+
+            const fn_expr_id = try self.store.addExpr(.{ .lookup = .{
+                .symbol = symbol,
+                .layout_idx = .i64,
+            } }, region);
+
+            const arg_indices = module_env.store.sliceExpr(tvd.args);
+            if (arg_indices.len == 0) {
+                break :blk .{
+                    .call = .{
+                        .fn_expr = fn_expr_id,
+                        .fn_layout = .i64,
+                        .args = MonoExprSpan.empty(),
+                        .ret_layout = method_layout,
+                        .called_via = .apply,
+                    },
+                };
+            } else {
+                const args = try self.lowerExprSpan(module_env, tvd.args);
+                break :blk .{
+                    .call = .{
+                        .fn_expr = fn_expr_id,
+                        .fn_layout = .i64,
+                        .args = args,
+                        .ret_layout = method_layout,
+                        .called_via = .apply,
+                    },
+                };
+            }
         },
 
         else => {
@@ -1906,6 +2549,13 @@ fn exprContainsPatternRef(
         .e_unary_not => |unary| {
             return self.exprContainsPatternRef(module_env, unary.expr, target_pattern);
         },
+        .e_type_var_dispatch => |tvd| {
+            const args = module_env.store.sliceExpr(tvd.args);
+            for (args) |arg_idx| {
+                if (self.exprContainsPatternRef(module_env, arg_idx, target_pattern)) return true;
+            }
+            return false;
+        },
         // Leaf expressions that can't contain references
         else => return false,
     }
@@ -2266,24 +2916,35 @@ fn lowerStmts(self: *Self, module_env: *ModuleEnv, stmts: CIR.Statement.Span) Al
         const stmt = module_env.store.getStatement(stmt_idx);
         switch (stmt) {
             .s_decl => |decl| {
-                const pattern = try self.lowerPattern(module_env, decl.pattern);
-                // Set current binding pattern and symbol for recursive closure detection
-                const old_binding = self.current_binding_pattern;
-                const old_symbol = self.current_binding_symbol;
-                self.current_binding_pattern = decl.pattern;
-                const binding_symbol = self.patternToSymbol(decl.pattern);
-                self.current_binding_symbol = binding_symbol;
-                const value = try self.lowerExprFromIdx(module_env, decl.expr);
-                self.current_binding_pattern = old_binding;
-                self.current_binding_symbol = old_symbol;
+                // Check if this declaration binds a lambda/closure
+                const decl_expr = module_env.store.getExpr(decl.expr);
+                const is_lambda = decl_expr == .e_lambda or decl_expr == .e_closure;
 
-                // Register the symbol definition for lookups
-                try self.store.registerSymbolDef(binding_symbol, value);
+                if (is_lambda) {
+                    // Defer lowering — the body will be lowered at call time when
+                    // type_scope is populated with concrete types from the call args.
+                    const pattern_key = @intFromEnum(decl.pattern);
+                    self.deferred_defs.put(pattern_key, decl.expr) catch {};
+                } else {
+                    // Non-lambda: lower eagerly as before
+                    const pattern = try self.lowerPattern(module_env, decl.pattern);
+                    const old_binding = self.current_binding_pattern;
+                    const old_symbol = self.current_binding_symbol;
+                    self.current_binding_pattern = decl.pattern;
+                    const binding_symbol = self.patternToSymbol(decl.pattern);
+                    self.current_binding_symbol = binding_symbol;
+                    const value = try self.lowerExprFromIdx(module_env, decl.expr);
+                    self.current_binding_pattern = old_binding;
+                    self.current_binding_symbol = old_symbol;
 
-                try lowered.append(self.allocator, .{
-                    .pattern = pattern,
-                    .expr = value,
-                });
+                    // Register the symbol definition for lookups
+                    try self.store.registerSymbolDef(binding_symbol, value);
+
+                    try lowered.append(self.allocator, .{
+                        .pattern = pattern,
+                        .expr = value,
+                    });
+                }
             },
             .s_var => |var_stmt| {
                 // Mutable variable declaration - treated like s_decl for lowering
@@ -2337,7 +2998,13 @@ fn lowerStmts(self: *Self, module_env: *ModuleEnv, stmts: CIR.Statement.Span) Al
                 // For loop statement - lower to a for_loop expression
                 const list_expr = try self.lowerExprFromIdx(module_env, for_stmt.expr);
                 const elem_pattern = try self.lowerPattern(module_env, for_stmt.patt);
+
+                // Push a type scope mapping for the element type (see e_for comment)
+                const pushed_scope = self.pushForLoopElementTypeScope(module_env, for_stmt.expr, for_stmt.patt);
+
                 const body = try self.lowerExprFromIdx(module_env, for_stmt.body);
+
+                if (pushed_scope) self.popForLoopElementTypeScope();
 
                 // Get element layout from the list expression's type (not the pattern)
                 const elem_layout = self.getForLoopElementLayout(for_stmt.expr);
