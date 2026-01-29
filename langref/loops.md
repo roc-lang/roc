@@ -20,7 +20,7 @@ for (x, y) in [(1, 2), (3, 4), (5, 6)] {
 }
 ```
 
-Use `_` to ignore the element value:
+Use `_` if you don't want to name the item:
 
 ```roc
 var $count = 0
