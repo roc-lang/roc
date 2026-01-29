@@ -75,4 +75,4 @@ for i in [1, 2, 3] {
 }
 ```
 
-Loops typically utilise [variable reassignment](./statements.md#reassignment) or for calling [effectful functions](./functions.md#effectful-functions).
+Loops typically utilize [variable reassignment](./statements.md#reassignment) or for calling [effectful functions](./functions.md#effectful-functions).
