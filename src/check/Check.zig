@@ -576,6 +576,21 @@ fn instantiateVarHelp(
 
             const fresh_resolved = self.types.resolveVar(fresh_var);
 
+            // Track newly instantiated from_numeral flex vars so
+            // finalizeNumericDefaults knows about them.
+            if (fresh_resolved.desc.content == .flex) {
+                const flex = fresh_resolved.desc.content.flex;
+                if (flex.constraints.len() > 0) {
+                    const constraints = self.types.sliceStaticDispatchConstraints(flex.constraints);
+                    for (constraints) |c| {
+                        if (c.origin == .from_numeral) {
+                            self.types.from_numeral_flex_count += 1;
+                            break;
+                        }
+                    }
+                }
+            }
+
             // Add to pool
             try env.var_pool.addVarToRank(fresh_var, fresh_resolved.desc.rank);
 
@@ -739,6 +754,38 @@ fn mkNumberTypeContent(self: *Self, type_name: []const u8, env: *Env) Allocator.
         no_type_args,
         origin_module_id,
         true, // Number types are opaque (defined with ::)
+    );
+}
+
+/// Create a Dec nominal type content using the stored ident index rather than
+/// constructing the qualified name from a string literal.
+fn mkDecContent(self: *Self, env: *Env) Allocator.Error!Content {
+    const origin_module_id = if (self.builtin_ctx.builtin_module) |_|
+        self.cir.idents.builtin_module
+    else
+        self.builtin_ctx.module_name;
+
+    const type_ident = types_mod.TypeIdent{
+        .ident_idx = self.cir.idents.dec_type,
+    };
+
+    const empty_tag_union_content = Content{ .structure = .empty_tag_union };
+    const ext_var = try self.freshFromContent(empty_tag_union_content, env, Region.zero());
+    const empty_tag_union = types_mod.TagUnion{
+        .tags = types_mod.Tag.SafeMultiList.Range.empty(),
+        .ext = ext_var,
+    };
+    const backing_content = Content{ .structure = .{ .tag_union = empty_tag_union } };
+    const backing_var = try self.freshFromContent(backing_content, env, Region.zero());
+
+    const no_type_args: []const Var = &.{};
+
+    return try self.types.mkNominal(
+        type_ident,
+        backing_var,
+        no_type_args,
+        origin_module_id,
+        true,
     );
 }
 
@@ -1096,6 +1143,7 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
 
     // Check any accumulated constraints
     try self.checkAllConstraints(&env);
+    try self.resolveNumericLiteralsFromContext(&env);
     try self.finalizeNumericDefaults(&env);
 
     // After solving all deferred constraints, check for infinite types
@@ -1491,6 +1539,7 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
 
     // Check any accumulated constraints
     try self.checkAllConstraints(&env);
+    try self.resolveNumericLiteralsFromContext(&env);
     try self.finalizeNumericDefaults(&env);
 
     // Check if the expression's type has incompatible constraints (e.g., !3)
@@ -1545,6 +1594,7 @@ pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Alloca
 
     // Check any accumulated constraints
     try self.checkAllConstraints(&env);
+    try self.resolveNumericLiteralsFromContext(&env);
     try self.finalizeNumericDefaults(&env);
 
     // After finalizing numeric defaults, resolve any remaining deferred
@@ -5265,14 +5315,82 @@ fn checkAllConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     }
 }
 
-/// After type checking, unify any remaining from_numeral flex vars with Dec.
-/// This resolves method dispatch constraints (e.g., to_str → Dec.to_str → returns Str).
+/// After type checking, resolve remaining from_numeral flex vars: first by inferring
+/// the type from peer arguments in dispatch constraints (e.g., U64 from List.len),
+/// then defaulting to Dec if no concrete peer is found.
+/// Resolve from_numeral flex vars using type information from their dispatch
+/// constraints, before falling back to Dec defaulting.
+///
+/// When a numeric literal appears in an arithmetic expression like
+/// `0 + List.len(tail)`, the binop creates a dispatch constraint
+/// `plus(F, U64) -> F` on the from_numeral flex var F. The normal dispatch
+/// resolution can't process this because F (the dispatcher) is still flex.
+/// But the constraint already contains the answer: the peer argument U64
+/// tells us F must be U64, since all built-in numeric arithmetic is
+/// homogeneous ((T, T) -> T) and from_numeral vars can only be numeric.
+///
+/// This pass walks from_numeral flex vars, finds concrete peer arguments
+/// in their desugared_binop constraints, and unifies — letting the normal
+/// dispatch resolution complete in the subsequent checkAllConstraints call.
+fn resolveNumericLiteralsFromContext(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+    if (self.types.from_numeral_flex_count == 0) return;
+
+    const num_vars: u32 = @intCast(self.types.len());
+    var i: u32 = 0;
+    while (i < num_vars) : (i += 1) {
+        const var_: types_mod.Var = @enumFromInt(i);
+        const resolved = self.types.resolveVar(var_);
+        if (resolved.desc.content != .flex) continue;
+
+        const flex = resolved.desc.content.flex;
+        if (flex.constraints.len() == 0) continue;
+
+        const constraints = self.types.sliceStaticDispatchConstraints(flex.constraints);
+
+        // Only process from_numeral flex vars.
+        var has_from_numeral = false;
+        for (constraints) |c| {
+            if (c.origin == .from_numeral) {
+                has_from_numeral = true;
+                break;
+            }
+        }
+        if (!has_from_numeral) continue;
+
+        // Look for a desugared_binop constraint with a concrete peer argument.
+        for (constraints) |c| {
+            if (c.origin != .desugared_binop) continue;
+            const fn_content = self.types.resolveVar(c.fn_var).desc.content;
+            const func = fn_content.unwrapFunc() orelse continue;
+            var found_peer = false;
+            for (self.types.sliceVars(func.args)) |arg| {
+                const resolved_arg = self.types.resolveVar(arg);
+                if (resolved_arg.var_ == resolved.var_) continue; // skip self
+                if (resolved_arg.desc.content.unwrapNominalType() == null) continue;
+                _ = try self.unify(resolved.var_, resolved_arg.var_, env);
+                found_peer = true;
+                break;
+            }
+            if (found_peer) break;
+        }
+    }
+
+    // Process constraints generated by the unifications above.
+    // The from_numeral flex vars that were unified with concrete peers
+    // now have their dispatch constraints deferred, and checkAllConstraints
+    // will resolve them through the normal dispatch machinery.
+    try self.checkAllConstraints(env);
+}
+
+/// Default any remaining from_numeral flex vars to Dec.
+///
+/// By the time this runs, resolveNumericLiteralsFromContext has already
+/// unified from_numeral vars that had concrete peers in their binop
+/// constraints (e.g., U64 from List.len). The only vars still flex here
+/// are those with genuinely no numeric context, so Dec is correct.
 fn finalizeNumericDefaults(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     if (self.types.from_numeral_flex_count == 0) return;
 
-    // Walk all type vars looking for flex vars with from_numeral.
-    // Capture len before the loop — unification may add new vars at the end,
-    // but those are Dec copies, not flex vars, so we don't need to visit them.
     const num_vars: u32 = @intCast(self.types.len());
     var i: u32 = 0;
     while (i < num_vars) : (i += 1) {
@@ -5291,10 +5409,7 @@ fn finalizeNumericDefaults(self: *Self, env: *Env) std.mem.Allocator.Error!void 
         }
         if (!has_from_numeral) continue;
 
-        // Create a Dec type using the same qualified ident convention as mkNumberTypeContent.
-        // This ensures the ident matches what the layout store expects (e.g., "Builtin.Num.Dec").
-        const dec_content = try self.mkNumberTypeContent("Dec", env);
-        const dec_var = try self.freshFromContent(dec_content, env, Region.zero());
+        const dec_var = try self.freshFromContent(try self.mkDecContent(env), env, Region.zero());
         _ = try self.unify(resolved.var_, dec_var, env);
     }
 
@@ -5559,8 +5674,9 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Erro
                 // to all args and return types.
                 if (fn_result.isProblem()) {
                     for (self.types.sliceVars(constraint_fn.args)) |arg| {
-                        // I don't _think_ we should need to do this, but eval
-                        // tests fail if we don't,
+                        // Propagate the error to args — necessary because constraint fn args
+                        // are shared with actual expression vars (e.g., binop lhs/rhs), and
+                        // leaving them non-err after a dispatch failure causes type confusion.
                         try self.unifyWith(arg, .err, env);
                     }
                     try self.unifyWith(deferred_constraint.var_, .err, env);
