@@ -3632,6 +3632,10 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                             .data_offset = 0,
                             .num_elements = 0,
                         } };
+                    } else if (result_layout_val.tag == .tag_union or result_layout_val.tag == .record or result_layout_val.tag == .tuple) {
+                        // Non-scalar composite types stay as generic stack values
+                        // so downstream code uses the layout for proper sizing.
+                        return .{ .stack = result_slot };
                     }
                 }
                 // Fallback: use size-based heuristics (covers dynamic upgrade case)
@@ -4262,6 +4266,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
             const tu_data = ls.getTagUnionData(union_layout.data.tag_union.idx);
             const stack_size = tu_data.size;
+
 
             // Allocate stack space for the tag union
             const base_offset = self.codegen.allocStackSlot(stack_size);
@@ -5303,12 +5308,19 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     }
                 },
                 .stack => |off| {
-                    if (comptime builtin.cpu.arch == .aarch64) {
-                        try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, off);
-                        try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, slot);
-                    } else {
-                        try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, off);
-                        try self.codegen.emit.movMemReg(.w64, .RBP, slot, temp_reg);
+                    // Copy slot_size bytes (in 8-byte chunks) to handle tag unions
+                    // and other multi-word stack values correctly.
+                    var copied: u32 = 0;
+                    while (copied < slot_size) {
+                        const chunk_off: i32 = @intCast(copied);
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, off + chunk_off);
+                            try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, slot + chunk_off);
+                        } else {
+                            try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, off + chunk_off);
+                            try self.codegen.emit.movMemReg(.w64, .RBP, slot + chunk_off, temp_reg);
+                        }
+                        copied += 8;
                     }
                 },
                 .stack_i128 => |off| {
@@ -6356,7 +6368,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 const arg_loc = try self.generateExpr(args[i]);
                 try self.bindPattern(pattern_id, arg_loc);
             }
-            return try self.generateExpr(lambda.body);
+            const result = try self.generateExpr(lambda.body);
+            return result;
         }
 
         /// Compile a lambda body expression as a procedure and call it.
@@ -6559,6 +6572,18 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                             return try self.callLambdaBodyDirect(lambda, args_span);
                         }
                         const offset = self.compileLambdaAsProc(def_expr_id, lambda) catch {
+                            // compileLambdaAsProc failed. Before falling back to
+                            // callLambdaBodyDirect, check for layout mismatch.
+                            // Polymorphic lambdas may have unspecialized internal
+                            // layouts that cause stack corruption in when expressions
+                            // and tag constructions when evaluated inline.
+                            if (self.layout_store) |ls| {
+                                const lambda_ret = ls.layoutSizeAlign(ls.getLayout(lambda.ret_layout)).size;
+                                const caller_ret = ls.layoutSizeAlign(ls.getLayout(ret_layout)).size;
+                                if (lambda_ret != caller_ret) {
+                                    return Error.UnsupportedExpression;
+                                }
+                            }
                             return try self.callLambdaBodyDirect(lambda, args_span);
                         };
                         return try self.generateCallToLambda(offset, args_span, ret_layout);
@@ -6571,6 +6596,14 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                                 return try self.callLambdaBodyDirect(inner.lambda, args_span);
                             }
                             const offset = self.compileLambdaAsProc(closure.lambda, inner.lambda) catch {
+                                // Check for layout mismatch (polymorphic lambda issue)
+                                if (self.layout_store) |ls| {
+                                    const lambda_ret = ls.layoutSizeAlign(ls.getLayout(inner.lambda.ret_layout)).size;
+                                    const caller_ret = ls.layoutSizeAlign(ls.getLayout(ret_layout)).size;
+                                    if (lambda_ret != caller_ret) {
+                                        return Error.UnsupportedExpression;
+                                    }
+                                }
                                 return try self.callLambdaBodyDirect(inner.lambda, args_span);
                             };
                             return try self.generateCallToLambda(offset, args_span, ret_layout);

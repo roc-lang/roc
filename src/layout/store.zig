@@ -2331,7 +2331,11 @@ pub const Store = struct {
                         current = self.getTypesStore().resolveVar(backing_var);
                         continue;
                     },
-                    .err => unreachable,
+                    // .err is a "poison" type from type-checking failures.
+                    // Treat it as ZST so downstream passes can proceed gracefully
+                    // instead of crashing; the expression will fail at a later stage
+                    // with a proper error message.
+                    .err => Layout.zst(),
                 };
 
                 // We actually resolved a layout that wasn't zero-sized!
