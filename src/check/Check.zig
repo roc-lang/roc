@@ -1547,6 +1547,17 @@ pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Alloca
     try self.checkAllConstraints(&env);
     try self.finalizeNumericDefaults(&env);
 
+    // After finalizing numeric defaults, resolve any remaining deferred
+    // static dispatch constraints. finalizeNumericDefaults unifies from_numeral
+    // flex vars with Dec, which may make deferred method_call constraints
+    // resolvable (e.g., Dec.to_str returns Str). Without this step, the
+    // return type of methods on defaulted numerics remains an unconstrained
+    // flex var, causing incorrect .zst layouts.
+    if (env.deferred_static_dispatch_constraints.items.items.len > 0) {
+        try self.checkStaticDispatchConstraints(&env);
+        try self.checkAllConstraints(&env);
+    }
+
     // After solving all deferred constraints, check for infinite types
     for (defs_slice) |def_idx| {
         try self.checkForInfiniteType(ModuleEnv.varFrom(def_idx));

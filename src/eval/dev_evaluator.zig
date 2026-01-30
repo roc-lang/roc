@@ -670,7 +670,6 @@ pub const DevEvaluator = struct {
     }
 };
 
-
 // Tests
 
 test "dev evaluator initialization" {

@@ -7039,6 +7039,21 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                                 try self.copyStackToPtr(loc, saved_ptr_reg, 24);
                                 return;
                             },
+                            .scalar => {
+                                const sa = ls.layoutSizeAlign(layout_val);
+                                if (sa.size == 24) {
+                                    // Str: 24-byte struct (ptr, len, capacity)
+                                    try self.copyStackToPtr(loc, saved_ptr_reg, 24);
+                                } else if (sa.size == 16) {
+                                    // i128/u128/Dec
+                                    try self.storeI128ToMem(saved_ptr_reg, loc);
+                                } else if (sa.size > 0) {
+                                    // Small scalars (1-8 bytes)
+                                    const reg = try self.ensureInGeneralReg(loc);
+                                    try self.emitStoreToMem(saved_ptr_reg, reg);
+                                }
+                                return;
+                            },
                             else => @panic("TODO: storeResultToSavedPtr for unsupported layout tag"),
                         }
                     } else {
