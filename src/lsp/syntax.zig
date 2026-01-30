@@ -23,6 +23,7 @@ const completion_context = @import("completion/context.zig");
 const completion_builtins = @import("completion/builtins.zig");
 const completion_builder = @import("completion/builder.zig");
 const BuildEnvHandle = @import("build_env_handle.zig").BuildEnvHandle;
+const doc_comments = @import("doc_comments.zig");
 
 const BuildEnv = compile.BuildEnv;
 const CacheManager = compile.CacheManager;
@@ -687,8 +688,16 @@ pub const SyntaxChecker = struct {
         try type_writer.write(result.type_var, .one_line);
         const type_str = type_writer.get();
 
-        // Create markdown-formatted output
-        const markdown = try std.fmt.allocPrint(self.allocator, "```roc\n{s}\n```", .{type_str});
+        // Extract documentation for the definition/pattern at this location
+        // Pass the target offset to resolve lookups to their definitions
+        const documentation = try self.findDocumentationForRegion(env, module_env, result.region, target_offset);
+        defer if (documentation) |doc| self.allocator.free(doc);
+
+        // Create markdown-formatted output with type and optional documentation
+        const markdown = if (documentation) |doc|
+            try std.fmt.allocPrint(self.allocator, "{s}\n\n```roc\n{s}\n```", .{ doc, type_str })
+        else
+            try std.fmt.allocPrint(self.allocator, "```roc\n{s}\n```", .{type_str});
 
         // Convert the region back to LSP positions
         const range = cir_queries.regionToRange(module_env, result.region);
@@ -697,6 +706,335 @@ pub const SyntaxChecker = struct {
             .type_str = markdown,
             .range = range,
         };
+    }
+
+    /// Find documentation comments for a definition containing the given region.
+    /// First checks if the region is a lookup expression (function call), and if so,
+    /// resolves it to the actual definition before extracting docs.
+    /// Otherwise searches through definitions and statements to find the one containing the region.
+    fn findDocumentationForRegion(self: *SyntaxChecker, env: *BuildEnv, module_env: *ModuleEnv, region: Region, target_offset: u32) !?[]const u8 {
+        // First, check if this is a lookup expression (e.g., a function call)
+        // If so, resolve it to the definition and extract docs from there
+        if (cir_queries.findLookupAtOffset(module_env, target_offset)) |expr_idx| {
+            const expr = module_env.store.getExpr(expr_idx);
+            switch (expr) {
+                .e_lookup_local => |lookup| {
+                    // Local lookup - find the pattern and extract docs
+                    const pattern_region = module_env.store.getPatternRegion(lookup.pattern_idx);
+
+                    // Find the definition containing this pattern
+                    const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
+                    for (defs_slice) |def_idx| {
+                        const def = module_env.store.getDef(def_idx);
+                        if (def.pattern == lookup.pattern_idx) {
+                            const doc_offset = if (def.annotation) |anno_idx|
+                                module_env.store.getAnnotationRegion(anno_idx).start.offset
+                            else
+                                pattern_region.start.offset;
+
+                            return doc_comments.extractDocCommentBefore(
+                                self.allocator,
+                                module_env.common.source,
+                                doc_offset,
+                            ) catch null;
+                        }
+                    }
+                    // Also check statements
+                    const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
+                    for (statements_slice) |stmt_idx| {
+                        const stmt = module_env.store.getStatement(stmt_idx);
+                        const pattern_idx_opt: ?CIR.Pattern.Idx = switch (stmt) {
+                            .s_decl => |decl| decl.pattern,
+                            .s_var => |var_stmt| var_stmt.pattern_idx,
+                            else => null,
+                        };
+                        if (pattern_idx_opt) |pat_idx| {
+                            if (pat_idx == lookup.pattern_idx) {
+                                const doc_offset = switch (stmt) {
+                                    .s_decl => |decl| if (decl.anno) |anno_idx|
+                                        module_env.store.getAnnotationRegion(anno_idx).start.offset
+                                    else
+                                        pattern_region.start.offset,
+                                    .s_var => |var_stmt| if (var_stmt.anno) |anno_idx|
+                                        module_env.store.getAnnotationRegion(anno_idx).start.offset
+                                    else
+                                        pattern_region.start.offset,
+                                    else => pattern_region.start.offset,
+                                };
+                                return doc_comments.extractDocCommentBefore(
+                                    self.allocator,
+                                    module_env.common.source,
+                                    doc_offset,
+                                ) catch null;
+                            }
+                        }
+                    }
+                },
+                .e_lookup_external => |lookup| {
+                    // External lookup - find the module and extract docs from that function
+                    const region_text = module_env.getSource(lookup.region);
+
+                    // Extract module name and function name from "Module.function" format
+                    if (std.mem.indexOf(u8, region_text, ".")) |dot_pos| {
+                        const module_name = region_text[0..dot_pos];
+                        const function_name = region_text[dot_pos + 1 ..];
+
+                        // Find the external module
+                        if (self.findExternalModuleEnv(env, module_name)) |external_env| {
+                            // Find the function definition in that module
+                            return self.findDocumentationInModule(external_env, function_name);
+                        }
+                    }
+                },
+                .e_dot_access => |dot| {
+                    // Method call - extract the method name and find its definition
+                    const field_name = module_env.getSource(dot.field_name_region);
+
+                    // Get the type of the receiver to find which module provides the method
+                    const receiver_type_var = ModuleEnv.varFrom(dot.receiver);
+                    const type_store = &module_env.types;
+                    const resolved = type_store.resolveVar(receiver_type_var);
+
+                    // Extract the type name from the resolved type
+                    const type_name_opt: ?[]const u8 = switch (resolved.desc.content) {
+                        .alias => |alias| module_env.getIdentText(alias.ident.ident_idx),
+                        .structure => |flat_type| switch (flat_type) {
+                            .nominal_type => |nominal| module_env.getIdentText(nominal.ident.ident_idx),
+                            else => null,
+                        },
+                        else => null,
+                    };
+
+                    if (type_name_opt) |type_name| {
+                        // Find the module for this type (often a builtin like "Str")
+                        if (self.findExternalModuleEnv(env, type_name)) |external_env| {
+                            // Find the method definition in that module
+                            // Methods are stored as "Type.method" qualified names
+                            const qualified_name = std.fmt.allocPrint(
+                                self.allocator,
+                                "{s}.{s}",
+                                .{ type_name, field_name },
+                            ) catch return null;
+                            defer self.allocator.free(qualified_name);
+
+                            return self.findDocumentationInModule(external_env, qualified_name);
+                        }
+                    }
+                },
+                else => {},
+            }
+        }
+
+        // Not a lookup, or lookup resolution failed - fall back to finding docs in the current region
+        const source = module_env.common.source;
+
+        // Check top-level definitions
+        const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
+        for (defs_slice) |def_idx| {
+            const def = module_env.store.getDef(def_idx);
+
+            // Check if the pattern region contains or matches our target region
+            const pattern_region = module_env.store.getPatternRegion(def.pattern);
+            if (cir_queries.regionContainsOffset(pattern_region, region.start.offset) or
+                pattern_region.start.offset == region.start.offset)
+            {
+                // Use annotation region if available (doc comments precede annotations)
+                const doc_offset = if (def.annotation) |anno_idx|
+                    module_env.store.getAnnotationRegion(anno_idx).start.offset
+                else
+                    pattern_region.start.offset;
+
+                return doc_comments.extractDocCommentBefore(self.allocator, source, doc_offset) catch null;
+            }
+
+            // Also check if the expression region matches (for hovering over expressions)
+            const expr_region = module_env.store.getExprRegion(def.expr);
+            if (cir_queries.regionContainsOffset(expr_region, region.start.offset)) {
+                // Use annotation region if available (doc comments precede annotations)
+                const doc_offset = if (def.annotation) |anno_idx|
+                    module_env.store.getAnnotationRegion(anno_idx).start.offset
+                else
+                    pattern_region.start.offset;
+
+                return doc_comments.extractDocCommentBefore(self.allocator, source, doc_offset) catch null;
+            }
+        }
+
+        // Check statements
+        const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
+        for (statements_slice) |stmt_idx| {
+            const stmt = module_env.store.getStatement(stmt_idx);
+            const stmt_region = module_env.store.getStatementRegion(stmt_idx);
+
+            if (cir_queries.regionContainsOffset(stmt_region, region.start.offset)) {
+                // For type declarations (alias, nominal), extract docs from statement start
+                switch (stmt) {
+                    .s_alias_decl, .s_nominal_decl => {
+                        return doc_comments.extractDocCommentBefore(self.allocator, source, stmt_region.start.offset) catch null;
+                    },
+                    .s_decl => |decl| {
+                        // For regular declarations, use annotation if available
+                        const doc_offset = if (decl.anno) |anno_idx|
+                            module_env.store.getAnnotationRegion(anno_idx).start.offset
+                        else
+                            module_env.store.getPatternRegion(decl.pattern).start.offset;
+
+                        return doc_comments.extractDocCommentBefore(self.allocator, source, doc_offset) catch null;
+                    },
+                    .s_var => |var_stmt| {
+                        const doc_offset = if (var_stmt.anno) |anno_idx|
+                            module_env.store.getAnnotationRegion(anno_idx).start.offset
+                        else
+                            module_env.store.getPatternRegion(var_stmt.pattern_idx).start.offset;
+
+                        return doc_comments.extractDocCommentBefore(self.allocator, source, doc_offset) catch null;
+                    },
+                    else => {},
+                }
+            }
+        }
+
+        // Check local bindings in scope
+        var scope = scope_map.ScopeMap.init(self.allocator);
+        defer scope.deinit();
+        scope.build(module_env) catch return null;
+
+        for (scope.bindings.items) |binding| {
+            const pattern_region = module_env.store.getPatternRegion(binding.pattern_idx);
+            if (cir_queries.regionContainsOffset(pattern_region, region.start.offset) or
+                pattern_region.start.offset == region.start.offset)
+            {
+                return doc_comments.extractDocCommentBefore(
+                    self.allocator,
+                    source,
+                    pattern_region.start.offset,
+                ) catch null;
+            }
+        }
+
+        return null;
+    }
+
+    /// Find a module environment by name (handles builtins and regular modules).
+    fn findExternalModuleEnv(_: *SyntaxChecker, env: *BuildEnv, module_name: []const u8) ?*ModuleEnv {
+        // Extract the base module name (e.g., "Stdout" from "pf.Stdout")
+        const base_name = if (std.mem.lastIndexOf(u8, module_name, ".")) |dot_pos|
+            module_name[dot_pos + 1 ..]
+        else
+            module_name;
+
+        // Check if this is a builtin type - use the builtin module env
+        if (completion_builtins.isBuiltinType(base_name)) {
+            return env.builtin_modules.builtin_module.env;
+        }
+
+        // Try to find the module in the schedulers
+        var sched_it = env.schedulers.iterator();
+        while (sched_it.next()) |entry| {
+            const sched = entry.value_ptr.*;
+            for (sched.modules.items) |*module_state| {
+                if (std.mem.eql(u8, module_state.name, module_name) or
+                    std.mem.eql(u8, module_state.name, base_name))
+                {
+                    if (module_state.env) |*mod_env| {
+                        return mod_env;
+                    }
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /// Find documentation for a function/definition by name in a module.
+    fn findDocumentationInModule(self: *SyntaxChecker, module_env: *ModuleEnv, name: []const u8) ?[]const u8 {
+        const source = module_env.common.source;
+
+        // Search through definitions
+        const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
+        for (defs_slice) |def_idx| {
+            const def = module_env.store.getDef(def_idx);
+            const pattern = module_env.store.getPattern(def.pattern);
+
+            const ident_idx = switch (pattern) {
+                .assign => |p| p.ident,
+                .as => |p| p.ident,
+                else => continue,
+            };
+
+            const def_name = module_env.getIdentText(ident_idx);
+
+            // Check both unqualified and qualified names
+            // (e.g., "concat" matches both "concat" and "Str.concat")
+            const matches = std.mem.eql(u8, def_name, name) or
+                (def_name.len > name.len and
+                    std.mem.endsWith(u8, def_name, name) and
+                    def_name[def_name.len - name.len - 1] == '.');
+
+            if (matches) {
+                const doc_offset = if (def.annotation) |anno_idx|
+                    module_env.store.getAnnotationRegion(anno_idx).start.offset
+                else
+                    module_env.store.getPatternRegion(def.pattern).start.offset;
+
+                return doc_comments.extractDocCommentBefore(
+                    self.allocator,
+                    source,
+                    doc_offset,
+                ) catch null;
+            }
+        }
+
+        // Search through statements
+        const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
+        for (statements_slice) |stmt_idx| {
+            const stmt = module_env.store.getStatement(stmt_idx);
+
+            const pattern_idx_opt: ?CIR.Pattern.Idx = switch (stmt) {
+                .s_decl => |decl| decl.pattern,
+                .s_var => |var_stmt| var_stmt.pattern_idx,
+                else => null,
+            };
+
+            if (pattern_idx_opt) |pat_idx| {
+                const pattern = module_env.store.getPattern(pat_idx);
+                const ident_idx = switch (pattern) {
+                    .assign => |p| p.ident,
+                    .as => |p| p.ident,
+                    else => continue,
+                };
+
+                const def_name = module_env.getIdentText(ident_idx);
+
+                // Check both unqualified and qualified names
+                const matches = std.mem.eql(u8, def_name, name) or
+                    (def_name.len > name.len and
+                        std.mem.endsWith(u8, def_name, name) and
+                        def_name[def_name.len - name.len - 1] == '.');
+
+                if (matches) {
+                    const doc_offset = switch (stmt) {
+                        .s_decl => |decl| if (decl.anno) |anno_idx|
+                            module_env.store.getAnnotationRegion(anno_idx).start.offset
+                        else
+                            module_env.store.getPatternRegion(pat_idx).start.offset,
+                        .s_var => |var_stmt| if (var_stmt.anno) |anno_idx|
+                            module_env.store.getAnnotationRegion(anno_idx).start.offset
+                        else
+                            module_env.store.getPatternRegion(pat_idx).start.offset,
+                        else => module_env.store.getPatternRegion(pat_idx).start.offset,
+                    };
+
+                    return doc_comments.extractDocCommentBefore(
+                        self.allocator,
+                        source,
+                        doc_offset,
+                    ) catch null;
+                }
+            }
+        }
+
+        return null;
     }
 
     /// Get definition location at a specific position in a document.

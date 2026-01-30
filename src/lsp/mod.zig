@@ -9,6 +9,7 @@ pub const cir_visitor = @import("cir_visitor.zig");
 pub const cir_queries = @import("cir_queries.zig");
 pub const completion = @import("completion/mod.zig");
 pub const module_lookup = @import("module_lookup.zig");
+pub const doc_comments = @import("doc_comments.zig");
 
 /// Convenience wrapper to launch the server using stdin/stdout from other modules.
 pub fn runWithStdIo(allocator: std.mem.Allocator, debug: server.DebugOptions) !void {
@@ -31,5 +32,6 @@ test "lsp tests" {
     std.testing.refAllDecls(@import("cir_visitor.zig"));
     std.testing.refAllDecls(@import("cir_queries.zig"));
     std.testing.refAllDecls(@import("module_lookup.zig"));
+    std.testing.refAllDecls(@import("doc_comments.zig"));
     _ = @import("completion/mod.zig");
 }
