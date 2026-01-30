@@ -357,13 +357,6 @@ fn lowerLocalDefByPattern(self: *Self, module_env: *ModuleEnv, symbol: MonoSymbo
     try self.lowered_symbols.put(symbol_key, expr_id);
 }
 
-/// Compute layout from an expression index using the global layout store
-fn computeLayoutFromExprIdx(self: *Self, _: *ModuleEnv, expr_idx: CIR.Expr.Idx) ?LayoutIdx {
-    const ls = self.layout_store orelse return null;
-    const type_var = ModuleEnv.varFrom(expr_idx);
-    return ls.fromTypeVar(self.current_module_idx, type_var, &self.type_scope, self.type_scope_caller_module) catch null;
-}
-
 /// Get layout for a block expression by inferring from the final expression
 fn getBlockLayout(self: *Self, module_env: *ModuleEnv, block: anytype) LayoutIdx {
     // Process declarations to populate type_env for lookups
@@ -899,10 +892,8 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             // Use the computed layout from type inference to determine the literal type.
             // The layout reflects the actual resolved type (e.g., U64 from function signature),
             // not just the syntactic hint from num.kind.
-            const layout_idx = self.computeLayoutFromExprIdx(module_env, expr_idx);
-            const is_dec = if (layout_idx) |idx| idx == .dec else
-                // Fallback to num.kind only when layout is unavailable
-                (num.kind == .dec or num.kind == .num_unbound or num.kind == .int_unbound);
+            const layout_idx = self.getExprLayoutFromIdx(module_env, expr_idx);
+            const is_dec = layout_idx == .dec;
 
             if (is_dec) {
                 // Dec values are scaled by 10^18 (one_point_zero = 10^18)
@@ -1042,7 +1033,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                         .low_level = .{
                             .op = op,
                             .args = args,
-                            .ret_layout = self.computeLayoutFromExprIdx(module_env, expr_idx) orelse LayoutIdx.default_num,
+                            .ret_layout = self.getExprLayoutFromIdx(module_env, expr_idx),
                         },
                     };
                 }
@@ -1161,7 +1152,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
 
         .e_tuple => |tuple| blk: {
             const elems = try self.lowerExprSpan(module_env, tuple.elems);
-            const tuple_layout = self.computeLayoutFromExprIdx(module_env, expr_idx) orelse LayoutIdx.default_num;
+            const tuple_layout = self.getExprLayoutFromIdx(module_env, expr_idx);
             break :blk .{
                 .tuple = .{
                     .tuple_layout = tuple_layout,
@@ -1172,7 +1163,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
 
         .e_record => |rec| blk: {
             const result = try self.lowerRecordFields(module_env, rec.fields);
-            const record_layout = self.computeLayoutFromExprIdx(module_env, expr_idx) orelse LayoutIdx.default_num;
+            const record_layout = self.getExprLayoutFromIdx(module_env, expr_idx);
             break :blk .{
                 .record = .{
                     .record_layout = record_layout,
@@ -1188,7 +1179,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
 
             // Check if this is a list.len or list.is_empty access
             // Check based on layout, not expression type, so it works for list variables too
-            const receiver_layout = self.computeLayoutFromExprIdx(module_env, dot.receiver) orelse LayoutIdx.default_num;
+            const receiver_layout = self.getExprLayoutFromIdx(module_env, dot.receiver);
             const is_list_receiver = if (self.layout_store) |ls| is_list: {
                 const layout_val = ls.getLayout(receiver_layout);
                 break :is_list layout_val.tag == .list or layout_val.tag == .list_of_zst;
@@ -1204,7 +1195,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                         // list.append(elem) -> list_append(list, elem)
                         if (arg_slice.len >= 1) {
                             const elem = try self.lowerExprFromIdx(module_env, arg_slice[0]);
-                            const ret_layout = self.computeLayoutFromExprIdx(module_env, expr_idx) orelse receiver_layout;
+                            const ret_layout = self.getExprLayoutFromIdx(module_env, expr_idx);
                             const args = try self.store.addExprSpan(&[_]ir.MonoExprId{ receiver, elem });
                             break :blk .{
                                 .low_level = .{
@@ -1218,7 +1209,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                         // list.prepend(elem) -> list_prepend(list, elem)
                         if (arg_slice.len >= 1) {
                             const elem = try self.lowerExprFromIdx(module_env, arg_slice[0]);
-                            const ret_layout = self.computeLayoutFromExprIdx(module_env, expr_idx) orelse receiver_layout;
+                            const ret_layout = self.getExprLayoutFromIdx(module_env, expr_idx);
                             const args = try self.store.addExprSpan(&[_]ir.MonoExprId{ receiver, elem });
                             break :blk .{
                                 .low_level = .{
@@ -1232,7 +1223,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                         // list.get(idx) -> list_get(list, idx)
                         if (arg_slice.len >= 1) {
                             const idx = try self.lowerExprFromIdx(module_env, arg_slice[0]);
-                            const ret_layout = self.computeLayoutFromExprIdx(module_env, expr_idx) orelse LayoutIdx.default_num;
+                            const ret_layout = self.getExprLayoutFromIdx(module_env, expr_idx);
                             const args = try self.store.addExprSpan(&[_]ir.MonoExprId{ receiver, idx });
                             break :blk .{
                                 .low_level = .{
@@ -1246,7 +1237,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                         // list.concat(other) -> list_concat(list, other)
                         if (arg_slice.len >= 1) {
                             const other = try self.lowerExprFromIdx(module_env, arg_slice[0]);
-                            const ret_layout = self.computeLayoutFromExprIdx(module_env, expr_idx) orelse receiver_layout;
+                            const ret_layout = self.getExprLayoutFromIdx(module_env, expr_idx);
                             const args = try self.store.addExprSpan(&[_]ir.MonoExprId{ receiver, other });
                             break :blk .{
                                 .low_level = .{
@@ -1604,7 +1595,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
 
             // For zero-argument tags, use zero_arg_tag
             if (args_slice.len == 0) {
-                const tag_layout = self.computeLayoutFromExprIdx(module_env, expr_idx) orelse LayoutIdx.default_num;
+                const tag_layout = self.getExprLayoutFromIdx(module_env, expr_idx);
                 break :blk .{ .zero_arg_tag = .{
                     .discriminant = discriminant,
                     .union_layout = tag_layout,
@@ -1614,7 +1605,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             break :blk .{
                 .tag = .{
                     .discriminant = discriminant,
-                    .union_layout = self.computeLayoutFromExprIdx(module_env, expr_idx) orelse LayoutIdx.default_num,
+                    .union_layout = self.getExprLayoutFromIdx(module_env, expr_idx),
                     .args = args,
                 },
             };
@@ -1625,7 +1616,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             const lambda_set_result = try self.collectIfClosureLambdaSet(module_env, if_expr);
 
             // Get result layout from the type system via the expression's type variable
-            const result_layout = self.computeLayoutFromExprIdx(module_env, expr_idx) orelse LayoutIdx.default_num;
+            const result_layout = self.getExprLayoutFromIdx(module_env, expr_idx);
 
             if (lambda_set_result.has_closure_branches) {
                 // Branches are closures - lower with lambda set info
