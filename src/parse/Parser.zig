@@ -3161,12 +3161,14 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAn
             self.advance(); // Advance past OpenRound
             const after_round = self.pos;
             const scratch_top = self.store.scratchTypeAnnoTop();
+            var saw_comma = false;
             while (self.peek() != .CloseRound and self.peek() != .OpArrow and self.peek() != .OpFatArrow and self.peek() != .EndOfFile) {
                 // Looking for args here so that we don't capture an un-parenthesized fn's args
                 try self.store.addScratchTypeAnno(try self.parseTypeAnno(.looking_for_args));
                 if (self.peek() != .Comma) {
                     break;
                 }
+                saw_comma = true;
                 self.advance(); // Advance past Comma
             }
             if (self.peek() == .OpArrow or self.peek() == .OpFatArrow) {
@@ -3215,10 +3217,19 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAn
                 }
                 self.advance(); // Advance past CloseRound
                 const annos = try self.store.typeAnnoSpanFrom(scratch_top);
-                anno = try self.store.addTypeAnno(.{ .tuple = .{
-                    .region = .{ .start = start, .end = self.pos },
-                    .annos = annos,
-                } });
+                // Single element without comma is parenthesized type, not tuple
+                // e.g., (Str) is parens, (Str,) is 1-element tuple
+                if (annos.span.len == 1 and !saw_comma) {
+                    anno = try self.store.addTypeAnno(.{ .parens = .{
+                        .anno = self.store.typeAnnoSlice(annos)[0],
+                        .region = .{ .start = start, .end = self.pos },
+                    } });
+                } else {
+                    anno = try self.store.addTypeAnno(.{ .tuple = .{
+                        .region = .{ .start = start, .end = self.pos },
+                        .annos = annos,
+                    } });
+                }
             }
         },
         .OpenCurly => {

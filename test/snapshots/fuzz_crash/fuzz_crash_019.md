@@ -1178,8 +1178,7 @@ EndOfFile,
 					(ty-var (raw "b"))))
 			(ty-fn
 				(ty (name "Lis"))
-				(ty-tuple
-					(ty-var (raw "ab")))
+				(ty-var (raw "ab"))
 				(ty-apply
 					(ty (name "List"))
 					(ty-var (raw "b")))))
@@ -1189,8 +1188,7 @@ EndOfFile,
 			(ty-fn
 				(ty-apply
 					(ty (name "List")))
-				(ty-tuple
-					(ty-var (raw "ab")))
+				(ty-var (raw "ab"))
 				(ty-apply
 					(ty (name "List"))
 					(ty-var (raw "b")))))
@@ -2100,14 +2098,16 @@ expect {
 				(ty-rigid-var (name "b"))))
 		(ty-fn (effectful false)
 			(ty-malformed)
-			(ty-malformed)
+			(ty-parens
+				(ty-malformed))
 			(ty-apply (name "List") (builtin)
 				(ty-rigid-var-lookup (ty-rigid-var (name "b"))))))
 	(s-alias-decl
 		(ty-header (name "MapML"))
 		(ty-fn (effectful false)
 			(ty-apply (name "List") (builtin))
-			(ty-malformed)
+			(ty-parens
+				(ty-malformed))
 			(ty-apply (name "List") (builtin)
 				(ty-malformed))))
 	(s-alias-decl
