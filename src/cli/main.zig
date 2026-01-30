@@ -5189,14 +5189,11 @@ fn generateAppDocs(
         for (package_env.modules.items) |module_state| {
             // Process external imports (e.g., "cli.Stdout")
             for (module_state.external_imports.items) |ext_import| {
-                // Parse the import (e.g., "cli.Stdout" -> package="cli", module="Stdout")
-                if (std.mem.indexOfScalar(u8, ext_import, '.')) |dot_index| {
-                    const pkg_shorthand = ext_import[0..dot_index];
-                    const module_name = ext_import[dot_index + 1 ..];
-
+                // Parse the import (e.g., "cli.Stdout" -> { .qualifier = "cli", .module = "Stdout" })
+                if (base.module_path.parseQualifiedImport(ext_import)) |qualified| {
                     // Create full name and link path
                     const full_name = try ctx.arena.dupe(u8, ext_import);
-                    const link_path = try std.fmt.allocPrint(ctx.arena, "{s}/{s}", .{ pkg_shorthand, module_name });
+                    const link_path = try std.fmt.allocPrint(ctx.arena, "{s}/{s}", .{ qualified.qualifier, qualified.module });
 
                     const empty_items = [_]AssociatedItem{};
                     const mod_info = ModuleInfo{
@@ -5212,7 +5209,7 @@ fn generateAppDocs(
                     }
 
                     // Generate index.html for this module
-                    const module_output_dir = try std.fs.path.join(ctx.arena, &[_][]const u8{ base_output_dir, pkg_shorthand, module_name });
+                    const module_output_dir = try std.fs.path.join(ctx.arena, &[_][]const u8{ base_output_dir, qualified.qualifier, qualified.module });
                     generateModuleIndex(ctx, module_output_dir, ext_import) catch |err| {
                         std.debug.print("Warning: failed to generate module index for {s}: {}\n", .{ ext_import, err });
                     };

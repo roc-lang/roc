@@ -65,3 +65,42 @@ test "getModuleNameAlloc allocates correctly" {
     defer allocator.free(result);
     try std.testing.expectEqualStrings("Module", result);
 }
+
+/// Result of parsing a qualified import name like "pf.Wrapper"
+pub const QualifiedImport = struct {
+    qualifier: []const u8,
+    module: []const u8,
+};
+
+/// Parse a qualified import name into its qualifier and module parts.
+///
+/// Examples:
+///   "pf.Wrapper" -> { .qualifier = "pf", .module = "Wrapper" }
+///   "json.Decode" -> { .qualifier = "json", .module = "Decode" }
+///   "Wrapper" -> null (no qualifier)
+///
+/// Returns null if the import name has no qualifier (no dot).
+/// This function returns slices of the input, so no allocation is needed.
+pub fn parseQualifiedImport(import_name: []const u8) ?QualifiedImport {
+    const dot_idx = std.mem.indexOfScalar(u8, import_name, '.') orelse return null;
+    return .{
+        .qualifier = import_name[0..dot_idx],
+        .module = import_name[dot_idx + 1 ..],
+    };
+}
+
+test "parseQualifiedImport parses qualified names" {
+    const result = parseQualifiedImport("pf.Wrapper").?;
+    try std.testing.expectEqualStrings("pf", result.qualifier);
+    try std.testing.expectEqualStrings("Wrapper", result.module);
+}
+
+test "parseQualifiedImport returns null for unqualified names" {
+    try std.testing.expect(parseQualifiedImport("Wrapper") == null);
+}
+
+test "parseQualifiedImport handles nested qualifiers" {
+    const result = parseQualifiedImport("pkg.Sub.Module").?;
+    try std.testing.expectEqualStrings("pkg", result.qualifier);
+    try std.testing.expectEqualStrings("Sub.Module", result.module);
+}
