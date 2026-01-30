@@ -3028,6 +3028,11 @@ pub fn build(b: *std.Build) void {
         else
             null;
         if (glue_host_target_path) |target_path| {
+            // Ensure the target directory exists before copying
+            if (glue_host_target_dir) |target_dir| {
+                const dir_path = b.pathJoin(&.{ "src/glue/platform/targets", target_dir });
+                std.fs.cwd().makePath(dir_path) catch {};
+            }
             copy_glue_host.addCopyFileToSource(
                 glue_platform_host_lib.getEmittedBin(),
                 target_path,
