@@ -68,7 +68,6 @@ const LayoutIdxSpan = mono.LayoutIdxSpan;
 
 /// Special layout index for List I64 type (must match dev_evaluator.zig).
 /// Lists are (ptr, len, capacity) = 24 bytes and need special handling when returning results.
-pub const list_i64_layout: layout.Idx = @enumFromInt(100);
 
 // Number-to-string C wrapper functions (explicit output pointer to avoid struct return ABI issues)
 const RocStr = builtins.str.RocStr;
@@ -511,13 +510,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 else => null,
             };
 
-            // Validate that the layout index is within bounds of our layout store
             if (raw_layout) |layout_idx| {
-                const ls = self.layout_store orelse return null;
-                if (@intFromEnum(layout_idx) >= ls.layouts.len()) {
-                    // Layout index is out of bounds (from external module) - don't use it
-                    return null;
-                }
                 return layout_idx;
             }
             return null;
@@ -757,19 +750,13 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     };
                     const ret_layout = ls.getLayout(ll.ret_layout);
 
-                    // Get element layout - for list_of_zst, use zero size, for regular lists use element layout
-                    // For cross-module calls (e.g., from List.map builtin), the return layout may
-                    // show as 'closure' due to layout index resolution across modules. In that case,
-                    // fall back to a default element size.
                     const elem_size_align: layout.SizeAlign = switch (ret_layout.tag) {
                         .list => blk: {
                             const elem_layout = ls.getLayout(ret_layout.data.list);
                             break :blk ls.layoutSizeAlign(elem_layout);
                         },
                         .list_of_zst => .{ .size = 0, .alignment = .@"1" },
-                        // For closure/non-list return types (cross-module layout resolution issue),
-                        // default to 8 bytes (common case for I64, pointers, etc.)
-                        else => .{ .size = 8, .alignment = .@"8" },
+                        else => unreachable, // list_with_capacity must return a list
                     };
 
                     const fn_addr: usize = @intFromPtr(&listWithCapacityC);
@@ -882,54 +869,12 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     // Using the LAYOUT rather than the generated value avoids issues with
                     // test interference or stale values
                     const elem_size_align: layout.SizeAlign = blk: {
-                        // First, try to get element layout directly from the element expression
-                        // This is more reliable than using ll.ret_layout which may be incorrect
-                        // (e.g., set to closure layout when the low_level_lambda was lowered)
-                        // Check the expression itself to detect empty_record
-                        const elem_expr = self.store.getExpr(args[1]);
-                        if (elem_expr == .empty_record) {
-                            // Empty record is always ZST
-                            break :blk .{ .size = 0, .alignment = .@"1" };
-                        }
-
-                        // Check the LIST argument's layout - if it's list_of_zst, the element is ZST
-                        if (self.getExprLayout(args[0])) |list_layout_idx| {
-                            const list_layout = ls.getLayout(list_layout_idx);
-                            if (list_layout.tag == .list_of_zst) {
-                                break :blk .{ .size = 0, .alignment = .@"1" };
-                            }
-                        }
-
-                        // For lookups, check the layout
-                        if (self.getExprLayout(args[1])) |elem_layout_idx| {
-                            const elem_layout = ls.getLayout(elem_layout_idx);
-                            const sa = ls.layoutSizeAlign(elem_layout);
-                            // Check for ZST layouts (empty records, tuples, etc.)
-                            if (elem_layout.tag == .zst) {
-                                break :blk .{ .size = 0, .alignment = .@"1" };
-                            }
-                            // Check for records that might be ZST
-                            if (elem_layout.tag == .record and sa.size == 0) {
-                                break :blk .{ .size = 0, .alignment = .@"1" };
-                            }
-                            break :blk sa;
-                        }
-
-                        // Try the return layout - if it's list_of_zst, we know it's ZST
-                        // NOTE: ll.ret_layout may be incorrect (e.g., closure) if this comes
-                        // from a lambda wrapping the low-level call
-                        const ret_layout = ls.getLayout(ll.ret_layout);
-                        if (ret_layout.tag == .list_of_zst) {
-                            break :blk .{ .size = 0, .alignment = .@"1" };
-                        }
-                        if (ret_layout.tag == .list) {
-                            const elem_layout = ls.getLayout(ret_layout.data.list);
-                            break :blk ls.layoutSizeAlign(elem_layout);
-                        }
-
-                        // Fallback: estimate size from the generated element value
-                        // Default to 8 bytes (most common case for I64, pointers, etc.)
-                        break :blk .{ .size = 8, .alignment = .@"8" };
+                        const ret_layout_val = ls.getLayout(ll.ret_layout);
+                        break :blk switch (ret_layout_val.tag) {
+                            .list => ls.layoutSizeAlign(ls.getLayout(ret_layout_val.data.list)),
+                            .list_of_zst => .{ .size = 0, .alignment = .@"1" },
+                            else => unreachable, // list_append must return a list
+                        };
                     };
 
                     // ZST detection based on LAYOUT size, not generated value
@@ -2571,7 +2516,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 .i32, .u32, .f32 => 4,
                 .i64, .u64, .f64, .str => 8,
                 .i128, .u128, .dec => 16,
-                else => 8, // Default to 8 bytes for unknown types
+                else => @panic("TODO: list equality for non-scalar element type"),
             };
 
             const result_reg = try self.allocTempGeneral();
@@ -3064,11 +3009,6 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     break :blk 24; // Strings are 24 bytes (ptr, len, capacity)
                 },
                 else => if (self.layout_store) |ls| blk: {
-                    // Check bounds before accessing layout (cross-module layouts may be out of range)
-                    if (@intFromEnum(ite.result_layout) >= ls.layouts.len()) {
-                        // Out of bounds - will check body_loc below to detect lists
-                        break :blk 8;
-                    }
                     const result_layout = ls.getLayout(ite.result_layout);
                     break :blk switch (result_layout.tag) {
                         .list, .list_of_zst => inner: {
@@ -3078,9 +3018,9 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         .tuple => ls.getTupleData(result_layout.data.tuple.idx).size,
                         .record => ls.getRecordData(result_layout.data.record.idx).size,
                         .tag_union => ls.getTagUnionData(result_layout.data.tag_union.idx).size,
-                        else => 8,
+                        else => @panic("TODO: if-then-else with unsupported result layout tag"),
                     };
-                } else 8,
+                } else unreachable,
             };
 
             // Determine storage strategy based on result size
@@ -4913,20 +4853,14 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
         /// Generate code for dbg expression (prints and returns value)
         fn generateDbg(self: *Self, dbg_expr: anytype) Error!ValueLocation {
-            // Generate the expression value
-            const value_loc = try self.generateExpr(dbg_expr.expr);
-            // TODO: Implement actual debug printing
-            // For now, just return the value
-            return value_loc;
+            _ = try self.generateExpr(dbg_expr.expr);
+            @panic("TODO: implement dbg printing");
         }
 
         /// Generate code for expect expression (assertion)
         fn generateExpect(self: *Self, expect_expr: anytype) Error!ValueLocation {
-            // Generate the condition
             _ = try self.generateExpr(expect_expr.cond);
-            // TODO: Implement actual assertion checking
-            // Generate and return the body
-            return try self.generateExpr(expect_expr.body);
+            @panic("TODO: implement expect assertion checking");
         }
 
         /// Generate code for string concatenation
@@ -4940,9 +4874,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 // Single element, just return it
                 return try self.generateExpr(expr_ids[0]);
             }
-            // TODO: Implement actual string concatenation by calling str_concat builtin
-            // For now, return the first string
-            return try self.generateExpr(expr_ids[0]);
+            @panic("TODO: implement multi-element string concatenation");
         }
 
         /// Generate an empty string
@@ -5105,8 +5037,9 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
         /// Generate code for str_escape_and_quote
         fn generateStrEscapeAndQuote(self: *Self, expr_id: anytype) Error!ValueLocation {
-            // Just return the string for now
-            return try self.generateExpr(expr_id);
+            _ = self;
+            _ = expr_id;
+            @panic("TODO: implement str_escape_and_quote");
         }
 
         /// Generate code for discriminant switch
@@ -5430,29 +5363,13 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                             // First binding: allocate a fixed slot and copy value there
                             const ls = self.layout_store orelse unreachable;
 
-                            // Determine the size from value_loc first (most reliable for compound types),
-                            // then fall back to expr_layout_override, then to pattern's layout.
-                            // The value_loc is a more reliable indicator of the actual runtime representation
-                            // because the expression's layout may be incorrectly inferred (e.g., list_with_capacity
-                            // might have a scalar layout in the MonoIR but actually produces a list at runtime).
-                            const size: u32 = switch (value_loc) {
-                                // Compound types have fixed sizes determined by their runtime representation
-                                .stack_i128, .immediate_i128 => 16,
-                                .stack_str => 24,
-                                .list_stack => 24, // Lists are always 24 bytes (ptr, len, capacity)
-                                else => blk: {
-                                    // For other types, use expr_layout_override if available
-                                    if (expr_layout_override) |expr_layout| {
-                                        const expr_layout_val = ls.getLayout(expr_layout);
-                                        const expr_size_align = ls.layoutSizeAlign(expr_layout_val);
-                                        break :blk expr_size_align.size;
-                                    } else {
-                                        // Fall back to pattern's layout
-                                        const layout_val = ls.getLayout(bind.layout_idx);
-                                        const size_align = ls.layoutSizeAlign(layout_val);
-                                        break :blk size_align.size;
-                                    }
-                                },
+                            const size: u32 = blk: {
+                                if (expr_layout_override) |expr_layout| {
+                                    const expr_layout_val = ls.getLayout(expr_layout);
+                                    break :blk ls.layoutSizeAlign(expr_layout_val).size;
+                                }
+                                const layout_val = ls.getLayout(bind.layout_idx);
+                                break :blk ls.layoutSizeAlign(layout_val).size;
                             };
 
                             // Allocate a fixed stack slot for this mutable variable
@@ -5573,16 +5490,14 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     // Elements are at ptr[0], ptr[1], etc.
 
                     // Get element size from layout
-                    // If override is a list layout, extract its element layout.
-                    // Fall back to pattern's lst.elem_layout if no override or if override is not a list.
+                    // Use element layout from the expression override if it's a list,
+                    // otherwise use the pattern's element layout.
                     const ls = self.layout_store orelse return;
                     const elem_layout = if (expr_layout_override) |override_idx| blk: {
                         const override_layout = ls.getLayout(override_idx);
                         if (override_layout.tag == .list) {
-                            // The override is a list - use its element layout
                             break :blk ls.getLayout(override_layout.data.list);
                         }
-                        // Override is not a list - fall back to pattern's elem_layout
                         break :blk ls.getLayout(lst.elem_layout);
                     } else ls.getLayout(lst.elem_layout);
                     const elem_size_align = ls.layoutSizeAlign(elem_layout);
@@ -7096,84 +7011,6 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         },
                     }
                 },
-                list_i64_layout => {
-                    // Lists are (ptr, len, capacity) = 24 bytes
-                    // With heap allocation, ptr already points to valid heap memory
-                    // Just copy the 24-byte struct to the result buffer
-                    switch (loc) {
-                        .list_stack => |list_info| {
-                            // Copy 24-byte struct from stack to result buffer
-                            const temp_reg = try self.allocTempGeneral();
-
-                            // Copy ptr (first 8 bytes)
-                            if (comptime builtin.cpu.arch == .aarch64) {
-                                try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, list_info.struct_offset);
-                                try self.codegen.emit.strRegMemUoff(.w64, temp_reg, saved_ptr_reg, 0);
-                            } else {
-                                try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, list_info.struct_offset);
-                                try self.codegen.emit.movMemReg(.w64, saved_ptr_reg, 0, temp_reg);
-                            }
-
-                            // Copy len (second 8 bytes)
-                            if (comptime builtin.cpu.arch == .aarch64) {
-                                try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, list_info.struct_offset + 8);
-                                try self.codegen.emit.strRegMemUoff(.w64, temp_reg, saved_ptr_reg, 1);
-                            } else {
-                                try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, list_info.struct_offset + 8);
-                                try self.codegen.emit.movMemReg(.w64, saved_ptr_reg, 8, temp_reg);
-                            }
-
-                            // Copy capacity (third 8 bytes)
-                            if (comptime builtin.cpu.arch == .aarch64) {
-                                try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, list_info.struct_offset + 16);
-                                try self.codegen.emit.strRegMemSoff(.w64, temp_reg, saved_ptr_reg, 16);
-                            } else {
-                                try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, list_info.struct_offset + 16);
-                                try self.codegen.emit.movMemReg(.w64, saved_ptr_reg, 16, temp_reg);
-                            }
-
-                            self.codegen.freeGeneral(temp_reg);
-                        },
-                        .stack => |stack_offset| {
-                            // Fallback for lists from .stack location - copy 24-byte struct
-                            const temp_reg = try self.allocTempGeneral();
-
-                            // Copy ptr (first 8 bytes)
-                            if (comptime builtin.cpu.arch == .aarch64) {
-                                try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, stack_offset);
-                                try self.codegen.emit.strRegMemUoff(.w64, temp_reg, saved_ptr_reg, 0);
-                            } else {
-                                try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, stack_offset);
-                                try self.codegen.emit.movMemReg(.w64, saved_ptr_reg, 0, temp_reg);
-                            }
-
-                            // Copy len (second 8 bytes)
-                            if (comptime builtin.cpu.arch == .aarch64) {
-                                try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, stack_offset + 8);
-                                try self.codegen.emit.strRegMemUoff(.w64, temp_reg, saved_ptr_reg, 1);
-                            } else {
-                                try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, stack_offset + 8);
-                                try self.codegen.emit.movMemReg(.w64, saved_ptr_reg, 8, temp_reg);
-                            }
-
-                            // Copy capacity (third 8 bytes)
-                            if (comptime builtin.cpu.arch == .aarch64) {
-                                try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, stack_offset + 16);
-                                try self.codegen.emit.strRegMemSoff(.w64, temp_reg, saved_ptr_reg, 16);
-                            } else {
-                                try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, stack_offset + 16);
-                                try self.codegen.emit.movMemReg(.w64, saved_ptr_reg, 16, temp_reg);
-                            }
-
-                            self.codegen.freeGeneral(temp_reg);
-                        },
-                        else => {
-                            // Fallback for non-stack list (shouldn't happen)
-                            const reg = try self.ensureInGeneralReg(loc);
-                            try self.emitStoreToMem(saved_ptr_reg, reg);
-                        },
-                    }
-                },
                 else => {
                     // Check if this is a composite type (record/tuple/list) via layout store
                     if (self.layout_store) |ls| {
@@ -7199,12 +7036,11 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                                 try self.copyStackToPtr(loc, saved_ptr_reg, 24);
                                 return;
                             },
-                            else => {},
+                            else => @panic("TODO: storeResultToSavedPtr for unsupported layout tag"),
                         }
+                    } else {
+                        unreachable; // non-scalar layout must have layout store
                     }
-                    // Default: store single 8-byte value
-                    const reg = try self.ensureInGeneralReg(loc);
-                    try self.emitStoreToMem(saved_ptr_reg, reg);
                 },
             }
         }

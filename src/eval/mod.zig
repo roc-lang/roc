@@ -7,8 +7,6 @@ const std = @import("std");
 /// Dev backend-based evaluator for native code generation using Mono IR
 const dev_evaluator_mod = @import("dev_evaluator.zig");
 pub const DevEvaluator = dev_evaluator_mod.DevEvaluator;
-/// Special layout index for list of i64 (used in test helpers)
-pub const list_i64_layout = dev_evaluator_mod.list_i64_layout;
 /// Compile-time value representation for the dev backend
 pub const comptime_value = @import("comptime_value.zig");
 /// Executable memory for running generated code (re-exported from backend module)

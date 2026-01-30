@@ -201,141 +201,85 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
                 break :blk formatted;
             }
         },
-        eval_mod.list_i64_layout => blk: {
-            // List result buffer layout: [0-7] ptr, [8-15] len, [16-23] capacity
-            // With heap allocation, ptr points to heap memory that survives the call
-            const ListResultBuffer = extern struct {
-                ptr: [*]const i64,
-                len: usize,
-                capacity: usize,
-            };
-            var result: ListResultBuffer align(8) = .{
-                .ptr = undefined,
-                .len = 0,
-                .capacity = 0,
-            };
-            jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&dev_eval.roc_ops));
-
-            // Format as "[elem1, elem2, ...]"
-            var output = std.array_list.Managed(u8).initCapacity(allocator, 64) catch
-                return error.OutOfMemory;
-            errdefer output.deinit();
-            output.append('[') catch return error.OutOfMemory;
-
-            if (result.len > 0) {
-                const elements = result.ptr[0..result.len];
-                for (elements, 0..) |elem, i| {
-                    if (i > 0) {
-                        try output.appendSlice(", ");
-                    }
-                    const elem_str = try std.fmt.allocPrint(allocator, "{}", .{elem});
-                    defer allocator.free(elem_str);
-                    try output.appendSlice(elem_str);
-                }
-            }
-
-            try output.append(']');
-
-            // Decref the heap-allocated list data after copying
-            // Lists have 8-byte alignment (pointer-sized elements), elements_refcounted = false for i64
-            if (result.len > 0) {
-                builtins.utils.decrefDataPtrC(@ptrCast(@constCast(result.ptr)), 8, false, @constCast(&dev_eval.roc_ops));
-            }
-
-            break :blk output.toOwnedSlice();
-        },
         else => blk: {
-            // Handle non-scalar layouts (records, tuples, etc.)
-            // Layout indices >= 16 are computed layouts (scalars are 0-15)
-            const layout_idx_val = @intFromEnum(code_result.result_layout);
-            if (layout_idx_val >= 16) {
-                // This is a computed layout (record, tuple, tag union, etc.)
-                if (code_result.layout_store) |ls| {
-                    const stored_layout = ls.getLayout(code_result.result_layout);
+            const ls = code_result.layout_store orelse unreachable; // non-scalar layout must have layout store
+            const stored_layout = ls.getLayout(code_result.result_layout);
+            switch (stored_layout.tag) {
+                .list_of_zst => {
+                    const ListResultBuffer = extern struct {
+                        ptr: ?[*]const u8,
+                        len: usize,
+                        capacity: usize,
+                    };
+                    var result: ListResultBuffer align(8) = .{
+                        .ptr = null,
+                        .len = 0,
+                        .capacity = 0,
+                    };
+                    jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&dev_eval.roc_ops));
 
-                    // Handle list_of_zst - lists of zero-sized types
-                    // We still need to execute the JIT code to get the length
-                    if (stored_layout.tag == .list_of_zst) {
-                        const ListResultBuffer = extern struct {
-                            ptr: ?[*]const u8,
-                            len: usize,
-                            capacity: usize,
-                        };
-                        var result: ListResultBuffer align(8) = .{
-                            .ptr = null,
-                            .len = 0,
-                            .capacity = 0,
-                        };
-                        jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&dev_eval.roc_ops));
+                    // Format as [(), (), ...] based on the length
+                    var output = std.array_list.Managed(u8).initCapacity(allocator, 64) catch
+                        return error.OutOfMemory;
+                    errdefer output.deinit();
+                    output.append('[') catch return error.OutOfMemory;
 
-                        // Format as [(), (), ...] based on the length
-                        var output = std.array_list.Managed(u8).initCapacity(allocator, 64) catch
-                            return error.OutOfMemory;
-                        errdefer output.deinit();
-                        output.append('[') catch return error.OutOfMemory;
+                    for (0..result.len) |i| {
+                        if (i > 0) {
+                            try output.appendSlice(", ");
+                        }
+                        try output.appendSlice("()");
+                    }
 
-                        for (0..result.len) |i| {
+                    try output.append(']');
+                    break :blk output.toOwnedSlice();
+                },
+                .list => {
+                    const ListResultBuffer = extern struct {
+                        ptr: [*]const i64,
+                        len: usize,
+                        capacity: usize,
+                    };
+                    var result: ListResultBuffer align(8) = .{
+                        .ptr = undefined,
+                        .len = 0,
+                        .capacity = 0,
+                    };
+                    jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&dev_eval.roc_ops));
+
+                    var output = std.array_list.Managed(u8).initCapacity(allocator, 64) catch
+                        return error.OutOfMemory;
+                    errdefer output.deinit();
+                    output.append('[') catch return error.OutOfMemory;
+
+                    if (result.len > 0) {
+                        const elements = result.ptr[0..result.len];
+                        for (elements, 0..) |elem, i| {
                             if (i > 0) {
                                 try output.appendSlice(", ");
                             }
-                            try output.appendSlice("()");
+                            const elem_str = try std.fmt.allocPrint(allocator, "{}", .{elem});
+                            defer allocator.free(elem_str);
+                            try output.appendSlice(elem_str);
                         }
-
-                        try output.append(']');
-                        break :blk output.toOwnedSlice();
                     }
 
-                    // Handle list - format as [elem1, elem2, ...]
-                    if (stored_layout.tag == .list) {
-                        const ListResultBuffer = extern struct {
-                            ptr: [*]const i64,
-                            len: usize,
-                            capacity: usize,
-                        };
-                        var result: ListResultBuffer align(8) = .{
-                            .ptr = undefined,
-                            .len = 0,
-                            .capacity = 0,
-                        };
-                        jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&dev_eval.roc_ops));
+                    try output.append(']');
 
-                        var output = std.array_list.Managed(u8).initCapacity(allocator, 64) catch
-                            return error.OutOfMemory;
-                        errdefer output.deinit();
-                        output.append('[') catch return error.OutOfMemory;
-
-                        if (result.len > 0) {
-                            const elements = result.ptr[0..result.len];
-                            for (elements, 0..) |elem, i| {
-                                if (i > 0) {
-                                    try output.appendSlice(", ");
-                                }
-                                const elem_str = try std.fmt.allocPrint(allocator, "{}", .{elem});
-                                defer allocator.free(elem_str);
-                                try output.appendSlice(elem_str);
-                            }
-                        }
-
-                        try output.append(']');
-
-                        if (result.len > 0) {
-                            builtins.utils.decrefDataPtrC(@ptrCast(@constCast(result.ptr)), 8, false, @constCast(&dev_eval.roc_ops));
-                        }
-
-                        break :blk output.toOwnedSlice();
+                    if (result.len > 0) {
+                        builtins.utils.decrefDataPtrC(@ptrCast(@constCast(result.ptr)), 8, false, @constCast(&dev_eval.roc_ops));
                     }
 
-                    // For records, look up the layout from the layout store
-                    if (stored_layout.tag == .record) {
-                        // Get record field count from record_data
-                        const record_idx = stored_layout.data.record.idx.int_idx;
-                        const record_data = ls.record_data.items.items[record_idx];
-                        const field_count = record_data.fields.count;
-                        break :blk std.fmt.allocPrint(allocator, "{{record with {d} fields}}", .{field_count});
-                    }
-                }
+                    break :blk output.toOwnedSlice();
+                },
+                .record => {
+                    const record_idx = stored_layout.data.record.idx.int_idx;
+                    const record_data = ls.record_data.items.items[record_idx];
+                    const field_count = record_data.fields.count;
+                    break :blk std.fmt.allocPrint(allocator, "{{record with {d} fields}}", .{field_count});
+                },
+                else => @panic("TODO: devEvaluatorStr for unsupported layout tag"),
             }
-            return error.UnsupportedLayout;
         },
     };
 }
