@@ -2056,6 +2056,9 @@ test "completion handler returns types after colon" {
     const file_uri = try uriFromPath(allocator, file_path);
     defer allocator.free(file_uri);
 
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
     const init_body =
         \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"clientInfo":{"name":"test"},"capabilities":{}}}
     ;
@@ -2070,8 +2073,8 @@ test "completion handler returns types after colon" {
 
     // Document with type annotation context
     const open_body = try std.fmt.allocPrint(allocator,
-        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"module []\n\nx : "}}}}}}
-    , .{file_uri});
+        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"app [main] {{ pf: platform \"{s}\" }}\nMyList:List(Str)\nx : "}}}}}}
+    , .{ file_uri, platform_path });
     defer allocator.free(open_body);
     const open_msg = try frame(allocator, open_body);
     defer allocator.free(open_msg);
@@ -2139,10 +2142,12 @@ test "completion handler returns types after colon" {
         var found_str = false;
         var found_u64 = false;
         var found_bool = false;
+        var found_my_list = false;
         for (items.array.items) |item| {
             const label = item.object.get("label") orelse continue;
             if (label == .string) {
                 if (std.mem.eql(u8, label.string, "Str")) found_str = true;
+                if (std.mem.eql(u8, label.string, "MyList")) found_my_list = true;
                 if (std.mem.eql(u8, label.string, "U64")) found_u64 = true;
                 if (std.mem.eql(u8, label.string, "Bool")) found_bool = true;
             }
