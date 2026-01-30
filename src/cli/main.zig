@@ -1695,11 +1695,7 @@ pub fn setupSharedMemoryWithCoordinator(ctx: *CliContext, roc_file_path: []const
 
     // Set up app package
     const app_pkg = try coord.ensurePackage("app", app_dir);
-    const app_basename = std.fs.path.basename(roc_file_path);
-    const app_module_name = if (std.mem.endsWith(u8, app_basename, ".roc"))
-        app_basename[0 .. app_basename.len - 4]
-    else
-        app_basename;
+    const app_module_name = base.module_path.getModuleName(roc_file_path);
     const app_module_id = try app_pkg.ensureModule(ctx.gpa, app_module_name, roc_file_path);
     app_pkg.root_module_id = app_module_id;
     app_pkg.modules.items[app_module_id].depth = 0;
@@ -2108,10 +2104,7 @@ fn processHostedFunctionsFromCoordinator(coord: *Coordinator, ctx: *CliContext) 
                     const hosted = expr.e_hosted_lambda;
                     const local_name = platform_env.getIdent(hosted.symbol_name);
 
-                    var plat_module_name = platform_env.module_name;
-                    if (std.mem.endsWith(u8, plat_module_name, ".roc")) {
-                        plat_module_name = plat_module_name[0 .. plat_module_name.len - 4];
-                    }
+                    const plat_module_name = base.module_path.getModuleName(platform_env.module_name);
                     const qualified_name = try std.fmt.allocPrint(ctx.gpa, "{s}.{s}", .{ plat_module_name, local_name });
                     defer ctx.gpa.free(qualified_name);
 
@@ -2267,9 +2260,8 @@ fn extractExposedModulesFromPlatform(ctx: *CliContext, roc_file_path: []const u8
     };
     defer ctx.gpa.free(source);
 
-    // Extract module name from the file path
-    const basename = std.fs.path.basename(roc_file_path);
-    const module_name = try ctx.arena.dupe(u8, basename);
+    // Extract module name from the file path (strip .roc extension)
+    const module_name = try base.module_path.getModuleNameAlloc(ctx.arena, roc_file_path);
 
     // Create ModuleEnv
     var env = ModuleEnv.init(ctx.gpa, source) catch return error.ParseFailed;
@@ -2433,9 +2425,8 @@ fn extractPlatformSpecFromApp(ctx: *CliContext, app_file_path: []const u8) ![]co
     };
     defer ctx.gpa.free(source);
 
-    // Extract module name from file path
-    const basename = std.fs.path.basename(app_file_path);
-    const module_name = try ctx.arena.dupe(u8, basename);
+    // Extract module name from file path (strips .roc extension)
+    const module_name = try base.module_path.getModuleNameAlloc(ctx.arena, app_file_path);
 
     // Create ModuleEnv for parsing
     var env = ModuleEnv.init(ctx.gpa, source) catch {
@@ -2700,9 +2691,8 @@ fn extractEntrypointsFromPlatform(ctx: *CliContext, roc_file_path: []const u8, e
     };
     defer ctx.gpa.free(source);
 
-    // Extract module name from the file path
-    const basename = std.fs.path.basename(roc_file_path);
-    const module_name = try ctx.arena.dupe(u8, basename);
+    // Extract module name from the file path (strip .roc extension)
+    const module_name = try base.module_path.getModuleNameAlloc(ctx.arena, roc_file_path);
 
     // Create ModuleEnv
     var env = ModuleEnv.init(ctx.gpa, source) catch return error.ParseFailed;
@@ -3176,12 +3166,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     const output_path = if (args.output) |output|
         try ctx.arena.dupe(u8, output)
     else blk: {
-        const basename = std.fs.path.basename(args.path);
-        const name_without_ext = if (std.mem.endsWith(u8, basename, ".roc"))
-            basename[0 .. basename.len - 4]
-        else
-            basename;
-        break :blk try ctx.arena.dupe(u8, name_without_ext);
+        break :blk try base.module_path.getModuleNameAlloc(ctx.arena, args.path);
     };
 
     // Set up cache directory for build artifacts
@@ -3752,9 +3737,8 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
     };
     defer ctx.gpa.free(source);
 
-    // Extract module name from the file path
-    const basename = std.fs.path.basename(args.path);
-    const module_name = try ctx.arena.dupe(u8, basename);
+    // Extract module name from the file path (strips .roc extension)
+    const module_name = try base.module_path.getModuleNameAlloc(ctx.arena, args.path);
 
     // Create ModuleEnv
     var env = ModuleEnv.init(ctx.gpa, source) catch |err| {
@@ -6064,14 +6048,11 @@ fn generateAppDocs(
         for (package_env.modules.items) |module_state| {
             // Process external imports (e.g., "cli.Stdout")
             for (module_state.external_imports.items) |ext_import| {
-                // Parse the import (e.g., "cli.Stdout" -> package="cli", module="Stdout")
-                if (std.mem.indexOfScalar(u8, ext_import, '.')) |dot_index| {
-                    const pkg_shorthand = ext_import[0..dot_index];
-                    const module_name = ext_import[dot_index + 1 ..];
-
+                // Parse the import (e.g., "cli.Stdout" -> { .qualifier = "cli", .module = "Stdout" })
+                if (base.module_path.parseQualifiedImport(ext_import)) |qualified| {
                     // Create full name and link path
                     const full_name = try ctx.arena.dupe(u8, ext_import);
-                    const link_path = try std.fmt.allocPrint(ctx.arena, "{s}/{s}", .{ pkg_shorthand, module_name });
+                    const link_path = try std.fmt.allocPrint(ctx.arena, "{s}/{s}", .{ qualified.qualifier, qualified.module });
 
                     const empty_items = [_]AssociatedItem{};
                     const mod_info = ModuleInfo{
@@ -6087,7 +6068,7 @@ fn generateAppDocs(
                     }
 
                     // Generate index.html for this module
-                    const module_output_dir = try std.fs.path.join(ctx.arena, &[_][]const u8{ base_output_dir, pkg_shorthand, module_name });
+                    const module_output_dir = try std.fs.path.join(ctx.arena, &[_][]const u8{ base_output_dir, qualified.qualifier, qualified.module });
                     generateModuleIndex(ctx, module_output_dir, ext_import) catch |err| {
                         std.debug.print("Warning: failed to generate module index for {s}: {}\n", .{ ext_import, err });
                     };

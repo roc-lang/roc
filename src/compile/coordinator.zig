@@ -1011,16 +1011,14 @@ pub const Coordinator = struct {
 
         // Process discovered external imports
         for (result.discovered_external_imports.items) |ext_imp| {
-            // Parse the qualified import name (e.g., "pf.Stdout" -> qual="pf", rest="Stdout")
-            const dot_idx = std.mem.indexOfScalar(u8, ext_imp.import_name, '.') orelse continue;
-            const qual = ext_imp.import_name[0..dot_idx];
-            const rest = ext_imp.import_name[dot_idx + 1 ..];
+            // Parse the qualified import name (e.g., "pf.Stdout" -> { .qualifier = "pf", .module = "Stdout" })
+            const qualified = base.module_path.parseQualifiedImport(ext_imp.import_name) orelse continue;
 
             // Only add to external_imports if the shorthand resolves to a valid package.
             // If the shorthand doesn't exist, the import is invalid and should not block
             // this module - the error will be caught during type-checking when the
             // pending lookup for this import cannot be resolved.
-            const target_pkg_name = pkg.shorthands.get(qual) orelse continue;
+            const target_pkg_name = pkg.shorthands.get(qualified.qualifier) orelse continue;
             const target_pkg = self.packages.get(target_pkg_name) orelse continue;
 
             // Valid shorthand - add to external imports and schedule
@@ -1028,7 +1026,7 @@ pub const Coordinator = struct {
             try self.scheduleExternalImport(result.package_name, ext_imp.import_name);
 
             // Register this module as a cross-package dependent of the target
-            const target_module_id = target_pkg.module_names.get(rest) orelse continue;
+            const target_module_id = target_pkg.module_names.get(qualified.module) orelse continue;
 
             try self.registerCrossPackageDependent(
                 target_pkg_name,
@@ -1145,15 +1143,12 @@ pub const Coordinator = struct {
 
                 // Add external imports (these have format "pkg.Module")
                 for (mod.external_imports.items) |ext_name| {
-                    if (std.mem.indexOfScalar(u8, ext_name, '.')) |dot_idx| {
-                        const pkg_shorthand = ext_name[0..dot_idx];
-                        const mod_name_part = ext_name[dot_idx + 1 ..];
-
+                    if (base.module_path.parseQualifiedImport(ext_name)) |qualified| {
                         // Resolve the external package and compute source hash by reading file
                         var imp_source_hash: [32]u8 = std.mem.zeroes([32]u8);
-                        if (pkg.shorthands.get(pkg_shorthand)) |ext_pkg_name| {
+                        if (pkg.shorthands.get(qualified.qualifier)) |ext_pkg_name| {
                             if (self.packages.get(ext_pkg_name)) |ext_pkg| {
-                                const imp_path = self.resolveModulePath(ext_pkg.root_dir, mod_name_part) catch null;
+                                const imp_path = self.resolveModulePath(ext_pkg.root_dir, qualified.module) catch null;
                                 if (imp_path) |path| {
                                     defer self.gpa.free(path);
                                     if (self.file_provider.read(self.file_provider.ctx, path, self.gpa) catch null) |source| {
@@ -1164,8 +1159,8 @@ pub const Coordinator = struct {
                             }
                         }
 
-                        const pkg_part = self.gpa.dupe(u8, pkg_shorthand) catch continue;
-                        const mod_part = self.gpa.dupe(u8, mod_name_part) catch {
+                        const pkg_part = self.gpa.dupe(u8, qualified.qualifier) catch continue;
+                        const mod_part = self.gpa.dupe(u8, qualified.module) catch {
                             self.gpa.free(pkg_part);
                             continue;
                         };
@@ -1660,10 +1655,39 @@ pub const Coordinator = struct {
             }
         }
 
-        // Add external imports
+        // Use a StringHashMap for O(1) duplicate detection when adding transitive deps
+        var seen_modules = std.StringHashMap(void).init(self.gpa);
+        defer seen_modules.deinit();
+
+        // Mark already-added imports as seen (builtin + local imports)
+        for (imported_envs.items) |env| {
+            try seen_modules.put(env.module_name, {});
+        }
+
+        // Add external imports and their transitive dependencies in one pass.
+        // Transitive deps ensure we have access to module environments for types
+        // used in where clauses even when not directly imported by this module.
         for (mod.external_imports.items) |ext_name| {
-            if (self.getExternalEnv(pkg.name, ext_name)) |ext_env| {
-                try imported_envs.append(self.gpa, ext_env);
+            const ext_env = self.getExternalEnv(pkg.name, ext_name) orelse continue;
+            try imported_envs.append(self.gpa, ext_env);
+
+            // Parse "pf.Wrapper" -> { .qualifier = "pf", .module = "Wrapper" }
+            const qualified = base.module_path.parseQualifiedImport(ext_name) orelse continue;
+            const target_pkg_name = pkg.shorthands.get(qualified.qualifier) orelse continue;
+            const target_pkg = self.packages.get(target_pkg_name) orelse continue;
+
+            // Add transitive dependencies from this external module
+            for (ext_env.imports.imports.items.items) |trans_str_idx| {
+                const trans_name = ext_env.getString(trans_str_idx);
+
+                // Skip if already seen (O(1) lookup)
+                if (seen_modules.contains(trans_name)) continue;
+
+                // Resolve the transitive import from the same target package
+                if (target_pkg.getEnvIfDone(trans_name)) |trans_env| {
+                    try imported_envs.append(self.gpa, trans_env);
+                    try seen_modules.put(trans_name, {});
+                }
             }
         }
 
@@ -1696,10 +1720,8 @@ pub const Coordinator = struct {
             std.debug.print("[COORD] SCHEDULE EXT IMPORT: from {s} importing {s}\n", .{ source_pkg, import_name });
         }
 
-        // Parse "pf.Stdout" -> qual="pf", rest="Stdout"
-        const dot_idx = std.mem.indexOfScalar(u8, import_name, '.') orelse return;
-        const qual = import_name[0..dot_idx];
-        const rest = import_name[dot_idx + 1 ..];
+        // Parse "pf.Stdout" -> { .qualifier = "pf", .module = "Stdout" }
+        const qualified = base.module_path.parseQualifiedImport(import_name) orelse return;
 
         // Resolve shorthand to target package
         const source = self.packages.get(source_pkg) orelse {
@@ -1708,9 +1730,9 @@ pub const Coordinator = struct {
             }
             return;
         };
-        const target_pkg_name = source.shorthands.get(qual) orelse {
+        const target_pkg_name = source.shorthands.get(qualified.qualifier) orelse {
             if (comptime trace_build) {
-                std.debug.print("[COORD] SCHEDULE EXT IMPORT: shorthand {s} not found in {s}\n", .{ qual, source_pkg });
+                std.debug.print("[COORD] SCHEDULE EXT IMPORT: shorthand {s} not found in {s}\n", .{ qualified.qualifier, source_pkg });
             }
             return;
         };
@@ -1722,10 +1744,10 @@ pub const Coordinator = struct {
             }
             return;
         };
-        const path = try self.resolveModulePath(target_pkg.root_dir, rest);
+        const path = try self.resolveModulePath(target_pkg.root_dir, qualified.module);
         defer self.gpa.free(path);
 
-        const module_id = try target_pkg.ensureModule(self.gpa, rest, path);
+        const module_id = try target_pkg.ensureModule(self.gpa, qualified.module, path);
         const mod = target_pkg.getModule(module_id).?;
 
         if (comptime trace_build) {
@@ -1803,30 +1825,26 @@ pub const Coordinator = struct {
     ///   Returning false would cause the coordinator to wait forever for something
     ///   that will never be ready.
     pub fn isExternalReady(self: *Coordinator, source_pkg: []const u8, import_name: []const u8) bool {
-        const dot_idx = std.mem.indexOfScalar(u8, import_name, '.') orelse return true;
-        const qual = import_name[0..dot_idx];
-        const rest = import_name[dot_idx + 1 ..];
+        const qualified = base.module_path.parseQualifiedImport(import_name) orelse return true;
 
         const source = self.packages.get(source_pkg) orelse return true;
-        const target_pkg_name = source.shorthands.get(qual) orelse return true;
+        const target_pkg_name = source.shorthands.get(qualified.qualifier) orelse return true;
         const target_pkg = self.packages.get(target_pkg_name) orelse return true;
 
         // Use isDone instead of getEnvIfDone - a module that failed to parse
         // is still "done" and shouldn't block dependents (even if it has no env)
-        return target_pkg.isDone(rest);
+        return target_pkg.isDone(qualified.module);
     }
 
     /// Get the ModuleEnv for an external import
     pub fn getExternalEnv(self: *Coordinator, source_pkg: []const u8, import_name: []const u8) ?*ModuleEnv {
-        const dot_idx = std.mem.indexOfScalar(u8, import_name, '.') orelse return null;
-        const qual = import_name[0..dot_idx];
-        const rest = import_name[dot_idx + 1 ..];
+        const qualified = base.module_path.parseQualifiedImport(import_name) orelse return null;
 
         const source = self.packages.get(source_pkg) orelse return null;
-        const target_pkg_name = source.shorthands.get(qual) orelse return null;
+        const target_pkg_name = source.shorthands.get(qualified.qualifier) orelse return null;
         const target_pkg = self.packages.get(target_pkg_name) orelse return null;
 
-        return target_pkg.getEnvIfDone(rest);
+        return target_pkg.getEnvIfDone(qualified.module);
     }
 
     /// Get build statistics for this compilation

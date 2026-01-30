@@ -3150,6 +3150,10 @@ fn add_fuzz_target(
     // Required for fuzzing.
     fuzz_obj.root_module.link_libc = true;
     fuzz_obj.root_module.stack_check = false;
+    // Enable coverage instrumentation for AFL++ when building fuzz targets.
+    if (fuzz and build_afl) {
+        fuzz_obj.sanitize_coverage_trace_pc_guard = true;
+    }
 
     roc_modules.addAll(fuzz_obj);
     add_tracy(b, roc_modules.build_options, fuzz_obj, target, false, tracy);

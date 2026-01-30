@@ -812,23 +812,13 @@ pub const BuildEnv = struct {
     // External import classification heuristic removed.
     // ModuleBuild determines external vs local using CIR qualifier metadata (s_import.qualifier_tok).
 
-    fn splitQualifier(import_name: []const u8) struct { qual: []const u8, rest: []const u8 } {
-        if (std.mem.indexOfScalar(u8, import_name, '.')) |dot| {
-            return .{ .qual = import_name[0..dot], .rest = import_name[dot + 1 ..] };
-        } else {
-            return .{ .qual = import_name, .rest = "" };
-        }
-    }
-
     fn resolverScheduleExternal(ctx: ?*anyopaque, current_package: []const u8, import_name: []const u8) void {
         var self: *ResolverCtx = @ptrCast(@alignCast(ctx.?));
         const cur_pkg = self.ws.packages.get(current_package) orelse return;
 
-        const parts = splitQualifier(import_name);
-        const qual = parts.qual;
-        const rest = parts.rest;
+        const qualified = base.module_path.parseQualifiedImport(import_name) orelse return;
 
-        const ref = cur_pkg.shorthands.get(qual) orelse {
+        const ref = cur_pkg.shorthands.get(qualified.qualifier) orelse {
             return;
         };
         const target_pkg_name = ref.name;
@@ -836,7 +826,7 @@ pub const BuildEnv = struct {
             return;
         };
 
-        const mod_path = self.ws.dottedToPath(target_pkg.root_dir, rest) catch {
+        const mod_path = self.ws.dottedToPath(target_pkg.root_dir, qualified.module) catch {
             return;
         };
         defer self.ws.gpa.free(mod_path);
@@ -844,7 +834,7 @@ pub const BuildEnv = struct {
         const sched = self.ws.schedulers.get(target_pkg_name) orelse {
             return;
         };
-        sched.*.scheduleModule(rest, mod_path, 1) catch {
+        sched.*.scheduleModule(qualified.module, mod_path, 1) catch {
             // Continue anyway - dependency resolution will handle missing modules
         };
     }
@@ -853,41 +843,34 @@ pub const BuildEnv = struct {
         var self: *ResolverCtx = @ptrCast(@alignCast(ctx.?));
         const cur_pkg = self.ws.packages.get(current_package) orelse return false;
 
-        const parts = splitQualifier(import_name);
-        const qual = parts.qual;
-        const rest = parts.rest;
+        const qualified = base.module_path.parseQualifiedImport(import_name) orelse return false;
 
-        const ref = cur_pkg.shorthands.get(qual) orelse return false;
+        const ref = cur_pkg.shorthands.get(qualified.qualifier) orelse return false;
         const sched = self.ws.schedulers.get(ref.name) orelse return false;
 
-        return sched.*.getEnvIfDone(rest) != null;
+        return sched.*.getEnvIfDone(qualified.module) != null;
     }
 
     fn resolverGetEnv(ctx: ?*anyopaque, current_package: []const u8, import_name: []const u8) ?*ModuleEnv {
         var self: *ResolverCtx = @ptrCast(@alignCast(ctx.?));
         const cur_pkg = self.ws.packages.get(current_package) orelse return null;
 
-        const parts = splitQualifier(import_name);
-        const qual = parts.qual;
-        const rest = parts.rest;
-
-        // Check if this is a local module (no qualifier - rest is empty)
-        if (rest.len == 0) {
+        // Check if this is a local module (no qualifier)
+        const qualified = base.module_path.parseQualifiedImport(import_name) orelse {
             // Local module - look it up in the current package's scheduler
             const cur_sched = self.ws.schedulers.get(current_package) orelse return null;
             return cur_sched.*.getEnvIfDone(import_name);
-        }
+        };
 
         // External module - look it up via shorthands
-        const ref = cur_pkg.shorthands.get(qual) orelse {
+        const ref = cur_pkg.shorthands.get(qualified.qualifier) orelse {
             return null;
         };
         const sched = self.ws.schedulers.get(ref.name) orelse {
             return null;
         };
 
-        const result = sched.*.getEnvIfDone(rest);
-        return result;
+        return sched.*.getEnvIfDone(qualified.module);
     }
 
     fn resolverResolveLocalPath(ctx: ?*anyopaque, _: []const u8, root_dir: []const u8, import_name: []const u8) []const u8 {
@@ -1741,6 +1724,14 @@ pub const BuildEnv = struct {
         // Now that order is built, mark ready reports as emitted so they can be drained
         self.sink.lock.lock();
         defer self.sink.lock.unlock();
+        // Mark entries without reports as emitted BEFORE calling tryEmitLocked
+        // so they don't block other entries from being emitted.
+        for (self.sink.entries.items) |*e| {
+            if (e.reports.items.len == 0) {
+                e.ready = true;
+                e.emitted = true;
+            }
+        }
         self.sink.tryEmitLocked();
     }
 
@@ -2309,24 +2300,45 @@ pub const OrderedSink = struct {
             if (!e.emitted) break;
         }
 
-        const count: usize = if (i >= self.drain_cursor) (i - self.drain_cursor) else 0;
-        if (count == 0) {
+        // Count only entries with reports (skip empty entries)
+        var reports_count: usize = 0;
+        {
+            var k: usize = self.drain_cursor;
+            while (k < i) : (k += 1) {
+                const entry_idx = self.order.items[k];
+                const e = &self.entries.items[entry_idx];
+                if (e.reports.items.len > 0) {
+                    reports_count += 1;
+                }
+            }
+        }
+
+        if (reports_count == 0) {
+            self.drain_cursor = i;
             return try gpa.alloc(Drained, 0);
         }
 
-        var out = try gpa.alloc(Drained, count);
+        var out = try gpa.alloc(Drained, reports_count);
         var j: usize = 0;
-        while (j < count) : (j += 1) {
-            const entry_idx = self.order.items[self.drain_cursor + j];
+        var k: usize = self.drain_cursor;
+        while (k < i) : (k += 1) {
+            const entry_idx = self.order.items[k];
             const e = &self.entries.items[entry_idx];
+
+            // Skip entries with no reports
+            if (e.reports.items.len == 0) {
+                e.ready = false;
+                e.emitted = false;
+                continue;
+            }
 
             // Move reports out; reset readiness for potential future appends
             const reps = e.reports.toOwnedSlice() catch {
                 // Back out partially allocated results on failure
-                var k: usize = 0;
-                while (k < j) : (k += 1) {
-                    for (out[k].reports) |*r| r.deinit();
-                    gpa.free(out[k].reports);
+                var m: usize = 0;
+                while (m < j) : (m += 1) {
+                    for (out[m].reports) |*r| r.deinit();
+                    gpa.free(out[m].reports);
                 }
                 gpa.free(out);
                 return error.OutOfMemory;
@@ -2337,6 +2349,7 @@ pub const OrderedSink = struct {
                 .module_name = e.module_name,
                 .reports = reps,
             };
+            j += 1;
 
             // Reinitialize the reports ArrayList since toOwnedSlice() moved ownership
             e.reports = std.array_list.Managed(Report).init(self.gpa);

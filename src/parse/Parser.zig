@@ -1334,16 +1334,13 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                 var nested_import = false;
 
                 // Parse all uppercase segments: first.Second.Third...
-                // We track both the first token (module_name_tok) and second-to-last token
-                // (prev_upper_tok) for proper handling of both regular imports and auto-expose.
-                var prev_upper_tok: ?TokenIdx = null;
+                // We track the first token (module_name_tok) and last token (last_upper_tok).
                 var last_upper_tok: TokenIdx = self.pos;
-                var module_name_tok = self.pos;
+                const module_name_tok = self.pos;
                 self.advance(); // Advance past first UpperIdent
 
                 // Keep consuming additional .UpperIdent segments
                 while (self.peek() == .NoSpaceDotUpperIdent or self.peek() == .DotUpperIdent) {
-                    prev_upper_tok = last_upper_tok;
                     last_upper_tok = self.pos;
                     self.advance();
                 }
@@ -1355,11 +1352,8 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                 if (has_multiple_segments and !has_explicit_clause) {
                     // Auto-expose pattern: import json.Parser.Config
                     // Module is everything before the last segment, last segment is auto-exposed
-                    // For auto-expose, module_name_tok should point to the second-to-last token
-                    // so that the formatter outputs everything up to (but not including) the last segment
-                    if (prev_upper_tok) |prev_tok| {
-                        module_name_tok = prev_tok;
-                    }
+                    // module_name_tok stays as the first uppercase token; the formatter will
+                    // iterate through consecutive uppercase tokens and stop before the exposed token.
                     const final_segment_tok = last_upper_tok;
                     nested_import = true;
 
@@ -3167,12 +3161,14 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAn
             self.advance(); // Advance past OpenRound
             const after_round = self.pos;
             const scratch_top = self.store.scratchTypeAnnoTop();
+            var saw_comma = false;
             while (self.peek() != .CloseRound and self.peek() != .OpArrow and self.peek() != .OpFatArrow and self.peek() != .EndOfFile) {
                 // Looking for args here so that we don't capture an un-parenthesized fn's args
                 try self.store.addScratchTypeAnno(try self.parseTypeAnno(.looking_for_args));
                 if (self.peek() != .Comma) {
                     break;
                 }
+                saw_comma = true;
                 self.advance(); // Advance past Comma
             }
             if (self.peek() == .OpArrow or self.peek() == .OpFatArrow) {
@@ -3221,10 +3217,19 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAn
                 }
                 self.advance(); // Advance past CloseRound
                 const annos = try self.store.typeAnnoSpanFrom(scratch_top);
-                anno = try self.store.addTypeAnno(.{ .tuple = .{
-                    .region = .{ .start = start, .end = self.pos },
-                    .annos = annos,
-                } });
+                // Single element without comma is parenthesized type, not tuple
+                // e.g., (Str) is parens, (Str,) is 1-element tuple
+                if (annos.span.len == 1 and !saw_comma) {
+                    anno = try self.store.addTypeAnno(.{ .parens = .{
+                        .anno = self.store.typeAnnoSlice(annos)[0],
+                        .region = .{ .start = start, .end = self.pos },
+                    } });
+                } else {
+                    anno = try self.store.addTypeAnno(.{ .tuple = .{
+                        .region = .{ .start = start, .end = self.pos },
+                        .annos = annos,
+                    } });
+                }
             }
         },
         .OpenCurly => {

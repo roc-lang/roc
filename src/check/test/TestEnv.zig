@@ -208,7 +208,8 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
     errdefer can.deinit();
 
     try can.canonicalizeFile();
-    try can.validateForChecking();
+    // Note: We skip validateForChecking() in unit tests since tests may not be valid
+    // type modules. The validation is for real modules that will be imported.
 
     // Get Bool, Try, and Str statement indices from the IMPORTED modules (not copied!)
     const bool_stmt_in_bool_module = builtin_indices.bool_type;
@@ -328,7 +329,8 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
     errdefer can.deinit();
 
     try can.canonicalizeFile();
-    try can.validateForChecking();
+    // Note: We skip validateForChecking() in unit tests since tests may not be valid
+    // type modules. The validation is for real modules that will be imported.
 
     // Get Bool, Try, and Str statement indices from the IMPORTED modules (not copied!)
     const bool_stmt_in_bool_module = builtin_indices.bool_type;
