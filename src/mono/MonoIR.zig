@@ -685,6 +685,10 @@ pub const MonoExpr = union(enum) {
         str_with_capacity,
         str_drop_prefix,
         str_drop_suffix,
+        str_with_ascii_lowercased,
+        str_with_ascii_uppercased,
+        str_with_prefix,
+        str_from_utf8_lossy,
 
         // List operations
         list_len,
