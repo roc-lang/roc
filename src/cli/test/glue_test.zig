@@ -27,7 +27,11 @@ test "glue command with DebugGlue succeeds" {
     try std.testing.expect(std.mem.indexOf(u8, result.stderr, "unreachable") == null);
 
     // Should complete successfully
-    try std.testing.expect(result.term == .Exited and result.term.Exited == 0);
+    if (result.term != .Exited or result.term.Exited != 0) {
+        std.debug.print("\nDebugGlue command failed!\nstderr:\n{s}\nstdout:\n{s}\n", .{ result.stderr, result.stdout });
+        std.debug.print("Exit term: {}\n", .{result.term});
+        try std.testing.expect(false);
+    }
 
     // DBG output goes to stderr - should show the actual name, not empty string
     // If the small string encoding issue is present, we'd see name: ""
