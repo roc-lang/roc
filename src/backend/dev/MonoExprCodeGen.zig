@@ -1208,6 +1208,135 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     std.debug.print("  args.len: {}\n", .{args.len});
                     unreachable;
                 },
+                // Safe integer widening (signed source -> larger signed target)
+                .i8_to_i16,
+                .i8_to_i32,
+                .i8_to_i64,
+                .i16_to_i32,
+                .i16_to_i64,
+                .i32_to_i64,
+                => {
+                    if (args.len < 1) return Error.UnsupportedExpression;
+                    const src_loc = try self.generateExpr(args[0]);
+                    const src_reg = try self.ensureInGeneralReg(src_loc);
+                    // Sign-extend: shift left to put sign bit at bit 63, then arithmetic shift right
+                    const src_bits: u8 = switch (ll.op) {
+                        .i8_to_i16, .i8_to_i32, .i8_to_i64 => 8,
+                        .i16_to_i32, .i16_to_i64 => 16,
+                        .i32_to_i64 => 32,
+                        else => unreachable,
+                    };
+                    const shift_amount: u8 = 64 - src_bits;
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.lslRegRegImm(.w64, src_reg, src_reg, @intCast(shift_amount));
+                        try self.codegen.emit.asrRegRegImm(.w64, src_reg, src_reg, @intCast(shift_amount));
+                    } else {
+                        try self.codegen.emit.shlRegImm8(.w64, src_reg, shift_amount);
+                        try self.codegen.emit.sarRegImm8(.w64, src_reg, shift_amount);
+                    }
+                    return .{ .general_reg = src_reg };
+                },
+
+                // Safe integer widening (unsigned source -> larger target)
+                .u8_to_i16,
+                .u8_to_i32,
+                .u8_to_i64,
+                .u8_to_u16,
+                .u8_to_u32,
+                .u8_to_u64,
+                .u16_to_i32,
+                .u16_to_i64,
+                .u16_to_u32,
+                .u16_to_u64,
+                .u32_to_i64,
+                .u32_to_u64,
+                => {
+                    if (args.len < 1) return Error.UnsupportedExpression;
+                    const src_loc = try self.generateExpr(args[0]);
+                    const src_reg = try self.ensureInGeneralReg(src_loc);
+                    // Zero-extend: mask off upper bits
+                    const src_bits: u8 = switch (ll.op) {
+                        .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_u16, .u8_to_u32, .u8_to_u64 => 8,
+                        .u16_to_i32, .u16_to_i64, .u16_to_u32, .u16_to_u64 => 16,
+                        .u32_to_i64, .u32_to_u64 => 32,
+                        else => unreachable,
+                    };
+                    const shift_amount: u8 = 64 - src_bits;
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.lslRegRegImm(.w64, src_reg, src_reg, @intCast(shift_amount));
+                        try self.codegen.emit.lsrRegRegImm(.w64, src_reg, src_reg, @intCast(shift_amount));
+                    } else {
+                        try self.codegen.emit.shlRegImm8(.w64, src_reg, shift_amount);
+                        try self.codegen.emit.shrRegImm8(.w64, src_reg, shift_amount);
+                    }
+                    return .{ .general_reg = src_reg };
+                },
+
+                // Wrapping conversions (truncation to smaller type)
+                .u8_to_i8_wrap,
+                .i8_to_u8_wrap,
+                .i8_to_u16_wrap,
+                .i8_to_u32_wrap,
+                .i8_to_u64_wrap,
+                .u16_to_i8_wrap,
+                .u16_to_i16_wrap,
+                .u16_to_u8_wrap,
+                .i16_to_i8_wrap,
+                .i16_to_u8_wrap,
+                .i16_to_u16_wrap,
+                .i16_to_u32_wrap,
+                .i16_to_u64_wrap,
+                .u32_to_i8_wrap,
+                .u32_to_i16_wrap,
+                .u32_to_i32_wrap,
+                .u32_to_u8_wrap,
+                .u32_to_u16_wrap,
+                .i32_to_i8_wrap,
+                .i32_to_i16_wrap,
+                .i32_to_u8_wrap,
+                .i32_to_u16_wrap,
+                .i32_to_u32_wrap,
+                .i32_to_u64_wrap,
+                .u64_to_i8_wrap,
+                .u64_to_i16_wrap,
+                .u64_to_i32_wrap,
+                .u64_to_i64_wrap,
+                .u64_to_u8_wrap,
+                .u64_to_u16_wrap,
+                .u64_to_u32_wrap,
+                .i64_to_i8_wrap,
+                .i64_to_i16_wrap,
+                .i64_to_i32_wrap,
+                .i64_to_u8_wrap,
+                .i64_to_u16_wrap,
+                .i64_to_u32_wrap,
+                .i64_to_u64_wrap,
+                => {
+                    if (args.len < 1) return Error.UnsupportedExpression;
+                    const src_loc = try self.generateExpr(args[0]);
+                    const src_reg = try self.ensureInGeneralReg(src_loc);
+                    // Truncation: just mask the relevant bits
+                    const dst_bits: u8 = switch (ll.op) {
+                        .u8_to_i8_wrap, .i8_to_u8_wrap, .u16_to_i8_wrap, .u16_to_u8_wrap, .i16_to_i8_wrap, .i16_to_u8_wrap, .u32_to_i8_wrap, .u32_to_u8_wrap, .i32_to_i8_wrap, .i32_to_u8_wrap, .u64_to_i8_wrap, .u64_to_u8_wrap, .i64_to_i8_wrap, .i64_to_u8_wrap => 8,
+                        .u16_to_i16_wrap, .i8_to_u16_wrap, .i16_to_u16_wrap, .u32_to_i16_wrap, .u32_to_u16_wrap, .i32_to_i16_wrap, .i32_to_u16_wrap, .u64_to_i16_wrap, .u64_to_u16_wrap, .i64_to_i16_wrap, .i64_to_u16_wrap => 16,
+                        .u32_to_i32_wrap, .i8_to_u32_wrap, .i16_to_u32_wrap, .i32_to_u32_wrap, .u64_to_i32_wrap, .u64_to_u32_wrap, .i64_to_i32_wrap, .i64_to_u32_wrap => 32,
+                        .i8_to_u64_wrap, .i16_to_u64_wrap, .i32_to_u64_wrap, .u64_to_i64_wrap, .i64_to_u64_wrap => 64,
+                        else => unreachable,
+                    };
+                    if (dst_bits < 64) {
+                        const shift_amount: u8 = 64 - dst_bits;
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            try self.codegen.emit.lslRegRegImm(.w64, src_reg, src_reg, @intCast(shift_amount));
+                            try self.codegen.emit.lsrRegRegImm(.w64, src_reg, src_reg, @intCast(shift_amount));
+                        } else {
+                            try self.codegen.emit.shlRegImm8(.w64, src_reg, shift_amount);
+                            try self.codegen.emit.shrRegImm8(.w64, src_reg, shift_amount);
+                        }
+                    }
+                    // 64-bit wrapping is a no-op (reinterpret bits)
+                    return .{ .general_reg = src_reg };
+                },
+
                 else => {
                     std.debug.print("UNIMPLEMENTED low-level op in MonoExprCodeGen: {s}\n", .{@tagName(ll.op)});
                     return Error.UnsupportedExpression;

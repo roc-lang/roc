@@ -2553,3 +2553,77 @@ test "higher-order function - twice" {
         \\}
     , 12, .no_trace);
 }
+
+// Integer conversion tests
+
+test "int conversion: I8.to_i64 positive" {
+    try runExpectI64(
+        \\{ 42i8.to_i64() }
+    , 42, .no_trace);
+}
+
+test "int conversion: I8.to_i64 negative" {
+    try runExpectI64(
+        \\{ (-1i8).to_i64() }
+    , -1, .no_trace);
+}
+
+test "int conversion: I16.to_i64 positive" {
+    try runExpectI64(
+        \\{ 1000i16.to_i64() }
+    , 1000, .no_trace);
+}
+
+test "int conversion: I16.to_i64 negative" {
+    try runExpectI64(
+        \\{ (-500i16).to_i64() }
+    , -500, .no_trace);
+}
+
+test "int conversion: I32.to_i64 positive" {
+    try runExpectI64(
+        \\{ 100000i32.to_i64() }
+    , 100000, .no_trace);
+}
+
+test "int conversion: I32.to_i64 negative" {
+    try runExpectI64(
+        \\{ (-100000i32).to_i64() }
+    , -100000, .no_trace);
+}
+
+test "int conversion: U8.to_i64" {
+    try runExpectI64(
+        \\{ 255u8.to_i64() }
+    , 255, .no_trace);
+}
+
+test "int conversion: U16.to_i64" {
+    try runExpectI64(
+        \\{ 65535u16.to_i64() }
+    , 65535, .no_trace);
+}
+
+test "int conversion: U32.to_i64" {
+    try runExpectI64(
+        \\{ 4000000000u32.to_i64() }
+    , 4000000000, .no_trace);
+}
+
+test "int conversion: I8.to_i32.to_i64" {
+    try runExpectI64(
+        \\{ (-10i8).to_i32().to_i64() }
+    , -10, .no_trace);
+}
+
+test "int conversion: U8.to_u32.to_i64" {
+    try runExpectI64(
+        \\{ 200u8.to_u32().to_i64() }
+    , 200, .no_trace);
+}
+
+test "int conversion: U8.to_i16.to_i64" {
+    try runExpectI64(
+        \\{ 128u8.to_i16().to_i64() }
+    , 128, .no_trace);
+}
