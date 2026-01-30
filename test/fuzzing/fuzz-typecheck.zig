@@ -83,10 +83,11 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
     }
 
     // Write generated code to a temporary file
+    // Filename must match the type name for type modules (Main.roc for Main type)
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const tmp_file_path = "fuzz_input.roc";
+    const tmp_file_path = "Main.roc";
     tmp_dir.dir.writeFile(.{ .sub_path = tmp_file_path, .data = generated_code }) catch return;
 
     // Get absolute path
