@@ -4088,7 +4088,14 @@ fn rocGlueInner(ctx: *CliContext, args: cli_args.GlueArgs) GlueError!void {
     }
 
     try app_source.appendSlice(ctx.gpa, "] { pf: platform \"");
-    try app_source.appendSlice(ctx.gpa, platform_abs_path);
+    // Escape backslashes for the Roc string literal (Windows paths contain backslashes)
+    for (platform_abs_path) |ch| {
+        if (ch == '\\') {
+            try app_source.appendSlice(ctx.gpa, "\\\\");
+        } else {
+            try app_source.append(ctx.gpa, ch);
+        }
+    }
     try app_source.appendSlice(ctx.gpa, "\" }\n\n");
 
     // Generate type alias definitions: Model : {}
@@ -4327,10 +4334,12 @@ fn rocGlueInner(ctx: *CliContext, args: cli_args.GlueArgs) GlueError!void {
             .Exited => |exit_code| {
                 if (exit_code != 0) {
                     stderr.print("Glue spec exited with code {}\n", .{exit_code}) catch {};
+                    return error.ProcessFailed;
                 }
             },
             else => {
                 stderr.print("Glue spec terminated abnormally\n", .{}) catch {};
+                return error.ProcessFailed;
             },
         }
     }
