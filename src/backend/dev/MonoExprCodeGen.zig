@@ -240,24 +240,25 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             immediate_f64: f64,
             /// Immediate 128-bit value
             immediate_i128: i128,
-            /// Compiled lambda/closure code location (for first-class functions)
+            /// Compiled lambda code location (for first-class functions)
             lambda_code: struct {
                 /// Offset into code buffer where the procedure starts
                 code_offset: usize,
                 /// Layout of the function's return type
                 ret_layout: layout.Idx,
-                /// Lambda parameters (for potential inlining with closure args)
-                params: mono.MonoPatternSpan,
-                /// Lambda body expression (for potential inlining)
-                body: mono.MonoExprId,
             },
             /// Closure value on stack - for lambda set dispatch at call sites.
-            /// Used when a closure is passed as an argument to a higher-order function.
+            /// Used when a closure is passed as an argument to a higher-order function,
+            /// or when a single-function closure captures variables.
             closure_value: struct {
-                /// Stack offset where closure data is stored
+                /// Stack offset where closure data (captures) is stored
                 stack_offset: i32,
                 /// The closure representation (contains lambda set info for dispatch)
                 representation: mono.ClosureRepresentation,
+                /// The lambda body expression (for single-function closures)
+                lambda: mono.MonoExprId,
+                /// Capture specifications (symbols and layouts)
+                captures: mono.MonoIR.MonoCaptureSpan,
             },
         };
 
@@ -566,19 +567,20 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 .call => |call| try self.generateCall(call),
                 // Lambdas and closures as first-class values (stored to variables)
                 .lambda => |lambda| {
-                    // Check if this lambda has any closure-typed parameters
-                    // If so, defer compilation - it will be inlined at call sites
-                    const has_closure_params = self.lambdaHasClosureParams(lambda);
-                    const code_offset = if (has_closure_params)
-                        std.math.maxInt(usize) // Sentinel for "needs inlining"
-                    else
-                        try self.compileLambdaAsProc(expr_id, lambda);
-
+                    const code_offset = self.compileLambdaAsProc(expr_id, lambda) catch {
+                        // Can't compile as proc (e.g., body references mutable variables
+                        // or captures from enclosing scope). Return as closure_value so
+                        // it can be dispatched via callLambdaBodyDirect at call sites.
+                        return .{ .closure_value = .{
+                            .stack_offset = 0,
+                            .representation = .direct_call,
+                            .lambda = expr_id,
+                            .captures = mono.MonoIR.MonoCaptureSpan.empty(),
+                        } };
+                    };
                     return .{ .lambda_code = .{
                         .code_offset = code_offset,
                         .ret_layout = lambda.ret_layout,
-                        .params = lambda.params,
-                        .body = lambda.body,
                     } };
                 },
                 .closure => |closure| {
@@ -5803,57 +5805,34 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             }
         }
 
-        /// Generate code for a function call (with inlining for closures)
+        /// Generate code for a function call
         fn generateCall(self: *Self, call: anytype) Error!ValueLocation {
             // Get the function expression
             const fn_expr = self.store.getExpr(call.fn_expr);
 
             return switch (fn_expr) {
-                // Direct lambda call: inline the lambda by binding params and evaluating body
-                // This allows closures to work correctly since we stay in the same stack frame
+                // Direct lambda call: compile as procedure and call
                 .lambda => |lambda| {
-                    // Bind the lambda's parameters to the call's arguments
-                    const args = self.store.getExprSpan(call.args);
-                    const params = self.store.getPatternSpan(lambda.params);
-                    for (params, 0..) |pattern_id, i| {
-                        if (i >= args.len) break;
-                        const arg_loc = try self.generateExpr(args[i]);
-                        // Use bindInlineParam to handle all pattern types (bind, record, list, etc.)
-                        try self.bindInlineParam(pattern_id, arg_loc);
-                    }
-                    // Evaluate the lambda body directly (inlined)
-                    return try self.generateExpr(lambda.body);
+                    const code_offset = self.compileLambdaAsProc(call.fn_expr, lambda) catch {
+                        return try self.callLambdaBodyDirect(lambda, call.args);
+                    };
+                    return try self.generateCallToLambda(code_offset, call.args, call.ret_layout);
                 },
 
-                // Direct closure call: inline the inner lambda
+                // Direct closure call: compile inner lambda as procedure and call
                 .closure => |closure| {
                     const inner = self.store.getExpr(closure.lambda);
                     if (inner == .lambda) {
-                        const lambda = inner.lambda;
-                        const args = self.store.getExprSpan(call.args);
-                        const params = self.store.getPatternSpan(lambda.params);
-                        for (params, 0..) |pattern_id, i| {
-                            if (i >= args.len) break;
-                            const arg_loc = try self.generateExpr(args[i]);
-                            // Use bindInlineParam to handle all pattern types (bind, record, list, etc.)
-                            try self.bindInlineParam(pattern_id, arg_loc);
-                        }
-                        return try self.generateExpr(lambda.body);
+                        const code_offset = self.compileLambdaAsProc(closure.lambda, inner.lambda) catch {
+                            return try self.callLambdaBodyDirect(inner.lambda, call.args);
+                        };
+                        return try self.generateCallToLambda(code_offset, call.args, call.ret_layout);
                     }
                     return Error.UnsupportedExpression;
                 },
 
-                // Chained calls: for curried functions, we inline all nested lambdas.
-                // This handles any depth of currying: (|a| |b| a * b)(5)(10)
-                // or triple curried: (((|a| |b| |c| a + b + c)(100))(20))(3)
+                // Chained calls: evaluate inner call, then call result with outer args
                 .call => |inner_call| {
-                    // Try to inline the curried function call chain
-                    const maybe_result = try self.tryInlineCurriedCall(call, inner_call);
-                    if (maybe_result) |result| {
-                        return result;
-                    }
-
-                    // Fallback: try calling and check result (may not work for all cases)
                     const inner_result = try self.generateCall(inner_call);
                     if (inner_result == .lambda_code) {
                         return try self.generateCallToLambda(
@@ -5862,10 +5841,13 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                             call.ret_layout,
                         );
                     }
+                    if (inner_result == .closure_value) {
+                        return try self.generateClosureDispatch(inner_result.closure_value, call.args, call.ret_layout);
+                    }
                     return Error.UnsupportedExpression;
                 },
 
-                // Block calls: evaluate block, if it returns lambda_code, call it
+                // Block calls: evaluate block, if it returns lambda_code or closure_value, call it
                 .block => |block| {
                     const block_result = try self.generateBlock(block);
                     if (block_result == .lambda_code) {
@@ -5874,6 +5856,9 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                             call.args,
                             call.ret_layout,
                         );
+                    }
+                    if (block_result == .closure_value) {
+                        return try self.generateClosureDispatch(block_result.closure_value, call.args, call.ret_layout);
                     }
                     return Error.UnsupportedExpression;
                 },
@@ -5885,12 +5870,6 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     if (self.symbol_locations.get(symbol_key)) |loc| {
                         switch (loc) {
                             .lambda_code => |lc| {
-                                // If lambda was deferred (has closure params) or any argument
-                                // is a closure, we need to inline the function
-                                const needs_inlining = lc.code_offset == std.math.maxInt(usize);
-                                if (needs_inlining or try self.anyArgIsClosure(call.args)) {
-                                    return try self.inlineLambdaCallFromLC(lc, call.args);
-                                }
                                 return try self.generateCallToLambda(
                                     lc.code_offset,
                                     call.args,
@@ -5926,6 +5905,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     return .{ .closure_value = .{
                         .stack_offset = slot,
                         .representation = closure.representation,
+                        .lambda = closure.lambda,
+                        .captures = closure.captures,
                     } };
                 },
                 .union_repr => |repr| {
@@ -5944,21 +5925,37 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     return .{ .closure_value = .{
                         .stack_offset = slot,
                         .representation = closure.representation,
+                        .lambda = closure.lambda,
+                        .captures = closure.captures,
                     } };
                 },
-                .unwrapped_capture, .struct_captures => {
-                    // Single function with captures - compile the lambda as a procedure.
-                    // The captures are already bound in symbol_locations when the closure
-                    // expression is evaluated, so the lambda body can access them.
-                    // This is the same as direct_call - no dispatch needed, just call the function.
-                    const inner = self.store.getExpr(closure.lambda);
-                    if (inner != .lambda) return Error.UnsupportedExpression;
-                    const code_offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda);
-                    return .{ .lambda_code = .{
-                        .code_offset = code_offset,
-                        .ret_layout = inner.lambda.ret_layout,
-                        .params = inner.lambda.params,
-                        .body = inner.lambda.body,
+                .unwrapped_capture => {
+                    // Single function with one capture - materialize capture to stack
+                    // and store as closure_value for dispatch at call sites.
+                    const ls = self.layout_store orelse return Error.UnsupportedExpression;
+                    const capture_layout = ls.getLayout(closure.representation.unwrapped_capture.capture_layout);
+                    const capture_size = ls.layoutSizeAlign(capture_layout).size;
+                    const slot = self.codegen.allocStackSlot(@intCast(capture_size));
+                    try self.materializeCaptures(closure.captures, slot);
+                    return .{ .closure_value = .{
+                        .stack_offset = slot,
+                        .representation = closure.representation,
+                        .lambda = closure.lambda,
+                        .captures = closure.captures,
+                    } };
+                },
+                .struct_captures => |sc| {
+                    // Single function with multiple captures - materialize to struct on stack.
+                    const ls = self.layout_store orelse return Error.UnsupportedExpression;
+                    const struct_layout = ls.getLayout(sc.struct_layout);
+                    const struct_size = ls.layoutSizeAlign(struct_layout).size;
+                    const slot = self.codegen.allocStackSlot(@intCast(struct_size));
+                    try self.materializeCaptures(closure.captures, slot);
+                    return .{ .closure_value = .{
+                        .stack_offset = slot,
+                        .representation = closure.representation,
+                        .lambda = closure.lambda,
+                        .captures = closure.captures,
                     } };
                 },
                 .direct_call => {
@@ -5969,8 +5966,6 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     return .{ .lambda_code = .{
                         .code_offset = code_offset,
                         .ret_layout = inner.lambda.ret_layout,
-                        .params = inner.lambda.params,
-                        .body = inner.lambda.body,
                     } };
                 },
             }
@@ -6037,17 +6032,28 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 .union_repr => |repr| {
                     return try self.dispatchUnionClosure(cv.stack_offset, repr, args_span, ret_layout);
                 },
-                .unwrapped_capture => |repr| {
+                .unwrapped_capture => {
                     // Single function - call directly with the captured value
-                    return try self.callSingleClosureUnwrapped(repr, cv.stack_offset, args_span, ret_layout);
+                    return try self.callSingleClosureWithCaptures(cv, args_span, ret_layout);
                 },
-                .struct_captures => |repr| {
+                .struct_captures => {
                     // Single function - call directly with captures struct
-                    return try self.callSingleClosureStruct(repr, cv.stack_offset, args_span, ret_layout);
+                    return try self.callSingleClosureWithCaptures(cv, args_span, ret_layout);
                 },
                 .direct_call => {
-                    // Should have been handled as lambda_code
-                    return Error.UnsupportedExpression;
+                    // Lambda that couldn't be compiled as proc (e.g., captures
+                    // mutable variables). Evaluate body directly in current scope.
+                    const lambda_expr = self.store.getExpr(cv.lambda);
+                    const lambda = switch (lambda_expr) {
+                        .lambda => |l| l,
+                        .closure => |c| blk: {
+                            const inner = self.store.getExpr(c.lambda);
+                            if (inner == .lambda) break :blk inner.lambda;
+                            return Error.UnsupportedExpression;
+                        },
+                        else => return Error.UnsupportedExpression,
+                    };
+                    return try self.callLambdaBodyDirect(lambda, args_span);
                 },
             }
         }
@@ -6182,43 +6188,58 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             return .{ .stack = result_slot };
         }
 
-        /// Call a single closure with an unwrapped capture (capture IS the closure value).
-        fn callSingleClosureUnwrapped(
+        /// Call a single closure (unwrapped_capture or struct_captures) by binding
+        /// its captures to symbol_locations and evaluating the lambda body directly.
+        fn callSingleClosureWithCaptures(
             self: *Self,
-            repr: anytype,
-            capture_offset: i32,
+            cv: anytype,
             args_span: anytype,
             ret_layout: layout.Idx,
         ) Error!ValueLocation {
-            _ = self;
-            _ = repr;
-            _ = capture_offset;
-            _ = args_span;
             _ = ret_layout;
-            // For unwrapped_capture, there's only one function in the lambda set.
-            // This representation is used when a closure has exactly one capture.
-            // TODO: Implement when we have full lambda set tracking.
-            return Error.UnsupportedExpression;
+
+            // Bind captures from the closure's stack data to their symbols
+            const captures = self.store.getCaptures(cv.captures);
+            var offset: i32 = 0;
+            for (captures) |capture| {
+                const symbol_key: u48 = @bitCast(capture.symbol);
+                const ls = self.layout_store orelse return Error.UnsupportedExpression;
+                const capture_layout = ls.getLayout(capture.layout_idx);
+                const capture_size = ls.layoutSizeAlign(capture_layout).size;
+                try self.symbol_locations.put(symbol_key, .{ .stack = cv.stack_offset + offset });
+                offset += @intCast(capture_size);
+            }
+
+            // Get the lambda body and evaluate it with captures in scope
+            const lambda_expr = self.store.getExpr(cv.lambda);
+            const lambda = switch (lambda_expr) {
+                .lambda => |l| l,
+                .closure => |c| blk: {
+                    const inner = self.store.getExpr(c.lambda);
+                    if (inner == .lambda) break :blk inner.lambda;
+                    return Error.UnsupportedExpression;
+                },
+                else => return Error.UnsupportedExpression,
+            };
+
+            return try self.callLambdaBodyDirect(lambda, args_span);
         }
 
-        /// Call a single closure with struct captures.
-        fn callSingleClosureStruct(
-            self: *Self,
-            repr: anytype,
-            captures_offset: i32,
-            args_span: anytype,
-            ret_layout: layout.Idx,
-        ) Error!ValueLocation {
-            _ = self;
-            _ = repr;
-            _ = captures_offset;
-            _ = args_span;
-            _ = ret_layout;
-            // TODO: Implement when we have full lambda set tracking.
-            return Error.UnsupportedExpression;
+        /// Call a lambda by binding its parameters to arguments and evaluating its body
+        /// directly in the current scope. Used when a lambda can't be compiled as a
+        /// standalone procedure (e.g., it captures variables from the enclosing scope).
+        fn callLambdaBodyDirect(self: *Self, lambda: anytype, args_span: anytype) Error!ValueLocation {
+            const args = self.store.getExprSpan(args_span);
+            const params = self.store.getPatternSpan(lambda.params);
+            for (params, 0..) |pattern_id, i| {
+                if (i >= args.len) break;
+                const arg_loc = try self.generateExpr(args[i]);
+                try self.bindPattern(pattern_id, arg_loc);
+            }
+            return try self.generateExpr(lambda.body);
         }
 
-        /// Compile a lambda body expression and call it.
+        /// Compile a lambda body expression as a procedure and call it.
         fn compileLambdaAndCall(
             self: *Self,
             lambda_body: mono.MonoExprId,
@@ -6228,13 +6249,17 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             const lambda_expr = self.store.getExpr(lambda_body);
             switch (lambda_expr) {
                 .lambda => |lambda| {
-                    const code_offset = try self.compileLambdaAsProc(lambda_body, lambda);
+                    const code_offset = self.compileLambdaAsProc(lambda_body, lambda) catch {
+                        return try self.callLambdaBodyDirect(lambda, args_span);
+                    };
                     return try self.generateCallToLambda(code_offset, args_span, ret_layout);
                 },
                 .closure => |closure| {
                     const inner = self.store.getExpr(closure.lambda);
                     if (inner == .lambda) {
-                        const code_offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda);
+                        const code_offset = self.compileLambdaAsProc(closure.lambda, inner.lambda) catch {
+                            return try self.callLambdaBodyDirect(inner.lambda, args_span);
+                        };
                         return try self.generateCallToLambda(code_offset, args_span, ret_layout);
                     }
                     return Error.UnsupportedExpression;
@@ -6244,6 +6269,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         }
 
         /// Compile a lambda and call it, binding captures from a stack location.
+        /// Binds captures to symbol_locations, then evaluates the lambda body directly
+        /// (captures need to stay in scope, so we don't compile as a separate procedure).
         fn compileLambdaAndCallWithCaptures(
             self: *Self,
             member: mono.LambdaSetMember,
@@ -6251,7 +6278,9 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             args_span: anytype,
             ret_layout: layout.Idx,
         ) Error!ValueLocation {
-            // First, bind the captures from the stack to their symbols
+            _ = ret_layout;
+
+            // Bind captures from the stack to their symbols
             const captures = self.store.getCaptures(member.captures);
             var offset: i32 = 0;
             for (captures) |capture| {
@@ -6259,14 +6288,23 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 const ls = self.layout_store orelse return Error.UnsupportedExpression;
                 const capture_layout = ls.getLayout(capture.layout_idx);
                 const capture_size = ls.layoutSizeAlign(capture_layout).size;
-
-                // Bind the capture to its stack location
                 try self.symbol_locations.put(symbol_key, .{ .stack = captures_offset + offset });
                 offset += @intCast(capture_size);
             }
 
-            // Now compile and call the lambda
-            return try self.compileLambdaAndCall(member.lambda_body, args_span, ret_layout);
+            // Get the lambda and evaluate directly with captures in scope
+            const lambda_expr = self.store.getExpr(member.lambda_body);
+            const lambda = switch (lambda_expr) {
+                .lambda => |l| l,
+                .closure => |c| blk: {
+                    const inner = self.store.getExpr(c.lambda);
+                    if (inner == .lambda) break :blk inner.lambda;
+                    return Error.UnsupportedExpression;
+                },
+                else => return Error.UnsupportedExpression,
+            };
+
+            return try self.callLambdaBodyDirect(lambda, args_span);
         }
 
         /// Copy a value location to a stack slot.
@@ -6378,7 +6416,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             }
         }
 
-        /// Generate code for calling a looked-up function (procedure-based, no inlining)
+        /// Generate code for calling a looked-up function definition.
         fn generateLookupCall(self: *Self, lookup: anytype, args_span: anytype, ret_layout: layout.Idx) Error!ValueLocation {
             const symbol_key: u48 = @bitCast(lookup.symbol);
 
@@ -6391,39 +6429,30 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             if (self.store.getSymbolDef(lookup.symbol)) |def_expr_id| {
                 const def_expr = self.store.getExpr(def_expr_id);
 
-
                 return switch (def_expr) {
                     .lambda => |lambda| {
-                        // Check if any argument is a closure - if so, inline the function
-                        // so the closure can be properly dispatched
-                        const has_closure_args = try self.anyArgIsClosure(args_span);
-                        const is_low_level = self.lambdaBodyIsLowLevel(lambda);
-                        if (has_closure_args) {
-                            return try self.inlineLambdaCall(lambda, args_span);
+                        // Low_level wrapper lambdas are evaluated directly in the
+                        // caller's scope. Compiling them as separate procedures causes
+                        // issues with stack frame management for C function calls.
+                        const body_expr = self.store.getExpr(lambda.body);
+                        if (body_expr == .low_level) {
+                            return try self.callLambdaBodyDirect(lambda, args_span);
                         }
-                        // Check if lambda body is a low_level op - if so, inline to avoid
-                        // parameter layout issues (builtins wrapped in lambdas may have
-                        // incorrect generic layouts like zst instead of concrete types like list)
-                        if (is_low_level) {
-                            return try self.inlineLambdaCall(lambda, args_span);
-                        }
-                        // Otherwise compile as a procedure for efficiency
-                        const offset = try self.compileLambdaAsProc(def_expr_id, lambda);
+                        const offset = self.compileLambdaAsProc(def_expr_id, lambda) catch {
+                            return try self.callLambdaBodyDirect(lambda, args_span);
+                        };
                         return try self.generateCallToLambda(offset, args_span, ret_layout);
                     },
                     .closure => |closure| {
                         const inner = self.store.getExpr(closure.lambda);
                         if (inner == .lambda) {
-                            // Check if any argument is a closure - if so, inline the function
-                            if (try self.anyArgIsClosure(args_span)) {
-                                return try self.inlineLambdaCall(inner.lambda, args_span);
+                            const inner_body = self.store.getExpr(inner.lambda.body);
+                            if (inner_body == .low_level) {
+                                return try self.callLambdaBodyDirect(inner.lambda, args_span);
                             }
-                            // Check if lambda body is a low_level op - if so, inline to avoid
-                            // parameter layout issues
-                            if (self.lambdaBodyIsLowLevel(inner.lambda)) {
-                                return try self.inlineLambdaCall(inner.lambda, args_span);
-                            }
-                            const offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda);
+                            const offset = self.compileLambdaAsProc(closure.lambda, inner.lambda) catch {
+                                return try self.callLambdaBodyDirect(inner.lambda, args_span);
+                            };
                             return try self.generateCallToLambda(offset, args_span, ret_layout);
                         }
                         return Error.UnsupportedExpression;
@@ -6433,276 +6462,6 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             }
 
             return Error.LocalNotFound;
-        }
-
-        /// Check if any argument expression is a closure (lambda or closure expression).
-        /// Used to determine if a function call should be inlined for proper closure dispatch.
-        fn anyArgIsClosure(self: *Self, args_span: anytype) Error!bool {
-            const args = self.store.getExprSpan(args_span);
-            for (args) |arg_id| {
-                const arg_expr = self.store.getExpr(arg_id);
-                switch (arg_expr) {
-                    .lambda, .closure => return true,
-                    else => {},
-                }
-            }
-            return false;
-        }
-
-        /// Check if a lambda's body is a low_level operation.
-        /// Such lambdas should be inlined to avoid parameter layout issues with generic builtins.
-        fn lambdaBodyIsLowLevel(self: *Self, lambda: anytype) bool {
-            const body_expr = self.store.getExpr(lambda.body);
-            return body_expr == .low_level;
-        }
-
-        /// Check if a lambda needs inlining rather than being compiled as a procedure.
-        /// Returns true if:
-        /// - Any parameter has a closure type (can't pass closures to compiled procedures)
-        /// - Any parameter uses destructuring patterns (bindLambdaParams only handles simple .bind)
-        fn lambdaHasClosureParams(self: *Self, lambda: anytype) bool {
-            const ls = self.layout_store orelse return false;
-            const params = self.store.getPatternSpan(lambda.params);
-            for (params) |pattern_id| {
-                const pattern = self.store.getPattern(pattern_id);
-                switch (pattern) {
-                    .bind => |bind| {
-                        const layout_val = ls.getLayout(bind.layout_idx);
-                        if (layout_val.tag == .closure) {
-                            return true;
-                        }
-                    },
-                    // Non-trivial patterns (record/list destructuring) require inlining
-                    // because bindLambdaParams doesn't handle them
-                    .record, .list => return true,
-                    else => {},
-                }
-            }
-            return false;
-        }
-
-        /// Inline a lambda call by binding parameters to arguments and evaluating the body.
-        /// This is used for higher-order functions to preserve closure dispatch information.
-        fn inlineLambdaCall(self: *Self, lambda: anytype, args_span: anytype) Error!ValueLocation {
-            const args = self.store.getExprSpan(args_span);
-            const params = self.store.getPatternSpan(lambda.params);
-            for (params, 0..) |pattern_id, i| {
-                if (i >= args.len) break;
-                const arg_loc = try self.generateExpr(args[i]);
-                try self.bindInlineParam(pattern_id, arg_loc);
-            }
-            // Evaluate the lambda body directly (inlined)
-            return try self.generateExpr(lambda.body);
-        }
-
-        /// Inline a lambda call from a lambda_code location.
-        /// Used when calling a higher-order function with closure arguments.
-        fn inlineLambdaCallFromLC(self: *Self, lc: anytype, args_span: anytype) Error!ValueLocation {
-            const args = self.store.getExprSpan(args_span);
-            const params = self.store.getPatternSpan(lc.params);
-            for (params, 0..) |pattern_id, i| {
-                if (i >= args.len) break;
-                const arg_loc = try self.generateExpr(args[i]);
-                try self.bindInlineParam(pattern_id, arg_loc);
-            }
-            // Evaluate the lambda body directly (inlined)
-            return try self.generateExpr(lc.body);
-        }
-
-        /// Bind a parameter pattern to an argument location during inlining.
-        /// Handles both simple .bind patterns and destructuring patterns.
-        fn bindInlineParam(self: *Self, pattern_id: MonoPatternId, arg_loc: ValueLocation) Error!void {
-            const pattern = self.store.getPattern(pattern_id);
-            switch (pattern) {
-                .bind => |bind| {
-                    const symbol_key: u48 = @bitCast(bind.symbol);
-                    // Preserve the full type information for special types
-                    switch (arg_loc) {
-                        .stack_str, .list_stack, .stack_i128, .lambda_code, .closure_value => {
-                            try self.symbol_locations.put(symbol_key, arg_loc);
-                        },
-                        else => {
-                            const stack_slot = try self.ensureOnStack(arg_loc, 8);
-                            try self.symbol_locations.put(symbol_key, .{ .stack = stack_slot });
-                        },
-                    }
-                },
-                .record => |rec| {
-                    // Record destructuring: {x, y} or {x: a, y: b}
-                    // The arg_loc should point to a record on the stack
-                    const base_offset: i32 = switch (arg_loc) {
-                        .stack => |off| off,
-                        else => blk: {
-                            // Ensure the record is on the stack
-                            const off = try self.ensureOnStack(arg_loc, 8);
-                            break :blk off;
-                        },
-                    };
-
-                    const ls = self.layout_store orelse return Error.UnsupportedExpression;
-                    const record_layout = ls.getLayout(rec.record_layout);
-
-                    const field_patterns = self.store.getPatternSpan(rec.fields);
-                    for (field_patterns, 0..) |field_pattern_id, field_idx| {
-                        const field_pattern = self.store.getPattern(field_pattern_id);
-                        if (field_pattern == .bind) {
-                            const field_bind = field_pattern.bind;
-                            const field_symbol_key: u48 = @bitCast(field_bind.symbol);
-
-                            // Get the field offset from the record layout
-                            const field_offset = ls.getRecordFieldOffset(record_layout.data.record.idx, @intCast(field_idx));
-
-                            // Bind the field to its stack location
-                            try self.symbol_locations.put(field_symbol_key, .{ .stack = base_offset + @as(i32, @intCast(field_offset)) });
-                        }
-                    }
-                },
-                .list => |list_pat| {
-                    // List destructuring: [first, second, ..rest]
-                    // The arg_loc should point to a list (ptr, len, capacity) on the stack
-                    const list_offset: i32 = switch (arg_loc) {
-                        .list_stack => |info| info.struct_offset,
-                        .stack => |off| off,
-                        else => blk: {
-                            // Ensure the list is on the stack
-                            const off = try self.ensureOnStack(arg_loc, 24);
-                            break :blk off;
-                        },
-                    };
-
-                    // Load the list's data pointer
-                    const list_ptr_reg = try self.allocTempGeneral();
-                    try self.codegen.emitLoadStack(.w64, list_ptr_reg, list_offset); // ptr
-
-                    const ls = self.layout_store orelse return Error.UnsupportedExpression;
-                    const elem_layout = ls.getLayout(list_pat.elem_layout);
-                    const elem_size = ls.layoutSizeAlign(elem_layout).size;
-
-                    // Handle prefix patterns (the known elements at the beginning)
-                    const prefix_patterns = self.store.getPatternSpan(list_pat.prefix);
-                    for (prefix_patterns, 0..) |elem_pattern_id, elem_idx| {
-                        // Allocate stack space for this element
-                        const elem_slot = self.codegen.allocStackSlot(@intCast(elem_size));
-
-                        // Copy element from list to stack
-                        const elem_offset_in_list = @as(i32, @intCast(elem_idx * elem_size));
-                        const temp_reg = try self.allocTempGeneral();
-
-                        if (elem_size <= 8) {
-                            // Load element from list[i] to temp
-                            if (comptime builtin.cpu.arch == .aarch64) {
-                                try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, list_ptr_reg, elem_offset_in_list);
-                                try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, elem_slot);
-                            } else {
-                                try self.codegen.emit.movRegMem(.w64, temp_reg, list_ptr_reg, elem_offset_in_list);
-                                try self.codegen.emit.movMemReg(.w64, .RBP, elem_slot, temp_reg);
-                            }
-                        } else {
-                            // For larger elements (e.g., nested lists), copy 8 bytes at a time
-                            var copied: u32 = 0;
-                            while (copied < elem_size) : (copied += 8) {
-                                const src_off = elem_offset_in_list + @as(i32, @intCast(copied));
-                                const dst_off = elem_slot + @as(i32, @intCast(copied));
-                                if (comptime builtin.cpu.arch == .aarch64) {
-                                    try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, list_ptr_reg, src_off);
-                                    try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, dst_off);
-                                } else {
-                                    try self.codegen.emit.movRegMem(.w64, temp_reg, list_ptr_reg, src_off);
-                                    try self.codegen.emit.movMemReg(.w64, .RBP, dst_off, temp_reg);
-                                }
-                            }
-                        }
-
-                        self.codegen.freeGeneral(temp_reg);
-
-                        // Bind the element pattern to the stack slot
-                        // Use stack_i128 for 16-byte elements (Dec/i128) so that i128 operations
-                        // know to load the full 16 bytes
-                        const elem_loc: ValueLocation = if (elem_size == 16)
-                            .{ .stack_i128 = elem_slot }
-                        else
-                            .{ .stack = elem_slot };
-                        try self.bindPattern(elem_pattern_id, elem_loc);
-                    }
-
-                    // Handle rest pattern (list_pat.rest) for [a, b, ..rest]
-                    if (!list_pat.rest.isNone()) {
-                        // Create a list struct for the remaining elements
-                        // The rest list shares data with the original (a slice)
-                        const rest_slot = self.codegen.allocStackSlot(24); // ptr, len, cap
-
-                        // Calculate rest pointer: list_ptr + prefix_count * elem_size
-                        const prefix_count = prefix_patterns.len;
-                        const prefix_offset = @as(i32, @intCast(prefix_count * elem_size));
-
-                        const rest_ptr_reg = try self.allocTempGeneral();
-                        if (prefix_offset == 0) {
-                            // No prefix - rest pointer is same as list pointer
-                            try self.emitMovRegReg(rest_ptr_reg, list_ptr_reg);
-                        } else {
-                            // rest_ptr = list_ptr + prefix_offset
-                            try self.codegen.emitLoadImm(rest_ptr_reg, prefix_offset);
-                            if (comptime builtin.cpu.arch == .aarch64) {
-                                try self.codegen.emit.addRegRegReg(.w64, rest_ptr_reg, list_ptr_reg, rest_ptr_reg);
-                            } else {
-                                try self.codegen.emit.addRegReg(.w64, rest_ptr_reg, list_ptr_reg);
-                            }
-                        }
-
-                        // Store rest pointer at rest_slot
-                        if (comptime builtin.cpu.arch == .aarch64) {
-                            try self.codegen.emit.strRegMemSoff(.w64, rest_ptr_reg, .FP, rest_slot);
-                        } else {
-                            try self.codegen.emit.movMemReg(.w64, .RBP, rest_slot, rest_ptr_reg);
-                        }
-                        self.codegen.freeGeneral(rest_ptr_reg);
-
-                        // Calculate rest length: list_len - prefix_count
-                        const len_reg = try self.allocTempGeneral();
-                        try self.codegen.emitLoadStack(.w64, len_reg, list_offset + 8); // len
-                        if (prefix_count > 0) {
-                            const prefix_count_reg = try self.allocTempGeneral();
-                            try self.codegen.emitLoadImm(prefix_count_reg, @as(i64, @intCast(prefix_count)));
-                            if (comptime builtin.cpu.arch == .aarch64) {
-                                try self.codegen.emit.subRegRegReg(.w64, len_reg, len_reg, prefix_count_reg);
-                            } else {
-                                try self.codegen.emit.subRegReg(.w64, len_reg, prefix_count_reg);
-                            }
-                            self.codegen.freeGeneral(prefix_count_reg);
-                        }
-                        // Store rest length
-                        if (comptime builtin.cpu.arch == .aarch64) {
-                            try self.codegen.emit.strRegMemSoff(.w64, len_reg, .FP, rest_slot + 8);
-                        } else {
-                            try self.codegen.emit.movMemReg(.w64, .RBP, rest_slot + 8, len_reg);
-                        }
-
-                        // Store rest capacity (same as length for a slice view)
-                        if (comptime builtin.cpu.arch == .aarch64) {
-                            try self.codegen.emit.strRegMemSoff(.w64, len_reg, .FP, rest_slot + 16);
-                        } else {
-                            try self.codegen.emit.movMemReg(.w64, .RBP, rest_slot + 16, len_reg);
-                        }
-                        self.codegen.freeGeneral(len_reg);
-
-                        // Bind the rest pattern
-                        const rest_loc = ValueLocation{ .list_stack = .{
-                            .struct_offset = rest_slot,
-                            .data_offset = 0,
-                            .num_elements = 0, // Unknown at compile time
-                        } };
-                        try self.bindPattern(list_pat.rest, rest_loc);
-                    }
-
-                    self.codegen.freeGeneral(list_ptr_reg);
-                },
-                .wildcard => {
-                    // Wildcard: just ignore the value
-                },
-                else => {
-                    return Error.UnsupportedExpression;
-                },
-            }
         }
 
         /// Generate a call to an already-compiled procedure.
@@ -7641,6 +7400,17 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             self.symbol_locations.clearRetainingCapacity();
             self.mutable_var_slots.clearRetainingCapacity();
 
+            // Restore state on error so callers can fall back to callLambdaBodyDirect
+            errdefer {
+                self.codegen.stack_offset = saved_stack_offset;
+                self.symbol_locations.deinit();
+                self.symbol_locations = saved_symbol_locations.clone() catch unreachable;
+                self.mutable_var_slots.deinit();
+                self.mutable_var_slots = saved_mutable_var_slots.clone() catch unreachable;
+                _ = self.compiled_lambdas.remove(key);
+                self.codegen.patchJump(skip_jump, self.codegen.currentOffset());
+            }
+
             // Emit prologue
             try self.emitPrologue();
 
@@ -7671,113 +7441,16 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             return code_start;
         }
 
-        /// Try to inline a curried function call chain.
-        /// Returns the result if successful, or null if this isn't a curried call.
-        /// Handles any depth of currying by collecting all args and binding them inline.
-        fn tryInlineCurriedCall(self: *Self, outer_call: anytype, inner_call: anytype) Error!?ValueLocation {
-            // Collect all the nested calls' arguments from outermost to innermost
-            var collected_args: std.ArrayListUnmanaged([]const MonoExprId) = .{};
-            defer collected_args.deinit(self.allocator);
-
-            // Add the outer call's args first
-            try collected_args.append(self.allocator, self.store.getExprSpan(outer_call.args));
-            // Add inner call's args
-            try collected_args.append(self.allocator, self.store.getExprSpan(inner_call.args));
-
-            // Walk the chain of calls to find more nested calls and the root lambda
-            var current_fn_expr_id = inner_call.fn_expr;
-            while (true) {
-                const expr = self.store.getExpr(current_fn_expr_id);
-                switch (expr) {
-                    .call => |nested_call| {
-                        try collected_args.append(self.allocator, self.store.getExprSpan(nested_call.args));
-                        current_fn_expr_id = nested_call.fn_expr;
-                    },
-                    .lambda, .closure => break, // Found the root lambda
-                    else => return null, // Can't inline this
-                }
-            }
-
-            // Get the root lambda
-            const root_expr = self.store.getExpr(current_fn_expr_id);
-            var lambda = switch (root_expr) {
-                .lambda => |l| l,
-                .closure => |c| blk: {
-                    const inner = self.store.getExpr(c.lambda);
-                    if (inner == .lambda) break :blk inner.lambda;
-                    return null;
-                },
-                else => return null,
-            };
-
-            // Process args from innermost to outermost (reverse order)
-            // collected_args[0] = outer call's args (last to apply)
-            // collected_args[len-1] = innermost call's args (first to apply)
-            const args_list = collected_args.items;
-            var arg_idx: usize = args_list.len;
-            while (arg_idx > 0) : (arg_idx -= 1) {
-                const args = args_list[arg_idx - 1];
-                const params = self.store.getPatternSpan(lambda.params);
-
-                // Bind this level's parameters
-                for (params, 0..) |pattern_id, i| {
-                    if (i >= args.len) break;
-                    const arg_loc = try self.generateExpr(args[i]);
-                    const pattern = self.store.getPattern(pattern_id);
-                    if (pattern == .bind) {
-                        const symbol_key: u48 = @bitCast(pattern.bind.symbol);
-                        const stack_slot = try self.ensureOnStack(arg_loc, 8);
-                        try self.symbol_locations.put(symbol_key, .{ .stack = stack_slot });
-                    }
-                }
-
-                // If there are more levels, get the next nested lambda
-                // The body might be a direct lambda, or a block whose final expr is a lambda
-                if (arg_idx > 1) {
-                    const body_expr = self.store.getExpr(lambda.body);
-                    lambda = switch (body_expr) {
-                        .lambda => |l| l,
-                        .closure => |c| blk: {
-                            const inner = self.store.getExpr(c.lambda);
-                            if (inner == .lambda) break :blk inner.lambda;
-                            return null;
-                        },
-                        .block => |block| blk: {
-                            // Evaluate the block's statements to bind any local variables
-                            const stmts = self.store.getStmts(block.stmts);
-                            for (stmts) |stmt| {
-                                // MonoStmt is a let binding with pattern and expr fields
-                                const val_loc = try self.generateExpr(stmt.expr);
-                                try self.bindPattern(stmt.pattern, val_loc);
-                            }
-                            // Now check if the final expression is a lambda
-                            const final_expr = self.store.getExpr(block.final_expr);
-                            switch (final_expr) {
-                                .lambda => |l| break :blk l,
-                                .closure => |c| {
-                                    const inner = self.store.getExpr(c.lambda);
-                                    if (inner == .lambda) break :blk inner.lambda;
-                                    return null;
-                                },
-                                else => return null,
-                            }
-                        },
-                        else => return null,
-                    };
-                }
-            }
-
-            // Finally, evaluate the innermost lambda's body
-            return try self.generateExpr(lambda.body);
-        }
-
         /// Bind lambda parameters from argument registers.
         /// Similar to bindProcParams but works with pattern spans.
+        const max_arg_regs: u8 = if (builtin.cpu.arch == .aarch64) 8 else 6;
+
         fn bindLambdaParams(self: *Self, params: mono.MonoPatternSpan) Error!void {
             const pattern_ids = self.store.getPatternSpan(params);
             var reg_idx: u8 = 0;
 
             for (pattern_ids) |pattern_id| {
+                if (reg_idx >= max_arg_regs) return Error.UnsupportedExpression;
                 const pattern = self.store.getPattern(pattern_id);
                 switch (pattern) {
                     .bind => |bind| {
@@ -7836,6 +7509,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                                     const size = ls.layoutSizeAlign(layout_val).size;
                                     if (size > 8) {
                                         const num_regs: u8 = @intCast((size + 7) / 8);
+                                        if (reg_idx + num_regs > max_arg_regs) return Error.UnsupportedExpression;
                                         const stack_offset = self.codegen.allocStackSlot(@intCast(size));
                                         var ri: u8 = 0;
                                         while (ri < num_regs) : (ri += 1) {
@@ -7867,6 +7541,51 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         // Skip this argument register
                         reg_idx += 1;
                     },
+                    .record => |rec| {
+                        // Record destructuring: store registers to stack, then delegate to bindPattern
+                        const ls = self.layout_store orelse return Error.UnsupportedExpression;
+                        const record_layout = ls.getLayout(rec.record_layout);
+                        const size = ls.layoutSizeAlign(record_layout).size;
+                        const num_regs: u8 = @intCast((size + 7) / 8);
+                        if (reg_idx + num_regs > max_arg_regs) return Error.UnsupportedExpression;
+                        const stack_offset = self.codegen.allocStackSlot(@intCast(size));
+                        var ri: u8 = 0;
+                        while (ri < num_regs) : (ri += 1) {
+                            const arg_r = self.getArgumentRegister(reg_idx + ri);
+                            try self.codegen.emitStoreStack(.w64, stack_offset + @as(i32, ri) * 8, arg_r);
+                        }
+                        reg_idx += num_regs;
+                        try self.bindPattern(pattern_id, .{ .stack = stack_offset });
+                    },
+                    .list => {
+                        // List destructuring: lists are 24 bytes (ptr, len, capacity) = 3 registers
+                        if (reg_idx + 3 > max_arg_regs) return Error.UnsupportedExpression;
+                        const stack_offset = self.codegen.allocStackSlot(24);
+                        const arg_reg0 = self.getArgumentRegister(reg_idx);
+                        const arg_reg1 = self.getArgumentRegister(reg_idx + 1);
+                        const arg_reg2 = self.getArgumentRegister(reg_idx + 2);
+                        try self.codegen.emitStoreStack(.w64, stack_offset, arg_reg0);
+                        try self.codegen.emitStoreStack(.w64, stack_offset + 8, arg_reg1);
+                        try self.codegen.emitStoreStack(.w64, stack_offset + 16, arg_reg2);
+                        reg_idx += 3;
+                        try self.bindPattern(pattern_id, .{ .stack = stack_offset });
+                    },
+                    .tuple => |tup| {
+                        // Tuple destructuring: store registers to stack, then delegate to bindPattern
+                        const ls = self.layout_store orelse return Error.UnsupportedExpression;
+                        const tuple_layout = ls.getLayout(tup.tuple_layout);
+                        const size = ls.layoutSizeAlign(tuple_layout).size;
+                        const num_regs: u8 = @intCast((size + 7) / 8);
+                        if (reg_idx + num_regs > max_arg_regs) return Error.UnsupportedExpression;
+                        const stack_offset = self.codegen.allocStackSlot(@intCast(size));
+                        var ri: u8 = 0;
+                        while (ri < num_regs) : (ri += 1) {
+                            const arg_r = self.getArgumentRegister(reg_idx + ri);
+                            try self.codegen.emitStoreStack(.w64, stack_offset + @as(i32, ri) * 8, arg_r);
+                        }
+                        reg_idx += num_regs;
+                        try self.bindPattern(pattern_id, .{ .stack = stack_offset });
+                    },
                     else => {
                         // For now, skip complex patterns
                         reg_idx += 1;
@@ -7881,6 +7600,26 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // First check if the layout tells us this is a multi-register type > 8 bytes
             if (self.layout_store) |ls| {
                 const layout_val = ls.getLayout(ret_layout);
+
+                // Lists and strings are always 24 bytes (3 registers)
+                if (layout_val.tag == .list or layout_val.tag == .list_of_zst) {
+                    const stack_offset: i32 = switch (loc) {
+                        .stack => |off| off,
+                        .list_stack => |info| info.struct_offset,
+                        else => return self.moveToReturnRegister(loc),
+                    };
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emitLoadStack(.w64, .X0, stack_offset);
+                        try self.codegen.emitLoadStack(.w64, .X1, stack_offset + 8);
+                        try self.codegen.emitLoadStack(.w64, .X2, stack_offset + 16);
+                    } else {
+                        try self.codegen.emitLoadStack(.w64, .RAX, stack_offset);
+                        try self.codegen.emitLoadStack(.w64, .RDX, stack_offset + 8);
+                        try self.codegen.emitLoadStack(.w64, .RCX, stack_offset + 16);
+                    }
+                    return;
+                }
+
                 if (layout_val.tag == .record or layout_val.tag == .tag_union or layout_val.tag == .tuple) {
                     const size_align = ls.layoutSizeAlign(layout_val);
                     if (size_align.size > 8) {
@@ -7977,6 +7716,12 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     } else {
                         try self.codegen.emitLoadImm(.RDX, @intFromEnum(lc.ret_layout));
                     }
+                },
+                .closure_value => {
+                    // Can't return a closure_value from a compiled procedure - the
+                    // closure's capture data lives on this procedure's stack frame
+                    // which is deallocated on return.
+                    return Error.UnsupportedExpression;
                 },
                 else => {
                     // For other types (like float_reg), try to handle appropriately

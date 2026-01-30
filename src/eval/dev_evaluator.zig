@@ -776,47 +776,10 @@ fn getExprLayoutWithTypeEnv(allocator: Allocator, module_env: *ModuleEnv, expr: 
                     }
                     break :blk LayoutIdx.default_num;
                 },
-                .e_lookup_external => |lookup| {
-                    // For external function calls like List.fold, List.map, etc.
-                    // Try to infer return type from arguments:
-                    // - List.fold(list, state, step) returns same type as state (arg 1)
-                    // - List.map(list, mapper) returns a list
-                    // Check the function name to determine the pattern
-                    const func_name = module_env.getIdent(lookup.ident_idx);
-                    const args = module_env.store.sliceExpr(call.args);
-
-                    if (std.mem.eql(u8, func_name, "fold") or
-                        std.mem.eql(u8, func_name, "foldR") or
-                        std.mem.eql(u8, func_name, "foldL") or
-                        std.mem.eql(u8, func_name, "reduce"))
-                    {
-                        // fold(list, initial, step) -> type of initial
-                        if (args.len >= 2) {
-                            const acc_expr = module_env.store.getExpr(args[1]);
-                            break :blk getExprLayoutWithTypeEnv(allocator, module_env, acc_expr, type_env);
-                        }
-                    }
+                .e_lookup_external => {
                     break :blk LayoutIdx.default_num;
                 },
-                .e_dot_access => |dot| {
-                    // For method-style calls like List.fold(...)
-                    // Check the field name to determine return type for fold operations
-                    const field_name = module_env.getIdent(dot.field_name);
-
-                    if (std.mem.eql(u8, field_name, "fold") or
-                        std.mem.eql(u8, field_name, "foldR") or
-                        std.mem.eql(u8, field_name, "foldL") or
-                        std.mem.eql(u8, field_name, "reduce"))
-                    {
-                        // fold(list, initial, step) -> type of initial
-                        const args = module_env.store.sliceExpr(call.args);
-                        if (args.len >= 2) {
-                            const acc_expr = module_env.store.getExpr(args[1]);
-                            break :blk getExprLayoutWithTypeEnv(allocator, module_env, acc_expr, type_env);
-                        }
-                    }
-                    // For list-returning functions, the type system override will compute
-                    // the correct layout with .list tag
+                .e_dot_access => {
                     break :blk LayoutIdx.default_num;
                 },
                 else => {},
