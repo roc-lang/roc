@@ -538,7 +538,7 @@ test "interpreter tag union: multi-arg tag Point(1, 2)" {
 test "interpreter tag union: nested tag in tuple in tag (issue #8750)" {
     // Regression test for https://github.com/roc-lang/roc/issues/8750
     // This previously caused a stack overflow in layout computation due to
-    // recursive addTypeVar calls for deeply nested tag union structures.
+    // recursive fromTypeVar calls for deeply nested tag union structures.
     // The key test is that this doesn't crash - the rendering format is secondary.
     const roc_src =
         \\Ok((Name("hello"), 5))

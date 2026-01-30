@@ -56,7 +56,7 @@ pub const Store = struct {
     /// Allocator for all internal allocations
     allocator: std.mem.Allocator,
 
-    /// Current module index during addTypeVar processing
+    /// Current module index during fromTypeVar processing
     current_module_idx: u16 = 0,
 
     /// Optional override types store (used by interpreter for runtime types).
@@ -92,7 +92,7 @@ pub const Store = struct {
     // Keyed by (module_idx, var) for cross-module correctness.
     raw_layout_placeholders: std.AutoHashMap(ModuleVarKey, Idx),
 
-    // Reusable work stack for addTypeVar (so it can be stack-safe instead of recursing)
+    // Reusable work stack for fromTypeVar (so it can be stack-safe instead of recursing)
     work: work.Work,
 
     // Identifier for "Builtin.Str" to recognize the string type without string comparisons
@@ -245,7 +245,7 @@ pub const Store = struct {
     }
 
     /// Set an override types store for runtime type resolution (used by interpreter).
-    /// When set, addTypeVar will use this store instead of all_module_envs[module_idx].types.
+    /// When set, fromTypeVar will use this store instead of all_module_envs[module_idx].types.
     pub fn setOverrideTypesStore(self: *Self, override: *const types_store.Store) void {
         self.override_types_store = override;
     }
@@ -1412,7 +1412,7 @@ pub const Store = struct {
     /// in the type_scope mappings. When a flex/rigid var is looked up in type_scope and
     /// found, the mapped var belongs to caller_module_idx, not module_idx. This is critical
     /// for cross-module polymorphic function calls.
-    pub fn addTypeVar(
+    pub fn fromTypeVar(
         self: *Self,
         module_idx: u16,
         unresolved_var: Var,
@@ -1433,11 +1433,11 @@ pub const Store = struct {
 
         // To make this function stack-safe, we use a manual stack instead of recursing.
         // We reuse that stack from call to call to avoid reallocating it.
-        // NOTE: We do NOT clear work fields here because addTypeVar can be called
+        // NOTE: We do NOT clear work fields here because fromTypeVar can be called
         // recursively (e.g., when processing tag union variant payloads), and nested
         // calls must not destroy the work state from outer calls.
 
-        // Save the container stack depth at entry. When addTypeVar is called recursively
+        // Save the container stack depth at entry. When fromTypeVar is called recursively
         // (e.g., from flex/rigid type scope resolution), the recursive call must not
         // consume containers that belong to the caller. The container loop below uses
         // this depth to know where to stop.
@@ -2235,7 +2235,7 @@ pub const Store = struct {
                                 const target_module = caller_module_idx.?;
                                 // Pass null for caller_module_idx in recursive call - the mapping has
                                 // been resolved, so we don't need to map again.
-                                layout_idx = try self.addTypeVar(target_module, mapped_var, type_scope, null);
+                                layout_idx = try self.fromTypeVar(target_module, mapped_var, type_scope, null);
                                 skip_layout_computation = true;
                                 break :blk self.getLayout(layout_idx);
                             }
@@ -2288,7 +2288,7 @@ pub const Store = struct {
                                 const target_module = caller_module_idx.?;
                                 // Pass null for caller_module_idx in recursive call - the mapping has
                                 // been resolved, so we don't need to map again.
-                                layout_idx = try self.addTypeVar(target_module, mapped_var, type_scope, null);
+                                layout_idx = try self.fromTypeVar(target_module, mapped_var, type_scope, null);
                                 skip_layout_computation = true;
                                 break :blk self.getLayout(layout_idx);
                             }
@@ -2412,10 +2412,10 @@ pub const Store = struct {
 
             // If this was part of a pending container that we're working on, update that container.
             // Only process containers pushed during THIS invocation (above container_base_depth).
-            // Recursive addTypeVar calls must not consume containers from the caller.
+            // Recursive fromTypeVar calls must not consume containers from the caller.
             while (self.work.pending_containers.len > container_base_depth) {
                 // Restore module context for the current container.
-                // Recursive addTypeVar calls (via flex/rigid type scope resolution) change
+                // Recursive fromTypeVar calls (via flex/rigid type scope resolution) change
                 // current_module_idx to the target module. The container's fields/variants
                 // are vars in the module that was active when the container was created.
                 self.current_module_idx = self.work.pending_containers.slice().items(.module_idx)[self.work.pending_containers.len - 1];
@@ -2719,7 +2719,7 @@ pub const Store = struct {
 
         // For non-list elements, try to compute layout from the type var
         const elem_type_var = ModuleEnv.varFrom(first_elem_idx);
-        const elem_layout_idx = try self.addTypeVar(module_idx, elem_type_var, type_scope, caller_module_idx);
+        const elem_layout_idx = try self.fromTypeVar(module_idx, elem_type_var, type_scope, caller_module_idx);
 
         // Return List(element_layout)
         const list_layout = Layout.list(elem_layout_idx);

@@ -96,7 +96,7 @@ current_module_idx: u16 = 0,
 
 /// The module whose type variables are in the type_scope mappings.
 /// When we call an external function, we map its rigid type vars to the caller's
-/// concrete types. This tracks the caller's module so addTypeVar can resolve
+/// concrete types. This tracks the caller's module so fromTypeVar can resolve
 /// the mapped vars using the correct module's types store.
 type_scope_caller_module: ?u16 = null,
 
@@ -361,7 +361,7 @@ fn lowerLocalDefByPattern(self: *Self, module_env: *ModuleEnv, symbol: MonoSymbo
 fn computeLayoutFromExprIdx(self: *Self, _: *ModuleEnv, expr_idx: CIR.Expr.Idx) ?LayoutIdx {
     const ls = self.layout_store orelse return null;
     const type_var = ModuleEnv.varFrom(expr_idx);
-    return ls.addTypeVar(self.current_module_idx, type_var, &self.type_scope, self.type_scope_caller_module) catch null;
+    return ls.fromTypeVar(self.current_module_idx, type_var, &self.type_scope, self.type_scope_caller_module) catch null;
 }
 
 /// Get layout for a block expression by inferring from the final expression
@@ -395,7 +395,7 @@ fn getBlockLayout(self: *Self, module_env: *ModuleEnv, block: anytype) LayoutIdx
 fn getExprLayoutFromIdx(self: *Self, _: *ModuleEnv, expr_idx: CIR.Expr.Idx) LayoutIdx {
     const type_var = ModuleEnv.varFrom(expr_idx);
     const ls = self.layout_store orelse unreachable;
-    return ls.addTypeVar(self.current_module_idx, type_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
+    return ls.fromTypeVar(self.current_module_idx, type_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
 }
 
 /// Push a type_scope mapping from the for-loop pattern's type variable to the element
@@ -470,7 +470,7 @@ fn getForLoopElementLayout(self: *Self, list_expr_idx: CIR.Expr.Idx) LayoutIdx {
                     std.debug.assert(args.len > 0); // List must have element type arg
                     const elem_type_var = args[0];
                     // Compute layout for the element type from the list's type arg
-                    const elem_layout = ls.addTypeVar(self.current_module_idx, elem_type_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
+                    const elem_layout = ls.fromTypeVar(self.current_module_idx, elem_type_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
                     return elem_layout;
                 },
                 else => unreachable, // For loop list must be List type
@@ -494,7 +494,7 @@ fn getPatternLayout(self: *Self, pattern_idx: CIR.Pattern.Idx) LayoutIdx {
     }
 
     const ls = self.layout_store orelse unreachable;
-    return ls.addTypeVar(self.current_module_idx, type_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
+    return ls.fromTypeVar(self.current_module_idx, type_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
 }
 
 /// Set up layout hints for a local function call.
@@ -765,7 +765,7 @@ fn collectTypeMappingsWithExpr(
             }
             // For nested calls: if the caller's type is also rigid/flex (because the
             // intermediate function is generic), resolve transitively through the existing
-            // type scope. Otherwise addTypeVar would try to resolve a module N var using
+            // type scope. Otherwise fromTypeVar would try to resolve a module N var using
             // the outermost caller's module (module 0), giving wrong results.
             if (caller_resolved.desc.content == .rigid or caller_resolved.desc.content == .flex) {
                 if (self.type_scope.lookup(caller_resolved.var_)) |transitive_var| {
@@ -1140,7 +1140,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                                 if (args.len > 0) {
                                     const elem_type_var = args[0];
                                     // Compute layout for the element type
-                                    break :elem_blk ls.addTypeVar(self.current_module_idx, elem_type_var, &self.type_scope, self.type_scope_caller_module) catch LayoutIdx.default_num;
+                                    break :elem_blk ls.fromTypeVar(self.current_module_idx, elem_type_var, &self.type_scope, self.type_scope_caller_module) catch LayoutIdx.default_num;
                                 }
                             },
                             else => {},
@@ -1865,7 +1865,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                     const param_vars = module_env.types.sliceVars(ft.args);
                     if (param_idx < param_vars.len) {
                         const param_type_var = param_vars[param_idx];
-                        break :layout_blk ls.addTypeVar(self.current_module_idx, param_type_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
+                        break :layout_blk ls.fromTypeVar(self.current_module_idx, param_type_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
                     }
                     unreachable; // Pattern count should match function parameter count
                 } else {
@@ -1886,7 +1886,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             // Use the function's RETURN type for ret_layout, not the function type itself
             const ret_layout = if (func_type) |ft| ret_blk: {
                 const ret_var = ft.ret;
-                break :ret_blk ls.addTypeVar(self.current_module_idx, ret_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
+                break :ret_blk ls.fromTypeVar(self.current_module_idx, ret_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
             } else
                 self.getExprLayoutFromIdx(module_env, expr_idx);
 
@@ -1915,7 +1915,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             // Compute the layout from the pattern's type variable
             const patt_type_var = ModuleEnv.varFrom(rc_op.pattern_idx);
             const ls = self.layout_store orelse unreachable;
-            const patt_layout = ls.addTypeVar(self.current_module_idx, patt_type_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
+            const patt_layout = ls.fromTypeVar(self.current_module_idx, patt_type_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
 
             // Convert pattern reference to a lookup expression
             const symbol = self.patternToSymbol(rc_op.pattern_idx);
@@ -1938,7 +1938,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             // Compute the layout from the pattern's type variable
             const patt_type_var = ModuleEnv.varFrom(rc_op.pattern_idx);
             const ls = self.layout_store orelse unreachable;
-            const patt_layout = ls.addTypeVar(self.current_module_idx, patt_type_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
+            const patt_layout = ls.fromTypeVar(self.current_module_idx, patt_type_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
 
             // Convert pattern reference to a lookup expression
             const symbol = self.patternToSymbol(rc_op.pattern_idx);
@@ -1960,7 +1960,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             // Compute the layout from the pattern's type variable
             const patt_type_var = ModuleEnv.varFrom(rc_op.pattern_idx);
             const ls = self.layout_store orelse unreachable;
-            const patt_layout = ls.addTypeVar(self.current_module_idx, patt_type_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
+            const patt_layout = ls.fromTypeVar(self.current_module_idx, patt_type_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
 
             // Convert pattern reference to a lookup expression
             const symbol = self.patternToSymbol(rc_op.pattern_idx);
@@ -2380,7 +2380,7 @@ fn lowerPattern(self: *Self, module_env: *ModuleEnv, pattern_idx: CIR.Pattern.Id
                                     break :elem_blk hint_layout;
                                 }
                                 // Compute layout for the element type
-                                break :elem_blk ls.addTypeVar(self.current_module_idx, elem_type_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
+                                break :elem_blk ls.fromTypeVar(self.current_module_idx, elem_type_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
                             },
                             else => unreachable, // List pattern must match List type
                         }

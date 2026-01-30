@@ -9036,10 +9036,10 @@ pub const Interpreter = struct {
         const layout_idx = switch (resolved.desc.content) {
             .structure => |st| switch (st) {
                 .empty_record => try self.runtime_layout_store.ensureEmptyRecordLayout(),
-                .nominal_type => try self.runtime_layout_store.addTypeVar(0, resolved.var_, &self.empty_scope, null),
-                else => try self.runtime_layout_store.addTypeVar(0, resolved.var_, &self.empty_scope, null),
+                .nominal_type => try self.runtime_layout_store.fromTypeVar(0, resolved.var_, &self.empty_scope, null),
+                else => try self.runtime_layout_store.fromTypeVar(0, resolved.var_, &self.empty_scope, null),
             },
-            else => try self.runtime_layout_store.addTypeVar(0, resolved.var_, &self.empty_scope, null),
+            else => try self.runtime_layout_store.fromTypeVar(0, resolved.var_, &self.empty_scope, null),
         };
         // Encode: (generation << 24) | (slot + 1)
         const gen_byte: u8 = @truncate(self.poly_context_generation);
