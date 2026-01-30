@@ -1420,7 +1420,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                             CIRLowLevel.dec_to_str => .{ .dec_to_str = receiver },
                             CIRLowLevel.f32_to_str => .{ .float_to_str = .{ .value = receiver, .float_precision = .f32 } },
                             CIRLowLevel.f64_to_str => .{ .float_to_str = .{ .value = receiver, .float_precision = .f64 } },
-                            else => ll_fallback: {
+                            else => low_level_dispatch: {
                                 // Inline convertible low-level ops directly at the call site.
                                 // This uses the call expression's type (resolved in the caller's module)
                                 // for ret_layout, avoiding cross-module type scope mapping issues.
@@ -1433,7 +1433,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                                         try ll_all_args.append(self.allocator, try self.lowerExprFromIdx(module_env, arg_idx));
                                     }
                                     const ll_args_span = try self.store.addExprSpan(ll_all_args.items);
-                                    break :ll_fallback .{
+                                    break :low_level_dispatch .{
                                         .low_level = .{
                                             .op = mono_op,
                                             .args = ll_args_span,
@@ -1464,7 +1464,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                                     try ll_all_args.append(self.allocator, lowered_arg);
                                 }
                                 const ll_args_span = try self.store.addExprSpan(ll_all_args.items);
-                                break :ll_fallback .{
+                                break :low_level_dispatch .{
                                     .call = .{
                                         .fn_expr = ll_fn_expr_id,
                                         .fn_layout = .i64,
