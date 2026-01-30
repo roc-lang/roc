@@ -811,6 +811,7 @@ fn mkFlexWithFromNumeralConstraint(
         },
     };
     try self.unifyWith(flex_var, flex_content, env);
+    self.types.from_numeral_flex_count += 1;
 
     return flex_var;
 }
@@ -1095,6 +1096,7 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
 
     // Check any accumulated constraints
     try self.checkAllConstraints(&env);
+    try self.finalizeNumericDefaults(&env);
 
     // After solving all deferred constraints, check for infinite types
     for (defs_slice) |def_idx| {
@@ -1489,6 +1491,7 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
 
     // Check any accumulated constraints
     try self.checkAllConstraints(&env);
+    try self.finalizeNumericDefaults(&env);
 
     // Check if the expression's type has incompatible constraints (e.g., !3)
     const expr_var = ModuleEnv.varFrom(expr_idx);
@@ -1542,6 +1545,7 @@ pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Alloca
 
     // Check any accumulated constraints
     try self.checkAllConstraints(&env);
+    try self.finalizeNumericDefaults(&env);
 
     // After solving all deferred constraints, check for infinite types
     for (defs_slice) |def_idx| {
@@ -5248,6 +5252,43 @@ fn checkAllConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
         try self.checkConstraints(env);
         try self.checkStaticDispatchConstraints(env);
     }
+}
+
+/// After type checking, unify any remaining from_numeral flex vars with Dec.
+/// This resolves method dispatch constraints (e.g., to_str → Dec.to_str → returns Str).
+fn finalizeNumericDefaults(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+    if (self.types.from_numeral_flex_count == 0) return;
+
+    // Walk all type vars looking for flex vars with from_numeral.
+    // Capture len before the loop — unification may add new vars at the end,
+    // but those are Dec copies, not flex vars, so we don't need to visit them.
+    const num_vars: u32 = @intCast(self.types.len());
+    var i: u32 = 0;
+    while (i < num_vars) : (i += 1) {
+        const var_: types_mod.Var = @enumFromInt(i);
+        const resolved = self.types.resolveVar(var_);
+        if (resolved.desc.content != .flex) continue;
+
+        const flex = resolved.desc.content.flex;
+        const constraints = self.types.sliceStaticDispatchConstraints(flex.constraints);
+        var has_from_numeral = false;
+        for (constraints) |c| {
+            if (c.origin == .from_numeral) {
+                has_from_numeral = true;
+                break;
+            }
+        }
+        if (!has_from_numeral) continue;
+
+        // Create a Dec type using the same qualified ident convention as mkNumberTypeContent.
+        // This ensures the ident matches what the layout store expects (e.g., "Builtin.Num.Dec").
+        const dec_content = try self.mkNumberTypeContent("Dec", env);
+        const dec_var = try self.freshFromContent(dec_content, env, Region.zero());
+        _ = try self.unify(resolved.var_, dec_var, env);
+    }
+
+    // Process the newly created constraints from the unification
+    try self.checkAllConstraints(env);
 }
 
 /// Check any accumulated constraints

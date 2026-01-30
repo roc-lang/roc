@@ -2398,6 +2398,16 @@ fn lowerPattern(self: *Self, module_env: *ModuleEnv, pattern_idx: CIR.Pattern.Id
             };
         },
 
+        .nominal => |n| {
+            // Unwrap nominal pattern to its backing pattern
+            return self.lowerPattern(module_env, n.backing_pattern);
+        },
+
+        .nominal_external => |n| {
+            // Unwrap nominal_external pattern to its backing pattern
+            return self.lowerPattern(module_env, n.backing_pattern);
+        },
+
         else => .{ .wildcard = {} }, // Fallback for unsupported patterns
     };
 
@@ -2439,9 +2449,16 @@ fn lowerCaptures(self: *Self, module_env: *ModuleEnv, captures: CIR.Expr.Capture
             try self.lowerLocalDefByPattern(module_env, symbol, cap.pattern_idx);
         }
 
+        // Compute layout from the capture's type variable
+        const capture_layout_idx = blk: {
+            const ls = self.layout_store orelse break :blk LayoutIdx.default_num;
+            const type_var = ModuleEnv.varFrom(cap.pattern_idx);
+            break :blk ls.fromTypeVar(self.current_module_idx, type_var, &self.type_scope, self.type_scope_caller_module) catch LayoutIdx.default_num;
+        };
+
         try lowered.append(self.allocator, .{
             .symbol = symbol,
-            .layout_idx = .i64, // TODO: get from type
+            .layout_idx = capture_layout_idx,
         });
     }
 

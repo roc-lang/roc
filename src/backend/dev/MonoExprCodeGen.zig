@@ -171,6 +171,20 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         /// Map from JoinPointId to parameter patterns (for rebinding to correct stack slots)
         join_point_param_patterns: std.AutoHashMap(u32, mono.MonoPatternSpan),
 
+        /// Stack of early return jump patches.
+        /// When generateEarlyReturn is called inside compileLambdaAsProc,
+        /// it emits a jump to the epilogue and records the patch location here.
+        /// After generating the lambda body, compileLambdaAsProc patches all
+        /// early return jumps to point to the epilogue.
+        early_return_patches: std.ArrayList(usize),
+
+        /// Stack slot where early return value is stored (for compileLambdaAsProc).
+        /// Set by compileLambdaAsProc before generating the body.
+        early_return_result_slot: ?i32 = null,
+
+        /// Layout for early return result (to know how to move to return register)
+        early_return_ret_layout: ?layout.Idx = null,
+
         /// Register where RocOps pointer is saved (for calling builtins that need it)
         roc_ops_reg: ?GeneralReg = null,
 
@@ -311,6 +325,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 .join_point_jumps = std.AutoHashMap(u32, std.ArrayList(JumpRecord)).init(allocator),
                 .join_point_param_layouts = std.AutoHashMap(u32, LayoutIdxSpan).init(allocator),
                 .join_point_param_patterns = std.AutoHashMap(u32, mono.MonoPatternSpan).init(allocator),
+                .early_return_patches = std.ArrayList(usize).empty,
             };
         }
 
@@ -331,6 +346,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             self.join_point_jumps.deinit();
             self.join_point_param_layouts.deinit();
             self.join_point_param_patterns.deinit();
+            self.early_return_patches.deinit(self.allocator);
         }
 
         /// Reset the code generator for generating a new expression
@@ -4879,8 +4895,19 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         fn generateEarlyReturn(self: *Self, er: anytype) Error!ValueLocation {
             // Generate the return value
             const value_loc = try self.generateExpr(er.expr);
-            // TODO: Implement proper early return with stack unwinding
-            // For now, just return the value
+
+            // If we're inside a compileLambdaAsProc, emit a jump to the epilogue
+            if (self.early_return_ret_layout) |ret_layout| {
+                // Move the value to the return register
+                try self.moveToReturnRegisterWithLayout(value_loc, ret_layout);
+                // Emit a jump (will be patched to the epilogue location)
+                const patch = try self.codegen.emitJump();
+                try self.early_return_patches.append(self.allocator, patch);
+                // Return a dummy value — this code is unreachable at runtime
+                return .{ .immediate_i64 = 0 };
+            }
+
+            // Inline lambda case: just return the value (best-effort fallback)
             return value_loc;
         }
 
@@ -5983,30 +6010,71 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     const ls = self.layout_store orelse return Error.UnsupportedExpression;
                     const capture_layout = ls.getLayout(capture.layout_idx);
                     const capture_size = ls.layoutSizeAlign(capture_layout).size;
+                    const is_i128 = (capture_size >= 16);
 
                     // Copy value to the struct offset
                     switch (capture_loc) {
+                        .immediate_i128 => |val| {
+                            // Store 128-bit immediate as two 64-bit halves
+                            const low: u64 = @truncate(@as(u128, @bitCast(val)));
+                            const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
+                            const temp = try self.allocTempGeneral();
+                            try self.codegen.emitLoadImm(temp, @bitCast(low));
+                            try self.codegen.emitStoreStack(.w64, base_offset + offset, temp);
+                            try self.codegen.emitLoadImm(temp, @bitCast(high));
+                            try self.codegen.emitStoreStack(.w64, base_offset + offset + 8, temp);
+                            self.codegen.freeGeneral(temp);
+                        },
+                        .stack_i128 => |src_offset| {
+                            // Copy both 64-bit halves
+                            const temp = try self.allocTempGeneral();
+                            try self.codegen.emitLoadStack(.w64, temp, src_offset);
+                            try self.codegen.emitStoreStack(.w64, base_offset + offset, temp);
+                            try self.codegen.emitLoadStack(.w64, temp, src_offset + 8);
+                            try self.codegen.emitStoreStack(.w64, base_offset + offset + 8, temp);
+                            self.codegen.freeGeneral(temp);
+                        },
                         .general_reg => |reg| {
                             try self.codegen.emitStoreStack(.w64, base_offset + offset, reg);
+                            if (is_i128) {
+                                // Zero-extend to 128 bits
+                                const temp = try self.allocTempGeneral();
+                                try self.codegen.emitLoadImm(temp, 0);
+                                try self.codegen.emitStoreStack(.w64, base_offset + offset + 8, temp);
+                                self.codegen.freeGeneral(temp);
+                            }
                         },
                         .stack => |src_offset| {
                             const temp = try self.allocTempGeneral();
                             try self.codegen.emitLoadStack(.w64, temp, src_offset);
                             try self.codegen.emitStoreStack(.w64, base_offset + offset, temp);
+                            if (is_i128) {
+                                try self.codegen.emitLoadStack(.w64, temp, src_offset + 8);
+                                try self.codegen.emitStoreStack(.w64, base_offset + offset + 8, temp);
+                            }
                             self.codegen.freeGeneral(temp);
                         },
                         .immediate_i64 => |val| {
                             const temp = try self.allocTempGeneral();
                             try self.codegen.emitLoadImm(temp, @bitCast(val));
                             try self.codegen.emitStoreStack(.w64, base_offset + offset, temp);
+                            if (is_i128) {
+                                // Sign-extend to 128 bits
+                                const sign_ext: i64 = if (val < 0) -1 else 0;
+                                try self.codegen.emitLoadImm(temp, sign_ext);
+                                try self.codegen.emitStoreStack(.w64, base_offset + offset + 8, temp);
+                            }
                             self.codegen.freeGeneral(temp);
                         },
                         else => {
-                            // For complex types, just store 8 bytes for now
-                            const slot = try self.ensureOnStack(capture_loc, 8);
+                            const slot = try self.ensureOnStack(capture_loc, if (is_i128) 16 else 8);
                             const temp = try self.allocTempGeneral();
                             try self.codegen.emitLoadStack(.w64, temp, slot);
                             try self.codegen.emitStoreStack(.w64, base_offset + offset, temp);
+                            if (is_i128) {
+                                try self.codegen.emitLoadStack(.w64, temp, slot + 8);
+                                try self.codegen.emitStoreStack(.w64, base_offset + offset + 8, temp);
+                            }
                             self.codegen.freeGeneral(temp);
                         },
                     }
@@ -6206,7 +6274,12 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 const ls = self.layout_store orelse return Error.UnsupportedExpression;
                 const capture_layout = ls.getLayout(capture.layout_idx);
                 const capture_size = ls.layoutSizeAlign(capture_layout).size;
-                try self.symbol_locations.put(symbol_key, .{ .stack = cv.stack_offset + offset });
+                // Use stack_i128 for 128-bit values (Dec, i128, u128)
+                if (capture_size >= 16) {
+                    try self.symbol_locations.put(symbol_key, .{ .stack_i128 = cv.stack_offset + offset });
+                } else {
+                    try self.symbol_locations.put(symbol_key, .{ .stack = cv.stack_offset + offset });
+                }
                 offset += @intCast(capture_size);
             }
 
@@ -7254,6 +7327,30 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
                     self.codegen.freeGeneral(reg);
                 },
+                .immediate_i64 => |val| {
+                    // Sign-extend i64 to i128 and store
+                    const val_i128: i128 = val;
+                    const low: u64 = @truncate(@as(u128, @bitCast(val_i128)));
+                    const high: u64 = @truncate(@as(u128, @bitCast(val_i128)) >> 64);
+
+                    const reg = try self.allocTempGeneral();
+
+                    try self.codegen.emitLoadImm(reg, @bitCast(low));
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.strRegMemUoff(.w64, reg, ptr_reg, 0);
+                    } else {
+                        try self.codegen.emit.movMemReg(.w64, ptr_reg, 0, reg);
+                    }
+
+                    try self.codegen.emitLoadImm(reg, @bitCast(high));
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.strRegMemUoff(.w64, reg, ptr_reg, 1);
+                    } else {
+                        try self.codegen.emit.movMemReg(.w64, ptr_reg, 8, reg);
+                    }
+
+                    self.codegen.freeGeneral(reg);
+                },
                 .general_reg => |reg| {
                     // Only have low 64 bits in register - this is a bug indicator,
                     // but handle gracefully by storing low and zeroing high
@@ -7400,6 +7497,10 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             self.symbol_locations.clearRetainingCapacity();
             self.mutable_var_slots.clearRetainingCapacity();
 
+            // Save early return state before generating body
+            const saved_early_return_ret_layout = self.early_return_ret_layout;
+            const saved_early_return_patches_len = self.early_return_patches.items.len;
+
             // Restore state on error so callers can fall back to callLambdaBodyDirect
             errdefer {
                 self.codegen.stack_offset = saved_stack_offset;
@@ -7409,6 +7510,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 self.mutable_var_slots = saved_mutable_var_slots.clone() catch unreachable;
                 _ = self.compiled_lambdas.remove(key);
                 self.codegen.patchJump(skip_jump, self.codegen.currentOffset());
+                self.early_return_ret_layout = saved_early_return_ret_layout;
+                self.early_return_patches.shrinkRetainingCapacity(saved_early_return_patches_len);
             }
 
             // Emit prologue
@@ -7417,6 +7520,9 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // Bind parameters from argument registers
             try self.bindLambdaParams(lambda.params);
 
+            // Set early return state so generateEarlyReturn can emit jumps
+            self.early_return_ret_layout = lambda.ret_layout;
+
             // Generate the body
             const result_loc = try self.generateExpr(lambda.body);
 
@@ -7424,8 +7530,19 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // Pass the return layout so we can handle records > 8 bytes
             try self.moveToReturnRegisterWithLayout(result_loc, lambda.ret_layout);
 
+            // Record epilogue location for early return patches
+            const epilogue_offset = self.codegen.currentOffset();
+
             // Emit epilogue and return
             try self.emitEpilogue();
+
+            // Patch all early return jumps to point to the epilogue
+            for (self.early_return_patches.items[saved_early_return_patches_len..]) |patch| {
+                self.codegen.patchJump(patch, epilogue_offset);
+            }
+            // Restore early return state (trim patches back)
+            self.early_return_patches.shrinkRetainingCapacity(saved_early_return_patches_len);
+            self.early_return_ret_layout = saved_early_return_ret_layout;
 
             // Restore state
             self.codegen.stack_offset = saved_stack_offset;

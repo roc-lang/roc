@@ -402,6 +402,16 @@ const Unifier = struct {
 
     // Unify flex //
 
+    /// Check if a flex var has a from_numeral constraint.
+    fn flexHasFromNumeral(self: *const Self, flex: Flex) bool {
+        if (flex.constraints.len() == 0) return false;
+        const constraints = self.types_store.sliceStaticDispatchConstraints(flex.constraints);
+        for (constraints) |c| {
+            if (c.origin == .from_numeral) return true;
+        }
+        return false;
+    }
+
     /// Unify when `a` was a flex
     fn unifyFlex(self: *Self, vars: *const ResolvedVarDescs, a_flex: Flex, b_content: Content) Error!void {
         const trace = tracy.trace(@src());
@@ -409,6 +419,11 @@ const Unifier = struct {
 
         switch (b_content) {
             .flex => |b_flex| {
+                // If both have from_numeral, two vars merge into one — decrement
+                if (self.flexHasFromNumeral(a_flex) and self.flexHasFromNumeral(b_flex)) {
+                    self.types_store.from_numeral_flex_count -= 1;
+                }
+
                 const mb_ident = blk: {
                     if (a_flex.name) |a_ident| {
                         break :blk a_ident;
@@ -437,6 +452,9 @@ const Unifier = struct {
                 }
             },
             .structure => {
+                if (self.flexHasFromNumeral(a_flex)) {
+                    self.types_store.from_numeral_flex_count -= 1;
+                }
                 try self.recordDeferredConstraint(vars, a_flex.constraints);
                 self.merge(vars, b_content);
             },
