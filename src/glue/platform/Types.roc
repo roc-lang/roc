@@ -4,16 +4,16 @@
 TypeId := U64
 
 ## Entry point information
-EntryPoint : { name : Str, type_id : TypeId }
+EntryPoint := { name : Str, type_id : TypeId }
 
 ## Function information
-FunctionInfo : { name : Str, type_str : Str }
+FunctionInfo := { name : Str, type_str : Str }
 
 ## Hosted function information (includes global index)
-HostedFunctionInfo : { index : U64, name : Str, type_str : Str }
+HostedFunctionInfo := { index : U64, name : Str, type_str : Str }
 
 ## Module type information
-ModuleTypeInfo : {
+ModuleTypeInfo := {
     functions : List(FunctionInfo),
     hosted_functions : List(HostedFunctionInfo),
     main_type : Str,
@@ -22,7 +22,7 @@ ModuleTypeInfo : {
 
 ## Types structure for glue generation
 ## This is a simplified version - will be expanded with full type info later
-Types : {
+Types := {
     ## Entry points (platform requires)
     entrypoints : List(EntryPoint),
     ## Module type information
