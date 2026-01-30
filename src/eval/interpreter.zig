@@ -7379,7 +7379,10 @@ pub const Interpreter = struct {
                                     // No luck with other variants - try looking at physical payload size
                                     // Payload is at offset 0, discriminant is at discriminant_offset,
                                     // so payload size is discriminant_offset
-                                    const inner_payload_size = inner_tu_data.discriminant_offset;
+                                    // IMPORTANT: Use dynamic computation, not stored value, because for
+                                    // recursive types the stored value may be stale (computed when variant
+                                    // layouts were still placeholders).
+                                    const inner_payload_size = self.runtime_layout_store.getTagUnionDiscriminantOffset(value.layout.data.tag_union.idx);
                                     if (inner_payload_size > 0 and inner_payload_size <= 16) {
                                         // Create a scalar int layout for the payload based on size
                                         const int_precision: types.Int.Precision = switch (inner_payload_size) {
@@ -15290,50 +15293,6 @@ pub const Interpreter = struct {
                     while (i > 0) {
                         i -= 1;
                         field_values[i] = value_stack.pop() orelse return error.Crash;
-
-                        // Check if this field value is a recursive tag_union that needs boxing.
-                        // A tag_union is recursive if any of its variant payloads contains
-                        // a Box pointing to this same tag_union.
-                        const field_layout = field_values[i].layout;
-                        if (field_layout.tag == .tag_union) {
-                            const tu_idx = field_layout.data.tag_union.idx;
-                            const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
-                            const variants = self.runtime_layout_store.getTagUnionVariants(tu_data);
-                            var needs_boxing = false;
-                            var var_idx: usize = 0;
-                            while (var_idx < variants.len) : (var_idx += 1) {
-                                const variant = variants.get(var_idx);
-                                const payload_layout = self.runtime_layout_store.getLayout(variant.payload_layout);
-                                if (self.layoutContainsBoxOfTagUnion(payload_layout, tu_idx)) {
-                                    needs_boxing = true;
-                                    break;
-                                }
-                            }
-
-                            if (needs_boxing) {
-                                // Find the Box layout index from the tag union's variants
-                                var found_box_idx: ?layout.Idx = null;
-                                var search_idx: usize = 0;
-                                while (search_idx < variants.len) : (search_idx += 1) {
-                                    const variant = variants.get(search_idx);
-                                    if (self.findBoxIdxForTagUnion(variant.payload_layout, tu_idx)) |box_idx| {
-                                        found_box_idx = box_idx;
-                                        break;
-                                    }
-                                }
-
-                                // This is unreachable because we detected needs_boxing=true above,
-                                // which means layoutContainsBoxOfTagUnion found a Box. findBoxIdxForTagUnion
-                                // searches the same layouts and must find the same Box.
-                                const box_idx = found_box_idx orelse unreachable;
-                                const box_layout = self.runtime_layout_store.getLayout(box_idx);
-
-                                // Box the value
-                                const boxed = try self.makeBoxValueFromLayout(box_layout, field_values[i], roc_ops, field_values[i].rt_var);
-                                field_values[i].decref(&self.runtime_layout_store, roc_ops);
-                                field_values[i] = boxed;
-                            }
-                        }
                     }
 
                     // Handle base record if extension exists
@@ -15641,9 +15600,12 @@ pub const Interpreter = struct {
                         if (payload_field.ptr) |payload_ptr| {
                             if (total_count == 1) {
                                 // Check for layout mismatch (similar to layout_type == 1)
+                                // IMPORTANT: Also check for nested layout mismatches in container types
+                                // (list, tuple, record). Without this, a list with different element layouts
+                                // would pass the shallow equality check but cause crashes during iteration.
                                 const arg_size = self.runtime_layout_store.layoutSize(values[0].layout);
                                 const payload_size = self.runtime_layout_store.layoutSize(payload_field.layout);
-                                const layouts_differ = arg_size != payload_size or !layoutsEqual(values[0].layout, payload_field.layout);
+                                const layouts_differ = arg_size != payload_size or !layoutsEqual(values[0].layout, payload_field.layout) or hasNestedLayoutMismatch(values[0].layout, payload_field.layout, &self.runtime_layout_store);
 
                                 if (layouts_differ) {
                                     // Create a new record layout with the actual payload layout
@@ -15784,9 +15746,12 @@ pub const Interpreter = struct {
                         if (payload_field.ptr) |payload_ptr| {
                             if (total_count == 1) {
                                 // Check for layout mismatch and handle it
+                                // IMPORTANT: Also check for nested layout mismatches in container types
+                                // (list, tuple, record). Without this, a list with different element layouts
+                                // would pass the shallow equality check but cause crashes during iteration.
                                 const arg_size = self.runtime_layout_store.layoutSize(values[0].layout);
                                 const payload_size = self.runtime_layout_store.layoutSize(payload_field.layout);
-                                const layouts_differ = arg_size > payload_size or !layoutsEqual(values[0].layout, payload_field.layout);
+                                const layouts_differ = arg_size > payload_size or !layoutsEqual(values[0].layout, payload_field.layout) or hasNestedLayoutMismatch(values[0].layout, payload_field.layout, &self.runtime_layout_store);
 
                                 if (layouts_differ) {
                                     // Create properly-typed tuple with actual arg layout
@@ -15947,6 +15912,81 @@ pub const Interpreter = struct {
                                     .rt_var = values[0].rt_var,
                                 };
                                 try inner_value.copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
+                            } else if (expected_payload_layout.tag == .list and values[0].layout.tag == .list) {
+                                // Both are lists - check if element layouts require re-boxing
+                                const expected_elem_layout = self.runtime_layout_store.getLayout(expected_payload_layout.data.list);
+                                const actual_elem_layout = self.runtime_layout_store.getLayout(values[0].layout.data.list);
+
+                                if (expected_elem_layout.tag == .box and actual_elem_layout.tag != .box) {
+                                    // Expected list has boxed elements, but actual list has non-boxed elements.
+                                    // We need to create a new list with boxed elements.
+
+                                    // Get the list data
+                                    const list_ptr = values[0].ptr;
+                                    const list_len = if (list_ptr) |ptr| blk: {
+                                        const list_header: *const RocList = @ptrCast(@alignCast(ptr));
+                                        break :blk list_header.len();
+                                    } else 0;
+
+                                    if (list_ptr == null or list_len == 0) {
+                                        // Empty list - just copy as is
+                                        try values[0].copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
+                                    } else {
+                                        // Create new list with boxed elements
+                                        const inner_elem_layout = self.runtime_layout_store.getLayout(expected_elem_layout.data.box);
+                                        const inner_elem_size = self.runtime_layout_store.layoutSize(inner_elem_layout);
+                                        const actual_elem_size = self.runtime_layout_store.layoutSize(actual_elem_layout);
+                                        const box_size: usize = 8; // pointer size
+                                        const box_align: u32 = 8;
+                                        const target_usize = self.runtime_layout_store.targetUsize();
+                                        const inner_elem_align: u32 = @intCast(inner_elem_layout.alignment(target_usize).toByteUnits());
+                                        const actual_list_header: *const RocList = @ptrCast(@alignCast(list_ptr.?));
+
+                                        // Allocate new list with boxed elements
+                                        var new_list = RocList.allocateExact(
+                                            box_align,
+                                            list_len,
+                                            box_size,
+                                            true, // elements_refcounted (boxes are refcounted)
+                                            roc_ops,
+                                        );
+
+                                        if (new_list.bytes) |new_buffer| {
+                                            const old_buffer = actual_list_header.bytes orelse unreachable;
+                                            var elem_idx: usize = 0;
+                                            while (elem_idx < list_len) : (elem_idx += 1) {
+                                                const old_elem_ptr = old_buffer + elem_idx * actual_elem_size;
+                                                const new_elem_ptr = new_buffer + elem_idx * box_size;
+
+                                                // Allocate box for this element
+                                                const data_ptr = builtins.utils.allocateWithRefcount(inner_elem_size, inner_elem_align, false, roc_ops);
+                                                if (inner_elem_size > 0) {
+                                                    // Copy the element data to the box
+                                                    const old_elem = StackValue{
+                                                        .layout = actual_elem_layout,
+                                                        .ptr = @ptrCast(old_elem_ptr),
+                                                        .is_initialized = true,
+                                                        .rt_var = values[0].rt_var,
+                                                    };
+                                                    try old_elem.copyToPtr(&self.runtime_layout_store, data_ptr, roc_ops);
+                                                }
+
+                                                // Write box pointer to new list element
+                                                const slot: *usize = @ptrCast(@alignCast(new_elem_ptr));
+                                                slot.* = @intFromPtr(data_ptr);
+                                            }
+                                        }
+
+                                        markListElementCount(&new_list, true, roc_ops);
+
+                                        // Write new list to payload location
+                                        const payload_list: *RocList = @ptrCast(@alignCast(payload_ptr));
+                                        payload_list.* = new_list;
+                                    }
+                                } else {
+                                    // Element layouts compatible, copy directly
+                                    try values[0].copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
+                                }
                             } else {
                                 try values[0].copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
                             }
@@ -19089,8 +19129,17 @@ pub const Interpreter = struct {
                 const type_based_size = self.runtime_layout_store.layoutSize(effective_elem_layout);
                 const elem_size: usize = @intCast(@max(stored_elem_size, type_based_size));
 
-                // Override elem_layout if physical is tuple but type-based is tag_union
-                // This ensures proper discriminant extraction during pattern matching
+                // Override elem_layout ONLY when physical layout is tuple but type-based is tag_union.
+                // This handles recursive opaque types where the physical layout is stored as tuple
+                // but we need the tag_union layout for proper discriminant extraction.
+                //
+                // IMPORTANT: Do NOT override when both are tag_union with different indices!
+                // Different indices mean the layouts were computed in different contexts (e.g.,
+                // platform module vs user module) and may have different:
+                // - Discriminant offsets (affecting where the discriminant is read from)
+                // - Variant orderings (affecting discriminant-to-variant mapping)
+                // Using the type-based layout for memory operations (incref/decref) when the data
+                // was stored with the physical layout causes memory corruption.
                 if (effective_elem_layout.tag == .tag_union and elem_layout.tag == .tuple) {
                     elem_layout = effective_elem_layout;
                 }
@@ -19121,6 +19170,7 @@ pub const Interpreter = struct {
                     .is_initialized = true,
                     .rt_var = fl.patt_rt_var,
                 };
+
                 elem_value.incref(&self.runtime_layout_store, roc_ops);
 
                 // Bind the pattern

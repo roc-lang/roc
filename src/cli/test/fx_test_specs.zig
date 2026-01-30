@@ -309,6 +309,16 @@ pub const io_spec_tests = [_]TestSpec{
         .io_spec = "1>Hello, World!",
         .description = "Regression test: Hosted effects on opaque types with data (not just [])",
     },
+    .{
+        .roc_file = "test/fx/issue9113_simple.roc",
+        .io_spec = "1>Test: SimpleElement with Leaf in list|1>Container branch|1>  iterating child|1>Leaf branch|1>Done!",
+        .description = "Regression test: Recursive opaque types with list element layout mismatch (issue #9113)",
+    },
+    .{
+        .roc_file = "test/fx/list_opaque_pattern_match_bug.roc",
+        .io_spec = "1>Test 1: Text elements in list (should work)|1>Div branch|1>  iterating child|1>Text branch: Hello|1>  iterating child|1>Text branch: World|1>|1>Test 2: Label element with opaque payload in list|1>Div branch|1>  iterating child|1>Label branch|1>Done!",
+        .description = "Regression test: Nested opaque types in lists (issue #9113 related)",
+    },
 };
 
 /// Get the total number of IO spec tests
