@@ -19,6 +19,7 @@ const builtin_completion = @import("builtins.zig");
 const scope_map = @import("../scope_map.zig");
 const type_utils = @import("../type_utils.zig");
 const module_lookup = @import("../module_lookup.zig");
+const doc_comments = @import("../doc_comments.zig");
 
 const Allocator = std.mem.Allocator;
 const CIR = can.CIR;
@@ -230,6 +231,7 @@ pub const CompletionBuilder = struct {
                 @intFromEnum(CompletionItemKind.function);
 
             var detail: ?[]const u8 = null;
+            var documentation: ?[]const u8 = null;
             if (type_writer) |*tw| {
                 if (module_env.common.getNodeIndexById(self.allocator, ident_idx)) |node_idx| {
                     if (node_idx != 0) {
@@ -242,6 +244,20 @@ pub const CompletionBuilder = struct {
                             detail = self.allocator.dupe(u8, type_str) catch null;
                         }
                         tw.reset();
+
+                        // Extract doc comments from source text
+                        // Use annotation region if available (doc comments precede type annotations),
+                        // otherwise fall back to pattern region
+                        const doc_offset = if (def.annotation) |anno_idx|
+                            module_env.store.getAnnotationRegion(anno_idx).start.offset
+                        else
+                            module_env.store.getPatternRegion(def.pattern).start.offset;
+
+                        documentation = doc_comments.extractDocCommentBefore(
+                            self.allocator,
+                            module_env.common.source,
+                            doc_offset,
+                        ) catch null;
                     }
                 }
             }
@@ -250,6 +266,7 @@ pub const CompletionBuilder = struct {
                 .label = label,
                 .kind = kind,
                 .detail = detail,
+                .documentation = documentation,
             });
         }
     }
@@ -287,10 +304,19 @@ pub const CompletionBuilder = struct {
                     const name = module_env.getIdentText(header.name);
                     if (name.len == 0) continue;
 
+                    // Extract doc comments from source text
+                    const stmt_region = module_env.store.getStatementRegion(stmt_idx);
+                    const documentation = doc_comments.extractDocCommentBefore(
+                        self.allocator,
+                        module_env.common.source,
+                        stmt_region.start.offset,
+                    ) catch null;
+
                     _ = try self.addItem(.{
                         .label = name,
                         .kind = @intFromEnum(CompletionItemKind.class),
                         .detail = null,
+                        .documentation = documentation,
                     });
                 },
                 .s_nominal_decl => |nominal| {
@@ -298,10 +324,19 @@ pub const CompletionBuilder = struct {
                     const name = module_env.getIdentText(header.name);
                     if (name.len == 0) continue;
 
+                    // Extract doc comments from source text
+                    const stmt_region = module_env.store.getStatementRegion(stmt_idx);
+                    const documentation = doc_comments.extractDocCommentBefore(
+                        self.allocator,
+                        module_env.common.source,
+                        stmt_region.start.offset,
+                    ) catch null;
+
                     _ = try self.addItem(.{
                         .label = name,
                         .kind = @intFromEnum(CompletionItemKind.class),
                         .detail = null,
+                        .documentation = documentation,
                     });
                 },
                 else => {},
@@ -349,10 +384,20 @@ pub const CompletionBuilder = struct {
                 tw.reset();
             }
 
+            // Extract doc comments from source text
+            // Use the pattern region to find the definition location
+            const pattern_region = module_env.store.getPatternRegion(binding.pattern_idx);
+            const documentation = doc_comments.extractDocCommentBefore(
+                self.allocator,
+                module_env.common.source,
+                pattern_region.start.offset,
+            ) catch null;
+
             _ = try self.addItem(.{
                 .label = label,
                 .kind = kind,
                 .detail = detail,
+                .documentation = documentation,
             });
         }
 
@@ -391,10 +436,25 @@ pub const CompletionBuilder = struct {
                 tw.reset();
             }
 
+            // Extract doc comments from source text
+            // Use annotation region if available (doc comments precede type annotations),
+            // otherwise fall back to pattern region
+            const doc_offset = if (def.annotation) |anno_idx|
+                module_env.store.getAnnotationRegion(anno_idx).start.offset
+            else
+                module_env.store.getPatternRegion(def.pattern).start.offset;
+
+            const documentation = doc_comments.extractDocCommentBefore(
+                self.allocator,
+                module_env.common.source,
+                doc_offset,
+            ) catch null;
+
             _ = try self.addItem(.{
                 .label = name,
                 .kind = kind,
                 .detail = detail,
+                .documentation = documentation,
             });
         }
 
@@ -439,10 +499,19 @@ pub const CompletionBuilder = struct {
                     tw.reset();
                 }
 
+                // Extract doc comments from source text
+                const stmt_region = module_env.store.getStatementRegion(stmt_idx);
+                const documentation = doc_comments.extractDocCommentBefore(
+                    self.allocator,
+                    module_env.common.source,
+                    stmt_region.start.offset,
+                ) catch null;
+
                 _ = try self.addItem(.{
                     .label = name,
                     .kind = kind,
                     .detail = detail,
+                    .documentation = documentation,
                 });
             }
         }
