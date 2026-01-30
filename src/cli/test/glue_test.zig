@@ -115,7 +115,7 @@ test "glue command with CGlue generates expected C header" {
     }
 }
 
-test "generated C header compiles with zig cc" {
+test "glue command generated C header compiles with zig cc" {
     const allocator = std.testing.allocator;
 
     // Create temp directory for output
