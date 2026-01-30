@@ -54,13 +54,42 @@ The crash **IS** specifically about:
 - Where `File := { ... }` is an opaque type
 - The crash happens during the **return** from `make_glue`, not during value creation
 
+### Deep Debug Investigation
+
+With debug instrumentation in the host (`src/glue/platform/host.zig`), we discovered:
+
+**Debug output showing successful data access:**
+```
+DEBUG HOST: result.tag = .Ok
+DEBUG HOST: Got files from payload
+Glue spec returned 1 file(s):
+DEBUG: Got file_name: 'test.txt'
+DEBUG: file_name.len = 8
+DEBUG: Got content, len = 5
+DEBUG: Content: 'hello'
+```
+
+**Key observations:**
+
+1. **The Roc function returns valid data** - file name ("test.txt") and content ("hello") were correctly readable via `file.name.asSlice()` and `file.content.asSlice()`
+
+2. **The crash happens immediately after `roc__make_glue` returns** - Adding `std.fs.cwd().access(".", .{})` right after the Roc call crashes immediately, proving the stack is already corrupted
+
+3. **The stack is corrupted by the return** - Simple operations like `allocator.alloc()` and `@memset()` work fine, but any filesystem syscall triggers the crash
+
+4. **Without signal handlers, exit code is 253** (Windows unhandled exception) instead of 134 (custom stack overflow handler)
+
+5. **The data is written correctly** - The result pointer contains valid data, but the process of returning corrupts the stack frame
+
+This proves the **generated code for returning the Result corrupts the stack on Windows** - the data is correct but the stack cleanup/return sequence damages the stack.
+
 ### Root Cause Hypothesis
 
 The bug is in the **code generation for returning opaque types** within a `Result(List(OpaqueType), Str)` structure. Possible locations:
 
-1. **Opaque type unwrapping/wrapping during return** - infinite recursion in generated code
-2. **Reference counting for opaque types in lists** - recursive decref loop
-3. **ABI mismatch** - the host expects a different layout than Roc generates
+1. **Stack frame corruption during return** - the generated code writes outside its stack frame
+2. **Calling convention mismatch** - wrong registers/stack cleanup for the return value
+3. **Windows-specific ABI issue** - different calling conventions on Windows x64
 
 ## Files Created During Investigation
 
@@ -72,15 +101,24 @@ The bug is in the **code generation for returning opaque types** within a `Resul
 - `src/glue/src/DropListGlue.roc` - Appends then drops (works)
 - `src/glue/src/ErrorGlue.roc` - Returns Err (works)
 
+## What Was Ruled Out
+
+- **String operations** - Crashes with U64 field too
+- **Host-side result processing** - Crash happens before host reads result
+- **File I/O bugs** - Crash happens even with simple `access(".", .{})` call
+- **Signal handler issues** - Same crash without handlers (just different exit code)
+- **Memory allocation** - `allocator.alloc()` works fine after Roc returns
+- **Layout mismatch for reading** - Data is readable correctly
+
 ## Next Steps
 
-1. **Examine codegen for opaque types** - Look at `src/backend/llvm/codegen.zig` or equivalent for how opaque type returns are generated
+1. **Compare generated assembly** between DebugGlue (`Ok([])`) and MinimalGlue (`Ok([file])`) to find the difference in return sequence
 
-2. **Check layout computation** - Verify the layout of `Result(List(File), Str)` matches between Roc and host
+2. **Check Windows x64 calling convention** - The `roc__make_glue` function uses `callconv(.c)` which may have different stack cleanup rules on Windows
 
-3. **Add debug tracing** - Instrument the generated code to find where the infinite recursion occurs
+3. **Examine how the Result payload is written** - The non-empty List case writes more data; check if it overflows the return area
 
-4. **Compare IR** - Generate IR for both DebugGlue (works) and MinimalGlue (crashes) to see the difference
+4. **Look at LLVM codegen for tag unions** - The Result type is a tag union; check how payloads are handled
 
 ## Progress Tracking
 
