@@ -873,7 +873,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         break :blk switch (ret_layout_val.tag) {
                             .list => ls.layoutSizeAlign(ls.getLayout(ret_layout_val.data.list)),
                             .list_of_zst => .{ .size = 0, .alignment = .@"1" },
-                            else => unreachable, // list_append must return a list
+                            // Unspecialized layout (e.g. from polymorphic lambda)
+                            else => return Error.UnsupportedExpression,
                         };
                     };
 
@@ -2645,7 +2646,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 .i32, .u32, .f32 => 4,
                 .i64, .u64, .f64, .str => 8,
                 .i128, .u128, .dec => 16,
-                else => @panic("TODO: list equality for non-scalar element type"),
+                else => return Error.UnsupportedExpression,
             };
 
             const result_reg = try self.allocTempGeneral();
@@ -3147,7 +3148,9 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         .tuple => ls.getTupleData(result_layout.data.tuple.idx).size,
                         .record => ls.getRecordData(result_layout.data.record.idx).size,
                         .tag_union => ls.getTagUnionData(result_layout.data.tag_union.idx).size,
-                        else => @panic("TODO: if-then-else with unsupported result layout tag"),
+                        .zst => 0,
+                        .scalar => ls.layoutSizeAlign(result_layout).size,
+                        else => return Error.UnsupportedExpression,
                     };
                 } else unreachable,
             };
@@ -4987,14 +4990,16 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
         /// Generate code for dbg expression (prints and returns value)
         fn generateDbg(self: *Self, dbg_expr: anytype) Error!ValueLocation {
-            _ = try self.generateExpr(dbg_expr.expr);
-            @panic("TODO: implement dbg printing");
+            _ = self;
+            _ = dbg_expr;
+            return Error.UnsupportedExpression;
         }
 
         /// Generate code for expect expression (assertion)
         fn generateExpect(self: *Self, expect_expr: anytype) Error!ValueLocation {
-            _ = try self.generateExpr(expect_expr.cond);
-            @panic("TODO: implement expect assertion checking");
+            _ = self;
+            _ = expect_expr;
+            return Error.UnsupportedExpression;
         }
 
         /// Generate code for string concatenation
@@ -5008,7 +5013,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 // Single element, just return it
                 return try self.generateExpr(expr_ids[0]);
             }
-            @panic("TODO: implement multi-element string concatenation");
+            return Error.UnsupportedExpression;
         }
 
         /// Generate an empty string
@@ -5173,7 +5178,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         fn generateStrEscapeAndQuote(self: *Self, expr_id: anytype) Error!ValueLocation {
             _ = self;
             _ = expr_id;
-            @panic("TODO: implement str_escape_and_quote");
+            return Error.UnsupportedExpression;
         }
 
         /// Generate code for discriminant switch
@@ -7216,7 +7221,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                                 }
                                 return;
                             },
-                            else => @panic("TODO: storeResultToSavedPtr for unsupported layout tag"),
+                            else => return Error.UnsupportedExpression,
                         }
                     } else {
                         unreachable; // non-scalar layout must have layout store

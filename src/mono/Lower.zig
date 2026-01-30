@@ -2156,10 +2156,8 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             const params = try self.lowerPatternSpan(module_env, ll.args);
 
             // Convert CIR LowLevel ops to MonoExpr LowLevel ops
-            const mono_op = convertToMonoLowLevel(ll.op) orelse {
-                std.debug.print("UNHANDLED LOW-LEVEL OP in e_low_level_lambda: {s}\n", .{@tagName(ll.op)});
-                unreachable;
-            };
+            const mono_op = convertToMonoLowLevel(ll.op) orelse
+                break :blk .{ .runtime_error = {} };
 
             // Create argument expressions from the parameter patterns
             // Each parameter becomes a lookup to itself
