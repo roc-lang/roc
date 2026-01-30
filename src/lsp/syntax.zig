@@ -1720,20 +1720,20 @@ pub const SyntaxChecker = struct {
 
         if (std.ascii.isUpper(first.segment[0])) {
             const resolved_module = resolveModuleAlias(module_env, first.segment);
-            const member_env = findModuleEnvForCompletion(module_lookup_env, env, resolved_module) orelse return null;
+            const resolved_env = findModuleEnvForCompletion(module_lookup_env, env, resolved_module) orelse module_env;
             const member = nextChainSegment(access_chain, idx) orelse return null;
             idx = member.next;
 
-            const def_info = module_lookup.findDefinitionByName(member_env, member.segment) orelse return null;
+            const def_info = module_lookup.findDefinitionByName(resolved_env, member.segment) orelse return null;
             var type_var = ModuleEnv.varFrom(def_info.pattern_idx);
 
             while (nextChainSegment(access_chain, idx)) |segment| {
                 idx = segment.next;
-                const next_var = builder.getFieldTypeVarFromTypeVar(member_env, type_var, segment.segment) orelse return null;
+                const next_var = builder.getFieldTypeVarFromTypeVar(resolved_env, type_var, segment.segment) orelse return null;
                 type_var = next_var;
             }
 
-            return .{ .module_env = member_env, .type_var = type_var };
+            return .{ .module_env = resolved_env, .type_var = type_var };
         }
 
         var type_var = self.resolveLocalBindingTypeVar(module_env, first.segment, chain_start) orelse return null;
@@ -1760,6 +1760,37 @@ pub const SyntaxChecker = struct {
         const dot_idx = std.mem.lastIndexOfScalar(u8, chain, '.') orelse return chain;
         if (dot_idx + 1 >= chain.len) return chain;
         return chain[dot_idx + 1 ..];
+    }
+
+    /// Extract the return type from a type variable.
+    /// If the type is a function, returns its return type.
+    /// Otherwise returns the type as-is (e.g., for tag constructors that are already the result type).
+    fn extractReturnType(module_env: *ModuleEnv, type_var: types.Var) types.Var {
+        const type_store = &module_env.types;
+        var resolved = type_store.resolveVar(type_var);
+        var content = resolved.desc.content;
+
+        // Unwrap aliases first
+        var steps: usize = 0;
+        while (steps < 8) : (steps += 1) {
+            switch (content) {
+                .alias => |alias| {
+                    const backing_var = type_store.getAliasBackingVar(alias);
+                    resolved = type_store.resolveVar(backing_var);
+                    content = resolved.desc.content;
+                    continue;
+                },
+                else => break,
+            }
+        }
+
+        // If it's a function, return the return type
+        if (content.unwrapFunc()) |func| {
+            return func.ret;
+        }
+
+        // Otherwise return as-is (tag constructors, etc.)
+        return type_var;
     }
 
     /// Get completion suggestions at a specific position in a document.
@@ -1936,12 +1967,26 @@ pub const SyntaxChecker = struct {
                         }
                     }
 
-                    if (resolved_type_var) |type_var| {
+                    if (used_snapshot or resolved_type_var == null) {
+                        // CIR-based lookup failed or used snapshot (offsets don't match).
+                        // Fall back to resolving the call chain textually.
+                        if (info.call_chain) |call_chain| {
+                            std.debug.print("completion: after_receiver_dot fallback using call_chain='{s}'\n", .{call_chain});
+                            if (resolveAccessChainTypeVar(self, &builder, module_env, module_lookup_env, env, call_chain, info.chain_start)) |resolved| {
+                                const ret_type = extractReturnType(resolved.module_env, resolved.type_var);
+                                try builder.addFieldsFromTypeVar(resolved.module_env, ret_type);
+                                try builder.addMethodsFromTypeVar(resolved.module_env, ret_type);
+                            }
+                        } else if (resolved_type_var) |type_var| {
+                            try builder.addFieldsFromTypeVar(module_env, type_var);
+                            try builder.addMethodsFromTypeVar(module_env, type_var);
+                        } else {
+                            std.debug.print("completion: after_receiver_dot no CIR receiver type found and no call_chain\n", .{});
+                        }
+                    } else if (resolved_type_var) |type_var| {
                         std.debug.print("completion: after_receiver_dot using CIR type_var={}", .{type_var});
                         try builder.addFieldsFromTypeVar(module_env, type_var);
                         try builder.addMethodsFromTypeVar(module_env, type_var);
-                    } else {
-                        std.debug.print("completion: after_receiver_dot no CIR receiver type found", .{});
                     }
                 } else {
                     std.debug.print("completion: NO module_env for receiver dot completions", .{});

@@ -576,6 +576,17 @@ pub const CompletionBuilder = struct {
                     content = resolved.desc.content;
                     continue;
                 },
+                .structure => |flat_type| {
+                    switch (flat_type) {
+                        .nominal_type => |nominal| {
+                            const backing_var = type_store.getNominalBackingVar(nominal);
+                            resolved = type_store.resolveVar(backing_var);
+                            content = resolved.desc.content;
+                            continue;
+                        },
+                        else => break,
+                    }
+                },
                 else => break,
             }
         }
@@ -627,6 +638,17 @@ pub const CompletionBuilder = struct {
                     resolved = type_store.resolveVar(backing_var);
                     content = resolved.desc.content;
                     continue;
+                },
+                .structure => |flat_type| {
+                    switch (flat_type) {
+                        .nominal_type => |nominal| {
+                            const backing_var = type_store.getNominalBackingVar(nominal);
+                            resolved = type_store.resolveVar(backing_var);
+                            content = resolved.desc.content;
+                            continue;
+                        },
+                        else => break,
+                    }
                 },
                 else => break,
             }
