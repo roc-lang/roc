@@ -1334,16 +1334,13 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                 var nested_import = false;
 
                 // Parse all uppercase segments: first.Second.Third...
-                // We track both the first token (module_name_tok) and second-to-last token
-                // (prev_upper_tok) for proper handling of both regular imports and auto-expose.
-                var prev_upper_tok: ?TokenIdx = null;
+                // We track the first token (module_name_tok) and last token (last_upper_tok).
                 var last_upper_tok: TokenIdx = self.pos;
-                var module_name_tok = self.pos;
+                const module_name_tok = self.pos;
                 self.advance(); // Advance past first UpperIdent
 
                 // Keep consuming additional .UpperIdent segments
                 while (self.peek() == .NoSpaceDotUpperIdent or self.peek() == .DotUpperIdent) {
-                    prev_upper_tok = last_upper_tok;
                     last_upper_tok = self.pos;
                     self.advance();
                 }
@@ -1355,11 +1352,8 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                 if (has_multiple_segments and !has_explicit_clause) {
                     // Auto-expose pattern: import json.Parser.Config
                     // Module is everything before the last segment, last segment is auto-exposed
-                    // For auto-expose, module_name_tok should point to the second-to-last token
-                    // so that the formatter outputs everything up to (but not including) the last segment
-                    if (prev_upper_tok) |prev_tok| {
-                        module_name_tok = prev_tok;
-                    }
+                    // module_name_tok stays as the first uppercase token; the formatter will
+                    // iterate through consecutive uppercase tokens and stop before the exposed token.
                     const final_segment_tok = last_upper_tok;
                     nested_import = true;
 
