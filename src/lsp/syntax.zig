@@ -1993,8 +1993,10 @@ pub const SyntaxChecker = struct {
                 // Type annotation context - add type names
                 if (module_env_opt) |module_env| {
                     try builder.addTypeCompletions(module_env);
+                    try builder.addModuleNameCompletions(module_env);
                 }
                 try builder.addTypeCompletionsFromEnv(env);
+                try builder.addModuleNameCompletionsFromEnv(env);
             },
             .expression => {
                 // General expression context - add local definitions + module names + structural tags + nominal types
