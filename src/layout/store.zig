@@ -1425,7 +1425,6 @@ pub const Store = struct {
         const types_store_ptr = self.getTypesStore();
         var current = types_store_ptr.resolveVar(unresolved_var);
 
-
         // If we've already seen this (module, var) pair, return the layout we resolved it to.
         const cache_key = ModuleVarKey{ .module_idx = module_idx, .var_ = current.var_ };
         if (self.layouts_by_module_var.get(cache_key)) |cached_idx| {
@@ -1437,6 +1436,12 @@ pub const Store = struct {
         // NOTE: We do NOT clear work fields here because addTypeVar can be called
         // recursively (e.g., when processing tag union variant payloads), and nested
         // calls must not destroy the work state from outer calls.
+
+        // Save the container stack depth at entry. When addTypeVar is called recursively
+        // (e.g., from flex/rigid type scope resolution), the recursive call must not
+        // consume containers that belong to the caller. The container loop below uses
+        // this depth to know where to stop.
+        const container_base_depth = self.work.pending_containers.len;
 
         var layout_idx: Idx = undefined;
 
@@ -2403,7 +2408,15 @@ pub const Store = struct {
             } // end if (!skip_layout_computation)
 
             // If this was part of a pending container that we're working on, update that container.
-            while (self.work.pending_containers.len > 0) {
+            // Only process containers pushed during THIS invocation (above container_base_depth).
+            // Recursive addTypeVar calls must not consume containers from the caller.
+            while (self.work.pending_containers.len > container_base_depth) {
+                // Restore module context for the current container.
+                // Recursive addTypeVar calls (via flex/rigid type scope resolution) change
+                // current_module_idx to the target module. The container's fields/variants
+                // are vars in the module that was active when the container was created.
+                self.current_module_idx = self.work.pending_containers.slice().items(.module_idx)[self.work.pending_containers.len - 1];
+
                 // Get a pointer to the last pending container, so we can mutate it in-place.
                 switch (self.work.pending_containers.slice().items(.container)[self.work.pending_containers.len - 1]) {
                     .box => {
@@ -2625,12 +2638,15 @@ pub const Store = struct {
                 }
             }
 
-            // Since there are no pending containers remaining, there shouldn't be any pending record or tuple fields either.
-            std.debug.assert(self.work.pending_record_fields.len == 0);
-            std.debug.assert(self.work.pending_tuple_fields.len == 0);
-            std.debug.assert(self.work.pending_tag_union_variants.len == 0);
+            // For top-level calls (no pre-existing containers), all pending fields should
+            // be consumed. For recursive calls, pending fields from the caller may remain.
+            if (container_base_depth == 0) {
+                std.debug.assert(self.work.pending_record_fields.len == 0);
+                std.debug.assert(self.work.pending_tuple_fields.len == 0);
+                std.debug.assert(self.work.pending_tag_union_variants.len == 0);
+            }
 
-            // No more pending containers; we're done!
+            // No more pending containers for this invocation; we're done!
             // Note: Work fields (in_progress_vars, in_progress_nominals, etc.) are not cleared
             // here because individual entries are removed via swapRemove/pop when types finish
             // processing, so these should be empty when the top-level call returns.
