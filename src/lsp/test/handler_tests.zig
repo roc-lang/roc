@@ -1830,6 +1830,8 @@ test "completion handler returns module members after dot" {
     const file_uri = try uriFromPath(allocator, file_path);
     defer allocator.free(file_uri);
 
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
     const init_body =
         \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"clientInfo":{"name":"test"},"capabilities":{}}}
     ;
@@ -1844,8 +1846,8 @@ test "completion handler returns module members after dot" {
 
     // Document with "Str." - should trigger module member completion
     const open_body = try std.fmt.allocPrint(allocator,
-        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"module []\\n\\nx = Str."}}}}}}
-    , .{file_uri});
+        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"app [main] {{ pf: platform \"{s}\" }}\n\nx = Str."}}}}}}
+    , .{ file_uri, platform_path });
     defer allocator.free(open_body);
     const open_msg = try frame(allocator, open_body);
     defer allocator.free(open_msg);
@@ -2168,6 +2170,8 @@ test "completion handler returns List module members after List dot" {
     const file_uri = try uriFromPath(allocator, file_path);
     defer allocator.free(file_uri);
 
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
     const init_body =
         \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"clientInfo":{"name":"test"},"capabilities":{}}}
     ;
@@ -2181,9 +2185,12 @@ test "completion handler returns List module members after List dot" {
     defer allocator.free(initialized_msg);
 
     // Document with "List." - should trigger List module member completion
-    const open_body = try std.fmt.allocPrint(allocator,
-        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"module []\\n\\nx = List."}}}}}}
-    , .{file_uri});
+    const open_body = try std.fmt.allocPrint(
+        allocator,
+        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"app [main] {{ pf: platform \"{s}\" }}\n\nx = List."}}}}}}
+    ,
+        .{ file_uri, platform_path },
+    );
     defer allocator.free(open_body);
     const open_msg = try frame(allocator, open_body);
     defer allocator.free(open_msg);
