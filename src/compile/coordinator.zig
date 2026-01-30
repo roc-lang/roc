@@ -1660,10 +1660,40 @@ pub const Coordinator = struct {
             }
         }
 
-        // Add external imports
+        // Use a StringHashMap for O(1) duplicate detection when adding transitive deps
+        var seen_modules = std.StringHashMap(void).init(self.gpa);
+        defer seen_modules.deinit();
+
+        // Mark already-added imports as seen (builtin + local imports)
+        for (imported_envs.items) |env| {
+            try seen_modules.put(env.module_name, {});
+        }
+
+        // Add external imports and their transitive dependencies in one pass.
+        // Transitive deps ensure we have access to module environments for types
+        // used in where clauses even when not directly imported by this module.
         for (mod.external_imports.items) |ext_name| {
-            if (self.getExternalEnv(pkg.name, ext_name)) |ext_env| {
-                try imported_envs.append(self.gpa, ext_env);
+            const ext_env = self.getExternalEnv(pkg.name, ext_name) orelse continue;
+            try imported_envs.append(self.gpa, ext_env);
+
+            // Parse "pf.Wrapper" -> qual="pf" to find the target package
+            const dot_idx = std.mem.indexOfScalar(u8, ext_name, '.') orelse continue;
+            const qual = ext_name[0..dot_idx];
+            const target_pkg_name = pkg.shorthands.get(qual) orelse continue;
+            const target_pkg = self.packages.get(target_pkg_name) orelse continue;
+
+            // Add transitive dependencies from this external module
+            for (ext_env.imports.imports.items.items) |trans_str_idx| {
+                const trans_name = ext_env.getString(trans_str_idx);
+
+                // Skip if already seen (O(1) lookup)
+                if (seen_modules.contains(trans_name)) continue;
+
+                // Resolve the transitive import from the same target package
+                if (target_pkg.getEnvIfDone(trans_name)) |trans_env| {
+                    try imported_envs.append(self.gpa, trans_env);
+                    try seen_modules.put(trans_name, {});
+                }
             }
         }
 
