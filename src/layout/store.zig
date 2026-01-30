@@ -2247,12 +2247,15 @@ pub const Store = struct {
                             break :blk Layout.zst();
                         }
 
-                        // Flex vars with constraints (from_numeral, method_call, etc.)
-                        // that haven't been resolved to a concrete type default to Dec.
-                        // This handles both numeric literals and polymorphic type vars
-                        // with method dispatch constraints (e.g., elem.to_str() in a
-                        // for loop over an untyped list parameter).
-                        break :blk Layout.default_num();
+                        // Flex vars with a from_numeral constraint are numeric literals
+                        // that haven't been resolved to a concrete type; default to Dec.
+                        if (self.hasFromNumeralConstraint(flex.constraints)) {
+                            break :blk Layout.default_num();
+                        }
+
+                        // Flex vars with other constraints (method_call, etc.) but no
+                        // from_numeral are not numeric — they're zero-sized.
+                        break :blk Layout.zst();
                     },
                     .rigid => |rigid| blk: {
                         // Only look up in TypeScope if we're doing cross-module resolution.

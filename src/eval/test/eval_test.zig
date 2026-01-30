@@ -1399,6 +1399,17 @@ test "List.map - empty list" {
     );
 }
 
+test "empty list with non-numeric type constraint should be list of zst" {
+    // An empty list whose element type has a method_call constraint but no
+    // from_numeral constraint should be List(ZST), not List(Dec).
+    // e.g. `x : List(a) where [a.blah : Str -> Str]` then `x = []`
+    try runExpectListZst(
+        "[]",
+        0,
+        .no_trace,
+    );
+}
+
 // Test for List.append
 
 test "List.append - basic case" {
