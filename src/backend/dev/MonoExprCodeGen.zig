@@ -5363,11 +5363,14 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                             // First binding: allocate a fixed slot and copy value there
                             const ls = self.layout_store orelse unreachable;
 
+                            // Use the pattern's layout for the mutable variable size.
+                            // The pattern's layout_idx reflects the variable's declared/inferred type
+                            // which includes all unification constraints (e.g., from both the initial
+                            // assignment and subsequent rebindings). The expression's layout
+                            // (expr_layout_override) can be wrong when the expression is wrapped in
+                            // a call whose ret_layout wasn't properly resolved (e.g., List.with_capacity
+                            // wrapped in a call with ret_layout=u8 instead of List).
                             const size: u32 = blk: {
-                                if (expr_layout_override) |expr_layout| {
-                                    const expr_layout_val = ls.getLayout(expr_layout);
-                                    break :blk ls.layoutSizeAlign(expr_layout_val).size;
-                                }
                                 const layout_val = ls.getLayout(bind.layout_idx);
                                 break :blk ls.layoutSizeAlign(layout_val).size;
                             };
