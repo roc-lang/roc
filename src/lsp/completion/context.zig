@@ -24,6 +24,12 @@ pub const CompletionContext = union(enum) {
     after_receiver_dot: struct {
         /// Byte offset of the dot character
         dot_offset: u32,
+        /// The identifier chain before the parenthesized call, if any.
+        /// For `Record2.SubVal("hi").` this is "Record2.SubVal".
+        /// For `testFunc("hi").` this is "testFunc".
+        call_chain: ?[]const u8 = null,
+        /// Byte offset of the start of the call chain
+        chain_start: u32 = 0,
     },
     /// After a colon (type annotation context)
     after_colon,
@@ -112,7 +118,44 @@ pub fn detectCompletionContext(source: []const u8, line: u32, character: u32) Co
                 }
             } else {
                 // No identifier before the dot; treat as a receiver dot (e.g., call chaining).
-                return .{ .after_receiver_dot = .{ .dot_offset = @intCast(pos - 1) } };
+                // Try to extract the call chain by matching parentheses backwards.
+                const dot_off: u32 = @intCast(pos - 1);
+                var result: CompletionContext = .{ .after_receiver_dot = .{ .dot_offset = dot_off } };
+
+                if (ident_end > 0 and source[ident_end - 1] == ')') {
+                    // Walk backwards to find the matching '('
+                    var paren_depth: u32 = 1;
+                    var scan = ident_end - 1; // position of ')'
+                    while (scan > 0) {
+                        scan -= 1;
+                        if (source[scan] == ')') {
+                            paren_depth += 1;
+                        } else if (source[scan] == '(') {
+                            paren_depth -= 1;
+                            if (paren_depth == 0) break;
+                        }
+                    }
+                    // scan now points to '(' (if matched)
+                    if (paren_depth == 0 and scan > 0) {
+                        // Extract the identifier chain before '('
+                        const chain_end = scan;
+                        var chain_start = chain_end;
+                        while (chain_start > 0) {
+                            const c = source[chain_start - 1];
+                            if (std.ascii.isAlphanumeric(c) or c == '_' or c == '.') {
+                                chain_start -= 1;
+                            } else {
+                                break;
+                            }
+                        }
+                        if (chain_start < chain_end) {
+                            result.after_receiver_dot.call_chain = source[chain_start..chain_end];
+                            result.after_receiver_dot.chain_start = @intCast(chain_start);
+                        }
+                    }
+                }
+
+                return result;
             }
         } else if (prev_char == ':') {
             return .after_colon;
@@ -172,6 +215,26 @@ test "detectCompletionContext: after receiver dot" {
     const ctx = detectCompletionContext(source, 0, 11);
     try std.testing.expect(ctx == .after_receiver_dot);
     try std.testing.expectEqual(@as(u32, 10), ctx.after_receiver_dot.dot_offset);
+    try std.testing.expectEqualStrings("val.func", ctx.after_receiver_dot.call_chain.?);
+    try std.testing.expectEqual(@as(u32, 0), ctx.after_receiver_dot.chain_start);
+}
+
+test "detectCompletionContext: after receiver dot with nominal constructor" {
+    const source = "Record2.SubVal(\"hi\").";
+    const ctx = detectCompletionContext(source, 0, 20);
+    try std.testing.expect(ctx == .after_receiver_dot);
+    try std.testing.expectEqual(@as(u32, 19), ctx.after_receiver_dot.dot_offset);
+    try std.testing.expectEqualStrings("Record2.SubVal", ctx.after_receiver_dot.call_chain.?);
+    try std.testing.expectEqual(@as(u32, 0), ctx.after_receiver_dot.chain_start);
+}
+
+test "detectCompletionContext: after receiver dot with simple function" {
+    const source = "testFunc(\"hi\").";
+    const ctx = detectCompletionContext(source, 0, 15);
+    try std.testing.expect(ctx == .after_receiver_dot);
+    try std.testing.expectEqual(@as(u32, 14), ctx.after_receiver_dot.dot_offset);
+    try std.testing.expectEqualStrings("testFunc", ctx.after_receiver_dot.call_chain.?);
+    try std.testing.expectEqual(@as(u32, 0), ctx.after_receiver_dot.chain_start);
 }
 
 test "detectCompletionContext: after colon" {
