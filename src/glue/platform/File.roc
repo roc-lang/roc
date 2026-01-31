@@ -1,1 +1,1 @@
-File := { name : Str, content : Str }
+File := { name : Str, content : Str }.{}

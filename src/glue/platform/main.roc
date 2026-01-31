@@ -2,7 +2,7 @@ platform ""
     requires {
         make_glue : List(Types) -> Try(List(File), Str)
     }
-    exposes [File, Types]
+    exposes [File, Types, TypeId, EntryPoint, ModuleTypeInfo, FunctionInfo, HostedFunctionInfo]
     packages {}
     provides { make_glue_for_host: "make_glue" }
     targets: {
@@ -19,6 +19,11 @@ platform ""
 
 import Types exposing [Types]
 import File exposing [File]
+import TypeId exposing [TypeId]
+import EntryPoint exposing [EntryPoint]
+import ModuleTypeInfo exposing [ModuleTypeInfo]
+import FunctionInfo exposing [FunctionInfo]
+import HostedFunctionInfo exposing [HostedFunctionInfo]
 
 make_glue_for_host : List(Types) -> Try(List(File), Str)
 make_glue_for_host = make_glue
