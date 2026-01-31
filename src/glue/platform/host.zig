@@ -20,82 +20,6 @@ const type_extractor = @import("type_extractor");
 
 const trace_refcount = build_options.trace_refcount;
 
-/// Stack usage information for debugging
-const StackInfo = struct {
-    stack_base: usize, // High address (top of stack)
-    stack_limit: usize, // Low address (guard page)
-    current_sp: usize, // Current stack pointer
-
-    fn used(self: StackInfo) usize {
-        return self.stack_base -| self.current_sp;
-    }
-
-    fn remaining(self: StackInfo) usize {
-        return self.current_sp -| self.stack_limit;
-    }
-
-    fn total(self: StackInfo) usize {
-        return self.stack_base -| self.stack_limit;
-    }
-};
-
-/// Get current stack information (Windows-specific)
-fn getStackInfo() StackInfo {
-    if (comptime builtin.os.tag == .windows) {
-        // Read from Thread Information Block (TIB) via GS segment
-        // GS:[0x08] = StackBase, GS:[0x10] = StackLimit
-        const stack_base = asm volatile (
-            "mov %gs:0x08, %[ret]"
-            : [ret] "=r" (-> usize),
-        );
-        const stack_limit = asm volatile (
-            "mov %gs:0x10, %[ret]"
-            : [ret] "=r" (-> usize),
-        );
-        // Get current stack pointer
-        const current_sp = asm volatile (
-            "mov %rsp, %[ret]"
-            : [ret] "=r" (-> usize),
-        );
-        return .{
-            .stack_base = stack_base,
-            .stack_limit = stack_limit,
-            .current_sp = current_sp,
-        };
-    } else {
-        // For non-Windows, return dummy values
-        return .{ .stack_base = 0, .stack_limit = 0, .current_sp = 0 };
-    }
-}
-
-fn printStackInfo(label: []const u8, info: StackInfo) void {
-    const stderr_file: std.fs.File = .stderr();
-    stderr_file.writeAll(label) catch {};
-    stderr_file.writeAll(":\n") catch {};
-
-    var buf: [256]u8 = undefined;
-    const msg = std.fmt.bufPrint(&buf,
-        \\  Stack base:  0x{X}
-        \\  Stack limit: 0x{X}
-        \\  Current SP:  0x{X}
-        \\  Used:        {d} bytes ({d} KB)
-        \\  Remaining:   {d} bytes ({d} KB)
-        \\  Total:       {d} bytes ({d} KB)
-        \\
-    , .{
-        info.stack_base,
-        info.stack_limit,
-        info.current_sp,
-        info.used(),
-        info.used() / 1024,
-        info.remaining(),
-        info.remaining() / 1024,
-        info.total(),
-        info.total() / 1024,
-    }) catch "format error\n";
-    stderr_file.writeAll(msg) catch {};
-}
-
 /// Zig logging configuration override
 pub const std_options: std.Options = .{
     .logFn = std.log.defaultLog,
@@ -943,48 +867,8 @@ fn platform_main(args: [][*:0]u8) !c_int {
     };
 
     // Call the Roc glue spec
-    // Stack instrumentation - see PLAN.md for investigation details
-    const stack_before = getStackInfo();
-    printStackInfo("Stack BEFORE roc__make_glue", stack_before);
-
-    // Stack canaries to detect corruption
-    var canary_before: u64 = 0xDEADBEEFCAFEBABE;
     var result: ResultListFileStr = undefined;
-    var canary_after: u64 = 0xFEEDFACE12345678;
-
     roc__make_glue(&roc_ops, &result, &types_list);
-
-    const stack_after = getStackInfo();
-    printStackInfo("Stack AFTER roc__make_glue", stack_after);
-
-    // Report stack usage delta
-    {
-        const stderr_file: std.fs.File = .stderr();
-        var buf: [128]u8 = undefined;
-        const delta_msg = std.fmt.bufPrint(&buf, "Stack used by Roc call: {d} bytes ({d} KB)\n\n", .{
-            stack_before.remaining() -| stack_after.remaining(),
-            (stack_before.remaining() -| stack_after.remaining()) / 1024,
-        }) catch "delta error\n";
-        stderr_file.writeAll(delta_msg) catch {};
-    }
-
-    // Check canaries using volatile reads to prevent optimization
-    const cb = @as(*volatile u64, &canary_before).*;
-    const ca = @as(*volatile u64, &canary_after).*;
-    if (cb != 0xDEADBEEFCAFEBABE) {
-        const stderr_file: std.fs.File = .stderr();
-        stderr_file.writeAll("!!! STACK CANARY CORRUPTION: canary_before was overwritten !!!\n") catch {};
-        var buf: [64]u8 = undefined;
-        const msg = std.fmt.bufPrint(&buf, "Expected: 0xDEADBEEFCAFEBABE, Got: 0x{X}\n", .{cb}) catch "corruption detected\n";
-        stderr_file.writeAll(msg) catch {};
-    }
-    if (ca != 0xFEEDFACE12345678) {
-        const stderr_file: std.fs.File = .stderr();
-        stderr_file.writeAll("!!! STACK CANARY CORRUPTION: canary_after was overwritten !!!\n") catch {};
-        var buf: [64]u8 = undefined;
-        const msg = std.fmt.bufPrint(&buf, "Expected: 0xFEEDFACE12345678, Got: 0x{X}\n", .{ca}) catch "corruption detected\n";
-        stderr_file.writeAll(msg) catch {};
-    }
 
     // Clean up entrypoint strings
     for (0..entry_point_names.len) |idx| {
@@ -1010,91 +894,7 @@ fn platform_main(args: [][*:0]u8) !c_int {
                     const file_slice: [*]const File = @ptrCast(@alignCast(file_bytes));
 
                     if (output_dir) |out_dir| {
-                        // Check stack before filesystem operation
-                        const stack_before_fs = getStackInfo();
-                        printStackInfo("Stack BEFORE makePath", stack_before_fs);
-
-                        // Check stack alignment (should be 8 mod 16 inside a function)
-                        {
-                            const stderr_file: std.fs.File = .stderr();
-                            var align_buf: [64]u8 = undefined;
-                            const align_msg = std.fmt.bufPrint(&align_buf, "Stack alignment: RSP mod 16 = {d}\n", .{stack_before_fs.current_sp % 16}) catch "?\n";
-                            stderr_file.writeAll(align_msg) catch {};
-                        }
-
-                        // Try manually touching stack pages to ensure they're committed
-                        {
-                            const stderr_file: std.fs.File = .stderr();
-                            stderr_file.writeAll("Probing stack (touching pages)...\n") catch {};
-                            // Allocate a large array on stack to force page commits
-                            var probe: [8192]u8 = undefined;
-                            probe[0] = 0xAA;
-                            probe[4095] = 0xBB;
-                            probe[8191] = 0xCC;
-                            // Prevent optimization
-                            if (probe[0] != 0xAA) unreachable;
-                            stderr_file.writeAll("Stack probe succeeded\n") catch {};
-                        }
-
-                        // Check stack after probe
-                        const stack_after_probe = getStackInfo();
-                        printStackInfo("Stack AFTER probe", stack_after_probe);
-
-                        // Try direct Windows API call - this WORKS
-                        if (comptime builtin.os.tag == .windows) {
-                            const kernel32 = struct {
-                                extern "kernel32" fn GetFileAttributesA(lpFileName: [*:0]const u8) callconv(.winapi) u32;
-                                extern "kernel32" fn CreateDirectoryA(lpPathName: [*:0]const u8, lpSecurityAttributes: ?*anyopaque) callconv(.winapi) i32;
-                                extern "kernel32" fn GetLastError() callconv(.winapi) u32;
-                            };
-                            stderr.writeAll("Trying direct GetFileAttributesA('.')...\n") catch {};
-                            const attrs = kernel32.GetFileAttributesA(".");
-                            var attr_buf: [64]u8 = undefined;
-                            const attr_msg = std.fmt.bufPrint(&attr_buf, "GetFileAttributesA returned: 0x{X}\n", .{attrs}) catch "?\n";
-                            stderr.writeAll(attr_msg) catch {};
-
-                            // Try CreateDirectoryA
-                            stderr.writeAll("Trying direct CreateDirectoryA('C:\\\\Temp\\\\roc_test')...\n") catch {};
-                            const create_result = kernel32.CreateDirectoryA("C:\\Temp\\roc_test", null);
-                            const last_err = kernel32.GetLastError();
-                            var dir_buf: [64]u8 = undefined;
-                            const dir_msg = std.fmt.bufPrint(&dir_buf, "CreateDirectoryA returned: {d}, error: {d}\n", .{ create_result, last_err }) catch "?\n";
-                            stderr.writeAll(dir_msg) catch {};
-                        }
-
-                        // Try NTDLL function directly
-                        const ntdll = struct {
-                            extern "ntdll" fn NtQuerySystemInformation(
-                                SystemInformationClass: u32,
-                                SystemInformation: ?*anyopaque,
-                                SystemInformationLength: u32,
-                                ReturnLength: ?*u32,
-                            ) callconv(.winapi) i32;
-                        };
-                        stderr.writeAll("Trying NTDLL NtQuerySystemInformation...\n") catch {};
-                        var return_len: u32 = 0;
-                        const nt_status = ntdll.NtQuerySystemInformation(0, null, 0, &return_len);
-                        var nt_buf: [64]u8 = undefined;
-                        const nt_msg = std.fmt.bufPrint(&nt_buf, "NtQuerySystemInformation returned: 0x{X}\n", .{@as(u32, @bitCast(nt_status))}) catch "?\n";
-                        stderr.writeAll(nt_msg) catch {};
-
-                        // Try kernel32 with wide string
-                        const kernel32_w = struct {
-                            extern "kernel32" fn GetFileAttributesW(lpFileName: [*:0]const u16) callconv(.winapi) u32;
-                        };
-                        const dot_wide = [_:0]u16{ '.', 0 };
-                        stderr.writeAll("Trying GetFileAttributesW(L'.')...\n") catch {};
-                        const attrs_w = kernel32_w.GetFileAttributesW(&dot_wide);
-                        var attr_w_buf: [64]u8 = undefined;
-                        const attr_w_msg = std.fmt.bufPrint(&attr_w_buf, "GetFileAttributesW returned: 0x{X}\n", .{attrs_w}) catch "?\n";
-                        stderr.writeAll(attr_w_msg) catch {};
-
-                        // Skip std.fs for now - direct API calls work, std.fs crashes
-                        stderr.writeAll("Direct Win32 API calls work, but std.fs crashes.\n") catch {};
-                        stderr.writeAll("This suggests the issue is in Zig's std.fs implementation or linking.\n") catch {};
-
                         // Create output directory if needed
-                        stderr.writeAll("Calling makePath with out_dir...\n") catch {};
                         std.fs.cwd().makePath(out_dir) catch |err| {
                             stderr.writeAll("Error: Could not create output directory: ") catch {};
                             var err_buf: [256]u8 = undefined;

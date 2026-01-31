@@ -272,7 +272,42 @@ The interpreter computes tag union layout (`src/layout/store.zig:1258-1265`):
 - [x] Step 4: Deep dive analysis of call chain and architecture
 - [x] Step 5: Add regression tests to CLI test suite
 - [x] Step 6: Verify hypothesis with stack canaries
-- [ ] Step 7: Implement and test fix
+- [x] Step 7: Implement and test fix (increase Windows stack size from 1MB to 16MB)
+
+**Status**: std.fs operations fixed by increasing stack size. CGlue has a separate segfault needing investigation.
+
+## Root Cause and Fix
+
+### Actual Root Cause: Windows Stack Size Too Small
+
+The Windows crash was caused by **insufficient stack size**, not stack corruption or calling convention issues.
+
+**Key findings:**
+- Roc-linked executables had a 1MB stack reserve (default lld-link behavior)
+- Standalone Zig executables have a 16MB stack reserve (Zig's default)
+- Zig's `std.fs` uses `PathSpace` buffers on the stack that are ~64KB each
+- Nested calls in `std.fs.Dir.openDir` use multiple `PathSpace` allocations
+- Multiple 64KB stack allocations + normal call stack exceeded 1MB limit
+
+**The fix (in `src/cli/linker.zig`):**
+```zig
+// Set stack size to 16MB (same as Zig default) to avoid stack overflow
+// with deeply nested calls or large stack allocations in std.fs
+try args.append("/stack:16777216");
+```
+
+This increases the Windows stack reserve from 1MB to 16MB, matching Zig's default behavior.
+
+### Test Results After Fix
+
+| Test | Result |
+|------|--------|
+| MinimalGlue (non-empty List) | **PASSES** |
+| EmptyListGlue (empty List) | **PASSES** |
+| DebugGlue (dbg output) | **PASSES** |
+| CGlue (C header generation) | **FAILS** (separate segfault issue) |
+
+The CGlue failure is a different bug - a segmentation fault during Roc code execution, not related to std.fs or stack size.
 
 ## Regression Tests
 
@@ -280,10 +315,10 @@ Added tests to `src/cli/test/glue_test.zig` that reproduce the issue:
 
 | Test | Glue Spec | Expected | Windows Result |
 |------|-----------|----------|----------------|
-| `"glue command with MinimalGlue returns non-empty file list"` | MinimalGlue.roc | Success | Stack overflow (exit 134) |
+| `"glue command with MinimalGlue returns non-empty file list"` | MinimalGlue.roc | Success | **Passes** (after Win32 API workaround) |
 | `"glue command with EmptyListGlue returns empty file list"` | EmptyListGlue.roc | Success | **Passes** |
 
-The existing CGlue tests also fail on Windows for the same reason (CGlue returns a non-empty file list).
+CGlue tests fail on Windows due to a separate issue (crash during Roc computation, not file I/O).
 
 Run with: `zig build test-cli`
 
@@ -368,4 +403,47 @@ The issue **IS** specific to Zig's std.fs implementation. Possible causes:
 3. **Internal Zig runtime state** - something in Zig's runtime got corrupted
 4. **Stack frame metadata** - Zig may use frame pointers or debug info differently
 
-The Roc interpreter is likely corrupting some state that Zig's std.fs relies on but that direct Windows API calls don't need
+## Critical New Finding: std.fs Broken at Startup
+
+Further investigation revealed that **std.fs.cwd().openDir() crashes at the very start of main()**, before any Roc code runs!
+
+### Test Results
+
+```
+Test 1: std.fs.cwd()...      → PASSES (just returns Dir struct)
+Test 2: std.fs.cwd().openDir(".", .{})  → CRASHES (exit code 253)
+```
+
+**This proves the issue is NOT caused by Roc corrupting something** - std.fs is broken from the start of the glue spec executable.
+
+### Key Difference: Glue Platform Imports Compiler Modules
+
+The glue platform host imports many compiler modules that the fx platform doesn't:
+
+| Platform | Additional Module Imports |
+|----------|--------------------------|
+| fx (works) | None (just builtins, build_options) |
+| glue (broken) | base, can, types, layout, eval, collections, type_extractor |
+
+These modules are added in `build.zig` lines 2999-3017:
+```zig
+glue_platform_host_lib.root_module.addImport("base", roc_modules.base);
+glue_platform_host_lib.root_module.addImport("can", roc_modules.can);
+// ...etc
+```
+
+### Root Cause Hypothesis
+
+The compiler modules (or their transitive dependencies) are causing a conflict with Zig's std.fs on Windows x64. Possible causes:
+
+1. **Symbol conflicts** - compiler modules define symbols that conflict with Windows API or Zig std internals
+2. **TLS corruption** - Thread Local Storage initialization conflicts
+3. **Global state** - module initialization corrupts std.fs internal state
+4. **Linker issues** - incorrect symbol resolution when linking multiple large Zig modules
+
+### Next Steps
+
+1. Identify which specific module import causes the crash (binary search)
+2. Check if the issue is in Zig's standard library linking
+3. Investigate if this is a known Zig issue with large projects on Windows
+4. Consider restructuring the glue platform to avoid the problematic imports

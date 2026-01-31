@@ -394,6 +394,10 @@ fn buildLinkArgs(ctx: *CliContext, config: LinkConfig) LinkError!std.array_list.
                 else => try args.append("/machine:x64"), // default to x64
             }
 
+            // Set stack size to 16MB (same as Zig default) to avoid stack overflow
+            // with deeply nested calls or large stack allocations in std.fs
+            try args.append("/stack:16777216");
+
             // These are part of the core Windows OS and are available on all Windows systems
             try args.append("/defaultlib:kernel32");
             try args.append("/defaultlib:ntdll");
