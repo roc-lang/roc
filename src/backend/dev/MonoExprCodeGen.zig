@@ -819,17 +819,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 .call => |call| try self.generateCall(call),
                 // Lambdas and closures as first-class values (stored to variables)
                 .lambda => |lambda| {
-                    const code_offset = self.compileLambdaAsProc(expr_id, lambda) catch {
-                        // Can't compile as proc (e.g., body references mutable variables
-                        // or captures from enclosing scope). Return as closure_value so
-                        // it can be dispatched via callLambdaBodyDirect at call sites.
-                        return .{ .closure_value = .{
-                            .stack_offset = 0,
-                            .representation = .direct_call,
-                            .lambda = expr_id,
-                            .captures = mono.MonoIR.MonoCaptureSpan.empty(),
-                        } };
-                    };
+                    const code_offset = try self.compileLambdaAsProc(expr_id, lambda);
                     return .{ .lambda_code = .{
                         .code_offset = code_offset,
                         .ret_layout = lambda.ret_layout,
@@ -7823,9 +7813,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             return switch (fn_expr) {
                 // Direct lambda call: compile as procedure and call
                 .lambda => |lambda| {
-                    const code_offset = self.compileLambdaAsProc(call.fn_expr, lambda) catch {
-                        return try self.callLambdaBodyDirect(lambda, call.args);
-                    };
+                    const code_offset = try self.compileLambdaAsProc(call.fn_expr, lambda);
                     return try self.generateCallToLambda(code_offset, call.args, call.ret_layout);
                 },
 
@@ -7833,9 +7821,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 .closure => |closure| {
                     const inner = self.store.getExpr(closure.lambda);
                     if (inner == .lambda) {
-                        const code_offset = self.compileLambdaAsProc(closure.lambda, inner.lambda) catch {
-                            return try self.callLambdaBodyDirect(inner.lambda, call.args);
-                        };
+                        const code_offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda);
                         return try self.generateCallToLambda(code_offset, call.args, call.ret_layout);
                     }
                     return Error.UnsupportedExpression;
@@ -8281,9 +8267,47 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             return try self.callLambdaBodyDirect(lambda, args_span);
         }
 
+        /// Check if any argument expression is a callable value (lambda, closure, or
+        /// a lookup that resolves to one). This is used to decide whether a higher-order
+        /// function call should be inlined rather than compiled as a separate procedure.
+        ///
+        /// Without lambda set specialization, function parameters passed to compiled procs
+        /// are opaque stack values that cannot be dispatched at call sites. By inlining
+        /// the callee, function arguments remain as .lambda_code/.closure_value in the
+        /// current scope and can be called directly.
+        fn hasCallableArguments(self: *Self, args_span: anytype) bool {
+            const args = self.store.getExprSpan(args_span);
+            for (args) |arg_id| {
+                const arg_expr = self.store.getExpr(arg_id);
+                switch (arg_expr) {
+                    .lambda, .closure => return true,
+                    .lookup => |lk| {
+                        const sk: u48 = @bitCast(lk.symbol);
+                        if (self.symbol_locations.get(sk)) |loc| {
+                            switch (loc) {
+                                .lambda_code, .closure_value => return true,
+                                else => {},
+                            }
+                        }
+                        // Check if the lookup resolves to a lambda/closure definition
+                        if (self.store.getSymbolDef(lk.symbol)) |def_id| {
+                            const def = self.store.getExpr(def_id);
+                            switch (def) {
+                                .lambda, .closure => return true,
+                                else => {},
+                            }
+                        }
+                    },
+                    else => {},
+                }
+            }
+            return false;
+        }
+
         /// Call a lambda by binding its parameters to arguments and evaluating its body
-        /// directly in the current scope. Used when a lambda can't be compiled as a
-        /// standalone procedure (e.g., it captures variables from the enclosing scope).
+        /// directly in the current scope. Used for higher-order functions where function
+        /// parameters need to remain as callable values (lambda_code/closure_value) in
+        /// scope, rather than being demoted to opaque stack bytes in a compiled proc.
         fn callLambdaBodyDirect(self: *Self, lambda: anytype, args_span: anytype) Error!ValueLocation {
             const args = self.store.getExprSpan(args_span);
             const params = self.store.getPatternSpan(lambda.params);
@@ -8292,8 +8316,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 const arg_loc = try self.generateExpr(args[i]);
                 try self.bindPattern(pattern_id, arg_loc);
             }
-            const result = try self.generateExpr(lambda.body);
-            return result;
+            return try self.generateExpr(lambda.body);
         }
 
         /// Compile a lambda body expression as a procedure and call it.
@@ -8306,17 +8329,13 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             const lambda_expr = self.store.getExpr(lambda_body);
             switch (lambda_expr) {
                 .lambda => |lambda| {
-                    const code_offset = self.compileLambdaAsProc(lambda_body, lambda) catch {
-                        return try self.callLambdaBodyDirect(lambda, args_span);
-                    };
+                    const code_offset = try self.compileLambdaAsProc(lambda_body, lambda);
                     return try self.generateCallToLambda(code_offset, args_span, ret_layout);
                 },
                 .closure => |closure| {
                     const inner = self.store.getExpr(closure.lambda);
                     if (inner == .lambda) {
-                        const code_offset = self.compileLambdaAsProc(closure.lambda, inner.lambda) catch {
-                            return try self.callLambdaBodyDirect(inner.lambda, args_span);
-                        };
+                        const code_offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda);
                         return try self.generateCallToLambda(code_offset, args_span, ret_layout);
                     }
                     return Error.UnsupportedExpression;
@@ -8488,28 +8507,22 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
                 return switch (def_expr) {
                     .lambda => |lambda| {
-                        // Low_level wrapper lambdas are evaluated directly in the
+                        // Low-level wrapper lambdas are evaluated directly in the
                         // caller's scope. Compiling them as separate procedures causes
                         // issues with stack frame management for C function calls.
                         const body_expr = self.store.getExpr(lambda.body);
                         if (body_expr == .low_level) {
                             return try self.callLambdaBodyDirect(lambda, args_span);
                         }
-                        const offset = self.compileLambdaAsProc(def_expr_id, lambda) catch {
-                            // compileLambdaAsProc failed. Before falling back to
-                            // callLambdaBodyDirect, check for layout mismatch.
-                            // Polymorphic lambdas may have unspecialized internal
-                            // layouts that cause stack corruption in when expressions
-                            // and tag constructions when evaluated inline.
-                            if (self.layout_store) |ls| {
-                                const lambda_ret = ls.layoutSizeAlign(ls.getLayout(lambda.ret_layout)).size;
-                                const caller_ret = ls.layoutSizeAlign(ls.getLayout(ret_layout)).size;
-                                if (lambda_ret != caller_ret) {
-                                    return Error.UnsupportedExpression;
-                                }
-                            }
+                        // Higher-order functions (those receiving callable arguments)
+                        // must be inlined so that function parameters remain as
+                        // .lambda_code/.closure_value in scope. Without lambda set
+                        // specialization, compiled procs cannot dispatch calls through
+                        // function parameters that are opaque stack values.
+                        if (self.hasCallableArguments(args_span)) {
                             return try self.callLambdaBodyDirect(lambda, args_span);
-                        };
+                        }
+                        const offset = try self.compileLambdaAsProc(def_expr_id, lambda);
                         return try self.generateCallToLambda(offset, args_span, ret_layout);
                     },
                     .closure => |closure| {
@@ -8519,17 +8532,10 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                             if (inner_body == .low_level) {
                                 return try self.callLambdaBodyDirect(inner.lambda, args_span);
                             }
-                            const offset = self.compileLambdaAsProc(closure.lambda, inner.lambda) catch {
-                                // Check for layout mismatch (polymorphic lambda issue)
-                                if (self.layout_store) |ls| {
-                                    const lambda_ret = ls.layoutSizeAlign(ls.getLayout(inner.lambda.ret_layout)).size;
-                                    const caller_ret = ls.layoutSizeAlign(ls.getLayout(ret_layout)).size;
-                                    if (lambda_ret != caller_ret) {
-                                        return Error.UnsupportedExpression;
-                                    }
-                                }
+                            if (self.hasCallableArguments(args_span)) {
                                 return try self.callLambdaBodyDirect(inner.lambda, args_span);
-                            };
+                            }
+                            const offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda);
                             return try self.generateCallToLambda(offset, args_span, ret_layout);
                         }
                         return Error.UnsupportedExpression;
@@ -8557,15 +8563,30 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                             if (body_expr == .low_level) {
                                 return try self.callLambdaBodyDirect(inner.lambda, args_span);
                             }
-                            const offset = self.compileLambdaAsProc(nom.backing_expr, inner.lambda) catch {
+                            if (self.hasCallableArguments(args_span)) {
                                 return try self.callLambdaBodyDirect(inner.lambda, args_span);
-                            };
+                            }
+                            const offset = try self.compileLambdaAsProc(nom.backing_expr, inner.lambda);
                             return try self.generateCallToLambda(offset, args_span, ret_layout);
                         }
                         return Error.UnsupportedExpression;
                     },
                     else => return Error.UnsupportedExpression,
                 };
+            }
+
+            // Check if the function is a locally-bound value (e.g., a lambda parameter
+            // in a higher-order function like `apply = |f, x| f(x)`)
+            if (self.symbol_locations.get(symbol_key)) |loc| {
+                switch (loc) {
+                    .lambda_code => |lc| {
+                        return try self.generateCallToLambda(lc.code_offset, args_span, ret_layout);
+                    },
+                    .closure_value => |cv| {
+                        return try self.generateClosureDispatch(cv, args_span, ret_layout);
+                    },
+                    else => {},
+                }
             }
 
             return Error.LocalNotFound;
