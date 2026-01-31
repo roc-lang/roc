@@ -411,6 +411,74 @@ test "Size of SizeAlign type" {
     try std.testing.expectEqual(32, @bitSizeOf(SizeAlign));
 }
 
+/// Bundled information about a list's element layout
+pub const ListInfo = struct {
+    elem_layout_idx: Idx,
+    elem_layout: Layout,
+    elem_size: u32,
+    elem_alignment: u32,
+    contains_refcounted: bool,
+};
+
+/// Bundled information about a box's element layout
+pub const BoxInfo = struct {
+    elem_layout_idx: Idx,
+    elem_layout: Layout,
+    elem_size: u32,
+    elem_alignment: u32,
+    contains_refcounted: bool,
+};
+
+/// Bundled information about a record layout
+pub const RecordInfo = struct {
+    data: *const RecordData,
+    alignment: std.mem.Alignment,
+    fields: RecordField.SafeMultiList.Slice,
+    contains_refcounted: bool,
+
+    pub fn size(self: RecordInfo) u32 {
+        return self.data.size;
+    }
+};
+
+/// Bundled information about a tuple layout
+pub const TupleInfo = struct {
+    data: *const TupleData,
+    alignment: std.mem.Alignment,
+    fields: TupleField.SafeMultiList.Slice,
+    contains_refcounted: bool,
+
+    pub fn size(self: TupleInfo) u32 {
+        return self.data.size;
+    }
+};
+
+/// Bundled information about a tag union layout
+pub const TagUnionInfo = struct {
+    idx: TagUnionIdx,
+    data: *const TagUnionData,
+    alignment: std.mem.Alignment,
+    variants: TagUnionVariant.SafeMultiList.Slice,
+    contains_refcounted: bool,
+
+    pub fn size(self: TagUnionInfo) u32 {
+        return self.data.size;
+    }
+
+    pub fn readDiscriminant(self: TagUnionInfo, ptr: [*]const u8) u32 {
+        return self.data.readDiscriminantFromPtr(ptr + self.data.discriminant_offset);
+    }
+};
+
+/// Bundled information about a scalar layout
+pub const ScalarInfo = struct {
+    tag: ScalarTag,
+    size: u32,
+    alignment: u32,
+    int_precision: ?types.Int.Precision,
+    frac_precision: ?types.Frac.Precision,
+};
+
 /// The memory layout of a value in a running Roc program.
 ///
 /// A Layout can be created from a Roc type, given the additional information
