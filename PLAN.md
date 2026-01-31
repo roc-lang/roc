@@ -447,3 +447,50 @@ The compiler modules (or their transitive dependencies) are causing a conflict w
 2. Check if the issue is in Zig's standard library linking
 3. Investigate if this is a known Zig issue with large projects on Windows
 4. Consider restructuring the glue platform to avoid the problematic imports
+
+## Remaining Issue: Flaky CGlue Tests
+
+After the stack size fix, there's a remaining flaky test issue with CGlue.
+
+### Observations
+
+1. **CGlue works reliably when run manually**:
+   ```
+   zig-out/bin/roc.exe experimental-glue src/glue/src/CGlue.roc <output_dir> test/fx/platform/main.roc
+   ```
+   This consistently succeeds.
+
+2. **Tests are flaky when run in quick succession**:
+   ```
+   Run 1: All 5 tests passed.
+   Run 2: 4 passed; 0 skipped; 1 failed.
+   Run 3: 4 passed; 0 skipped; 1 failed.
+   Run 4: 3 passed; 0 skipped; 2 failed.
+   Run 5: All 5 tests passed.
+   ```
+
+3. **Failure mode is SIGSEGV**:
+   ```
+   Segmentation fault (SIGSEGV) in this Roc program.
+   Fault address: 0x1798b8cfff8
+   Glue spec exited with code 139
+   ```
+   The fault addresses end in `fff8`, which is 8 bytes from a page boundary - consistent with stack overflow pattern.
+
+4. **The glue_spec builds successfully** (100% cache hit) but crashes when executed.
+
+### Hypotheses
+
+1. **Race condition in shared state**: When tests run quickly in succession, some shared resource (temp files, cache, shared memory) may not be properly cleaned up between runs.
+
+2. **Stack overflow in specific code paths**: While the 16MB stack fixes most cases, certain CGlue code paths with deep recursion or large stack allocations may still overflow intermittently.
+
+3. **Memory corruption**: Some state from a previous test run may be corrupting memory for subsequent runs.
+
+### Current Status
+
+- **4 of 5 glue tests pass reliably**: DebugGlue, MinimalGlue, EmptyListGlue work consistently
+- **CGlue tests are flaky**: Pass ~40-60% of the time when run in quick succession
+- **Manual CGlue execution works**: Always succeeds when run standalone
+
+The flakiness appears to be a race condition or resource cleanup issue rather than a fundamental bug in the stack size fix.
