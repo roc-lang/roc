@@ -1808,20 +1808,15 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 // arg2: X2 (low), X3 (high)
                 // return: X0 (low), X1 (high)
 
-                // Load function address FIRST, before setting up arguments
-                // This avoids allocating a register that might conflict with X0-X3
-                const addr_reg = try self.allocTempGeneral();
-                try self.codegen.emitLoadImm(addr_reg, @intCast(fn_addr));
-
                 // Move arguments to correct registers
                 try self.codegen.emit.movRegReg(.w64, .X0, lhs_parts.low);
                 try self.codegen.emit.movRegReg(.w64, .X1, lhs_parts.high);
                 try self.codegen.emit.movRegReg(.w64, .X2, rhs_parts.low);
                 try self.codegen.emit.movRegReg(.w64, .X3, rhs_parts.high);
 
-                // Call the function
-                try self.codegen.emit.blrReg(addr_reg);
-                self.codegen.freeGeneral(addr_reg);
+                // Load function address into X9 (caller-saved, not an arg register) and call
+                try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
+                try self.codegen.emit.blrReg(.X9);
 
                 // Get result from X0, X1
                 try self.codegen.emit.movRegReg(.w64, result_low, .X0);
@@ -1912,11 +1907,9 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 try self.codegen.emit.movRegReg(.w64, .X3, rhs_parts.high);
                 try self.codegen.emit.movRegReg(.w64, .X4, roc_ops_reg);
 
-                // Load function address and call
-                const addr_reg = try self.allocTempGeneral();
-                try self.codegen.emitLoadImm(addr_reg, @intCast(fn_addr));
-                try self.codegen.emit.blrReg(addr_reg);
-                self.codegen.freeGeneral(addr_reg);
+                // Load function address into X9 (caller-saved, not an arg register) and call
+                try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
+                try self.codegen.emit.blrReg(.X9);
 
                 // Get result from X0, X1
                 try self.codegen.emit.movRegReg(.w64, result_low, .X0);
@@ -2008,11 +2001,9 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 try self.codegen.emit.movRegReg(.w64, .X3, rhs_parts.high);
                 try self.codegen.emit.movRegReg(.w64, .X4, roc_ops_reg);
 
-                // Load function address and call
-                const addr_reg = try self.allocTempGeneral();
-                try self.codegen.emitLoadImm(addr_reg, @intCast(fn_addr));
-                try self.codegen.emit.blrReg(addr_reg);
-                self.codegen.freeGeneral(addr_reg);
+                // Load function address into X9 (caller-saved, not an arg register) and call
+                try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
+                try self.codegen.emit.blrReg(.X9);
 
                 // Get result from X0, X1
                 try self.codegen.emit.movRegReg(.w64, result_low, .X0);
@@ -2115,11 +2106,9 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 try self.codegen.emit.movRegReg(.w64, .X3, rhs_parts.high);
                 try self.codegen.emit.movRegReg(.w64, .X4, roc_ops_reg);
 
-                // Load function address and call
-                const addr_reg = try self.allocTempGeneral();
-                try self.codegen.emitLoadImm(addr_reg, @intCast(fn_addr));
-                try self.codegen.emit.blrReg(addr_reg);
-                self.codegen.freeGeneral(addr_reg);
+                // Load function address into X9 (caller-saved, not an arg register) and call
+                try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
+                try self.codegen.emit.blrReg(.X9);
 
                 // Get result from X0, X1
                 try self.codegen.emit.movRegReg(.w64, result_low, .X0);
@@ -3799,11 +3788,9 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 try self.codegen.emit.movRegImm64(.X2, if (elements_refcounted) 1 else 0);
                 try self.codegen.emit.movRegReg(.w64, .X3, roc_ops_reg);
 
-                // Load function address and call
-                const addr_reg = try self.allocTempGeneral();
-                try self.codegen.emitLoadImm(addr_reg, @intCast(fn_addr));
-                try self.codegen.emit.blrReg(addr_reg);
-                self.codegen.freeGeneral(addr_reg);
+                // Load function address into X9 (caller-saved, not an arg register) and call
+                try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
+                try self.codegen.emit.blrReg(.X9);
 
                 // Save heap pointer from X0 to stack slot
                 try self.codegen.emit.strRegMemSoff(.w64, .X0, .FP, heap_ptr_slot);
@@ -4617,11 +4604,9 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     try self.codegen.emit.movRegImm64(.X2, 0); // elements_refcounted = false
                     try self.codegen.emit.movRegReg(.w64, .X3, roc_ops_reg);
 
-                    // Load function address and call
-                    const addr_reg = try self.allocTempGeneral();
-                    try self.codegen.emitLoadImm(addr_reg, @intCast(fn_addr));
-                    try self.codegen.emit.blrReg(addr_reg);
-                    self.codegen.freeGeneral(addr_reg);
+                    // Load function address into X9 (caller-saved, not an arg register) and call
+                    try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
+                    try self.codegen.emit.blrReg(.X9);
 
                     // Save heap pointer from X0 to stack slot
                     try self.codegen.emit.strRegMemSoff(.w64, .X0, .FP, heap_ptr_slot);
@@ -9050,10 +9035,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 try self.codegen.emit.movRegImm64(.X1, @intCast(count));
                 try self.codegen.emit.movRegReg(.w64, .X2, roc_ops_reg);
 
-                const addr_reg = try self.allocTempGeneral();
-                try self.codegen.emitLoadImm(addr_reg, @intCast(fn_addr));
-                try self.codegen.emit.blrReg(addr_reg);
-                self.codegen.freeGeneral(addr_reg);
+                try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
+                try self.codegen.emit.blrReg(.X9);
             } else {
                 try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
                 try self.codegen.emit.movRegReg(.w64, .RDI, ptr_reg);
@@ -9098,10 +9081,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 try self.codegen.emit.movRegImm64(.X2, 0); // elements_refcounted = false
                 try self.codegen.emit.movRegReg(.w64, .X3, roc_ops_reg);
 
-                const addr_reg = try self.allocTempGeneral();
-                try self.codegen.emitLoadImm(addr_reg, @intCast(fn_addr));
-                try self.codegen.emit.blrReg(addr_reg);
-                self.codegen.freeGeneral(addr_reg);
+                try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
+                try self.codegen.emit.blrReg(.X9);
             } else {
                 try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
                 try self.codegen.emit.movRegReg(.w64, .RDI, ptr_reg);
@@ -9145,10 +9126,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 try self.codegen.emit.movRegImm64(.X2, 0);
                 try self.codegen.emit.movRegReg(.w64, .X3, roc_ops_reg);
 
-                const addr_reg = try self.allocTempGeneral();
-                try self.codegen.emitLoadImm(addr_reg, @intCast(fn_addr));
-                try self.codegen.emit.blrReg(addr_reg);
-                self.codegen.freeGeneral(addr_reg);
+                try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
+                try self.codegen.emit.blrReg(.X9);
             } else {
                 try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
                 try self.codegen.emit.movRegReg(.w64, .RDI, ptr_reg);
@@ -9216,10 +9195,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 try self.codegen.emit.movRegImm64(.X1, @intCast(count));
                 try self.codegen.emit.movRegReg(.w64, .X2, roc_ops_reg);
 
-                const addr_reg = try self.allocTempGeneral();
-                try self.codegen.emitLoadImm(addr_reg, @intCast(fn_addr));
-                try self.codegen.emit.blrReg(addr_reg);
-                self.codegen.freeGeneral(addr_reg);
+                try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
+                try self.codegen.emit.blrReg(.X9);
             } else {
                 try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
                 try self.codegen.emit.movRegReg(.w64, .RDI, ptr_reg);
@@ -9284,10 +9261,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 try self.codegen.emit.movRegImm64(.X2, 0); // elements_refcounted = false
                 try self.codegen.emit.movRegReg(.w64, .X3, roc_ops_reg);
 
-                const addr_reg = try self.allocTempGeneral();
-                try self.codegen.emitLoadImm(addr_reg, @intCast(fn_addr));
-                try self.codegen.emit.blrReg(addr_reg);
-                self.codegen.freeGeneral(addr_reg);
+                try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
+                try self.codegen.emit.blrReg(.X9);
             } else {
                 try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
                 try self.codegen.emit.movRegReg(.w64, .RDI, ptr_reg);
@@ -9352,10 +9327,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 try self.codegen.emit.movRegImm64(.X2, 0);
                 try self.codegen.emit.movRegReg(.w64, .X3, roc_ops_reg);
 
-                const addr_reg = try self.allocTempGeneral();
-                try self.codegen.emitLoadImm(addr_reg, @intCast(fn_addr));
-                try self.codegen.emit.blrReg(addr_reg);
-                self.codegen.freeGeneral(addr_reg);
+                try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
+                try self.codegen.emit.blrReg(.X9);
             } else {
                 try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
                 try self.codegen.emit.movRegReg(.w64, .RDI, ptr_reg);
@@ -9402,10 +9375,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 try self.codegen.emit.movRegImm64(.X1, @intCast(count));
                 try self.codegen.emit.movRegReg(.w64, .X2, roc_ops_reg);
 
-                const addr_reg = try self.allocTempGeneral();
-                try self.codegen.emitLoadImm(addr_reg, @intCast(fn_addr));
-                try self.codegen.emit.blrReg(addr_reg);
-                self.codegen.freeGeneral(addr_reg);
+                try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
+                try self.codegen.emit.blrReg(.X9);
             } else {
                 try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
                 try self.codegen.emit.movRegReg(.w64, .RDI, ptr_reg);
@@ -9449,10 +9420,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 try self.codegen.emit.movRegImm64(.X2, 0);
                 try self.codegen.emit.movRegReg(.w64, .X3, roc_ops_reg);
 
-                const addr_reg = try self.allocTempGeneral();
-                try self.codegen.emitLoadImm(addr_reg, @intCast(fn_addr));
-                try self.codegen.emit.blrReg(addr_reg);
-                self.codegen.freeGeneral(addr_reg);
+                try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
+                try self.codegen.emit.blrReg(.X9);
             } else {
                 try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
                 try self.codegen.emit.movRegReg(.w64, .RDI, ptr_reg);
@@ -9496,10 +9465,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 try self.codegen.emit.movRegImm64(.X2, 0);
                 try self.codegen.emit.movRegReg(.w64, .X3, roc_ops_reg);
 
-                const addr_reg = try self.allocTempGeneral();
-                try self.codegen.emitLoadImm(addr_reg, @intCast(fn_addr));
-                try self.codegen.emit.blrReg(addr_reg);
-                self.codegen.freeGeneral(addr_reg);
+                try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
+                try self.codegen.emit.blrReg(.X9);
             } else {
                 try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
                 try self.codegen.emit.movRegReg(.w64, .RDI, ptr_reg);
