@@ -2829,8 +2829,8 @@ pub const Interpreter = struct {
                     return result;
                 }
 
-                // Determine if elements are refcounted
-                const elements_refcounted = self.runtime_layout_store.layoutContainsRefcounted(elem_layout);
+                // Set up refcount context to determine if elements are refcounted
+                var rc = try RefcountContext.init(&self.runtime_layout_store, elem_layout, self.runtime_types, roc_ops);
 
                 // Create a fresh list by allocating and copying elements.
                 // We can't use the builtin listConcat here because it consumes its input lists
@@ -2845,7 +2845,7 @@ pub const Interpreter = struct {
                     elem_alignment_u32,
                     total_count,
                     elem_size,
-                    elements_refcounted,
+                    rc.isRefcounted(),
                     roc_ops,
                 );
 
@@ -2868,19 +2868,11 @@ pub const Interpreter = struct {
 
                 // Handle refcounting for copied elements - increment refcount for each element
                 // since we copied them (the elements are now shared with the original lists)
-                if (elements_refcounted) {
-                    const elem_rt_var = try self.runtime_types.fresh();
-                    var refcount_context = RefcountContext{
-                        .layout_store = &self.runtime_layout_store,
-                        .elem_layout = elem_layout,
-                        .elem_rt_var = elem_rt_var,
-                        .roc_ops = roc_ops,
-                        .is_refcounted = elements_refcounted,
-                    };
+                if (rc.isRefcounted()) {
                     if (runtime_list.bytes) |buffer| {
                         var i: usize = 0;
                         while (i < total_count) : (i += 1) {
-                            listElementInc(@ptrCast(&refcount_context), buffer + i * elem_size);
+                            listElementInc(rc.incContext(), buffer + i * elem_size);
                         }
                     }
                 }
