@@ -12205,7 +12205,7 @@ pub const Interpreter = struct {
                 // Schedule evaluation of the backing expression
                 try work_stack.push(.{ .eval_expr = .{
                     .expr_idx = nom.backing_expr,
-                    .expected_rt_var = backing_info.backing,
+                    .expected_rt_var = backing_info.nominal orelse backing_info.backing,
                 } });
             },
 
@@ -12367,11 +12367,13 @@ pub const Interpreter = struct {
                     self.triggerCrash(msg, true, roc_ops);
                     return error.Crash;
                 };
-                // Use the resolved (unwrapped) type's layout, not the nominal wrapper's layout.
-                // This ensures we get the actual tag union layout instead of a box wrapper.
-                // We store resolved.var_ as layout_rt_var for consistent layout calculation,
-                // while keeping rt_var for type identity and method dispatch.
-                const layout_rt_var = resolved.var_;
+                // Use rt_var for layout computation. For recursive nominals, this preserves the
+                // nominal var, which the layout store needs for its nominal-level cycle detection
+                // (in_progress_nominals). The layout store's cache maps nominal vars to their raw
+                // backing layout (not boxed), so getRuntimeLayout(nominal_var) returns the same
+                // tag union layout as getRuntimeLayout(tag_union_var) would — but without hitting
+                // the var-level cycle detection's unreachable path.
+                const layout_rt_var = rt_var;
                 const layout_val = try self.getRuntimeLayout(layout_rt_var);
 
                 if (layout_val.tag == .scalar) {
