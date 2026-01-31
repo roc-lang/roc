@@ -3577,7 +3577,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                             }
 
                             self.codegen.freeGeneral(temp_reg);
-                            try self.bindPattern(elem_pattern_id, .{ .stack = elem_slot });
+                            try self.bindPattern(elem_pattern_id, self.stackLocationForLayout(list_pattern.elem_layout, elem_slot));
                         }
 
                         self.codegen.freeGeneral(list_ptr_reg);
@@ -3832,7 +3832,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 // We must handle different location types differently because the actual
                 // size of the value may differ from elem_size (due to type variable resolution)
                 switch (elem_loc) {
-                    .stack => |src_offset| {
+                    .stack, .stack_str => |src_offset| {
                         // Copy elem_size bytes from stack to heap in 8-byte chunks
                         const temp_reg = try self.allocTempGeneral();
                         var copied: u32 = 0;
@@ -4856,7 +4856,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // Bind the element to the pattern, passing the element layout so list patterns
             // can use the correct inner element size (the pattern's stored elem_layout may be wrong)
             // For ZST elements, bind to immediate 0 (no actual data)
-            const elem_loc: ValueLocation = if (is_zst) .{ .immediate_i64 = 0 } else .{ .stack = elem_slot };
+            const elem_loc: ValueLocation = if (is_zst) .{ .immediate_i64 = 0 } else self.stackLocationForLayout(for_loop.elem_layout, elem_slot);
             try self.bindPatternWithLayout(for_loop.elem_pattern, elem_loc, for_loop.elem_layout);
 
             // Execute the body (result is discarded)
@@ -5561,13 +5561,10 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     // Bind each field
                     for (field_patterns, 0..) |field_pattern_id, i| {
                         const field_offset = ls.getRecordFieldOffset(record_layout.data.record.idx, @intCast(i));
-                        const field_size = ls.getRecordFieldSize(record_layout.data.record.idx, @intCast(i));
 
-                        // Create a location for the field
-                        const field_loc: ValueLocation = if (field_size > 8)
-                            .{ .stack = base_offset + @as(i32, @intCast(field_offset)) }
-                        else
-                            .{ .stack = base_offset + @as(i32, @intCast(field_offset)) };
+                        // Create a location for the field using the correct layout type
+                        const field_layout_idx = ls.getRecordFieldLayout(record_layout.data.record.idx, @intCast(i));
+                        const field_loc: ValueLocation = self.stackLocationForLayout(field_layout_idx, base_offset + @as(i32, @intCast(field_offset)));
 
                         try self.bindPattern(field_pattern_id, field_loc);
                     }
@@ -5587,12 +5584,13 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         else => return, // Can't destructure non-stack values
                     };
 
-                    // Bind each element
+                    // Bind each element (patterns are in source order, so use ByOriginalIndex)
                     for (elem_patterns, 0..) |elem_pattern_id, i| {
-                        const elem_offset = ls.getTupleElementOffset(tuple_layout.data.tuple.idx, @intCast(i));
+                        const elem_offset = ls.getTupleElementOffsetByOriginalIndex(tuple_layout.data.tuple.idx, @intCast(i));
 
-                        // Create a location for the element
-                        const elem_loc: ValueLocation = .{ .stack = base_offset + @as(i32, @intCast(elem_offset)) };
+                        // Create a location for the element using the correct layout type
+                        const elem_layout_idx = ls.getTupleElementLayoutByOriginalIndex(tuple_layout.data.tuple.idx, @intCast(i));
+                        const elem_loc: ValueLocation = self.stackLocationForLayout(elem_layout_idx, base_offset + @as(i32, @intCast(elem_offset)));
 
                         try self.bindPattern(elem_pattern_id, elem_loc);
                     }
@@ -5682,12 +5680,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         self.codegen.freeGeneral(temp_reg);
 
                         // Bind the element pattern to the stack slot
-                        // Use stack_i128 for 16-byte elements (Dec/i128) so that i128 operations
-                        // know to load the full 16 bytes
-                        const elem_loc: ValueLocation = if (elem_size == 16)
-                            .{ .stack_i128 = elem_slot }
-                        else
-                            .{ .stack = elem_slot };
+                        const elem_loc: ValueLocation = self.stackLocationForLayout(lst.elem_layout, elem_slot);
                         try self.bindPattern(elem_pattern_id, elem_loc);
                     }
 
@@ -5760,7 +5753,11 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         self.codegen.freeGeneral(len_reg);
 
                         // Bind the rest pattern to the new list slot
-                        try self.bindPattern(lst.rest, .{ .stack = rest_slot });
+                        try self.bindPattern(lst.rest, .{ .list_stack = .{
+                            .struct_offset = rest_slot,
+                            .data_offset = 0,
+                            .num_elements = 0,
+                        } });
                     }
 
                     self.codegen.freeGeneral(list_ptr_reg);
@@ -5796,27 +5793,17 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     if (arg_patterns.len == 1) {
                         // Use the correct value location type based on payload layout
                         const payload_loc_offset = base_offset + payload_offset;
-                        const arg_loc: ValueLocation = if (variant.payload_layout == .i128 or
-                            variant.payload_layout == .u128 or variant.payload_layout == .dec)
-                            .{ .stack_i128 = payload_loc_offset }
-                        else if (variant.payload_layout == .str)
-                            .{ .stack_str = payload_loc_offset }
-                        else if (payload_layout.tag == .list or payload_layout.tag == .list_of_zst)
-                            .{ .list_stack = .{
-                                .struct_offset = payload_loc_offset,
-                                .data_offset = 0,
-                                .num_elements = 0,
-                            } }
-                        else
-                            .{ .stack = payload_loc_offset };
+                        const arg_loc: ValueLocation = self.stackLocationForLayout(variant.payload_layout, payload_loc_offset);
                         try self.bindPattern(arg_patterns[0], arg_loc);
                     } else {
                         // Multiple args means payload is a tuple - get offsets from tuple layout
+                        // Patterns are in source order, so use ByOriginalIndex
                         if (payload_layout.tag == .tuple) {
                             for (arg_patterns, 0..) |arg_pattern_id, i| {
-                                const tuple_elem_offset = ls.getTupleElementOffset(payload_layout.data.tuple.idx, @intCast(i));
+                                const tuple_elem_offset = ls.getTupleElementOffsetByOriginalIndex(payload_layout.data.tuple.idx, @intCast(i));
                                 const arg_offset = base_offset + payload_offset + @as(i32, @intCast(tuple_elem_offset));
-                                try self.bindPattern(arg_pattern_id, .{ .stack = arg_offset });
+                                const tuple_elem_layout_idx = ls.getTupleElementLayoutByOriginalIndex(payload_layout.data.tuple.idx, @intCast(i));
+                                try self.bindPattern(arg_pattern_id, self.stackLocationForLayout(tuple_elem_layout_idx, arg_offset));
                             }
                         } else {
                             // Payload is not a tuple but we have multiple patterns - this shouldn't happen
@@ -5833,6 +5820,21 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     // They are used for matching in when expressions, not for binding
                 },
             }
+        }
+
+        /// Map a layout index to the correct ValueLocation for a value on the stack.
+        /// Multi-word types (strings, i128/Dec, lists) need specific location variants
+        /// so downstream code loads the correct number of bytes.
+        fn stackLocationForLayout(self: *Self, layout_idx: layout.Idx, stack_offset: i32) ValueLocation {
+            if (layout_idx == .i128 or layout_idx == .u128 or layout_idx == .dec)
+                return .{ .stack_i128 = stack_offset };
+            if (layout_idx == .str)
+                return .{ .stack_str = stack_offset };
+            const ls = self.layout_store orelse return .{ .stack = stack_offset };
+            const resolved = ls.getLayout(layout_idx);
+            if (resolved.tag == .list or resolved.tag == .list_of_zst)
+                return .{ .list_stack = .{ .struct_offset = stack_offset, .data_offset = 0, .num_elements = 0 } };
+            return .{ .stack = stack_offset };
         }
 
         /// Get the register used for argument N in the calling convention
