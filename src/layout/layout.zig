@@ -418,6 +418,48 @@ pub const ListInfo = struct {
     elem_size: u32,
     elem_alignment: u32,
     contains_refcounted: bool,
+
+    /// Iterator for traversing list elements with proper pointer arithmetic.
+    /// Use iterateElements() to create one.
+    pub const ElementIterator = struct {
+        base: [*]u8,
+        elem_size: usize,
+        elem_layout: Layout,
+        count: usize,
+        idx: usize = 0,
+
+        /// Get the next element pointer and advance the iterator.
+        /// Returns null when all elements have been visited.
+        pub fn next(self: *ElementIterator) ?[*]u8 {
+            if (self.idx >= self.count) return null;
+            const ptr = self.base + self.idx * self.elem_size;
+            self.idx += 1;
+            return ptr;
+        }
+
+        /// Reset the iterator to the beginning.
+        pub fn reset(self: *ElementIterator) void {
+            self.idx = 0;
+        }
+
+        /// Get remaining element count.
+        pub fn remaining(self: ElementIterator) usize {
+            return self.count - self.idx;
+        }
+    };
+
+    /// Create an iterator for traversing list elements.
+    /// The caller should obtain base_ptr and count from RocList methods:
+    ///   - base_ptr from list.getAllocationDataPtr(ops)
+    ///   - count from list.getAllocationElementCount(self.contains_refcounted, ops)
+    pub fn iterateElements(self: ListInfo, base_ptr: [*]u8, count: usize) ElementIterator {
+        return ElementIterator{
+            .base = base_ptr,
+            .elem_size = self.elem_size,
+            .elem_layout = self.elem_layout,
+            .count = count,
+        };
+    }
 };
 
 /// Bundled information about a box's element layout

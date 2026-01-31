@@ -36,7 +36,6 @@ const RecordInfo = layout_mod.RecordInfo;
 const TupleInfo = layout_mod.TupleInfo;
 const TagUnionInfo = layout_mod.TagUnionInfo;
 const ScalarInfo = layout_mod.ScalarInfo;
-const ScalarTag = layout_mod.ScalarTag;
 const Work = work.Work;
 
 /// Errors that can occur during layout computation

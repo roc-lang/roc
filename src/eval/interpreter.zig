@@ -960,11 +960,9 @@ pub const Interpreter = struct {
                             const raw_ptr = s.*;
                             if (raw_ptr != 0) {
                                 const data_ptr: [*]u8 = @ptrFromInt(raw_ptr);
-                                const elem_layout = self.runtime_layout_store.getLayout(arg_value.layout.data.box);
-                                const target_usize = self.runtime_layout_store.targetUsize();
-                                const elem_alignment: u32 = @intCast(elem_layout.alignment(target_usize).toByteUnits());
+                                const box_info = self.runtime_layout_store.getBoxInfo(arg_value.layout);
                                 // Decref the data pointer but don't zero the host's slot
-                                builtins.utils.decrefDataPtrC(@as(?[*]u8, data_ptr), elem_alignment, false, roc_ops);
+                                builtins.utils.decrefDataPtrC(@as(?[*]u8, data_ptr), box_info.elem_alignment, false, roc_ops);
                             }
                         }
                     } else if (arg_value.layout.tag != .box_of_zst) {
@@ -1205,19 +1203,15 @@ pub const Interpreter = struct {
             return .{ .already_sorted = list_arg };
         }
 
-        // Get element layout
-        const elem_layout_idx = list_arg.layout.data.list;
-        const elem_layout = self.runtime_layout_store.getLayout(elem_layout_idx);
-        const elem_size = self.runtime_layout_store.layoutSize(elem_layout);
-        const elem_alignment = elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
-        const elem_alignment_u32: u32 = @intCast(elem_alignment);
+        // Get element layout info
+        const list_info = self.runtime_layout_store.getListInfo(list_arg.layout);
 
         // Make a unique copy of the list for sorting
-        var rc = try RefcountContext.init(&self.runtime_layout_store, elem_layout, self.runtime_types, roc_ops);
+        var rc = try RefcountContext.init(&self.runtime_layout_store, list_info.elem_layout, self.runtime_types, roc_ops);
 
         const working_list = roc_list.makeUnique(
-            elem_alignment_u32,
-            elem_size,
+            list_info.elem_alignment,
+            list_info.elem_size,
             rc.isRefcounted(),
             rc.incContext(),
             rc.incCallback(),
@@ -1237,17 +1231,17 @@ pub const Interpreter = struct {
 
         // Start insertion sort at index 1
         // Get elements at indices 0 and 1 for first comparison
-        const elem0_ptr = working_list.bytes.? + 0 * elem_size;
-        const elem1_ptr = working_list.bytes.? + 1 * elem_size;
+        const elem0_ptr = working_list.bytes.? + 0 * list_info.elem_size;
+        const elem1_ptr = working_list.bytes.? + 1 * list_info.elem_size;
 
         const elem0_value = StackValue{
-            .layout = elem_layout,
+            .layout = list_info.elem_layout,
             .ptr = @ptrCast(elem0_ptr),
             .is_initialized = true,
             .rt_var = rc.elem_rt_var,
         };
         const elem1_value = StackValue{
-            .layout = elem_layout,
+            .layout = list_info.elem_layout,
             .ptr = @ptrCast(elem1_ptr),
             .is_initialized = true,
             .rt_var = rc.elem_rt_var,
@@ -1266,8 +1260,8 @@ pub const Interpreter = struct {
             .outer_index = 1,
             .inner_index = 0,
             .list_len = list_len,
-            .elem_size = elem_size,
-            .elem_layout = elem_layout,
+            .elem_size = list_info.elem_size,
+            .elem_layout = list_info.elem_layout,
             .elem_rt_var = rc.elem_rt_var,
         } } });
         saved_rigid_subst = null; // Ownership transferred to continuation
@@ -2575,22 +2569,18 @@ pub const Interpreter = struct {
                     return out;
                 }
 
-                // Get element layout from the list layout
+                // Get element layout info
                 std.debug.assert(result_layout.tag == .list);
-                const elem_layout_idx = result_layout.data.list;
-                const elem_layout = self.runtime_layout_store.getLayout(elem_layout_idx);
-                const elem_size = self.runtime_layout_store.layoutSize(elem_layout);
-                const elem_alignment = elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
-                const elem_alignment_u32: u32 = @intCast(elem_alignment);
+                const list_info = self.runtime_layout_store.getListInfo(result_layout);
 
                 // Set up refcount context
-                var rc = try RefcountContext.init(&self.runtime_layout_store, elem_layout, self.runtime_types, roc_ops);
+                var rc = try RefcountContext.init(&self.runtime_layout_store, list_info.elem_layout, self.runtime_types, roc_ops);
 
                 // Create empty list with capacity
                 const result_list = builtins.list.listWithCapacity(
                     capacity,
-                    elem_alignment_u32,
-                    elem_size,
+                    list_info.elem_alignment,
+                    list_info.elem_size,
                     rc.isRefcounted(),
                     rc.incContext(),
                     rc.incCallback(),
@@ -2624,16 +2614,14 @@ pub const Interpreter = struct {
                 const roc_list = list_arg.asRocList().?;
                 const index = index_arg.asI128(); // U64 stored as i128
 
-                // Get element layout
-                const elem_layout_idx = list_arg.layout.data.list;
-                const elem_layout = self.runtime_layout_store.getLayout(elem_layout_idx);
-                const elem_size = self.runtime_layout_store.layoutSize(elem_layout);
+                // Get element layout info
+                const list_info = self.runtime_layout_store.getListInfo(list_arg.layout);
 
-                if (elem_size == 0) {
+                if (list_info.elem_size == 0) {
                     // ZST element - return zero-sized value
                     const elem_rt_var = return_rt_var orelse try self.runtime_types.fresh();
                     return StackValue{
-                        .layout = elem_layout,
+                        .layout = list_info.elem_layout,
                         .ptr = null,
                         .is_initialized = true,
                         .rt_var = elem_rt_var,
@@ -2641,7 +2629,7 @@ pub const Interpreter = struct {
                 }
 
                 // Get pointer to element (no bounds checking!)
-                const elem_ptr = builtins.list.listGetUnsafe(roc_list.*, @intCast(index), elem_size);
+                const elem_ptr = builtins.list.listGetUnsafe(roc_list.*, @intCast(index), list_info.elem_size);
                 // Null pointer from list_get_unsafe is a compiler bug - bounds should have been checked
                 std.debug.assert(elem_ptr != null);
 
@@ -2745,12 +2733,12 @@ pub const Interpreter = struct {
                         }
                     }
                     // Final fallback: create type from layout (handles corrupted types)
-                    break :blk try self.createTypeFromLayout(elem_layout);
+                    break :blk try self.createTypeFromLayout(list_info.elem_layout);
                 };
 
                 // Create StackValue pointing to the element
                 const elem_value = StackValue{
-                    .layout = elem_layout,
+                    .layout = list_info.elem_layout,
                     .ptr = @ptrCast(elem_ptr.?),
                     .is_initialized = true,
                     .rt_var = elem_rt_var,
@@ -3215,21 +3203,17 @@ pub const Interpreter = struct {
 
                 const roc_list = list_arg.asRocList().?;
 
-                // Get element layout from the list layout
-                const elem_layout_idx = list_arg.layout.data.list;
-                const elem_layout = self.runtime_layout_store.getLayout(elem_layout_idx);
-                const elem_size = self.runtime_layout_store.layoutSize(elem_layout);
-                const elem_alignment = elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
-                const elem_alignment_u32: u32 = @intCast(elem_alignment);
+                // Get element layout info
+                const list_info = self.runtime_layout_store.getListInfo(list_arg.layout);
 
                 // Set up refcount context
-                var rc = try RefcountContext.init(&self.runtime_layout_store, elem_layout, self.runtime_types, roc_ops);
+                var rc = try RefcountContext.init(&self.runtime_layout_store, list_info.elem_layout, self.runtime_types, roc_ops);
 
                 // Return list with element at index dropped
                 const result_list = builtins.list.listDropAt(
                     roc_list.*,
-                    elem_alignment_u32,
-                    elem_size,
+                    list_info.elem_alignment,
+                    list_info.elem_size,
                     rc.isRefcounted(),
                     drop_index,
                     rc.incContext(),
@@ -3269,21 +3253,17 @@ pub const Interpreter = struct {
                 const sublist_start: u64 = @intCast(sublist_start_stack.asI128());
                 const sublist_len: u64 = @intCast(sublist_len_stack.asI128());
 
-                // Get element layout from the list layout
-                const elem_layout_idx = list_arg.layout.data.list;
-                const elem_layout = self.runtime_layout_store.getLayout(elem_layout_idx);
-                const elem_size = self.runtime_layout_store.layoutSize(elem_layout);
-                const elem_alignment = elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
-                const elem_alignment_u32: u32 = @intCast(elem_alignment);
+                // Get element layout info
+                const list_info = self.runtime_layout_store.getListInfo(list_arg.layout);
 
                 // Set up refcount context
-                var rc = try RefcountContext.init(&self.runtime_layout_store, elem_layout, self.runtime_types, roc_ops);
+                var rc = try RefcountContext.init(&self.runtime_layout_store, list_info.elem_layout, self.runtime_types, roc_ops);
 
                 // Return sublist
                 const result_list = builtins.list.listSublist(
                     roc_list.*,
-                    elem_alignment_u32,
-                    elem_size,
+                    list_info.elem_alignment,
+                    list_info.elem_size,
                     rc.isRefcounted(),
                     sublist_start,
                     sublist_len,
@@ -7227,8 +7207,7 @@ pub const Interpreter = struct {
                 // This is critical because the value may have been created with a structurally
                 // equivalent but differently-indexed type. The layout is authoritative for the
                 // actual memory representation.
-                const tu_data = self.runtime_layout_store.getTagUnionData(value.layout.data.tag_union.idx);
-                const layout_variants = self.runtime_layout_store.getTagUnionVariants(tu_data);
+                const tu_info = self.runtime_layout_store.getTagUnionInfo(value.layout);
                 // If discriminant is out of range for the layout's variant count, this indicates
                 // a mismatch between the value's layout and the expected type. This can happen when:
                 // 1. A value was created with a narrower type (e.g., [XYZ]) that the type system
@@ -7239,7 +7218,7 @@ pub const Interpreter = struct {
                 // For single-variant unions, the discriminant doesn't carry useful information
                 // (there's only one possible tag), so we can safely use index 0.
                 // For multi-variant unions with out-of-range discriminants, return an error.
-                if (tag_index >= layout_variants.len) {
+                if (tag_index >= tu_info.variants.len) {
                     // The discriminant is out of range for this layout's variant count.
                     // This typically means the value was created with a wider type (more variants)
                     // than the current expected type. Return the actual discriminant so the caller
@@ -7253,11 +7232,11 @@ pub const Interpreter = struct {
                     // We use variant 0's layout as a placeholder for memory shape, but preserve
                     // original_tu_layout_idx so that refcounting uses the correct original layout
                     // to properly incref/decref the actual payload.
-                    if (layout_variants.len >= 1) {
+                    if (tu_info.variants.len >= 1) {
                         const payload_layout = acc.getVariantLayout(0);
                         // Preserve original tag union layout: use existing original if present,
                         // otherwise capture current layout's tag union index
-                        const orig_tu_idx = value.original_tu_layout_idx orelse value.layout.data.tag_union.idx;
+                        const orig_tu_idx = value.original_tu_layout_idx orelse tu_info.idx;
                         if (payload_layout.tag != .zst) {
                             return .{
                                 .index = tag_index, // Return actual discriminant, not 0
@@ -7539,27 +7518,25 @@ pub const Interpreter = struct {
         }
 
         if (boxed_value.layout.tag == .box) {
-            // Get element layout
-            const elem_idx = boxed_value.layout.data.box;
-            const elem_layout = self.runtime_layout_store.getLayout(elem_idx);
-            const elem_size = self.runtime_layout_store.layoutSize(elem_layout);
+            // Get element layout info
+            const box_info = self.runtime_layout_store.getBoxInfo(boxed_value.layout);
 
             // Get pointer to heap data from the box
             const data_ptr = boxed_value.getBoxedData().?;
 
             // Allocate stack space and copy the value
-            var result = try self.pushRaw(elem_layout, 0, elem_rt_var);
-            if (elem_size > 0 and result.ptr != null) {
+            var result = try self.pushRaw(box_info.elem_layout, 0, elem_rt_var);
+            if (box_info.elem_size > 0 and result.ptr != null) {
                 @memcpy(
-                    @as([*]u8, @ptrCast(result.ptr.?))[0..elem_size],
-                    data_ptr[0..elem_size],
+                    @as([*]u8, @ptrCast(result.ptr.?))[0..box_info.elem_size],
+                    data_ptr[0..box_info.elem_size],
                 );
             }
             result.is_initialized = true;
 
             // If the element is refcounted, increment its refcount since we're
             // creating a new reference (the box still holds its own reference)
-            if (self.runtime_layout_store.layoutContainsRefcounted(elem_layout)) {
+            if (box_info.contains_refcounted) {
                 result.incref(&self.runtime_layout_store, roc_ops);
             }
 
