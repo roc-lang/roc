@@ -78,6 +78,8 @@ pub const Context = union(enum) {
     method_type: MethodTypeContext,
     /// `expect` statements
     expect,
+    /// recursive definition mismatch
+    recursive_def: RecursiveDef,
 
     /// Context for function call
     pub const FnCallArityContext = struct {
@@ -254,6 +256,12 @@ pub const Context = union(enum) {
         dispatcher_name: Ident.Idx,
         /// The method name
         method_name: Ident.Idx,
+    };
+
+    /// Context for method type mismatch (where clause)
+    pub const RecursiveDef = struct {
+        /// The def name
+        def_name: ?Ident.Idx,
     };
 };
 

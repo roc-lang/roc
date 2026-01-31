@@ -663,6 +663,7 @@ pub const ReportBuilder = struct {
                     .expect => self.buildExpect(mismatch.types),
                     .record_access => |ctx| self.buildRecordAccess(mismatch.types, ctx),
                     .record_update => |ctx| self.buildRecordUpdate(mismatch.types, ctx),
+                    .recursive_def => |ctx| self.buildRecursiveDef(mismatch.types, ctx),
                     .platform_requirement => return try self.makeMismatchReport(
                         ProblemRegion{ .simple = regionIdxFrom(mismatch.types.actual_var) },
                         &.{D.bytes("This expression is used in an unexpected way:")},
@@ -1976,7 +1977,7 @@ pub const ReportBuilder = struct {
                 D.bytes("has the type:"),
             },
             types.expected_snapshot,
-            &.{D.bytes("But is needs to have the type:")},
+            &.{D.bytes("But I need it to have the type:")},
             types.actual_snapshot,
             &.{
                 // TODO: Once we have nicer type diff hints, use them here
@@ -2269,6 +2270,30 @@ pub const ReportBuilder = struct {
                 }
             },
         }
+    }
+
+    /// Build a report for when a method exists but its type doesn't match the where clause requirement
+    fn buildRecursiveDef(
+        self: *Self,
+        types: TypePair,
+        ctx: problem_mod.Context.RecursiveDef,
+    ) !Report {
+        return try self.makeMismatchReport(
+            ProblemRegion{ .simple = regionIdxFrom(types.actual_var) },
+            if (ctx.def_name) |def_name|
+                &.{
+                    D.bytes("The recursive definition"),
+                    D.ident(def_name).withAnnotation(.inline_code),
+                    D.bytes("is used in an unexpected way:"),
+                }
+            else
+                &.{D.bytes("This recursive definition is used in an unexpected way:")},
+            &.{D.bytes("It has the type:")},
+            types.actual_snapshot,
+            &.{D.bytes("But other places expect it to be:")},
+            types.expected_snapshot,
+            &.{},
+        );
     }
 
     /// Build a report for when an anonymous type doesn't support equality

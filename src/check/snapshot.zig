@@ -3,6 +3,7 @@
 const std = @import("std");
 const base = @import("base");
 const collections = @import("collections");
+const tracy = @import("tracy");
 const types = @import("types");
 
 const Allocator = std.mem.Allocator;
@@ -247,6 +248,9 @@ pub const Store = struct {
     /// AND formats each nested type using TypeWriter before the types get overwritten with .err.
     /// ONLY use this in error paths - it allocates formatted strings for all nested types.
     pub fn snapshotVarForError(self: *Self, store: *const TypesStore, type_writer: *TypeWriter, var_: types.Var) std.mem.Allocator.Error!SnapshotContentIdx {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
         const snapshot_idx = try self.deepCopyVarInternal(store, type_writer, var_);
         return snapshot_idx;
     }
@@ -631,6 +635,9 @@ pub const Store = struct {
         gpa: std.mem.Allocator,
         fields_out: *SnapshotRecordFieldSafeList,
     ) std.mem.Allocator.Error!RecordFieldSnapshot {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
         const unwrapped = self.getContentUnwrapAlias(idx);
         switch (unwrapped) {
             .structure => |s| switch (s) {
@@ -675,6 +682,8 @@ pub const Store = struct {
         gpa: std.mem.Allocator,
         fields_out: *SnapshotRecordFieldSafeList,
     ) std.mem.Allocator.Error!void {
+        const trace = tracy.trace(@src());
+        defer trace.end();
 
         // Add immediate fields
         const record_fields = self.sliceRecordFields(record.fields);

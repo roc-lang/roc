@@ -6,6 +6,7 @@
 
 const std = @import("std");
 const base = @import("base");
+const tracy = @import("tracy");
 const snapshot = @import("../snapshot.zig");
 
 const Allocator = std.mem.Allocator;
@@ -192,6 +193,9 @@ pub fn findBestTypoSuggestions(
     ident_store: *const Ident.Store,
     suggestions: *TypoSuggestion.ArrayList,
 ) std.mem.Allocator.Error!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     // Clobber and allocate
     suggestions.clearRetainingCapacity();
     try suggestions.ensureUnusedCapacity(candidates.len);
@@ -226,8 +230,11 @@ pub fn compareTypes(
     fields: *SnapshotRecordFieldSafeList,
     tags: *SnapshotTagSafeList,
 ) HintList {
-    fields.items.shrinkRetainingCapacity(0);
-    tags.items.shrinkRetainingCapacity(0);
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    fields.items.clearRetainingCapacity();
+    tags.items.clearRetainingCapacity();
     var hints = HintList{};
 
     const expected = snap_store.getContent(expected_idx);
@@ -453,6 +460,9 @@ pub fn gatherFieldsFromRecord(
     gpa: Allocator,
     fields: *SnapshotRecordFieldSafeList,
 ) SnapshotRecordFieldSafeList.Range {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     const start: u32 = fields.len();
     snap_store.gatherRecordFieldsHelp(record, gpa, fields) catch {};
     return fields.rangeToEnd(start);

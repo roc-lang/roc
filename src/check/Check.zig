@@ -125,7 +125,11 @@ enclosing_func_name: ?Ident.Idx,
 type_writer: types_mod.TypeWriter,
 
 /// A def + processing data
-const DefProcessed = struct { def_idx: CIR.Def.Idx, status: HasProcessed };
+const DefProcessed = struct {
+    def_idx: CIR.Def.Idx,
+    def_name: ?Ident.Idx,
+    status: HasProcessed,
+};
 
 /// Indicates if something has been processed or not
 const HasProcessed = enum { processed, processing, not_processed };
@@ -141,13 +145,7 @@ const ScratchStaticDispatchConstraint = struct {
 /// In most cases, we don't defer constraint checking and unify things
 /// immediately. However, there are some cases where it's necessary.
 const Constraint = union(enum) {
-    eql: struct { expected: Var, actual: Var, ctx: Ctx },
-
-    pub const Ctx = union(enum) {
-        anonymous,
-        early_return,
-        try_suffix_return,
-    };
+    eql: struct { expected: Var, actual: Var, ctx: problem.Context },
 
     pub const SafeList = MkSafeList(@This());
 };
@@ -367,6 +365,9 @@ const Env = struct {
 
 /// Unify two types where `a` is the expected type and `b` is the actual type
 fn unify(self: *Self, a: Var, b: Var, env: *Env) std.mem.Allocator.Error!unifier.Result {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     return self.unifyInContext(a, b, env, .none);
 }
 
@@ -427,6 +428,9 @@ fn unifyInContext(self: *Self, a: Var, b: Var, env: *Env, ctx: problem.Context) 
 /// This catches cases like `f = |x| f([x])` which creates `a = List(a)`.
 /// Similar to Rust's check_for_infinite_type called after LetCon.
 fn checkForInfiniteType(self: *Self, comptime Idx: anytype, idx: Idx) std.mem.Allocator.Error!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     std.debug.assert(Idx == CIR.Def.Idx or Idx == CIR.Expr.Idx);
 
     const var_ = ModuleEnv.varFrom(idx);
@@ -499,6 +503,9 @@ fn instantiateVar(
     env: *Env,
     region_behavior: InstantiateRegionBehavior,
 ) std.mem.Allocator.Error!Var {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     var instantiate_ctx = Instantiator{
         .store = self.types,
         .idents = self.cir.getIdentStoreConst(),
@@ -520,6 +527,8 @@ fn instantiateVarOrphan(
     rank: Rank,
     region_behavior: InstantiateRegionBehavior,
 ) std.mem.Allocator.Error!Var {
+    const trace = tracy.trace(@src());
+    defer trace.end();
     std.debug.assert(@intFromEnum(rank) <= @intFromEnum(env.rank()));
     var instantiate_ctx = Instantiator{
         .store = self.types,
@@ -547,6 +556,9 @@ fn instantiateVarWithSubs(
     env: *Env,
     region_behavior: InstantiateRegionBehavior,
 ) std.mem.Allocator.Error!Var {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     var instantiate_ctx = Instantiator{
         .store = self.types,
         .idents = self.cir.getIdentStoreConst(),
@@ -566,6 +578,9 @@ fn instantiateVarHelp(
     env: *Env,
     region_behavior: InstantiateRegionBehavior,
 ) std.mem.Allocator.Error!Var {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     // First, reset state
     instantiator.var_map.clearRetainingCapacity();
 
@@ -671,6 +686,9 @@ fn freshStr(self: *Self, env: *Env, new_region: Region) Allocator.Error!Var {
 
 /// Create a nominal List type with the given element type
 fn mkListContent(self: *Self, elem_var: Var, env: *Env) Allocator.Error!Content {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     // Use the cached builtin_module_ident from the current module's ident store.
     // This represents the "Builtin" module where List is defined.
     const origin_module_id = if (self.builtin_ctx.builtin_module) |_|
@@ -713,6 +731,9 @@ fn mkListContent(self: *Self, elem_var: Var, env: *Env) Allocator.Error!Content 
 /// Number types are defined in Builtin.roc nested inside Num module: Num.U8 :: [].{...}
 /// They have no type parameters and their backing is the empty tag union []
 fn mkNumberTypeContent(self: *Self, type_name: []const u8, env: *Env) Allocator.Error!Content {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     const origin_module_id = if (self.builtin_ctx.builtin_module) |_|
         self.cir.idents.builtin_module
     else
@@ -759,6 +780,9 @@ fn mkFlexWithFromNumeralConstraint(
     num_literal_info: types_mod.NumeralInfo,
     env: *Env,
 ) !Var {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     const from_numeral_ident = self.cir.idents.from_numeral;
 
     // Create the flex var first - this represents the target type `a`
@@ -824,6 +848,9 @@ fn mkFlexWithFromNumeralConstraint(
 
 /// Create a nominal Box type with the given element type
 fn mkBoxContent(self: *Self, elem_var: Var) Allocator.Error!Content {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     // Use the cached builtin_module_ident from the current module's ident store.
     // This represents the "Builtin" module where Box is defined.
     const origin_module_id = if (self.builtin_ctx.builtin_module) |_|
@@ -851,6 +878,9 @@ fn mkBoxContent(self: *Self, elem_var: Var) Allocator.Error!Content {
 /// Create a nominal Try type with the given success and error types.
 /// This is used for creating Try types in function signatures (e.g., from_numeral).
 fn mkTryContent(self: *Self, ok_var: Var, err_var: Var, env: *Env) Allocator.Error!Content {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     const origin_module_id = if (self.builtin_ctx.builtin_module) |_|
         self.cir.idents.builtin_module
     else
@@ -885,6 +915,9 @@ fn mkTryContent(self: *Self, ok_var: Var, err_var: Var, env: *Env) Allocator.Err
 /// Create a nominal Numeral type (from Builtin.Num.Numeral)
 /// Numeral has no type parameters - it's a concrete record type wrapped in Self tag
 fn mkNumeralContent(self: *Self, env: *Env) Allocator.Error!Content {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     // Use the cached builtin_module_ident from the current module's ident store.
     // This represents the "Builtin" module where Numeral is defined.
     const origin_module_id = if (self.builtin_ctx.builtin_module) |_|
@@ -928,6 +961,9 @@ fn mkNumeralContent(self: *Self, env: *Env) Allocator.Error!Content {
 ///
 /// This should primarily be use to set CIR node vars that were initially filled with placeholders
 fn unifyWith(self: *Self, target_var: Var, content: types_mod.Content, env: *Env) std.mem.Allocator.Error!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     const resolved_target = self.types.resolveVar(target_var);
     if (resolved_target.is_root and resolved_target.desc.rank == env.rank() and resolved_target.desc.content == .flex) {
         // The vast majority of the time, we call unify with on a placeholder
@@ -971,6 +1007,9 @@ fn setVarRank(self: *Self, target_var: Var, env: *Env) std.mem.Allocator.Error!v
 /// other modules directly. The Bool and Try types are used in language constructs like
 /// `if` conditions and need to be available in every module's type store.
 fn copyBuiltinTypes(self: *Self) !void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     const bool_stmt_idx = self.builtin_ctx.bool_stmt;
     const str_stmt_idx = self.builtin_ctx.str_stmt;
 
@@ -1053,7 +1092,11 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
     const defs_slice = self.cir.store.sliceDefs(self.cir.all_defs);
     for (defs_slice) |def_idx| {
         const def = self.cir.store.getDef(def_idx);
-        try self.top_level_ptrns.put(def.pattern, .{ .def_idx = def_idx, .status = .not_processed });
+        try self.top_level_ptrns.put(def.pattern, DefProcessed{
+            .def_idx = def_idx,
+            .def_name = null,
+            .status = .not_processed,
+        });
     }
 
     // Set the rank to be outermost
@@ -1139,6 +1182,9 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
 /// So `b` get the node CIR.TypeAnno.rigid_var_lookup{ .ref = <a_id> }
 /// Then, any reference to `b` replaced with `a` in `generateAnnoTypeInPlace`.
 fn processRequiresTypes(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     // Ensure we are generalized
     // This is because we do not want the type checking we do here to be let-polymorphic
     std.debug.assert(env.rank() == .outermost);
@@ -1429,6 +1475,9 @@ pub fn checkPlatformRequirements(
 /// not the var for the alias declaration itself.
 /// Returns null if no type alias declaration with the given name is found.
 fn findTypeAliasBodyVar(self: *Self, name: Ident.Idx) ?Var {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     const stmts_slice = self.cir.store.sliceStatements(self.cir.all_statements);
     for (stmts_slice) |stmt_idx| {
         const stmt = self.cir.store.getStatement(stmt_idx);
@@ -1466,6 +1515,9 @@ fn isForClauseAliasStatement(self: *Self, stmt_idx: CIR.Statement.Idx) bool {
 
 /// Check an expr for the repl
 pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     try ensureTypeStoreIsFilled(self);
 
     // Copy builtin types into this module's type store
@@ -1504,6 +1556,9 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
 
 /// Check a REPL expression, also type-checking any definitions (for local type declarations)
 pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     try ensureTypeStoreIsFilled(self);
 
     // Copy builtin types into this module's type store
@@ -1525,7 +1580,11 @@ pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Alloca
     const defs_slice = self.cir.store.sliceDefs(self.cir.all_defs);
     for (defs_slice) |def_idx| {
         const def = self.cir.store.getDef(def_idx);
-        try self.top_level_ptrns.put(def.pattern, .{ .def_idx = def_idx, .status = .not_processed });
+        try self.top_level_ptrns.put(def.pattern, DefProcessed{
+            .def_idx = def_idx,
+            .def_name = null,
+            .status = .not_processed,
+        });
     }
 
     // Set the rank to be outermost
@@ -1570,7 +1629,12 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
     }
 
     // Make as processing
-    try self.top_level_ptrns.put(def.pattern, .{ .def_idx = def_idx, .status = .processing });
+    const def_name = self.getPatternIdent(def.pattern);
+    try self.top_level_ptrns.put(def.pattern, .{
+        .def_idx = def_idx,
+        .def_name = def_name,
+        .status = .processing,
+    });
 
     // Check if this expr is one that should be generalized
     const def_var = ModuleEnv.varFrom(def_idx);
@@ -1589,7 +1653,7 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
 
     // Extract function name from the pattern (for better error messages)
     const saved_func_name = self.enclosing_func_name;
-    self.enclosing_func_name = self.getPatternIdent(def.pattern);
+    self.enclosing_func_name = def_name;
     defer self.enclosing_func_name = saved_func_name;
 
     // Check the annotation, if it exists
@@ -1611,7 +1675,11 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
     _ = try self.unify(def_var, ptrn_var, env);
 
     // Mark as processed
-    try self.top_level_ptrns.put(def.pattern, .{ .def_idx = def_idx, .status = .processed });
+    try self.top_level_ptrns.put(def.pattern, .{
+        .def_idx = def_idx,
+        .def_name = def_name,
+        .status = .processed,
+    });
 }
 
 // create types for type decls //
@@ -1626,6 +1694,9 @@ fn generateStmtTypeDeclType(
     decl_idx: CIR.Statement.Idx,
     env: *Env,
 ) std.mem.Allocator.Error!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     const decl = self.cir.store.getStatement(decl_idx);
     const decl_var = ModuleEnv.varFrom(decl_idx);
 
@@ -1653,6 +1724,9 @@ fn generateAliasDecl(
     alias: std.meta.fieldInfo(CIR.Statement, .s_alias_decl).type,
     env: *Env,
 ) std.mem.Allocator.Error!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     // Get the type header's args
     const header = self.cir.store.getTypeHeader(alias.header);
     const header_args = self.cir.store.sliceTypeAnnos(header.args);
@@ -1691,6 +1765,9 @@ fn generateNominalDecl(
     nominal: std.meta.fieldInfo(CIR.Statement, .s_nominal_decl).type,
     env: *Env,
 ) std.mem.Allocator.Error!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     // Get the type header's args
     const header = self.cir.store.getTypeHeader(nominal.header);
     const header_args = self.cir.store.sliceTypeAnnos(header.args);
@@ -1731,6 +1808,9 @@ fn generateStandaloneTypeAnno(
     type_anno: std.meta.fieldInfo(CIR.Statement, .s_type_anno).type,
     env: *Env,
 ) std.mem.Allocator.Error!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     // Reset seen type annos
     self.seen_annos.clearRetainingCapacity();
 
@@ -1760,6 +1840,9 @@ fn generateHeaderVars(
     header_args: []CIR.TypeAnno.Idx,
     env: *Env,
 ) std.mem.Allocator.Error![]Var {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     for (header_args) |header_arg_idx| {
         const header_arg = self.cir.store.getTypeAnno(header_arg_idx);
         const header_var = ModuleEnv.varFrom(header_arg_idx);
@@ -1845,6 +1928,9 @@ fn generateAnnotationType(self: *Self, annotation_idx: CIR.Annotation.Idx, env: 
 
 /// Given a where clause, generate static dispatch constraints and add to scratch_static_dispatch_constraints
 fn generateStaticDispatchConstraintFromWhere(self: *Self, where_idx: CIR.WhereClause.Idx, env: *Env) std.mem.Allocator.Error!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     const where = self.cir.store.getWhereClause(where_idx);
     const where_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(where_idx));
 
@@ -2400,6 +2486,9 @@ fn setBuiltinTypeContent(
     anno_region: Region,
     env: *Env,
 ) std.mem.Allocator.Error!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     switch (anno_builtin_type) {
         // Phase 5: Use nominal types from Builtin instead of special .num content
         .u8 => try self.unifyWith(anno_var, try self.mkNumberTypeContent("U8", env), env),
@@ -3482,7 +3571,11 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         try self.unifyWith(expr_var, .{ .flex = Flex.init() }, env);
 
                         // Write down this constraint for later validation
-                        _ = try self.constraints.append(self.gpa, Constraint{ .eql = .{ .expected = pat_var, .actual = expr_var, .ctx = .anonymous } });
+                        _ = try self.constraints.append(self.gpa, Constraint{ .eql = .{
+                            .expected = pat_var,
+                            .actual = expr_var,
+                            .ctx = .{ .recursive_def = .{ .def_name = processing_def.def_name } },
+                        } });
 
                         break :blk;
                     },
@@ -4087,7 +4180,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 .actual = ret_var,
                 .ctx = switch (ret.context) {
                     .return_expr => .early_return,
-                    .try_suffix => .try_suffix_return,
+                    .try_suffix => .try_operator,
                 },
             } });
 
@@ -4224,6 +4317,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 }
 
 fn getExprPatternIdent(self: *const Self, expr_idx: CIR.Expr.Idx) ?Ident.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     const func_expr = self.cir.store.getExpr(expr_idx);
     switch (func_expr) {
         .e_lookup_local => |lookup| {
@@ -4267,6 +4363,9 @@ const BlockStatementsResult = struct {
 /// Given a slice of stmts, type check each one
 /// Returns whether any statement has effects and whether the block diverges (return/crash)
 fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env: *Env, _: Region) std.mem.Allocator.Error!BlockStatementsResult {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     var does_fx = false;
     var diverges = false;
     for (statements) |stmt_idx| {
@@ -5045,6 +5144,9 @@ fn mkBinopConstraint(
     env: *Env,
     region: Region,
 ) Allocator.Error!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     // Create the function type: lhs_type, rhs_type -> ret_type
     const args_range = try self.types.appendVars(&.{ lhs_var, rhs_var });
 
@@ -5083,6 +5185,9 @@ fn mkUnaryOp(
     env: *Env,
     region: Region,
 ) Allocator.Error!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     // Create the function type: lhs_type, rhs_type -> ret_type
     const args_range = try self.types.appendVars(&.{arg_var});
 
@@ -5133,6 +5238,9 @@ fn resolveVarFromExternal(
     import_idx: CIR.Import.Idx,
     node_idx: u16,
 ) std.mem.Allocator.Error!?ExternalType {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     // First try to use the resolved module index from the imports store
     // This is the proper way to map import indices to module positions
     const module_idx = self.cir.imports.getResolvedModule(import_idx) orelse blk: {
@@ -5181,6 +5289,9 @@ fn resolveVarFromExternal(
 /// Copy a variable from another module into this module
 /// The ranks of all variables copied will be generalized
 fn copyVar(self: *Self, other_module_var: Var, other_module_env: *const ModuleEnv, mb_region: ?Region) std.mem.Allocator.Error!Var {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     // First, reset state
     self.var_map.clearRetainingCapacity();
 
@@ -5245,6 +5356,9 @@ fn checkNominalTypeUsage(
     region: Region,
     env: *Env,
 ) std.mem.Allocator.Error!NominalCheckResult {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     // Instantiate the nominal type declaration
     const nominal_var = try self.instantiateVar(nominal_type_decl_var, env, .{ .explicit = region });
     const nominal_resolved = self.types.resolveVar(nominal_var).desc.content;
@@ -5313,6 +5427,9 @@ fn checkNominalTypeUsage(
 /// We loop here because checkStaticDispatchConstraints and add new regular
 /// constraints.
 fn checkAllConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     while (self.constraints.items.items.len > 0) {
         try self.checkConstraints(env);
         try self.checkStaticDispatchConstraints(env);
@@ -5321,17 +5438,15 @@ fn checkAllConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
 
 /// Check any accumulated constraints
 fn checkConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     var iter = self.constraints.iterIndices();
     while (iter.next()) |idx| {
         const constraint = self.constraints.get(idx);
         switch (constraint.*) {
             .eql => |eql| {
-                const context: problem.Context = switch (eql.ctx) {
-                    .anonymous => .none,
-                    .early_return => .early_return,
-                    .try_suffix_return => .try_operator,
-                };
-                _ = try self.unifyInContext(eql.expected, eql.actual, env, context);
+                _ = try self.unifyInContext(eql.expected, eql.actual, env, eql.ctx);
             },
         }
     }
@@ -5351,6 +5466,9 @@ fn checkConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
 /// Initially, we only have to check constraint for `Test.to_str2`. But when we
 /// process that, we then have to check `Test.to_str`.
 fn checkStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     // During this pass, we want to hold onto any flex vars we encounter and
     // check them again later, when maybe they've been resolved
     const scratch_deferred_top = self.scratch_deferred_static_dispatch_constraints.top();
