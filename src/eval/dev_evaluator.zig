@@ -483,9 +483,14 @@ pub const DevEvaluator = struct {
         defer lowerer.deinit();
 
         // Lower CIR expression to Mono IR
-        const mono_expr_id = lowerer.lowerExpr(module_idx, expr_idx) catch {
+        const lowered_expr_id = lowerer.lowerExpr(module_idx, expr_idx) catch {
             return error.UnsupportedExpression;
         };
+
+        // Run RC insertion pass on the Mono IR
+        var rc_pass = mono.RcInsert.RcInsertPass.init(self.allocator, &mono_store, layout_store_ptr);
+        defer rc_pass.deinit();
+        const mono_expr_id = rc_pass.insertRcOps(lowered_expr_id) catch lowered_expr_id;
 
         // Determine the result layout from the expression's type variable
         const cir_expr = module_env.store.getExpr(expr_idx);
