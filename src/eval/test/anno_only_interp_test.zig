@@ -80,10 +80,13 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
     try czer.canonicalizeFile();
 
     // Heap-allocate imported_envs so it outlives this function.
-    // The interpreter's all_module_envs is a slice that points to this memory.
-    const imported_envs = try gpa.alloc(*const ModuleEnv, 1);
+    // Order must match all_module_envs in the interpreter (self module first, then imports).
+    // evalLookupExternal uses all_module_envs[resolved_idx], so resolveImports indices
+    // must match this array. The interpreter detects other_envs[0]==env and uses it directly.
+    const imported_envs = try gpa.alloc(*const ModuleEnv, 2);
     errdefer gpa.free(imported_envs);
-    imported_envs[0] = builtin_module.env;
+    imported_envs[0] = module_env;
+    imported_envs[1] = builtin_module.env;
 
     // Resolve imports - map each import to its index in imported_envs
     module_env.imports.resolveImports(module_env, imported_envs);
