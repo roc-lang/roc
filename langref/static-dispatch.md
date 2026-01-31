@@ -31,3 +31,42 @@ Counter := { value: I64 }.{
 counter : Counter
 counter = Counter.new().increment()
 ```
+
+## Special Methods
+
+Roc recognizes certain method names as having special meaning. When defined on a nominal type, these methods are called automatically in specific contexts.
+
+### `to_inspect`
+
+The `to_inspect` method customizes how a value is rendered by `Str.inspect`.
+
+```roc
+Color := [Red, Green, Blue].{
+    to_inspect : Color -> Str
+    to_inspect = |color| match color {
+        Red => "Color::Red"
+        Green => "Color::Green"
+        Blue => "Color::Blue"
+    }
+}
+```
+
+When `Str.inspect` is called on a `Color` value, it uses the custom `to_inspect` method instead of the default rendering:
+
+```roc
+red : Color
+red = Red
+
+Str.inspect(red)  # "Color::Red"
+```
+
+Without a `to_inspect` method, the default rendering includes the type name:
+
+```roc
+ColorDefault := [Red, Green, Blue]
+
+c : ColorDefault
+c = Red
+
+Str.inspect(c)  # "ColorDefault.Red"
+```
