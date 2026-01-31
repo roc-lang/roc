@@ -934,6 +934,70 @@ pub const InsertPass = struct {
         try self.module_env.store.addScratchStatement(incref_stmt);
     }
 
+    /// When a refcounted value's last use stores it in a container (list, tuple,
+    /// record, tag, nominal), the container creates a persistent reference to the
+    /// underlying data. Insert an incref so the source variable's scope-exit decref
+    /// does not prematurely free data the container still references.
+    ///
+    /// For non-last uses, `transformLookup` already inserts an incref that serves
+    /// the same purpose, so this helper only acts on last-use lookups
+    /// (remaining_uses == 0 after transformLookup).
+    fn emitContainerElementIncref(self: *Self, original_expr: CIR.Expr.Idx, transformed_expr: CIR.Expr.Idx) !CIR.Expr.Idx {
+        const expr = self.module_env.store.getExpr(original_expr);
+        if (expr != .e_lookup_local) return transformed_expr;
+
+        const pattern_idx = expr.e_lookup_local.pattern_idx;
+        const state = self.symbol_states.get(pattern_idx) orelse return transformed_expr;
+
+        if (state.remaining_uses != 0) return transformed_expr;
+        if (state.consumed) return transformed_expr;
+        if (!self.layoutNeedsRc(state.layout_idx)) return transformed_expr;
+
+        const region = self.module_env.store.getExprRegion(original_expr);
+        const incref_expr = try self.module_env.store.addExpr(
+            .{ .e_incref = .{ .pattern_idx = pattern_idx, .count = 1 } },
+            region,
+        );
+        const stmt_start = self.module_env.store.scratchTop("statements");
+        const incref_stmt = try self.module_env.store.addStatement(
+            .{ .s_expr = .{ .expr = incref_expr } },
+            region,
+        );
+        try self.module_env.store.addScratchStatement(incref_stmt);
+        const stmts_span = try self.module_env.store.statementSpanFrom(stmt_start);
+
+        return try self.module_env.store.addExpr(
+            .{ .e_block = .{ .stmts = stmts_span, .final_expr = transformed_expr } },
+            region,
+        );
+    }
+
+    /// Like `emitContainerElementIncref`, but emits only the incref statement
+    /// to the caller's scratch statement buffer instead of wrapping in a block.
+    /// Used by `transformTag` which needs increfs outside the tag expression.
+    fn emitContainerElementIncrefStmt(self: *Self, original_expr: CIR.Expr.Idx) !void {
+        const expr = self.module_env.store.getExpr(original_expr);
+        if (expr != .e_lookup_local) return;
+
+        const pattern_idx = expr.e_lookup_local.pattern_idx;
+        const state = self.symbol_states.get(pattern_idx) orelse return;
+
+        if (state.remaining_uses != 0) return;
+        if (state.consumed) return;
+        if (!self.layoutNeedsRc(state.layout_idx)) return;
+
+        const region = self.module_env.store.getExprRegion(original_expr);
+        const incref_expr = try self.module_env.store.addExpr(
+            .{ .e_incref = .{ .pattern_idx = pattern_idx, .count = 1 } },
+            region,
+        );
+        const incref_stmt = try self.module_env.store.addStatement(
+            .{ .s_expr = .{ .expr = incref_expr } },
+            region,
+        );
+        try self.module_env.store.addScratchStatement(incref_stmt);
+    }
+
     /// Transform a statement
     fn transformStatement(self: *Self, stmt_idx: CIR.Statement.Idx) std.mem.Allocator.Error!CIR.Statement.Idx {
         const stmt = self.module_env.store.getStatement(stmt_idx);
@@ -1660,8 +1724,9 @@ pub const InsertPass = struct {
         const elem_start = self.module_env.store.scratchExprTop();
         for (elems) |elem_idx| {
             const new_elem = try self.transformExpr(elem_idx);
-            if (new_elem != elem_idx) any_changed = true;
-            try self.module_env.store.addScratchExpr(new_elem);
+            const final_elem = try self.emitContainerElementIncref(elem_idx, new_elem);
+            if (final_elem != elem_idx) any_changed = true;
+            try self.module_env.store.addScratchExpr(final_elem);
         }
         if (!any_changed) {
             self.module_env.store.clearScratchExprsFrom(elem_start);
@@ -1680,8 +1745,9 @@ pub const InsertPass = struct {
         const elem_start = self.module_env.store.scratchExprTop();
         for (elems) |elem_idx| {
             const new_elem = try self.transformExpr(elem_idx);
-            if (new_elem != elem_idx) any_changed = true;
-            try self.module_env.store.addScratchExpr(new_elem);
+            const final_elem = try self.emitContainerElementIncref(elem_idx, new_elem);
+            if (final_elem != elem_idx) any_changed = true;
+            try self.module_env.store.addScratchExpr(final_elem);
         }
         if (!any_changed) {
             self.module_env.store.clearScratchExprsFrom(elem_start);
@@ -1701,10 +1767,11 @@ pub const InsertPass = struct {
         for (field_idxs) |field_idx| {
             const field = self.module_env.store.getRecordField(field_idx);
             const new_value = try self.transformExpr(field.value);
-            if (new_value != field.value) any_changed = true;
+            const final_value = try self.emitContainerElementIncref(field.value, new_value);
+            if (final_value != field.value) any_changed = true;
             const new_field = try self.module_env.store.addRecordField(.{
                 .name = field.name,
-                .value = new_value,
+                .value = final_value,
             }, self.module_env.store.getExprRegion(expr_idx));
             try self.module_env.store.addScratch("record_fields", new_field);
         }
@@ -1713,9 +1780,10 @@ pub const InsertPass = struct {
         var new_ext: ?CIR.Expr.Idx = record.ext;
         if (record.ext) |ext_expr| {
             const transformed_ext = try self.transformExpr(ext_expr);
-            if (transformed_ext != ext_expr) {
+            const final_ext = try self.emitContainerElementIncref(ext_expr, transformed_ext);
+            if (final_ext != ext_expr) {
                 any_changed = true;
-                new_ext = transformed_ext;
+                new_ext = final_ext;
             }
         }
 
@@ -1734,32 +1802,53 @@ pub const InsertPass = struct {
         const args = self.module_env.store.sliceExpr(tag.args);
         var any_changed = false;
         const arg_start = self.module_env.store.scratchExprTop();
+
+        // Track which original args need container-element increfs.
+        // We emit the increfs outside the tag (wrapping the whole tag in a
+        // block) rather than inside individual args, because downstream code
+        // generation does not support e_block expressions inside tag args.
+        const incref_start = self.module_env.store.scratchTop("statements");
+
         for (args) |arg_idx| {
             const new_arg = try self.transformExpr(arg_idx);
             if (new_arg != arg_idx) any_changed = true;
             try self.module_env.store.addScratchExpr(new_arg);
+            try self.emitContainerElementIncrefStmt(arg_idx);
         }
         if (!any_changed) {
             self.module_env.store.clearScratchExprsFrom(arg_start);
-            return expr_idx;
+            const incref_stmts = try self.module_env.store.statementSpanFrom(incref_start);
+            if (incref_stmts.span.len == 0) return expr_idx;
+            // No args changed but we still need incref stmts — wrap original tag
+            return try self.module_env.store.addExpr(
+                .{ .e_block = .{ .stmts = incref_stmts, .final_expr = expr_idx } },
+                self.module_env.store.getExprRegion(expr_idx),
+            );
         }
         const new_args = try self.module_env.store.exprSpanFrom(arg_start);
-        return try self.module_env.store.addExpr(
+        const incref_stmts = try self.module_env.store.statementSpanFrom(incref_start);
+        const new_tag = try self.module_env.store.addExpr(
             .{ .e_tag = .{
                 .name = tag.name,
                 .args = new_args,
             } },
             self.module_env.store.getExprRegion(expr_idx),
         );
+        if (incref_stmts.span.len == 0) return new_tag;
+        return try self.module_env.store.addExpr(
+            .{ .e_block = .{ .stmts = incref_stmts, .final_expr = new_tag } },
+            self.module_env.store.getExprRegion(expr_idx),
+        );
     }
 
     fn transformNominal(self: *Self, expr_idx: CIR.Expr.Idx, nom: anytype) !CIR.Expr.Idx {
         const new_backing = try self.transformExpr(nom.backing_expr);
-        if (new_backing != nom.backing_expr) {
+        const final_backing = try self.emitContainerElementIncref(nom.backing_expr, new_backing);
+        if (final_backing != nom.backing_expr) {
             return try self.module_env.store.addExpr(
                 .{ .e_nominal = .{
                     .nominal_type_decl = nom.nominal_type_decl,
-                    .backing_expr = new_backing,
+                    .backing_expr = final_backing,
                     .backing_type = nom.backing_type,
                 } },
                 self.module_env.store.getExprRegion(expr_idx),
@@ -1770,12 +1859,13 @@ pub const InsertPass = struct {
 
     fn transformNominalExternal(self: *Self, expr_idx: CIR.Expr.Idx, nom: anytype) !CIR.Expr.Idx {
         const new_backing = try self.transformExpr(nom.backing_expr);
-        if (new_backing != nom.backing_expr) {
+        const final_backing = try self.emitContainerElementIncref(nom.backing_expr, new_backing);
+        if (final_backing != nom.backing_expr) {
             return try self.module_env.store.addExpr(
                 .{ .e_nominal_external = .{
                     .module_idx = nom.module_idx,
                     .target_node_idx = nom.target_node_idx,
-                    .backing_expr = new_backing,
+                    .backing_expr = final_backing,
                     .backing_type = nom.backing_type,
                 } },
                 self.module_env.store.getExprRegion(expr_idx),
