@@ -1733,10 +1733,12 @@ pub const InsertPass = struct {
             return expr_idx;
         }
         const new_elems = try self.module_env.store.exprSpanFrom(elem_start);
-        return try self.module_env.store.addExpr(
-            .{ .e_list = .{ .elems = new_elems } },
-            self.module_env.store.getExprRegion(expr_idx),
-        );
+        // Replace the list expression in-place to preserve the original CIR node's
+        // type variable. Creating a new node via addExpr would produce an index beyond
+        // the type store's bounds, causing the lowering pass to read garbage when
+        // computing elem_layout.
+        self.module_env.store.replaceExprWithList(expr_idx, new_elems);
+        return expr_idx;
     }
 
     fn transformTuple(self: *Self, expr_idx: CIR.Expr.Idx, tuple: anytype) !CIR.Expr.Idx {

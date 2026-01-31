@@ -1062,6 +1062,19 @@ pub fn replaceExprWithTag(
     store.nodes.set(node_idx, node);
 }
 
+/// Replaces an existing expression with an e_list expression in-place.
+/// Used by the RC insertion pass to update list elements without creating a new
+/// CIR node, preserving the original node's type variable.
+pub fn replaceExprWithList(store: *NodeStore, expr_idx: CIR.Expr.Idx, elems: CIR.Expr.Span) void {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+    var node = Node.init(.expr_list);
+    node.setPayload(.{ .expr_list = .{
+        .elems_start = elems.span.start,
+        .elems_len = elems.span.len,
+    } });
+    store.nodes.set(node_idx, node);
+}
+
 /// Updates the body of an e_lambda expression.
 /// Used when the lambda was created with a placeholder body and needs to be updated
 /// after the actual body is canonicalized.
