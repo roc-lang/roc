@@ -106,6 +106,8 @@ pub const TestArgs = struct {
     opt: OptLevel, // the optimization level to be used for test execution
     main: ?[]const u8, // the path to a roc file with an app header to be used to resolve dependencies
     verbose: bool = false, // enable verbose output showing individual test results
+    no_cache: bool = false, // disable compilation caching, force re-run all tests
+    max_threads: ?usize = null, // max worker threads (null = auto, 1 = single-threaded)
 };
 
 /// Arguments for `roc format`
@@ -593,9 +595,11 @@ fn parseTest(args: []const []const u8) CliArgs {
     var opt: OptLevel = .dev;
     var main: ?[]const u8 = null;
     var verbose: bool = false;
+    var no_cache: bool = false;
+    var max_threads: ?usize = null;
     for (args) |arg| {
         if (isHelpFlag(arg)) {
-            return CliArgs{ .help = 
+            return CliArgs{ .help =
             \\Run all top-level `expect`s in a main module and any modules it imports
             \\
             \\Usage: roc test [OPTIONS] [ROC_FILE]
@@ -604,9 +608,11 @@ fn parseTest(args: []const []const u8) CliArgs {
             \\  [ROC_FILE] The .roc file to test [default: main.roc]
             \\
             \\Options:
-            \\      --opt=<size|speed|dev>  Optimize the build process for binary size, execution speed, or compilation speed. Defaults to compilation speed dev
+            \\      --opt=<size|speed|dev>  Optimize the build process for binary size, execution speed, or compilation speed. Defaults to compilation speed (dev)
             \\      --main <main>           The .roc file of the main app/package module to resolve dependencies from
             \\      --verbose               Enable verbose output showing individual test results
+            \\      --no-cache              Disable compilation caching, force re-run all tests
+            \\  -j, --jobs=<N>              Max worker threads for parallel compilation (default: auto-detect CPU count)
             \\  -h, --help                  Print help
             \\
         };
@@ -628,6 +634,25 @@ fn parseTest(args: []const []const u8) CliArgs {
             }
         } else if (mem.eql(u8, arg, "--verbose")) {
             verbose = true;
+        } else if (mem.eql(u8, arg, "--no-cache")) {
+            no_cache = true;
+        } else if (mem.startsWith(u8, arg, "--jobs")) {
+            if (getFlagValue(arg)) |value| {
+                max_threads = std.fmt.parseInt(usize, value, 10) catch {
+                    return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "--jobs", .value = value, .valid_options = "positive integer" } } };
+                };
+            } else {
+                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--jobs" } } };
+            }
+        } else if (mem.startsWith(u8, arg, "-j")) {
+            // Handle -jN format (e.g., -j4)
+            const value = arg[2..];
+            if (value.len == 0) {
+                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "-j" } } };
+            }
+            max_threads = std.fmt.parseInt(usize, value, 10) catch {
+                return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "-j", .value = value, .valid_options = "positive integer" } } };
+            };
         } else {
             if (path != null) {
                 return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "test", .arg = arg } } };
@@ -635,7 +660,7 @@ fn parseTest(args: []const []const u8) CliArgs {
             path = arg;
         }
     }
-    return CliArgs{ .test_cmd = TestArgs{ .path = path orelse "main.roc", .opt = opt, .main = main, .verbose = verbose } };
+    return CliArgs{ .test_cmd = TestArgs{ .path = path orelse "main.roc", .opt = opt, .main = main, .verbose = verbose, .no_cache = no_cache, .max_threads = max_threads } };
 }
 
 fn parseRepl(args: []const []const u8) CliArgs {

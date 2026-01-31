@@ -338,7 +338,9 @@ pub const BuildEnv = struct {
         defer header_info.deinit(self.gpa);
 
         const is_executable = header_info.kind == .app or header_info.kind == .default_app;
-        if (!is_executable and header_info.kind != .module and header_info.kind != .type_module) {
+        // Allow all module types: app, module, type_module, package, platform
+        // Package and platform modules can also be tested
+        if (!is_executable and header_info.kind != .module and header_info.kind != .type_module and header_info.kind != .package and header_info.kind != .platform) {
             return error.UnsupportedHeader;
         }
 
@@ -355,8 +357,8 @@ pub const BuildEnv = struct {
             .root_dir = pkg_root_dir,
         });
 
-        // Populate package graph (for apps)
-        if (header_info.kind == .app) {
+        // Populate package graph (for apps and packages with dependencies)
+        if (header_info.kind == .app or header_info.kind == .package) {
             try self.populatePackageShorthands(pkg_name, &header_info);
         }
 
