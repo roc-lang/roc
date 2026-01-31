@@ -287,10 +287,6 @@ fn collectExprDependencies(
         },
 
         .e_runtime_error => {},
-
-        // RC expressions are inserted after canonicalization (by RC insertion pass)
-        // They only reference already-bound patterns, no new dependencies
-        .e_incref, .e_decref, .e_free => {},
     }
 }
 

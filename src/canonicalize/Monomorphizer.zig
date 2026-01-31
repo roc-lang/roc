@@ -1353,7 +1353,7 @@ fn duplicateExpr(
             const new_func = specialized_func orelse try self.duplicateExpr(call.func, type_subs);
 
             // Normalize arguments: complex expressions become let-bindings, simple lookups stay as-is.
-            // This ensures all call arguments are simple symbol references by the time RC runs,
+            // This ensures all call arguments are simple symbol references,
             // matching the architecture of crates/compiler/mono/src/inc_dec.rs.
             const args = self.module_env.store.sliceExpr(call.args);
             const args_start = self.module_env.store.scratch.?.exprs.top();
@@ -1392,7 +1392,7 @@ fn duplicateExpr(
                     // Set the synthetic pattern's type to match the ORIGINAL expression's type.
                     // We use arg_idx (original) not new_arg (duplicated) because the original
                     // has valid type info from type checking, while the duplicate may not.
-                    // Later stages (RC pass, lambda set specialization) need valid type info.
+                    // Later stages (lambda set specialization) need valid type info.
                     const pattern_var = ModuleEnv.varFrom(pattern_idx);
                     const expr_var = ModuleEnv.varFrom(arg_idx);
                     // Extend type store to cover the new pattern index (created after type checking)
@@ -1825,10 +1825,6 @@ fn duplicateExpr(
         .e_hosted_lambda,
         .e_low_level_lambda,
         .e_crash,
-        // RC expressions are inserted after monomorphization
-        .e_incref,
-        .e_decref,
-        .e_free,
         => return expr_idx,
     }
 }

@@ -457,44 +457,6 @@ pub const Expr = union(enum) {
         body: Expr.Idx,
     },
 
-    // Reference Counting Operations
-    //
-    // These expressions are inserted by the RC insertion pass (src/rc/insert.zig)
-    // after type checking and layout computation. They are NOT created during
-    // canonicalization - user code never directly contains these expressions.
-    //
-    // All backends (interpreter, dev backend, LLVM) consume these expressions
-    // uniformly, so RC logic is implemented once in the IR transformation.
-
-    /// Increment the reference count of a value by a given amount.
-    /// Inserted when a refcounted value is used multiple times and we need
-    /// to ensure it stays alive for subsequent uses.
-    ///
-    /// The count field allows batching multiple increments (e.g., when passing
-    /// the same value to multiple arguments).
-    e_incref: struct {
-        /// The pattern (variable binding) whose value should be incref'd
-        pattern_idx: CIR.Pattern.Idx,
-        /// Number of times to increment (usually 1, but can be batched)
-        count: u16,
-    },
-
-    /// Decrement the reference count of a value.
-    /// If the count reaches zero, the memory is freed.
-    /// Inserted at scope exits for owned values that weren't consumed.
-    e_decref: struct {
-        /// The pattern (variable binding) whose value should be decref'd
-        pattern_idx: CIR.Pattern.Idx,
-    },
-
-    /// Free memory without decrementing the refcount.
-    /// Used when we statically know the refcount is already zero.
-    /// This is an optimization - semantically equivalent to decref when count==1.
-    e_free: struct {
-        /// The pattern (variable binding) whose value should be freed
-        pattern_idx: CIR.Pattern.Idx,
-    },
-
     /// A hosted function that will be provided by the platform at runtime.
     /// This represents a lambda/function whose implementation is provided by the host application
     /// via the RocOps.hosted_fns array.
@@ -2031,34 +1993,6 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
 
-            // RC expressions - inserted after canonicalization by RC insertion pass
-            .e_incref => |rc_op| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-incref");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
-                const attrs = tree.beginNode();
-                try ir.store.getPattern(rc_op.pattern_idx).pushToSExprTree(ir, tree, rc_op.pattern_idx);
-                try tree.endNode(begin, attrs);
-            },
-            .e_decref => |rc_op| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-decref");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
-                const attrs = tree.beginNode();
-                try ir.store.getPattern(rc_op.pattern_idx).pushToSExprTree(ir, tree, rc_op.pattern_idx);
-                try tree.endNode(begin, attrs);
-            },
-            .e_free => |rc_op| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-free");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
-                const attrs = tree.beginNode();
-                try ir.store.getPattern(rc_op.pattern_idx).pushToSExprTree(ir, tree, rc_op.pattern_idx);
-                try tree.endNode(begin, attrs);
-            },
         }
     }
 

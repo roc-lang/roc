@@ -590,10 +590,6 @@ fn transformBodyWithCaptures(
         .e_hosted_lambda,
         .e_low_level_lambda,
         .e_crash,
-        // RC expressions are inserted after canonicalization
-        .e_incref,
-        .e_decref,
-        .e_free,
         => return body_idx,
 
         .e_match => |match| {

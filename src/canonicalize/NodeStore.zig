@@ -274,7 +274,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// Count of the diagnostic nodes in the ModuleEnv
 pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 65;
 /// Count of the expression nodes in the ModuleEnv
-pub const MODULEENV_EXPR_NODE_COUNT = 45;
+pub const MODULEENV_EXPR_NODE_COUNT = 42;
 /// Count of the statement nodes in the ModuleEnv
 pub const MODULEENV_STATEMENT_NODE_COUNT = 17;
 /// Count of the type annotation nodes in the ModuleEnv
@@ -930,27 +930,6 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             } };
         },
 
-        // RC expressions (inserted by RC insertion pass after canonicalization)
-        .expr_incref => {
-            const p = payload.expr_incref;
-            return CIR.Expr{ .e_incref = .{
-                .pattern_idx = @enumFromInt(p.pattern_idx),
-                .count = @intCast(p.count),
-            } };
-        },
-        .expr_decref => {
-            const p = payload.expr_decref;
-            return CIR.Expr{ .e_decref = .{
-                .pattern_idx = @enumFromInt(p.pattern_idx),
-            } };
-        },
-        .expr_free => {
-            const p = payload.expr_free;
-            return CIR.Expr{ .e_free = .{
-                .pattern_idx = @enumFromInt(p.pattern_idx),
-            } };
-        },
-
         // NOTE: Diagnostic tags should NEVER appear in getExpr().
         // If compilation errors occur, use pushMalformed() to create .malformed nodes
         // that reference diagnostic indices. The .malformed case above handles
@@ -1058,19 +1037,6 @@ pub fn replaceExprWithTag(
         .name = @bitCast(name),
         .args_start = @intCast(index_data_start),
         .args_len = @intCast(arg_indices.len),
-    } });
-    store.nodes.set(node_idx, node);
-}
-
-/// Replaces an existing expression with an e_list expression in-place.
-/// Used by the RC insertion pass to update list elements without creating a new
-/// CIR node, preserving the original node's type variable.
-pub fn replaceExprWithList(store: *NodeStore, expr_idx: CIR.Expr.Idx, elems: CIR.Expr.Span) void {
-    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
-    var node = Node.init(.expr_list);
-    node.setPayload(.{ .expr_list = .{
-        .elems_start = elems.span.start,
-        .elems_len = elems.span.len,
     } });
     store.nodes.set(node_idx, node);
 }
@@ -2166,26 +2132,6 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             } });
         },
 
-        // RC expressions - inserted by RC insertion pass after canonicalization
-        .e_incref => |e| {
-            node.tag = .expr_incref;
-            node.setPayload(.{ .expr_incref = .{
-                .pattern_idx = @intFromEnum(e.pattern_idx),
-                .count = e.count,
-            } });
-        },
-        .e_decref => |e| {
-            node.tag = .expr_decref;
-            node.setPayload(.{ .expr_decref = .{
-                .pattern_idx = @intFromEnum(e.pattern_idx),
-            } });
-        },
-        .e_free => |e| {
-            node.tag = .expr_free;
-            node.setPayload(.{ .expr_free = .{
-                .pattern_idx = @intFromEnum(e.pattern_idx),
-            } });
-        },
     }
 
     const node_idx = try store.nodes.append(store.gpa, node);

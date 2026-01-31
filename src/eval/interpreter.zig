@@ -12949,12 +12949,6 @@ pub const Interpreter = struct {
                 } });
             },
 
-            // Reference counting operations - no-ops in interpreter (memory managed by GC)
-            .e_incref, .e_decref, .e_free => {
-                const value = try self.evalEmptyRecord(expr_idx, expected_rt_var);
-                try value_stack.push(value);
-            },
-
             // If we reach here, there's a new expression type that hasn't been added.
             // else => unreachable,
         }

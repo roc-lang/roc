@@ -19,7 +19,6 @@ const layout = @import("layout");
 const types = @import("types");
 const backend = @import("backend");
 const mono = @import("mono");
-const rc = @import("rc");
 const builtin_loading = @import("builtin_loading.zig");
 const builtins = @import("builtins");
 
@@ -479,21 +478,12 @@ pub const DevEvaluator = struct {
         // This is a single store shared across all modules for cross-module correctness
         const layout_store_ptr = try self.ensureGlobalLayoutStore(all_module_envs);
 
-        // Create a type scope for RC pass (will be empty, but RC handles null layouts gracefully)
-        var rc_type_scope = types.TypeScope.init(self.allocator);
-        defer rc_type_scope.deinit();
-
-        // Run RC insertion pass to add incref/decref operations
-        var rc_pass = rc.InsertPass.init(self.allocator, module_env, layout_store_ptr, &rc_type_scope);
-        defer rc_pass.deinit();
-        const rc_expr_idx = rc_pass.runOnExpr(expr_idx) catch expr_idx;
-
         // Create the lowerer with the layout store
         var lowerer = MonoLower.init(self.allocator, &mono_store, all_module_envs, null, layout_store_ptr);
         defer lowerer.deinit();
 
-        // Lower the RC-transformed CIR expression to Mono IR
-        const mono_expr_id = lowerer.lowerExpr(module_idx, rc_expr_idx) catch {
+        // Lower CIR expression to Mono IR
+        const mono_expr_id = lowerer.lowerExpr(module_idx, expr_idx) catch {
             return error.UnsupportedExpression;
         };
 

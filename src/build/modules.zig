@@ -301,7 +301,6 @@ pub const ModuleType = enum {
     base58,
     lsp,
     backend,
-    rc,
     mono,
 
     /// Returns the dependencies for this module type
@@ -320,10 +319,10 @@ pub const ModuleType = enum {
             .can => &.{ .tracy, .builtins, .collections, .types, .base, .parse, .reporting, .build_options },
             .check => &.{ .tracy, .builtins, .collections, .base, .parse, .types, .can, .reporting },
             .layout => &.{ .tracy, .collections, .base, .types, .builtins, .can },
-            .eval => &.{ .tracy, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .build_options, .reporting, .backend, .rc, .mono },
+            .eval => &.{ .tracy, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .build_options, .reporting, .backend, .mono },
             .compile => &.{ .tracy, .build_options, .fs, .builtins, .collections, .base, .types, .parse, .can, .check, .reporting, .layout, .eval, .unbundle },
             .ipc => &.{},
-            .repl => &.{ .base, .collections, .compile, .parse, .types, .can, .check, .builtins, .layout, .eval, .backend, .rc },
+            .repl => &.{ .base, .collections, .compile, .parse, .types, .can, .check, .builtins, .layout, .eval, .backend },
             .fmt => &.{ .base, .parse, .collections, .can, .fs, .tracy },
             .watch => &.{.build_options},
             .bundle => &.{ .base, .collections, .base58, .unbundle },
@@ -331,7 +330,6 @@ pub const ModuleType = enum {
             .base58 => &.{},
             .lsp => &.{ .compile, .reporting, .build_options, .fs, .base, .parse, .can, .types, .fmt },
             .backend => &.{ .base, .layout, .builtins, .can, .mono },
-            .rc => &.{ .can, .layout, .base, .types },
             .mono => &.{ .base, .layout, .can, .types },
         };
     }
@@ -363,7 +361,6 @@ pub const RocModules = struct {
     base58: *Module,
     lsp: *Module,
     backend: *Module,
-    rc: *Module,
     mono: *Module,
     roc_target: *Module,
 
@@ -399,7 +396,6 @@ pub const RocModules = struct {
             .base58 = b.addModule("base58", .{ .root_source_file = b.path("src/base58/mod.zig") }),
             .lsp = b.addModule("lsp", .{ .root_source_file = b.path("src/lsp/mod.zig") }),
             .backend = b.addModule("backend", .{ .root_source_file = b.path("src/backend/dev/mod.zig") }),
-            .rc = b.addModule("rc", .{ .root_source_file = b.path("src/rc/mod.zig") }),
             .mono = b.addModule("mono", .{ .root_source_file = b.path("src/mono/mod.zig") }),
             .roc_target = b.addModule("roc_target", .{ .root_source_file = b.path("src/target/mod.zig") }),
         };
@@ -441,7 +437,6 @@ pub const RocModules = struct {
             .base58,
             .lsp,
             .backend,
-            .rc,
             .mono,
         };
 
@@ -523,7 +518,6 @@ pub const RocModules = struct {
             .base58 => self.base58,
             .lsp => self.lsp,
             .backend => self.backend,
-            .rc => self.rc,
             .mono => self.mono,
         };
     }
