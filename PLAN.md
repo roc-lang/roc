@@ -271,7 +271,7 @@ The interpreter computes tag union layout (`src/layout/store.zig:1258-1265`):
 - [x] Step 3: Create standalone minimal reproduction
 - [x] Step 4: Deep dive analysis of call chain and architecture
 - [x] Step 5: Add regression tests to CLI test suite
-- [ ] Step 6: Verify hypothesis with assembly inspection or stack canaries
+- [x] Step 6: Verify hypothesis with stack canaries
 - [ ] Step 7: Implement and test fix
 
 ## Regression Tests
@@ -286,3 +286,42 @@ Added tests to `src/cli/test/glue_test.zig` that reproduce the issue:
 The existing CGlue tests also fail on Windows for the same reason (CGlue returns a non-empty file list).
 
 Run with: `zig build test-cli`
+
+## Stack Canary Investigation
+
+Added stack canaries to `src/glue/platform/host.zig` around the `roc__make_glue` call to detect stack corruption.
+
+### Findings
+
+**Canaries do NOT trigger** - the local variables immediately around `result` are not corrupted:
+```zig
+var canary_before: u64 = 0xDEADBEEFCAFEBABE;
+var result: ResultListFileStr = undefined;
+var canary_after: u64 = 0xFEEDFACE12345678;
+roc__make_glue(&roc_ops, &result, &types_list);
+// Both canaries remain intact after the call
+```
+
+**Operations that WORK after the Roc call:**
+- `stderr.writeAll()` - can print debug messages
+- `std.time.timestamp()` - get current time
+- `allocator.alloc()` / `allocator.free()` - heap operations
+- `std.fs.cwd()` - just constructs a Dir struct, no syscall
+
+**Operations that CRASH (stack overflow):**
+- `std.fs.cwd().openDir(".", .{})` - open current directory
+- `std.fs.cwd().makePath(path)` - create directory
+- `std.fs.cwd().access(".", .{})` - check access permissions
+
+### Interpretation
+
+The stack corruption is **not in the immediate local variables** but in a location that:
+1. Doesn't affect simple syscalls (timestamp, write to already-open stderr)
+2. Does affect filesystem syscalls (openDir, makePath, access)
+
+Likely candidates:
+- **Corrupted saved XMM registers** - Windows x64 requires XMM6-15 to be preserved; filesystem operations may use these for SIMD string operations
+- **Stack frame metadata** - return address or saved RBP, but only checked during deeper call chains
+- **Stack pointer misalignment** - only affects certain calling patterns
+
+The filesystem operations likely use more stack space and/or rely on preserved XMM registers for path string processing, which would explain why they crash while simpler operations work

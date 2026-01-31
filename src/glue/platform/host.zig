@@ -867,8 +867,30 @@ fn platform_main(args: [][*:0]u8) !c_int {
     };
 
     // Call the Roc glue spec
+    // Stack canaries to detect corruption - see PLAN.md for investigation details
+    var canary_before: u64 = 0xDEADBEEFCAFEBABE;
     var result: ResultListFileStr = undefined;
+    var canary_after: u64 = 0xFEEDFACE12345678;
+
     roc__make_glue(&roc_ops, &result, &types_list);
+
+    // Check canaries immediately after call using volatile reads to prevent optimization
+    const cb = @as(*volatile u64, &canary_before).*;
+    const ca = @as(*volatile u64, &canary_after).*;
+    if (cb != 0xDEADBEEFCAFEBABE) {
+        const stderr_file: std.fs.File = .stderr();
+        stderr_file.writeAll("\n!!! STACK CANARY CORRUPTION: canary_before was overwritten !!!\n") catch {};
+        var buf: [64]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "Expected: 0xDEADBEEFCAFEBABE, Got: 0x{X}\n", .{cb}) catch "corruption detected\n";
+        stderr_file.writeAll(msg) catch {};
+    }
+    if (ca != 0xFEEDFACE12345678) {
+        const stderr_file: std.fs.File = .stderr();
+        stderr_file.writeAll("\n!!! STACK CANARY CORRUPTION: canary_after was overwritten !!!\n") catch {};
+        var buf: [64]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "Expected: 0xFEEDFACE12345678, Got: 0x{X}\n", .{ca}) catch "corruption detected\n";
+        stderr_file.writeAll(msg) catch {};
+    }
 
     // Clean up entrypoint strings
     for (0..entry_point_names.len) |idx| {
