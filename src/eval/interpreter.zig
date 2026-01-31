@@ -4229,19 +4229,19 @@ pub const Interpreter = struct {
                                     switch (int_type) {
                                         .i8 => {
                                             const neg_value: i128 = -@as(i128, @intCast(value));
-                                            @as(*i8, @ptrCast(@alignCast(payload_ptr))).* = @intCast(neg_value);
+                                            builtins.utils.writeAs(i8, payload_ptr, @intCast(neg_value), @src());
                                         },
                                         .i16 => {
                                             const neg_value: i128 = -@as(i128, @intCast(value));
-                                            @as(*i16, @ptrCast(@alignCast(payload_ptr))).* = @intCast(neg_value);
+                                            builtins.utils.writeAs(i16, payload_ptr, @intCast(neg_value), @src());
                                         },
                                         .i32 => {
                                             const neg_value: i128 = -@as(i128, @intCast(value));
-                                            @as(*i32, @ptrCast(@alignCast(payload_ptr))).* = @intCast(neg_value);
+                                            builtins.utils.writeAs(i32, payload_ptr, @intCast(neg_value), @src());
                                         },
                                         .i64 => {
                                             const neg_value: i128 = -@as(i128, @intCast(value));
-                                            @as(*i64, @ptrCast(@alignCast(payload_ptr))).* = @intCast(neg_value);
+                                            builtins.utils.writeAs(i64, payload_ptr, @intCast(neg_value), @src());
                                         },
                                         .i128 => {
                                             // For i128, we need special handling because the minimum value's absolute
@@ -4250,23 +4250,23 @@ pub const Interpreter = struct {
                                             // This correctly handles i128 min value: -(2^127) wraps to itself.
                                             const as_signed: i128 = @bitCast(value);
                                             const neg_value: i128 = -%as_signed;
-                                            @as(*i128, @ptrCast(@alignCast(payload_ptr))).* = neg_value;
+                                            builtins.utils.writeAs(i128, payload_ptr, neg_value, @src());
                                         },
                                         else => {}, // Unsigned types already rejected above
                                     }
                                 } else {
                                     // Write positive value
                                     switch (int_type) {
-                                        .u8 => @as(*u8, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
-                                        .i8 => @as(*i8, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
-                                        .u16 => @as(*u16, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
-                                        .i16 => @as(*i16, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
-                                        .u32 => @as(*u32, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
-                                        .i32 => @as(*i32, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
-                                        .u64 => @as(*u64, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
-                                        .i64 => @as(*i64, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
-                                        .u128 => @as(*u128, @ptrCast(@alignCast(payload_ptr))).* = value,
-                                        .i128 => @as(*i128, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
+                                        .u8 => builtins.utils.writeAs(u8, payload_ptr, @intCast(value), @src()),
+                                        .i8 => builtins.utils.writeAs(i8, payload_ptr, @intCast(value), @src()),
+                                        .u16 => builtins.utils.writeAs(u16, payload_ptr, @intCast(value), @src()),
+                                        .i16 => builtins.utils.writeAs(i16, payload_ptr, @intCast(value), @src()),
+                                        .u32 => builtins.utils.writeAs(u32, payload_ptr, @intCast(value), @src()),
+                                        .i32 => builtins.utils.writeAs(i32, payload_ptr, @intCast(value), @src()),
+                                        .u64 => builtins.utils.writeAs(u64, payload_ptr, @intCast(value), @src()),
+                                        .i64 => builtins.utils.writeAs(i64, payload_ptr, @intCast(value), @src()),
+                                        .u128 => builtins.utils.writeAs(u128, payload_ptr, value, @src()),
+                                        .i128 => builtins.utils.writeAs(i128, payload_ptr, @intCast(value), @src()),
                                     }
                                 }
                             } else if (num_layout.tag == .scalar and num_layout.data.scalar.tag == .frac) {
@@ -4294,15 +4294,15 @@ pub const Interpreter = struct {
                                 }
 
                                 switch (frac_precision) {
-                                    .f32 => @as(*f32, @ptrCast(@alignCast(payload_ptr))).* = @floatCast(final_value),
-                                    .f64 => @as(*f64, @ptrCast(@alignCast(payload_ptr))).* = final_value,
+                                    .f32 => builtins.utils.writeAs(f32, payload_ptr, @floatCast(final_value), @src()),
+                                    .f64 => builtins.utils.writeAs(f64, payload_ptr, final_value, @src()),
                                     .dec => {
                                         // Dec type - RocDec has i128 internal representation
                                         const dec_value: i128 = if (is_negative)
                                             -@as(i128, @intCast(value)) * builtins.dec.RocDec.one_point_zero_i128
                                         else
                                             @as(i128, @intCast(value)) * builtins.dec.RocDec.one_point_zero_i128;
-                                        @as(*i128, @ptrCast(@alignCast(payload_ptr))).* = dec_value;
+                                        builtins.utils.writeAs(i128, payload_ptr, dec_value, @src());
                                     },
                                 }
                             }
@@ -4436,40 +4436,40 @@ pub const Interpreter = struct {
                                     switch (int_type) {
                                         .i8 => {
                                             const neg_value: i128 = -@as(i128, @intCast(value));
-                                            @as(*i8, @ptrCast(@alignCast(payload_ptr))).* = @intCast(neg_value);
+                                            builtins.utils.writeAs(i8, payload_ptr, @intCast(neg_value), @src());
                                         },
                                         .i16 => {
                                             const neg_value: i128 = -@as(i128, @intCast(value));
-                                            @as(*i16, @ptrCast(@alignCast(payload_ptr))).* = @intCast(neg_value);
+                                            builtins.utils.writeAs(i16, payload_ptr, @intCast(neg_value), @src());
                                         },
                                         .i32 => {
                                             const neg_value: i128 = -@as(i128, @intCast(value));
-                                            @as(*i32, @ptrCast(@alignCast(payload_ptr))).* = @intCast(neg_value);
+                                            builtins.utils.writeAs(i32, payload_ptr, @intCast(neg_value), @src());
                                         },
                                         .i64 => {
                                             const neg_value: i128 = -@as(i128, @intCast(value));
-                                            @as(*i64, @ptrCast(@alignCast(payload_ptr))).* = @intCast(neg_value);
+                                            builtins.utils.writeAs(i64, payload_ptr, @intCast(neg_value), @src());
                                         },
                                         .i128 => {
                                             const as_signed: i128 = @bitCast(value);
                                             const neg_value: i128 = -%as_signed;
-                                            @as(*i128, @ptrCast(@alignCast(payload_ptr))).* = neg_value;
+                                            builtins.utils.writeAs(i128, payload_ptr, neg_value, @src());
                                         },
                                         else => {}, // Unsigned types already rejected above
                                     }
                                 } else {
                                     // Write positive value
                                     switch (int_type) {
-                                        .u8 => @as(*u8, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
-                                        .i8 => @as(*i8, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
-                                        .u16 => @as(*u16, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
-                                        .i16 => @as(*i16, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
-                                        .u32 => @as(*u32, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
-                                        .i32 => @as(*i32, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
-                                        .u64 => @as(*u64, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
-                                        .i64 => @as(*i64, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
-                                        .u128 => @as(*u128, @ptrCast(@alignCast(payload_ptr))).* = value,
-                                        .i128 => @as(*i128, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
+                                        .u8 => builtins.utils.writeAs(u8, payload_ptr, @intCast(value), @src()),
+                                        .i8 => builtins.utils.writeAs(i8, payload_ptr, @intCast(value), @src()),
+                                        .u16 => builtins.utils.writeAs(u16, payload_ptr, @intCast(value), @src()),
+                                        .i16 => builtins.utils.writeAs(i16, payload_ptr, @intCast(value), @src()),
+                                        .u32 => builtins.utils.writeAs(u32, payload_ptr, @intCast(value), @src()),
+                                        .i32 => builtins.utils.writeAs(i32, payload_ptr, @intCast(value), @src()),
+                                        .u64 => builtins.utils.writeAs(u64, payload_ptr, @intCast(value), @src()),
+                                        .i64 => builtins.utils.writeAs(i64, payload_ptr, @intCast(value), @src()),
+                                        .u128 => builtins.utils.writeAs(u128, payload_ptr, value, @src()),
+                                        .i128 => builtins.utils.writeAs(i128, payload_ptr, @intCast(value), @src()),
                                     }
                                 }
                             } else if (num_layout.tag == .scalar and num_layout.data.scalar.tag == .frac) {
@@ -4492,14 +4492,14 @@ pub const Interpreter = struct {
                                 const full_value = if (is_negative) float_value - frac_part else float_value + frac_part;
 
                                 switch (frac_precision) {
-                                    .f32 => @as(*f32, @ptrCast(@alignCast(payload_ptr))).* = @floatCast(full_value),
-                                    .f64 => @as(*f64, @ptrCast(@alignCast(payload_ptr))).* = full_value,
+                                    .f32 => builtins.utils.writeAs(f32, payload_ptr, @floatCast(full_value), @src()),
+                                    .f64 => builtins.utils.writeAs(f64, payload_ptr, full_value, @src()),
                                     .dec => {
                                         const dec_value: i128 = if (is_negative)
                                             -@as(i128, @intCast(value)) * builtins.dec.RocDec.one_point_zero_i128
                                         else
                                             @as(i128, @intCast(value)) * builtins.dec.RocDec.one_point_zero_i128;
-                                        @as(*i128, @ptrCast(@alignCast(payload_ptr))).* = dec_value;
+                                        builtins.utils.writeAs(i128, payload_ptr, dec_value, @src());
                                     },
                                 }
                             }
