@@ -4276,9 +4276,10 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // Start with equality result = 1 (true for eq, will be inverted for neq)
             try self.codegen.emitLoadImm(result_reg, 1);
 
-            // Calculate comparison byte offsets using the layout store
+            // Calculate comparison byte offsets and sizes using the layout store
             // This must match how generateTuple/generateRecord place elements
             var offsets: [32]i32 = undefined; // Max 32 comparison points
+            var sizes: [32]u32 = undefined; // Size at each comparison point
             var offset_count: usize = 0;
 
             const ls = self.layout_store;
@@ -4295,6 +4296,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                                 const field_slots: usize = @max(1, (field_size + 7) / 8);
                                 for (0..field_slots) |j| {
                                     offsets[offset_count] = @as(i32, @intCast(field_offset)) + @as(i32, @intCast(j)) * 8;
+                                    const remaining = field_size - @as(u32, @intCast(j)) * 8;
+                                    sizes[offset_count] = @min(remaining, 8);
                                     offset_count += 1;
                                 }
                             }
@@ -4302,6 +4305,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                             // Fallback: 16-byte slots
                             for (0..elem_exprs.len) |i| {
                                 offsets[offset_count] = @as(i32, @intCast(i)) * 16;
+                                sizes[offset_count] = 8;
                                 offset_count += 1;
                             }
                         }
@@ -4309,6 +4313,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         // No layout store: 16-byte slots
                         for (0..elem_exprs.len) |i| {
                             offsets[offset_count] = @as(i32, @intCast(i)) * 16;
+                            sizes[offset_count] = 8;
                             offset_count += 1;
                         }
                     }
@@ -4318,17 +4323,16 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         const tuple_layout = layout_store.getLayout(t.tuple_layout);
                         if (tuple_layout.tag == .tuple) {
                             // Use layout store offsets to match generateTuple
-                            // For nested tuples, we need to compare all 8-byte slots within each element
                             for (0..elem_exprs.len) |i| {
                                 const elem_offset = layout_store.getTupleElementOffset(tuple_layout.data.tuple.idx, @intCast(i));
                                 const elem_size = layout_store.getTupleElementSize(tuple_layout.data.tuple.idx, @intCast(i));
 
-                                // Use the element size to determine how many 8-byte slots to compare
                                 const elem_slots: usize = @max(1, (elem_size + 7) / 8);
 
-                                // Add comparison points for each 8-byte slot within this element
                                 for (0..elem_slots) |j| {
                                     offsets[offset_count] = @as(i32, @intCast(elem_offset)) + @as(i32, @intCast(j)) * 8;
+                                    const remaining = elem_size - @as(u32, @intCast(j)) * 8;
+                                    sizes[offset_count] = @min(remaining, 8);
                                     offset_count += 1;
                                 }
                             }
@@ -4343,6 +4347,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                                 };
                                 for (0..elem_slots) |_| {
                                     offsets[offset_count] = current_offset;
+                                    sizes[offset_count] = 8;
                                     offset_count += 1;
                                     current_offset += 8;
                                 }
@@ -4359,6 +4364,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                             };
                             for (0..elem_slots) |_| {
                                 offsets[offset_count] = current_offset;
+                                sizes[offset_count] = 8;
                                 offset_count += 1;
                                 current_offset += 8;
                             }
@@ -4374,6 +4380,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // Compare all elements at their respective offsets
             for (0..offset_count) |i| {
                 const offset: i32 = offsets[i];
+                const cmp_size: u32 = sizes[i];
 
                 // Load LHS element
                 switch (lhs_loc) {
@@ -4409,6 +4416,21 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                             try self.emitMovRegReg(temp_rhs, reg);
                         }
                     },
+                }
+
+                // Mask to actual field size if less than 8 bytes
+                if (cmp_size < 8) {
+                    const mask: u64 = (@as(u64, 1) << @intCast(cmp_size * 8)) - 1;
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        const mask_reg = try self.allocTempGeneral();
+                        try self.codegen.emitLoadImm(mask_reg, @bitCast(mask));
+                        try self.codegen.emit.andRegRegReg(.w64, temp_lhs, temp_lhs, mask_reg);
+                        try self.codegen.emit.andRegRegReg(.w64, temp_rhs, temp_rhs, mask_reg);
+                        self.codegen.freeGeneral(mask_reg);
+                    } else {
+                        try self.codegen.emit.andRegImm32(temp_lhs, @intCast(mask));
+                        try self.codegen.emit.andRegImm32(temp_rhs, @intCast(mask));
+                    }
                 }
 
                 // Compare elements: if not equal, set result to 0
@@ -4765,21 +4787,30 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             const temp_lhs = try self.allocTempGeneral();
             const temp_rhs = try self.allocTempGeneral();
 
-            // Compare records field-by-field in 8-byte chunks
+            // Compare records in 8-byte chunks, masking the last chunk if record_size
+            // is not a multiple of 8 (to avoid comparing uninitialized stack bytes).
             if (comptime builtin.cpu.arch == .aarch64) {
-                // Initialize result to true (1 for eq, 0 for ne)
                 try self.codegen.emitLoadImm(result_reg, if (op == .eq) @as(i64, 1) else @as(i64, 0));
 
                 var offset: i32 = 0;
                 while (offset < @as(i32, @intCast(record_size))) {
                     try self.codegen.emit.ldrRegMemSoff(.w64, temp_lhs, .FP, lhs_stack + offset);
                     try self.codegen.emit.ldrRegMemSoff(.w64, temp_rhs, .FP, rhs_stack + offset);
+
+                    // Mask the last chunk if it's a partial 8-byte read
+                    const remaining = record_size - @as(u32, @intCast(offset));
+                    if (remaining < 8) {
+                        const mask: u64 = (@as(u64, 1) << @intCast(remaining * 8)) - 1;
+                        const mask_reg = try self.allocTempGeneral();
+                        try self.codegen.emitLoadImm(mask_reg, @bitCast(mask));
+                        try self.codegen.emit.andRegRegReg(.w64, temp_lhs, temp_lhs, mask_reg);
+                        try self.codegen.emit.andRegRegReg(.w64, temp_rhs, temp_rhs, mask_reg);
+                        self.codegen.freeGeneral(mask_reg);
+                    }
+
                     try self.codegen.emit.cmpRegReg(.w64, temp_lhs, temp_rhs);
                     try self.codegen.emit.cset(.w64, temp_lhs, if (op == .eq) .eq else .ne);
-                    // AND results together (for eq: all chunks must match)
-                    if (comptime builtin.cpu.arch == .aarch64) {
-                        try self.codegen.emit.andRegRegReg(.w64, result_reg, result_reg, temp_lhs);
-                    }
+                    try self.codegen.emit.andRegRegReg(.w64, result_reg, result_reg, temp_lhs);
                     offset += 8;
                 }
             } else {
@@ -4788,9 +4819,17 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 while (offset < @as(i32, @intCast(record_size))) {
                     try self.codegen.emit.movRegMem(.w64, temp_lhs, .RBP, lhs_stack + offset);
                     try self.codegen.emit.movRegMem(.w64, temp_rhs, .RBP, rhs_stack + offset);
+
+                    // Mask the last chunk if it's a partial 8-byte read
+                    const remaining = record_size - @as(u32, @intCast(offset));
+                    if (remaining < 8) {
+                        const mask: u64 = (@as(u64, 1) << @intCast(remaining * 8)) - 1;
+                        try self.codegen.emit.andRegImm32(temp_lhs, @intCast(mask));
+                        try self.codegen.emit.andRegImm32(temp_rhs, @intCast(mask));
+                    }
+
                     try self.codegen.emit.cmpRegReg(.w64, temp_lhs, temp_rhs);
                     try self.codegen.emit.setcc(if (op == .eq) .equal else .not_equal, temp_lhs);
-                    // AND with 0xFF to get just the byte
                     try self.codegen.emit.andRegImm32(temp_lhs, 0xFF);
                     try self.codegen.emit.andRegRegReg(.w64, result_reg, result_reg, temp_lhs);
                     offset += 8;
