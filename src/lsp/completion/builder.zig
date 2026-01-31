@@ -245,18 +245,11 @@ pub const CompletionBuilder = struct {
                         }
                         tw.reset();
 
-                        // Extract doc comments from source text
-                        // Use annotation region if available (doc comments precede type annotations),
-                        // otherwise fall back to pattern region
-                        const doc_offset = if (def.annotation) |anno_idx|
-                            module_env.store.getAnnotationRegion(anno_idx).start.offset
-                        else
-                            module_env.store.getPatternRegion(def.pattern).start.offset;
-
-                        documentation = doc_comments.extractDocCommentBefore(
+                        documentation = doc_comments.extractDocForDef(
                             self.allocator,
                             module_env.common.source,
-                            doc_offset,
+                            &module_env.store,
+                            def,
                         ) catch null;
                     }
                 }
@@ -299,37 +292,22 @@ pub const CompletionBuilder = struct {
         for (statements_slice) |stmt_idx| {
             const stmt = module_env.store.getStatement(stmt_idx);
             switch (stmt) {
-                .s_alias_decl => |alias| {
-                    const header = module_env.store.getTypeHeader(alias.header);
+                .s_alias_decl, .s_nominal_decl => {
+                    const header_idx = switch (stmt) {
+                        .s_alias_decl => |a| a.header,
+                        .s_nominal_decl => |n| n.header,
+                        else => unreachable,
+                    };
+                    const header = module_env.store.getTypeHeader(header_idx);
                     const name = module_env.getIdentText(header.name);
                     if (name.len == 0) continue;
 
-                    // Extract doc comments from source text
-                    const stmt_region = module_env.store.getStatementRegion(stmt_idx);
-                    const documentation = doc_comments.extractDocCommentBefore(
+                    const documentation = doc_comments.extractDocForStatement(
                         self.allocator,
                         module_env.common.source,
-                        stmt_region.start.offset,
-                    ) catch null;
-
-                    _ = try self.addItem(.{
-                        .label = name,
-                        .kind = @intFromEnum(CompletionItemKind.class),
-                        .detail = null,
-                        .documentation = documentation,
-                    });
-                },
-                .s_nominal_decl => |nominal| {
-                    const header = module_env.store.getTypeHeader(nominal.header);
-                    const name = module_env.getIdentText(header.name);
-                    if (name.len == 0) continue;
-
-                    // Extract doc comments from source text
-                    const stmt_region = module_env.store.getStatementRegion(stmt_idx);
-                    const documentation = doc_comments.extractDocCommentBefore(
-                        self.allocator,
-                        module_env.common.source,
-                        stmt_region.start.offset,
+                        &module_env.store,
+                        stmt,
+                        stmt_idx,
                     ) catch null;
 
                     _ = try self.addItem(.{
@@ -384,13 +362,10 @@ pub const CompletionBuilder = struct {
                 tw.reset();
             }
 
-            // Extract doc comments from source text
-            // Use the pattern region to find the definition location
-            const pattern_region = module_env.store.getPatternRegion(binding.pattern_idx);
             const documentation = doc_comments.extractDocCommentBefore(
                 self.allocator,
                 module_env.common.source,
-                pattern_region.start.offset,
+                module_env.store.getPatternRegion(binding.pattern_idx).start.offset,
             ) catch null;
 
             _ = try self.addItem(.{
@@ -436,18 +411,11 @@ pub const CompletionBuilder = struct {
                 tw.reset();
             }
 
-            // Extract doc comments from source text
-            // Use annotation region if available (doc comments precede type annotations),
-            // otherwise fall back to pattern region
-            const doc_offset = if (def.annotation) |anno_idx|
-                module_env.store.getAnnotationRegion(anno_idx).start.offset
-            else
-                module_env.store.getPatternRegion(def.pattern).start.offset;
-
-            const documentation = doc_comments.extractDocCommentBefore(
+            const documentation = doc_comments.extractDocForDef(
                 self.allocator,
                 module_env.common.source,
-                doc_offset,
+                &module_env.store,
+                def,
             ) catch null;
 
             _ = try self.addItem(.{
@@ -499,12 +467,12 @@ pub const CompletionBuilder = struct {
                     tw.reset();
                 }
 
-                // Extract doc comments from source text
-                const stmt_region = module_env.store.getStatementRegion(stmt_idx);
-                const documentation = doc_comments.extractDocCommentBefore(
+                const documentation = doc_comments.extractDocForStatement(
                     self.allocator,
                     module_env.common.source,
-                    stmt_region.start.offset,
+                    &module_env.store,
+                    stmt,
+                    stmt_idx,
                 ) catch null;
 
                 _ = try self.addItem(.{

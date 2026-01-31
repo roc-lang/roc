@@ -8,6 +8,9 @@
 //! from the preserved source text using region information.
 
 const std = @import("std");
+const can = @import("can");
+const CIR = can.CIR;
+const NodeStore = can.NodeStore;
 const Allocator = std.mem.Allocator;
 
 /// Extracts doc comments preceding a given byte offset in source code.
@@ -156,11 +159,44 @@ fn skipBackwardsToNewline(source: []const u8, pos: u32) u32 {
     return i;
 }
 
-/// Get the region (start offset) for a definition from a statement index.
-/// This is a helper that the completion builder can use.
-pub fn getDefinitionOffset(comptime NodeStore: type, store: *const NodeStore, comptime StmtIdx: type, stmt_idx: StmtIdx) u32 {
-    const region = store.getStatementRegion(stmt_idx);
-    return region.start.offset;
+// =============================================================================
+// CIR-aware doc offset helpers
+// =============================================================================
+
+/// Compute the source offset where doc comments should be found for a Def.
+/// Prefers annotation region (doc comments precede type annotations),
+/// otherwise falls back to pattern region.
+pub fn docOffsetForDef(store: *const NodeStore, def: CIR.Def) u32 {
+    if (def.annotation) |anno_idx|
+        return store.getAnnotationRegion(anno_idx).start.offset;
+    return store.getPatternRegion(def.pattern).start.offset;
+}
+
+/// Compute the source offset where doc comments should be found for a Statement.
+/// Handles annotation-bearing statements (s_decl, s_var) by preferring the
+/// annotation region, and falls back to the statement region for other types.
+pub fn docOffsetForStatement(store: *const NodeStore, stmt: CIR.Statement, stmt_idx: CIR.Statement.Idx) u32 {
+    return switch (stmt) {
+        .s_decl => |d| if (d.anno) |a|
+            store.getAnnotationRegion(a).start.offset
+        else
+            store.getPatternRegion(d.pattern).start.offset,
+        .s_var => |v| if (v.anno) |a|
+            store.getAnnotationRegion(a).start.offset
+        else
+            store.getPatternRegion(v.pattern_idx).start.offset,
+        else => store.getStatementRegion(stmt_idx).start.offset,
+    };
+}
+
+/// Extract doc comments for a Def (combines offset computation + source extraction).
+pub fn extractDocForDef(allocator: Allocator, source: []const u8, store: *const NodeStore, def: CIR.Def) !?[]const u8 {
+    return extractDocCommentBefore(allocator, source, docOffsetForDef(store, def));
+}
+
+/// Extract doc comments for a Statement (combines offset computation + source extraction).
+pub fn extractDocForStatement(allocator: Allocator, source: []const u8, store: *const NodeStore, stmt: CIR.Statement, stmt_idx: CIR.Statement.Idx) !?[]const u8 {
+    return extractDocCommentBefore(allocator, source, docOffsetForStatement(store, stmt, stmt_idx));
 }
 
 // =============================================================================
