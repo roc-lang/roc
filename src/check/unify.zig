@@ -539,15 +539,34 @@ const Unifier = struct {
         const trace = tracy.trace(@src());
         defer trace.end();
 
-        if (a_alias.vars.nonempty.count != b_alias.vars.nonempty.count) {
-            return error.TypeMismatch;
-        }
+        var did_arg_error = false;
 
         // Unify each pair of arguments
-        const a_args_slice = self.types_store.sliceAliasArgs(a_alias);
-        const b_args_slice = self.types_store.sliceAliasArgs(b_alias);
-        for (a_args_slice, b_args_slice) |a_arg, b_arg| {
-            try self.unifyGuarded(a_arg, b_arg);
+        var a_args_iter = self.types_store.iterAliasArgs(a_alias);
+        var b_args_iter = self.types_store.iterAliasArgs(b_alias);
+        while (true) {
+            const mb_a_arg = a_args_iter.next();
+            const mb_b_arg = b_args_iter.next();
+
+            if (mb_a_arg != null and mb_b_arg != null) {
+                self.unifyGuarded(mb_a_arg.?, mb_b_arg.?) catch |err| switch (err) {
+                    error.TypeMismatch => {
+                        // Defer mismatch to check all args
+                        did_arg_error = true;
+                    },
+                    else => return err,
+                };
+            } else if (mb_a_arg == null and mb_b_arg == null) {
+                break;
+            } else {
+                did_arg_error = true;
+                break;
+            }
+        }
+
+        // If any field errored, then error
+        if (did_arg_error) {
+            return error.TypeMismatch;
         }
 
         // Rust compiler comment:
@@ -1417,6 +1436,9 @@ const Unifier = struct {
                 );
             },
             .both_extend => {
+                // Create a new ext var
+                const new_ext_var = try self.fresh(vars, .{ .flex = Flex.init() });
+
                 // Create a new variable of a record with only a's uniq fields
                 // This copies fields from scratch into type_store
                 const only_in_a_fields_range = try self.types_store.appendRecordFields(
@@ -1424,7 +1446,7 @@ const Unifier = struct {
                 );
                 const only_in_a_var = try self.fresh(vars, Content{ .structure = FlatType{ .record = .{
                     .fields = only_in_a_fields_range,
-                    .ext = a_gathered_ext,
+                    .ext = new_ext_var,
                 } } });
 
                 // Create a new variable of a record with only b's uniq fields
@@ -1434,15 +1456,14 @@ const Unifier = struct {
                 );
                 const only_in_b_var = try self.fresh(vars, Content{ .structure = FlatType{ .record = .{
                     .fields = only_in_b_fields_range,
-                    .ext = b_gathered_ext,
+                    .ext = new_ext_var,
                 } } });
 
-                // Create a new ext var
-                const new_ext_var = try self.fresh(vars, .{ .flex = Flex.init() });
-
                 // Unify the sub records with exts
-                try self.unifyGuarded(a_gathered_ext, only_in_b_var);
+                // The order we unify is important! If these are flipped, then
+                // you can get into weird partial-merge states
                 try self.unifyGuarded(only_in_a_var, b_gathered_ext);
+                try self.unifyGuarded(a_gathered_ext, only_in_b_var);
 
                 // Unify shared fields
                 // This copies fields from scratch into type_store
@@ -1645,6 +1666,8 @@ const Unifier = struct {
         const trace = tracy.trace(@src());
         defer trace.end();
 
+        var did_field_error = false;
+
         // First, unify all field types. This may cause nested record unifications
         // which will append their own fields to the store. We must NOT interleave
         // our field appends with these nested calls.
@@ -1653,7 +1676,18 @@ const Unifier = struct {
         // cause `in_both_fields` to reallocate, invalidating the slice pointer.
         var shared_fields_iter = self.scratch.in_both_fields.iterRange(shared_fields_range);
         while (shared_fields_iter.next()) |shared| {
-            try self.unifyGuarded(shared.a.var_, shared.b.var_);
+            self.unifyGuarded(shared.a.var_, shared.b.var_) catch |err| switch (err) {
+                error.TypeMismatch => {
+                    // Defer mismatch to check all fields
+                    did_field_error = true;
+                },
+                else => return err,
+            };
+        }
+
+        // If any field errored, then error
+        if (did_field_error) {
+            return error.TypeMismatch;
         }
 
         // Now that all nested unifications are complete, append OUR fields.
