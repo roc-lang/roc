@@ -77,10 +77,57 @@ fn debugUnreachable(roc_ops: ?*RocOps, comptime msg: []const u8, src: std.builti
 
 /// Context structure for inc/dec callbacks in list operations
 const RefcountContext = struct {
+    // Existing fields
     layout_store: *layout.Store,
     elem_layout: Layout,
     elem_rt_var: types.Var,
     roc_ops: *RocOps,
+    // New field
+    is_refcounted: bool,
+
+    pub const Inc = *const fn (?*anyopaque, ?[*]u8) callconv(.c) void;
+    pub const Dec = *const fn (?*anyopaque, ?[*]u8) callconv(.c) void;
+
+    /// Initialize RefcountContext from element layout
+    pub fn init(
+        layout_store_ptr: *layout.Store,
+        elem_layout: Layout,
+        runtime_types: *types.store.Store,
+        roc_ops_ptr: *RocOps,
+    ) std.mem.Allocator.Error!RefcountContext {
+        return .{
+            .layout_store = layout_store_ptr,
+            .elem_layout = elem_layout,
+            .elem_rt_var = try runtime_types.fresh(),
+            .roc_ops = roc_ops_ptr,
+            .is_refcounted = layout_store_ptr.layoutContainsRefcounted(elem_layout),
+        };
+    }
+
+    /// Get context pointer for inc callback (null if not refcounted)
+    pub fn incContext(self: *RefcountContext) ?*anyopaque {
+        return if (self.is_refcounted) @ptrCast(self) else null;
+    }
+
+    /// Get inc callback function (rcNone if not refcounted)
+    pub fn incCallback(self: *const RefcountContext) Inc {
+        return if (self.is_refcounted) &listElementInc else &builtins.list.rcNone;
+    }
+
+    /// Get context pointer for dec callback (null if not refcounted)
+    pub fn decContext(self: *RefcountContext) ?*anyopaque {
+        return if (self.is_refcounted) @ptrCast(self) else null;
+    }
+
+    /// Get dec callback function (rcNone if not refcounted)
+    pub fn decCallback(self: *const RefcountContext) Dec {
+        return if (self.is_refcounted) &listElementDec else &builtins.list.rcNone;
+    }
+
+    /// Check if elements are refcounted
+    pub fn isRefcounted(self: *const RefcountContext) bool {
+        return self.is_refcounted;
+    }
 };
 
 /// Increment callback for list operations - increments refcount of element via StackValue
@@ -1173,6 +1220,7 @@ pub const Interpreter = struct {
             .elem_layout = elem_layout,
             .elem_rt_var = elem_rt_var,
             .roc_ops = roc_ops,
+            .is_refcounted = elements_refcounted,
         };
 
         const working_list = roc_list.makeUnique(
@@ -2554,6 +2602,7 @@ pub const Interpreter = struct {
                     .elem_layout = elem_layout,
                     .elem_rt_var = elem_rt_var,
                     .roc_ops = roc_ops,
+                    .is_refcounted = elements_refcounted,
                 };
 
                 // Create empty list with capacity
@@ -2845,6 +2894,7 @@ pub const Interpreter = struct {
                         .elem_layout = elem_layout,
                         .elem_rt_var = elem_rt_var,
                         .roc_ops = roc_ops,
+                        .is_refcounted = elements_refcounted,
                     };
                     if (runtime_list.bytes) |buffer| {
                         var i: usize = 0;
@@ -2925,6 +2975,7 @@ pub const Interpreter = struct {
                         .elem_layout = elem_layout,
                         .elem_rt_var = elem_rt_var,
                         .roc_ops = roc_ops,
+                        .is_refcounted = elements_refcounted,
                     };
 
                     const copy_fn = selectCopyFallbackFn(elem_layout);
@@ -3008,6 +3059,7 @@ pub const Interpreter = struct {
                     .elem_layout = elem_layout,
                     .elem_rt_var = elem_rt_var,
                     .roc_ops = roc_ops,
+                    .is_refcounted = elements_refcounted,
                 };
 
                 const copy_fn = selectCopyFallbackFn(elem_layout);
@@ -3103,6 +3155,7 @@ pub const Interpreter = struct {
                         .elem_layout = elem_layout,
                         .elem_rt_var = elem_rt_var,
                         .roc_ops = roc_ops,
+                        .is_refcounted = elements_refcounted,
                     };
 
                     const copy_fn = selectCopyFallbackFn(elem_layout);
@@ -3183,6 +3236,7 @@ pub const Interpreter = struct {
                     .elem_layout = elem_layout,
                     .elem_rt_var = elem_rt_var,
                     .roc_ops = roc_ops,
+                    .is_refcounted = elements_refcounted,
                 };
 
                 const copy_fn = selectCopyFallbackFn(elem_layout);
@@ -3249,6 +3303,7 @@ pub const Interpreter = struct {
                     .elem_layout = elem_layout,
                     .elem_rt_var = elem_rt_var,
                     .roc_ops = roc_ops,
+                    .is_refcounted = elements_refcounted,
                 };
 
                 // Return list with element at index dropped
@@ -3312,6 +3367,7 @@ pub const Interpreter = struct {
                     .elem_layout = elem_layout,
                     .elem_rt_var = elem_rt_var,
                     .roc_ops = roc_ops,
+                    .is_refcounted = elements_refcounted,
                 };
 
                 // Return list with element at index dropped
