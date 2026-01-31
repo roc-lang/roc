@@ -765,9 +765,21 @@ pub const InsertPass = struct {
         const stmt_start = self.module_env.store.scratchTop("statements");
 
         for (stmts) |stmt_idx| {
+            // If this declaration shadows an existing variable in this scope,
+            // emit a decref for the old value BEFORE the new assignment overwrites
+            // the storage location. Mark the old pattern consumed to prevent
+            // a duplicate scope-exit decref.
+            try self.emitShadowDecrefIfNeeded(stmt_idx, &any_changed);
+
             const new_stmt = try self.transformStatement(stmt_idx);
             try self.module_env.store.addScratchStatement(new_stmt);
             if (new_stmt != stmt_idx) any_changed = true;
+
+            // For alias declarations (target = source where source is a local
+            // lookup of a refcounted value), emit an incref on the source right
+            // after the declaration. This accounts for the new reference the
+            // alias creates — both source and target may get scope-exit decrefs.
+            try self.emitAliasIncrefIfNeeded(stmt_idx, &any_changed);
         }
 
         // Transform final expression
@@ -822,6 +834,104 @@ pub const InsertPass = struct {
             } },
             self.module_env.store.getExprRegion(expr_idx),
         );
+    }
+
+    /// If this statement declares a variable that shadows an existing variable in
+    /// the current scope (same ident), emit a decref for the old pattern BEFORE
+    /// the shadow assignment. At the Mono level, shadowed variables with the same
+    /// ident share the same storage location, so the old value must be freed before
+    /// the storage is overwritten. Mark the old pattern as consumed to prevent a
+    /// duplicate decref at scope exit.
+    fn emitShadowDecrefIfNeeded(self: *Self, stmt_idx: CIR.Statement.Idx, any_changed: *bool) std.mem.Allocator.Error!void {
+        const stmt = self.module_env.store.getStatement(stmt_idx);
+        const new_pattern = switch (stmt) {
+            .s_decl => |d| d.pattern,
+            else => return,
+        };
+
+        // Get ident of the new pattern
+        const new_pat = self.module_env.store.getPattern(new_pattern);
+        const new_ident_idx: u29 = switch (new_pat) {
+            .assign => |a| a.ident.idx,
+            else => return,
+        };
+
+        // Check current scope for an existing pattern with the same ident
+        const scope = self.current_scope orelse return;
+        for (scope.introduced_patterns.items) |existing_pattern| {
+            const existing_pat = self.module_env.store.getPattern(existing_pattern);
+            const existing_ident_idx: u29 = switch (existing_pat) {
+                .assign => |a| a.ident.idx,
+                else => continue,
+            };
+
+            if (existing_ident_idx == new_ident_idx) {
+                // Shadow detected. Emit decref for the old value if it's owned and refcounted.
+                const state_ptr = self.symbol_states.getPtr(existing_pattern) orelse continue;
+                if (state_ptr.ownership == .owned and self.layoutNeedsRc(state_ptr.layout_idx)) {
+                    any_changed.* = true;
+                    const region = self.module_env.store.getStatementRegion(stmt_idx);
+                    const decref_expr = try self.module_env.store.addExpr(
+                        .{ .e_decref = .{ .pattern_idx = existing_pattern } },
+                        region,
+                    );
+                    const decref_stmt = try self.module_env.store.addStatement(
+                        .{ .s_expr = .{ .expr = decref_expr } },
+                        region,
+                    );
+                    try self.module_env.store.addScratchStatement(decref_stmt);
+                    // Mark old pattern consumed to prevent scope-exit decref
+                    state_ptr.consumed = true;
+                }
+                break;
+            }
+        }
+    }
+
+    /// If this statement is an alias declaration (target = e_lookup_local(source))
+    /// where both target and source are refcounted, emit an incref on the source.
+    /// This accounts for the new reference the alias creates.
+    fn emitAliasIncrefIfNeeded(self: *Self, stmt_idx: CIR.Statement.Idx, any_changed: *bool) std.mem.Allocator.Error!void {
+        const stmt = self.module_env.store.getStatement(stmt_idx);
+        const info: struct { pattern: CIR.Pattern.Idx, expr: CIR.Expr.Idx } = switch (stmt) {
+            .s_decl => |d| .{ .pattern = d.pattern, .expr = d.expr },
+            .s_var => |v| .{ .pattern = v.pattern_idx, .expr = v.expr },
+            else => return,
+        };
+
+        const expr = self.module_env.store.getExpr(info.expr);
+        if (expr != .e_lookup_local) return;
+
+        const source_pattern = expr.e_lookup_local.pattern_idx;
+
+        // Check target needs RC
+        const target_state = self.symbol_states.get(info.pattern) orelse return;
+        if (!self.layoutNeedsRc(target_state.layout_idx)) return;
+
+        // Check source needs RC
+        const source_state = self.symbol_states.get(source_pattern) orelse return;
+        if (!self.layoutNeedsRc(source_state.layout_idx)) return;
+
+        // Only emit alias incref when the alias was the last use of the source
+        // (remaining_uses == 0 after transformLookup). When remaining_uses > 0,
+        // transformLookup already inserted an incref that accounts for the
+        // additional reference created by this alias.
+        if (source_state.remaining_uses > 0) return;
+
+        any_changed.* = true;
+        const region = self.module_env.store.getStatementRegion(stmt_idx);
+        const incref_expr = try self.module_env.store.addExpr(
+            .{ .e_incref = .{
+                .pattern_idx = source_pattern,
+                .count = 1,
+            } },
+            region,
+        );
+        const incref_stmt = try self.module_env.store.addStatement(
+            .{ .s_expr = .{ .expr = incref_expr } },
+            region,
+        );
+        try self.module_env.store.addScratchStatement(incref_stmt);
     }
 
     /// Transform a statement
