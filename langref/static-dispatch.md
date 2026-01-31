@@ -51,7 +51,7 @@ Color := [Red, Green, Blue].{
 }
 ```
 
-When `Str.inspect` is called on a `Color` value, it uses the custom `to_inspect` method instead of the default rendering:
+When `Str.inspect` is called on a `Color` value, it uses the `to_inspect` method instead of the default rendering:
 
 ```roc
 red : Color
@@ -69,4 +69,97 @@ c : ColorDefault
 c = Red
 
 Str.inspect(c)  # "ColorDefault.Red"
+```
+
+### `is_eq`
+
+The `is_eq` method customizes how equality is checked using the `==` and `!=` operators.
+
+```roc
+Point := { x: I64, y: I64 }.{
+    is_eq : Point, Point -> Bool
+    is_eq = |a, b| a.x == b.x and a.y == b.y
+}
+```
+
+When `==` is used on `Point` values, it calls the `is_eq` method:
+
+```roc
+p1 : Point
+p1 = { x: 1, y: 2 }
+
+p2 : Point
+p2 = { x: 1, y: 2 }
+
+expect p1 == p2  # calls Point.is_eq(p1, p2)
+expect (p1 != p2) == False
+```
+
+### `plus`
+
+The `plus` method customizes the `+` operator for a nominal type.
+
+```roc
+Vec := { x: I64, y: I64 }.{
+    plus : Vec, Vec -> Vec
+    plus = |a, b| { x: a.x + b.x, y: a.y + b.y }
+}
+```
+
+When `+` is used on `Vec` values, it calls the `plus` method:
+
+```roc
+v1 : Vec
+v1 = { x: 1, y: 2 }
+
+v2 : Vec
+v2 = { x: 3, y: 4 }
+
+# v1 + v2  calls Vec.plus(v1, v2), returns { x: 4, y: 6 }
+```
+
+### `minus`
+
+The `minus` method customizes the `-` operator for a nominal type.
+
+```roc
+Vec := { x: I64, y: I64 }.{
+    minus : Vec, Vec -> Vec
+    minus = |a, b| { x: a.x - b.x, y: a.y - b.y }
+}
+```
+
+When `-` is used on `Vec` values, it calls the custom `minus` method:
+
+```roc
+v1 : Vec
+v1 = { x: 5, y: 10 }
+
+v2 : Vec
+v2 = { x: 3, y: 4 }
+
+# v1 - v2 calls Vec.minus(v1, v2), returns { x: 2, y: 6 }
+```
+
+### `times`
+
+The `times` method customizes the `*` operator for a nominal type.
+
+```roc
+Vec := { x: I64, y: I64 }.{
+    times : Vec, Vec -> Vec
+    times = |a, b| { x: a.x * b.x, y: a.y * b.y }
+}
+```
+
+When `*` is used on `Vec` values, it calls the custom `times` method:
+
+```roc
+v1 : Vec
+v1 = { x: 2, y: 3 }
+
+v2 : Vec
+v2 = { x: 4, y: 5 }
+
+# v1 * v2 calls Vec.times(v1, v2), returns { x: 8, y: 15 }
 ```
