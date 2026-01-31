@@ -61,8 +61,8 @@ gpa: std.mem.Allocator,
 types: *types_mod.Store,
 /// This module's env
 cir: *ModuleEnv,
-/// A list of regions. Parallel with type vars & CIR nodes
-regions: *Region.List,
+/// A list of regions. Owned copy, cloned from NodeStore at init time.
+regions: Region.List,
 /// List of directly imported  module. Import indexes in CIR refer to this list
 imported_modules: []const *const ModuleEnv,
 /// Map of auto-imported type names (like "Str", "List", "Bool") to their defining modules.
@@ -177,7 +177,7 @@ pub fn init(
     cir: *const ModuleEnv,
     imported_modules: []const *const ModuleEnv,
     auto_imported_types: ?*const std.AutoHashMap(Ident.Idx, can.Can.AutoImportedType),
-    regions: *Region.List,
+    regions: *const Region.List,
     builtin_ctx: BuiltinContext,
 ) std.mem.Allocator.Error!Self {
     const mutable_cir = @constCast(cir);
@@ -197,7 +197,11 @@ pub fn init(
         .cir = mutable_cir,
         .imported_modules = imported_modules,
         .auto_imported_types = auto_imported_types,
-        .regions = regions,
+        .regions = blk: {
+            var owned = Region.List{};
+            _ = try owned.appendSlice(gpa, regions.items.items);
+            break :blk owned;
+        },
         .builtin_ctx = builtin_ctx,
         .snapshots = try SnapshotStore.initCapacity(gpa, 512),
         .problems = try ProblemStore.initCapacity(gpa, 64),
@@ -236,6 +240,7 @@ pub fn fixupTypeWriter(self: *Self) void {
 
 /// Deinit owned fields
 pub fn deinit(self: *Self) void {
+    self.regions.deinit(self.gpa);
     self.problems.deinit(self.gpa);
     self.snapshots.deinit();
     self.import_mapping.deinit();
@@ -419,7 +424,7 @@ fn unifyWithConf(self: *Self, a: Var, b: Var, env: *Env, conf: unifier.Conf) std
     // A more precise solution would track the origin of each fresh variable during
     // unification and propagate that back, but the current approach is sufficient for
     // typical error reporting scenarios.
-    const region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(b));
+    const region = self.getRegionAt(b);
     for (self.unify_scratch.fresh_vars.items.items) |fresh_var| {
         // Set the rank
         const fresh_rank = self.types.resolveVar(fresh_var).desc.rank;
@@ -629,8 +634,8 @@ fn fillInRegionsThrough(self: *Self, target_var: Var) Allocator.Error!void {
     const idx = @intFromEnum(target_var);
 
     if (idx >= self.regions.len()) {
-        // Use the store's allocator since regions was allocated by the store
-        try self.regions.items.ensureTotalCapacity(self.cir.store.gpa, idx + 1);
+        // Use Check's allocator since regions is owned by Check
+        try self.regions.items.ensureTotalCapacity(self.gpa, idx + 1);
 
         const empty_region = Region.zero();
         while (self.regions.len() <= idx) {

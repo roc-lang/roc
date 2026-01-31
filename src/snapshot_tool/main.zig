@@ -408,6 +408,7 @@ fn generateAllReports(
             snapshot_path,
             empty_modules,
             &solver.import_mapping,
+            &solver.regions,
         );
         defer report_builder.deinit();
 

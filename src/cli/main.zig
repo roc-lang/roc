@@ -312,6 +312,7 @@ fn renderTypeProblems(
         filename,
         &.{},
         &checker.import_mapping,
+        &checker.regions,
     );
     defer rb.deinit();
 
@@ -3255,6 +3256,7 @@ fn compileModuleForSerialization(
         file_path,
         &.{},
         &checker.import_mapping,
+        &checker.regions,
     );
     defer rb.deinit();
 
@@ -5148,6 +5150,7 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
             args.path,
             &.{},
             &checker.import_mapping,
+            &checker.regions,
         );
         defer report_builder.deinit();
 

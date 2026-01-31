@@ -426,6 +426,7 @@ pub const ReportBuilder = struct {
     filename: []const u8,
     other_modules: []const *const ModuleEnv,
     import_mapping: *const @import("types").import_mapping.ImportMapping,
+    regions: *const base.Region.List,
 
     /// Init report builder
     /// Only owned field is `buf`
@@ -438,6 +439,7 @@ pub const ReportBuilder = struct {
         filename: []const u8,
         other_modules: []const *const ModuleEnv,
         import_mapping: *const @import("types").import_mapping.ImportMapping,
+        regions: *const base.Region.List,
     ) Self {
         return .{
             .gpa = gpa,
@@ -450,6 +452,7 @@ pub const ReportBuilder = struct {
             .source = module_env.common.source,
             .filename = filename,
             .other_modules = other_modules,
+            .regions = regions,
         };
     }
 
@@ -647,7 +650,7 @@ pub const ReportBuilder = struct {
             origin_var
         else
             types.actual_var;
-        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(region_var)));
+        const region = self.regions.get(@enumFromInt(@intFromEnum(region_var)));
 
         // Check if both types are functions to provide more specific error messages
         const expected_content = self.snapshots.getContent(types.expected_snapshot);
@@ -740,8 +743,8 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         // Determine the overall region that encompasses both elements
-        const actual_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
-        const expected_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.last_elem_idx)));
+        const actual_region = self.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
+        const expected_region = self.regions.get(@enumFromInt(@intFromEnum(data.last_elem_idx)));
         const overall_start_offset = @min(actual_region.start.offset, expected_region.start.offset);
         const overall_end_offset = @max(actual_region.end.offset, expected_region.end.offset);
 
@@ -852,7 +855,7 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         // Get the region info for the invalid condition
-        const actual_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
+        const actual_region = self.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
         const actual_region_info = base.RegionInfo.position(
             self.source,
             self.module_env.getLineStarts(),
@@ -923,7 +926,7 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         // Get the region info for the expression
-        const actual_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
+        const actual_region = self.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
         const actual_region_info = base.RegionInfo.position(
             self.source,
             self.module_env.getLineStarts(),
@@ -985,7 +988,7 @@ pub const ReportBuilder = struct {
 
         const owned_actual = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
         const owned_expected = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
-        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
+        const region = self.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
 
         // Add source region highlighting
         const region_info = self.module_env.calcRegionInfo(region.*);
@@ -1036,7 +1039,7 @@ pub const ReportBuilder = struct {
 
         const owned_actual = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
         const owned_expected = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
-        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
+        const region = self.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
 
         // Add source region highlighting
         const region_info = self.module_env.calcRegionInfo(region.*);
@@ -1120,12 +1123,12 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         // Determine the overall region that encompasses both elements
-        const last_if_branch_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.last_if_branch)));
+        const last_if_branch_region = self.regions.get(@enumFromInt(@intFromEnum(data.last_if_branch)));
 
         // TODO: getExprSpecific will panic if actual_var is not an Expr
         // It _should_ always be, but we should handle this better so it don't blow up
         const zoomed_in_var = self.can_ir.store.getExprSpecific(@enumFromInt(@intFromEnum(types.actual_var)));
-        const actual_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(zoomed_in_var)));
+        const actual_region = self.regions.get(@enumFromInt(@intFromEnum(zoomed_in_var)));
 
         const overall_start_offset = @min(last_if_branch_region.start.offset, actual_region.start.offset);
         const overall_end_offset = @max(last_if_branch_region.end.offset, actual_region.end.offset);
@@ -1237,7 +1240,7 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         // Determine the overall region that encompasses both elements
-        const match_expr_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.match_expr)));
+        const match_expr_region = self.regions.get(@enumFromInt(@intFromEnum(data.match_expr)));
         const overall_region_info = base.RegionInfo.position(
             self.source,
             self.module_env.getLineStarts(),
@@ -1246,7 +1249,7 @@ pub const ReportBuilder = struct {
         ) catch return report;
 
         // Get region info for invalid branch
-        const invalid_var_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
+        const invalid_var_region = self.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
         const invalid_var_region_info = base.RegionInfo.position(
             self.source,
             self.module_env.getLineStarts(),
@@ -1342,7 +1345,7 @@ pub const ReportBuilder = struct {
         }
 
         // Determine the overall region that encompasses both elements
-        const match_expr_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.match_expr)));
+        const match_expr_region = self.regions.get(@enumFromInt(@intFromEnum(data.match_expr)));
         const overall_region_info = base.RegionInfo.position(
             self.source,
             self.module_env.getLineStarts(),
@@ -1351,7 +1354,7 @@ pub const ReportBuilder = struct {
         ) catch return report;
 
         // Get region info for invalid branch
-        const invalid_var_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
+        const invalid_var_region = self.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
         const invalid_var_region_info = base.RegionInfo.position(
             self.source,
             self.module_env.getLineStarts(),
@@ -1449,8 +1452,8 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         // Determine the overall region that encompasses both elements
-        const expr_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.match_expr)));
-        const this_branch_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
+        const expr_region = self.regions.get(@enumFromInt(@intFromEnum(data.match_expr)));
+        const this_branch_region = self.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
 
         const overall_start_offset = expr_region.start.offset;
         const overall_end_offset = this_branch_region.end.offset;
@@ -1547,7 +1550,7 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         // Get the match expression region
-        const match_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.match_expr)));
+        const match_region = self.regions.get(@enumFromInt(@intFromEnum(data.match_expr)));
         const match_region_info = base.RegionInfo.position(
             self.source,
             self.module_env.getLineStarts(),
@@ -1616,7 +1619,7 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         // Get the expression region
-        const expr_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.expr)));
+        const expr_region = self.regions.get(@enumFromInt(@intFromEnum(data.expr)));
         const expr_region_info = base.RegionInfo.position(
             self.source,
             self.module_env.getLineStarts(),
@@ -1681,8 +1684,8 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         // Determine the overall region that encompasses both elements
-        const expr_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.binop_expr)));
-        const problem_side_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
+        const expr_region = self.regions.get(@enumFromInt(@intFromEnum(data.binop_expr)));
+        const problem_side_region = self.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
 
         const overall_start_offset = expr_region.start.offset;
         const overall_end_offset = problem_side_region.end.offset;
@@ -1779,7 +1782,7 @@ pub const ReportBuilder = struct {
         try report.document.addText("I'm having trouble with this nominal tag:");
         try report.document.addLineBreak();
 
-        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
+        const region = self.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
         const region_info = self.module_env.calcRegionInfo(region.*);
         try report.document.addSourceRegion(
             region_info,
@@ -1850,7 +1853,7 @@ pub const ReportBuilder = struct {
         try report.document.addText("I'm having trouble with this nominal type that wraps a record:");
         try report.document.addLineBreak();
 
-        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
+        const region = self.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
         const region_info = self.module_env.calcRegionInfo(region.*);
         try report.document.addSourceRegion(
             region_info,
@@ -1890,7 +1893,7 @@ pub const ReportBuilder = struct {
         try report.document.addText("I'm having trouble with this nominal type that wraps a tuple:");
         try report.document.addLineBreak();
 
-        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
+        const region = self.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
         const region_info = self.module_env.calcRegionInfo(region.*);
         try report.document.addSourceRegion(
             region_info,
@@ -1930,7 +1933,7 @@ pub const ReportBuilder = struct {
         try report.document.addText("I'm having trouble with this nominal type:");
         try report.document.addLineBreak();
 
-        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
+        const region = self.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
         const region_info = self.module_env.calcRegionInfo(region.*);
         try report.document.addSourceRegion(
             region_info,
@@ -1984,7 +1987,7 @@ pub const ReportBuilder = struct {
         try report.document.addText(" argument being passed to this function has the wrong type:");
         try report.document.addLineBreak();
 
-        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.arg_var)));
+        const region = self.regions.get(@enumFromInt(@intFromEnum(data.arg_var)));
         const region_info = self.module_env.calcRegionInfo(region.*);
         try report.document.addSourceRegion(
             region_info,
@@ -2056,10 +2059,10 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         // Highlight both arguments in a single code block with underlines
-        const first_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.first_arg_var)));
+        const first_region = self.regions.get(@enumFromInt(@intFromEnum(data.first_arg_var)));
         const first_region_info = self.module_env.calcRegionInfo(first_region.*);
 
-        const second_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.second_arg_var)));
+        const second_region = self.regions.get(@enumFromInt(@intFromEnum(data.second_arg_var)));
         const second_region_info = self.module_env.calcRegionInfo(second_region.*);
 
         // Determine the overall display region (should include both arguments)
@@ -2342,7 +2345,7 @@ pub const ReportBuilder = struct {
 
         const method_name_str = try report.addOwnedString(self.can_ir.getIdentText(data.method_name));
 
-        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.fn_var)));
+        const region = self.regions.get(@enumFromInt(@intFromEnum(data.fn_var)));
 
         // Add source region highlighting
         const region_info = self.module_env.calcRegionInfo(region.*);
@@ -2389,7 +2392,7 @@ pub const ReportBuilder = struct {
 
         const method_name_str = try report.addOwnedString(self.can_ir.getIdentText(data.method_name));
 
-        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.fn_var)));
+        const region = self.regions.get(@enumFromInt(@intFromEnum(data.fn_var)));
 
         // Add source region highlighting
         const region_info = self.module_env.calcRegionInfo(region.*);
@@ -2498,7 +2501,7 @@ pub const ReportBuilder = struct {
 
         // Get the region of the dispatcher (the type that was expected)
         // This might be different if the type came from somewhere else (e.g., a type annotation)
-        const dispatcher_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.dispatcher_var))).*;
+        const dispatcher_region = self.regions.get(@enumFromInt(@intFromEnum(data.dispatcher_var))).*;
 
         try report.document.addReflowingText("This number is being used where a non-number type is needed:");
         try report.document.addLineBreak();
@@ -2548,7 +2551,7 @@ pub const ReportBuilder = struct {
 
         const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
 
-        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.fn_var)));
+        const region = self.regions.get(@enumFromInt(@intFromEnum(data.fn_var)));
         const region_info = self.module_env.calcRegionInfo(region.*);
 
         try report.document.addReflowingText("This expression is doing an equality check on a type that doesn't support equality:");
@@ -2616,7 +2619,7 @@ pub const ReportBuilder = struct {
             origin_var
         else
             data.dispatcher_var;
-        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(region_var)));
+        const region = self.regions.get(@enumFromInt(@intFromEnum(region_var)));
         const region_info = self.module_env.calcRegionInfo(region.*);
 
         try report.document.addAnnotated(dispatcher_str, .inline_code);
@@ -2665,7 +2668,7 @@ pub const ReportBuilder = struct {
         var report = Report.init(self.gpa, "CANNOT USE OPAQUE NOMINAL TYPE", .runtime_error);
         errdefer report.deinit();
 
-        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.var_)));
+        const region = self.regions.get(@enumFromInt(@intFromEnum(data.var_)));
         const region_info = self.module_env.calcRegionInfo(region.*);
 
         try report.document.addReflowingText("You're attempting to create an instance of ");
@@ -2703,7 +2706,7 @@ pub const ReportBuilder = struct {
         var report = Report.init(self.gpa, "COMPILER BUG", .runtime_error);
         errdefer report.deinit();
 
-        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.var_)));
+        const region = self.regions.get(@enumFromInt(@intFromEnum(data.var_)));
         const region_info = self.module_env.calcRegionInfo(region.*);
 
         try report.document.addReflowingText("An internal compiler error occurred while checking this nominal type usage:");
@@ -3085,7 +3088,7 @@ pub const ReportBuilder = struct {
 
         const owned_expected = try report.addOwnedString(self.getFormattedString(data.expected_type));
 
-        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.literal_var)));
+        const region = self.regions.get(@enumFromInt(@intFromEnum(data.literal_var)));
 
         // Add source region highlighting
         const region_info = self.module_env.calcRegionInfo(region.*);
@@ -3123,7 +3126,7 @@ pub const ReportBuilder = struct {
 
         const owned_expected = try report.addOwnedString(self.getFormattedString(data.expected_type));
 
-        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.literal_var)));
+        const region = self.regions.get(@enumFromInt(@intFromEnum(data.literal_var)));
 
         // Add source region highlighting
         const region_info = self.module_env.calcRegionInfo(region.*);
@@ -3231,7 +3234,7 @@ pub const ReportBuilder = struct {
 
         const owned_expected = try report.addOwnedString(self.getFormattedString(data.snapshot));
 
-        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.var_)));
+        const region = self.regions.get(@enumFromInt(@intFromEnum(data.var_)));
         const region_info = self.module_env.calcRegionInfo(region.*);
 
         try report.document.addReflowingText("This expression produces a value, but it's not being used:");
@@ -3520,7 +3523,7 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         // Add source region highlighting
-        const match_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.match_expr)));
+        const match_region = self.regions.get(@enumFromInt(@intFromEnum(data.match_expr)));
         const region_info = self.module_env.calcRegionInfo(match_region.*);
         try report.document.addSourceRegion(
             region_info,
@@ -3575,7 +3578,7 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         // Add source region highlighting
-        const match_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.match_expr)));
+        const match_region = self.regions.get(@enumFromInt(@intFromEnum(data.match_expr)));
         const region_info = self.module_env.calcRegionInfo(match_region.*);
         try report.document.addSourceRegion(
             region_info,
@@ -3608,7 +3611,7 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         // Add source region highlighting
-        const match_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.match_expr)));
+        const match_region = self.regions.get(@enumFromInt(@intFromEnum(data.match_expr)));
         const region_info = self.module_env.calcRegionInfo(match_region.*);
         try report.document.addSourceRegion(
             region_info,

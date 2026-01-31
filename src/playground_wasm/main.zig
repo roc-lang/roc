@@ -1157,6 +1157,7 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
             "main.roc",
             &.{}, // other_modules - empty for playground
             &solver.import_mapping,
+            &solver.regions,
         );
         defer report_builder.deinit();
 
