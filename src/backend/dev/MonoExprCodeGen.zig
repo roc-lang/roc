@@ -7811,18 +7811,19 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             const fn_expr = self.store.getExpr(call.fn_expr);
 
             return switch (fn_expr) {
-                // Direct lambda call: compile as procedure and call
+                // Direct lambda call: inline the body in the current scope.
+                // Inline lambdas are defined at a single call site, cannot be
+                // recursive, and may return closures whose capture data must
+                // remain on the current stack frame.
                 .lambda => |lambda| {
-                    const code_offset = try self.compileLambdaAsProc(call.fn_expr, lambda);
-                    return try self.generateCallToLambda(code_offset, call.args, call.ret_layout);
+                    return try self.callLambdaBodyDirect(lambda, call.args);
                 },
 
-                // Direct closure call: compile inner lambda as procedure and call
+                // Direct closure call: inline the inner lambda's body
                 .closure => |closure| {
                     const inner = self.store.getExpr(closure.lambda);
                     if (inner == .lambda) {
-                        const code_offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda);
-                        return try self.generateCallToLambda(code_offset, call.args, call.ret_layout);
+                        return try self.callLambdaBodyDirect(inner.lambda, call.args);
                     }
                     return Error.UnsupportedExpression;
                 },
@@ -8267,6 +8268,22 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             return try self.callLambdaBodyDirect(lambda, args_span);
         }
 
+        /// Check if a lambda's body would evaluate to a callable value (lambda/closure).
+        /// Compiled procs cannot return closure values because capture data lives on the
+        /// proc's stack frame which is deallocated on return. Such lambdas must be inlined.
+        fn bodyReturnsCallable(self: *Self, body_expr_id: mono.MonoExprId) bool {
+            const body = self.store.getExpr(body_expr_id);
+            return switch (body) {
+                .lambda, .closure => true,
+                .block => |block| self.bodyReturnsCallable(block.final_expr),
+                .if_then_else => |ite| {
+                    // Conservative: if any branch returns callable, inline
+                    return self.bodyReturnsCallable(ite.final_else);
+                },
+                else => false,
+            };
+        }
+
         /// Check if any argument expression is a callable value (lambda, closure, or
         /// a lookup that resolves to one). This is used to decide whether a higher-order
         /// function call should be inlined rather than compiled as a separate procedure.
@@ -8514,12 +8531,13 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         if (body_expr == .low_level) {
                             return try self.callLambdaBodyDirect(lambda, args_span);
                         }
-                        // Higher-order functions (those receiving callable arguments)
-                        // must be inlined so that function parameters remain as
-                        // .lambda_code/.closure_value in scope. Without lambda set
-                        // specialization, compiled procs cannot dispatch calls through
-                        // function parameters that are opaque stack values.
-                        if (self.hasCallableArguments(args_span)) {
+                        // Must inline if:
+                        // 1. Any argument is callable (higher-order function) — without
+                        //    lambda set specialization, function params in compiled procs
+                        //    are opaque stack values that can't be dispatched.
+                        // 2. Body returns a callable — compiled procs can't return
+                        //    closure values (capture data on proc's stack frame).
+                        if (self.hasCallableArguments(args_span) or self.bodyReturnsCallable(lambda.body)) {
                             return try self.callLambdaBodyDirect(lambda, args_span);
                         }
                         const offset = try self.compileLambdaAsProc(def_expr_id, lambda);
@@ -8532,7 +8550,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                             if (inner_body == .low_level) {
                                 return try self.callLambdaBodyDirect(inner.lambda, args_span);
                             }
-                            if (self.hasCallableArguments(args_span)) {
+                            if (self.hasCallableArguments(args_span) or self.bodyReturnsCallable(inner.lambda.body)) {
                                 return try self.callLambdaBodyDirect(inner.lambda, args_span);
                             }
                             const offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda);
@@ -8563,7 +8581,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                             if (body_expr == .low_level) {
                                 return try self.callLambdaBodyDirect(inner.lambda, args_span);
                             }
-                            if (self.hasCallableArguments(args_span)) {
+                            if (self.hasCallableArguments(args_span) or self.bodyReturnsCallable(inner.lambda.body)) {
                                 return try self.callLambdaBodyDirect(inner.lambda, args_span);
                             }
                             const offset = try self.compileLambdaAsProc(nom.backing_expr, inner.lambda);
