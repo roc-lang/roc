@@ -137,6 +137,58 @@ pub fn findDefinitionByName(module_env: *ModuleEnv, name: []const u8) ?Definitio
     return null;
 }
 
+/// Find a definition by name, also matching unqualified names against qualified ones.
+/// For example, name "concat" will match a definition named "Str.concat".
+/// This is useful for resolving external lookups where the caller knows only the
+/// unqualified function name.
+pub fn findDefinitionByUnqualifiedName(module_env: *ModuleEnv, name: []const u8) ?DefinitionInfo {
+    // Try exact match first
+    if (findDefinitionByName(module_env, name)) |info| return info;
+
+    // Fall back to suffix matching: "name" matches "Module.name"
+    var iter = iterateDefinitions(module_env);
+    while (iter.next()) |def_info| {
+        const def_name = module_env.getIdentText(def_info.ident_idx);
+        if (def_name.len > name.len and
+            std.mem.endsWith(u8, def_name, name) and
+            def_name[def_name.len - name.len - 1] == '.')
+        {
+            return def_info;
+        }
+    }
+    return null;
+}
+
+/// Find the Def that owns a specific pattern index.
+/// Searches through all_defs for a def whose pattern matches the target.
+/// Returns the full Def struct if found.
+pub fn findDefOwningPattern(module_env: *ModuleEnv, target_pattern: CIR.Pattern.Idx) ?CIR.Def {
+    const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
+    for (defs_slice) |def_idx| {
+        const def = module_env.store.getDef(def_idx);
+        if (def.pattern == target_pattern) return def;
+    }
+    return null;
+}
+
+/// Find the Statement and its index that own a specific pattern index.
+/// Searches through all_statements for a statement whose pattern matches the target.
+pub fn findStatementOwningPattern(module_env: *ModuleEnv, target_pattern: CIR.Pattern.Idx) ?struct { stmt: CIR.Statement, idx: CIR.Statement.Idx } {
+    const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
+    for (statements_slice) |stmt_idx| {
+        const stmt = module_env.store.getStatement(stmt_idx);
+        const pattern_idx_opt: ?CIR.Pattern.Idx = switch (stmt) {
+            .s_decl => |decl| decl.pattern,
+            .s_var => |var_stmt| var_stmt.pattern_idx,
+            else => null,
+        };
+        if (pattern_idx_opt) |pat_idx| {
+            if (pat_idx == target_pattern) return .{ .stmt = stmt, .idx = stmt_idx };
+        }
+    }
+    return null;
+}
+
 /// Find all definitions in a module that match a given prefix.
 /// Useful for completion suggestions.
 pub fn findDefinitionsWithPrefix(
