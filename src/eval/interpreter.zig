@@ -132,7 +132,7 @@ const RefcountContext = struct {
 
 /// Increment callback for list operations - increments refcount of element via StackValue
 fn listElementInc(context_opaque: ?*anyopaque, elem_ptr: ?[*]u8) callconv(.c) void {
-    const context: *RefcountContext = @ptrCast(@alignCast(context_opaque.?));
+    const context = builtins.utils.alignedPtrCast(*RefcountContext, context_opaque.?, @src());
     const elem_value = StackValue{
         .layout = context.elem_layout,
         .ptr = @ptrCast(elem_ptr),
@@ -144,7 +144,7 @@ fn listElementInc(context_opaque: ?*anyopaque, elem_ptr: ?[*]u8) callconv(.c) vo
 
 /// Decrement callback for list operations - decrements refcount of element via StackValue
 fn listElementDec(context_opaque: ?*anyopaque, elem_ptr: ?[*]u8) callconv(.c) void {
-    const context: *RefcountContext = @ptrCast(@alignCast(context_opaque.?));
+    const context = builtins.utils.alignedPtrCast(*RefcountContext, context_opaque.?, @src());
     const elem_value = StackValue{
         .layout = context.elem_layout,
         .ptr = @ptrCast(elem_ptr),
@@ -1076,8 +1076,7 @@ pub const Interpreter = struct {
         const buffer = try arena_alloc.alignedAlloc(u8, alignment, total_size);
 
         // Set refcount to REFCOUNT_STATIC_DATA (0) - this string is immortal
-        const refcount_ptr: *usize = @ptrCast(@alignCast(buffer.ptr));
-        refcount_ptr.* = 0; // REFCOUNT_STATIC_DATA
+        builtins.utils.writeAs(usize, buffer.ptr, 0, @src()); // REFCOUNT_STATIC_DATA
 
         // Copy string content after refcount
         const data_ptr = buffer.ptr + extra_bytes;
@@ -2010,8 +2009,7 @@ pub const Interpreter = struct {
                             tu_data.writeDiscriminantToPtr(ptr_u8 + disc_offset, @intCast(ok_index orelse 0));
                             // Cannot use setRocStr() - dest.layout is tag_union, not str.
                             // String data is written at base_ptr (offset 0).
-                            const str_ptr: *RocStr = @ptrCast(@alignCast(base_ptr));
-                            str_ptr.* = result.string;
+                            builtins.utils.writeAs(RocStr, base_ptr, result.string, @src());
                         }
 
                         dest.is_initialized = true;
@@ -2052,8 +2050,7 @@ pub const Interpreter = struct {
                                     const problem_rt = try self.runtime_types.fresh();
                                     const problem_field = try inner_acc.getFieldByIndex(problem_idx, problem_rt);
                                     if (problem_field.ptr) |ptr| {
-                                        const typed_ptr: *u8 = @ptrCast(@alignCast(ptr));
-                                        typed_ptr.* = @intFromEnum(result.problem_code);
+                                        builtins.utils.writeAs(u8, ptr, @intFromEnum(result.problem_code), @src());
                                     }
                                 }
                                 // Set index field (U64)
@@ -2061,8 +2058,7 @@ pub const Interpreter = struct {
                                     const index_rt = try self.runtime_types.fresh();
                                     const index_field = try inner_acc.getFieldByIndex(index_idx, index_rt);
                                     if (index_field.ptr) |ptr| {
-                                        const typed_ptr: *u64 = @ptrCast(@alignCast(ptr));
-                                        typed_ptr.* = result.byte_index;
+                                        builtins.utils.writeAs(u64, ptr, result.byte_index, @src());
                                     }
                                 }
                             }
@@ -2095,16 +2091,14 @@ pub const Interpreter = struct {
                                         const field_rt2 = try self.runtime_types.fresh();
                                         const problem_field = try inner_acc.getFieldByIndex(problem_idx, field_rt2);
                                         if (problem_field.ptr) |ptr| {
-                                            const typed_ptr: *u8 = @ptrCast(@alignCast(ptr));
-                                            typed_ptr.* = @intFromEnum(result.problem_code);
+                                            builtins.utils.writeAs(u8, ptr, @intFromEnum(result.problem_code), @src());
                                         }
                                     }
                                     if (inner_acc.findFieldIndex(self.env.idents.index)) |index_idx| {
                                         const field_rt2 = try self.runtime_types.fresh();
                                         const index_field = try inner_acc.getFieldByIndex(index_idx, field_rt2);
                                         if (index_field.ptr) |ptr| {
-                                            const typed_ptr: *u64 = @ptrCast(@alignCast(ptr));
-                                            typed_ptr.* = result.byte_index;
+                                            builtins.utils.writeAs(u64, ptr, result.byte_index, @src());
                                         }
                                     }
                                 }
@@ -2149,16 +2143,14 @@ pub const Interpreter = struct {
                                     const field_rt2 = try self.runtime_types.fresh();
                                     const problem_field = try inner_acc.getFieldByIndex(problem_idx, field_rt2);
                                     if (problem_field.ptr) |ptr| {
-                                        const typed_ptr: *u8 = @ptrCast(@alignCast(ptr));
-                                        typed_ptr.* = @intFromEnum(result.problem_code);
+                                        builtins.utils.writeAs(u8, ptr, @intFromEnum(result.problem_code), @src());
                                     }
                                 }
                                 if (inner_acc.findFieldIndex(self.env.idents.index)) |index_idx| {
                                     const field_rt2 = try self.runtime_types.fresh();
                                     const index_field = try inner_acc.getFieldByIndex(index_idx, field_rt2);
                                     if (index_field.ptr) |ptr| {
-                                        const typed_ptr: *u64 = @ptrCast(@alignCast(ptr));
-                                        typed_ptr.* = result.byte_index;
+                                        builtins.utils.writeAs(u64, ptr, result.byte_index, @src());
                                     }
                                 }
                             }
@@ -2189,16 +2181,14 @@ pub const Interpreter = struct {
                                         const field_rt3 = try self.runtime_types.fresh();
                                         const problem_field = try inner_acc.getFieldByIndex(problem_idx, field_rt3);
                                         if (problem_field.ptr) |ptr| {
-                                            const typed_ptr: *u8 = @ptrCast(@alignCast(ptr));
-                                            typed_ptr.* = @intFromEnum(result.problem_code);
+                                            builtins.utils.writeAs(u8, ptr, @intFromEnum(result.problem_code), @src());
                                         }
                                     }
                                     if (inner_acc.findFieldIndex(self.env.idents.index)) |index_idx| {
                                         const field_rt3 = try self.runtime_types.fresh();
                                         const index_field = try inner_acc.getFieldByIndex(index_idx, field_rt3);
                                         if (index_field.ptr) |ptr| {
-                                            const typed_ptr: *u64 = @ptrCast(@alignCast(ptr));
-                                            typed_ptr.* = result.byte_index;
+                                            builtins.utils.writeAs(u64, ptr, result.byte_index, @src());
                                         }
                                     }
                                 }
@@ -2249,8 +2239,7 @@ pub const Interpreter = struct {
                                         record_layout.data.record.idx,
                                         self.env.idents.problem,
                                     )) |problem_offset| {
-                                        const problem_ptr: *u8 = @ptrCast(@alignCast(ptr_u8 + problem_offset));
-                                        problem_ptr.* = @intFromEnum(result.problem_code);
+                                        builtins.utils.writeAs(u8, ptr_u8 + problem_offset, @intFromEnum(result.problem_code), @src());
                                     }
 
                                     // Write index field
@@ -2258,8 +2247,7 @@ pub const Interpreter = struct {
                                         record_layout.data.record.idx,
                                         self.env.idents.index,
                                     )) |index_offset| {
-                                        const index_ptr: *u64 = @ptrCast(@alignCast(ptr_u8 + index_offset));
-                                        index_ptr.* = result.byte_index;
+                                        builtins.utils.writeAs(u64, ptr_u8 + index_offset, result.byte_index, @src());
                                     }
                                 }
                             }
@@ -4382,8 +4370,7 @@ pub const Interpreter = struct {
                                     // Direct Str payload (single-tag union optimized away)
                                     // Cannot use asRocStr() - outer_payload_ptr is a computed pointer
                                     // from tag union payload offset, not a StackValue.
-                                    const str_dest: *RocStr = @ptrCast(@alignCast(outer_payload_ptr));
-                                    str_dest.* = roc_str;
+                                    builtins.utils.writeAs(RocStr, outer_payload_ptr, roc_str, @src());
                                 }
                             } else {
                                 // Payload area is too small for RocStr - store the error message in the interpreter
@@ -4563,39 +4550,39 @@ pub const Interpreter = struct {
                                 switch (int_type) {
                                     .i8 => {
                                         const neg_value: i128 = -@as(i128, @intCast(value));
-                                        @as(*i8, @ptrCast(@alignCast(payload_ptr))).* = @intCast(neg_value);
+                                        builtins.utils.writeAs(i8, payload_ptr, @intCast(neg_value), @src());
                                     },
                                     .i16 => {
                                         const neg_value: i128 = -@as(i128, @intCast(value));
-                                        @as(*i16, @ptrCast(@alignCast(payload_ptr))).* = @intCast(neg_value);
+                                        builtins.utils.writeAs(i16, payload_ptr, @intCast(neg_value), @src());
                                     },
                                     .i32 => {
                                         const neg_value: i128 = -@as(i128, @intCast(value));
-                                        @as(*i32, @ptrCast(@alignCast(payload_ptr))).* = @intCast(neg_value);
+                                        builtins.utils.writeAs(i32, payload_ptr, @intCast(neg_value), @src());
                                     },
                                     .i64 => {
                                         const neg_value: i128 = -@as(i128, @intCast(value));
-                                        @as(*i64, @ptrCast(@alignCast(payload_ptr))).* = @intCast(neg_value);
+                                        builtins.utils.writeAs(i64, payload_ptr, @intCast(neg_value), @src());
                                     },
                                     .i128 => {
                                         const as_signed: i128 = @bitCast(value);
                                         const neg_value: i128 = -%as_signed;
-                                        @as(*i128, @ptrCast(@alignCast(payload_ptr))).* = neg_value;
+                                        builtins.utils.writeAs(i128, payload_ptr, neg_value, @src());
                                     },
                                     else => {},
                                 }
                             } else {
                                 switch (int_type) {
-                                    .u8 => @as(*u8, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
-                                    .i8 => @as(*i8, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
-                                    .u16 => @as(*u16, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
-                                    .i16 => @as(*i16, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
-                                    .u32 => @as(*u32, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
-                                    .i32 => @as(*i32, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
-                                    .u64 => @as(*u64, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
-                                    .i64 => @as(*i64, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
-                                    .u128 => @as(*u128, @ptrCast(@alignCast(payload_ptr))).* = value,
-                                    .i128 => @as(*i128, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
+                                    .u8 => builtins.utils.writeAs(u8, payload_ptr, @intCast(value), @src()),
+                                    .i8 => builtins.utils.writeAs(i8, payload_ptr, @intCast(value), @src()),
+                                    .u16 => builtins.utils.writeAs(u16, payload_ptr, @intCast(value), @src()),
+                                    .i16 => builtins.utils.writeAs(i16, payload_ptr, @intCast(value), @src()),
+                                    .u32 => builtins.utils.writeAs(u32, payload_ptr, @intCast(value), @src()),
+                                    .i32 => builtins.utils.writeAs(i32, payload_ptr, @intCast(value), @src()),
+                                    .u64 => builtins.utils.writeAs(u64, payload_ptr, @intCast(value), @src()),
+                                    .i64 => builtins.utils.writeAs(i64, payload_ptr, @intCast(value), @src()),
+                                    .u128 => builtins.utils.writeAs(u128, payload_ptr, value, @src()),
+                                    .i128 => builtins.utils.writeAs(i128, payload_ptr, @intCast(value), @src()),
                                 }
                             }
                         } else if (num_layout.tag == .scalar and num_layout.data.scalar.tag == .frac) {
@@ -4616,14 +4603,14 @@ pub const Interpreter = struct {
                             const full_value = if (is_negative) float_value - frac_part else float_value + frac_part;
 
                             switch (frac_precision) {
-                                .f32 => @as(*f32, @ptrCast(@alignCast(payload_ptr))).* = @floatCast(full_value),
-                                .f64 => @as(*f64, @ptrCast(@alignCast(payload_ptr))).* = full_value,
+                                .f32 => builtins.utils.writeAs(f32, payload_ptr, @floatCast(full_value), @src()),
+                                .f64 => builtins.utils.writeAs(f64, payload_ptr, full_value, @src()),
                                 .dec => {
                                     const dec_value: i128 = if (is_negative)
                                         -@as(i128, @intCast(value)) * builtins.dec.RocDec.one_point_zero_i128
                                     else
                                         @as(i128, @intCast(value)) * builtins.dec.RocDec.one_point_zero_i128;
-                                    @as(*i128, @ptrCast(@alignCast(payload_ptr))).* = dec_value;
+                                    builtins.utils.writeAs(i128, payload_ptr, dec_value, @src());
                                 },
                             }
                         }
@@ -4707,8 +4694,8 @@ pub const Interpreter = struct {
                 std.debug.assert(args.len == 1); // expects 1 argument: Dec
 
                 const dec_arg = args[0];
-                const roc_dec: *const RocDec = @ptrCast(@alignCast(dec_arg.ptr.?));
-                const result_str = builtins.dec.to_str(roc_dec.*, roc_ops);
+                const roc_dec = builtins.utils.readAs(RocDec, dec_arg.ptr.?, @src());
+                const result_str = builtins.dec.to_str(roc_dec, roc_ops);
 
                 const str_rt_var = try self.getCanonicalStrRuntimeVar();
                 const value = try self.pushStr(str_rt_var);
@@ -5022,7 +5009,7 @@ pub const Interpreter = struct {
         std.debug.assert(args.len == 1);
         const int_arg = args[0];
 
-        const int_value: T = @as(*const T, @ptrCast(@alignCast(int_arg.ptr.?))).*;
+        const int_value: T = builtins.utils.readAs(T, int_arg.ptr.?, @src());
 
         // Use std.fmt to format the integer
         var buf: [40]u8 = undefined; // 40 is enough for i128
@@ -5040,7 +5027,7 @@ pub const Interpreter = struct {
         std.debug.assert(args.len == 1);
         const float_arg = args[0];
 
-        const float_value: T = @as(*const T, @ptrCast(@alignCast(float_arg.ptr.?))).*;
+        const float_value: T = builtins.utils.readAs(T, float_arg.ptr.?, @src());
 
         // Use std.fmt to format the float
         var buf: [400]u8 = undefined;
@@ -5060,14 +5047,14 @@ pub const Interpreter = struct {
         // Null argument is a compiler bug - the compiler should never produce code with null args
         std.debug.assert(int_arg.ptr != null);
 
-        const from_value: From = @as(*const From, @ptrCast(@alignCast(int_arg.ptr.?))).*;
+        const from_value = builtins.utils.readAs(From, int_arg.ptr.?, @src());
         const to_value: To = @intCast(from_value);
 
         const to_layout = Layout.int(comptime intTypeFromZigType(To));
         const result_rt_var = try self.runtime_types.fresh();
         var out = try self.pushRaw(to_layout, 0, result_rt_var);
         out.is_initialized = false;
-        @as(*To, @ptrCast(@alignCast(out.ptr.?))).* = to_value;
+        builtins.utils.writeAs(To, out.ptr.?, to_value, @src());
         out.is_initialized = true;
         return out;
     }
@@ -5079,7 +5066,7 @@ pub const Interpreter = struct {
         // Null argument is a compiler bug - the compiler should never produce code with null args
         std.debug.assert(int_arg.ptr != null);
 
-        const from_value: From = @as(*const From, @ptrCast(@alignCast(int_arg.ptr.?))).*;
+        const from_value = builtins.utils.readAs(From, int_arg.ptr.?, @src());
         // For wrapping conversion:
         // - Same size: bitCast (reinterpret bits)
         // - Narrowing: truncate then bitCast
@@ -5102,7 +5089,7 @@ pub const Interpreter = struct {
         const result_rt_var = try self.runtime_types.fresh();
         var out = try self.pushRaw(to_layout, 0, result_rt_var);
         out.is_initialized = false;
-        @as(*To, @ptrCast(@alignCast(out.ptr.?))).* = to_value;
+        builtins.utils.writeAs(To, out.ptr.?, to_value, @src());
         out.is_initialized = true;
         return out;
     }
@@ -5119,7 +5106,7 @@ pub const Interpreter = struct {
 
         const result_layout = try self.getRuntimeLayout(result_rt_var);
 
-        const from_value: From = @as(*const From, @ptrCast(@alignCast(int_arg.ptr.?))).*;
+        const from_value: From = builtins.utils.readAs(From, int_arg.ptr.?, @src());
 
         // Check if conversion is in range
         const in_range = std.math.cast(To, from_value) != null;
@@ -5190,7 +5177,7 @@ pub const Interpreter = struct {
             if (in_range) {
                 const to_value: To = @intCast(from_value);
                 if (payload_field.ptr) |payload_ptr| {
-                    @as(*To, @ptrCast(@alignCast(payload_ptr))).* = to_value;
+                    builtins.utils.writeAs(To, payload_ptr, to_value, @src());
                 }
             }
             // For Err case, payload is OutOfRange which is a zero-arg tag (already zeroed)
@@ -5228,7 +5215,7 @@ pub const Interpreter = struct {
             if (in_range) {
                 const to_value: To = @intCast(from_value);
                 if (payload_field.ptr) |payload_ptr| {
-                    @as(*To, @ptrCast(@alignCast(payload_ptr))).* = to_value;
+                    builtins.utils.writeAs(To, payload_ptr, to_value, @src());
                 }
             }
             // For Err case, payload is OutOfRange which is a zero-arg tag (already zeroed)
@@ -5254,8 +5241,7 @@ pub const Interpreter = struct {
             // Write payload for Ok case
             if (in_range) {
                 const to_value: To = @intCast(from_value);
-                const payload_ptr: *To = @ptrCast(@alignCast(base_ptr));
-                payload_ptr.* = to_value;
+                builtins.utils.writeAs(To, base_ptr, to_value, @src());
             }
             // For Err case, payload is OutOfRange which is a zero-arg tag (already zeroed)
 
@@ -5273,14 +5259,14 @@ pub const Interpreter = struct {
         // Null argument is a compiler bug - the compiler should never produce code with null args
         std.debug.assert(int_arg.ptr != null);
 
-        const from_value: From = @as(*const From, @ptrCast(@alignCast(int_arg.ptr.?))).*;
+        const from_value = builtins.utils.readAs(From, int_arg.ptr.?, @src());
         const to_value: To = @floatFromInt(from_value);
 
         const to_layout = Layout.frac(comptime fracTypeFromZigType(To));
         const result_rt_var = try self.runtime_types.fresh();
         var out = try self.pushRaw(to_layout, 0, result_rt_var);
         out.is_initialized = false;
-        @as(*To, @ptrCast(@alignCast(out.ptr.?))).* = to_value;
+        builtins.utils.writeAs(To, out.ptr.?, to_value, @src());
         out.is_initialized = true;
         return out;
     }
@@ -5292,14 +5278,14 @@ pub const Interpreter = struct {
         // Null argument is a compiler bug - the compiler should never produce code with null args
         std.debug.assert(int_arg.ptr != null);
 
-        const from_value: From = @as(*const From, @ptrCast(@alignCast(int_arg.ptr.?))).*;
+        const from_value = builtins.utils.readAs(From, int_arg.ptr.?, @src());
         const dec_value = RocDec.fromWholeInt(from_value).?;
 
         const dec_layout = Layout.frac(.dec);
         const result_rt_var = try self.runtime_types.fresh();
         var out = try self.pushRaw(dec_layout, 0, result_rt_var);
         out.is_initialized = false;
-        @as(*RocDec, @ptrCast(@alignCast(out.ptr.?))).* = dec_value;
+        builtins.utils.writeAs(RocDec, out.ptr.?, dec_value, @src());
         out.is_initialized = true;
         return out;
     }
@@ -5311,7 +5297,7 @@ pub const Interpreter = struct {
         const int_arg = args[0];
         std.debug.assert(int_arg.ptr != null);
 
-        const from_value: From = @as(*const From, @ptrCast(@alignCast(int_arg.ptr.?))).*;
+        const from_value = builtins.utils.readAs(From, int_arg.ptr.?, @src());
 
         // Dec's max whole number is ~1.7×10^20, which is less than u128's max (~3.4×10^38)
         // Dec is stored as i128 * 10^18, so max safe value is i128.max / 10^18
@@ -5336,7 +5322,7 @@ pub const Interpreter = struct {
         const float_arg = args[0];
         std.debug.assert(float_arg.ptr != null);
 
-        const from_value: From = @as(*const From, @ptrCast(@alignCast(float_arg.ptr.?))).*;
+        const from_value = builtins.utils.readAs(From, float_arg.ptr.?, @src());
 
         // Truncate float to integer (clamping to range and truncating fractional part)
         const to_value: To = floatToIntSaturating(From, To, from_value);
@@ -5345,7 +5331,7 @@ pub const Interpreter = struct {
         const result_rt_var = try self.runtime_types.fresh();
         var out = try self.pushRaw(to_layout, 0, result_rt_var);
         out.is_initialized = false;
-        @as(*To, @ptrCast(@alignCast(out.ptr.?))).* = to_value;
+        builtins.utils.writeAs(To, out.ptr.?, to_value, @src());
         out.is_initialized = true;
         return out;
     }
@@ -5357,7 +5343,7 @@ pub const Interpreter = struct {
         const float_arg = args[0];
         std.debug.assert(float_arg.ptr != null);
 
-        const from_value: From = @as(*const From, @ptrCast(@alignCast(float_arg.ptr.?))).*;
+        const from_value = builtins.utils.readAs(From, float_arg.ptr.?, @src());
 
         // Check if it's an integer (no fractional part) and not NaN/Inf
         const is_int = !std.math.isNan(from_value) and !std.math.isInf(from_value) and @trunc(from_value) == from_value;
@@ -5379,14 +5365,14 @@ pub const Interpreter = struct {
         const float_arg = args[0];
         std.debug.assert(float_arg.ptr != null);
 
-        const from_value: From = @as(*const From, @ptrCast(@alignCast(float_arg.ptr.?))).*;
+        const from_value = builtins.utils.readAs(From, float_arg.ptr.?, @src());
         const to_value: To = @floatCast(from_value);
 
         const to_layout = Layout.frac(comptime fracTypeFromZigType(To));
         const result_rt_var = try self.runtime_types.fresh();
         var out = try self.pushRaw(to_layout, 0, result_rt_var);
         out.is_initialized = false;
-        @as(*To, @ptrCast(@alignCast(out.ptr.?))).* = to_value;
+        builtins.utils.writeAs(To, out.ptr.?, to_value, @src());
         out.is_initialized = true;
         return out;
     }
@@ -5397,14 +5383,14 @@ pub const Interpreter = struct {
         const float_arg = args[0];
         std.debug.assert(float_arg.ptr != null);
 
-        const from_value: From = @as(*const From, @ptrCast(@alignCast(float_arg.ptr.?))).*;
+        const from_value = builtins.utils.readAs(From, float_arg.ptr.?, @src());
         const to_value: To = @floatCast(from_value);
 
         const to_layout = Layout.frac(comptime fracTypeFromZigType(To));
         const result_rt_var = try self.runtime_types.fresh();
         var out = try self.pushRaw(to_layout, 0, result_rt_var);
         out.is_initialized = false;
-        @as(*To, @ptrCast(@alignCast(out.ptr.?))).* = to_value;
+        builtins.utils.writeAs(To, out.ptr.?, to_value, @src());
         out.is_initialized = true;
         return out;
     }
@@ -5416,7 +5402,7 @@ pub const Interpreter = struct {
         const float_arg = args[0];
         std.debug.assert(float_arg.ptr != null);
 
-        const from_value: From = @as(*const From, @ptrCast(@alignCast(float_arg.ptr.?))).*;
+        const from_value = builtins.utils.readAs(From, float_arg.ptr.?, @src());
         const to_value: To = @floatCast(from_value);
 
         // Check if the conversion is lossless (converting back gives the same value)
@@ -5434,7 +5420,7 @@ pub const Interpreter = struct {
         const dec_arg = args[0];
         std.debug.assert(dec_arg.ptr != null);
 
-        const dec_value: RocDec = @as(*const RocDec, @ptrCast(@alignCast(dec_arg.ptr.?))).*;
+        const dec_value = builtins.utils.readAs(RocDec, dec_arg.ptr.?, @src());
 
         // Get the whole number part by dividing by one_point_zero
         const whole_part = dec_value.toWholeInt();
@@ -5446,7 +5432,7 @@ pub const Interpreter = struct {
         const result_rt_var = try self.runtime_types.fresh();
         var out = try self.pushRaw(to_layout, 0, result_rt_var);
         out.is_initialized = false;
-        @as(*To, @ptrCast(@alignCast(out.ptr.?))).* = to_value;
+        builtins.utils.writeAs(To, out.ptr.?, to_value, @src());
         out.is_initialized = true;
         return out;
     }
@@ -5458,7 +5444,7 @@ pub const Interpreter = struct {
         const dec_arg = args[0];
         std.debug.assert(dec_arg.ptr != null);
 
-        const dec_value: RocDec = @as(*const RocDec, @ptrCast(@alignCast(dec_arg.ptr.?))).*;
+        const dec_value = builtins.utils.readAs(RocDec, dec_arg.ptr.?, @src());
 
         // Check if it's an integer (no fractional part)
         const remainder = @rem(dec_value.num, RocDec.one_point_zero_i128);
@@ -5482,7 +5468,7 @@ pub const Interpreter = struct {
         const dec_arg = args[0];
         std.debug.assert(dec_arg.ptr != null);
 
-        const dec_value: RocDec = @as(*const RocDec, @ptrCast(@alignCast(dec_arg.ptr.?))).*;
+        const dec_value = builtins.utils.readAs(RocDec, dec_arg.ptr.?, @src());
 
         // Check if it's an integer (no fractional part)
         const remainder = @rem(dec_value.num, RocDec.one_point_zero_i128);
@@ -5500,7 +5486,7 @@ pub const Interpreter = struct {
         const dec_arg = args[0];
         std.debug.assert(dec_arg.ptr != null);
 
-        const dec_value: RocDec = @as(*const RocDec, @ptrCast(@alignCast(dec_arg.ptr.?))).*;
+        const dec_value = builtins.utils.readAs(RocDec, dec_arg.ptr.?, @src());
         const f64_value = dec_value.toF64();
         const f32_value: f32 = @floatCast(f64_value);
 
@@ -5508,7 +5494,7 @@ pub const Interpreter = struct {
         const result_rt_var = try self.runtime_types.fresh();
         var out = try self.pushRaw(to_layout, 0, result_rt_var);
         out.is_initialized = false;
-        @as(*f32, @ptrCast(@alignCast(out.ptr.?))).* = f32_value;
+        builtins.utils.writeAs(f32, out.ptr.?, f32_value, @src());
         out.is_initialized = true;
         return out;
     }
@@ -5520,7 +5506,7 @@ pub const Interpreter = struct {
         const dec_arg = args[0];
         std.debug.assert(dec_arg.ptr != null);
 
-        const dec_value: RocDec = @as(*const RocDec, @ptrCast(@alignCast(dec_arg.ptr.?))).*;
+        const dec_value = builtins.utils.readAs(RocDec, dec_arg.ptr.?, @src());
         const f64_value = dec_value.toF64();
         const f32_value: f32 = @floatCast(f64_value);
 
@@ -5538,14 +5524,14 @@ pub const Interpreter = struct {
         const dec_arg = args[0];
         std.debug.assert(dec_arg.ptr != null);
 
-        const dec_value: RocDec = @as(*const RocDec, @ptrCast(@alignCast(dec_arg.ptr.?))).*;
+        const dec_value = builtins.utils.readAs(RocDec, dec_arg.ptr.?, @src());
         const f64_value = dec_value.toF64();
 
         const to_layout = Layout.frac(.f64);
         const result_rt_var = try self.runtime_types.fresh();
         var out = try self.pushRaw(to_layout, 0, result_rt_var);
         out.is_initialized = false;
-        @as(*f64, @ptrCast(@alignCast(out.ptr.?))).* = f64_value;
+        builtins.utils.writeAs(f64, out.ptr.?, f64_value, @src());
         out.is_initialized = true;
         return out;
     }
@@ -5564,7 +5550,7 @@ pub const Interpreter = struct {
         out.is_initialized = false;
 
         // Write Dec at offset 0
-        @as(*RocDec, @ptrCast(@alignCast(out.ptr.?))).* = val;
+        builtins.utils.writeAs(RocDec, out.ptr.?, val, @src());
 
         // Write Bool at offset 16
         const bool_ptr: *u8 = @ptrFromInt(@intFromPtr(out.ptr.?) + 16);
@@ -5584,7 +5570,7 @@ pub const Interpreter = struct {
         out.is_initialized = false;
 
         // Write F32 at offset 0
-        @as(*f32, @ptrCast(@alignCast(out.ptr.?))).* = val;
+        builtins.utils.writeAs(f32, out.ptr.?, val, @src());
 
         // Write Bool at offset 4
         const bool_ptr: *u8 = @ptrFromInt(@intFromPtr(out.ptr.?) + 4);
@@ -5609,7 +5595,7 @@ pub const Interpreter = struct {
         out.is_initialized = false;
 
         // Write val at offset 0
-        @as(*To, @ptrCast(@alignCast(out.ptr.?))).* = val;
+        builtins.utils.writeAs(To, out.ptr.?, val, @src());
 
         // Write is_int at offset val_size
         const is_int_ptr: *u8 = @ptrFromInt(@intFromPtr(out.ptr.?) + val_size);
@@ -5633,7 +5619,7 @@ pub const Interpreter = struct {
         out.is_initialized = false;
 
         // Write I128 at offset 0
-        @as(*i128, @ptrCast(@alignCast(out.ptr.?))).* = val;
+        builtins.utils.writeAs(i128, out.ptr.?, val, @src());
 
         // Write Bool at offset 16
         const bool_ptr: *u8 = @ptrFromInt(@intFromPtr(out.ptr.?) + 16);
@@ -5806,7 +5792,7 @@ pub const Interpreter = struct {
                     @memset(@as([*]u8, @ptrCast(payload_ptr))[0..payload_bytes_len], 0);
                 }
                 if (success) {
-                    @as(*T, @ptrCast(@alignCast(payload_ptr))).* = value;
+                    builtins.utils.writeAs(T, payload_ptr, value, @src());
                 }
             }
             return dest;
@@ -5830,7 +5816,7 @@ pub const Interpreter = struct {
                     @memset(@as([*]u8, @ptrCast(payload_ptr))[0..payload_bytes_len], 0);
                 }
                 if (success) {
-                    @as(*T, @ptrCast(@alignCast(payload_ptr))).* = value;
+                    builtins.utils.writeAs(T, payload_ptr, value, @src());
                 }
             }
             return dest;
@@ -5849,7 +5835,7 @@ pub const Interpreter = struct {
                 @memset(base_ptr[0..payload_size], 0);
             }
             if (success) {
-                @as(*T, @ptrCast(@alignCast(base_ptr))).* = value;
+                builtins.utils.writeAs(T, base_ptr, value, @src());
             }
 
             dest.is_initialized = true;
@@ -6154,9 +6140,8 @@ pub const Interpreter = struct {
         std.debug.assert(value.layout.data.scalar.data.int == .u8);
 
         const ptr = value.ptr orelse debugUnreachable(null, "null pointer in getRuntimeU8", @src());
-        const b: *const u8 = @ptrCast(@alignCast(ptr));
 
-        return b.*;
+        return builtins.utils.readAs(u8, ptr, @src());
     }
 
     fn boolValueEquals(self: *Interpreter, equals: bool, value: StackValue, roc_ops: *RocOps) bool {
@@ -6167,7 +6152,7 @@ pub const Interpreter = struct {
         if (value.layout.tag == .scalar) {
             std.debug.assert(value.layout.data.scalar.tag == .int);
             std.debug.assert(value.layout.data.scalar.data.int == .u8);
-            const bool_byte = @as(*const u8, @ptrCast(@alignCast(ptr))).*;
+            const bool_byte = builtins.utils.readAs(u8, ptr, @src());
             // Debug removed
             return (bool_byte != 0) == equals;
         } else if (value.layout.tag == .tag_union) {
@@ -6362,18 +6347,15 @@ pub const Interpreter = struct {
             .frac => switch (scalar.data.frac) {
                 .f32 => {
                     const raw_ptr = value.ptr orelse return error.TypeMismatch;
-                    const ptr = @as(*const f32, @ptrCast(@alignCast(raw_ptr)));
-                    return NumericValue{ .f32 = ptr.* };
+                    return NumericValue{ .f32 = builtins.utils.readAs(f32, raw_ptr, @src()) };
                 },
                 .f64 => {
                     const raw_ptr = value.ptr orelse return error.TypeMismatch;
-                    const ptr = @as(*const f64, @ptrCast(@alignCast(raw_ptr)));
-                    return NumericValue{ .f64 = ptr.* };
+                    return NumericValue{ .f64 = builtins.utils.readAs(f64, raw_ptr, @src()) };
                 },
                 .dec => {
                     const raw_ptr = value.ptr orelse return error.TypeMismatch;
-                    const ptr = @as(*const RocDec, @ptrCast(@alignCast(raw_ptr)));
-                    return NumericValue{ .dec = ptr.* };
+                    return NumericValue{ .dec = builtins.utils.readAs(RocDec, raw_ptr, @src()) };
                 },
             },
             else => error.NotNumeric,
@@ -7582,7 +7564,7 @@ pub const Interpreter = struct {
     /// Callback for render_helpers to handle nominal types with custom to_inspect methods.
     /// Returns the rendered string if the type has a to_inspect method, null otherwise.
     fn toInspectCallback(ctx: *anyopaque, value: StackValue, rt_var: types.Var) ?[]u8 {
-        const cb_ctx: *ToInspectCallbackContext = @ptrCast(@alignCast(ctx));
+        const cb_ctx = builtins.utils.alignedPtrCast(*ToInspectCallbackContext, ctx, @src());
         const self = cb_ctx.interpreter;
         const roc_ops = cb_ctx.roc_ops;
 
@@ -7647,7 +7629,7 @@ pub const Interpreter = struct {
         if (result.layout.tag != .scalar) return null;
         if (result.layout.data.scalar.tag != .str) return null;
 
-        const rs: *const builtins.str.RocStr = @ptrCast(@alignCast(result.ptr.?));
+        const rs = builtins.utils.alignedPtrCast(*const builtins.str.RocStr, result.ptr.?, @src());
         const s = rs.asSlice();
 
         // Return a copy of the string
@@ -13010,7 +12992,7 @@ pub const Interpreter = struct {
                 .int => try value.setIntFromBytes(num_lit.value.bytes, num_lit.value.kind == .u128),
                 .frac => switch (layout_val.data.scalar.data.frac) {
                     .f32 => {
-                        const ptr = @as(*f32, @ptrCast(@alignCast(value.ptr.?)));
+                        const ptr = builtins.utils.alignedPtrCast(*f32, value.ptr.?, @src());
                         if (num_lit.value.kind == .u128) {
                             const u128_val: u128 = @bitCast(num_lit.value.bytes);
                             ptr.* = @floatFromInt(u128_val);
@@ -13019,7 +13001,7 @@ pub const Interpreter = struct {
                         }
                     },
                     .f64 => {
-                        const ptr = @as(*f64, @ptrCast(@alignCast(value.ptr.?)));
+                        const ptr = builtins.utils.alignedPtrCast(*f64, value.ptr.?, @src());
                         if (num_lit.value.kind == .u128) {
                             const u128_val: u128 = @bitCast(num_lit.value.bytes);
                             ptr.* = @floatFromInt(u128_val);
@@ -13028,7 +13010,7 @@ pub const Interpreter = struct {
                         }
                     },
                     .dec => {
-                        const ptr = @as(*RocDec, @ptrCast(@alignCast(value.ptr.?)));
+                        const ptr = builtins.utils.alignedPtrCast(*RocDec, value.ptr.?, @src());
                         ptr.* = RocDec.fromWholeInt(num_lit.value.toI128()).?;
                     },
                 },
@@ -13098,8 +13080,7 @@ pub const Interpreter = struct {
 
         const value = try self.pushRaw(layout_val, 0, final_rt_var);
         if (value.ptr) |ptr| {
-            const typed_ptr: *f32 = @ptrCast(@alignCast(ptr));
-            typed_ptr.* = lit.value;
+            builtins.utils.writeAs(f32, ptr, lit.value, @src());
         }
         return value;
     }
@@ -13128,8 +13109,7 @@ pub const Interpreter = struct {
 
         const value = try self.pushRaw(layout_val, 0, final_rt_var);
         if (value.ptr) |ptr| {
-            const typed_ptr: *f64 = @ptrCast(@alignCast(ptr));
-            typed_ptr.* = lit.value;
+            builtins.utils.writeAs(f64, ptr, lit.value, @src());
         }
         return value;
     }
@@ -13158,8 +13138,7 @@ pub const Interpreter = struct {
 
         const value = try self.pushRaw(layout_val, 0, final_rt_var);
         if (value.ptr) |ptr| {
-            const typed_ptr: *RocDec = @ptrCast(@alignCast(ptr));
-            typed_ptr.* = dec_lit.value;
+            builtins.utils.writeAs(RocDec, ptr, dec_lit.value, @src());
         }
         return value;
     }
@@ -13199,7 +13178,7 @@ pub const Interpreter = struct {
 
         const value = try self.pushRaw(layout_val, 0, final_rt_var);
         if (value.ptr) |ptr| {
-            const typed_ptr: *RocDec = @ptrCast(@alignCast(ptr));
+            const typed_ptr = builtins.utils.alignedPtrCast(*RocDec, ptr, @src());
             const scale_factor = std.math.pow(i128, 10, RocDec.decimal_places - small.value.denominator_power_of_ten);
             const scaled = @as(i128, small.value.numerator) * scale_factor;
             typed_ptr.* = RocDec{ .num = scaled };
@@ -13250,7 +13229,7 @@ pub const Interpreter = struct {
                 .int => try value.setIntFromBytes(typed_int.value.bytes, typed_int.value.kind == .u128),
                 .frac => switch (layout_val.data.scalar.data.frac) {
                     .f32 => {
-                        const ptr = @as(*f32, @ptrCast(@alignCast(value.ptr.?)));
+                        const ptr = builtins.utils.alignedPtrCast(*f32, value.ptr.?, @src());
                         if (typed_int.value.kind == .u128) {
                             const u128_val: u128 = @bitCast(typed_int.value.bytes);
                             ptr.* = @floatFromInt(u128_val);
@@ -13259,7 +13238,7 @@ pub const Interpreter = struct {
                         }
                     },
                     .f64 => {
-                        const ptr = @as(*f64, @ptrCast(@alignCast(value.ptr.?)));
+                        const ptr = builtins.utils.alignedPtrCast(*f64, value.ptr.?, @src());
                         if (typed_int.value.kind == .u128) {
                             const u128_val: u128 = @bitCast(typed_int.value.bytes);
                             ptr.* = @floatFromInt(u128_val);
@@ -13268,7 +13247,7 @@ pub const Interpreter = struct {
                         }
                     },
                     .dec => {
-                        const ptr = @as(*RocDec, @ptrCast(@alignCast(value.ptr.?)));
+                        const ptr = builtins.utils.alignedPtrCast(*RocDec, value.ptr.?, @src());
                         ptr.* = RocDec.fromWholeInt(typed_int.value.toI128()).?;
                     },
                 },
@@ -13325,17 +13304,17 @@ pub const Interpreter = struct {
             .scalar => switch (layout_val.data.scalar.tag) {
                 .frac => switch (layout_val.data.scalar.data.frac) {
                     .f32 => {
-                        const ptr = @as(*f32, @ptrCast(@alignCast(value.ptr.?)));
+                        const ptr = builtins.utils.alignedPtrCast(*f32, value.ptr.?, @src());
                         // Convert from scaled i128 (10^18) to f32
                         ptr.* = @as(f32, @floatFromInt(scaled_value)) / @as(f32, @floatFromInt(RocDec.one_point_zero_i128));
                     },
                     .f64 => {
-                        const ptr = @as(*f64, @ptrCast(@alignCast(value.ptr.?)));
+                        const ptr = builtins.utils.alignedPtrCast(*f64, value.ptr.?, @src());
                         // Convert from scaled i128 (10^18) to f64
                         ptr.* = @as(f64, @floatFromInt(scaled_value)) / @as(f64, @floatFromInt(RocDec.one_point_zero_i128));
                     },
                     .dec => {
-                        const ptr = @as(*RocDec, @ptrCast(@alignCast(value.ptr.?)));
+                        const ptr = builtins.utils.alignedPtrCast(*RocDec, value.ptr.?, @src());
                         // Value is already in Dec format (scaled i128)
                         ptr.* = .{ .num = scaled_value };
                     },
@@ -13721,15 +13700,14 @@ pub const Interpreter = struct {
         const value = try self.pushRaw(closure_layout, 0, rt_var);
         self.registerDefValue(expr_idx, value);
         if (value.ptr) |ptr| {
-            const header: *layout.Closure = @ptrCast(@alignCast(ptr));
-            header.* = .{
+            builtins.utils.writeAs(layout.Closure, ptr, .{
                 .body_idx = lam.body,
                 .params = lam.args,
                 .captures_pattern_idx = @enumFromInt(@as(u32, 0)),
                 .captures_layout_idx = closure_layout.data.closure.captures_layout_idx,
                 .lambda_expr_idx = expr_idx,
                 .source_env = self.env,
-            };
+            }, @src());
         }
         return value;
     }
@@ -13751,15 +13729,14 @@ pub const Interpreter = struct {
         const value = try self.pushRaw(closure_layout, 0, rt_var);
         self.registerDefValue(expr_idx, value);
         if (value.ptr) |ptr| {
-            const header: *layout.Closure = @ptrCast(@alignCast(ptr));
-            header.* = .{
+            builtins.utils.writeAs(layout.Closure, ptr, .{
                 .body_idx = lam.body,
                 .params = lam.args,
                 .captures_pattern_idx = @enumFromInt(@as(u32, 0)),
                 .captures_layout_idx = closure_layout.data.closure.captures_layout_idx,
                 .lambda_expr_idx = expr_idx,
                 .source_env = self.env,
-            };
+            }, @src());
         }
         return value;
     }
@@ -13787,15 +13764,14 @@ pub const Interpreter = struct {
         const value = try self.pushRaw(closure_layout, 0, rt_var);
         self.registerDefValue(expr_idx, value);
         if (value.ptr) |ptr| {
-            const header: *layout.Closure = @ptrCast(@alignCast(ptr));
-            header.* = .{
+            builtins.utils.writeAs(layout.Closure, ptr, .{
                 .body_idx = hosted.body,
                 .params = hosted.args,
                 .captures_pattern_idx = @enumFromInt(@as(u32, 0)),
                 .captures_layout_idx = closure_layout.data.closure.captures_layout_idx,
                 .lambda_expr_idx = expr_idx,
                 .source_env = self.env,
-            };
+            }, @src());
         }
         return value;
     }
@@ -13854,20 +13830,19 @@ pub const Interpreter = struct {
         self.registerDefValue(expr_idx, value);
 
         if (value.ptr) |ptr| {
-            const header: *layout.Closure = @ptrCast(@alignCast(ptr));
-            header.* = .{
+            builtins.utils.writeAs(layout.Closure, ptr, .{
                 .body_idx = lam.body,
                 .params = lam.args,
                 .captures_pattern_idx = @enumFromInt(@as(u32, 0)),
                 .captures_layout_idx = captures_layout_idx,
                 .lambda_expr_idx = expr_idx,
                 .source_env = self.env,
-            };
+            }, @src());
             // Copy captures into record area following header
             const header_size = @sizeOf(layout.Closure);
             const cap_align = captures_layout.alignment(self.runtime_layout_store.targetUsize());
             const aligned_off = std.mem.alignForward(usize, header_size, @intCast(cap_align.toByteUnits()));
-            const base: [*]u8 = @ptrCast(@alignCast(ptr));
+            const base: [*]u8 = @ptrCast(ptr);
             const rec_ptr: *anyopaque = @ptrCast(base + aligned_off);
             const rec_val = StackValue{ .layout = captures_layout, .ptr = rec_ptr, .is_initialized = true, .rt_var = closure_rt_var };
             var accessor = try rec_val.asRecord(&self.runtime_layout_store);
@@ -14314,15 +14289,14 @@ pub const Interpreter = struct {
         } else return;
         const ph = try self.pushRaw(closure_layout, 0, patt_rt_var);
         if (ph.ptr) |ptr| {
-            const header: *layout.Closure = @ptrCast(@alignCast(ptr));
-            header.* = .{
+            builtins.utils.writeAs(layout.Closure, ptr, .{
                 .body_idx = body_idx,
                 .params = params,
                 .captures_pattern_idx = @enumFromInt(@as(u32, 0)),
                 .captures_layout_idx = closure_layout.data.closure.captures_layout_idx,
                 .lambda_expr_idx = rhs_expr,
                 .source_env = self.env,
-            };
+            }, @src());
         }
         try self.bindings.append(.{ .pattern_idx = patt_idx, .value = ph, .expr_idx = rhs_expr, .source_env = self.env });
     }
@@ -15143,8 +15117,7 @@ pub const Interpreter = struct {
                                             try val.copyToPtr(&self.runtime_layout_store, data_ptr, roc_ops);
                                         }
                                         // Write box pointer to list element location
-                                        const slot: *usize = @ptrCast(@alignCast(dest_ptr));
-                                        slot.* = @intFromPtr(data_ptr);
+                                        builtins.utils.writeAs(usize, dest_ptr, @intFromPtr(data_ptr), @src());
                                     }
                                 } else {
                                     for (values, 0..) |val, idx| {
@@ -15873,8 +15846,7 @@ pub const Interpreter = struct {
                                 }
 
                                 // Write box pointer to payload location
-                                const slot: *usize = @ptrCast(@alignCast(payload_ptr));
-                                slot.* = @intFromPtr(data_ptr);
+                                builtins.utils.writeAs(usize, payload_ptr, @intFromPtr(data_ptr), @src());
                             } else if (values[0].layout.tag == .box and expected_payload_layout.tag != .box) {
                                 // Auto-unbox: actual is boxed but expected is unboxed.
                                 // This happens when List elements are boxed (for recursive types),
@@ -16006,8 +15978,7 @@ pub const Interpreter = struct {
 
                                     // Write box pointer to element location
                                     const elem_ptr = try tup_acc.getElementPtr(idx);
-                                    const slot: *usize = @ptrCast(@alignCast(elem_ptr));
-                                    slot.* = @intFromPtr(data_ptr);
+                                    builtins.utils.writeAs(usize, elem_ptr, @intFromPtr(data_ptr), @src());
                                 } else {
                                     try tup_acc.setElement(idx, val, roc_ops);
                                 }
@@ -18957,7 +18928,7 @@ pub const Interpreter = struct {
 
                 if (list_value.layout.tag == .list_of_zst) {
                     // Short circuit for empty lists
-                    const list_header: *const RocList = @ptrCast(@alignCast(list_value.ptr.?));
+                    const list_header = builtins.utils.alignedPtrCast(*const RocList, list_value.ptr.?, @src());
                     const list_len = list_header.len();
                     if (list_len == 0) {
                         // Empty list
@@ -18978,7 +18949,7 @@ pub const Interpreter = struct {
                     layout.Layout.zst(); // list_of_zst has zero-sized elements
 
                 // Get the RocList header
-                const list_header: *const RocList = @ptrCast(@alignCast(list_value.ptr.?));
+                const list_header = builtins.utils.alignedPtrCast(*const RocList, list_value.ptr.?, @src());
                 const list_len = list_header.len();
 
                 // Extract the element type from the list's runtime type.
@@ -19120,7 +19091,7 @@ pub const Interpreter = struct {
                 }
 
                 // Get next element
-                const list_header: *const RocList = @ptrCast(@alignCast(fl.list_value.ptr.?));
+                const list_header = builtins.utils.alignedPtrCast(*const RocList, fl.list_value.ptr.?, @src());
                 const elem_ptr = if (list_header.bytes) |buffer|
                     buffer + next_index * fl.elem_size
                 else
