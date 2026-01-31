@@ -3870,11 +3870,15 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
         return err;
     };
 
-    _ = comptime_evaluator.evalAll() catch |err| {
-        try stderr.print("Failed to evaluate declarations: {}\n", .{err});
-        comptime_evaluator.deinit();
-        return err;
-    };
+    // Only run evalAll if evaluation_order is set (not cached modules)
+    // Cached modules have evaluation_order = null since it's not serialized
+    if (root_env.evaluation_order != null) {
+        _ = comptime_evaluator.evalAll() catch |err| {
+            try stderr.print("Failed to evaluate declarations: {}\n", .{err});
+            comptime_evaluator.deinit();
+            return err;
+        };
+    }
 
     // Track test results across all modules
     var total_passed: u32 = 0;
