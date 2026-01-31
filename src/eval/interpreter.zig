@@ -77,10 +77,57 @@ fn debugUnreachable(roc_ops: ?*RocOps, comptime msg: []const u8, src: std.builti
 
 /// Context structure for inc/dec callbacks in list operations
 const RefcountContext = struct {
+    // Existing fields
     layout_store: *layout.Store,
     elem_layout: Layout,
     elem_rt_var: types.Var,
     roc_ops: *RocOps,
+    // New field
+    is_refcounted: bool,
+
+    pub const Inc = *const fn (?*anyopaque, ?[*]u8) callconv(.c) void;
+    pub const Dec = *const fn (?*anyopaque, ?[*]u8) callconv(.c) void;
+
+    /// Initialize RefcountContext from element layout
+    pub fn init(
+        layout_store_ptr: *layout.Store,
+        elem_layout: Layout,
+        runtime_types: *types.store.Store,
+        roc_ops_ptr: *RocOps,
+    ) std.mem.Allocator.Error!RefcountContext {
+        return .{
+            .layout_store = layout_store_ptr,
+            .elem_layout = elem_layout,
+            .elem_rt_var = try runtime_types.fresh(),
+            .roc_ops = roc_ops_ptr,
+            .is_refcounted = layout_store_ptr.layoutContainsRefcounted(elem_layout),
+        };
+    }
+
+    /// Get context pointer for inc callback (null if not refcounted)
+    pub fn incContext(self: *RefcountContext) ?*anyopaque {
+        return if (self.is_refcounted) @ptrCast(self) else null;
+    }
+
+    /// Get inc callback function (rcNone if not refcounted)
+    pub fn incCallback(self: *const RefcountContext) Inc {
+        return if (self.is_refcounted) &listElementInc else &builtins.list.rcNone;
+    }
+
+    /// Get context pointer for dec callback (null if not refcounted)
+    pub fn decContext(self: *RefcountContext) ?*anyopaque {
+        return if (self.is_refcounted) @ptrCast(self) else null;
+    }
+
+    /// Get dec callback function (rcNone if not refcounted)
+    pub fn decCallback(self: *const RefcountContext) Dec {
+        return if (self.is_refcounted) &listElementDec else &builtins.list.rcNone;
+    }
+
+    /// Check if elements are refcounted
+    pub fn isRefcounted(self: *const RefcountContext) bool {
+        return self.is_refcounted;
+    }
 };
 
 /// Increment callback for list operations - increments refcount of element via StackValue
@@ -1166,23 +1213,16 @@ pub const Interpreter = struct {
         const elem_alignment_u32: u32 = @intCast(elem_alignment);
 
         // Make a unique copy of the list for sorting
-        const elements_refcounted = self.runtime_layout_store.layoutContainsRefcounted(elem_layout);
-        const elem_rt_var = try self.runtime_types.fresh();
-        var refcount_context = RefcountContext{
-            .layout_store = &self.runtime_layout_store,
-            .elem_layout = elem_layout,
-            .elem_rt_var = elem_rt_var,
-            .roc_ops = roc_ops,
-        };
+        var rc = try RefcountContext.init(&self.runtime_layout_store, elem_layout, self.runtime_types, roc_ops);
 
         const working_list = roc_list.makeUnique(
             elem_alignment_u32,
             elem_size,
-            elements_refcounted,
-            if (elements_refcounted) @ptrCast(&refcount_context) else null,
-            if (elements_refcounted) &listElementInc else &builtins.list.rcNone,
-            if (elements_refcounted) @ptrCast(&refcount_context) else null,
-            if (elements_refcounted) &listElementDec else &builtins.list.rcNone,
+            rc.isRefcounted(),
+            rc.incContext(),
+            rc.incCallback(),
+            rc.decContext(),
+            rc.decCallback(),
             roc_ops,
         );
 
@@ -1200,18 +1240,17 @@ pub const Interpreter = struct {
         const elem0_ptr = working_list.bytes.? + 0 * elem_size;
         const elem1_ptr = working_list.bytes.? + 1 * elem_size;
 
-        // elem_rt_var already declared above for RefcountContext
         const elem0_value = StackValue{
             .layout = elem_layout,
             .ptr = @ptrCast(elem0_ptr),
             .is_initialized = true,
-            .rt_var = elem_rt_var,
+            .rt_var = rc.elem_rt_var,
         };
         const elem1_value = StackValue{
             .layout = elem_layout,
             .ptr = @ptrCast(elem1_ptr),
             .is_initialized = true,
-            .rt_var = elem_rt_var,
+            .rt_var = rc.elem_rt_var,
         };
 
         // Copy elements for comparison (compare_fn will consume them)
@@ -1229,7 +1268,7 @@ pub const Interpreter = struct {
             .list_len = list_len,
             .elem_size = elem_size,
             .elem_layout = elem_layout,
-            .elem_rt_var = elem_rt_var,
+            .elem_rt_var = rc.elem_rt_var,
         } } });
         saved_rigid_subst = null; // Ownership transferred to continuation
 
@@ -2544,26 +2583,17 @@ pub const Interpreter = struct {
                 const elem_alignment = elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
                 const elem_alignment_u32: u32 = @intCast(elem_alignment);
 
-                // Determine if elements are refcounted
-                const elements_refcounted = self.runtime_layout_store.layoutContainsRefcounted(elem_layout);
-
-                // Set up context for refcount callbacks
-                const elem_rt_var = try self.runtime_types.fresh();
-                var refcount_context = RefcountContext{
-                    .layout_store = &self.runtime_layout_store,
-                    .elem_layout = elem_layout,
-                    .elem_rt_var = elem_rt_var,
-                    .roc_ops = roc_ops,
-                };
+                // Set up refcount context
+                var rc = try RefcountContext.init(&self.runtime_layout_store, elem_layout, self.runtime_types, roc_ops);
 
                 // Create empty list with capacity
                 const result_list = builtins.list.listWithCapacity(
                     capacity,
                     elem_alignment_u32,
                     elem_size,
-                    elements_refcounted,
-                    if (elements_refcounted) @ptrCast(&refcount_context) else null,
-                    if (elements_refcounted) &listElementInc else &builtins.list.rcNone,
+                    rc.isRefcounted(),
+                    rc.incContext(),
+                    rc.incCallback(),
                     roc_ops,
                 );
 
@@ -2799,8 +2829,8 @@ pub const Interpreter = struct {
                     return result;
                 }
 
-                // Determine if elements are refcounted
-                const elements_refcounted = self.runtime_layout_store.layoutContainsRefcounted(elem_layout);
+                // Set up refcount context to determine if elements are refcounted
+                var rc = try RefcountContext.init(&self.runtime_layout_store, elem_layout, self.runtime_types, roc_ops);
 
                 // Create a fresh list by allocating and copying elements.
                 // We can't use the builtin listConcat here because it consumes its input lists
@@ -2815,7 +2845,7 @@ pub const Interpreter = struct {
                     elem_alignment_u32,
                     total_count,
                     elem_size,
-                    elements_refcounted,
+                    rc.isRefcounted(),
                     roc_ops,
                 );
 
@@ -2838,18 +2868,11 @@ pub const Interpreter = struct {
 
                 // Handle refcounting for copied elements - increment refcount for each element
                 // since we copied them (the elements are now shared with the original lists)
-                if (elements_refcounted) {
-                    const elem_rt_var = try self.runtime_types.fresh();
-                    var refcount_context = RefcountContext{
-                        .layout_store = &self.runtime_layout_store,
-                        .elem_layout = elem_layout,
-                        .elem_rt_var = elem_rt_var,
-                        .roc_ops = roc_ops,
-                    };
+                if (rc.isRefcounted()) {
                     if (runtime_list.bytes) |buffer| {
                         var i: usize = 0;
                         while (i < total_count) : (i += 1) {
-                            listElementInc(@ptrCast(&refcount_context), buffer + i * elem_size);
+                            listElementInc(rc.incContext(), buffer + i * elem_size);
                         }
                     }
                 }
@@ -2915,22 +2938,13 @@ pub const Interpreter = struct {
                     const elem_alignment = elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
                     const elem_alignment_u32: u32 = @intCast(elem_alignment);
 
-                    // Determine if elements contain refcounted data
-                    const elements_refcounted = self.runtime_layout_store.layoutContainsRefcounted(elem_layout);
-
-                    // Set up context for refcount callbacks
-                    const elem_rt_var = try self.runtime_types.fresh();
-                    var refcount_context = RefcountContext{
-                        .layout_store = &self.runtime_layout_store,
-                        .elem_layout = elem_layout,
-                        .elem_rt_var = elem_rt_var,
-                        .roc_ops = roc_ops,
-                    };
+                    // Set up refcount context
+                    var rc = try RefcountContext.init(&self.runtime_layout_store, elem_layout, self.runtime_types, roc_ops);
 
                     const copy_fn = selectCopyFallbackFn(elem_layout);
 
                     // Increment refcount of the element being appended
-                    if (elements_refcounted) {
+                    if (rc.isRefcounted()) {
                         elt_arg.incref(&self.runtime_layout_store, roc_ops);
                     }
 
@@ -2941,9 +2955,9 @@ pub const Interpreter = struct {
                         elem_alignment_u32,
                         append_elt,
                         elem_size,
-                        elements_refcounted,
-                        if (elements_refcounted) @ptrCast(&refcount_context) else null,
-                        if (elements_refcounted) &listElementInc else &builtins.list.rcNone,
+                        rc.isRefcounted(),
+                        rc.incContext(),
+                        rc.incCallback(),
                         builtins.utils.UpdateMode.Immutable,
                         copy_fn,
                         roc_ops,
@@ -2993,22 +3007,11 @@ pub const Interpreter = struct {
                 const elem_alignment = elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
                 const elem_alignment_u32: u32 = @intCast(elem_alignment);
 
-                // Determine if elements contain refcounted data (directly or transitively).
-                // This is more comprehensive than isRefcounted() - it also catches tuples/records
-                // containing strings, which need proper refcounting (fixes issue #8650).
-                const elements_refcounted = self.runtime_layout_store.layoutContainsRefcounted(elem_layout);
-
                 // Determine if list can be mutated in place
                 const update_mode = if (roc_list.isUnique(roc_ops)) builtins.utils.UpdateMode.InPlace else builtins.utils.UpdateMode.Immutable;
 
-                // Set up context for refcount callbacks
-                const elem_rt_var = try self.runtime_types.fresh();
-                var refcount_context = RefcountContext{
-                    .layout_store = &self.runtime_layout_store,
-                    .elem_layout = elem_layout,
-                    .elem_rt_var = elem_rt_var,
-                    .roc_ops = roc_ops,
-                };
+                // Set up refcount context
+                var rc = try RefcountContext.init(&self.runtime_layout_store, elem_layout, self.runtime_types, roc_ops);
 
                 const copy_fn = selectCopyFallbackFn(elem_layout);
 
@@ -3017,11 +3020,11 @@ pub const Interpreter = struct {
                 // so we need to increment its refcount before the copy.
                 // Without this, when the original element is freed, the list would
                 // hold a dangling reference (use-after-free bug).
-                if (elements_refcounted) {
+                if (rc.isRefcounted()) {
                     elt_arg.incref(&self.runtime_layout_store, roc_ops);
                 }
 
-                const result_list = builtins.list.listAppend(roc_list.*, elem_alignment_u32, append_elt, elem_size, elements_refcounted, if (elements_refcounted) @ptrCast(&refcount_context) else null, if (elements_refcounted) &listElementInc else &builtins.list.rcNone, update_mode, copy_fn, roc_ops);
+                const result_list = builtins.list.listAppend(roc_list.*, elem_alignment_u32, append_elt, elem_size, rc.isRefcounted(), rc.incContext(), rc.incCallback(), update_mode, copy_fn, roc_ops);
 
                 // Allocate space for the result list
                 // If we upgraded the element layout, create a new list layout with the upgraded element
@@ -3093,22 +3096,13 @@ pub const Interpreter = struct {
                     const elem_alignment = elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
                     const elem_alignment_u32: u32 = @intCast(elem_alignment);
 
-                    // Determine if elements contain refcounted data
-                    const elements_refcounted = self.runtime_layout_store.layoutContainsRefcounted(elem_layout);
-
-                    // Set up context for refcount callbacks
-                    const elem_rt_var = try self.runtime_types.fresh();
-                    var refcount_context = RefcountContext{
-                        .layout_store = &self.runtime_layout_store,
-                        .elem_layout = elem_layout,
-                        .elem_rt_var = elem_rt_var,
-                        .roc_ops = roc_ops,
-                    };
+                    // Set up refcount context
+                    var rc = try RefcountContext.init(&self.runtime_layout_store, elem_layout, self.runtime_types, roc_ops);
 
                     const copy_fn = selectCopyFallbackFn(elem_layout);
 
                     // Increment refcount of the element being appended
-                    if (elements_refcounted) {
+                    if (rc.isRefcounted()) {
                         elt_arg.incref(&self.runtime_layout_store, roc_ops);
                     }
 
@@ -3119,9 +3113,9 @@ pub const Interpreter = struct {
                         elem_alignment_u32,
                         append_elt,
                         elem_size,
-                        elements_refcounted,
-                        if (elements_refcounted) @ptrCast(&refcount_context) else null,
-                        if (elements_refcounted) &listElementInc else &builtins.list.rcNone,
+                        rc.isRefcounted(),
+                        rc.incContext(),
+                        rc.incCallback(),
                         builtins.utils.UpdateMode.Immutable,
                         copy_fn,
                         roc_ops,
@@ -3168,22 +3162,11 @@ pub const Interpreter = struct {
                 const elem_alignment = elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
                 const elem_alignment_u32: u32 = @intCast(elem_alignment);
 
-                // Determine if elements contain refcounted data (directly or transitively).
-                // This is more comprehensive than isRefcounted() - it also catches tuples/records
-                // containing strings, which need proper refcounting (fixes issue #8650).
-                const elements_refcounted = self.runtime_layout_store.layoutContainsRefcounted(elem_layout);
-
                 // Determine if list can be mutated in place
                 const update_mode = if (roc_list.isUnique(roc_ops)) builtins.utils.UpdateMode.InPlace else builtins.utils.UpdateMode.Immutable;
 
-                // Set up context for refcount callbacks
-                const elem_rt_var = try self.runtime_types.fresh();
-                var refcount_context = RefcountContext{
-                    .layout_store = &self.runtime_layout_store,
-                    .elem_layout = elem_layout,
-                    .elem_rt_var = elem_rt_var,
-                    .roc_ops = roc_ops,
-                };
+                // Set up refcount context
+                var rc = try RefcountContext.init(&self.runtime_layout_store, elem_layout, self.runtime_types, roc_ops);
 
                 const copy_fn = selectCopyFallbackFn(elem_layout);
 
@@ -3192,11 +3175,11 @@ pub const Interpreter = struct {
                 // so we need to increment its refcount before the copy.
                 // Without this, when the original element is freed, the list would
                 // hold a dangling reference (use-after-free bug).
-                if (elements_refcounted) {
+                if (rc.isRefcounted()) {
                     elt_arg.incref(&self.runtime_layout_store, roc_ops);
                 }
 
-                const result_list = builtins.list.listAppend(roc_list.*, elem_alignment_u32, append_elt, elem_size, elements_refcounted, if (elements_refcounted) @ptrCast(&refcount_context) else null, if (elements_refcounted) &listElementInc else &builtins.list.rcNone, update_mode, copy_fn, roc_ops);
+                const result_list = builtins.list.listAppend(roc_list.*, elem_alignment_u32, append_elt, elem_size, rc.isRefcounted(), rc.incContext(), rc.incCallback(), update_mode, copy_fn, roc_ops);
 
                 // Allocate space for the result list
                 // If we upgraded the element layout, create a new list layout with the upgraded element
@@ -3239,29 +3222,20 @@ pub const Interpreter = struct {
                 const elem_alignment = elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
                 const elem_alignment_u32: u32 = @intCast(elem_alignment);
 
-                // Determine if elements are refcounted
-                const elements_refcounted = self.runtime_layout_store.layoutContainsRefcounted(elem_layout);
-
-                // Set up context for refcount callbacks
-                const elem_rt_var = try self.runtime_types.fresh();
-                var refcount_context = RefcountContext{
-                    .layout_store = &self.runtime_layout_store,
-                    .elem_layout = elem_layout,
-                    .elem_rt_var = elem_rt_var,
-                    .roc_ops = roc_ops,
-                };
+                // Set up refcount context
+                var rc = try RefcountContext.init(&self.runtime_layout_store, elem_layout, self.runtime_types, roc_ops);
 
                 // Return list with element at index dropped
                 const result_list = builtins.list.listDropAt(
                     roc_list.*,
                     elem_alignment_u32,
                     elem_size,
-                    elements_refcounted,
+                    rc.isRefcounted(),
                     drop_index,
-                    if (elements_refcounted) @ptrCast(&refcount_context) else null,
-                    if (elements_refcounted) &listElementInc else &builtins.list.rcNone,
-                    if (elements_refcounted) @ptrCast(&refcount_context) else null,
-                    if (elements_refcounted) &listElementDec else &builtins.list.rcNone,
+                    rc.incContext(),
+                    rc.incCallback(),
+                    rc.decContext(),
+                    rc.decCallback(),
                     roc_ops,
                 );
 
@@ -3302,28 +3276,19 @@ pub const Interpreter = struct {
                 const elem_alignment = elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
                 const elem_alignment_u32: u32 = @intCast(elem_alignment);
 
-                // Determine if elements are refcounted
-                const elements_refcounted = self.runtime_layout_store.layoutContainsRefcounted(elem_layout);
+                // Set up refcount context
+                var rc = try RefcountContext.init(&self.runtime_layout_store, elem_layout, self.runtime_types, roc_ops);
 
-                // Set up context for refcount callbacks
-                const elem_rt_var = try self.runtime_types.fresh();
-                var refcount_context = RefcountContext{
-                    .layout_store = &self.runtime_layout_store,
-                    .elem_layout = elem_layout,
-                    .elem_rt_var = elem_rt_var,
-                    .roc_ops = roc_ops,
-                };
-
-                // Return list with element at index dropped
+                // Return sublist
                 const result_list = builtins.list.listSublist(
                     roc_list.*,
                     elem_alignment_u32,
                     elem_size,
-                    elements_refcounted,
+                    rc.isRefcounted(),
                     sublist_start,
                     sublist_len,
-                    if (elements_refcounted) @ptrCast(&refcount_context) else null,
-                    if (elements_refcounted) &listElementDec else &builtins.list.rcNone,
+                    rc.decContext(),
+                    rc.decCallback(),
                     roc_ops,
                 );
 
