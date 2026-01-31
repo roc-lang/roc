@@ -937,39 +937,42 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     if (args.len < 1) return Error.UnsupportedExpression;
                     const list_loc = try self.generateExpr(args[0]);
 
-                    switch (list_loc) {
-                        .stack => |base_offset| {
-                            // Length is at offset 8 - check if zero
-                            const len_reg = try self.allocTempGeneral();
-                            if (comptime builtin.cpu.arch == .aarch64) {
-                                try self.codegen.emit.ldrRegMemSoff(.w64, len_reg, .FP, base_offset + 8);
-                            } else {
-                                try self.codegen.emit.movRegMem(.w64, len_reg, .RBP, base_offset + 8);
-                            }
-                            // Compare with 0
-                            try self.emitCmpImm(len_reg, 0);
-                            // Set result to 1 if equal (empty), 0 otherwise
-                            const result_reg = try self.allocTempGeneral();
-                            try self.codegen.emitLoadImm(result_reg, 0);
-                            const one_reg = try self.allocTempGeneral();
-                            try self.codegen.emitLoadImm(one_reg, 1);
-                            if (comptime builtin.cpu.arch == .aarch64) {
-                                try self.codegen.emit.csel(.w64, result_reg, one_reg, result_reg, .eq);
-                            } else {
-                                try self.codegen.emit.cmovcc(.equal, .w64, result_reg, one_reg);
-                            }
-                            self.codegen.freeGeneral(one_reg);
-                            self.codegen.freeGeneral(len_reg);
-                            return .{ .general_reg = result_reg };
-                        },
+                    const base_offset: i32 = switch (list_loc) {
+                        .stack => |off| off,
+                        .list_stack => |ls_info| ls_info.struct_offset,
                         .immediate_i64 => |val| {
                             // Empty list - is_empty returns true (1)
                             if (val == 0) {
                                 return .{ .immediate_i64 = 1 };
                             }
-                            return Error.UnsupportedExpression;
+                            unreachable;
                         },
                         else => return Error.UnsupportedExpression,
+                    };
+
+                    {
+                        // Length is at offset 8 - check if zero
+                        const len_reg = try self.allocTempGeneral();
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            try self.codegen.emit.ldrRegMemSoff(.w64, len_reg, .FP, base_offset + 8);
+                        } else {
+                            try self.codegen.emit.movRegMem(.w64, len_reg, .RBP, base_offset + 8);
+                        }
+                        // Compare with 0
+                        try self.emitCmpImm(len_reg, 0);
+                        // Set result to 1 if equal (empty), 0 otherwise
+                        const result_reg = try self.allocTempGeneral();
+                        try self.codegen.emitLoadImm(result_reg, 0);
+                        const one_reg = try self.allocTempGeneral();
+                        try self.codegen.emitLoadImm(one_reg, 1);
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            try self.codegen.emit.csel(.w64, result_reg, one_reg, result_reg, .eq);
+                        } else {
+                            try self.codegen.emit.cmovcc(.equal, .w64, result_reg, one_reg);
+                        }
+                        self.codegen.freeGeneral(one_reg);
+                        self.codegen.freeGeneral(len_reg);
+                        return .{ .general_reg = result_reg };
                     }
                 },
                 .list_with_capacity => {
@@ -5271,12 +5274,20 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         // Load discriminant based on value location
                         const disc_reg = try self.allocTempGeneral();
                         switch (value_loc) {
-                            .stack => |base_offset| {
+                            .stack, .stack_str, .stack_i128 => |base_offset| {
                                 // Load discriminant from correct offset in tag union
                                 if (comptime builtin.cpu.arch == .aarch64) {
                                     try self.codegen.emit.ldrRegMemSoff(.w64, disc_reg, .FP, base_offset + tu_disc_offset);
                                 } else {
                                     try self.codegen.emit.movRegMem(.w64, disc_reg, .RBP, base_offset + tu_disc_offset);
+                                }
+                            },
+                            .list_stack => |ls_info| {
+                                // List on stack — load discriminant from struct offset
+                                if (comptime builtin.cpu.arch == .aarch64) {
+                                    try self.codegen.emit.ldrRegMemSoff(.w64, disc_reg, .FP, ls_info.struct_offset + tu_disc_offset);
+                                } else {
+                                    try self.codegen.emit.movRegMem(.w64, disc_reg, .RBP, ls_info.struct_offset + tu_disc_offset);
                                 }
                             },
                             .general_reg => |reg| {
@@ -8517,6 +8528,36 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                                         return Error.UnsupportedExpression;
                                     }
                                 }
+                                return try self.callLambdaBodyDirect(inner.lambda, args_span);
+                            };
+                            return try self.generateCallToLambda(offset, args_span, ret_layout);
+                        }
+                        return Error.UnsupportedExpression;
+                    },
+                    .block => {
+                        // Definition is a block — evaluate the block which may produce a lambda/closure
+                        const block_result = try self.generateExpr(def_expr_id);
+                        if (block_result == .lambda_code) {
+                            return try self.generateCallToLambda(
+                                block_result.lambda_code.code_offset,
+                                args_span,
+                                ret_layout,
+                            );
+                        }
+                        if (block_result == .closure_value) {
+                            return try self.generateClosureDispatch(block_result.closure_value, args_span, ret_layout);
+                        }
+                        return Error.UnsupportedExpression;
+                    },
+                    .nominal => |nom| {
+                        // Unwrap nominal and retry with the inner expression
+                        const inner = self.store.getExpr(nom.backing_expr);
+                        if (inner == .lambda) {
+                            const body_expr = self.store.getExpr(inner.lambda.body);
+                            if (body_expr == .low_level) {
+                                return try self.callLambdaBodyDirect(inner.lambda, args_span);
+                            }
+                            const offset = self.compileLambdaAsProc(nom.backing_expr, inner.lambda) catch {
                                 return try self.callLambdaBodyDirect(inner.lambda, args_span);
                             };
                             return try self.generateCallToLambda(offset, args_span, ret_layout);
