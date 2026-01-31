@@ -16169,9 +16169,24 @@ pub const Interpreter = struct {
                     }
                 }
 
-                // No branch matched - this should be caught by compile-time exhaustiveness checking
+                // No branch matched - this should be caught by compile-time exhaustiveness checking,
+                // but if there are type errors (e.g., using ? on a non-Try type), execution may
+                // reach here. Report a crash instead of hitting unreachable.
                 scrutinee.decref(&self.runtime_layout_store, roc_ops);
-                unreachable;
+
+                // Check if this is a try_suffix match to provide a more specific error message
+                const match_expr = self.env.store.getExpr(mb.expr_idx);
+                const is_try_suffix = switch (match_expr) {
+                    .e_match => |m| m.is_try_suffix,
+                    else => false,
+                };
+
+                if (is_try_suffix) {
+                    self.triggerCrash("The ? operator was used on a value that is not a Try type. The ? operator expects a value of type [Ok(a), Err(e)].", false, roc_ops);
+                } else {
+                    self.triggerCrash("Match expression was not exhaustive - no branch matched the scrutinee. This indicates a type error that should have been caught during type checking.", false, roc_ops);
+                }
+                return error.Crash;
             },
             .match_guard => |mg| {
                 const cont_trace = tracy.traceNamed(@src(), "cont.match_guard");
@@ -16200,10 +16215,24 @@ pub const Interpreter = struct {
                     self.trimBindingList(&self.bindings, mg.bindings_start, roc_ops);
 
                     if (mg.remaining_branches.len == 0) {
-                        // No more branches - this should be caught by compile-time exhaustiveness checking
+                        // No more branches - this should be caught by compile-time exhaustiveness checking,
+                        // but if there are type errors, execution may reach here.
                         const scrutinee = value_stack.pop() orelse return error.Crash;
                         scrutinee.decref(&self.runtime_layout_store, roc_ops);
-                        unreachable;
+
+                        // Check if this is a try_suffix match to provide a more specific error message
+                        const match_expr = self.env.store.getExpr(mg.expr_idx);
+                        const is_try_suffix = switch (match_expr) {
+                            .e_match => |m| m.is_try_suffix,
+                            else => false,
+                        };
+
+                        if (is_try_suffix) {
+                            self.triggerCrash("The ? operator was used on a value that is not a Try type. The ? operator expects a value of type [Ok(a), Err(e)].", false, roc_ops);
+                        } else {
+                            self.triggerCrash("Match expression was not exhaustive - no branch matched the scrutinee. This indicates a type error that should have been caught during type checking.", false, roc_ops);
+                        }
+                        return error.Crash;
                     }
 
                     // Continue with remaining branches
