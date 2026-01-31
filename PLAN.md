@@ -324,4 +324,48 @@ Likely candidates:
 - **Stack frame metadata** - return address or saved RBP, but only checked during deeper call chains
 - **Stack pointer misalignment** - only affects certain calling patterns
 
-The filesystem operations likely use more stack space and/or rely on preserved XMM registers for path string processing, which would explain why they crash while simpler operations work
+The filesystem operations likely use more stack space and/or rely on preserved XMM registers for path string processing, which would explain why they crash while simpler operations work.
+
+## Stack Usage Investigation
+
+Added detailed stack instrumentation to measure stack usage before/after the Roc call.
+
+### Findings
+
+**Stack measurements show plenty of space:**
+- Before Roc call: ~17 KB remaining
+- After Roc call: ~172 KB remaining (Windows committed more pages during execution)
+- Stack alignment correct: RSP mod 16 = 8
+- Manual 8KB stack probe **succeeds**
+
+**Direct Windows API calls WORK:**
+```
+GetFileAttributesA(".")     → 0x10 (success, returns DIRECTORY attribute)
+CreateDirectoryA(path)      → works (returns expected error for missing parent)
+GetFileAttributesW(L".")    → 0x10 (success, wide string version)
+NtQuerySystemInformation()  → 0xC0000004 (expected STATUS_INFO_LENGTH_MISMATCH)
+```
+
+**Zig std.fs operations CRASH:**
+```
+std.fs.cwd().statFile(".")  → stack overflow
+std.fs.cwd().openDir(".")   → stack overflow
+std.fs.cwd().makePath(path) → stack overflow
+```
+
+### Interpretation
+
+The issue is **NOT** with:
+- Stack size (172 KB available)
+- Stack alignment (correct)
+- Windows kernel32 API calls (work fine)
+- Windows ntdll API calls (work fine)
+- Wide string handling (GetFileAttributesW works)
+
+The issue **IS** specific to Zig's std.fs implementation. Possible causes:
+1. **Zig error return tracing** - std.fs uses Zig's error handling infrastructure
+2. **SEH (Structured Exception Handling)** - std.fs may set up exception handlers
+3. **Internal Zig runtime state** - something in Zig's runtime got corrupted
+4. **Stack frame metadata** - Zig may use frame pointers or debug info differently
+
+The Roc interpreter is likely corrupting some state that Zig's std.fs relies on but that direct Windows API calls don't need
