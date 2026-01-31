@@ -5442,8 +5442,46 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                             }
                         }
                     },
+                    .record => {
+                        // Record destructuring always matches - bind fields and generate body
+                        // Ensure the value is on the stack for field access
+                        const value_size = ls.layoutSizeAlign(value_layout_val).size;
+                        const stack_off = try self.ensureOnStack(value_loc, value_size);
+                        try self.bindPattern(branch.pattern, .{ .stack = stack_off });
+
+                        const body_loc = try self.generateExpr(branch.body);
+                        try self.storeWhenResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
+                        // Record destructuring always matches, no more branches needed
+                        break;
+                    },
+                    .tuple => {
+                        // Tuple destructuring always matches - bind elements and generate body
+                        // Ensure the value is on the stack for element access
+                        const value_size = ls.layoutSizeAlign(value_layout_val).size;
+                        const stack_off = try self.ensureOnStack(value_loc, value_size);
+                        try self.bindPattern(branch.pattern, .{ .stack = stack_off });
+
+                        const body_loc = try self.generateExpr(branch.body);
+                        try self.storeWhenResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
+                        // Tuple destructuring always matches, no more branches needed
+                        break;
+                    },
+                    .as_pattern => |as_pat| {
+                        // As-pattern: bind the whole value to the symbol, then match the inner pattern
+                        const symbol_key: u48 = @bitCast(as_pat.symbol);
+                        try self.symbol_locations.put(symbol_key, value_loc);
+
+                        // Also bind the inner pattern
+                        const value_size = ls.layoutSizeAlign(value_layout_val).size;
+                        const stack_off = try self.ensureOnStack(value_loc, value_size);
+                        try self.bindPattern(as_pat.inner, .{ .stack = stack_off });
+
+                        const body_loc = try self.generateExpr(branch.body);
+                        try self.storeWhenResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
+                        // As-pattern always matches, no more branches needed
+                        break;
+                    },
                     else => {
-                        // Unsupported pattern type (record, tuple destructuring)
                         return Error.UnsupportedExpression;
                     },
                 }
