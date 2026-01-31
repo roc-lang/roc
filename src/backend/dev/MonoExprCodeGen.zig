@@ -45,6 +45,42 @@ const listWithCapacityC = builtins.list.listWithCapacityC;
 const listAppendUnsafeC = builtins.list.listAppendUnsafeC;
 const listAppendSafeC = builtins.list.listAppendSafeC;
 const copy_fallback = builtins.list.copy_fallback;
+const RocList = builtins.list.RocList;
+
+// Additional list builtins (return RocList by value with callconv(.c))
+const listConcat = builtins.list.listConcat;
+const listPrepend = builtins.list.listPrepend;
+const listSublist = builtins.list.listSublist;
+const listDropAt = builtins.list.listDropAt;
+const listReplace = builtins.list.listReplace;
+const listReserve = builtins.list.listReserve;
+const listReleaseExcessCapacity = builtins.list.listReleaseExcessCapacity;
+
+// String builtins
+const strToUtf8C = builtins.str.strToUtf8C;
+const strConcatC = builtins.str.strConcatC;
+const strContains = builtins.str.strContains;
+const strStartsWith = builtins.str.startsWith;
+const strEndsWith = builtins.str.endsWith;
+const strCountUtf8Bytes = builtins.str.countUtf8Bytes;
+const strCaselessAsciiEquals = builtins.str.strCaselessAsciiEquals;
+const strIsEmpty = builtins.str.isEmpty;
+const strEqual = builtins.str.strEqual;
+const strRepeatC = builtins.str.repeatC;
+const strTrim = builtins.str.strTrim;
+const strTrimStart = builtins.str.strTrimStart;
+const strTrimEnd = builtins.str.strTrimEnd;
+const strSplitOn = builtins.str.strSplitOn;
+const strJoinWithC = builtins.str.strJoinWithC;
+const strReserveC = builtins.str.reserveC;
+const strReleaseExcessCapacity = builtins.str.strReleaseExcessCapacity;
+const strWithCapacityC = builtins.str.withCapacityC;
+const strDropPrefix = builtins.str.strDropPrefix;
+const strDropSuffix = builtins.str.strDropSuffix;
+const strWithAsciiLowercased = builtins.str.strWithAsciiLowercased;
+const strWithAsciiUppercased = builtins.str.strWithAsciiUppercased;
+const strFromUtf8Lossy = builtins.str.fromUtf8Lossy;
+const strFromUtf8C = builtins.str.fromUtf8C;
 
 const Relocation = @import("Relocation.zig").Relocation;
 const StaticDataInterner = @import("StaticDataInterner.zig");
@@ -107,6 +143,213 @@ fn decToStrC(out: *RocStr, value: i128, roc_ops: *RocOps) callconv(.c) void {
     const slice = dec.format_to_buf(&buf);
     out.* = RocStr.init(&buf, slice.len, roc_ops);
 }
+
+// ── C wrapper functions for string/list builtins ──
+// These decompose 24-byte RocStr/RocList structs into individual 8-byte fields
+// so all args fit in registers and we avoid platform-specific struct-passing ABI issues.
+
+/// Wrapper: strToUtf8C(RocStr, *RocOps) -> RocList
+/// Decomposed: (out, str_bytes, str_len, str_cap, roc_ops) -> void
+fn wrapStrToUtf8(out: *RocList, str_bytes: ?[*]u8, str_len: usize, str_cap: usize, roc_ops: *RocOps) callconv(.c) void {
+    const arg = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
+    out.* = strToUtf8C(arg, roc_ops);
+}
+
+/// Wrapper: strConcatC(RocStr, RocStr, *RocOps) -> RocStr
+/// Decomposed: (out, a_bytes, a_len, a_cap, b_bytes, b_len, b_cap, roc_ops) -> void
+fn wrapStrConcat(out: *RocStr, a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize, roc_ops: *RocOps) callconv(.c) void {
+    const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
+    const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
+    out.* = strConcatC(a, b, roc_ops);
+}
+
+/// Wrapper: strContains(RocStr, RocStr) -> bool
+/// Decomposed: (a_bytes, a_len, a_cap, b_bytes, b_len, b_cap) -> bool
+fn wrapStrContains(a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize) callconv(.c) bool {
+    const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
+    const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
+    return strContains(a, b);
+}
+
+/// Wrapper: startsWith(RocStr, RocStr) -> bool
+fn wrapStrStartsWith(a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize) callconv(.c) bool {
+    const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
+    const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
+    return strStartsWith(a, b);
+}
+
+/// Wrapper: endsWith(RocStr, RocStr) -> bool
+fn wrapStrEndsWith(a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize) callconv(.c) bool {
+    const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
+    const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
+    return strEndsWith(a, b);
+}
+
+/// Wrapper: isEmpty(RocStr) -> bool
+fn wrapStrIsEmpty(str_bytes: ?[*]u8, str_len: usize, str_cap: usize) callconv(.c) bool {
+    const s = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
+    return strIsEmpty(s);
+}
+
+/// Wrapper: strEqual(RocStr, RocStr) -> bool
+fn wrapStrEqual(a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize) callconv(.c) bool {
+    const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
+    const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
+    return strEqual(a, b);
+}
+
+/// Wrapper: countUtf8Bytes(RocStr) -> u64
+fn wrapStrCountUtf8Bytes(str_bytes: ?[*]u8, str_len: usize, str_cap: usize) callconv(.c) u64 {
+    const s = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
+    return strCountUtf8Bytes(s);
+}
+
+/// Wrapper: strCaselessAsciiEquals(RocStr, RocStr) -> bool
+fn wrapStrCaselessAsciiEquals(a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize) callconv(.c) bool {
+    const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
+    const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
+    return strCaselessAsciiEquals(a, b);
+}
+
+/// Wrapper: repeatC(RocStr, u64, *RocOps) -> RocStr
+fn wrapStrRepeat(out: *RocStr, str_bytes: ?[*]u8, str_len: usize, str_cap: usize, count: u64, roc_ops: *RocOps) callconv(.c) void {
+    const s = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
+    out.* = strRepeatC(s, count, roc_ops);
+}
+
+/// Wrapper: strTrim(RocStr, *RocOps) -> RocStr
+fn wrapStrTrim(out: *RocStr, str_bytes: ?[*]u8, str_len: usize, str_cap: usize, roc_ops: *RocOps) callconv(.c) void {
+    const s = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
+    out.* = strTrim(s, roc_ops);
+}
+
+/// Wrapper: strTrimStart(RocStr, *RocOps) -> RocStr
+fn wrapStrTrimStart(out: *RocStr, str_bytes: ?[*]u8, str_len: usize, str_cap: usize, roc_ops: *RocOps) callconv(.c) void {
+    const s = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
+    out.* = strTrimStart(s, roc_ops);
+}
+
+/// Wrapper: strTrimEnd(RocStr, *RocOps) -> RocStr
+fn wrapStrTrimEnd(out: *RocStr, str_bytes: ?[*]u8, str_len: usize, str_cap: usize, roc_ops: *RocOps) callconv(.c) void {
+    const s = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
+    out.* = strTrimEnd(s, roc_ops);
+}
+
+/// Wrapper: strSplitOn(RocStr, RocStr, *RocOps) -> RocList
+fn wrapStrSplit(out: *RocList, a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize, roc_ops: *RocOps) callconv(.c) void {
+    const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
+    const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
+    out.* = strSplitOn(a, b, roc_ops);
+}
+
+/// Wrapper: strJoinWithC(RocList, RocStr, *RocOps) -> RocStr
+fn wrapStrJoinWith(out: *RocStr, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, sep_bytes: ?[*]u8, sep_len: usize, sep_cap: usize, roc_ops: *RocOps) callconv(.c) void {
+    const list = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+    const sep = RocStr{ .bytes = sep_bytes, .length = sep_len, .capacity_or_alloc_ptr = sep_cap };
+    out.* = strJoinWithC(list, sep, roc_ops);
+}
+
+/// Wrapper: reserveC(RocStr, u64, *RocOps) -> RocStr
+fn wrapStrReserve(out: *RocStr, str_bytes: ?[*]u8, str_len: usize, str_cap: usize, spare: u64, roc_ops: *RocOps) callconv(.c) void {
+    const s = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
+    out.* = strReserveC(s, spare, roc_ops);
+}
+
+/// Wrapper: strReleaseExcessCapacity(*RocOps, RocStr) -> RocStr
+fn wrapStrReleaseExcessCapacity(out: *RocStr, str_bytes: ?[*]u8, str_len: usize, str_cap: usize, roc_ops: *RocOps) callconv(.c) void {
+    const s = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
+    out.* = strReleaseExcessCapacity(roc_ops, s);
+}
+
+/// Wrapper: withCapacityC(u64, *RocOps) -> RocStr
+fn wrapStrWithCapacity(out: *RocStr, capacity: u64, roc_ops: *RocOps) callconv(.c) void {
+    out.* = strWithCapacityC(capacity, roc_ops);
+}
+
+/// Wrapper: strDropPrefix(RocStr, RocStr, *RocOps) -> RocStr
+fn wrapStrDropPrefix(out: *RocStr, a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize, roc_ops: *RocOps) callconv(.c) void {
+    const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
+    const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
+    out.* = strDropPrefix(a, b, roc_ops);
+}
+
+/// Wrapper: strDropSuffix(RocStr, RocStr, *RocOps) -> RocStr
+fn wrapStrDropSuffix(out: *RocStr, a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize, roc_ops: *RocOps) callconv(.c) void {
+    const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
+    const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
+    out.* = strDropSuffix(a, b, roc_ops);
+}
+
+/// Wrapper: strWithAsciiLowercased(RocStr, *RocOps) -> RocStr
+fn wrapStrWithAsciiLowercased(out: *RocStr, str_bytes: ?[*]u8, str_len: usize, str_cap: usize, roc_ops: *RocOps) callconv(.c) void {
+    const s = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
+    out.* = strWithAsciiLowercased(s, roc_ops);
+}
+
+/// Wrapper: strWithAsciiUppercased(RocStr, *RocOps) -> RocStr
+fn wrapStrWithAsciiUppercased(out: *RocStr, str_bytes: ?[*]u8, str_len: usize, str_cap: usize, roc_ops: *RocOps) callconv(.c) void {
+    const s = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
+    out.* = strWithAsciiUppercased(s, roc_ops);
+}
+
+/// Wrapper: fromUtf8Lossy(RocList, *RocOps) -> RocStr
+fn wrapStrFromUtf8Lossy(out: *RocStr, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, roc_ops: *RocOps) callconv(.c) void {
+    const list = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+    out.* = strFromUtf8Lossy(list, roc_ops);
+}
+
+/// Wrapper for str_with_prefix: strConcatC(prefix, string, *RocOps) -> RocStr
+/// str_with_prefix(string, prefix) = concat(prefix, string) — prefix goes first!
+fn wrapStrWithPrefix(out: *RocStr, str_bytes: ?[*]u8, str_len: usize, str_cap: usize, pfx_bytes: ?[*]u8, pfx_len: usize, pfx_cap: usize, roc_ops: *RocOps) callconv(.c) void {
+    const s = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
+    const pfx = RocStr{ .bytes = pfx_bytes, .length = pfx_len, .capacity_or_alloc_ptr = pfx_cap };
+    // with_prefix(string, prefix) is concat(prefix, string)
+    out.* = strConcatC(pfx, s, roc_ops);
+}
+
+/// Wrapper: listConcat(RocList, RocList, alignment, element_width, ..., *RocOps) -> RocList
+fn wrapListConcat(out: *RocList, a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize, alignment: u32, element_width: usize, roc_ops: *RocOps) callconv(.c) void {
+    const a = RocList{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
+    const b = RocList{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
+    out.* = listConcat(a, b, alignment, element_width, false, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), roc_ops);
+}
+
+/// Wrapper: listPrepend(RocList, alignment, element, element_width, ..., *RocOps) -> RocList
+fn wrapListPrepend(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, element: ?[*]u8, element_width: usize, roc_ops: *RocOps) callconv(.c) void {
+    const list = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+    out.* = listPrepend(list, alignment, element, element_width, false, null, @ptrCast(&rcNone), @ptrCast(&copy_fallback), roc_ops);
+}
+
+/// Wrapper: listSublist for drop_first/drop_last/take_first/take_last
+fn wrapListSublist(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, element_width: usize, start: u64, len: u64, roc_ops: *RocOps) callconv(.c) void {
+    const list = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+    out.* = listSublist(list, alignment, element_width, false, start, len, null, @ptrCast(&rcNone), roc_ops);
+}
+
+/// Wrapper: listReplace for list_set
+fn wrapListReplace(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, index: u64, element: ?[*]u8, element_width: usize, out_element: ?[*]u8, roc_ops: *RocOps) callconv(.c) void {
+    const list = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+    out.* = listReplace(list, alignment, index, element, element_width, false, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), out_element, @ptrCast(&copy_fallback), roc_ops);
+}
+
+/// Wrapper: listReserve
+fn wrapListReserve(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, spare: u64, element_width: usize, roc_ops: *RocOps) callconv(.c) void {
+    const list = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+    out.* = listReserve(list, alignment, spare, element_width, false, null, @ptrCast(&rcNone), .Immutable, roc_ops);
+}
+
+/// Wrapper: listReleaseExcessCapacity
+fn wrapListReleaseExcessCapacity(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, element_width: usize, roc_ops: *RocOps) callconv(.c) void {
+    const list = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+    out.* = listReleaseExcessCapacity(list, alignment, element_width, false, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), .Immutable, roc_ops);
+}
+
+/// Wrapper: listDropAt for list operations that drop by index
+fn wrapListDropAt(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, element_width: usize, drop_index: u64, roc_ops: *RocOps) callconv(.c) void {
+    const list = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+    out.* = listDropAt(list, alignment, element_width, false, drop_index, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), roc_ops);
+}
+
 const MonoProc = mono.MonoProc;
 
 const Allocator = std.mem.Allocator;
@@ -1196,18 +1439,327 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         return .{ .stack = elem_slot };
                     }
                 },
-                .list_concat,
-                .list_prepend,
-                .list_repeat,
-                .list_drop_first,
-                .list_drop_last,
-                .list_take_first,
-                .list_take_last,
-                => {
-                    // These list operations are complex and require calling builtin functions
-                    std.debug.print("UNIMPLEMENTED low-level op in MonoExprCodeGen: {s}\n", .{@tagName(ll.op)});
-                    std.debug.print("  args.len: {}\n", .{args.len});
-                    unreachable;
+                .list_concat => {
+                    // list_concat(list_a, list_b) -> List
+                    if (args.len != 2) unreachable;
+                    const list_a_loc = try self.generateExpr(args[0]);
+                    const list_b_loc = try self.generateExpr(args[1]);
+
+                    const ls = self.layout_store orelse unreachable;
+                    const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+
+                    const elem_size_align: layout.SizeAlign = blk: {
+                        const ret_layout = ls.getLayout(ll.ret_layout);
+                        break :blk switch (ret_layout.tag) {
+                            .list => ls.layoutSizeAlign(ls.getLayout(ret_layout.data.list)),
+                            .list_of_zst => .{ .size = 0, .alignment = .@"1" },
+                            else => unreachable,
+                        };
+                    };
+
+                    const list_a_off = try self.ensureOnStack(list_a_loc, 24);
+                    const list_b_off = try self.ensureOnStack(list_b_loc, 24);
+                    const result_offset = self.codegen.allocStackSlot(24);
+                    const alignment_bytes = elem_size_align.alignment.toByteUnits();
+                    const fn_addr: usize = @intFromPtr(&wrapListConcat);
+
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        // wrapListConcat(out, a_bytes, a_len, a_cap, b_bytes, b_len, b_cap, alignment, element_width, roc_ops)
+                        // 10 args: X0-X7 + 2 on stack
+                        try self.codegen.emit.subRegRegImm12(.w64, .ZRSP, .ZRSP, 16);
+                        const temp = try self.allocTempGeneral();
+                        try self.codegen.emitLoadImm(temp, @intCast(elem_size_align.size));
+                        try self.codegen.emit.strRegMemUoff(.w64, temp, .ZRSP, 0);
+                        try self.codegen.emit.strRegMemUoff(.w64, roc_ops_reg, .ZRSP, 1);
+                        self.codegen.freeGeneral(temp);
+
+                        try self.codegen.emit.movRegImm64(.X0, @bitCast(@as(i64, result_offset)));
+                        try self.codegen.emit.addRegRegReg(.w64, .X0, .FP, .X0);
+                        try self.codegen.emit.ldrRegMemSoff(.w64, .X1, .FP, list_a_off);
+                        try self.codegen.emit.ldrRegMemSoff(.w64, .X2, .FP, list_a_off + 8);
+                        try self.codegen.emit.ldrRegMemSoff(.w64, .X3, .FP, list_a_off + 16);
+                        try self.codegen.emit.ldrRegMemSoff(.w64, .X4, .FP, list_b_off);
+                        try self.codegen.emit.ldrRegMemSoff(.w64, .X5, .FP, list_b_off + 8);
+                        try self.codegen.emit.ldrRegMemSoff(.w64, .X6, .FP, list_b_off + 16);
+                        try self.codegen.emitLoadImm(.X7, @intCast(alignment_bytes));
+
+                        try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
+                        try self.codegen.emit.blrReg(.X9);
+                        try self.codegen.emit.addRegRegImm12(.w64, .ZRSP, .ZRSP, 16);
+                    } else {
+                        // x86_64: wrapListConcat(out, a_bytes, a_len, a_cap, b_bytes, b_len, b_cap, alignment, element_width, roc_ops)
+                        // 10 args: 6 in regs + 4 on stack
+                        try self.codegen.emit.pushReg(roc_ops_reg);
+                        try self.codegen.emitLoadImm(.R11, @intCast(elem_size_align.size));
+                        try self.codegen.emit.pushReg(.R11);
+                        try self.codegen.emitLoadImm(.R11, @intCast(alignment_bytes));
+                        try self.codegen.emit.pushReg(.R11);
+                        try self.codegen.emit.movRegMem(.w64, .R11, .RBP, list_b_off + 16);
+                        try self.codegen.emit.pushReg(.R11);
+
+                        try self.codegen.emit.leaRegMem(.RDI, .RBP, result_offset);
+                        try self.codegen.emit.movRegMem(.w64, .RSI, .RBP, list_a_off);
+                        try self.codegen.emit.movRegMem(.w64, .RDX, .RBP, list_a_off + 8);
+                        try self.codegen.emit.movRegMem(.w64, .RCX, .RBP, list_a_off + 16);
+                        try self.codegen.emit.movRegMem(.w64, .R8, .RBP, list_b_off);
+                        try self.codegen.emit.movRegMem(.w64, .R9, .RBP, list_b_off + 8);
+
+                        try self.codegen.emitLoadImm(.R11, @intCast(fn_addr));
+                        try self.codegen.emit.callReg(.R11);
+                        try self.codegen.emit.addImm(.RSP, 32);
+                    }
+
+                    return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
+                },
+                .list_prepend => {
+                    // list_prepend(list, element) -> List
+                    if (args.len != 2) unreachable;
+                    const list_loc = try self.generateExpr(args[0]);
+                    const elem_loc = try self.generateExpr(args[1]);
+
+                    const ls = self.layout_store orelse unreachable;
+                    const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+
+                    const elem_size_align: layout.SizeAlign = blk: {
+                        const ret_layout = ls.getLayout(ll.ret_layout);
+                        break :blk switch (ret_layout.tag) {
+                            .list => ls.layoutSizeAlign(ls.getLayout(ret_layout.data.list)),
+                            .list_of_zst => .{ .size = 0, .alignment = .@"1" },
+                            else => unreachable,
+                        };
+                    };
+
+                    const list_off = try self.ensureOnStack(list_loc, 24);
+                    const elem_off = try self.ensureOnStack(elem_loc, elem_size_align.size);
+                    const result_offset = self.codegen.allocStackSlot(24);
+                    const alignment_bytes = elem_size_align.alignment.toByteUnits();
+                    const fn_addr: usize = @intFromPtr(&wrapListPrepend);
+
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        // wrapListPrepend(out, list_bytes, list_len, list_cap, alignment, element, element_width, roc_ops)
+                        try self.codegen.emit.movRegImm64(.X0, @bitCast(@as(i64, result_offset)));
+                        try self.codegen.emit.addRegRegReg(.w64, .X0, .FP, .X0);
+                        try self.codegen.emit.ldrRegMemSoff(.w64, .X1, .FP, list_off);
+                        try self.codegen.emit.ldrRegMemSoff(.w64, .X2, .FP, list_off + 8);
+                        try self.codegen.emit.ldrRegMemSoff(.w64, .X3, .FP, list_off + 16);
+                        try self.codegen.emitLoadImm(.X4, @intCast(alignment_bytes));
+                        try self.codegen.emit.movRegImm64(.X5, @bitCast(@as(i64, elem_off)));
+                        try self.codegen.emit.addRegRegReg(.w64, .X5, .FP, .X5);
+                        try self.codegen.emitLoadImm(.X6, @intCast(elem_size_align.size));
+                        try self.codegen.emit.movRegReg(.w64, .X7, roc_ops_reg);
+
+                        try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
+                        try self.codegen.emit.blrReg(.X9);
+                    } else {
+                        // x86_64: 8 args: 6 in regs + 2 on stack
+                        try self.codegen.emit.pushReg(roc_ops_reg);
+                        try self.codegen.emitLoadImm(.R11, @intCast(elem_size_align.size));
+                        try self.codegen.emit.pushReg(.R11);
+
+                        try self.codegen.emit.leaRegMem(.RDI, .RBP, result_offset);
+                        try self.codegen.emit.movRegMem(.w64, .RSI, .RBP, list_off);
+                        try self.codegen.emit.movRegMem(.w64, .RDX, .RBP, list_off + 8);
+                        try self.codegen.emit.movRegMem(.w64, .RCX, .RBP, list_off + 16);
+                        try self.codegen.emitLoadImm(.R8, @intCast(alignment_bytes));
+                        try self.codegen.emit.leaRegMem(.R9, .RBP, elem_off);
+
+                        try self.codegen.emitLoadImm(.R11, @intCast(fn_addr));
+                        try self.codegen.emit.callReg(.R11);
+                        try self.codegen.emit.addImm(.RSP, 16);
+                    }
+
+                    return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
+                },
+                .list_drop_first => {
+                    // list_drop_first(list, n) -> List  (sublist from index n to end)
+                    if (args.len != 2) unreachable;
+                    const list_loc = try self.generateExpr(args[0]);
+                    const n_loc = try self.generateExpr(args[1]);
+                    return try self.callListSublist(ll, list_loc, n_loc, .drop_first);
+                },
+                .list_drop_last => {
+                    // list_drop_last(list, n) -> List  (sublist from 0 with len - n)
+                    if (args.len != 2) unreachable;
+                    const list_loc = try self.generateExpr(args[0]);
+                    const n_loc = try self.generateExpr(args[1]);
+                    return try self.callListSublist(ll, list_loc, n_loc, .drop_last);
+                },
+                .list_take_first => {
+                    // list_take_first(list, n) -> List  (sublist from 0 with n elements)
+                    if (args.len != 2) unreachable;
+                    const list_loc = try self.generateExpr(args[0]);
+                    const n_loc = try self.generateExpr(args[1]);
+                    return try self.callListSublist(ll, list_loc, n_loc, .take_first);
+                },
+                .list_take_last => {
+                    // list_take_last(list, n) -> List  (sublist from len - n to end)
+                    if (args.len != 2) unreachable;
+                    const list_loc = try self.generateExpr(args[0]);
+                    const n_loc = try self.generateExpr(args[1]);
+                    return try self.callListSublist(ll, list_loc, n_loc, .take_last);
+                },
+                .list_repeat => {
+                    // list_repeat(element, count) -> List
+                    // Implementation: create list with capacity, then append the element count times
+                    if (args.len != 2) unreachable;
+                    const elem_loc = try self.generateExpr(args[0]);
+                    const count_loc = try self.generateExpr(args[1]);
+
+                    const ls = self.layout_store orelse unreachable;
+                    const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+
+                    const elem_size_align: layout.SizeAlign = blk: {
+                        const ret_layout = ls.getLayout(ll.ret_layout);
+                        break :blk switch (ret_layout.tag) {
+                            .list => ls.layoutSizeAlign(ls.getLayout(ret_layout.data.list)),
+                            .list_of_zst => .{ .size = 0, .alignment = .@"1" },
+                            else => unreachable,
+                        };
+                    };
+
+                    // Materialize count to a register then save to stack slot
+                    const count_reg = try self.ensureInGeneralReg(count_loc);
+                    const count_slot = self.codegen.allocStackSlot(8);
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.strRegMemSoff(.w64, count_reg, .FP, count_slot);
+                    } else {
+                        try self.codegen.emit.movMemReg(.w64, .RBP, count_slot, count_reg);
+                    }
+                    self.codegen.freeGeneral(count_reg);
+
+                    // Ensure element is on the stack
+                    const elem_off = try self.ensureOnStack(elem_loc, elem_size_align.size);
+
+                    // First: allocate list with capacity
+                    const alignment_bytes = elem_size_align.alignment.toByteUnits();
+                    const result_offset = self.codegen.allocStackSlot(24);
+                    const cap_fn_addr: usize = @intFromPtr(&listWithCapacityC);
+                    const rc_none_addr: usize = @intFromPtr(&rcNone);
+
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.movRegImm64(.X0, @bitCast(@as(i64, result_offset)));
+                        try self.codegen.emit.addRegRegReg(.w64, .X0, .FP, .X0);
+                        try self.codegen.emit.ldrRegMemSoff(.w64, .X1, .FP, count_slot);
+                        try self.codegen.emitLoadImm(.X2, @intCast(alignment_bytes));
+                        try self.codegen.emitLoadImm(.X3, @intCast(elem_size_align.size));
+                        try self.codegen.emitLoadImm(.X4, 0);
+                        try self.codegen.emitLoadImm(.X5, 0);
+                        try self.codegen.emitLoadImm(.X6, @intCast(rc_none_addr));
+                        try self.codegen.emit.movRegReg(.w64, .X7, roc_ops_reg);
+                        try self.codegen.emitLoadImm(.X9, @intCast(cap_fn_addr));
+                        try self.codegen.emit.blrReg(.X9);
+                    } else {
+                        try self.codegen.emit.pushReg(roc_ops_reg);
+                        try self.codegen.emitLoadImm(.R11, @intCast(rc_none_addr));
+                        try self.codegen.emit.pushReg(.R11);
+                        try self.codegen.emit.leaRegMem(.RDI, .RBP, result_offset);
+                        try self.codegen.emit.movRegMem(.w64, .RSI, .RBP, count_slot);
+                        try self.codegen.emitLoadImm(.RDX, @intCast(alignment_bytes));
+                        try self.codegen.emitLoadImm(.RCX, @intCast(elem_size_align.size));
+                        try self.codegen.emitLoadImm(.R8, 0);
+                        try self.codegen.emitLoadImm(.R9, 0);
+                        try self.codegen.emitLoadImm(.R11, @intCast(cap_fn_addr));
+                        try self.codegen.emit.callReg(.R11);
+                        try self.codegen.emit.addImm(.RSP, 16);
+                    }
+
+                    // Now loop: append element count times using counter on stack
+                    const loop_counter_slot = self.codegen.allocStackSlot(8);
+                    const temp_init = try self.allocTempGeneral();
+                    try self.codegen.emitLoadImm(temp_init, 0);
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.strRegMemSoff(.w64, temp_init, .FP, loop_counter_slot);
+                    } else {
+                        try self.codegen.emit.movMemReg(.w64, .RBP, loop_counter_slot, temp_init);
+                    }
+                    self.codegen.freeGeneral(temp_init);
+
+                    // Loop start: load counter, compare with count, branch if done
+                    const loop_start = self.codegen.currentOffset();
+
+                    const ctr_reg2 = try self.allocTempGeneral();
+                    const cnt_reg2 = try self.allocTempGeneral();
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.ldrRegMemSoff(.w64, ctr_reg2, .FP, loop_counter_slot);
+                        try self.codegen.emit.ldrRegMemSoff(.w64, cnt_reg2, .FP, count_slot);
+                    } else {
+                        try self.codegen.emit.movRegMem(.w64, ctr_reg2, .RBP, loop_counter_slot);
+                        try self.codegen.emit.movRegMem(.w64, cnt_reg2, .RBP, count_slot);
+                    }
+                    try self.codegen.emit.cmpRegReg(.w64, ctr_reg2, cnt_reg2);
+                    self.codegen.freeGeneral(cnt_reg2);
+
+                    // Branch to end if counter >= count
+                    const skip_patch = try self.codegen.emitCondJump(condGreaterOrEqual());
+
+                    // Increment counter before the call (so it survives the call)
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.addRegRegImm12(.w64, ctr_reg2, ctr_reg2, 1);
+                        try self.codegen.emit.strRegMemSoff(.w64, ctr_reg2, .FP, loop_counter_slot);
+                    } else {
+                        try self.codegen.emit.addImm(ctr_reg2, 1);
+                        try self.codegen.emit.movMemReg(.w64, .RBP, loop_counter_slot, ctr_reg2);
+                    }
+                    self.codegen.freeGeneral(ctr_reg2);
+
+                    // Call listAppendUnsafeC (capacity is already reserved)
+                    const tmp_result = self.codegen.allocStackSlot(24);
+                    const append_fn_addr: usize = @intFromPtr(&listAppendUnsafeC);
+                    const copy_fallback_addr: usize = @intFromPtr(&copy_fallback);
+
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.movRegImm64(.X0, @bitCast(@as(i64, tmp_result)));
+                        try self.codegen.emit.addRegRegReg(.w64, .X0, .FP, .X0);
+                        try self.codegen.emit.ldrRegMemSoff(.w64, .X1, .FP, result_offset);
+                        try self.codegen.emit.ldrRegMemSoff(.w64, .X2, .FP, result_offset + 8);
+                        try self.codegen.emit.ldrRegMemSoff(.w64, .X3, .FP, result_offset + 16);
+                        try self.codegen.emit.movRegImm64(.X4, @bitCast(@as(i64, elem_off)));
+                        try self.codegen.emit.addRegRegReg(.w64, .X4, .FP, .X4);
+                        try self.codegen.emitLoadImm(.X5, @intCast(elem_size_align.size));
+                        try self.codegen.emitLoadImm(.X6, @intCast(copy_fallback_addr));
+                        try self.codegen.emitLoadImm(.X9, @intCast(append_fn_addr));
+                        try self.codegen.emit.blrReg(.X9);
+                    } else {
+                        try self.codegen.emitLoadImm(.R11, @intCast(copy_fallback_addr));
+                        try self.codegen.emit.pushReg(.R11);
+                        try self.codegen.emit.leaRegMem(.RDI, .RBP, tmp_result);
+                        try self.codegen.emit.movRegMem(.w64, .RSI, .RBP, result_offset);
+                        try self.codegen.emit.movRegMem(.w64, .RDX, .RBP, result_offset + 8);
+                        try self.codegen.emit.movRegMem(.w64, .RCX, .RBP, result_offset + 16);
+                        try self.codegen.emit.leaRegMem(.R8, .RBP, elem_off);
+                        try self.codegen.emitLoadImm(.R9, @intCast(elem_size_align.size));
+                        try self.codegen.emitLoadImm(.R11, @intCast(append_fn_addr));
+                        try self.codegen.emit.callReg(.R11);
+                        try self.codegen.emit.addImm(.RSP, 8);
+                    }
+
+                    // Copy tmp_result back to result_offset
+                    const cp = try self.allocTempGeneral();
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.ldrRegMemSoff(.w64, cp, .FP, tmp_result);
+                        try self.codegen.emit.strRegMemSoff(.w64, cp, .FP, result_offset);
+                        try self.codegen.emit.ldrRegMemSoff(.w64, cp, .FP, tmp_result + 8);
+                        try self.codegen.emit.strRegMemSoff(.w64, cp, .FP, result_offset + 8);
+                        try self.codegen.emit.ldrRegMemSoff(.w64, cp, .FP, tmp_result + 16);
+                        try self.codegen.emit.strRegMemSoff(.w64, cp, .FP, result_offset + 16);
+                    } else {
+                        try self.codegen.emit.movRegMem(.w64, cp, .RBP, tmp_result);
+                        try self.codegen.emit.movMemReg(.w64, .RBP, result_offset, cp);
+                        try self.codegen.emit.movRegMem(.w64, cp, .RBP, tmp_result + 8);
+                        try self.codegen.emit.movMemReg(.w64, .RBP, result_offset + 8, cp);
+                        try self.codegen.emit.movRegMem(.w64, cp, .RBP, tmp_result + 16);
+                        try self.codegen.emit.movMemReg(.w64, .RBP, result_offset + 16, cp);
+                    }
+                    self.codegen.freeGeneral(cp);
+
+                    // Jump back to loop start
+                    const back_patch = try self.codegen.emitJump();
+                    self.codegen.patchJump(back_patch, loop_start);
+
+                    // Patch the forward branch to here
+                    self.codegen.patchJump(skip_patch, self.codegen.currentOffset());
+
+                    return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
                 },
                 // Safe integer widening (signed source -> larger signed target)
                 .i8_to_i16,
@@ -1338,11 +1890,1303 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     return .{ .general_reg = src_reg };
                 },
 
+                // ── String low-level operations ──
+
+                .str_to_utf8 => {
+                    // str_to_utf8(str) -> List(U8)
+                    if (args.len != 1) unreachable;
+                    const str_loc = try self.generateExpr(args[0]);
+                    const str_off = try self.ensureOnStack(str_loc, 24);
+                    return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrToUtf8), .list);
+                },
+                .str_is_empty => {
+                    if (args.len != 1) unreachable;
+                    const str_loc = try self.generateExpr(args[0]);
+                    const str_off = try self.ensureOnStack(str_loc, 24);
+                    return try self.callStr1ToScalar(str_off, @intFromPtr(&wrapStrIsEmpty));
+                },
+                .str_is_eq => {
+                    if (args.len != 2) unreachable;
+                    const a_loc = try self.generateExpr(args[0]);
+                    const b_loc = try self.generateExpr(args[1]);
+                    const a_off = try self.ensureOnStack(a_loc, 24);
+                    const b_off = try self.ensureOnStack(b_loc, 24);
+                    return try self.callStr2ToScalar(a_off, b_off, @intFromPtr(&wrapStrEqual));
+                },
+                .str_concat => {
+                    if (args.len != 2) unreachable;
+                    const a_loc = try self.generateExpr(args[0]);
+                    const b_loc = try self.generateExpr(args[1]);
+                    const a_off = try self.ensureOnStack(a_loc, 24);
+                    const b_off = try self.ensureOnStack(b_loc, 24);
+                    return try self.callStr2RocOpsToStr(a_off, b_off, @intFromPtr(&wrapStrConcat));
+                },
+                .str_contains => {
+                    if (args.len != 2) unreachable;
+                    const a_loc = try self.generateExpr(args[0]);
+                    const b_loc = try self.generateExpr(args[1]);
+                    const a_off = try self.ensureOnStack(a_loc, 24);
+                    const b_off = try self.ensureOnStack(b_loc, 24);
+                    return try self.callStr2ToScalar(a_off, b_off, @intFromPtr(&wrapStrContains));
+                },
+                .str_starts_with => {
+                    if (args.len != 2) unreachable;
+                    const a_loc = try self.generateExpr(args[0]);
+                    const b_loc = try self.generateExpr(args[1]);
+                    const a_off = try self.ensureOnStack(a_loc, 24);
+                    const b_off = try self.ensureOnStack(b_loc, 24);
+                    return try self.callStr2ToScalar(a_off, b_off, @intFromPtr(&wrapStrStartsWith));
+                },
+                .str_ends_with => {
+                    if (args.len != 2) unreachable;
+                    const a_loc = try self.generateExpr(args[0]);
+                    const b_loc = try self.generateExpr(args[1]);
+                    const a_off = try self.ensureOnStack(a_loc, 24);
+                    const b_off = try self.ensureOnStack(b_loc, 24);
+                    return try self.callStr2ToScalar(a_off, b_off, @intFromPtr(&wrapStrEndsWith));
+                },
+                .str_count_utf8_bytes => {
+                    if (args.len != 1) unreachable;
+                    const str_loc = try self.generateExpr(args[0]);
+                    const str_off = try self.ensureOnStack(str_loc, 24);
+                    return try self.callStr1ToScalar(str_off, @intFromPtr(&wrapStrCountUtf8Bytes));
+                },
+                .str_caseless_ascii_equals => {
+                    if (args.len != 2) unreachable;
+                    const a_loc = try self.generateExpr(args[0]);
+                    const b_loc = try self.generateExpr(args[1]);
+                    const a_off = try self.ensureOnStack(a_loc, 24);
+                    const b_off = try self.ensureOnStack(b_loc, 24);
+                    return try self.callStr2ToScalar(a_off, b_off, @intFromPtr(&wrapStrCaselessAsciiEquals));
+                },
+                .str_repeat => {
+                    // str_repeat(str, count) -> Str
+                    if (args.len != 2) unreachable;
+                    const str_loc = try self.generateExpr(args[0]);
+                    const count_loc = try self.generateExpr(args[1]);
+                    const str_off = try self.ensureOnStack(str_loc, 24);
+                    const count_off = try self.ensureOnStack(count_loc, 8);
+                    return try self.callStr1U64RocOpsToStr(str_off, count_off, @intFromPtr(&wrapStrRepeat));
+                },
+                .str_trim => {
+                    if (args.len != 1) unreachable;
+                    const str_loc = try self.generateExpr(args[0]);
+                    const str_off = try self.ensureOnStack(str_loc, 24);
+                    return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrTrim), .str);
+                },
+                .str_trim_start => {
+                    if (args.len != 1) unreachable;
+                    const str_loc = try self.generateExpr(args[0]);
+                    const str_off = try self.ensureOnStack(str_loc, 24);
+                    return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrTrimStart), .str);
+                },
+                .str_trim_end => {
+                    if (args.len != 1) unreachable;
+                    const str_loc = try self.generateExpr(args[0]);
+                    const str_off = try self.ensureOnStack(str_loc, 24);
+                    return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrTrimEnd), .str);
+                },
+                .str_split => {
+                    // str_split(str, delimiter) -> List(Str)
+                    if (args.len != 2) unreachable;
+                    const a_loc = try self.generateExpr(args[0]);
+                    const b_loc = try self.generateExpr(args[1]);
+                    const a_off = try self.ensureOnStack(a_loc, 24);
+                    const b_off = try self.ensureOnStack(b_loc, 24);
+                    return try self.callStr2RocOpsToResult(a_off, b_off, @intFromPtr(&wrapStrSplit), .list);
+                },
+                .str_join_with => {
+                    // str_join_with(list, separator) -> Str
+                    if (args.len != 2) unreachable;
+                    const list_loc = try self.generateExpr(args[0]);
+                    const sep_loc = try self.generateExpr(args[1]);
+                    const list_off = try self.ensureOnStack(list_loc, 24);
+                    const sep_off = try self.ensureOnStack(sep_loc, 24);
+                    return try self.callStr2RocOpsToResult(list_off, sep_off, @intFromPtr(&wrapStrJoinWith), .str);
+                },
+                .str_reserve => {
+                    // str_reserve(str, spare) -> Str
+                    if (args.len != 2) unreachable;
+                    const str_loc = try self.generateExpr(args[0]);
+                    const spare_loc = try self.generateExpr(args[1]);
+                    const str_off = try self.ensureOnStack(str_loc, 24);
+                    const spare_off = try self.ensureOnStack(spare_loc, 8);
+                    return try self.callStr1U64RocOpsToStr(str_off, spare_off, @intFromPtr(&wrapStrReserve));
+                },
+                .str_release_excess_capacity => {
+                    if (args.len != 1) unreachable;
+                    const str_loc = try self.generateExpr(args[0]);
+                    const str_off = try self.ensureOnStack(str_loc, 24);
+                    return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrReleaseExcessCapacity), .str);
+                },
+                .str_with_capacity => {
+                    // str_with_capacity(capacity) -> Str
+                    if (args.len != 1) unreachable;
+                    const cap_loc = try self.generateExpr(args[0]);
+                    const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+                    const result_offset = self.codegen.allocStackSlot(24);
+                    const fn_addr: usize = @intFromPtr(&wrapStrWithCapacity);
+                    const cap_reg = try self.ensureInGeneralReg(cap_loc);
+
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.movRegReg(.w64, .X1, cap_reg);
+                        self.codegen.freeGeneral(cap_reg);
+                        try self.codegen.emit.movRegReg(.w64, .X2, roc_ops_reg);
+                        try self.codegen.emit.movRegImm64(.X0, @bitCast(@as(i64, result_offset)));
+                        try self.codegen.emit.addRegRegReg(.w64, .X0, .FP, .X0);
+                        try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
+                        try self.codegen.emit.blrReg(.X9);
+                    } else {
+                        try self.codegen.emit.movRegReg(.w64, .RSI, cap_reg);
+                        self.codegen.freeGeneral(cap_reg);
+                        try self.codegen.emit.movRegReg(.w64, .RDX, roc_ops_reg);
+                        try self.codegen.emit.leaRegMem(.RDI, .RBP, result_offset);
+                        try self.codegen.emitLoadImm(.R11, @intCast(fn_addr));
+                        try self.codegen.emit.callReg(.R11);
+                    }
+                    return .{ .stack_str = result_offset };
+                },
+                .str_drop_prefix => {
+                    if (args.len != 2) unreachable;
+                    const a_loc = try self.generateExpr(args[0]);
+                    const b_loc = try self.generateExpr(args[1]);
+                    const a_off = try self.ensureOnStack(a_loc, 24);
+                    const b_off = try self.ensureOnStack(b_loc, 24);
+                    return try self.callStr2RocOpsToResult(a_off, b_off, @intFromPtr(&wrapStrDropPrefix), .str);
+                },
+                .str_drop_suffix => {
+                    if (args.len != 2) unreachable;
+                    const a_loc = try self.generateExpr(args[0]);
+                    const b_loc = try self.generateExpr(args[1]);
+                    const a_off = try self.ensureOnStack(a_loc, 24);
+                    const b_off = try self.ensureOnStack(b_loc, 24);
+                    return try self.callStr2RocOpsToResult(a_off, b_off, @intFromPtr(&wrapStrDropSuffix), .str);
+                },
+                .str_with_ascii_lowercased => {
+                    if (args.len != 1) unreachable;
+                    const str_loc = try self.generateExpr(args[0]);
+                    const str_off = try self.ensureOnStack(str_loc, 24);
+                    return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrWithAsciiLowercased), .str);
+                },
+                .str_with_ascii_uppercased => {
+                    if (args.len != 1) unreachable;
+                    const str_loc = try self.generateExpr(args[0]);
+                    const str_off = try self.ensureOnStack(str_loc, 24);
+                    return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrWithAsciiUppercased), .str);
+                },
+                .str_with_prefix => {
+                    // str_with_prefix(string, prefix) -> Str  (= concat(prefix, string))
+                    if (args.len != 2) unreachable;
+                    const str_loc = try self.generateExpr(args[0]);
+                    const pfx_loc = try self.generateExpr(args[1]);
+                    const str_off = try self.ensureOnStack(str_loc, 24);
+                    const pfx_off = try self.ensureOnStack(pfx_loc, 24);
+                    return try self.callStr2RocOpsToResult(str_off, pfx_off, @intFromPtr(&wrapStrWithPrefix), .str);
+                },
+                .str_from_utf8_lossy => {
+                    // str_from_utf8_lossy(list) -> Str
+                    if (args.len != 1) unreachable;
+                    const list_loc = try self.generateExpr(args[0]);
+                    const list_off = try self.ensureOnStack(list_loc, 24);
+                    return try self.callStr1RocOpsToResult(list_off, @intFromPtr(&wrapStrFromUtf8Lossy), .str);
+                },
+                .str_from_utf8 => {
+                    // str_from_utf8(list) -> {Str, Bool, U64} result struct
+                    // For now, use the lossy version (which always succeeds)
+                    // TODO: proper from_utf8 with validation
+                    if (args.len != 1) unreachable;
+                    const list_loc = try self.generateExpr(args[0]);
+                    const list_off = try self.ensureOnStack(list_loc, 24);
+                    return try self.callStr1RocOpsToResult(list_off, @intFromPtr(&wrapStrFromUtf8Lossy), .str);
+                },
+
+                // ── Remaining list low-level operations ──
+
+                .list_set => {
+                    // list_set(list, index, element) -> List
+                    if (args.len != 3) unreachable;
+                    const list_loc = try self.generateExpr(args[0]);
+                    const index_loc = try self.generateExpr(args[1]);
+                    const elem_loc = try self.generateExpr(args[2]);
+
+                    const ls = self.layout_store orelse unreachable;
+                    const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+
+                    const elem_size_align: layout.SizeAlign = blk: {
+                        const ret_layout = ls.getLayout(ll.ret_layout);
+                        break :blk switch (ret_layout.tag) {
+                            .list => ls.layoutSizeAlign(ls.getLayout(ret_layout.data.list)),
+                            .list_of_zst => .{ .size = 0, .alignment = .@"1" },
+                            else => unreachable,
+                        };
+                    };
+
+                    const list_off = try self.ensureOnStack(list_loc, 24);
+                    const index_off = try self.ensureOnStack(index_loc, 8);
+                    const elem_off = try self.ensureOnStack(elem_loc, elem_size_align.size);
+                    const result_offset = self.codegen.allocStackSlot(24);
+                    // We need a scratch slot for the old element (out_element param)
+                    const old_elem_slot = self.codegen.allocStackSlot(@intCast(if (elem_size_align.size > 0) elem_size_align.size else 8));
+                    const alignment_bytes = elem_size_align.alignment.toByteUnits();
+                    const fn_addr: usize = @intFromPtr(&wrapListReplace);
+
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        // wrapListReplace(out, list_bytes, list_len, list_cap, alignment, index, element, element_width, out_element, roc_ops)
+                        // 10 args: X0-X7 + 2 on stack
+                        try self.codegen.emit.subRegRegImm12(.w64, .ZRSP, .ZRSP, 16);
+                        const tmp2 = try self.allocTempGeneral();
+                        try self.codegen.emit.movRegImm64(tmp2, @bitCast(@as(i64, old_elem_slot)));
+                        try self.codegen.emit.addRegRegReg(.w64, tmp2, .FP, tmp2);
+                        try self.codegen.emit.strRegMemUoff(.w64, tmp2, .ZRSP, 0);
+                        try self.codegen.emit.strRegMemUoff(.w64, roc_ops_reg, .ZRSP, 1);
+                        self.codegen.freeGeneral(tmp2);
+
+                        try self.codegen.emit.movRegImm64(.X0, @bitCast(@as(i64, result_offset)));
+                        try self.codegen.emit.addRegRegReg(.w64, .X0, .FP, .X0);
+                        try self.codegen.emit.ldrRegMemSoff(.w64, .X1, .FP, list_off);
+                        try self.codegen.emit.ldrRegMemSoff(.w64, .X2, .FP, list_off + 8);
+                        try self.codegen.emit.ldrRegMemSoff(.w64, .X3, .FP, list_off + 16);
+                        try self.codegen.emitLoadImm(.X4, @intCast(alignment_bytes));
+                        try self.codegen.emit.ldrRegMemSoff(.w64, .X5, .FP, index_off);
+                        try self.codegen.emit.movRegImm64(.X6, @bitCast(@as(i64, elem_off)));
+                        try self.codegen.emit.addRegRegReg(.w64, .X6, .FP, .X6);
+                        try self.codegen.emitLoadImm(.X7, @intCast(elem_size_align.size));
+
+                        try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
+                        try self.codegen.emit.blrReg(.X9);
+                        try self.codegen.emit.addRegRegImm12(.w64, .ZRSP, .ZRSP, 16);
+                    } else {
+                        // x86_64: 10 args: 6 in regs + 4 on stack
+                        try self.codegen.emit.pushReg(roc_ops_reg);
+                        try self.codegen.emitLoadImm(.R11, 0); // placeholder for out_element
+                        try self.codegen.emit.leaRegMem(.R11, .RBP, old_elem_slot);
+                        try self.codegen.emit.pushReg(.R11);
+                        try self.codegen.emitLoadImm(.R11, @intCast(elem_size_align.size));
+                        try self.codegen.emit.pushReg(.R11);
+                        try self.codegen.emit.leaRegMem(.R11, .RBP, elem_off);
+                        try self.codegen.emit.pushReg(.R11);
+
+                        try self.codegen.emit.leaRegMem(.RDI, .RBP, result_offset);
+                        try self.codegen.emit.movRegMem(.w64, .RSI, .RBP, list_off);
+                        try self.codegen.emit.movRegMem(.w64, .RDX, .RBP, list_off + 8);
+                        try self.codegen.emit.movRegMem(.w64, .RCX, .RBP, list_off + 16);
+                        try self.codegen.emitLoadImm(.R8, @intCast(alignment_bytes));
+                        try self.codegen.emit.movRegMem(.w64, .R9, .RBP, index_off);
+
+                        try self.codegen.emitLoadImm(.R11, @intCast(fn_addr));
+                        try self.codegen.emit.callReg(.R11);
+                        try self.codegen.emit.addImm(.RSP, 32);
+                    }
+
+                    return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
+                },
+                .list_first => {
+                    // list_first(list) -> element  (same as list_get at index 0)
+                    if (args.len != 1) unreachable;
+                    const list_loc = try self.generateExpr(args[0]);
+                    return try self.listGetAtConstIndex(list_loc, 0, ll.ret_layout);
+                },
+                .list_last => {
+                    // list_last(list) -> element  (same as list_get at index len-1)
+                    if (args.len != 1) unreachable;
+                    const list_loc = try self.generateExpr(args[0]);
+                    return try self.listGetAtLastIndex(list_loc, ll.ret_layout);
+                },
+                .list_contains => {
+                    // list_contains(list, element) -> bool
+                    // Linear scan: iterate through list, compare each element
+                    if (args.len != 2) unreachable;
+                    const list_loc = try self.generateExpr(args[0]);
+                    const needle_loc = try self.generateExpr(args[1]);
+                    return try self.generateListContains(list_loc, needle_loc, ll);
+                },
+                .list_reverse => {
+                    // list_reverse(list) -> List
+                    // Clone and reverse in place using listSublist (full range)
+                    // Actually reverse needs a proper implementation. For now use sublist(0, len) and reverse.
+                    // Simplest correct approach: allocate new list, copy elements in reverse order
+                    if (args.len != 1) unreachable;
+                    const list_loc = try self.generateExpr(args[0]);
+                    return try self.generateListReverse(list_loc, ll);
+                },
+                .list_reserve => {
+                    // list_reserve(list, spare) -> List
+                    if (args.len != 2) unreachable;
+                    const list_loc = try self.generateExpr(args[0]);
+                    const spare_loc = try self.generateExpr(args[1]);
+                    return try self.callListReserveOp(list_loc, spare_loc, ll);
+                },
+                .list_release_excess_capacity => {
+                    // list_release_excess_capacity(list) -> List
+                    if (args.len != 1) unreachable;
+                    const list_loc = try self.generateExpr(args[0]);
+                    return try self.callListReleaseExcessCapOp(list_loc, ll);
+                },
+                .list_split_first => {
+                    // list_split_first(list) -> {element, List}
+                    // Returns the first element and the rest of the list
+                    if (args.len != 1) unreachable;
+                    const list_loc = try self.generateExpr(args[0]);
+                    _ = list_loc;
+                    return Error.UnsupportedExpression; // Complex: returns a record/tuple
+                },
+                .list_split_last => {
+                    // list_split_last(list) -> {List, element}
+                    if (args.len != 1) unreachable;
+                    const list_loc = try self.generateExpr(args[0]);
+                    _ = list_loc;
+                    return Error.UnsupportedExpression; // Complex: returns a record/tuple
+                },
+
                 else => {
                     std.debug.print("UNIMPLEMENTED low-level op in MonoExprCodeGen: {s}\n", .{@tagName(ll.op)});
                     return Error.UnsupportedExpression;
                 },
             }
+        }
+
+        // ── Helper methods for calling C wrapper builtins ──
+
+        /// Call a C wrapper: fn(out, str_f0, str_f1, str_f2, roc_ops) -> void
+        /// Used for str->str and str->list ops that take 1 string + roc_ops
+        fn callStr1RocOpsToResult(self: *Self, str_off: i32, fn_addr: usize, result_kind: enum { str, list }) Error!ValueLocation {
+            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+            const result_offset = self.codegen.allocStackSlot(24);
+
+            if (comptime builtin.cpu.arch == .aarch64) {
+                // (out, str_bytes, str_len, str_cap, roc_ops)
+                try self.codegen.emit.movRegImm64(.X0, @bitCast(@as(i64, result_offset)));
+                try self.codegen.emit.addRegRegReg(.w64, .X0, .FP, .X0);
+                try self.codegen.emit.ldrRegMemSoff(.w64, .X1, .FP, str_off);
+                try self.codegen.emit.ldrRegMemSoff(.w64, .X2, .FP, str_off + 8);
+                try self.codegen.emit.ldrRegMemSoff(.w64, .X3, .FP, str_off + 16);
+                try self.codegen.emit.movRegReg(.w64, .X4, roc_ops_reg);
+                try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
+                try self.codegen.emit.blrReg(.X9);
+            } else {
+                try self.codegen.emit.leaRegMem(.RDI, .RBP, result_offset);
+                try self.codegen.emit.movRegMem(.w64, .RSI, .RBP, str_off);
+                try self.codegen.emit.movRegMem(.w64, .RDX, .RBP, str_off + 8);
+                try self.codegen.emit.movRegMem(.w64, .RCX, .RBP, str_off + 16);
+                try self.codegen.emit.movRegReg(.w64, .R8, roc_ops_reg);
+                try self.codegen.emitLoadImm(.R11, @intCast(fn_addr));
+                try self.codegen.emit.callReg(.R11);
+            }
+
+            return switch (result_kind) {
+                .str => .{ .stack_str = result_offset },
+                .list => .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } },
+            };
+        }
+
+        /// Call a C wrapper: fn(str_f0, str_f1, str_f2) -> scalar (bool or u64)
+        /// Used for str->bool and str->u64 ops that take 1 string
+        fn callStr1ToScalar(self: *Self, str_off: i32, fn_addr: usize) Error!ValueLocation {
+            if (comptime builtin.cpu.arch == .aarch64) {
+                try self.codegen.emit.ldrRegMemSoff(.w64, .X0, .FP, str_off);
+                try self.codegen.emit.ldrRegMemSoff(.w64, .X1, .FP, str_off + 8);
+                try self.codegen.emit.ldrRegMemSoff(.w64, .X2, .FP, str_off + 16);
+                try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
+                try self.codegen.emit.blrReg(.X9);
+                // Result is in X0
+                const result_reg = try self.allocTempGeneral();
+                try self.codegen.emit.movRegReg(.w64, result_reg, .X0);
+                return .{ .general_reg = result_reg };
+            } else {
+                try self.codegen.emit.movRegMem(.w64, .RDI, .RBP, str_off);
+                try self.codegen.emit.movRegMem(.w64, .RSI, .RBP, str_off + 8);
+                try self.codegen.emit.movRegMem(.w64, .RDX, .RBP, str_off + 16);
+                try self.codegen.emitLoadImm(.R11, @intCast(fn_addr));
+                try self.codegen.emit.callReg(.R11);
+                // Result is in RAX
+                const result_reg = try self.allocTempGeneral();
+                try self.codegen.emit.movRegReg(.w64, result_reg, .RAX);
+                return .{ .general_reg = result_reg };
+            }
+        }
+
+        /// Call a C wrapper: fn(a_f0, a_f1, a_f2, b_f0, b_f1, b_f2) -> scalar
+        /// Used for (str, str) -> bool ops
+        fn callStr2ToScalar(self: *Self, a_off: i32, b_off: i32, fn_addr: usize) Error!ValueLocation {
+            if (comptime builtin.cpu.arch == .aarch64) {
+                try self.codegen.emit.ldrRegMemSoff(.w64, .X0, .FP, a_off);
+                try self.codegen.emit.ldrRegMemSoff(.w64, .X1, .FP, a_off + 8);
+                try self.codegen.emit.ldrRegMemSoff(.w64, .X2, .FP, a_off + 16);
+                try self.codegen.emit.ldrRegMemSoff(.w64, .X3, .FP, b_off);
+                try self.codegen.emit.ldrRegMemSoff(.w64, .X4, .FP, b_off + 8);
+                try self.codegen.emit.ldrRegMemSoff(.w64, .X5, .FP, b_off + 16);
+                try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
+                try self.codegen.emit.blrReg(.X9);
+                const result_reg = try self.allocTempGeneral();
+                try self.codegen.emit.movRegReg(.w64, result_reg, .X0);
+                return .{ .general_reg = result_reg };
+            } else {
+                try self.codegen.emit.movRegMem(.w64, .RDI, .RBP, a_off);
+                try self.codegen.emit.movRegMem(.w64, .RSI, .RBP, a_off + 8);
+                try self.codegen.emit.movRegMem(.w64, .RDX, .RBP, a_off + 16);
+                try self.codegen.emit.movRegMem(.w64, .RCX, .RBP, b_off);
+                try self.codegen.emit.movRegMem(.w64, .R8, .RBP, b_off + 8);
+                try self.codegen.emit.movRegMem(.w64, .R9, .RBP, b_off + 16);
+                try self.codegen.emitLoadImm(.R11, @intCast(fn_addr));
+                try self.codegen.emit.callReg(.R11);
+                const result_reg = try self.allocTempGeneral();
+                try self.codegen.emit.movRegReg(.w64, result_reg, .RAX);
+                return .{ .general_reg = result_reg };
+            }
+        }
+
+        /// Call a C wrapper: fn(out, a_f0, a_f1, a_f2, b_f0, b_f1, b_f2, roc_ops) -> void
+        /// Used for (str, str, roc_ops) -> str/list ops
+        fn callStr2RocOpsToStr(self: *Self, a_off: i32, b_off: i32, fn_addr: usize) Error!ValueLocation {
+            return self.callStr2RocOpsToResult(a_off, b_off, fn_addr, .str);
+        }
+
+        fn callStr2RocOpsToResult(self: *Self, a_off: i32, b_off: i32, fn_addr: usize, result_kind: enum { str, list }) Error!ValueLocation {
+            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+            const result_offset = self.codegen.allocStackSlot(24);
+
+            if (comptime builtin.cpu.arch == .aarch64) {
+                // 8 args: X0-X7
+                try self.codegen.emit.movRegImm64(.X0, @bitCast(@as(i64, result_offset)));
+                try self.codegen.emit.addRegRegReg(.w64, .X0, .FP, .X0);
+                try self.codegen.emit.ldrRegMemSoff(.w64, .X1, .FP, a_off);
+                try self.codegen.emit.ldrRegMemSoff(.w64, .X2, .FP, a_off + 8);
+                try self.codegen.emit.ldrRegMemSoff(.w64, .X3, .FP, a_off + 16);
+                try self.codegen.emit.ldrRegMemSoff(.w64, .X4, .FP, b_off);
+                try self.codegen.emit.ldrRegMemSoff(.w64, .X5, .FP, b_off + 8);
+                try self.codegen.emit.ldrRegMemSoff(.w64, .X6, .FP, b_off + 16);
+                try self.codegen.emit.movRegReg(.w64, .X7, roc_ops_reg);
+                try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
+                try self.codegen.emit.blrReg(.X9);
+            } else {
+                // x86_64: 8 args: 6 in regs + 2 on stack
+                try self.codegen.emit.pushReg(roc_ops_reg);
+                try self.codegen.emit.movRegMem(.w64, .R11, .RBP, b_off + 16);
+                try self.codegen.emit.pushReg(.R11);
+
+                try self.codegen.emit.leaRegMem(.RDI, .RBP, result_offset);
+                try self.codegen.emit.movRegMem(.w64, .RSI, .RBP, a_off);
+                try self.codegen.emit.movRegMem(.w64, .RDX, .RBP, a_off + 8);
+                try self.codegen.emit.movRegMem(.w64, .RCX, .RBP, a_off + 16);
+                try self.codegen.emit.movRegMem(.w64, .R8, .RBP, b_off);
+                try self.codegen.emit.movRegMem(.w64, .R9, .RBP, b_off + 8);
+
+                try self.codegen.emitLoadImm(.R11, @intCast(fn_addr));
+                try self.codegen.emit.callReg(.R11);
+                try self.codegen.emit.addImm(.RSP, 16);
+            }
+
+            return switch (result_kind) {
+                .str => .{ .stack_str = result_offset },
+                .list => .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } },
+            };
+        }
+
+        /// Call: fn(out, str_f0, str_f1, str_f2, u64_val, roc_ops) -> void
+        /// Used for (str, u64, roc_ops) -> str ops like str_repeat, str_reserve
+        fn callStr1U64RocOpsToStr(self: *Self, str_off: i32, u64_off: i32, fn_addr: usize) Error!ValueLocation {
+            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+            const result_offset = self.codegen.allocStackSlot(24);
+
+            if (comptime builtin.cpu.arch == .aarch64) {
+                // 6 args: X0-X5
+                try self.codegen.emit.movRegImm64(.X0, @bitCast(@as(i64, result_offset)));
+                try self.codegen.emit.addRegRegReg(.w64, .X0, .FP, .X0);
+                try self.codegen.emit.ldrRegMemSoff(.w64, .X1, .FP, str_off);
+                try self.codegen.emit.ldrRegMemSoff(.w64, .X2, .FP, str_off + 8);
+                try self.codegen.emit.ldrRegMemSoff(.w64, .X3, .FP, str_off + 16);
+                try self.codegen.emit.ldrRegMemSoff(.w64, .X4, .FP, u64_off);
+                try self.codegen.emit.movRegReg(.w64, .X5, roc_ops_reg);
+                try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
+                try self.codegen.emit.blrReg(.X9);
+            } else {
+                try self.codegen.emit.leaRegMem(.RDI, .RBP, result_offset);
+                try self.codegen.emit.movRegMem(.w64, .RSI, .RBP, str_off);
+                try self.codegen.emit.movRegMem(.w64, .RDX, .RBP, str_off + 8);
+                try self.codegen.emit.movRegMem(.w64, .RCX, .RBP, str_off + 16);
+                try self.codegen.emit.movRegMem(.w64, .R8, .RBP, u64_off);
+                try self.codegen.emit.movRegReg(.w64, .R9, roc_ops_reg);
+                try self.codegen.emitLoadImm(.R11, @intCast(fn_addr));
+                try self.codegen.emit.callReg(.R11);
+            }
+
+            return .{ .stack_str = result_offset };
+        }
+
+        /// Helper for list_drop_first, list_drop_last, list_take_first, list_take_last
+        /// These all map to listSublist with different start/len calculations
+        fn callListSublist(self: *Self, ll: anytype, list_loc: ValueLocation, n_loc: ValueLocation, mode: enum { drop_first, drop_last, take_first, take_last }) Error!ValueLocation {
+            const ls = self.layout_store orelse unreachable;
+            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+
+            const elem_size_align: layout.SizeAlign = blk: {
+                const ret_layout = ls.getLayout(ll.ret_layout);
+                break :blk switch (ret_layout.tag) {
+                    .list => ls.layoutSizeAlign(ls.getLayout(ret_layout.data.list)),
+                    .list_of_zst => .{ .size = 0, .alignment = .@"1" },
+                    else => unreachable,
+                };
+            };
+
+            const list_off = try self.ensureOnStack(list_loc, 24);
+            const n_reg = try self.ensureInGeneralReg(n_loc);
+
+            // Load list length from the struct (offset 8)
+            const len_reg = try self.allocTempGeneral();
+            if (comptime builtin.cpu.arch == .aarch64) {
+                try self.codegen.emit.ldrRegMemSoff(.w64, len_reg, .FP, list_off + 8);
+            } else {
+                try self.codegen.emit.movRegMem(.w64, len_reg, .RBP, list_off + 8);
+            }
+
+            // Compute start and len based on mode
+            const start_slot = self.codegen.allocStackSlot(8);
+            const len_slot = self.codegen.allocStackSlot(8);
+
+            switch (mode) {
+                .drop_first => {
+                    // start = n, len = max(list_len - n, 0)
+                    // Compute len = list_len - n (saturating)
+                    const diff_reg = try self.allocTempGeneral();
+                    try self.codegen.emit.movRegReg(.w64, diff_reg, len_reg);
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        // sub, but saturate at 0: if n > len, result = 0
+                        try self.codegen.emit.cmpRegReg(.w64, diff_reg, n_reg);
+                        // Use conditional select: if len >= n, result = len - n, else 0
+                        try self.codegen.emit.subRegRegReg(.w64, diff_reg, diff_reg, n_reg);
+                        // If the subtraction went negative, csel zero
+                        // Actually, for unsigned subtraction, use subs and csel
+                        // Simpler approach: compute max(len - n, 0)
+                        // We already have cmp above. Use csel with condition cs (carry set = no borrow = len >= n)
+                    } else {
+                        try self.codegen.emit.subRegReg(.w64, diff_reg, n_reg);
+                    }
+                    // For simplicity: if n > len, we want 0. The C listSublist handles out-of-bounds gracefully.
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.strRegMemSoff(.w64, n_reg, .FP, start_slot);
+                        try self.codegen.emit.strRegMemSoff(.w64, diff_reg, .FP, len_slot);
+                    } else {
+                        try self.codegen.emit.movMemReg(.w64, .RBP, start_slot, n_reg);
+                        try self.codegen.emit.movMemReg(.w64, .RBP, len_slot, diff_reg);
+                    }
+                    self.codegen.freeGeneral(diff_reg);
+                },
+                .drop_last => {
+                    // start = 0, len = max(list_len - n, 0)
+                    const diff_reg = try self.allocTempGeneral();
+                    try self.codegen.emit.movRegReg(.w64, diff_reg, len_reg);
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.subRegRegReg(.w64, diff_reg, diff_reg, n_reg);
+                    } else {
+                        try self.codegen.emit.subRegReg(.w64, diff_reg, n_reg);
+                    }
+                    const zero_reg = try self.allocTempGeneral();
+                    try self.codegen.emitLoadImm(zero_reg, 0);
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.strRegMemSoff(.w64, zero_reg, .FP, start_slot);
+                        try self.codegen.emit.strRegMemSoff(.w64, diff_reg, .FP, len_slot);
+                    } else {
+                        try self.codegen.emit.movMemReg(.w64, .RBP, start_slot, zero_reg);
+                        try self.codegen.emit.movMemReg(.w64, .RBP, len_slot, diff_reg);
+                    }
+                    self.codegen.freeGeneral(zero_reg);
+                    self.codegen.freeGeneral(diff_reg);
+                },
+                .take_first => {
+                    // start = 0, len = min(n, list_len)
+                    // listSublist handles this correctly even if n > list_len
+                    const zero_reg = try self.allocTempGeneral();
+                    try self.codegen.emitLoadImm(zero_reg, 0);
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.strRegMemSoff(.w64, zero_reg, .FP, start_slot);
+                        try self.codegen.emit.strRegMemSoff(.w64, n_reg, .FP, len_slot);
+                    } else {
+                        try self.codegen.emit.movMemReg(.w64, .RBP, start_slot, zero_reg);
+                        try self.codegen.emit.movMemReg(.w64, .RBP, len_slot, n_reg);
+                    }
+                    self.codegen.freeGeneral(zero_reg);
+                },
+                .take_last => {
+                    // start = max(list_len - n, 0), len = n
+                    // But we want the LAST n elements, so len = min(n, list_len)
+                    const diff_reg = try self.allocTempGeneral();
+                    try self.codegen.emit.movRegReg(.w64, diff_reg, len_reg);
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.subRegRegReg(.w64, diff_reg, diff_reg, n_reg);
+                    } else {
+                        try self.codegen.emit.subRegReg(.w64, diff_reg, n_reg);
+                    }
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.strRegMemSoff(.w64, diff_reg, .FP, start_slot);
+                        try self.codegen.emit.strRegMemSoff(.w64, n_reg, .FP, len_slot);
+                    } else {
+                        try self.codegen.emit.movMemReg(.w64, .RBP, start_slot, diff_reg);
+                        try self.codegen.emit.movMemReg(.w64, .RBP, len_slot, n_reg);
+                    }
+                    self.codegen.freeGeneral(diff_reg);
+                },
+            }
+            self.codegen.freeGeneral(n_reg);
+            self.codegen.freeGeneral(len_reg);
+
+            // Call wrapListSublist(out, list_bytes, list_len, list_cap, alignment, element_width, start, len, roc_ops)
+            const result_offset = self.codegen.allocStackSlot(24);
+            const alignment_bytes = elem_size_align.alignment.toByteUnits();
+            const fn_addr: usize = @intFromPtr(&wrapListSublist);
+
+            if (comptime builtin.cpu.arch == .aarch64) {
+                // 9 args: X0-X7 + 1 on stack
+                try self.codegen.emit.subRegRegImm12(.w64, .ZRSP, .ZRSP, 16);
+                try self.codegen.emit.strRegMemUoff(.w64, roc_ops_reg, .ZRSP, 0);
+
+                try self.codegen.emit.movRegImm64(.X0, @bitCast(@as(i64, result_offset)));
+                try self.codegen.emit.addRegRegReg(.w64, .X0, .FP, .X0);
+                try self.codegen.emit.ldrRegMemSoff(.w64, .X1, .FP, list_off);
+                try self.codegen.emit.ldrRegMemSoff(.w64, .X2, .FP, list_off + 8);
+                try self.codegen.emit.ldrRegMemSoff(.w64, .X3, .FP, list_off + 16);
+                try self.codegen.emitLoadImm(.X4, @intCast(alignment_bytes));
+                try self.codegen.emitLoadImm(.X5, @intCast(elem_size_align.size));
+                try self.codegen.emit.ldrRegMemSoff(.w64, .X6, .FP, start_slot);
+                try self.codegen.emit.ldrRegMemSoff(.w64, .X7, .FP, len_slot);
+
+                try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
+                try self.codegen.emit.blrReg(.X9);
+                try self.codegen.emit.addRegRegImm12(.w64, .ZRSP, .ZRSP, 16);
+            } else {
+                // x86_64: 9 args: 6 in regs + 3 on stack
+                try self.codegen.emit.pushReg(roc_ops_reg);
+                try self.codegen.emit.movRegMem(.w64, .R11, .RBP, len_slot);
+                try self.codegen.emit.pushReg(.R11);
+                try self.codegen.emit.movRegMem(.w64, .R11, .RBP, start_slot);
+                try self.codegen.emit.pushReg(.R11);
+
+                try self.codegen.emit.leaRegMem(.RDI, .RBP, result_offset);
+                try self.codegen.emit.movRegMem(.w64, .RSI, .RBP, list_off);
+                try self.codegen.emit.movRegMem(.w64, .RDX, .RBP, list_off + 8);
+                try self.codegen.emit.movRegMem(.w64, .RCX, .RBP, list_off + 16);
+                try self.codegen.emitLoadImm(.R8, @intCast(alignment_bytes));
+                try self.codegen.emitLoadImm(.R9, @intCast(elem_size_align.size));
+
+                try self.codegen.emitLoadImm(.R11, @intCast(fn_addr));
+                try self.codegen.emit.callReg(.R11);
+                try self.codegen.emit.addImm(.RSP, 24);
+            }
+
+            return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
+        }
+
+        /// Get element at constant index 0 from a list
+        fn listGetAtConstIndex(self: *Self, list_loc: ValueLocation, index: u64, ret_layout_idx: layout.Idx) Error!ValueLocation {
+            const list_base: i32 = switch (list_loc) {
+                .stack => |off| off,
+                .list_stack => |ls_info| ls_info.struct_offset,
+                else => return Error.UnsupportedExpression,
+            };
+
+            const ls = self.layout_store orelse unreachable;
+            const ret_layout_val = ls.getLayout(ret_layout_idx);
+            const elem_size: u32 = ls.layoutSizeAlign(ret_layout_val).size;
+
+            if (elem_size == 0) return .{ .immediate_i64 = 0 };
+
+            // Load list pointer
+            const ptr_reg = try self.allocTempGeneral();
+            if (comptime builtin.cpu.arch == .aarch64) {
+                try self.codegen.emit.ldrRegMemSoff(.w64, ptr_reg, .FP, list_base);
+            } else {
+                try self.codegen.emit.movRegMem(.w64, ptr_reg, .RBP, list_base);
+            }
+
+            // Element address = ptr + index * elem_size
+            const byte_offset: u32 = @intCast(index * elem_size);
+
+            // Copy element to stack
+            const elem_slot = self.codegen.allocStackSlot(@intCast(elem_size));
+            const temp_reg = try self.allocTempGeneral();
+
+            if (elem_size <= 8) {
+                if (comptime builtin.cpu.arch == .aarch64) {
+                    try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, ptr_reg, @intCast(byte_offset));
+                    try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, elem_slot);
+                } else {
+                    try self.codegen.emit.movRegMem(.w64, temp_reg, ptr_reg, @intCast(byte_offset));
+                    try self.codegen.emit.movMemReg(.w64, .RBP, elem_slot, temp_reg);
+                }
+            } else {
+                var copied: u32 = 0;
+                while (copied < elem_size) : (copied += 8) {
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, ptr_reg, @intCast(byte_offset + copied));
+                        try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, elem_slot + @as(i32, @intCast(copied)));
+                    } else {
+                        try self.codegen.emit.movRegMem(.w64, temp_reg, ptr_reg, @intCast(byte_offset + copied));
+                        try self.codegen.emit.movMemReg(.w64, .RBP, elem_slot + @as(i32, @intCast(copied)), temp_reg);
+                    }
+                }
+            }
+            self.codegen.freeGeneral(temp_reg);
+            self.codegen.freeGeneral(ptr_reg);
+
+            if (ret_layout_idx == .i128 or ret_layout_idx == .u128 or ret_layout_idx == .dec) {
+                return .{ .stack_i128 = elem_slot };
+            } else if (ret_layout_idx == .str) {
+                return .{ .stack_str = elem_slot };
+            } else if (ret_layout_val.tag == .list or ret_layout_val.tag == .list_of_zst) {
+                return .{ .list_stack = .{ .struct_offset = elem_slot, .data_offset = 0, .num_elements = 0 } };
+            } else {
+                return .{ .stack = elem_slot };
+            }
+        }
+
+        /// Get element at last index (len - 1) from a list
+        fn listGetAtLastIndex(self: *Self, list_loc: ValueLocation, ret_layout_idx: layout.Idx) Error!ValueLocation {
+            const list_base: i32 = switch (list_loc) {
+                .stack => |off| off,
+                .list_stack => |ls_info| ls_info.struct_offset,
+                else => return Error.UnsupportedExpression,
+            };
+
+            const ls = self.layout_store orelse unreachable;
+            const ret_layout_val = ls.getLayout(ret_layout_idx);
+            const elem_size: u32 = ls.layoutSizeAlign(ret_layout_val).size;
+
+            if (elem_size == 0) return .{ .immediate_i64 = 0 };
+
+            // Load list pointer and length
+            const ptr_reg = try self.allocTempGeneral();
+            const len_reg = try self.allocTempGeneral();
+            if (comptime builtin.cpu.arch == .aarch64) {
+                try self.codegen.emit.ldrRegMemSoff(.w64, ptr_reg, .FP, list_base);
+                try self.codegen.emit.ldrRegMemSoff(.w64, len_reg, .FP, list_base + 8);
+            } else {
+                try self.codegen.emit.movRegMem(.w64, ptr_reg, .RBP, list_base);
+                try self.codegen.emit.movRegMem(.w64, len_reg, .RBP, list_base + 8);
+            }
+
+            // index = len - 1
+            if (comptime builtin.cpu.arch == .aarch64) {
+                try self.codegen.emit.subRegRegImm12(.w64, len_reg, len_reg, 1);
+            } else {
+                try self.codegen.emit.addImm(len_reg, -1);
+            }
+
+            // addr = ptr + index * elem_size
+            const addr_reg = try self.allocTempGeneral();
+            try self.codegen.emit.movRegReg(.w64, addr_reg, len_reg);
+            self.codegen.freeGeneral(len_reg);
+
+            if (elem_size != 1) {
+                const size_reg = try self.allocTempGeneral();
+                try self.codegen.emitLoadImm(size_reg, elem_size);
+                if (comptime builtin.cpu.arch == .aarch64) {
+                    try self.codegen.emit.mulRegRegReg(.w64, addr_reg, addr_reg, size_reg);
+                } else {
+                    try self.codegen.emit.imulRegReg(.w64, addr_reg, size_reg);
+                }
+                self.codegen.freeGeneral(size_reg);
+            }
+
+            if (comptime builtin.cpu.arch == .aarch64) {
+                try self.codegen.emit.addRegRegReg(.w64, addr_reg, addr_reg, ptr_reg);
+            } else {
+                try self.codegen.emit.addRegReg(.w64, addr_reg, ptr_reg);
+            }
+            self.codegen.freeGeneral(ptr_reg);
+
+            // Copy element to stack
+            const elem_slot = self.codegen.allocStackSlot(@intCast(elem_size));
+            const temp_reg = try self.allocTempGeneral();
+
+            if (elem_size <= 8) {
+                if (comptime builtin.cpu.arch == .aarch64) {
+                    try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, addr_reg, 0);
+                    try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, elem_slot);
+                } else {
+                    try self.codegen.emit.movRegMem(.w64, temp_reg, addr_reg, 0);
+                    try self.codegen.emit.movMemReg(.w64, .RBP, elem_slot, temp_reg);
+                }
+            } else {
+                var copied: u32 = 0;
+                while (copied < elem_size) : (copied += 8) {
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, addr_reg, @intCast(copied));
+                        try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, elem_slot + @as(i32, @intCast(copied)));
+                    } else {
+                        try self.codegen.emit.movRegMem(.w64, temp_reg, addr_reg, @intCast(copied));
+                        try self.codegen.emit.movMemReg(.w64, .RBP, elem_slot + @as(i32, @intCast(copied)), temp_reg);
+                    }
+                }
+            }
+            self.codegen.freeGeneral(temp_reg);
+            self.codegen.freeGeneral(addr_reg);
+
+            if (ret_layout_idx == .i128 or ret_layout_idx == .u128 or ret_layout_idx == .dec) {
+                return .{ .stack_i128 = elem_slot };
+            } else if (ret_layout_idx == .str) {
+                return .{ .stack_str = elem_slot };
+            } else if (ret_layout_val.tag == .list or ret_layout_val.tag == .list_of_zst) {
+                return .{ .list_stack = .{ .struct_offset = elem_slot, .data_offset = 0, .num_elements = 0 } };
+            } else {
+                return .{ .stack = elem_slot };
+            }
+        }
+
+        /// Generate list_contains: linear scan comparing each element
+        fn generateListContains(self: *Self, list_loc: ValueLocation, needle_loc: ValueLocation, ll: anytype) Error!ValueLocation {
+            const ls = self.layout_store orelse unreachable;
+
+            // Get element size from the list's element layout
+            // list_contains args: [list, element], the element layout comes from the list type
+            const args_span = self.store.getExprSpan(ll.args);
+            _ = args_span;
+
+            // We know the list contains elements of the same type as the needle
+            const needle_size: u32 = blk: {
+                const ret_layout = ls.getLayout(ll.ret_layout);
+                _ = ret_layout; // return type is bool, not helpful
+                // We need to figure out element size from the list arg's layout
+                // For now, assume the needle fits in a register (<=8 bytes)
+                break :blk 8;
+            };
+            _ = needle_size;
+
+            const list_base: i32 = switch (list_loc) {
+                .stack => |off| off,
+                .list_stack => |ls_info| ls_info.struct_offset,
+                .immediate_i64 => |val| {
+                    if (val != 0) unreachable;
+                    // Empty list: contains always returns false
+                    return .{ .immediate_i64 = 0 };
+                },
+                else => return Error.UnsupportedExpression,
+            };
+
+            // Save needle to stack
+            const needle_reg = try self.ensureInGeneralReg(needle_loc);
+            const needle_slot = self.codegen.allocStackSlot(8);
+            if (comptime builtin.cpu.arch == .aarch64) {
+                try self.codegen.emit.strRegMemSoff(.w64, needle_reg, .FP, needle_slot);
+            } else {
+                try self.codegen.emit.movMemReg(.w64, .RBP, needle_slot, needle_reg);
+            }
+            self.codegen.freeGeneral(needle_reg);
+
+            // Load list ptr and len
+            const ptr_reg = try self.allocTempGeneral();
+            const len_reg = try self.allocTempGeneral();
+            if (comptime builtin.cpu.arch == .aarch64) {
+                try self.codegen.emit.ldrRegMemSoff(.w64, ptr_reg, .FP, list_base);
+                try self.codegen.emit.ldrRegMemSoff(.w64, len_reg, .FP, list_base + 8);
+            } else {
+                try self.codegen.emit.movRegMem(.w64, ptr_reg, .RBP, list_base);
+                try self.codegen.emit.movRegMem(.w64, len_reg, .RBP, list_base + 8);
+            }
+
+            // Initialize counter = 0, result = false
+            const ctr_reg = try self.allocTempGeneral();
+            try self.codegen.emitLoadImm(ctr_reg, 0);
+            const result_slot = self.codegen.allocStackSlot(8);
+            const tmp_r = try self.allocTempGeneral();
+            try self.codegen.emitLoadImm(tmp_r, 0);
+            if (comptime builtin.cpu.arch == .aarch64) {
+                try self.codegen.emit.strRegMemSoff(.w64, tmp_r, .FP, result_slot);
+            } else {
+                try self.codegen.emit.movMemReg(.w64, .RBP, result_slot, tmp_r);
+            }
+            self.codegen.freeGeneral(tmp_r);
+
+            // Loop start
+            const loop_start = self.codegen.currentOffset();
+
+            // if ctr >= len, jump to end
+            try self.codegen.emit.cmpRegReg(.w64, ctr_reg, len_reg);
+            const exit_patch = try self.codegen.emitCondJump(condGreaterOrEqual());
+
+            // Load element at ptr[ctr * 8] (assuming 8-byte elements for I64)
+            const elem_reg = try self.allocTempGeneral();
+            const offset_reg = try self.allocTempGeneral();
+            try self.codegen.emit.movRegReg(.w64, offset_reg, ctr_reg);
+            // Multiply by 8 (shift left 3)
+            if (comptime builtin.cpu.arch == .aarch64) {
+                try self.codegen.emit.lslRegRegImm(.w64, offset_reg, offset_reg, 3);
+                try self.codegen.emit.addRegRegReg(.w64, offset_reg, ptr_reg, offset_reg);
+                try self.codegen.emit.ldrRegMemSoff(.w64, elem_reg, offset_reg, 0);
+            } else {
+                try self.codegen.emit.shlRegImm8(.w64, offset_reg, 3);
+                try self.codegen.emit.addRegReg(.w64, offset_reg, ptr_reg);
+                try self.codegen.emit.movRegMem(.w64, elem_reg, offset_reg, 0);
+            }
+            self.codegen.freeGeneral(offset_reg);
+
+            // Compare with needle
+            const ndl_reg = try self.allocTempGeneral();
+            if (comptime builtin.cpu.arch == .aarch64) {
+                try self.codegen.emit.ldrRegMemSoff(.w64, ndl_reg, .FP, needle_slot);
+            } else {
+                try self.codegen.emit.movRegMem(.w64, ndl_reg, .RBP, needle_slot);
+            }
+            try self.codegen.emit.cmpRegReg(.w64, elem_reg, ndl_reg);
+            self.codegen.freeGeneral(elem_reg);
+            self.codegen.freeGeneral(ndl_reg);
+
+            // If equal, set result = true and jump to end
+            const not_equal_patch = try self.codegen.emitCondJump(condNotEqual());
+            // Found! Set result = 1
+            const one_reg = try self.allocTempGeneral();
+            try self.codegen.emitLoadImm(one_reg, 1);
+            if (comptime builtin.cpu.arch == .aarch64) {
+                try self.codegen.emit.strRegMemSoff(.w64, one_reg, .FP, result_slot);
+            } else {
+                try self.codegen.emit.movMemReg(.w64, .RBP, result_slot, one_reg);
+            }
+            self.codegen.freeGeneral(one_reg);
+            // Jump to end
+            const found_patch = try self.codegen.emitJump();
+            // Not equal: continue
+            self.codegen.patchJump(not_equal_patch, self.codegen.currentOffset());
+
+            // Increment counter
+            if (comptime builtin.cpu.arch == .aarch64) {
+                try self.codegen.emit.addRegRegImm12(.w64, ctr_reg, ctr_reg, 1);
+            } else {
+                try self.codegen.emit.addImm(ctr_reg, 1);
+            }
+
+            // Jump back to loop start
+            const back_patch = try self.codegen.emitJump();
+            self.codegen.patchJump(back_patch, loop_start);
+
+            // End: patch exit jumps
+            self.codegen.patchJump(exit_patch, self.codegen.currentOffset());
+            self.codegen.patchJump(found_patch, self.codegen.currentOffset());
+
+            self.codegen.freeGeneral(ctr_reg);
+            self.codegen.freeGeneral(len_reg);
+            self.codegen.freeGeneral(ptr_reg);
+
+            // Load result from stack
+            const res_reg = try self.allocTempGeneral();
+            if (comptime builtin.cpu.arch == .aarch64) {
+                try self.codegen.emit.ldrRegMemSoff(.w64, res_reg, .FP, result_slot);
+            } else {
+                try self.codegen.emit.movRegMem(.w64, res_reg, .RBP, result_slot);
+            }
+            return .{ .general_reg = res_reg };
+        }
+
+        /// Generate list_reverse: allocate new list, copy elements in reverse order
+        fn generateListReverse(self: *Self, list_loc: ValueLocation, ll: anytype) Error!ValueLocation {
+            const ls = self.layout_store orelse unreachable;
+            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+
+            const elem_size_align: layout.SizeAlign = blk: {
+                const ret_layout = ls.getLayout(ll.ret_layout);
+                break :blk switch (ret_layout.tag) {
+                    .list => ls.layoutSizeAlign(ls.getLayout(ret_layout.data.list)),
+                    .list_of_zst => .{ .size = 0, .alignment = .@"1" },
+                    else => unreachable,
+                };
+            };
+
+            const list_off = try self.ensureOnStack(list_loc, 24);
+            const result_offset = self.codegen.allocStackSlot(24);
+            const alignment_bytes = elem_size_align.alignment.toByteUnits();
+
+            // Allocate list with same capacity as input length
+            const cap_fn_addr: usize = @intFromPtr(&listWithCapacityC);
+            const rc_none_addr: usize = @intFromPtr(&rcNone);
+
+            if (comptime builtin.cpu.arch == .aarch64) {
+                try self.codegen.emit.movRegImm64(.X0, @bitCast(@as(i64, result_offset)));
+                try self.codegen.emit.addRegRegReg(.w64, .X0, .FP, .X0);
+                try self.codegen.emit.ldrRegMemSoff(.w64, .X1, .FP, list_off + 8); // capacity = input length
+                try self.codegen.emitLoadImm(.X2, @intCast(alignment_bytes));
+                try self.codegen.emitLoadImm(.X3, @intCast(elem_size_align.size));
+                try self.codegen.emitLoadImm(.X4, 0);
+                try self.codegen.emitLoadImm(.X5, 0);
+                try self.codegen.emitLoadImm(.X6, @intCast(rc_none_addr));
+                try self.codegen.emit.movRegReg(.w64, .X7, roc_ops_reg);
+                try self.codegen.emitLoadImm(.X9, @intCast(cap_fn_addr));
+                try self.codegen.emit.blrReg(.X9);
+            } else {
+                try self.codegen.emit.pushReg(roc_ops_reg);
+                try self.codegen.emitLoadImm(.R11, @intCast(rc_none_addr));
+                try self.codegen.emit.pushReg(.R11);
+                try self.codegen.emit.leaRegMem(.RDI, .RBP, result_offset);
+                try self.codegen.emit.movRegMem(.w64, .RSI, .RBP, list_off + 8);
+                try self.codegen.emitLoadImm(.RDX, @intCast(alignment_bytes));
+                try self.codegen.emitLoadImm(.RCX, @intCast(elem_size_align.size));
+                try self.codegen.emitLoadImm(.R8, 0);
+                try self.codegen.emitLoadImm(.R9, 0);
+                try self.codegen.emitLoadImm(.R11, @intCast(cap_fn_addr));
+                try self.codegen.emit.callReg(.R11);
+                try self.codegen.emit.addImm(.RSP, 16);
+            }
+
+            // Now copy elements in reverse. For each i from 0..len-1, copy src[len-1-i] to dst[i]
+            // Use stack slots for loop state
+            if (elem_size_align.size == 0) {
+                // ZST: just set the length
+                const len_reg = try self.allocTempGeneral();
+                if (comptime builtin.cpu.arch == .aarch64) {
+                    try self.codegen.emit.ldrRegMemSoff(.w64, len_reg, .FP, list_off + 8);
+                    try self.codegen.emit.strRegMemSoff(.w64, len_reg, .FP, result_offset + 8);
+                } else {
+                    try self.codegen.emit.movRegMem(.w64, len_reg, .RBP, list_off + 8);
+                    try self.codegen.emit.movMemReg(.w64, .RBP, result_offset + 8, len_reg);
+                }
+                self.codegen.freeGeneral(len_reg);
+            } else {
+                // Save src ptr, src len, dst ptr
+                const src_ptr_slot = self.codegen.allocStackSlot(8);
+                const src_len_slot = self.codegen.allocStackSlot(8);
+                const dst_ptr_slot = self.codegen.allocStackSlot(8);
+                const ctr_slot = self.codegen.allocStackSlot(8);
+
+                const tr = try self.allocTempGeneral();
+                if (comptime builtin.cpu.arch == .aarch64) {
+                    try self.codegen.emit.ldrRegMemSoff(.w64, tr, .FP, list_off);
+                    try self.codegen.emit.strRegMemSoff(.w64, tr, .FP, src_ptr_slot);
+                    try self.codegen.emit.ldrRegMemSoff(.w64, tr, .FP, list_off + 8);
+                    try self.codegen.emit.strRegMemSoff(.w64, tr, .FP, src_len_slot);
+                    try self.codegen.emit.ldrRegMemSoff(.w64, tr, .FP, result_offset);
+                    try self.codegen.emit.strRegMemSoff(.w64, tr, .FP, dst_ptr_slot);
+                } else {
+                    try self.codegen.emit.movRegMem(.w64, tr, .RBP, list_off);
+                    try self.codegen.emit.movMemReg(.w64, .RBP, src_ptr_slot, tr);
+                    try self.codegen.emit.movRegMem(.w64, tr, .RBP, list_off + 8);
+                    try self.codegen.emit.movMemReg(.w64, .RBP, src_len_slot, tr);
+                    try self.codegen.emit.movRegMem(.w64, tr, .RBP, result_offset);
+                    try self.codegen.emit.movMemReg(.w64, .RBP, dst_ptr_slot, tr);
+                }
+                // Init counter = 0
+                try self.codegen.emitLoadImm(tr, 0);
+                if (comptime builtin.cpu.arch == .aarch64) {
+                    try self.codegen.emit.strRegMemSoff(.w64, tr, .FP, ctr_slot);
+                } else {
+                    try self.codegen.emit.movMemReg(.w64, .RBP, ctr_slot, tr);
+                }
+                self.codegen.freeGeneral(tr);
+
+                // Loop
+                const loop_start2 = self.codegen.currentOffset();
+                const ci = try self.allocTempGeneral();
+                const li = try self.allocTempGeneral();
+                if (comptime builtin.cpu.arch == .aarch64) {
+                    try self.codegen.emit.ldrRegMemSoff(.w64, ci, .FP, ctr_slot);
+                    try self.codegen.emit.ldrRegMemSoff(.w64, li, .FP, src_len_slot);
+                } else {
+                    try self.codegen.emit.movRegMem(.w64, ci, .RBP, ctr_slot);
+                    try self.codegen.emit.movRegMem(.w64, li, .RBP, src_len_slot);
+                }
+                try self.codegen.emit.cmpRegReg(.w64, ci, li);
+                self.codegen.freeGeneral(li);
+                const exit_patch2 = try self.codegen.emitCondJump(condGreaterOrEqual());
+
+                // src_index = len - 1 - i
+                const si = try self.allocTempGeneral();
+                if (comptime builtin.cpu.arch == .aarch64) {
+                    try self.codegen.emit.ldrRegMemSoff(.w64, si, .FP, src_len_slot);
+                    try self.codegen.emit.subRegRegImm12(.w64, si, si, 1);
+                    try self.codegen.emit.subRegRegReg(.w64, si, si, ci);
+                } else {
+                    try self.codegen.emit.movRegMem(.w64, si, .RBP, src_len_slot);
+                    try self.codegen.emit.addImm(si, -1);
+                    try self.codegen.emit.subRegReg(.w64, si, ci);
+                }
+
+                // Compute src address and dst address
+                const elem_sz: i64 = @intCast(elem_size_align.size);
+                const esz_reg = try self.allocTempGeneral();
+                try self.codegen.emitLoadImm(esz_reg, elem_sz);
+
+                // src_addr = src_ptr + src_index * elem_size
+                const src_addr = try self.allocTempGeneral();
+                if (comptime builtin.cpu.arch == .aarch64) {
+                    try self.codegen.emit.mulRegRegReg(.w64, src_addr, si, esz_reg);
+                } else {
+                    try self.codegen.emit.movRegReg(.w64, src_addr, si);
+                    try self.codegen.emit.imulRegReg(.w64, src_addr, esz_reg);
+                }
+                self.codegen.freeGeneral(si);
+                const sp_reg = try self.allocTempGeneral();
+                if (comptime builtin.cpu.arch == .aarch64) {
+                    try self.codegen.emit.ldrRegMemSoff(.w64, sp_reg, .FP, src_ptr_slot);
+                    try self.codegen.emit.addRegRegReg(.w64, src_addr, src_addr, sp_reg);
+                } else {
+                    try self.codegen.emit.movRegMem(.w64, sp_reg, .RBP, src_ptr_slot);
+                    try self.codegen.emit.addRegReg(.w64, src_addr, sp_reg);
+                }
+                self.codegen.freeGeneral(sp_reg);
+
+                // dst_addr = dst_ptr + i * elem_size
+                const dst_addr = try self.allocTempGeneral();
+                if (comptime builtin.cpu.arch == .aarch64) {
+                    try self.codegen.emit.mulRegRegReg(.w64, dst_addr, ci, esz_reg);
+                } else {
+                    try self.codegen.emit.movRegReg(.w64, dst_addr, ci);
+                    try self.codegen.emit.imulRegReg(.w64, dst_addr, esz_reg);
+                }
+                self.codegen.freeGeneral(esz_reg);
+                const dp_reg = try self.allocTempGeneral();
+                if (comptime builtin.cpu.arch == .aarch64) {
+                    try self.codegen.emit.ldrRegMemSoff(.w64, dp_reg, .FP, dst_ptr_slot);
+                    try self.codegen.emit.addRegRegReg(.w64, dst_addr, dst_addr, dp_reg);
+                } else {
+                    try self.codegen.emit.movRegMem(.w64, dp_reg, .RBP, dst_ptr_slot);
+                    try self.codegen.emit.addRegReg(.w64, dst_addr, dp_reg);
+                }
+                self.codegen.freeGeneral(dp_reg);
+
+                // Copy elem_size bytes from src_addr to dst_addr
+                const copy_tmp = try self.allocTempGeneral();
+                var off: u32 = 0;
+                while (off < elem_size_align.size) : (off += 8) {
+                    const chunk = @min(8, elem_size_align.size - off);
+                    _ = chunk;
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.ldrRegMemSoff(.w64, copy_tmp, src_addr, @intCast(off));
+                        try self.codegen.emit.strRegMemSoff(.w64, copy_tmp, dst_addr, @intCast(off));
+                    } else {
+                        try self.codegen.emit.movRegMem(.w64, copy_tmp, src_addr, @intCast(off));
+                        try self.codegen.emit.movMemReg(.w64, dst_addr, @intCast(off), copy_tmp);
+                    }
+                }
+                self.codegen.freeGeneral(copy_tmp);
+                self.codegen.freeGeneral(src_addr);
+                self.codegen.freeGeneral(dst_addr);
+
+                // Increment counter
+                if (comptime builtin.cpu.arch == .aarch64) {
+                    try self.codegen.emit.addRegRegImm12(.w64, ci, ci, 1);
+                    try self.codegen.emit.strRegMemSoff(.w64, ci, .FP, ctr_slot);
+                } else {
+                    try self.codegen.emit.addImm(ci, 1);
+                    try self.codegen.emit.movMemReg(.w64, .RBP, ctr_slot, ci);
+                }
+                self.codegen.freeGeneral(ci);
+
+                const back_patch2 = try self.codegen.emitJump();
+                self.codegen.patchJump(back_patch2, loop_start2);
+                self.codegen.patchJump(exit_patch2, self.codegen.currentOffset());
+
+                // Set result length = src length
+                const fl = try self.allocTempGeneral();
+                if (comptime builtin.cpu.arch == .aarch64) {
+                    try self.codegen.emit.ldrRegMemSoff(.w64, fl, .FP, src_len_slot);
+                    try self.codegen.emit.strRegMemSoff(.w64, fl, .FP, result_offset + 8);
+                } else {
+                    try self.codegen.emit.movRegMem(.w64, fl, .RBP, src_len_slot);
+                    try self.codegen.emit.movMemReg(.w64, .RBP, result_offset + 8, fl);
+                }
+                self.codegen.freeGeneral(fl);
+            }
+
+            return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
+        }
+
+        /// Call list_reserve wrapper
+        fn callListReserveOp(self: *Self, list_loc: ValueLocation, spare_loc: ValueLocation, ll: anytype) Error!ValueLocation {
+            const ls = self.layout_store orelse unreachable;
+            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+
+            const elem_size_align: layout.SizeAlign = blk: {
+                const ret_layout = ls.getLayout(ll.ret_layout);
+                break :blk switch (ret_layout.tag) {
+                    .list => ls.layoutSizeAlign(ls.getLayout(ret_layout.data.list)),
+                    .list_of_zst => .{ .size = 0, .alignment = .@"1" },
+                    else => unreachable,
+                };
+            };
+
+            const list_off = try self.ensureOnStack(list_loc, 24);
+            const spare_off = try self.ensureOnStack(spare_loc, 8);
+            const result_offset = self.codegen.allocStackSlot(24);
+            const alignment_bytes = elem_size_align.alignment.toByteUnits();
+            const fn_addr: usize = @intFromPtr(&wrapListReserve);
+
+            if (comptime builtin.cpu.arch == .aarch64) {
+                // wrapListReserve(out, list_bytes, list_len, list_cap, alignment, spare, element_width, roc_ops)
+                try self.codegen.emit.movRegImm64(.X0, @bitCast(@as(i64, result_offset)));
+                try self.codegen.emit.addRegRegReg(.w64, .X0, .FP, .X0);
+                try self.codegen.emit.ldrRegMemSoff(.w64, .X1, .FP, list_off);
+                try self.codegen.emit.ldrRegMemSoff(.w64, .X2, .FP, list_off + 8);
+                try self.codegen.emit.ldrRegMemSoff(.w64, .X3, .FP, list_off + 16);
+                try self.codegen.emitLoadImm(.X4, @intCast(alignment_bytes));
+                try self.codegen.emit.ldrRegMemSoff(.w64, .X5, .FP, spare_off);
+                try self.codegen.emitLoadImm(.X6, @intCast(elem_size_align.size));
+                try self.codegen.emit.movRegReg(.w64, .X7, roc_ops_reg);
+                try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
+                try self.codegen.emit.blrReg(.X9);
+            } else {
+                // x86_64: 8 args: 6 in regs + 2 on stack
+                try self.codegen.emit.pushReg(roc_ops_reg);
+                try self.codegen.emitLoadImm(.R11, @intCast(elem_size_align.size));
+                try self.codegen.emit.pushReg(.R11);
+
+                try self.codegen.emit.leaRegMem(.RDI, .RBP, result_offset);
+                try self.codegen.emit.movRegMem(.w64, .RSI, .RBP, list_off);
+                try self.codegen.emit.movRegMem(.w64, .RDX, .RBP, list_off + 8);
+                try self.codegen.emit.movRegMem(.w64, .RCX, .RBP, list_off + 16);
+                try self.codegen.emitLoadImm(.R8, @intCast(alignment_bytes));
+                try self.codegen.emit.movRegMem(.w64, .R9, .RBP, spare_off);
+
+                try self.codegen.emitLoadImm(.R11, @intCast(fn_addr));
+                try self.codegen.emit.callReg(.R11);
+                try self.codegen.emit.addImm(.RSP, 16);
+            }
+
+            return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
+        }
+
+        /// Call list_release_excess_capacity wrapper
+        fn callListReleaseExcessCapOp(self: *Self, list_loc: ValueLocation, ll: anytype) Error!ValueLocation {
+            const ls = self.layout_store orelse unreachable;
+            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+
+            const elem_size_align: layout.SizeAlign = blk: {
+                const ret_layout = ls.getLayout(ll.ret_layout);
+                break :blk switch (ret_layout.tag) {
+                    .list => ls.layoutSizeAlign(ls.getLayout(ret_layout.data.list)),
+                    .list_of_zst => .{ .size = 0, .alignment = .@"1" },
+                    else => unreachable,
+                };
+            };
+
+            const list_off = try self.ensureOnStack(list_loc, 24);
+            const result_offset = self.codegen.allocStackSlot(24);
+            const alignment_bytes = elem_size_align.alignment.toByteUnits();
+            const fn_addr: usize = @intFromPtr(&wrapListReleaseExcessCapacity);
+
+            if (comptime builtin.cpu.arch == .aarch64) {
+                // wrapListReleaseExcessCapacity(out, list_bytes, list_len, list_cap, alignment, element_width, roc_ops)
+                try self.codegen.emit.movRegImm64(.X0, @bitCast(@as(i64, result_offset)));
+                try self.codegen.emit.addRegRegReg(.w64, .X0, .FP, .X0);
+                try self.codegen.emit.ldrRegMemSoff(.w64, .X1, .FP, list_off);
+                try self.codegen.emit.ldrRegMemSoff(.w64, .X2, .FP, list_off + 8);
+                try self.codegen.emit.ldrRegMemSoff(.w64, .X3, .FP, list_off + 16);
+                try self.codegen.emitLoadImm(.X4, @intCast(alignment_bytes));
+                try self.codegen.emitLoadImm(.X5, @intCast(elem_size_align.size));
+                try self.codegen.emit.movRegReg(.w64, .X6, roc_ops_reg);
+                try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
+                try self.codegen.emit.blrReg(.X9);
+            } else {
+                // x86_64: 7 args: 6 in regs + 1 on stack
+                try self.codegen.emit.pushReg(roc_ops_reg);
+
+                try self.codegen.emit.leaRegMem(.RDI, .RBP, result_offset);
+                try self.codegen.emit.movRegMem(.w64, .RSI, .RBP, list_off);
+                try self.codegen.emit.movRegMem(.w64, .RDX, .RBP, list_off + 8);
+                try self.codegen.emit.movRegMem(.w64, .RCX, .RBP, list_off + 16);
+                try self.codegen.emitLoadImm(.R8, @intCast(alignment_bytes));
+                try self.codegen.emitLoadImm(.R9, @intCast(elem_size_align.size));
+
+                try self.codegen.emitLoadImm(.R11, @intCast(fn_addr));
+                try self.codegen.emit.callReg(.R11);
+                try self.codegen.emit.addImm(.RSP, 8);
+            }
+
+            return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
         }
 
         /// Generate code for an i128 literal
