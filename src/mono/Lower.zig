@@ -899,6 +899,33 @@ fn convertToMonoLowLevel(op: CIR.Expr.LowLevel) ?ir.MonoExpr.LowLevel {
     };
 }
 
+/// Convert a CIR *_to_str low-level op to the corresponding MonoExpr.
+/// These ops need type-specific MonoExprs (int_to_str, float_to_str, dec_to_str)
+/// rather than a generic low_level wrapper, because the backend needs the precision info.
+/// Returns null if the op is not a *_to_str operation.
+fn toStrMonoExpr(op: CIR.Expr.LowLevel, module_env: *ModuleEnv, args: anytype, self: *Self) ?ir.MonoExpr {
+    const arg_indices = module_env.store.sliceExpr(args);
+    if (arg_indices.len != 1) return null;
+    const arg_idx = arg_indices[0];
+    const arg_id = self.lowerExprFromIdx(module_env, arg_idx) catch return null;
+    return switch (op) {
+        .u8_to_str => .{ .int_to_str = .{ .value = arg_id, .int_precision = .u8 } },
+        .i8_to_str => .{ .int_to_str = .{ .value = arg_id, .int_precision = .i8 } },
+        .u16_to_str => .{ .int_to_str = .{ .value = arg_id, .int_precision = .u16 } },
+        .i16_to_str => .{ .int_to_str = .{ .value = arg_id, .int_precision = .i16 } },
+        .u32_to_str => .{ .int_to_str = .{ .value = arg_id, .int_precision = .u32 } },
+        .i32_to_str => .{ .int_to_str = .{ .value = arg_id, .int_precision = .i32 } },
+        .u64_to_str => .{ .int_to_str = .{ .value = arg_id, .int_precision = .u64 } },
+        .i64_to_str => .{ .int_to_str = .{ .value = arg_id, .int_precision = .i64 } },
+        .u128_to_str => .{ .int_to_str = .{ .value = arg_id, .int_precision = .u128 } },
+        .i128_to_str => .{ .int_to_str = .{ .value = arg_id, .int_precision = .i128 } },
+        .dec_to_str => .{ .dec_to_str = arg_id },
+        .f32_to_str => .{ .float_to_str = .{ .value = arg_id, .float_precision = .f32 } },
+        .f64_to_str => .{ .float_to_str = .{ .value = arg_id, .float_precision = .f64 } },
+        else => null,
+    };
+}
+
 /// Look up whether an external definition is a low-level lambda.
 /// Returns the low-level lambda data if so, null otherwise.
 fn getExternalLowLevelLambda(self: *Self, caller_env: *ModuleEnv, lookup: anytype) ?@FieldType(CIR.Expr, "e_low_level_lambda") {
@@ -1482,6 +1509,10 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                             return self.lowerStrInspekt(arg_id, arg_type_var, arg_layout, module_env, region);
                         }
                     }
+                    // Non-convertible ops: *_to_str needs type-specific MonoExprs.
+                    if (toStrMonoExpr(ll.op, module_env, call.args, self)) |mono_expr| {
+                        return try self.store.addExpr(mono_expr, region);
+                    }
                 }
             }
 
@@ -1499,6 +1530,10 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                         const arg_layout = self.getExprLayoutFromIdx(module_env, arg_idx);
                         return self.lowerStrInspekt(arg_id, arg_type_var, arg_layout, module_env, region);
                     }
+                }
+                // *_to_str ops need type-specific MonoExprs (int_to_str, float_to_str, dec_to_str)
+                if (toStrMonoExpr(ll.op, module_env, call.args, self)) |mono_expr| {
+                    return try self.store.addExpr(mono_expr, region);
                 }
                 // Convert CIR LowLevel ops to MonoExpr LowLevel ops
                 // Using the CALL expression's type for ret_layout (not the lambda's rigid type vars)
