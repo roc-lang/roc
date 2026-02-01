@@ -9107,6 +9107,33 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                             const offset = try self.compileLambdaAsProc(nom.backing_expr, inner.lambda);
                             return try self.generateCallToLambda(offset, args_span, ret_layout);
                         }
+                        if (inner == .closure) {
+                            const closure_inner = self.store.getExpr(inner.closure.lambda);
+                            if (closure_inner == .lambda) {
+                                const closure_body = self.store.getExpr(closure_inner.lambda.body);
+                                if (closure_body == .low_level) {
+                                    return try self.callLambdaBodyDirect(closure_inner.lambda, args_span);
+                                }
+                                if (self.hasCallableArguments(args_span) or self.bodyReturnsCallable(closure_inner.lambda.body)) {
+                                    return try self.callLambdaBodyDirect(closure_inner.lambda, args_span);
+                                }
+                                const offset = try self.compileLambdaAsProc(inner.closure.lambda, closure_inner.lambda);
+                                return try self.generateCallToLambda(offset, args_span, ret_layout);
+                            }
+                        }
+                        if (inner == .block) {
+                            const block_result = try self.generateExpr(nom.backing_expr);
+                            if (block_result == .lambda_code) {
+                                return try self.generateCallToLambda(
+                                    block_result.lambda_code.code_offset,
+                                    args_span,
+                                    ret_layout,
+                                );
+                            }
+                            if (block_result == .closure_value) {
+                                return try self.generateClosureDispatch(block_result.closure_value, args_span, ret_layout);
+                            }
+                        }
                         return Error.UnsupportedExpression;
                     },
                     else => return Error.UnsupportedExpression,
