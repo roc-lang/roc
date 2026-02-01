@@ -690,7 +690,7 @@ fn generateMainNominalType(self: *Self) !void {
     }
 }
 
-/// Generate Main using defined type aliases in payloads
+/// Generate Main using defined types in payloads with cross-references
 fn generateMainWithDefinedTypes(self: *Self) !void {
     try self.write("Main := [");
 
@@ -701,17 +701,10 @@ fn generateMainWithDefinedTypes(self: *Self) !void {
         if (i > 0) try self.write(", ");
         try self.write(variant_names[i]);
 
-        // 60% chance to add payload
-        if (self.reader().intRangeAtMost(u8, 0, 9) < 6) {
-            try self.write("(");
-            // Try to use a defined alias type, otherwise use primitive
-            if (self.findAliasType()) |def| {
-                try self.write(def.name);
-            } else {
-                try self.randomPrimitiveType().format(self.writer());
-            }
-            try self.write(")");
-        }
+        // Always add payload to make it more interesting
+        try self.write("(");
+        try self.writeInterestingPayloadType();
+        try self.write(")");
     }
 
     try self.write("].{\n");
@@ -722,6 +715,64 @@ fn generateMainWithDefinedTypes(self: *Self) !void {
 
     try self.write("}\n");
     self.indent_level = 0;
+}
+
+/// Write an interesting payload type that references other defined types
+fn writeInterestingPayloadType(self: *Self) !void {
+    if (self.defined_type_count == 0) {
+        try self.randomPrimitiveType().format(self.writer());
+        return;
+    }
+
+    const choice = self.reader().intRangeAtMost(u8, 0, 9);
+
+    if (choice < 2) {
+        // 20% - Parametric with alias: Wrapper(Color)
+        if (self.findParametricType()) |param_def| {
+            if (self.findAliasType()) |alias_def| {
+                try self.write(param_def.name);
+                try self.write("(");
+                try self.write(alias_def.name);
+                try self.write(")");
+                return;
+            }
+        }
+    } else if (choice < 4) {
+        // 20% - Parametric with recursive: Wrapper(Node)
+        if (self.findParametricType()) |param_def| {
+            if (self.findRecursiveType()) |rec_def| {
+                try self.write(param_def.name);
+                try self.write("(");
+                try self.write(rec_def.name);
+                try self.write(")");
+                return;
+            }
+        }
+    } else if (choice < 5) {
+        // 10% - Just recursive type: Node
+        if (self.findRecursiveType()) |def| {
+            try self.write(def.name);
+            return;
+        }
+    } else if (choice < 6) {
+        // 10% - Just alias type: Color
+        if (self.findAliasType()) |def| {
+            try self.write(def.name);
+            return;
+        }
+    } else if (choice < 8) {
+        // 20% - Parametric with primitive: Wrapper(Str)
+        if (self.findParametricType()) |def| {
+            try self.write(def.name);
+            try self.write("(");
+            try self.randomPrimitiveType().format(self.writer());
+            try self.write(")");
+            return;
+        }
+    }
+
+    // 20% - Fallback to primitive
+    try self.randomPrimitiveType().format(self.writer());
 }
 
 /// Generate Main using parametric type payloads like Wrapper(Color)
@@ -819,15 +870,30 @@ fn generateMainMethods(self: *Self) !void {
 }
 
 /// Generate a concrete type argument for parametric types
+/// Can output: Color, Node, Str, U32, etc.
 fn generateConcreteTypeArg(self: *Self) !void {
-    // 50% use a defined type alias, 50% use primitive
-    if (self.defined_type_count > 0 and self.reader().boolean()) {
-        // Find a non-parametric type (alias)
+    if (self.defined_type_count == 0) {
+        try self.randomPrimitiveType().format(self.writer());
+        return;
+    }
+
+    const choice = self.reader().intRangeAtMost(u8, 0, 9);
+
+    if (choice < 4) {
+        // 40% - Use a type alias: Wrapper(Color)
         if (self.findAliasType()) |def| {
             try self.write(def.name);
             return;
         }
+    } else if (choice < 6) {
+        // 20% - Use a recursive type: Wrapper(Node)
+        if (self.findRecursiveType()) |def| {
+            try self.write(def.name);
+            return;
+        }
     }
+
+    // 40% - Use primitive: Wrapper(Str)
     try self.randomPrimitiveType().format(self.writer());
 }
 
@@ -886,15 +952,62 @@ fn findDefinedType(self: *Self, name: []const u8) ?*const DefinedType {
     return null;
 }
 
-/// Generate a random type suitable for payloads (can use defined aliases)
+/// Generate a random type suitable for payloads (can use defined types)
+/// This is the key function for making types reference each other
 fn randomPayloadType(self: *Self) Type {
-    // 40% chance to use a defined alias if available
-    if (self.defined_type_count > 0 and self.reader().intRangeAtMost(u8, 0, 9) < 4) {
+    if (self.defined_type_count == 0) {
+        return self.randomPrimitiveType();
+    }
+
+    const choice = self.reader().intRangeAtMost(u8, 0, 9);
+
+    if (choice < 3) {
+        // 30% - Use a type alias directly: Color
         if (self.findAliasType()) |def| {
             return .{ .type_ref = def.name };
         }
+    } else if (choice < 5) {
+        // 20% - Use parametric type with alias arg: Wrapper(Color)
+        if (self.findParametricType()) |param_def| {
+            if (self.findAliasType()) |alias_def| {
+                // Create Wrapper(Color)
+                if (self.allocType(.{ .type_ref = alias_def.name })) |arg_ptr| {
+                    return .{ .nominal_app = .{
+                        .name = param_def.name,
+                        .type_args = .{ arg_ptr, undefined },
+                        .type_arg_count = 1,
+                    } };
+                }
+            }
+            // Fallback: Wrapper(Str)
+            if (self.allocType(.str)) |arg_ptr| {
+                return .{ .nominal_app = .{
+                    .name = param_def.name,
+                    .type_args = .{ arg_ptr, undefined },
+                    .type_arg_count = 1,
+                } };
+            }
+        }
+    } else if (choice < 6) {
+        // 10% - Use recursive type directly: Node
+        if (self.findRecursiveType()) |def| {
+            return .{ .type_ref = def.name };
+        }
+    } else if (choice < 7) {
+        // 10% - Use parametric type with primitive: Wrapper(Str)
+        if (self.findParametricType()) |def| {
+            const prim = self.randomPrimitiveType();
+            if (self.allocType(prim)) |arg_ptr| {
+                return .{ .nominal_app = .{
+                    .name = def.name,
+                    .type_args = .{ arg_ptr, undefined },
+                    .type_arg_count = 1,
+                } };
+            }
+        }
     }
-    // Otherwise use primitive
+
+    // 30% - Fallback to primitive
     return self.randomPrimitiveType();
 }
 
