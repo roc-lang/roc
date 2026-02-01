@@ -2262,9 +2262,10 @@ pub const Store = struct {
                                 // This avoids switching current_module_idx which would mess up pending
                                 // work items from the current module.
                                 const target_module = caller_module_idx.?;
-                                // Pass null for caller_module_idx in recursive call - the mapping has
-                                // been resolved, so we don't need to map again.
-                                layout_idx = try self.fromTypeVar(target_module, mapped_var, type_scope, null);
+                                // Pass target_module as caller so chained type scope lookups
+                                // work (e.g., rigid → flex → concrete via two scope entries).
+                                // Cycle detection prevents infinite loops.
+                                layout_idx = try self.fromTypeVar(target_module, mapped_var, type_scope, target_module);
                                 skip_layout_computation = true;
                                 break :blk self.getLayout(layout_idx);
                             }
@@ -2321,9 +2322,10 @@ pub const Store = struct {
                                 // This avoids switching current_module_idx which would mess up pending
                                 // work items from the current module.
                                 const target_module = caller_module_idx.?;
-                                // Pass null for caller_module_idx in recursive call - the mapping has
-                                // been resolved, so we don't need to map again.
-                                layout_idx = try self.fromTypeVar(target_module, mapped_var, type_scope, null);
+                                // Pass target_module as caller so chained type scope lookups
+                                // work (e.g., rigid → flex → concrete via two scope entries).
+                                // Cycle detection prevents infinite loops.
+                                layout_idx = try self.fromTypeVar(target_module, mapped_var, type_scope, target_module);
                                 skip_layout_computation = true;
                                 break :blk self.getLayout(layout_idx);
                             }
