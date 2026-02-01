@@ -2355,6 +2355,58 @@ test "issue 8872: polymorphic tag union payload layout in match expressions" {
     , "hello", .no_trace);
 }
 
+test "match on tag union with different input/output sizes in proc" {
+    try runExpectStr(
+        \\{
+        \\    transform : [Ok({}), Err(I32)] -> [Ok({}), Err(Str)]
+        \\    transform = |try_val| match try_val {
+        \\        Err(_) => Err("hello")
+        \\        Ok(ok) => Ok(ok)
+        \\    }
+        \\
+        \\    result = transform(Err(42i32))
+        \\    match result {
+        \\        Ok(_) => "got ok"
+        \\        Err(msg) => msg
+        \\    }
+        \\}
+    , "hello", .no_trace);
+}
+
+test "polymorphic tag transform with match (transform_err pattern)" {
+    try runExpectStr(
+        \\{
+        \\    transform_err = |try_val| match try_val {
+        \\        Err(_) => Err("hello")
+        \\        Ok(ok) => Ok(ok)
+        \\    }
+        \\
+        \\    err : [Ok({}), Err(I32)]
+        \\    err = Err(42i32)
+        \\
+        \\    result = transform_err(err)
+        \\    match result {
+        \\        Ok(_) => "got ok"
+        \\        Err(msg) => msg
+        \\    }
+        \\}
+    , "hello", .no_trace);
+}
+
+test "proc with tag match returning non-tag type" {
+    try runExpectStr(
+        \\{
+        \\    check : [Ok({}), Err(I32)] -> Str
+        \\    check = |try_val| match try_val {
+        \\        Err(_) => "was err"
+        \\        Ok(_) => "was ok"
+        \\    }
+        \\
+        \\    check(Err(42i32))
+        \\}
+    , "was err", .no_trace);
+}
+
 test "issue 8899: closure decref index out of bounds in for loop" {
     // Regression test for GitHub issue #8899: panic "index out of bounds: index 131, len 73"
     // when running roc test on code with closures and for loops.

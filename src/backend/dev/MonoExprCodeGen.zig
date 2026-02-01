@@ -7117,6 +7117,13 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 const tu_data = ls.getTagUnionData(value_layout_val.data.tag_union.idx);
                 break :blk @intCast(tu_data.discriminant_offset);
             } else 0;
+            const tu_total_size: u32 = if (value_layout_val.tag == .tag_union) blk: {
+                const tu_data = ls.getTagUnionData(value_layout_val.data.tag_union.idx);
+                break :blk tu_data.size;
+            } else 0;
+            // Use .w32 for discriminant loads when .w64 would read past the tag union.
+            // Discriminants are at most 4 bytes, so .w32 is always sufficient.
+            const disc_use_w32 = (tu_disc_offset + 8 > @as(i32, @intCast(tu_total_size)));
 
             // Allocate result storage (may be upgraded dynamically below)
             var result_slot: i32 = if (use_stack_result) self.codegen.allocStackSlot(result_size) else 0;
@@ -7197,17 +7204,21 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                             .stack, .stack_str, .stack_i128 => |base_offset| {
                                 // Load discriminant from correct offset in tag union
                                 if (comptime builtin.cpu.arch == .aarch64) {
-                                    try self.codegen.emit.ldrRegMemSoff(.w64, disc_reg, .FP, base_offset + tu_disc_offset);
+                                    const w = if (disc_use_w32) aarch64.RegisterWidth.w32 else aarch64.RegisterWidth.w64;
+                                    try self.codegen.emit.ldrRegMemSoff(w, disc_reg, .FP, base_offset + tu_disc_offset);
                                 } else {
-                                    try self.codegen.emit.movRegMem(.w64, disc_reg, .RBP, base_offset + tu_disc_offset);
+                                    const w = if (disc_use_w32) x86_64.RegisterWidth.w32 else x86_64.RegisterWidth.w64;
+                                    try self.codegen.emit.movRegMem(w, disc_reg, .RBP, base_offset + tu_disc_offset);
                                 }
                             },
                             .list_stack => |ls_info| {
                                 // List on stack — load discriminant from struct offset
                                 if (comptime builtin.cpu.arch == .aarch64) {
-                                    try self.codegen.emit.ldrRegMemSoff(.w64, disc_reg, .FP, ls_info.struct_offset + tu_disc_offset);
+                                    const w = if (disc_use_w32) aarch64.RegisterWidth.w32 else aarch64.RegisterWidth.w64;
+                                    try self.codegen.emit.ldrRegMemSoff(w, disc_reg, .FP, ls_info.struct_offset + tu_disc_offset);
                                 } else {
-                                    try self.codegen.emit.movRegMem(.w64, disc_reg, .RBP, ls_info.struct_offset + tu_disc_offset);
+                                    const w = if (disc_use_w32) x86_64.RegisterWidth.w32 else x86_64.RegisterWidth.w64;
+                                    try self.codegen.emit.movRegMem(w, disc_reg, .RBP, ls_info.struct_offset + tu_disc_offset);
                                 }
                             },
                             .general_reg => |reg| {

@@ -1307,6 +1307,39 @@ fn collectTypeMappingsWithExpr(
                         }
                     }
                 },
+                .tag_union => |tu| {
+                    // Recurse into tag union variants to map payload type vars.
+                    // Without this, flex vars inside tag union payloads (e.g.,
+                    // the `a` in `[Ok({}), Err(a)]`) won't be mapped to their
+                    // concrete types from the caller's tag union.
+                    const caller_tu = caller_resolved.desc.content.unwrapTagUnion() orelse return;
+                    const ext_tags = ext_env.types.getTagsSlice(tu.tags);
+                    const caller_tags = caller_env.types.getTagsSlice(caller_tu.tags);
+                    const ext_ident = ext_env.getIdentStoreConst();
+                    const caller_ident = caller_env.getIdentStoreConst();
+
+                    // Match tags by name and recurse into payload vars
+                    for (ext_tags.items(.name), ext_tags.items(.args)) |ext_name, ext_args| {
+                        const ext_text = ext_ident.getText(ext_name);
+                        const ext_payload_vars = ext_env.types.sliceVars(ext_args);
+
+                        for (caller_tags.items(.name), caller_tags.items(.args)) |caller_name, caller_args| {
+                            const caller_text = caller_ident.getText(caller_name);
+                            if (std.mem.eql(u8, ext_text, caller_text)) {
+                                // Same tag name — recurse into payload vars
+                                const caller_payload_vars = caller_env.types.sliceVars(caller_args);
+                                const num = @min(ext_payload_vars.len, caller_payload_vars.len);
+                                for (0..num) |j| {
+                                    try self.collectTypeMappings(scope, ext_env, ext_payload_vars[j], caller_env, caller_payload_vars[j]);
+                                }
+                                break;
+                            }
+                        }
+                    }
+
+                    // Also recurse into extension vars
+                    try self.collectTypeMappings(scope, ext_env, tu.ext, caller_env, caller_tu.ext);
+                },
                 else => {},
             }
         },
