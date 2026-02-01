@@ -1746,6 +1746,9 @@ test "issue 8667: List.with_capacity should be inferred as List(I64)" {
     // If it's .list_of_zst, that indicates a type inference bug.
     try runExpectListI64("List.append(List.with_capacity(1), 1i64)", &[_]i64{1}, .no_trace);
 
+    // Test fold with inline lambda that calls append
+    try runExpectListI64("[1i64].fold(List.with_capacity(1), |acc, item| acc.append(item))", &[_]i64{1}, .no_trace);
+
     // Also test the fold case which is where the bug was originally reported
     try runExpectListI64("[1i64].fold(List.with_capacity(1), List.append)", &[_]i64{1}, .no_trace);
 }

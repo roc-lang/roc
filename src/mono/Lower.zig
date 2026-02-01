@@ -1938,8 +1938,13 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                 // Fall through to handle as external call lookup if not a known method
             }
 
-            // Handle method calls on non-list nominal types (e.g., n.to_str() where n : U64)
-            if (dot.args != null and !is_list_receiver) {
+            // Handle method calls via nominal type dispatch (e.g., n.to_str(), list.fold(...))
+            // For list receivers, only use nominal dispatch for methods NOT already handled
+            // above (append/prepend/get/concat) or below (len/is_empty).
+            const skip_nominal_for_list = is_list_receiver and (std.mem.eql(u8, field_name, "len") or
+                std.mem.eql(u8, field_name, "is_empty") or
+                std.mem.eql(u8, field_name, "isEmpty"));
+            if (dot.args != null and !skip_nominal_for_list) {
                 const receiver_type_var = ModuleEnv.varFrom(dot.receiver);
                 var recv_resolved = module_env.types.resolveVar(receiver_type_var);
                 var recv_type_source_env: *const ModuleEnv = module_env;
@@ -2155,16 +2160,12 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                         try self.lowerExternalDefByIdx(method_symbol, node_idx);
                     }
 
-                    // Compute ret_layout BEFORE clearing type scope, since the
-                    // expression's type var may need type scope mappings to resolve
-                    // generic type parameters (e.g., ok_or's return type `ok` → Str).
+                    // Compute ret_layout and lower arguments BEFORE clearing the type
+                    // scope. Both need the type scope active so that generic type
+                    // parameters are properly resolved. Arguments like `List.append`
+                    // (passed as a function value) need the type scope to produce
+                    // correct layouts for their wrapper lambdas.
                     const ret_layout = self.getExprLayoutFromIdx(module_env, expr_idx);
-
-                    // Clean up type scope after computing layouts
-                    self.type_scope_caller_module = old_caller_module;
-                    if (self.type_scope.scopes.items.len > 0) {
-                        self.type_scope.scopes.items[0].clearRetainingCapacity();
-                    }
 
                     const fn_expr_id = try self.store.addExpr(.{ .lookup = .{
                         .symbol = method_symbol,
@@ -2181,6 +2182,12 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                         try all_args.append(self.allocator, lowered_arg);
                     }
                     const args_span = try self.store.addExprSpan(all_args.items);
+
+                    // Clean up type scope after lowering arguments
+                    self.type_scope_caller_module = old_caller_module;
+                    if (self.type_scope.scopes.items.len > 0) {
+                        self.type_scope.scopes.items[0].clearRetainingCapacity();
+                    }
 
                     break :blk .{
                         .call = .{
@@ -2452,18 +2459,9 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             // This happens when a low-level function is passed as a value
             // or stored as a definition that's looked up later.
 
-            // Lower the parameter patterns
-            const params = try self.lowerPatternSpan(module_env, ll.args);
-
             // Convert CIR LowLevel ops to MonoExpr LowLevel ops
             const mono_op = convertToMonoLowLevel(ll.op) orelse
                 break :blk .{ .runtime_error = {} };
-
-            // Create argument expressions from the parameter patterns
-            // Each parameter becomes a lookup to itself
-            const param_patterns = module_env.store.slicePatterns(ll.args);
-            var arg_list = std.ArrayList(MonoExprId).empty;
-            defer arg_list.deinit(self.allocator);
 
             // Get the function type from the expression to extract parameter types.
             // This is needed because the pattern type variables in builtins are generic (flex),
@@ -2473,9 +2471,12 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             const func_type = expr_resolved.desc.content.unwrapFunc();
             const ls = self.layout_store orelse unreachable;
 
+            // CRITICAL: Set up type scope mappings BEFORE lowering patterns.
             // Low-level lambdas from builtins have their own rigid type variables that
             // may not be in the type scope (which was set up for the enclosing function).
-            // Add mappings by matching rigid var names against existing scope entries.
+            // Without these mappings, lowerPatternSpan -> getPatternLayout -> fromTypeVar
+            // cannot resolve the rigid type variables and produces ZST layouts instead of
+            // the correct concrete types (e.g., List(I64) → list layout instead of zst).
             if (func_type != null and self.type_scope.scopes.items.len > 0) {
                 const ft = func_type.?;
                 const scope = &self.type_scope.scopes.items[0];
@@ -2514,6 +2515,15 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                 }
             }
 
+            // Lower the parameter patterns (AFTER type scope setup so layouts resolve correctly)
+            const params = try self.lowerPatternSpan(module_env, ll.args);
+
+            // Create argument expressions from the parameter patterns
+            // Each parameter becomes a lookup to itself
+            const param_patterns = module_env.store.slicePatterns(ll.args);
+            var arg_list = std.ArrayList(MonoExprId).empty;
+            defer arg_list.deinit(self.allocator);
+
             var param_idx: usize = 0;
             for (param_patterns) |patt_idx| {
                 const symbol = self.patternToSymbol(patt_idx);
@@ -2545,8 +2555,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
 
             // Use the function's RETURN type for ret_layout, not the function type itself
             const ret_layout = if (func_type) |ft| ret_blk: {
-                const ret_var = ft.ret;
-                break :ret_blk ls.fromTypeVar(self.current_module_idx, ret_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
+                break :ret_blk ls.fromTypeVar(self.current_module_idx, ft.ret, &self.type_scope, self.type_scope_caller_module) catch unreachable;
             } else
                 self.getExprLayoutFromIdx(module_env, expr_idx);
 

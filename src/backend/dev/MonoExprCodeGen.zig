@@ -1455,7 +1455,6 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         break :blk .{ .size = 0, .alignment = .@"1" };
                     };
 
-                    // ZST detection based on LAYOUT size, not generated value
                     const is_zst = (elem_size_align.size == 0);
                     const list_offset: i32 = switch (list_loc) {
                         .stack => |off| off,
@@ -11397,7 +11396,6 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         /// Store the result to the output buffer pointed to by a saved register
         /// This is used when the original result pointer (X0/RDI) may have been clobbered
         fn storeResultToSavedPtr(self: *Self, loc: ValueLocation, result_layout: layout.Idx, saved_ptr_reg: GeneralReg, tuple_len: usize) Error!void {
-
             // Handle tuples specially - copy all elements from stack to result buffer
             if (tuple_len > 1) {
                 switch (loc) {
@@ -11820,7 +11818,6 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     }
                 },
                 else => {
-                    // Unknown location type - shouldn't happen for i128
                     unreachable;
                 },
             }
@@ -12342,7 +12339,6 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 if (i >= 8) break;
                 const arg_loc = try self.generateExpr(arg_id);
                 const arg_layout = self.getExprLayout(arg_id);
-
                 arg_infos[i] = .{ .loc = arg_loc, .layout_idx = arg_layout };
             }
 

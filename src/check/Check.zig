@@ -4076,6 +4076,48 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             // Check the body (which will be e_runtime_error or similar)
             does_fx = try self.checkExpr(ll.body, env, .no_expectation) or does_fx;
 
+            // Check the argument patterns and unify them with the annotation's
+            // function parameter types. Without this, pattern type variables remain
+            // as bare flex vars, which resolve to ZST layouts during lowering.
+            // This mirrors what e_lambda does at its pattern-checking step.
+            const arg_pattern_idxs = self.cir.store.slicePatterns(ll.args);
+            for (arg_pattern_idxs) |pattern_idx| {
+                try self.checkPattern(pattern_idx, env);
+            }
+
+            if (mb_anno_vars) |anno_vars| {
+                const mb_anno_func: ?types_mod.Func = func_blk: {
+                    var var_ = anno_vars.anno_var;
+                    var guard = types_mod.debug.IterationGuard.init("checkExpr.ll_lambda.unwrapExpectedFunc");
+                    while (true) {
+                        guard.tick();
+                        switch (self.types.resolveVar(var_).desc.content) {
+                            .structure => |flat_type| {
+                                switch (flat_type) {
+                                    .fn_pure => |func| break :func_blk func,
+                                    .fn_unbound => |func| break :func_blk func,
+                                    .fn_effectful => |func| break :func_blk func,
+                                    else => break :func_blk null,
+                                }
+                            },
+                            .alias => |alias| {
+                                var_ = self.types.getAliasBackingVar(alias);
+                            },
+                            else => break :func_blk null,
+                        }
+                    }
+                };
+
+                if (mb_anno_func) |anno_func| {
+                    const anno_func_args = self.types.sliceVars(anno_func.args);
+                    if (anno_func_args.len == arg_pattern_idxs.len) {
+                        for (anno_func_args, arg_pattern_idxs) |expected_arg_var, pattern_idx| {
+                            _ = try self.unifyWithCtx(expected_arg_var, ModuleEnv.varFrom(pattern_idx), env, .anno);
+                        }
+                    }
+                }
+            }
+
             // For low level lambda expressions, the type comes from the annotation.
             // This is similar to e_anno_only - the implementation is provided by the host.
             switch (expected) {

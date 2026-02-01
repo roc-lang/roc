@@ -576,7 +576,6 @@ pub const DevEvaluator = struct {
         // type variable can have Content.err for expressions involving the `?`
         // operator at top level (where the Err branch desugars to runtime_error).
         const cir_expr = module_env.store.getExpr(expr_idx);
-        // Trace the layout extraction chain
         const result_layout = monoExprResultLayout(&mono_store, mono_expr_id) orelse blk: {
             // Fallback: resolve from the CIR type variable
             const type_var = can.ModuleEnv.varFrom(expr_idx);
