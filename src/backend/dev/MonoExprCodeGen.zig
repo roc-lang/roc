@@ -5951,6 +5951,63 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         }
 
         /// Generate code for field access
+        /// Determine the size of a value from its ValueLocation alone.
+        fn valueSizeFromLoc(_: *Self, loc: ValueLocation) u32 {
+            return switch (loc) {
+                .stack_str, .list_stack => 24,
+                .stack_i128, .immediate_i128 => 16,
+                .immediate_i64, .general_reg, .stack, .float_reg, .immediate_f64 => 8,
+                else => 8,
+            };
+        }
+
+        /// Determine the size of a value from its ValueLocation and expression layout.
+        fn valueSizeFromLocOrLayout(self: *Self, loc: ValueLocation, expr_id: MonoExprId) u32 {
+            // First try the value location (most reliable for multi-word types)
+            switch (loc) {
+                .stack_str, .list_stack => return 24,
+                .stack_i128, .immediate_i128 => return 16,
+                else => {},
+            }
+            // Then try the expression layout
+            if (self.getExprLayout(expr_id)) |layout_idx| {
+                if (self.layout_store) |ls| {
+                    const layout_val = ls.getLayout(layout_idx);
+                    return ls.layoutSizeAlign(layout_val).size;
+                }
+            }
+            // Default based on loc
+            return self.valueSizeFromLoc(loc);
+        }
+
+        /// Given a field's stack base offset, size, and layout index, return the appropriate ValueLocation.
+        fn fieldLocationFromLayout(self: *Self, field_base: i32, field_size: u32, field_layout_idx: layout.Idx) ValueLocation {
+            // Check well-known layout indices first
+            if (field_layout_idx == .str) {
+                return .{ .stack_str = field_base };
+            }
+            if (field_layout_idx == .i128 or field_layout_idx == .u128 or field_layout_idx == .dec) {
+                return .{ .stack_i128 = field_base };
+            }
+            // Check layout tag for lists
+            if (self.layout_store) |ls| {
+                if (@intFromEnum(field_layout_idx) < ls.layouts.len()) {
+                    const field_layout = ls.getLayout(field_layout_idx);
+                    if (field_layout.tag == .list or field_layout.tag == .list_of_zst) {
+                        return .{ .list_stack = .{
+                            .struct_offset = field_base,
+                            .data_offset = 0,
+                            .num_elements = 0,
+                        } };
+                    }
+                }
+            }
+            if (field_size == 16) {
+                return .{ .stack_i128 = field_base };
+            }
+            return .{ .stack = field_base };
+        }
+
         fn generateFieldAccess(self: *Self, access: anytype) Error!ValueLocation {
             const ls = self.layout_store orelse return Error.UnsupportedExpression;
 
@@ -5975,24 +6032,18 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
             const field_offset = ls.getRecordFieldOffset(record_layout.data.record.idx, access.field_idx);
             const field_size = ls.getRecordFieldSize(record_layout.data.record.idx, access.field_idx);
+            const field_layout_idx = ls.getRecordFieldLayout(record_layout.data.record.idx, access.field_idx);
 
             // Return location pointing to the field within the record
             return switch (record_loc) {
                 .stack, .stack_str => |s| {
                     const field_base = s + @as(i32, @intCast(field_offset));
-                    // Return stack_i128 for 16-byte fields (Dec/i128/u128)
-                    if (field_size == 16) {
-                        return .{ .stack_i128 = field_base };
-                    }
-                    return .{ .stack = field_base };
+                    return self.fieldLocationFromLayout(field_base, field_size, field_layout_idx);
                 },
                 .stack_i128 => |s| {
                     // Record itself is i128-sized, field access within it
                     const field_base = s + @as(i32, @intCast(field_offset));
-                    if (field_size == 16) {
-                        return .{ .stack_i128 = field_base };
-                    }
-                    return .{ .stack = field_base };
+                    return self.fieldLocationFromLayout(field_base, field_size, field_layout_idx);
                 },
                 .general_reg => |reg| {
                     // Record in register - only valid for small records (<=8 bytes)
@@ -6186,14 +6237,31 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // Zero out the union space first
             try self.zeroStackArea(base_offset, stack_size);
 
+            // Get the variant's payload layout to determine correct sizes
+            const variants = ls.getTagUnionVariants(tu_data);
+            const variant_payload_layout: ?layout.Idx = if (tag.discriminant < variants.len) blk: {
+                break :blk variants.get(tag.discriminant).payload_layout;
+            } else null;
+
             // Get argument expressions and store them as payload
             const arg_exprs = self.store.getExprSpan(tag.args);
-            var payload_offset: u32 = 0;
-            for (arg_exprs) |arg_expr_id| {
-                const arg_loc = try self.generateExpr(arg_expr_id);
-                try self.copyValueToStackOffset(base_offset + @as(i32, @intCast(payload_offset)), arg_loc);
-                // Advance by 8 bytes per field (simplified - should use actual field sizes)
-                payload_offset += 8;
+            if (arg_exprs.len == 1) {
+                // Single argument: the payload layout directly tells us the size
+                const arg_loc = try self.generateExpr(arg_exprs[0]);
+                const payload_size: u32 = if (variant_payload_layout) |pl| blk: {
+                    const pl_val = ls.getLayout(pl);
+                    break :blk ls.layoutSizeAlign(pl_val).size;
+                } else self.valueSizeFromLoc(arg_loc);
+                try self.copyBytesToStackOffset(base_offset, arg_loc, payload_size);
+            } else {
+                // Multiple arguments: use the variant's payload tuple layout to get
+                // field offsets and sizes. This correctly handles boxed/recursive types.
+                for (arg_exprs, 0..) |arg_expr_id, arg_i| {
+                    const arg_loc = try self.generateExpr(arg_expr_id);
+                    // Use copyValueToStackOffset which dispatches correctly based on
+                    // the ValueLocation kind (stack_str→24 bytes, list_stack→24 bytes, etc.)
+                    try self.copyValueToStackOffset(base_offset + @as(i32, @intCast(arg_i * 8)), arg_loc);
+                }
             }
 
             // Store discriminant at its offset
@@ -9759,13 +9827,13 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         };
                         const num_regs = (size_align.size + 7) / 8;
                         if (comptime builtin.cpu.arch == .aarch64) {
-                            const regs = [_]@TypeOf(GeneralReg.X0){ .X0, .X1, .X2, .X3 };
-                            for (0..@min(num_regs, 4)) |i| {
+                            const regs = [_]@TypeOf(GeneralReg.X0){ .X0, .X1, .X2, .X3, .X4, .X5, .X6, .X7 };
+                            for (0..@min(num_regs, regs.len)) |i| {
                                 try self.codegen.emitLoadStack(.w64, regs[i], stack_offset + @as(i32, @intCast(i * 8)));
                             }
                         } else {
-                            const regs = [_]@TypeOf(GeneralReg.RAX){ .RAX, .RDX, .RCX, .R8 };
-                            for (0..@min(num_regs, 4)) |i| {
+                            const regs = [_]@TypeOf(GeneralReg.RAX){ .RAX, .RDX, .RCX, .R8, .R9, .R10, .R11 };
+                            for (0..@min(num_regs, regs.len)) |i| {
                                 try self.codegen.emitLoadStack(.w64, regs[i], stack_offset + @as(i32, @intCast(i * 8)));
                             }
                         }
@@ -10099,15 +10167,13 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         const stack_offset = self.codegen.allocStackSlot(size_align.size);
                         const num_regs = (size_align.size + 7) / 8;
                         if (comptime builtin.cpu.arch == .aarch64) {
-                            // Save X0, X1, X2, X3... to stack based on size
-                            const regs = [_]@TypeOf(GeneralReg.X0){ .X0, .X1, .X2, .X3 };
-                            for (0..@min(num_regs, 4)) |i| {
+                            const regs = [_]@TypeOf(GeneralReg.X0){ .X0, .X1, .X2, .X3, .X4, .X5, .X6, .X7 };
+                            for (0..@min(num_regs, regs.len)) |i| {
                                 try self.codegen.emit.strRegMemSoff(.w64, regs[i], .FP, stack_offset + @as(i32, @intCast(i * 8)));
                             }
                         } else {
-                            // x86_64: RAX, RDX, RCX, R8
-                            const regs = [_]@TypeOf(GeneralReg.RAX){ .RAX, .RDX, .RCX, .R8 };
-                            for (0..@min(num_regs, 4)) |i| {
+                            const regs = [_]@TypeOf(GeneralReg.RAX){ .RAX, .RDX, .RCX, .R8, .R9, .R10, .R11 };
+                            for (0..@min(num_regs, regs.len)) |i| {
                                 try self.codegen.emit.movMemReg(.w64, .RBP, stack_offset + @as(i32, @intCast(i * 8)), regs[i]);
                             }
                         }
