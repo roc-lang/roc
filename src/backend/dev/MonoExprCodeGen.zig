@@ -5343,6 +5343,38 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                                                                 .num_elements = 0,
                                                             } };
                                                         }
+                                                        // For small payloads (< 8 bytes), the discriminant is adjacent.
+                                                        // We must extract only the payload bytes to avoid reading
+                                                        // discriminant data when the value is later used as 8 bytes.
+                                                        const pl_size = ls.layoutSizeAlign(pl_val).size;
+                                                        if (pl_size > 0 and pl_size < 8 and tu_disc_offset < 8) {
+                                                            const fresh_slot = self.codegen.allocStackSlot(8);
+                                                            const tmp_reg = try self.allocTempGeneral();
+                                                            // Zero the slot first
+                                                            try self.codegen.emitLoadImm(tmp_reg, 0);
+                                                            try self.codegen.emitStoreStack(.w64, fresh_slot, tmp_reg);
+                                                            // Load only payload bytes (w32 for 1-4 bytes, w64 for 5-7)
+                                                            if (pl_size <= 4) {
+                                                                try self.codegen.emitLoadStack(.w32, tmp_reg, payload_offset);
+                                                                // Mask to exact size if discriminant is within the 4 bytes
+                                                                if (pl_size < 4) {
+                                                                    const mask: i64 = (@as(i64, 1) << @intCast(pl_size * 8)) - 1;
+                                                                    const mask_reg = try self.allocTempGeneral();
+                                                                    try self.codegen.emitLoadImm(mask_reg, mask);
+                                                                    if (comptime builtin.cpu.arch == .aarch64) {
+                                                                        try self.codegen.emit.andRegRegReg(.w64, tmp_reg, tmp_reg, mask_reg);
+                                                                    } else {
+                                                                        try self.codegen.emit.andRegReg(.w64, tmp_reg, mask_reg);
+                                                                    }
+                                                                    self.codegen.freeGeneral(mask_reg);
+                                                                }
+                                                            } else {
+                                                                try self.codegen.emitLoadStack(.w64, tmp_reg, payload_offset);
+                                                            }
+                                                            try self.codegen.emitStoreStack(.w64, fresh_slot, tmp_reg);
+                                                            self.codegen.freeGeneral(tmp_reg);
+                                                            break :plblk .{ .stack = fresh_slot };
+                                                        }
                                                         break :plblk .{ .stack = payload_offset };
                                                     }
                                                 } else .{ .stack = payload_offset };
