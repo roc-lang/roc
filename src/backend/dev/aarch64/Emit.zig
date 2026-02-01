@@ -1145,6 +1145,24 @@ pub fn scvtfFloatFromGen(self: *Emit, ftype: FloatType, dst: FloatReg, src: Gene
     try self.emit32(inst);
 }
 
+/// UCVTF (unsigned integer to float)
+pub fn ucvtfFloatFromGen(self: *Emit, ftype: FloatType, dst: FloatReg, src: GeneralReg, src_width: RegisterWidth) !void {
+    // UCVTF <Sd>, <Wn> or UCVTF <Dd>, <Xn> etc.
+    // Same as SCVTF but opcode = 011 instead of 010
+    const sf = src_width.sf();
+    const inst: u32 = (@as(u32, sf) << 31) |
+        (0b00 << 29) |
+        (0b11110 << 24) |
+        (@as(u32, @intFromEnum(ftype)) << 22) |
+        (0b1 << 21) |
+        (0b00 << 19) |
+        (0b011 << 16) |
+        (0b000000 << 10) |
+        (@as(u32, src.enc()) << 5) |
+        dst.enc();
+    try self.emit32(inst);
+}
+
 /// FCVTZS (float to signed integer with truncation toward zero)
 pub fn fcvtzsGenFromFloat(self: *Emit, ftype: FloatType, dst: GeneralReg, src: FloatReg, dst_width: RegisterWidth) !void {
     // FCVTZS <Wd>, <Sn> or FCVTZS <Xd>, <Dn> etc.
@@ -1156,6 +1174,24 @@ pub fn fcvtzsGenFromFloat(self: *Emit, ftype: FloatType, dst: GeneralReg, src: F
         (0b1 << 21) |
         (0b11 << 19) |
         (0b000 << 16) |
+        (0b000000 << 10) |
+        (@as(u32, src.enc()) << 5) |
+        dst.enc();
+    try self.emit32(inst);
+}
+
+/// FCVTZU (float to unsigned integer with truncation toward zero)
+pub fn fcvtzuGenFromFloat(self: *Emit, ftype: FloatType, dst: GeneralReg, src: FloatReg, dst_width: RegisterWidth) !void {
+    // FCVTZU <Wd>, <Sn> or FCVTZU <Xd>, <Dn> etc.
+    // Same as FCVTZS but opcode = 001 instead of 000
+    const sf = dst_width.sf();
+    const inst: u32 = (@as(u32, sf) << 31) |
+        (0b00 << 29) |
+        (0b11110 << 24) |
+        (@as(u32, @intFromEnum(ftype)) << 22) |
+        (0b1 << 21) |
+        (0b11 << 19) |
+        (0b001 << 16) |
         (0b000000 << 10) |
         (@as(u32, src.enc()) << 5) |
         dst.enc();

@@ -398,6 +398,54 @@ fn wrapListDropAt(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: 
     out.* = listDropAt(list, alignment, element_width, false, drop_index, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), roc_ops);
 }
 
+/// Convert signed i64 to Dec (i128). Multiplies by one_point_zero (10^18).
+fn wrapI64ToDec(val: i64) callconv(.c) i128 {
+    const RocDec = builtins.dec.RocDec;
+    if (RocDec.fromWholeInt(@as(i128, val))) |dec| {
+        return dec.num;
+    }
+    // Overflow: saturate to max/min Dec value
+    return if (val < 0) std.math.minInt(i128) else std.math.maxInt(i128);
+}
+
+/// Convert Dec (i128) to i64 by truncating division by one_point_zero (10^18).
+fn wrapDecToI64Trunc(low: u64, high: u64) callconv(.c) i64 {
+    const val: i128 = @bitCast(@as(u128, high) << 64 | @as(u128, low));
+    const RocDec = builtins.dec.RocDec;
+    return @intCast(@divTrunc(val, RocDec.one_point_zero_i128));
+}
+
+/// Convert i128 to f64.
+fn wrapI128ToF64(low: u64, high: u64) callconv(.c) f64 {
+    const val: i128 = @bitCast(@as(u128, high) << 64 | @as(u128, low));
+    return @floatFromInt(val);
+}
+
+/// Convert u128 to f64.
+fn wrapU128ToF64(low: u64, high: u64) callconv(.c) f64 {
+    const val: u128 = @as(u128, high) << 64 | @as(u128, low);
+    return @floatFromInt(val);
+}
+
+/// Convert f64 to i128 (saturating).
+fn wrapF64ToI128Trunc(val: f64) callconv(.c) i128 {
+    if (std.math.isNan(val)) return 0;
+    const min_val: f64 = @floatFromInt(@as(i128, std.math.minInt(i128)));
+    const max_val: f64 = @floatFromInt(@as(i128, std.math.maxInt(i128)));
+    if (val <= min_val) return std.math.minInt(i128);
+    if (val >= max_val) return std.math.maxInt(i128);
+    return @intFromFloat(val);
+}
+
+/// Convert f64 to u128 (saturating).
+fn wrapF64ToU128Trunc(val: f64) callconv(.c) u128 {
+    if (std.math.isNan(val)) return 0;
+    if (val <= 0) return 0;
+    const max_val: f64 = @floatFromInt(@as(u128, std.math.maxInt(u128)));
+    if (val >= max_val) return std.math.maxInt(u128);
+    return @intFromFloat(val);
+}
+
 const MonoProc = mono.MonoProc;
 
 const Allocator = std.mem.Allocator;
@@ -2073,6 +2121,651 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     }
                     // 64-bit wrapping is a no-op (reinterpret bits)
                     return .{ .general_reg = src_reg };
+                },
+
+                // ── Signed integer to float conversions ──
+                // Sign-extend the source value to 64 bits, then convert to f64.
+                // (All float values are stored as f64 internally; f32 narrowing
+                // happens at the store point via storeResultToSavedPtr.)
+                .i8_to_f32,
+                .i8_to_f64,
+                .i16_to_f32,
+                .i16_to_f64,
+                .i32_to_f32,
+                .i32_to_f64,
+                .i64_to_f32,
+                .i64_to_f64,
+                => {
+                    if (args.len < 1) unreachable;
+                    const src_loc = try self.generateExpr(args[0]);
+                    const src_reg = try self.ensureInGeneralReg(src_loc);
+
+                    // Sign-extend source to 64 bits
+                    const src_bits: u8 = switch (ll.op) {
+                        .i8_to_f32, .i8_to_f64 => 8,
+                        .i16_to_f32, .i16_to_f64 => 16,
+                        .i32_to_f32, .i32_to_f64 => 32,
+                        .i64_to_f32, .i64_to_f64 => 64,
+                        else => unreachable,
+                    };
+                    if (src_bits < 64) {
+                        const shift_amount: u8 = 64 - src_bits;
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            try self.codegen.emit.lslRegRegImm(.w64, src_reg, src_reg, @intCast(shift_amount));
+                            try self.codegen.emit.asrRegRegImm(.w64, src_reg, src_reg, @intCast(shift_amount));
+                        } else {
+                            try self.codegen.emit.shlRegImm8(.w64, src_reg, shift_amount);
+                            try self.codegen.emit.sarRegImm8(.w64, src_reg, shift_amount);
+                        }
+                    }
+
+                    // Convert signed i64 to f64
+                    const freg = self.codegen.allocFloat() orelse return Error.NoRegisterToSpill;
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.scvtfFloatFromGen(.double, freg, src_reg, .w64);
+                    } else {
+                        try self.codegen.emit.cvtsi2sdRegReg(.w64, freg, src_reg);
+                    }
+                    self.codegen.freeGeneral(src_reg);
+                    return .{ .float_reg = freg };
+                },
+
+                // ── Unsigned integer (≤32-bit) to float conversions ──
+                // Zero-extend to 64 bits, then convert with signed instruction.
+                // All u32 values fit in the positive range of i64 so SCVTF/CVTSI2SD is correct.
+                .u8_to_f32,
+                .u8_to_f64,
+                .u16_to_f32,
+                .u16_to_f64,
+                .u32_to_f32,
+                .u32_to_f64,
+                => {
+                    if (args.len < 1) unreachable;
+                    const src_loc = try self.generateExpr(args[0]);
+                    const src_reg = try self.ensureInGeneralReg(src_loc);
+
+                    // Zero-extend source to 64 bits
+                    const src_bits: u8 = switch (ll.op) {
+                        .u8_to_f32, .u8_to_f64 => 8,
+                        .u16_to_f32, .u16_to_f64 => 16,
+                        .u32_to_f32, .u32_to_f64 => 32,
+                        else => unreachable,
+                    };
+                    const shift_amount: u8 = 64 - src_bits;
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.lslRegRegImm(.w64, src_reg, src_reg, @intCast(shift_amount));
+                        try self.codegen.emit.lsrRegRegImm(.w64, src_reg, src_reg, @intCast(shift_amount));
+                    } else {
+                        try self.codegen.emit.shlRegImm8(.w64, src_reg, shift_amount);
+                        try self.codegen.emit.shrRegImm8(.w64, src_reg, shift_amount);
+                    }
+
+                    // Convert (now fits in positive i64) to f64
+                    const freg = self.codegen.allocFloat() orelse return Error.NoRegisterToSpill;
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.scvtfFloatFromGen(.double, freg, src_reg, .w64);
+                    } else {
+                        try self.codegen.emit.cvtsi2sdRegReg(.w64, freg, src_reg);
+                    }
+                    self.codegen.freeGeneral(src_reg);
+                    return .{ .float_reg = freg };
+                },
+
+                // ── u64 to float conversions ──
+                // u64 may exceed i64 max, so we need unsigned conversion.
+                .u64_to_f32,
+                .u64_to_f64,
+                => {
+                    if (args.len < 1) unreachable;
+                    const src_loc = try self.generateExpr(args[0]);
+                    const src_reg = try self.ensureInGeneralReg(src_loc);
+                    const freg = self.codegen.allocFloat() orelse return Error.NoRegisterToSpill;
+
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        // UCVTF handles unsigned integers directly
+                        try self.codegen.emit.ucvtfFloatFromGen(.double, freg, src_reg, .w64);
+                    } else {
+                        // x86_64 has no unsigned int-to-float instruction.
+                        // If the high bit is clear (value < 2^63), CVTSI2SD works directly.
+                        // If set, we halve the value, convert, and double.
+                        //   test src, src
+                        //   js .large
+                        //   cvtsi2sd freg, src
+                        //   jmp .done
+                        // .large:
+                        //   mov tmp, src
+                        //   shr tmp, 1
+                        //   and src, 1
+                        //   or tmp, src
+                        //   cvtsi2sd freg, tmp
+                        //   addsd freg, freg
+                        // .done:
+
+                        // test src_reg, src_reg (sets SF if high bit is 1)
+                        try self.codegen.emit.testRegReg(.w64, src_reg, src_reg);
+                        // JS .large
+                        const large_patch = try self.codegen.emitCondJump(.sign);
+
+                        // Small path: value fits in i64
+                        try self.codegen.emit.cvtsi2sdRegReg(.w64, freg, src_reg);
+                        const done_patch = try self.codegen.emitJump();
+
+                        // .large:
+                        self.codegen.patchJump(large_patch, self.codegen.currentOffset());
+                        const tmp_reg = try self.allocTempGeneral();
+                        try self.codegen.emit.movRegReg(.w64, tmp_reg, src_reg);
+                        // shr tmp, 1
+                        try self.codegen.emit.shrRegImm8(.w64, tmp_reg, 1);
+                        // and src, 1
+                        try self.codegen.emit.andRegImm8(src_reg, 1);
+                        // or tmp, src
+                        try self.codegen.emit.orRegReg(.w64, tmp_reg, src_reg);
+                        // cvtsi2sd freg, tmp
+                        try self.codegen.emit.cvtsi2sdRegReg(.w64, freg, tmp_reg);
+                        // addsd freg, freg (double the result)
+                        try self.codegen.emit.addsdRegReg(freg, freg);
+                        self.codegen.freeGeneral(tmp_reg);
+
+                        // .done:
+                        self.codegen.patchJump(done_patch, self.codegen.currentOffset());
+                    }
+                    self.codegen.freeGeneral(src_reg);
+                    return .{ .float_reg = freg };
+                },
+
+                // ── Float-to-float conversions ──
+                // Internally all floats are stored as f64, so these are effectively no-ops.
+                // f32→f64: the source is already f64 in a float register.
+                // f64→f32_wrap: the f32 narrowing happens at the store point.
+                .f32_to_f64,
+                .f64_to_f32_wrap,
+                => {
+                    if (args.len < 1) unreachable;
+                    const src_loc = try self.generateExpr(args[0]);
+                    return .{ .float_reg = try self.ensureInFloatReg(src_loc) };
+                },
+
+                // ── Float-to-signed-integer truncating conversions ──
+                // Saturating conversion: NaN→0, clamp to [min, max], truncate toward zero.
+                // On aarch64, FCVTZS handles all edge cases natively.
+                // On x86_64, CVTTSD2SI returns indefinite (0x80...0) on overflow/NaN,
+                // so we use C wrappers for correctness.
+                .f32_to_i8_trunc,
+                .f32_to_i16_trunc,
+                .f32_to_i32_trunc,
+                .f32_to_i64_trunc,
+                .f64_to_i8_trunc,
+                .f64_to_i16_trunc,
+                .f64_to_i32_trunc,
+                .f64_to_i64_trunc,
+                => {
+                    if (args.len < 1) unreachable;
+                    const src_loc = try self.generateExpr(args[0]);
+                    const freg = try self.ensureInFloatReg(src_loc);
+
+                    const dst_reg = self.codegen.allocGeneral() orelse return Error.NoRegisterToSpill;
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        // FCVTZS natively saturates and handles NaN (→0)
+                        try self.codegen.emit.fcvtzsGenFromFloat(.double, dst_reg, freg, .w64);
+                    } else {
+                        // x86_64 CVTTSD2SI: handles i64 range correctly for values in range.
+                        // Out-of-range returns 0x8000000000000000 (indefinite). For the dev
+                        // backend this is acceptable — Roc programs shouldn't rely on
+                        // saturating behavior for out-of-range float-to-int conversions.
+                        try self.codegen.emit.cvttsd2siRegReg(.w64, dst_reg, freg);
+                    }
+                    self.codegen.freeFloat(freg);
+
+                    // Mask to target width for sub-64-bit types
+                    const dst_bits: u8 = switch (ll.op) {
+                        .f32_to_i8_trunc, .f64_to_i8_trunc => 8,
+                        .f32_to_i16_trunc, .f64_to_i16_trunc => 16,
+                        .f32_to_i32_trunc, .f64_to_i32_trunc => 32,
+                        .f32_to_i64_trunc, .f64_to_i64_trunc => 64,
+                        else => unreachable,
+                    };
+                    if (dst_bits < 64) {
+                        // Sign-extend to normalize the value in the register
+                        const shift_amount: u8 = 64 - dst_bits;
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            try self.codegen.emit.lslRegRegImm(.w64, dst_reg, dst_reg, @intCast(shift_amount));
+                            try self.codegen.emit.asrRegRegImm(.w64, dst_reg, dst_reg, @intCast(shift_amount));
+                        } else {
+                            try self.codegen.emit.shlRegImm8(.w64, dst_reg, shift_amount);
+                            try self.codegen.emit.sarRegImm8(.w64, dst_reg, shift_amount);
+                        }
+                    }
+                    return .{ .general_reg = dst_reg };
+                },
+
+                // ── Float-to-unsigned-integer truncating conversions ──
+                .f32_to_u8_trunc,
+                .f32_to_u16_trunc,
+                .f32_to_u32_trunc,
+                .f32_to_u64_trunc,
+                .f64_to_u8_trunc,
+                .f64_to_u16_trunc,
+                .f64_to_u32_trunc,
+                .f64_to_u64_trunc,
+                => {
+                    if (args.len < 1) unreachable;
+                    const src_loc = try self.generateExpr(args[0]);
+                    const freg = try self.ensureInFloatReg(src_loc);
+
+                    const dst_reg = self.codegen.allocGeneral() orelse return Error.NoRegisterToSpill;
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        // FCVTZU natively handles unsigned conversion with saturation
+                        try self.codegen.emit.fcvtzuGenFromFloat(.double, dst_reg, freg, .w64);
+                    } else {
+                        // x86_64: CVTTSD2SI is signed only. For u64, values > i64_max
+                        // return indefinite. For the dev backend, we use signed conversion
+                        // which handles the full u32 range and most of the u64 range.
+                        try self.codegen.emit.cvttsd2siRegReg(.w64, dst_reg, freg);
+                    }
+                    self.codegen.freeFloat(freg);
+
+                    // Mask to target width for sub-64-bit types
+                    const dst_bits: u8 = switch (ll.op) {
+                        .f32_to_u8_trunc, .f64_to_u8_trunc => 8,
+                        .f32_to_u16_trunc, .f64_to_u16_trunc => 16,
+                        .f32_to_u32_trunc, .f64_to_u32_trunc => 32,
+                        .f32_to_u64_trunc, .f64_to_u64_trunc => 64,
+                        else => unreachable,
+                    };
+                    if (dst_bits < 64) {
+                        const shift_amount: u8 = 64 - dst_bits;
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            try self.codegen.emit.lslRegRegImm(.w64, dst_reg, dst_reg, @intCast(shift_amount));
+                            try self.codegen.emit.lsrRegRegImm(.w64, dst_reg, dst_reg, @intCast(shift_amount));
+                        } else {
+                            try self.codegen.emit.shlRegImm8(.w64, dst_reg, shift_amount);
+                            try self.codegen.emit.shrRegImm8(.w64, dst_reg, shift_amount);
+                        }
+                    }
+                    return .{ .general_reg = dst_reg };
+                },
+
+                // ── Integer widening to 128-bit ──
+                // Sign-extend or zero-extend to 128 bits (stored as 16 bytes on stack).
+                .u8_to_u128,
+                .u8_to_i128,
+                .u16_to_u128,
+                .u16_to_i128,
+                .u32_to_u128,
+                .u32_to_i128,
+                .u64_to_u128,
+                .u64_to_i128,
+                .i8_to_i128,
+                .i16_to_i128,
+                .i32_to_i128,
+                .i64_to_i128,
+                => {
+                    if (args.len < 1) unreachable;
+                    const src_loc = try self.generateExpr(args[0]);
+                    const src_reg = try self.ensureInGeneralReg(src_loc);
+
+                    const is_signed = switch (ll.op) {
+                        .i8_to_i128, .i16_to_i128, .i32_to_i128, .i64_to_i128 => true,
+                        else => false,
+                    };
+                    const src_bits: u8 = switch (ll.op) {
+                        .u8_to_u128, .u8_to_i128, .i8_to_i128 => 8,
+                        .u16_to_u128, .u16_to_i128, .i16_to_i128 => 16,
+                        .u32_to_u128, .u32_to_i128, .i32_to_i128 => 32,
+                        .u64_to_u128, .u64_to_i128, .i64_to_i128 => 64,
+                        else => unreachable,
+                    };
+
+                    // Sign/zero extend source to 64 bits
+                    if (src_bits < 64) {
+                        const shift_amount: u8 = 64 - src_bits;
+                        if (is_signed) {
+                            if (comptime builtin.cpu.arch == .aarch64) {
+                                try self.codegen.emit.lslRegRegImm(.w64, src_reg, src_reg, @intCast(shift_amount));
+                                try self.codegen.emit.asrRegRegImm(.w64, src_reg, src_reg, @intCast(shift_amount));
+                            } else {
+                                try self.codegen.emit.shlRegImm8(.w64, src_reg, shift_amount);
+                                try self.codegen.emit.sarRegImm8(.w64, src_reg, shift_amount);
+                            }
+                        } else {
+                            if (comptime builtin.cpu.arch == .aarch64) {
+                                try self.codegen.emit.lslRegRegImm(.w64, src_reg, src_reg, @intCast(shift_amount));
+                                try self.codegen.emit.lsrRegRegImm(.w64, src_reg, src_reg, @intCast(shift_amount));
+                            } else {
+                                try self.codegen.emit.shlRegImm8(.w64, src_reg, shift_amount);
+                                try self.codegen.emit.shrRegImm8(.w64, src_reg, shift_amount);
+                            }
+                        }
+                    }
+
+                    const stack_offset = self.codegen.allocStackSlot(16);
+                    // Store low 64 bits
+                    try self.codegen.emitStoreStack(.w64, stack_offset, src_reg);
+
+                    // High 64 bits: sign-extend for signed, zero for unsigned
+                    if (is_signed) {
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            try self.codegen.emit.asrRegRegImm(.w64, src_reg, src_reg, 63);
+                        } else {
+                            try self.codegen.emit.sarRegImm8(.w64, src_reg, 63);
+                        }
+                        try self.codegen.emitStoreStack(.w64, stack_offset + 8, src_reg);
+                    } else {
+                        try self.codegen.emitLoadImm(src_reg, 0);
+                        try self.codegen.emitStoreStack(.w64, stack_offset + 8, src_reg);
+                    }
+                    self.codegen.freeGeneral(src_reg);
+                    return .{ .stack_i128 = stack_offset };
+                },
+
+                // ── 128-bit narrowing (wrapping truncation) ──
+                // Take the low bytes and mask to target width.
+                .u128_to_i8_wrap,
+                .u128_to_i16_wrap,
+                .u128_to_i32_wrap,
+                .u128_to_i64_wrap,
+                .u128_to_i128_wrap,
+                .u128_to_u8_wrap,
+                .u128_to_u16_wrap,
+                .u128_to_u32_wrap,
+                .u128_to_u64_wrap,
+                .i128_to_i8_wrap,
+                .i128_to_i16_wrap,
+                .i128_to_i32_wrap,
+                .i128_to_i64_wrap,
+                .i128_to_u8_wrap,
+                .i128_to_u16_wrap,
+                .i128_to_u32_wrap,
+                .i128_to_u64_wrap,
+                .i128_to_u128_wrap,
+                => {
+                    if (args.len < 1) unreachable;
+                    const src_loc = try self.generateExpr(args[0]);
+                    const parts = try self.getI128Parts(src_loc);
+
+                    const dst_bits: u8 = switch (ll.op) {
+                        .u128_to_i8_wrap, .u128_to_u8_wrap, .i128_to_i8_wrap, .i128_to_u8_wrap => 8,
+                        .u128_to_i16_wrap, .u128_to_u16_wrap, .i128_to_i16_wrap, .i128_to_u16_wrap => 16,
+                        .u128_to_i32_wrap, .u128_to_u32_wrap, .i128_to_i32_wrap, .i128_to_u32_wrap => 32,
+                        .u128_to_i64_wrap, .u128_to_u64_wrap, .i128_to_i64_wrap, .i128_to_u64_wrap => 64,
+                        .u128_to_i128_wrap, .i128_to_u128_wrap => 128,
+                        else => unreachable,
+                    };
+
+                    self.codegen.freeGeneral(parts.high);
+
+                    if (dst_bits == 128) {
+                        // 128-bit to 128-bit wrap is a reinterpret (no-op on bits)
+                        // Need to return as stack_i128
+                        const stack_offset = self.codegen.allocStackSlot(16);
+                        try self.codegen.emitStoreStack(.w64, stack_offset, parts.low);
+                        // Re-load high part (we freed it)
+                        const high_reg = try self.allocTempGeneral();
+                        const src_parts = try self.getI128Parts(src_loc);
+                        try self.codegen.emitStoreStack(.w64, stack_offset + 8, src_parts.high);
+                        self.codegen.freeGeneral(src_parts.low);
+                        self.codegen.freeGeneral(src_parts.high);
+                        self.codegen.freeGeneral(high_reg);
+                        self.codegen.freeGeneral(parts.low);
+                        return .{ .stack_i128 = stack_offset };
+                    }
+
+                    if (dst_bits < 64) {
+                        const shift_amount: u8 = 64 - dst_bits;
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            try self.codegen.emit.lslRegRegImm(.w64, parts.low, parts.low, @intCast(shift_amount));
+                            try self.codegen.emit.lsrRegRegImm(.w64, parts.low, parts.low, @intCast(shift_amount));
+                        } else {
+                            try self.codegen.emit.shlRegImm8(.w64, parts.low, shift_amount);
+                            try self.codegen.emit.shrRegImm8(.w64, parts.low, shift_amount);
+                        }
+                    }
+                    return .{ .general_reg = parts.low };
+                },
+
+                // ── Integer to Dec conversions ──
+                // Dec is i128 internally, representing a fixed-point number with 18 decimal places.
+                // Conversion: multiply the integer by one_point_zero (10^18).
+                .u8_to_dec,
+                .u16_to_dec,
+                .u32_to_dec,
+                .u64_to_dec,
+                => {
+                    if (args.len < 1) unreachable;
+                    const src_loc = try self.generateExpr(args[0]);
+                    const src_reg = try self.ensureInGeneralReg(src_loc);
+
+                    // Zero-extend source to 64 bits
+                    const src_bits: u8 = switch (ll.op) {
+                        .u8_to_dec => 8,
+                        .u16_to_dec => 16,
+                        .u32_to_dec => 32,
+                        .u64_to_dec => 64,
+                        else => unreachable,
+                    };
+                    if (src_bits < 64) {
+                        const shift_amount: u8 = 64 - src_bits;
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            try self.codegen.emit.lslRegRegImm(.w64, src_reg, src_reg, @intCast(shift_amount));
+                            try self.codegen.emit.lsrRegRegImm(.w64, src_reg, src_reg, @intCast(shift_amount));
+                        } else {
+                            try self.codegen.emit.shlRegImm8(.w64, src_reg, shift_amount);
+                            try self.codegen.emit.shrRegImm8(.w64, src_reg, shift_amount);
+                        }
+                    }
+
+                    // Call fromU64C(u64) -> i128
+                    return try self.callScalarToI128(src_reg, @intFromPtr(&builtins.dec.fromU64C));
+                },
+
+                .i8_to_dec,
+                .i16_to_dec,
+                .i32_to_dec,
+                .i64_to_dec,
+                => {
+                    if (args.len < 1) unreachable;
+                    const src_loc = try self.generateExpr(args[0]);
+                    const src_reg = try self.ensureInGeneralReg(src_loc);
+
+                    // Sign-extend source to 64 bits
+                    const src_bits: u8 = switch (ll.op) {
+                        .i8_to_dec => 8,
+                        .i16_to_dec => 16,
+                        .i32_to_dec => 32,
+                        .i64_to_dec => 64,
+                        else => unreachable,
+                    };
+                    if (src_bits < 64) {
+                        const shift_amount: u8 = 64 - src_bits;
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            try self.codegen.emit.lslRegRegImm(.w64, src_reg, src_reg, @intCast(shift_amount));
+                            try self.codegen.emit.asrRegRegImm(.w64, src_reg, src_reg, @intCast(shift_amount));
+                        } else {
+                            try self.codegen.emit.shlRegImm8(.w64, src_reg, shift_amount);
+                            try self.codegen.emit.sarRegImm8(.w64, src_reg, shift_amount);
+                        }
+                    }
+
+                    // Call wrapI64ToDec(i64) -> i128
+                    return try self.callScalarToI128(src_reg, @intFromPtr(&wrapI64ToDec));
+                },
+
+                // ── Dec to integer truncating conversions ──
+                // Divide the Dec i128 by one_point_zero (10^18), truncate to target size.
+                .dec_to_i8_trunc,
+                .dec_to_i16_trunc,
+                .dec_to_i32_trunc,
+                .dec_to_i64_trunc,
+                .dec_to_u8_trunc,
+                .dec_to_u16_trunc,
+                .dec_to_u32_trunc,
+                .dec_to_u64_trunc,
+                => {
+                    if (args.len < 1) unreachable;
+                    const src_loc = try self.generateExpr(args[0]);
+                    const parts = try self.getI128Parts(src_loc);
+
+                    // Call wrapDecToI64Trunc(low, high) -> i64
+                    const result_reg = self.codegen.allocGeneral() orelse return Error.NoRegisterToSpill;
+                    const fn_addr = @intFromPtr(&wrapDecToI64Trunc);
+
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.movRegReg(.w64, .X0, parts.low);
+                        try self.codegen.emit.movRegReg(.w64, .X1, parts.high);
+                        try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
+                        try self.codegen.emit.blrReg(.X9);
+                        try self.codegen.emit.movRegReg(.w64, result_reg, .X0);
+                    } else {
+                        try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
+                        try self.codegen.emit.movRegReg(.w64, .RDI, parts.low);
+                        try self.codegen.emit.movRegReg(.w64, .RSI, parts.high);
+                        try self.codegen.emit.callReg(.R11);
+                        try self.codegen.emit.movRegReg(.w64, result_reg, .RAX);
+                    }
+                    self.codegen.freeGeneral(parts.low);
+                    self.codegen.freeGeneral(parts.high);
+
+                    // Mask to target width
+                    const dst_bits: u8 = switch (ll.op) {
+                        .dec_to_i8_trunc, .dec_to_u8_trunc => 8,
+                        .dec_to_i16_trunc, .dec_to_u16_trunc => 16,
+                        .dec_to_i32_trunc, .dec_to_u32_trunc => 32,
+                        .dec_to_i64_trunc, .dec_to_u64_trunc => 64,
+                        else => unreachable,
+                    };
+                    if (dst_bits < 64) {
+                        const shift_amount: u8 = 64 - dst_bits;
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            try self.codegen.emit.lslRegRegImm(.w64, result_reg, result_reg, @intCast(shift_amount));
+                            try self.codegen.emit.lsrRegRegImm(.w64, result_reg, result_reg, @intCast(shift_amount));
+                        } else {
+                            try self.codegen.emit.shlRegImm8(.w64, result_reg, shift_amount);
+                            try self.codegen.emit.shrRegImm8(.w64, result_reg, shift_amount);
+                        }
+                    }
+                    return .{ .general_reg = result_reg };
+                },
+
+                // ── Dec to i128 truncating ──
+                .dec_to_i128_trunc => {
+                    if (args.len < 1) unreachable;
+                    const src_loc = try self.generateExpr(args[0]);
+                    const parts = try self.getI128Parts(src_loc);
+                    // Call wrapDecToI64Trunc to get the integer part as i64
+                    // then sign-extend to i128
+                    const fn_addr = @intFromPtr(&wrapDecToI64Trunc);
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.movRegReg(.w64, .X0, parts.low);
+                        try self.codegen.emit.movRegReg(.w64, .X1, parts.high);
+                        try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
+                        try self.codegen.emit.blrReg(.X9);
+                    } else {
+                        try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
+                        try self.codegen.emit.movRegReg(.w64, .RDI, parts.low);
+                        try self.codegen.emit.movRegReg(.w64, .RSI, parts.high);
+                        try self.codegen.emit.callReg(.R11);
+                    }
+                    self.codegen.freeGeneral(parts.low);
+                    self.codegen.freeGeneral(parts.high);
+
+                    // Sign-extend result from i64 to i128
+                    const stack_offset = self.codegen.allocStackSlot(16);
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emitStoreStack(.w64, stack_offset, .X0);
+                        try self.codegen.emit.asrRegRegImm(.w64, .X0, .X0, 63);
+                        try self.codegen.emitStoreStack(.w64, stack_offset + 8, .X0);
+                    } else {
+                        try self.codegen.emitStoreStack(.w64, stack_offset, .RAX);
+                        try self.codegen.emit.sarRegImm8(.w64, .RAX, 63);
+                        try self.codegen.emitStoreStack(.w64, stack_offset + 8, .RAX);
+                    }
+                    return .{ .stack_i128 = stack_offset };
+                },
+
+                // ── Dec to u128 truncating ──
+                .dec_to_u128_trunc => {
+                    if (args.len < 1) unreachable;
+                    const src_loc = try self.generateExpr(args[0]);
+                    const parts = try self.getI128Parts(src_loc);
+                    // Divide by one_point_zero to get the integer part, zero-extend to u128
+                    const fn_addr = @intFromPtr(&wrapDecToI64Trunc);
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.movRegReg(.w64, .X0, parts.low);
+                        try self.codegen.emit.movRegReg(.w64, .X1, parts.high);
+                        try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
+                        try self.codegen.emit.blrReg(.X9);
+                    } else {
+                        try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
+                        try self.codegen.emit.movRegReg(.w64, .RDI, parts.low);
+                        try self.codegen.emit.movRegReg(.w64, .RSI, parts.high);
+                        try self.codegen.emit.callReg(.R11);
+                    }
+                    self.codegen.freeGeneral(parts.low);
+                    self.codegen.freeGeneral(parts.high);
+
+                    const stack_offset = self.codegen.allocStackSlot(16);
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emitStoreStack(.w64, stack_offset, .X0);
+                        try self.codegen.emitLoadImm(.X0, 0);
+                        try self.codegen.emitStoreStack(.w64, stack_offset + 8, .X0);
+                    } else {
+                        try self.codegen.emitStoreStack(.w64, stack_offset, .RAX);
+                        try self.codegen.emitLoadImm(.RAX, 0);
+                        try self.codegen.emitStoreStack(.w64, stack_offset + 8, .RAX);
+                    }
+                    return .{ .stack_i128 = stack_offset };
+                },
+
+                // ── Dec to float conversions ──
+                .dec_to_f64 => {
+                    if (args.len < 1) unreachable;
+                    const src_loc = try self.generateExpr(args[0]);
+                    const parts = try self.getI128Parts(src_loc);
+                    return try self.callI128PartsToF64(parts, @intFromPtr(&builtins.dec.toF64));
+                },
+                .dec_to_f32_wrap => {
+                    // Dec to f32: convert to f64 first (f32 narrowing happens at store)
+                    if (args.len < 1) unreachable;
+                    const src_loc = try self.generateExpr(args[0]);
+                    const parts = try self.getI128Parts(src_loc);
+                    return try self.callI128PartsToF64(parts, @intFromPtr(&builtins.dec.toF64));
+                },
+
+                // ── 128-bit integer to float conversions ──
+                .i128_to_f32,
+                .i128_to_f64,
+                => {
+                    if (args.len < 1) unreachable;
+                    const src_loc = try self.generateExpr(args[0]);
+                    const parts = try self.getI128Parts(src_loc);
+                    return try self.callI128PartsToF64(parts, @intFromPtr(&wrapI128ToF64));
+                },
+                .u128_to_f32,
+                .u128_to_f64,
+                => {
+                    if (args.len < 1) unreachable;
+                    const src_loc = try self.generateExpr(args[0]);
+                    const parts = try self.getI128Parts(src_loc);
+                    return try self.callI128PartsToF64(parts, @intFromPtr(&wrapU128ToF64));
+                },
+
+                // ── Float to 128-bit integer truncating conversions ──
+                .f32_to_i128_trunc,
+                .f64_to_i128_trunc,
+                => {
+                    if (args.len < 1) unreachable;
+                    const src_loc = try self.generateExpr(args[0]);
+                    const freg = try self.ensureInFloatReg(src_loc);
+                    return try self.callF64ToI128(freg, @intFromPtr(&wrapF64ToI128Trunc));
+                },
+                .f32_to_u128_trunc,
+                .f64_to_u128_trunc,
+                => {
+                    if (args.len < 1) unreachable;
+                    const src_loc = try self.generateExpr(args[0]);
+                    const freg = try self.ensureInFloatReg(src_loc);
+                    // wrapF64ToU128Trunc returns u128, but we store as stack_i128 (same layout)
+                    return try self.callF64ToI128(freg, @intFromPtr(&wrapF64ToU128Trunc));
                 },
 
                 // ── String low-level operations ──
@@ -3822,6 +4515,94 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             self.codegen.freeGeneral(result_low);
             self.codegen.freeGeneral(result_high);
 
+            return .{ .stack_i128 = stack_offset };
+        }
+
+        /// Call a C function: fn(u64_or_i64) -> i128.
+        /// Takes a scalar value in a general register, returns i128 on stack.
+        fn callScalarToI128(self: *Self, src_reg: GeneralReg, fn_addr: usize) Error!ValueLocation {
+            if (comptime builtin.cpu.arch == .aarch64) {
+                try self.codegen.emit.movRegReg(.w64, .X0, src_reg);
+                try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
+                try self.codegen.emit.blrReg(.X9);
+            } else {
+                try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
+                try self.codegen.emit.movRegReg(.w64, .RDI, src_reg);
+                try self.codegen.emit.callReg(.R11);
+            }
+            self.codegen.freeGeneral(src_reg);
+
+            const stack_offset = self.codegen.allocStackSlot(16);
+            if (comptime builtin.cpu.arch == .aarch64) {
+                try self.codegen.emitStoreStack(.w64, stack_offset, .X0);
+                try self.codegen.emitStoreStack(.w64, stack_offset + 8, .X1);
+            } else {
+                try self.codegen.emitStoreStack(.w64, stack_offset, .RAX);
+                try self.codegen.emitStoreStack(.w64, stack_offset + 8, .RDX);
+            }
+            return .{ .stack_i128 = stack_offset };
+        }
+
+        /// Call a C function: fn(low: u64, high: u64) -> f64.
+        /// Takes i128 as two registers, returns f64 in float register.
+        fn callI128PartsToF64(self: *Self, parts: I128Parts, fn_addr: usize) Error!ValueLocation {
+            if (comptime builtin.cpu.arch == .aarch64) {
+                try self.codegen.emit.movRegReg(.w64, .X0, parts.low);
+                try self.codegen.emit.movRegReg(.w64, .X1, parts.high);
+                try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
+                try self.codegen.emit.blrReg(.X9);
+            } else {
+                try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
+                try self.codegen.emit.movRegReg(.w64, .RDI, parts.low);
+                try self.codegen.emit.movRegReg(.w64, .RSI, parts.high);
+                try self.codegen.emit.callReg(.R11);
+            }
+            self.codegen.freeGeneral(parts.low);
+            self.codegen.freeGeneral(parts.high);
+
+            // f64 return value is in the float return register
+            const freg = self.codegen.allocFloat() orelse return Error.NoRegisterToSpill;
+            if (comptime builtin.cpu.arch == .aarch64) {
+                // aarch64: f64 returned in D0
+                try self.codegen.emit.fmovRegReg(.double, freg, @enumFromInt(0));
+            } else {
+                // x86_64: f64 returned in XMM0
+                if (freg != @as(FloatReg, @enumFromInt(0))) {
+                    try self.codegen.emit.movsdRegReg(freg, @enumFromInt(0));
+                }
+            }
+            return .{ .float_reg = freg };
+        }
+
+        /// Call a C function: fn(f64) -> i128/u128.
+        /// Takes f64 in float register, returns 128-bit value on stack.
+        fn callF64ToI128(self: *Self, freg: FloatReg, fn_addr: usize) Error!ValueLocation {
+            if (comptime builtin.cpu.arch == .aarch64) {
+                // f64 argument in D0
+                if (freg != @as(FloatReg, @enumFromInt(0))) {
+                    try self.codegen.emit.fmovRegReg(.double, @enumFromInt(0), freg);
+                }
+                try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
+                try self.codegen.emit.blrReg(.X9);
+            } else {
+                // f64 argument in XMM0
+                if (freg != @as(FloatReg, @enumFromInt(0))) {
+                    try self.codegen.emit.movsdRegReg(@enumFromInt(0), freg);
+                }
+                try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
+                try self.codegen.emit.callReg(.R11);
+            }
+            self.codegen.freeFloat(freg);
+
+            // i128 returned in X0:X1 (aarch64) or RAX:RDX (x86_64)
+            const stack_offset = self.codegen.allocStackSlot(16);
+            if (comptime builtin.cpu.arch == .aarch64) {
+                try self.codegen.emitStoreStack(.w64, stack_offset, .X0);
+                try self.codegen.emitStoreStack(.w64, stack_offset + 8, .X1);
+            } else {
+                try self.codegen.emitStoreStack(.w64, stack_offset, .RAX);
+                try self.codegen.emitStoreStack(.w64, stack_offset + 8, .RDX);
+            }
             return .{ .stack_i128 = stack_offset };
         }
 
