@@ -398,6 +398,229 @@ fn wrapListDropAt(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: 
     out.* = listDropAt(list, alignment, element_width, false, drop_index, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), roc_ops);
 }
 
+/// Try integer conversion: checks if a signed 64-bit value is in [min, max] range.
+/// Writes to a tag union buffer: payload at offset 0, discriminant (0=Err, 1=Ok) at disc_offset.
+fn wrapIntTrySigned(out: [*]u8, val: i64, min_val: i64, max_val: i64, payload_size: u32, disc_offset: u32) callconv(.c) void {
+    if (val >= min_val and val <= max_val) {
+        // Ok: write payload then discriminant
+        const payload_bytes: [8]u8 = @bitCast(val);
+        if (payload_size <= 8) {
+            @memcpy(out[0..payload_size], payload_bytes[0..payload_size]);
+        } else {
+            // For 128-bit targets: write 8 bytes then zero-extend.
+            // When we get here for signed-to-u128, val >= 0, so zero-extension is correct.
+            @memcpy(out[0..8], &payload_bytes);
+            @memset(out[8..payload_size], 0);
+        }
+        out[disc_offset] = 1; // Ok
+    } else {
+        out[disc_offset] = 0; // Err
+    }
+}
+
+/// Try integer conversion for unsigned source: checks if a u64 value is in [0, max] range.
+fn wrapIntTryUnsigned(out: [*]u8, val: u64, max_val: u64, payload_size: u32, disc_offset: u32) callconv(.c) void {
+    if (val <= max_val) {
+        const payload_bytes: [8]u8 = @bitCast(@as(i64, @bitCast(val)));
+        @memcpy(out[0..payload_size], payload_bytes[0..payload_size]);
+        out[disc_offset] = 1; // Ok
+    } else {
+        out[disc_offset] = 0; // Err
+    }
+}
+
+/// Try conversion for i128 source: checks if an i128 value fits in the target integer type.
+fn wrapI128TryConvert(out: [*]u8, val_low: u64, val_high: u64, target_bits: u32, target_is_signed: u32, payload_size: u32, disc_offset: u32) callconv(.c) void {
+    const val: i128 = @bitCast(@as(u128, val_high) << 64 | @as(u128, val_low));
+    if (i128InTargetRange(val, target_bits, target_is_signed != 0)) {
+        const payload_bytes: [16]u8 = @bitCast(@as(u128, @bitCast(val)));
+        @memcpy(out[0..payload_size], payload_bytes[0..payload_size]);
+        out[disc_offset] = 1; // Ok
+    } else {
+        out[disc_offset] = 0; // Err
+    }
+}
+
+/// Try conversion for u128 source: checks if a u128 value fits in the target integer type.
+fn wrapU128TryConvert(out: [*]u8, val_low: u64, val_high: u64, target_bits: u32, target_is_signed: u32, payload_size: u32, disc_offset: u32) callconv(.c) void {
+    const val: u128 = @as(u128, val_high) << 64 | @as(u128, val_low);
+    if (u128InTargetRange(val, target_bits, target_is_signed != 0)) {
+        const payload_bytes: [16]u8 = @bitCast(val);
+        @memcpy(out[0..payload_size], payload_bytes[0..payload_size]);
+        out[disc_offset] = 1; // Ok
+    } else {
+        out[disc_offset] = 0; // Err
+    }
+}
+
+fn i128InTargetRange(val: i128, target_bits: u32, target_signed: bool) bool {
+    if (target_bits >= 128) {
+        return if (target_signed) true else val >= 0;
+    }
+    if (target_signed) {
+        const shift: u7 = @intCast(target_bits - 1);
+        const min_val: i128 = -(@as(i128, 1) << shift);
+        const max_val: i128 = (@as(i128, 1) << shift) - 1;
+        return val >= min_val and val <= max_val;
+    } else {
+        if (val < 0) return false;
+        const shift: u7 = @intCast(target_bits);
+        const max_val: i128 = (@as(i128, 1) << shift) - 1;
+        return val <= max_val;
+    }
+}
+
+fn u128InTargetRange(val: u128, target_bits: u32, target_signed: bool) bool {
+    if (target_bits >= 128) {
+        return if (target_signed) val <= @as(u128, @bitCast(@as(i128, std.math.maxInt(i128)))) else true;
+    }
+    if (target_signed) {
+        const shift: u7 = @intCast(target_bits - 1);
+        const max_val: u128 = (@as(u128, 1) << shift) - 1;
+        return val <= max_val;
+    } else {
+        const shift: u7 = @intCast(target_bits);
+        const max_val: u128 = (@as(u128, 1) << shift) - 1;
+        return val <= max_val;
+    }
+}
+
+/// Float-to-integer try_unsafe: returns {val, is_int, in_range} record.
+/// val is at offset 0 (val_size bytes), is_int at val_size, in_range at val_size+1.
+fn wrapF64ToIntTryUnsafe(out: [*]u8, val: f64, target_bits: u32, target_is_signed: u32, val_size: u32) callconv(.c) void {
+    const is_int: bool = !std.math.isNan(val) and !std.math.isInf(val) and @trunc(val) == val;
+
+    const in_range: bool = blk: {
+        if (target_is_signed != 0) {
+            if (target_bits >= 128) {
+                const min_f: f64 = @floatFromInt(@as(i128, std.math.minInt(i128)));
+                const max_f: f64 = @floatFromInt(@as(i128, std.math.maxInt(i128)));
+                break :blk val >= min_f and val <= max_f;
+            }
+            const shift: u6 = @intCast(target_bits - 1);
+            const min_i: i64 = -(@as(i64, 1) << shift);
+            const max_i: i64 = (@as(i64, 1) << shift) - 1;
+            break :blk val >= @as(f64, @floatFromInt(min_i)) and val <= @as(f64, @floatFromInt(max_i));
+        } else {
+            if (val < 0) break :blk false;
+            if (target_bits >= 128) {
+                const max_f: f64 = @floatFromInt(@as(u128, std.math.maxInt(u128)));
+                break :blk val <= max_f;
+            }
+            if (target_bits >= 64) {
+                const max_f: f64 = @floatFromInt(@as(u64, std.math.maxInt(u64)));
+                break :blk val <= max_f;
+            }
+            const shift: u6 = @intCast(target_bits);
+            const max_u: u64 = (@as(u64, 1) << shift) - 1;
+            break :blk val <= @as(f64, @floatFromInt(max_u));
+        }
+    };
+
+    if (is_int and in_range) {
+        if (target_is_signed != 0) {
+            if (val_size <= 8) {
+                const v: i64 = @intFromFloat(val);
+                const v_bytes: [8]u8 = @bitCast(v);
+                @memcpy(out[0..val_size], v_bytes[0..val_size]);
+            } else {
+                const v: i128 = @intFromFloat(val);
+                const v_bytes: [16]u8 = @bitCast(v);
+                @memcpy(out[0..val_size], v_bytes[0..val_size]);
+            }
+        } else {
+            if (val_size <= 8) {
+                const v: u64 = @intFromFloat(val);
+                const v_bytes: [8]u8 = @bitCast(v);
+                @memcpy(out[0..val_size], v_bytes[0..val_size]);
+            } else {
+                const v: u128 = @intFromFloat(val);
+                const v_bytes: [16]u8 = @bitCast(v);
+                @memcpy(out[0..val_size], v_bytes[0..val_size]);
+            }
+        }
+    }
+
+    out[val_size] = @intFromBool(is_int);
+    out[val_size + 1] = @intFromBool(in_range);
+}
+
+/// Float narrowing try_unsafe (f64 -> f32): returns {val: F32, success: Bool} record.
+fn wrapF64ToF32TryUnsafe(out: [*]u8, val: f64) callconv(.c) void {
+    const f32_val: f32 = @floatCast(val);
+    const success: bool = !std.math.isInf(f32_val) and (!std.math.isNan(val) or std.math.isNan(f32_val));
+    const f32_bytes: [4]u8 = @bitCast(f32_val);
+    @memcpy(out[0..4], &f32_bytes);
+    out[4] = @intFromBool(success);
+}
+
+/// Dec-to-integer try_unsafe: returns {val, is_int, in_range} record.
+fn wrapDecToIntTryUnsafe(out: [*]u8, dec_low: u64, dec_high: u64, target_bits: u32, target_is_signed: u32, val_size: u32) callconv(.c) void {
+    const dec_val: i128 = @bitCast(@as(u128, dec_high) << 64 | @as(u128, dec_low));
+    const RocDec = builtins.dec.RocDec;
+    const one = RocDec.one_point_zero_i128;
+
+    const remainder = @rem(dec_val, one);
+    const is_int: bool = remainder == 0;
+    const int_val: i128 = @divTrunc(dec_val, one);
+
+    const in_range: bool = blk: {
+        if (target_is_signed != 0) {
+            break :blk i128InTargetRange(int_val, target_bits, true);
+        } else {
+            if (int_val < 0) break :blk false;
+            break :blk u128InTargetRange(@as(u128, @bitCast(int_val)), target_bits, false);
+        }
+    };
+
+    if (is_int and in_range) {
+        const v_bytes: [16]u8 = @bitCast(@as(u128, @bitCast(int_val)));
+        @memcpy(out[0..val_size], v_bytes[0..val_size]);
+    }
+
+    out[val_size] = @intFromBool(is_int);
+    out[val_size + 1] = @intFromBool(in_range);
+}
+
+/// Dec-to-f32 try_unsafe: returns {val: F32, success: Bool} record.
+fn wrapDecToF32TryUnsafe(out: [*]u8, dec_low: u64, dec_high: u64) callconv(.c) void {
+    const dec_val: i128 = @bitCast(@as(u128, dec_high) << 64 | @as(u128, dec_low));
+    const RocDec = builtins.dec.RocDec;
+    const f64_val: f64 = builtins.dec.toF64(RocDec{ .num = dec_val });
+    const f32_val: f32 = @floatCast(f64_val);
+    const success: bool = !std.math.isInf(f32_val) and (!std.math.isNan(f64_val) or std.math.isNan(f32_val));
+    const f32_bytes: [4]u8 = @bitCast(f32_val);
+    @memcpy(out[0..4], &f32_bytes);
+    out[4] = @intFromBool(success);
+}
+
+/// i128-to-Dec try_unsafe: returns {val: Dec(i128), is_int: Bool} record.
+/// Checks if the integer can be represented as Dec without overflow.
+fn wrapI128ToDecTryUnsafe(out: [*]u8, val_low: u64, val_high: u64) callconv(.c) void {
+    const val: i128 = @bitCast(@as(u128, val_high) << 64 | @as(u128, val_low));
+    const RocDec = builtins.dec.RocDec;
+    const result = RocDec.fromWholeInt(val);
+    const success = result != null;
+    const dec_val: i128 = if (result) |d| d.num else 0;
+    const dec_bytes: [16]u8 = @bitCast(@as(u128, @bitCast(dec_val)));
+    @memcpy(out[0..16], &dec_bytes);
+    out[16] = @intFromBool(success);
+}
+
+/// u128-to-Dec try_unsafe: returns {val: Dec(i128), is_int: Bool} record.
+fn wrapU128ToDecTryUnsafe(out: [*]u8, val_low: u64, val_high: u64) callconv(.c) void {
+    const val: u128 = @as(u128, val_high) << 64 | @as(u128, val_low);
+    const RocDec = builtins.dec.RocDec;
+    // u128 values > maxInt(i128) cannot be represented as Dec (which is i128-based).
+    const fits_i128 = val <= @as(u128, @bitCast(@as(i128, std.math.maxInt(i128))));
+    const result: ?RocDec = if (fits_i128) RocDec.fromWholeInt(@as(i128, @bitCast(val))) else null;
+    const success = result != null;
+    const dec_val: i128 = if (result) |d| d.num else 0;
+    const dec_bytes: [16]u8 = @bitCast(@as(u128, @bitCast(dec_val)));
+    @memcpy(out[0..16], &dec_bytes);
+    out[16] = @intFromBool(success);
+}
+
 /// Convert signed i64 to Dec (i128). Multiplies by one_point_zero (10^18).
 fn wrapI64ToDec(val: i64) callconv(.c) i128 {
     const RocDec = builtins.dec.RocDec;
@@ -2399,20 +2622,28 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 .i16_to_i128,
                 .i32_to_i128,
                 .i64_to_i128,
+                // Signed-to-unsigned 128-bit wrapping: same as sign-extending
+                // to 128 bits and reinterpreting the bits as unsigned.
+                .i8_to_u128_wrap,
+                .i16_to_u128_wrap,
+                .i32_to_u128_wrap,
+                .i64_to_u128_wrap,
                 => {
                     if (args.len < 1) unreachable;
                     const src_loc = try self.generateExpr(args[0]);
                     const src_reg = try self.ensureInGeneralReg(src_loc);
 
                     const is_signed = switch (ll.op) {
-                        .i8_to_i128, .i16_to_i128, .i32_to_i128, .i64_to_i128 => true,
+                        .i8_to_i128, .i16_to_i128, .i32_to_i128, .i64_to_i128,
+                        .i8_to_u128_wrap, .i16_to_u128_wrap, .i32_to_u128_wrap, .i64_to_u128_wrap,
+                        => true,
                         else => false,
                     };
                     const src_bits: u8 = switch (ll.op) {
-                        .u8_to_u128, .u8_to_i128, .i8_to_i128 => 8,
-                        .u16_to_u128, .u16_to_i128, .i16_to_i128 => 16,
-                        .u32_to_u128, .u32_to_i128, .i32_to_i128 => 32,
-                        .u64_to_u128, .u64_to_i128, .i64_to_i128 => 64,
+                        .u8_to_u128, .u8_to_i128, .i8_to_i128, .i8_to_u128_wrap => 8,
+                        .u16_to_u128, .u16_to_i128, .i16_to_i128, .i16_to_u128_wrap => 16,
+                        .u32_to_u128, .u32_to_i128, .i32_to_i128, .i32_to_u128_wrap => 32,
+                        .u64_to_u128, .u64_to_i128, .i64_to_i128, .i64_to_u128_wrap => 64,
                         else => unreachable,
                     };
 
@@ -3116,7 +3347,138 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     return Error.UnsupportedExpression; // Complex: returns a record/tuple
                 },
 
-                else => {
+                // ── Integer-to-integer try conversions ──
+                // Returns a tag union: Ok(To) | Err({}).
+                // Uses C wrappers that check bounds and write the tag union to a buffer.
+                .u8_to_i8_try,
+                .i8_to_u8_try,
+                .i8_to_u16_try,
+                .i8_to_u32_try,
+                .i8_to_u64_try,
+                .i8_to_u128_try,
+                .u16_to_i8_try,
+                .u16_to_i16_try,
+                .u16_to_u8_try,
+                .i16_to_i8_try,
+                .i16_to_u8_try,
+                .i16_to_u16_try,
+                .i16_to_u32_try,
+                .i16_to_u64_try,
+                .i16_to_u128_try,
+                .u32_to_i8_try,
+                .u32_to_i16_try,
+                .u32_to_i32_try,
+                .u32_to_u8_try,
+                .u32_to_u16_try,
+                .i32_to_i8_try,
+                .i32_to_i16_try,
+                .i32_to_u8_try,
+                .i32_to_u16_try,
+                .i32_to_u32_try,
+                .i32_to_u64_try,
+                .i32_to_u128_try,
+                .u64_to_i8_try,
+                .u64_to_i16_try,
+                .u64_to_i32_try,
+                .u64_to_i64_try,
+                .u64_to_u8_try,
+                .u64_to_u16_try,
+                .u64_to_u32_try,
+                .i64_to_i8_try,
+                .i64_to_i16_try,
+                .i64_to_i32_try,
+                .i64_to_u8_try,
+                .i64_to_u16_try,
+                .i64_to_u32_try,
+                .i64_to_u64_try,
+                .i64_to_u128_try,
+                .u128_to_i8_try,
+                .u128_to_i16_try,
+                .u128_to_i32_try,
+                .u128_to_i64_try,
+                .u128_to_i128_try,
+                .u128_to_u8_try,
+                .u128_to_u16_try,
+                .u128_to_u32_try,
+                .u128_to_u64_try,
+                .i128_to_i8_try,
+                .i128_to_i16_try,
+                .i128_to_i32_try,
+                .i128_to_i64_try,
+                .i128_to_u8_try,
+                .i128_to_u16_try,
+                .i128_to_u32_try,
+                .i128_to_u64_try,
+                .i128_to_u128_try,
+                => {
+                    return try self.generateIntTryConversion(ll, args);
+                },
+
+                // ── Float/Dec try_unsafe conversions ──
+                // Returns a record { is_int: Bool, in_range: Bool, val_or_memory_garbage: To }.
+                .f32_to_i8_try_unsafe,
+                .f32_to_i16_try_unsafe,
+                .f32_to_i32_try_unsafe,
+                .f32_to_i64_try_unsafe,
+                .f32_to_i128_try_unsafe,
+                .f32_to_u8_try_unsafe,
+                .f32_to_u16_try_unsafe,
+                .f32_to_u32_try_unsafe,
+                .f32_to_u64_try_unsafe,
+                .f32_to_u128_try_unsafe,
+                .f64_to_i8_try_unsafe,
+                .f64_to_i16_try_unsafe,
+                .f64_to_i32_try_unsafe,
+                .f64_to_i64_try_unsafe,
+                .f64_to_i128_try_unsafe,
+                .f64_to_u8_try_unsafe,
+                .f64_to_u16_try_unsafe,
+                .f64_to_u32_try_unsafe,
+                .f64_to_u64_try_unsafe,
+                .f64_to_u128_try_unsafe,
+                .f64_to_f32_try_unsafe,
+                .dec_to_i8_try_unsafe,
+                .dec_to_i16_try_unsafe,
+                .dec_to_i32_try_unsafe,
+                .dec_to_i64_try_unsafe,
+                .dec_to_i128_try_unsafe,
+                .dec_to_u8_try_unsafe,
+                .dec_to_u16_try_unsafe,
+                .dec_to_u32_try_unsafe,
+                .dec_to_u64_try_unsafe,
+                .dec_to_u128_try_unsafe,
+                .dec_to_f32_try_unsafe,
+                .u128_to_dec_try_unsafe,
+                .i128_to_dec_try_unsafe,
+                => {
+                    return try self.generateFloatDecTryUnsafeConversion(ll, args);
+                },
+
+                // ── Remaining generic numeric operations ──
+                // These are defined in the LowLevel enum but not currently emitted
+                // by the Mono IR lowering phase. Per-type arithmetic operations
+                // (int_add_wrap, dec_add, float_add, etc.) are used instead.
+                .num_add,
+                .num_sub,
+                .num_mul,
+                .num_div,
+                .num_mod,
+                .num_neg,
+                .num_abs,
+                .num_pow,
+                .num_sqrt,
+                .num_log,
+                .num_round,
+                .num_floor,
+                .num_ceiling,
+                .num_to_str,
+                .num_from_str,
+                .num_from_numeral,
+                .box_box,
+                .box_unbox,
+                .compare,
+                .crash,
+                => {
                     std.debug.print("UNIMPLEMENTED low-level op in MonoExprCodeGen: {s}\n", .{@tagName(ll.op)});
                     return Error.UnsupportedExpression;
                 },
@@ -4604,6 +4966,467 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 try self.codegen.emitStoreStack(.w64, stack_offset + 8, .RDX);
             }
             return .{ .stack_i128 = stack_offset };
+        }
+
+        // ── Integer try conversion info ──
+
+        const IntTryInfo = struct {
+            src_bits: u8,
+            src_signed: bool,
+            tgt_bits: u8,
+            tgt_signed: bool,
+        };
+
+        fn intTryConvInfo(op: anytype) IntTryInfo {
+            return switch (op) {
+                .u8_to_i8_try => .{ .src_bits = 8, .src_signed = false, .tgt_bits = 8, .tgt_signed = true },
+                .i8_to_u8_try => .{ .src_bits = 8, .src_signed = true, .tgt_bits = 8, .tgt_signed = false },
+                .i8_to_u16_try => .{ .src_bits = 8, .src_signed = true, .tgt_bits = 16, .tgt_signed = false },
+                .i8_to_u32_try => .{ .src_bits = 8, .src_signed = true, .tgt_bits = 32, .tgt_signed = false },
+                .i8_to_u64_try => .{ .src_bits = 8, .src_signed = true, .tgt_bits = 64, .tgt_signed = false },
+                .i8_to_u128_try => .{ .src_bits = 8, .src_signed = true, .tgt_bits = 128, .tgt_signed = false },
+                .u16_to_i8_try => .{ .src_bits = 16, .src_signed = false, .tgt_bits = 8, .tgt_signed = true },
+                .u16_to_i16_try => .{ .src_bits = 16, .src_signed = false, .tgt_bits = 16, .tgt_signed = true },
+                .u16_to_u8_try => .{ .src_bits = 16, .src_signed = false, .tgt_bits = 8, .tgt_signed = false },
+                .i16_to_i8_try => .{ .src_bits = 16, .src_signed = true, .tgt_bits = 8, .tgt_signed = true },
+                .i16_to_u8_try => .{ .src_bits = 16, .src_signed = true, .tgt_bits = 8, .tgt_signed = false },
+                .i16_to_u16_try => .{ .src_bits = 16, .src_signed = true, .tgt_bits = 16, .tgt_signed = false },
+                .i16_to_u32_try => .{ .src_bits = 16, .src_signed = true, .tgt_bits = 32, .tgt_signed = false },
+                .i16_to_u64_try => .{ .src_bits = 16, .src_signed = true, .tgt_bits = 64, .tgt_signed = false },
+                .i16_to_u128_try => .{ .src_bits = 16, .src_signed = true, .tgt_bits = 128, .tgt_signed = false },
+                .u32_to_i8_try => .{ .src_bits = 32, .src_signed = false, .tgt_bits = 8, .tgt_signed = true },
+                .u32_to_i16_try => .{ .src_bits = 32, .src_signed = false, .tgt_bits = 16, .tgt_signed = true },
+                .u32_to_i32_try => .{ .src_bits = 32, .src_signed = false, .tgt_bits = 32, .tgt_signed = true },
+                .u32_to_u8_try => .{ .src_bits = 32, .src_signed = false, .tgt_bits = 8, .tgt_signed = false },
+                .u32_to_u16_try => .{ .src_bits = 32, .src_signed = false, .tgt_bits = 16, .tgt_signed = false },
+                .i32_to_i8_try => .{ .src_bits = 32, .src_signed = true, .tgt_bits = 8, .tgt_signed = true },
+                .i32_to_i16_try => .{ .src_bits = 32, .src_signed = true, .tgt_bits = 16, .tgt_signed = true },
+                .i32_to_u8_try => .{ .src_bits = 32, .src_signed = true, .tgt_bits = 8, .tgt_signed = false },
+                .i32_to_u16_try => .{ .src_bits = 32, .src_signed = true, .tgt_bits = 16, .tgt_signed = false },
+                .i32_to_u32_try => .{ .src_bits = 32, .src_signed = true, .tgt_bits = 32, .tgt_signed = false },
+                .i32_to_u64_try => .{ .src_bits = 32, .src_signed = true, .tgt_bits = 64, .tgt_signed = false },
+                .i32_to_u128_try => .{ .src_bits = 32, .src_signed = true, .tgt_bits = 128, .tgt_signed = false },
+                .u64_to_i8_try => .{ .src_bits = 64, .src_signed = false, .tgt_bits = 8, .tgt_signed = true },
+                .u64_to_i16_try => .{ .src_bits = 64, .src_signed = false, .tgt_bits = 16, .tgt_signed = true },
+                .u64_to_i32_try => .{ .src_bits = 64, .src_signed = false, .tgt_bits = 32, .tgt_signed = true },
+                .u64_to_i64_try => .{ .src_bits = 64, .src_signed = false, .tgt_bits = 64, .tgt_signed = true },
+                .u64_to_u8_try => .{ .src_bits = 64, .src_signed = false, .tgt_bits = 8, .tgt_signed = false },
+                .u64_to_u16_try => .{ .src_bits = 64, .src_signed = false, .tgt_bits = 16, .tgt_signed = false },
+                .u64_to_u32_try => .{ .src_bits = 64, .src_signed = false, .tgt_bits = 32, .tgt_signed = false },
+                .i64_to_i8_try => .{ .src_bits = 64, .src_signed = true, .tgt_bits = 8, .tgt_signed = true },
+                .i64_to_i16_try => .{ .src_bits = 64, .src_signed = true, .tgt_bits = 16, .tgt_signed = true },
+                .i64_to_i32_try => .{ .src_bits = 64, .src_signed = true, .tgt_bits = 32, .tgt_signed = true },
+                .i64_to_u8_try => .{ .src_bits = 64, .src_signed = true, .tgt_bits = 8, .tgt_signed = false },
+                .i64_to_u16_try => .{ .src_bits = 64, .src_signed = true, .tgt_bits = 16, .tgt_signed = false },
+                .i64_to_u32_try => .{ .src_bits = 64, .src_signed = true, .tgt_bits = 32, .tgt_signed = false },
+                .i64_to_u64_try => .{ .src_bits = 64, .src_signed = true, .tgt_bits = 64, .tgt_signed = false },
+                .i64_to_u128_try => .{ .src_bits = 64, .src_signed = true, .tgt_bits = 128, .tgt_signed = false },
+                .u128_to_i8_try => .{ .src_bits = 128, .src_signed = false, .tgt_bits = 8, .tgt_signed = true },
+                .u128_to_i16_try => .{ .src_bits = 128, .src_signed = false, .tgt_bits = 16, .tgt_signed = true },
+                .u128_to_i32_try => .{ .src_bits = 128, .src_signed = false, .tgt_bits = 32, .tgt_signed = true },
+                .u128_to_i64_try => .{ .src_bits = 128, .src_signed = false, .tgt_bits = 64, .tgt_signed = true },
+                .u128_to_i128_try => .{ .src_bits = 128, .src_signed = false, .tgt_bits = 128, .tgt_signed = true },
+                .u128_to_u8_try => .{ .src_bits = 128, .src_signed = false, .tgt_bits = 8, .tgt_signed = false },
+                .u128_to_u16_try => .{ .src_bits = 128, .src_signed = false, .tgt_bits = 16, .tgt_signed = false },
+                .u128_to_u32_try => .{ .src_bits = 128, .src_signed = false, .tgt_bits = 32, .tgt_signed = false },
+                .u128_to_u64_try => .{ .src_bits = 128, .src_signed = false, .tgt_bits = 64, .tgt_signed = false },
+                .i128_to_i8_try => .{ .src_bits = 128, .src_signed = true, .tgt_bits = 8, .tgt_signed = true },
+                .i128_to_i16_try => .{ .src_bits = 128, .src_signed = true, .tgt_bits = 16, .tgt_signed = true },
+                .i128_to_i32_try => .{ .src_bits = 128, .src_signed = true, .tgt_bits = 32, .tgt_signed = true },
+                .i128_to_i64_try => .{ .src_bits = 128, .src_signed = true, .tgt_bits = 64, .tgt_signed = true },
+                .i128_to_u8_try => .{ .src_bits = 128, .src_signed = true, .tgt_bits = 8, .tgt_signed = false },
+                .i128_to_u16_try => .{ .src_bits = 128, .src_signed = true, .tgt_bits = 16, .tgt_signed = false },
+                .i128_to_u32_try => .{ .src_bits = 128, .src_signed = true, .tgt_bits = 32, .tgt_signed = false },
+                .i128_to_u64_try => .{ .src_bits = 128, .src_signed = true, .tgt_bits = 64, .tgt_signed = false },
+                .i128_to_u128_try => .{ .src_bits = 128, .src_signed = true, .tgt_bits = 128, .tgt_signed = false },
+                else => unreachable,
+            };
+        }
+
+        /// Generate a checked integer conversion returning Ok(value) | Err(OutOfRange).
+        fn generateIntTryConversion(self: *Self, ll: anytype, args: []const MonoExprId) Error!ValueLocation {
+            if (args.len != 1) unreachable;
+            const src_loc = try self.generateExpr(args[0]);
+
+            const ls = self.layout_store orelse unreachable;
+            const ret_layout_val = ls.getLayout(ll.ret_layout);
+            std.debug.assert(ret_layout_val.tag == .tag_union);
+            const tu_idx = ret_layout_val.data.tag_union.idx;
+            const tu_data = ls.getTagUnionData(tu_idx);
+
+            const result_offset = self.codegen.allocStackSlot(tu_data.size);
+            try self.zeroStackArea(result_offset, tu_data.size);
+
+            const disc_offset: u32 = tu_data.discriminant_offset;
+            const payload_size: u32 = disc_offset; // payload is before discriminant
+
+            const info = intTryConvInfo(ll.op);
+
+            if (info.src_bits > 64) {
+                // 128-bit source: load as two registers, call 128-bit C wrapper
+                const parts = try self.getI128Parts(src_loc);
+
+                const fn_addr: usize = if (info.src_signed)
+                    @intFromPtr(&wrapI128TryConvert)
+                else
+                    @intFromPtr(&wrapU128TryConvert);
+
+                const target_bits: u32 = info.tgt_bits;
+                const target_is_signed: u32 = if (info.tgt_signed) 1 else 0;
+
+                // fn(out, val_low, val_high, target_bits, target_is_signed, payload_size, disc_offset) -> void
+                // 7 args: aarch64 fits in X0-X6, x86_64 needs 1 on stack
+                if (comptime builtin.cpu.arch == .aarch64) {
+                    try self.codegen.emit.movRegImm64(.X0, @bitCast(@as(i64, result_offset)));
+                    try self.codegen.emit.addRegRegReg(.w64, .X0, .FP, .X0);
+                    try self.codegen.emit.movRegReg(.w64, .X1, parts.low);
+                    try self.codegen.emit.movRegReg(.w64, .X2, parts.high);
+                    try self.codegen.emitLoadImm(.X3, @intCast(target_bits));
+                    try self.codegen.emitLoadImm(.X4, @intCast(target_is_signed));
+                    try self.codegen.emitLoadImm(.X5, @intCast(payload_size));
+                    try self.codegen.emitLoadImm(.X6, @intCast(disc_offset));
+                    try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
+                    try self.codegen.emit.blrReg(.X9);
+                } else {
+                    // x86_64: 7 args — 6 in regs + 1 on stack
+                    try self.codegen.emitLoadImm(.R11, @intCast(disc_offset));
+                    try self.codegen.emit.pushReg(.R11);
+
+                    try self.codegen.emit.leaRegMem(.RDI, .RBP, result_offset);
+                    try self.codegen.emit.movRegReg(.w64, .RSI, parts.low);
+                    try self.codegen.emit.movRegReg(.w64, .RDX, parts.high);
+                    try self.codegen.emitLoadImm(.RCX, @intCast(target_bits));
+                    try self.codegen.emitLoadImm(.R8, @intCast(target_is_signed));
+                    try self.codegen.emitLoadImm(.R9, @intCast(payload_size));
+
+                    try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
+                    try self.codegen.emit.callReg(.R11);
+                    try self.codegen.emit.addImm(.RSP, 8);
+                }
+
+                self.codegen.freeGeneral(parts.low);
+                self.codegen.freeGeneral(parts.high);
+            } else {
+                // ≤64-bit source: load into register, sign/zero extend, call C wrapper
+                const src_reg = try self.ensureInGeneralReg(src_loc);
+
+                // Sign-extend or zero-extend source to fill 64-bit register
+                if (info.src_bits < 64) {
+                    const shift_amount: u8 = 64 - info.src_bits;
+                    if (info.src_signed) {
+                        // Sign-extend
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            try self.codegen.emit.lslRegRegImm(.w64, src_reg, src_reg, @intCast(shift_amount));
+                            try self.codegen.emit.asrRegRegImm(.w64, src_reg, src_reg, @intCast(shift_amount));
+                        } else {
+                            try self.codegen.emit.shlRegImm8(.w64, src_reg, shift_amount);
+                            try self.codegen.emit.sarRegImm8(.w64, src_reg, shift_amount);
+                        }
+                    } else {
+                        // Zero-extend
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            try self.codegen.emit.lslRegRegImm(.w64, src_reg, src_reg, @intCast(shift_amount));
+                            try self.codegen.emit.lsrRegRegImm(.w64, src_reg, src_reg, @intCast(shift_amount));
+                        } else {
+                            try self.codegen.emit.shlRegImm8(.w64, src_reg, shift_amount);
+                            try self.codegen.emit.shrRegImm8(.w64, src_reg, shift_amount);
+                        }
+                    }
+                }
+
+                if (info.src_signed) {
+                    // Signed source: call wrapIntTrySigned(out, val, min_val, max_val, payload_size, disc_offset)
+                    const min_val: i64 = if (info.tgt_signed) blk: {
+                        if (info.tgt_bits >= 64) break :blk std.math.minInt(i64);
+                        const shift: u6 = @intCast(info.tgt_bits - 1);
+                        break :blk -(@as(i64, 1) << shift);
+                    } else 0;
+
+                    const max_val: i64 = if (info.tgt_signed) blk: {
+                        if (info.tgt_bits >= 64) break :blk std.math.maxInt(i64);
+                        const shift: u6 = @intCast(info.tgt_bits - 1);
+                        break :blk (@as(i64, 1) << shift) - 1;
+                    } else blk: {
+                        // For unsigned targets >= 64 bits, any non-negative i64 fits
+                        if (info.tgt_bits >= 64) break :blk std.math.maxInt(i64);
+                        const shift: u6 = @intCast(info.tgt_bits);
+                        break :blk (@as(i64, 1) << shift) - 1;
+                    };
+
+                    const fn_addr: usize = @intFromPtr(&wrapIntTrySigned);
+                    // 6 args — fits in registers on both architectures
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.movRegImm64(.X0, @bitCast(@as(i64, result_offset)));
+                        try self.codegen.emit.addRegRegReg(.w64, .X0, .FP, .X0);
+                        try self.codegen.emit.movRegReg(.w64, .X1, src_reg);
+                        try self.codegen.emit.movRegImm64(.X2, @bitCast(min_val));
+                        try self.codegen.emit.movRegImm64(.X3, @bitCast(max_val));
+                        try self.codegen.emitLoadImm(.X4, @intCast(payload_size));
+                        try self.codegen.emitLoadImm(.X5, @intCast(disc_offset));
+                        try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
+                        try self.codegen.emit.blrReg(.X9);
+                    } else {
+                        try self.codegen.emit.leaRegMem(.RDI, .RBP, result_offset);
+                        try self.codegen.emit.movRegReg(.w64, .RSI, src_reg);
+                        try self.codegen.emit.movRegImm64(.RDX, @bitCast(min_val));
+                        try self.codegen.emit.movRegImm64(.RCX, @bitCast(max_val));
+                        try self.codegen.emitLoadImm(.R8, @intCast(payload_size));
+                        try self.codegen.emitLoadImm(.R9, @intCast(disc_offset));
+                        try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
+                        try self.codegen.emit.callReg(.R11);
+                    }
+                } else {
+                    // Unsigned source: call wrapIntTryUnsigned(out, val, max_val, payload_size, disc_offset)
+                    const max_val: u64 = if (info.tgt_signed) blk: {
+                        if (info.tgt_bits >= 64) break :blk @as(u64, @bitCast(@as(i64, std.math.maxInt(i64))));
+                        const shift: u6 = @intCast(info.tgt_bits - 1);
+                        break :blk @as(u64, @intCast((@as(i64, 1) << shift) - 1));
+                    } else blk: {
+                        if (info.tgt_bits >= 64) break :blk std.math.maxInt(u64);
+                        const shift: u6 = @intCast(info.tgt_bits);
+                        break :blk (@as(u64, 1) << shift) - 1;
+                    };
+
+                    const fn_addr: usize = @intFromPtr(&wrapIntTryUnsigned);
+                    // 5 args — fits in registers on both architectures
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.movRegImm64(.X0, @bitCast(@as(i64, result_offset)));
+                        try self.codegen.emit.addRegRegReg(.w64, .X0, .FP, .X0);
+                        try self.codegen.emit.movRegReg(.w64, .X1, src_reg);
+                        try self.codegen.emit.movRegImm64(.X2, @bitCast(@as(i64, @bitCast(max_val))));
+                        try self.codegen.emitLoadImm(.X3, @intCast(payload_size));
+                        try self.codegen.emitLoadImm(.X4, @intCast(disc_offset));
+                        try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
+                        try self.codegen.emit.blrReg(.X9);
+                    } else {
+                        try self.codegen.emit.leaRegMem(.RDI, .RBP, result_offset);
+                        try self.codegen.emit.movRegReg(.w64, .RSI, src_reg);
+                        try self.codegen.emit.movRegImm64(.RDX, @bitCast(@as(i64, @bitCast(max_val))));
+                        try self.codegen.emitLoadImm(.RCX, @intCast(payload_size));
+                        try self.codegen.emitLoadImm(.R8, @intCast(disc_offset));
+                        try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
+                        try self.codegen.emit.callReg(.R11);
+                    }
+                }
+
+                self.codegen.freeGeneral(src_reg);
+            }
+
+            return .{ .stack = result_offset };
+        }
+
+        // ── Float/Dec try_unsafe conversion info ──
+
+        const FloatDecTryUnsafeInfo = struct {
+            src_kind: enum { f32, f64, dec },
+            tgt_kind: enum { int, f32, dec },
+            tgt_bits: u8,
+            tgt_signed: bool,
+        };
+
+        fn floatDecTryUnsafeInfo(op: anytype) FloatDecTryUnsafeInfo {
+            return switch (op) {
+                .f32_to_i8_try_unsafe => .{ .src_kind = .f32, .tgt_kind = .int, .tgt_bits = 8, .tgt_signed = true },
+                .f32_to_i16_try_unsafe => .{ .src_kind = .f32, .tgt_kind = .int, .tgt_bits = 16, .tgt_signed = true },
+                .f32_to_i32_try_unsafe => .{ .src_kind = .f32, .tgt_kind = .int, .tgt_bits = 32, .tgt_signed = true },
+                .f32_to_i64_try_unsafe => .{ .src_kind = .f32, .tgt_kind = .int, .tgt_bits = 64, .tgt_signed = true },
+                .f32_to_i128_try_unsafe => .{ .src_kind = .f32, .tgt_kind = .int, .tgt_bits = 128, .tgt_signed = true },
+                .f32_to_u8_try_unsafe => .{ .src_kind = .f32, .tgt_kind = .int, .tgt_bits = 8, .tgt_signed = false },
+                .f32_to_u16_try_unsafe => .{ .src_kind = .f32, .tgt_kind = .int, .tgt_bits = 16, .tgt_signed = false },
+                .f32_to_u32_try_unsafe => .{ .src_kind = .f32, .tgt_kind = .int, .tgt_bits = 32, .tgt_signed = false },
+                .f32_to_u64_try_unsafe => .{ .src_kind = .f32, .tgt_kind = .int, .tgt_bits = 64, .tgt_signed = false },
+                .f32_to_u128_try_unsafe => .{ .src_kind = .f32, .tgt_kind = .int, .tgt_bits = 128, .tgt_signed = false },
+                .f64_to_i8_try_unsafe => .{ .src_kind = .f64, .tgt_kind = .int, .tgt_bits = 8, .tgt_signed = true },
+                .f64_to_i16_try_unsafe => .{ .src_kind = .f64, .tgt_kind = .int, .tgt_bits = 16, .tgt_signed = true },
+                .f64_to_i32_try_unsafe => .{ .src_kind = .f64, .tgt_kind = .int, .tgt_bits = 32, .tgt_signed = true },
+                .f64_to_i64_try_unsafe => .{ .src_kind = .f64, .tgt_kind = .int, .tgt_bits = 64, .tgt_signed = true },
+                .f64_to_i128_try_unsafe => .{ .src_kind = .f64, .tgt_kind = .int, .tgt_bits = 128, .tgt_signed = true },
+                .f64_to_u8_try_unsafe => .{ .src_kind = .f64, .tgt_kind = .int, .tgt_bits = 8, .tgt_signed = false },
+                .f64_to_u16_try_unsafe => .{ .src_kind = .f64, .tgt_kind = .int, .tgt_bits = 16, .tgt_signed = false },
+                .f64_to_u32_try_unsafe => .{ .src_kind = .f64, .tgt_kind = .int, .tgt_bits = 32, .tgt_signed = false },
+                .f64_to_u64_try_unsafe => .{ .src_kind = .f64, .tgt_kind = .int, .tgt_bits = 64, .tgt_signed = false },
+                .f64_to_u128_try_unsafe => .{ .src_kind = .f64, .tgt_kind = .int, .tgt_bits = 128, .tgt_signed = false },
+                .f64_to_f32_try_unsafe => .{ .src_kind = .f64, .tgt_kind = .f32, .tgt_bits = 32, .tgt_signed = true },
+                .dec_to_i8_try_unsafe => .{ .src_kind = .dec, .tgt_kind = .int, .tgt_bits = 8, .tgt_signed = true },
+                .dec_to_i16_try_unsafe => .{ .src_kind = .dec, .tgt_kind = .int, .tgt_bits = 16, .tgt_signed = true },
+                .dec_to_i32_try_unsafe => .{ .src_kind = .dec, .tgt_kind = .int, .tgt_bits = 32, .tgt_signed = true },
+                .dec_to_i64_try_unsafe => .{ .src_kind = .dec, .tgt_kind = .int, .tgt_bits = 64, .tgt_signed = true },
+                .dec_to_i128_try_unsafe => .{ .src_kind = .dec, .tgt_kind = .int, .tgt_bits = 128, .tgt_signed = true },
+                .dec_to_u8_try_unsafe => .{ .src_kind = .dec, .tgt_kind = .int, .tgt_bits = 8, .tgt_signed = false },
+                .dec_to_u16_try_unsafe => .{ .src_kind = .dec, .tgt_kind = .int, .tgt_bits = 16, .tgt_signed = false },
+                .dec_to_u32_try_unsafe => .{ .src_kind = .dec, .tgt_kind = .int, .tgt_bits = 32, .tgt_signed = false },
+                .dec_to_u64_try_unsafe => .{ .src_kind = .dec, .tgt_kind = .int, .tgt_bits = 64, .tgt_signed = false },
+                .dec_to_u128_try_unsafe => .{ .src_kind = .dec, .tgt_kind = .int, .tgt_bits = 128, .tgt_signed = false },
+                .dec_to_f32_try_unsafe => .{ .src_kind = .dec, .tgt_kind = .f32, .tgt_bits = 32, .tgt_signed = true },
+                .u128_to_dec_try_unsafe => .{ .src_kind = .dec, .tgt_kind = .dec, .tgt_bits = 128, .tgt_signed = false },
+                .i128_to_dec_try_unsafe => .{ .src_kind = .dec, .tgt_kind = .dec, .tgt_bits = 128, .tgt_signed = true },
+                else => unreachable,
+            };
+        }
+
+        /// Generate a float/dec try_unsafe conversion returning a record.
+        fn generateFloatDecTryUnsafeConversion(self: *Self, ll: anytype, args: []const MonoExprId) Error!ValueLocation {
+            if (args.len != 1) unreachable;
+            const src_loc = try self.generateExpr(args[0]);
+
+            const ls = self.layout_store orelse unreachable;
+            const ret_layout_val = ls.getLayout(ll.ret_layout);
+            const size_align = ls.layoutSizeAlign(ret_layout_val);
+            const result_offset = self.codegen.allocStackSlot(size_align.size);
+            try self.zeroStackArea(result_offset, size_align.size);
+
+            const info = floatDecTryUnsafeInfo(ll.op);
+
+            switch (info.tgt_kind) {
+                .int => {
+                    // Float/Dec to integer: call wrapper with (out, val, target_bits, target_is_signed, val_size)
+                    const val_size: u32 = @as(u32, info.tgt_bits) / 8;
+                    const target_bits: u32 = info.tgt_bits;
+                    const target_is_signed: u32 = if (info.tgt_signed) 1 else 0;
+
+                    if (info.src_kind == .dec) {
+                        // Dec source: get i128 parts, call Dec-to-int wrapper
+                        const parts = try self.getI128Parts(src_loc);
+                        const fn_addr: usize = @intFromPtr(&wrapDecToIntTryUnsafe);
+
+                        // fn(out, dec_low, dec_high, target_bits, target_is_signed, val_size) — 6 args
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            try self.codegen.emit.movRegImm64(.X0, @bitCast(@as(i64, result_offset)));
+                            try self.codegen.emit.addRegRegReg(.w64, .X0, .FP, .X0);
+                            try self.codegen.emit.movRegReg(.w64, .X1, parts.low);
+                            try self.codegen.emit.movRegReg(.w64, .X2, parts.high);
+                            try self.codegen.emitLoadImm(.X3, @intCast(target_bits));
+                            try self.codegen.emitLoadImm(.X4, @intCast(target_is_signed));
+                            try self.codegen.emitLoadImm(.X5, @intCast(val_size));
+                            try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
+                            try self.codegen.emit.blrReg(.X9);
+                        } else {
+                            try self.codegen.emit.leaRegMem(.RDI, .RBP, result_offset);
+                            try self.codegen.emit.movRegReg(.w64, .RSI, parts.low);
+                            try self.codegen.emit.movRegReg(.w64, .RDX, parts.high);
+                            try self.codegen.emitLoadImm(.RCX, @intCast(target_bits));
+                            try self.codegen.emitLoadImm(.R8, @intCast(target_is_signed));
+                            try self.codegen.emitLoadImm(.R9, @intCast(val_size));
+                            try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
+                            try self.codegen.emit.callReg(.R11);
+                        }
+
+                        self.codegen.freeGeneral(parts.low);
+                        self.codegen.freeGeneral(parts.high);
+                    } else {
+                        // Float source (f32 or f64): all floats stored as f64 internally
+                        const freg = try self.ensureInFloatReg(src_loc);
+                        const fn_addr: usize = @intFromPtr(&wrapF64ToIntTryUnsafe);
+
+                        // fn(out, val, target_bits, target_is_signed, val_size) — 5 args
+                        // val is f64 passed in float register (D0/XMM0)
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            try self.codegen.emit.movRegImm64(.X0, @bitCast(@as(i64, result_offset)));
+                            try self.codegen.emit.addRegRegReg(.w64, .X0, .FP, .X0);
+                            if (freg != @as(FloatReg, @enumFromInt(0))) {
+                                try self.codegen.emit.fmovRegReg(.double, @enumFromInt(0), freg);
+                            }
+                            try self.codegen.emitLoadImm(.X1, @intCast(target_bits));
+                            try self.codegen.emitLoadImm(.X2, @intCast(target_is_signed));
+                            try self.codegen.emitLoadImm(.X3, @intCast(val_size));
+                            try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
+                            try self.codegen.emit.blrReg(.X9);
+                        } else {
+                            try self.codegen.emit.leaRegMem(.RDI, .RBP, result_offset);
+                            if (freg != @as(FloatReg, @enumFromInt(0))) {
+                                try self.codegen.emit.movsdRegReg(@enumFromInt(0), freg);
+                            }
+                            try self.codegen.emitLoadImm(.RSI, @intCast(target_bits));
+                            try self.codegen.emitLoadImm(.RDX, @intCast(target_is_signed));
+                            try self.codegen.emitLoadImm(.RCX, @intCast(val_size));
+                            try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
+                            try self.codegen.emit.callReg(.R11);
+                        }
+
+                        self.codegen.freeFloat(freg);
+                    }
+                },
+                .f32 => {
+                    // Float/Dec narrowing to f32: result is {val: F32, success: Bool}
+                    if (info.src_kind == .dec) {
+                        // Dec to f32
+                        const parts = try self.getI128Parts(src_loc);
+                        const fn_addr: usize = @intFromPtr(&wrapDecToF32TryUnsafe);
+
+                        // fn(out, dec_low, dec_high) — 3 args
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            try self.codegen.emit.movRegImm64(.X0, @bitCast(@as(i64, result_offset)));
+                            try self.codegen.emit.addRegRegReg(.w64, .X0, .FP, .X0);
+                            try self.codegen.emit.movRegReg(.w64, .X1, parts.low);
+                            try self.codegen.emit.movRegReg(.w64, .X2, parts.high);
+                            try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
+                            try self.codegen.emit.blrReg(.X9);
+                        } else {
+                            try self.codegen.emit.leaRegMem(.RDI, .RBP, result_offset);
+                            try self.codegen.emit.movRegReg(.w64, .RSI, parts.low);
+                            try self.codegen.emit.movRegReg(.w64, .RDX, parts.high);
+                            try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
+                            try self.codegen.emit.callReg(.R11);
+                        }
+
+                        self.codegen.freeGeneral(parts.low);
+                        self.codegen.freeGeneral(parts.high);
+                    } else {
+                        // f64 to f32
+                        const freg = try self.ensureInFloatReg(src_loc);
+                        const fn_addr: usize = @intFromPtr(&wrapF64ToF32TryUnsafe);
+
+                        // fn(out, val) — 2 args (out: ptr, val: f64)
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            try self.codegen.emit.movRegImm64(.X0, @bitCast(@as(i64, result_offset)));
+                            try self.codegen.emit.addRegRegReg(.w64, .X0, .FP, .X0);
+                            if (freg != @as(FloatReg, @enumFromInt(0))) {
+                                try self.codegen.emit.fmovRegReg(.double, @enumFromInt(0), freg);
+                            }
+                            try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
+                            try self.codegen.emit.blrReg(.X9);
+                        } else {
+                            try self.codegen.emit.leaRegMem(.RDI, .RBP, result_offset);
+                            if (freg != @as(FloatReg, @enumFromInt(0))) {
+                                try self.codegen.emit.movsdRegReg(@enumFromInt(0), freg);
+                            }
+                            try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
+                            try self.codegen.emit.callReg(.R11);
+                        }
+
+                        self.codegen.freeFloat(freg);
+                    }
+                },
+                .dec => {
+                    // Integer to Dec: result is {val: Dec(i128), is_int: Bool}
+                    const parts = try self.getI128Parts(src_loc);
+                    const fn_addr: usize = if (info.tgt_signed)
+                        @intFromPtr(&wrapI128ToDecTryUnsafe)
+                    else
+                        @intFromPtr(&wrapU128ToDecTryUnsafe);
+
+                    // fn(out, val_low, val_high) — 3 args
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.movRegImm64(.X0, @bitCast(@as(i64, result_offset)));
+                        try self.codegen.emit.addRegRegReg(.w64, .X0, .FP, .X0);
+                        try self.codegen.emit.movRegReg(.w64, .X1, parts.low);
+                        try self.codegen.emit.movRegReg(.w64, .X2, parts.high);
+                        try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
+                        try self.codegen.emit.blrReg(.X9);
+                    } else {
+                        try self.codegen.emit.leaRegMem(.RDI, .RBP, result_offset);
+                        try self.codegen.emit.movRegReg(.w64, .RSI, parts.low);
+                        try self.codegen.emit.movRegReg(.w64, .RDX, parts.high);
+                        try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
+                        try self.codegen.emit.callReg(.R11);
+                    }
+
+                    self.codegen.freeGeneral(parts.low);
+                    self.codegen.freeGeneral(parts.high);
+                },
+            }
+
+            return .{ .stack = result_offset };
         }
 
         /// Call Dec multiplication builtin: mulSaturatedC(RocDec, RocDec) -> RocDec
@@ -9917,6 +10740,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         }
                         return Error.UnsupportedExpression;
                     },
+                    .runtime_error => return Error.RuntimeError,
                     else => return Error.UnsupportedExpression,
                 };
             }
