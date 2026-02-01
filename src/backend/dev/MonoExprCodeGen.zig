@@ -9524,8 +9524,12 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     try self.codegen.emitLoadStackF64(reg, offset);
                     return reg;
                 },
-                .general_reg, .immediate_i64, .immediate_i128, .stack_i128, .stack_str, .list_stack, .lambda_code, .closure_value => {
-                    // Convert int to float or lambda_code/closure_value - not supported
+                .immediate_i64 => |val| {
+                    // Integer literal used in float context — convert at compile time
+                    const f_val: f64 = @floatFromInt(val);
+                    return self.ensureInFloatReg(.{ .immediate_f64 = f_val });
+                },
+                .general_reg, .immediate_i128, .stack_i128, .stack_str, .list_stack, .lambda_code, .closure_value => {
                     return Error.InvalidLocalLocation;
                 },
             }
