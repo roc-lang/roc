@@ -77,6 +77,58 @@ jobs:
           SHA: ${{ env.SHA }}
         run: echo "RELEASE_FOLDER_NAME=new_roc_nightly-${{ matrix.artifact_name }}-$DATE-$SHA" >> $GITHUB_ENV
 
+      # macOS code signing and notarization
+      - name: Import code signing certificate (macOS)
+        if: runner.os == 'macOS'
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+          MACOS_CI_KEYCHAIN_PWD: ${{ secrets.MACOS_CI_KEYCHAIN_PWD }}
+        run: |
+          echo "$MACOS_CERTIFICATE" | base64 --decode > certificate.p12
+          security create-keychain -p "$MACOS_CI_KEYCHAIN_PWD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$MACOS_CI_KEYCHAIN_PWD" build.keychain
+          security import certificate.p12 -k build.keychain -P "$MACOS_CERTIFICATE_PWD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$MACOS_CI_KEYCHAIN_PWD" build.keychain
+          rm certificate.p12
+
+      - name: Code sign binary (macOS)
+        if: runner.os == 'macOS'
+        env:
+          MACOS_CERTIFICATE_NAME: ${{ secrets.MACOS_CERTIFICATE_NAME }}
+        run: |
+          /usr/bin/codesign --verbose -f -s "$MACOS_CERTIFICATE_NAME" -o runtime ./zig-out/bin/roc
+          # Verify the signature
+          /usr/bin/codesign --verify --verbose ./zig-out/bin/roc
+
+      - name: Notarize binary (macOS)
+        if: runner.os == 'macOS'
+        env:
+          APPLE_NOTARIZATION_KEY_ID: ${{ secrets.APPLE_NOTARIZATION_KEY_ID }}
+          APPLE_NOTARIZATION_ISSUER: ${{ secrets.APPLE_NOTARIZATION_ISSUER }}
+          APPLE_NOTARIZATION_KEY: ${{ secrets.APPLE_NOTARIZATION_KEY }}
+        run: |
+          # Write the notarization key to a file
+          echo "$APPLE_NOTARIZATION_KEY" > notarization_key.p8
+
+          # Store credentials in keychain
+          xcrun notarytool store-credentials "notarytool-profile" \
+            --key notarization_key.p8 \
+            --key-id "$APPLE_NOTARIZATION_KEY_ID" \
+            --issuer "$APPLE_NOTARIZATION_ISSUER"
+
+          # Zip the binary for notarization (required format for CLI tools)
+          zip -j roc-notarize.zip ./zig-out/bin/roc
+
+          # Submit for notarization and wait for result
+          xcrun notarytool submit roc-notarize.zip \
+            --keychain-profile "notarytool-profile" \
+            --wait
+
+          # Clean up
+          rm notarization_key.p8 roc-notarize.zip
+
       - name: Package release
         run: |
           mkdir -p ${{ env.RELEASE_FOLDER_NAME }}
