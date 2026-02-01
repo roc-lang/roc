@@ -13739,6 +13739,19 @@ pub const Interpreter = struct {
             tu_data.writeDiscriminantToPtr(base_ptr + disc_offset, @intCast(tag_index));
             dest.is_initialized = true;
             return dest;
+        } else if (layout_val.tag == .scalar) {
+            // Pure enum tag union (no payloads) — just set the discriminant
+            var dest = try self.pushRaw(layout_val, 0, rt_var);
+            if (layout_val.data.scalar.tag == .int) {
+                dest.is_initialized = false;
+                try dest.setInt(@intCast(tag_index));
+                dest.is_initialized = true;
+            }
+            return dest;
+        } else if (layout_val.tag == .zst) {
+            // Zero-sized tag union (single variant with no payload)
+            const dest = try self.pushRaw(layout_val, 0, rt_var);
+            return dest;
         }
         self.triggerCrash("e_tag: unexpected layout in finalizeTagNoPayload", false, roc_ops);
         return error.Crash;
