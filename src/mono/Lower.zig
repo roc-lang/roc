@@ -391,6 +391,46 @@ fn getExprLayoutFromIdx(self: *Self, _: *ModuleEnv, expr_idx: CIR.Expr.Idx) Layo
     return ls.fromTypeVar(self.current_module_idx, type_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
 }
 
+/// Look up the discriminant for a tag name within a tag union type.
+/// The layout store sorts tag names alphabetically to assign discriminants,
+/// so we must replicate that sorting here.
+fn resolveTagDiscriminant(self: *Self, module_env: *ModuleEnv, type_var: types.Var, tag_name: Ident.Idx) u16 {
+    var resolved = module_env.types.resolveVar(type_var);
+
+    // Follow type scope if unresolved (flex/rigid)
+    if (resolved.desc.content == .flex or resolved.desc.content == .rigid) {
+        if (self.type_scope.lookup(resolved.var_)) |mapped| {
+            const scope_env = if (self.type_scope_caller_module) |caller_idx|
+                self.all_module_envs[caller_idx]
+            else
+                module_env;
+            resolved = scope_env.types.resolveVar(mapped);
+        }
+    }
+
+    const tag_union = resolved.desc.content.unwrapTagUnion() orelse return 0;
+
+    const tags_slice = module_env.types.getTagsSlice(tag_union.tags);
+    const tags_names = tags_slice.items(.name);
+    const num_tags = tags_names.len;
+
+    if (num_tags <= 1) return 0;
+
+    // Sort tag names alphabetically (same as the layout store does)
+    const ident_store = module_env.getIdentStoreConst();
+    const target_text = ident_store.getText(tag_name);
+
+    // Count how many tag names sort before our target
+    var discriminant: u16 = 0;
+    for (tags_names) |other_name| {
+        const other_text = ident_store.getText(other_name);
+        if (std.mem.order(u8, other_text, target_text) == .lt) {
+            discriminant += 1;
+        }
+    }
+    return discriminant;
+}
+
 /// Push a type_scope mapping from the for-loop pattern's type variable to the element
 /// type extracted from the list expression's type. Returns true if a scope was pushed.
 /// The caller must call popForLoopElementTypeScope() after lowering the body.
@@ -1970,25 +2010,14 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
         },
 
         .e_zero_argument_tag => |tag| blk: {
-            // Get discriminant from tag name by comparing text
-            // For Bool, True = 1, False = 0
-            // We compare by text rather than ident index to handle cross-module cases
-            const tag_name_text = module_env.getIdent(tag.name);
-            // Handle both "True"/"False" (canonical form) and potential variations
-            const discriminant: u16 = if (std.mem.eql(u8, tag_name_text, "True") or std.mem.eql(u8, tag_name_text, "true"))
-                1
-            else if (std.mem.eql(u8, tag_name_text, "False") or std.mem.eql(u8, tag_name_text, "false"))
-                0
-            else if (std.ascii.eqlIgnoreCase(tag_name_text, "true"))
-                1
-            else if (std.ascii.eqlIgnoreCase(tag_name_text, "false"))
-                0
-            else
-                0; // TODO: proper discriminant lookup
+            // Resolve discriminant by looking up the tag's position in the
+            // alphabetically-sorted variant list of the tag union type.
+            const type_var = ModuleEnv.varFrom(expr_idx);
+            const discriminant = self.resolveTagDiscriminant(module_env, type_var, tag.name);
 
             break :blk .{ .zero_arg_tag = .{
                 .discriminant = discriminant,
-                .union_layout = .bool,
+                .union_layout = self.getExprLayoutFromIdx(module_env, expr_idx),
             } };
         },
 
@@ -1996,24 +2025,10 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             const args = try self.lowerExprSpan(module_env, tag.args);
             const args_slice = module_env.store.sliceExpr(tag.args);
 
-            // Get discriminant from tag name
-            // For Result type: tags are sorted alphabetically, so Err=0, Ok=1
-            // For Bool type: False=0, True=1
-            const tag_name_text = module_env.getIdent(tag.name);
-            const discriminant: u16 = if (std.mem.eql(u8, tag_name_text, "Ok") or std.ascii.eqlIgnoreCase(tag_name_text, "ok"))
-                1 // Ok comes after Err alphabetically
-            else if (std.mem.eql(u8, tag_name_text, "Err") or std.ascii.eqlIgnoreCase(tag_name_text, "err"))
-                0 // Err comes first alphabetically
-            else if (args_slice.len == 0) disc_blk: {
-                // Zero-argument tag - check for True/False
-                if (std.mem.eql(u8, tag_name_text, "True") or std.ascii.eqlIgnoreCase(tag_name_text, "true")) {
-                    break :disc_blk 1;
-                } else if (std.mem.eql(u8, tag_name_text, "False") or std.ascii.eqlIgnoreCase(tag_name_text, "false")) {
-                    break :disc_blk 0;
-                } else {
-                    break :disc_blk 0; // TODO: proper discriminant lookup
-                }
-            } else 0; // TODO: proper discriminant lookup for other tags with args
+            // Resolve discriminant by looking up the tag's position in the
+            // alphabetically-sorted variant list of the tag union type.
+            const type_var = ModuleEnv.varFrom(expr_idx);
+            const discriminant = self.resolveTagDiscriminant(module_env, type_var, tag.name);
 
             // For zero-argument tags, use zero_arg_tag
             if (args_slice.len == 0) {
@@ -2595,29 +2610,16 @@ fn lowerPattern(self: *Self, module_env: *ModuleEnv, pattern_idx: CIR.Pattern.Id
 
         .applied_tag => |t| blk: {
             const args = try self.lowerPatternSpan(module_env, t.args);
-            // Compute discriminant based on tag name
-            // For Result type: tags are sorted alphabetically, so Err=0, Ok=1
-            // For Bool type: False=0, True=1
-            const tag_name_text = module_env.getIdent(t.name);
-            const discriminant: u16 = if (std.mem.eql(u8, tag_name_text, "Ok") or
-                std.ascii.eqlIgnoreCase(tag_name_text, "ok"))
-                1 // Ok comes after Err alphabetically
-            else if (std.mem.eql(u8, tag_name_text, "Err") or
-                std.ascii.eqlIgnoreCase(tag_name_text, "err"))
-                0 // Err comes first alphabetically
-            else if (std.mem.eql(u8, tag_name_text, "True") or
-                std.ascii.eqlIgnoreCase(tag_name_text, "true"))
-                1
-            else if (std.mem.eql(u8, tag_name_text, "False") or
-                std.ascii.eqlIgnoreCase(tag_name_text, "false"))
-                0
-            else
-                0; // TODO: proper discriminant lookup for other tags
+            // Resolve discriminant by looking up the tag's position in the
+            // alphabetically-sorted variant list of the tag union type.
+            const type_var = ModuleEnv.varFrom(pattern_idx);
+            const discriminant = self.resolveTagDiscriminant(module_env, type_var, t.name);
+            const union_layout = self.getPatternLayout(pattern_idx);
 
             break :blk .{
                 .tag = .{
                     .discriminant = discriminant,
-                    .union_layout = .i64, // TODO: proper layout
+                    .union_layout = union_layout,
                     .args = args,
                 },
             };
