@@ -5724,6 +5724,78 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                             try self.bindPattern(elem_pattern_id, self.stackLocationForLayout(list_pattern.elem_layout, elem_slot));
                         }
 
+                        // Handle rest pattern (e.g. [first, .. as rest])
+                        if (!list_pattern.rest.isNone()) {
+                            const rest_slot = self.codegen.allocStackSlot(24);
+
+                            const prefix_count = @as(u32, @intCast(prefix_patterns.len));
+                            const prefix_byte_offset = prefix_count * @as(u32, @intCast(elem_size));
+
+                            // Calculate rest pointer: original_ptr + prefix_len * elem_size
+                            const rest_ptr_reg = try self.allocTempGeneral();
+                            if (prefix_byte_offset == 0) {
+                                if (comptime builtin.cpu.arch == .aarch64) {
+                                    try self.codegen.emit.movRegReg(.w64, rest_ptr_reg, list_ptr_reg);
+                                } else {
+                                    try self.codegen.emit.movRegReg(.w64, rest_ptr_reg, list_ptr_reg);
+                                }
+                            } else {
+                                if (comptime builtin.cpu.arch == .aarch64) {
+                                    try self.codegen.emit.addRegRegImm12(.w64, rest_ptr_reg, list_ptr_reg, @intCast(prefix_byte_offset));
+                                } else {
+                                    try self.codegen.emit.movRegReg(.w64, rest_ptr_reg, list_ptr_reg);
+                                    try self.codegen.emit.addRegImm32(.w64, rest_ptr_reg, @intCast(prefix_byte_offset));
+                                }
+                            }
+
+                            // Store rest pointer at rest_slot + 0
+                            if (comptime builtin.cpu.arch == .aarch64) {
+                                try self.codegen.emit.strRegMemSoff(.w64, rest_ptr_reg, .FP, rest_slot);
+                            } else {
+                                try self.codegen.emit.movMemReg(.w64, .RBP, rest_slot, rest_ptr_reg);
+                            }
+                            self.codegen.freeGeneral(rest_ptr_reg);
+
+                            // Load original length from base_offset + 8
+                            const rest_len_reg = try self.allocTempGeneral();
+                            if (comptime builtin.cpu.arch == .aarch64) {
+                                try self.codegen.emit.ldrRegMemSoff(.w64, rest_len_reg, .FP, base_offset + 8);
+                            } else {
+                                try self.codegen.emit.movRegMem(.w64, rest_len_reg, .RBP, base_offset + 8);
+                            }
+
+                            // Calculate rest length: original_length - prefix_count
+                            if (prefix_count > 0) {
+                                if (comptime builtin.cpu.arch == .aarch64) {
+                                    try self.codegen.emit.subRegRegImm12(.w64, rest_len_reg, rest_len_reg, @intCast(prefix_count));
+                                } else {
+                                    try self.codegen.emit.subRegImm32(.w64, rest_len_reg, @intCast(prefix_count));
+                                }
+                            }
+
+                            // Store rest length at rest_slot + 8
+                            if (comptime builtin.cpu.arch == .aarch64) {
+                                try self.codegen.emit.strRegMemSoff(.w64, rest_len_reg, .FP, rest_slot + 8);
+                            } else {
+                                try self.codegen.emit.movMemReg(.w64, .RBP, rest_slot + 8, rest_len_reg);
+                            }
+
+                            // Store capacity = rest length at rest_slot + 16
+                            if (comptime builtin.cpu.arch == .aarch64) {
+                                try self.codegen.emit.strRegMemSoff(.w64, rest_len_reg, .FP, rest_slot + 16);
+                            } else {
+                                try self.codegen.emit.movMemReg(.w64, .RBP, rest_slot + 16, rest_len_reg);
+                            }
+                            self.codegen.freeGeneral(rest_len_reg);
+
+                            // Bind the rest pattern to the new list slot
+                            try self.bindPattern(list_pattern.rest, .{ .list_stack = .{
+                                .struct_offset = rest_slot,
+                                .data_offset = 0,
+                                .num_elements = 0,
+                            } });
+                        }
+
                         self.codegen.freeGeneral(list_ptr_reg);
 
                         // Generate body

@@ -2678,12 +2678,15 @@ fn lowerPattern(self: *Self, module_env: *ModuleEnv, pattern_idx: CIR.Pattern.Id
         .list => |l| blk: {
             // Lower prefix patterns
             const prefix = try self.lowerPatternSpan(module_env, l.patterns);
-            // Lower rest pattern if present
+            // Lower rest pattern if present.
+            // When rest_info exists but has no binding pattern (bare `..`),
+            // emit a wildcard so the codegen knows this is a rest match
+            // (length >= prefix_count) rather than an exact match (length == prefix_count).
             const rest_id = if (l.rest_info) |rest_info|
                 if (rest_info.pattern) |rest_pattern|
                     try self.lowerPattern(module_env, rest_pattern)
                 else
-                    MonoPatternId.none
+                    try self.store.addPattern(.{ .wildcard = {} }, region)
             else
                 MonoPatternId.none;
 
