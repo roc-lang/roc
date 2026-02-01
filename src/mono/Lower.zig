@@ -462,8 +462,23 @@ fn getForLoopElementLayout(self: *Self, list_expr_idx: CIR.Expr.Idx) LayoutIdx {
                     const args = module_env.types.sliceNominalArgs(nominal);
                     std.debug.assert(args.len > 0); // List must have element type arg
                     const elem_type_var = args[0];
+                    // For local calls, setupLocalCallLayoutHints populates the type_scope
+                    // with intra-module mappings (e.g., flex_var -> concrete_type), but
+                    // type_scope_caller_module remains null. fromTypeVar only checks the
+                    // type_scope when caller_module_idx is non-null. So when the element
+                    // type is a flex/rigid var and the type_scope has a mapping for it,
+                    // pass the current module as caller so the mapping is used.
+                    const effective_caller = self.type_scope_caller_module orelse blk: {
+                        const elem_resolved = module_env.types.resolveVar(elem_type_var);
+                        if (elem_resolved.desc.content == .flex or elem_resolved.desc.content == .rigid) {
+                            if (self.type_scope.lookup(elem_resolved.var_) != null) {
+                                break :blk self.current_module_idx;
+                            }
+                        }
+                        break :blk null;
+                    };
                     // Compute layout for the element type from the list's type arg
-                    const elem_layout = ls.fromTypeVar(self.current_module_idx, elem_type_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
+                    const elem_layout = ls.fromTypeVar(self.current_module_idx, elem_type_var, &self.type_scope, effective_caller) catch unreachable;
                     return elem_layout;
                 },
                 else => unreachable, // For loop list must be List type
@@ -1407,7 +1422,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             break :blk .{
                 .call = .{
                     .fn_expr = fn_id,
-                    .fn_layout = .i64, // TODO: proper function layout
+                    .fn_layout = self.getExprLayoutFromIdx(module_env, call.func),
                     .args = args,
                     .ret_layout = self.getExprLayoutFromIdx(module_env, expr_idx),
                     .called_via = call.called_via,
@@ -1421,7 +1436,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             const ret_layout = self.getExprLayoutFromIdx(module_env, lambda.body);
             break :blk .{
                 .lambda = .{
-                    .fn_layout = .i64, // TODO
+                    .fn_layout = self.getExprLayoutFromIdx(module_env, expr_idx),
                     .params = params,
                     .body = body,
                     .ret_layout = ret_layout,
@@ -1767,7 +1782,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                                 break :low_level_dispatch .{
                                     .call = .{
                                         .fn_expr = ll_fn_expr_id,
-                                        .fn_layout = .i64,
+                                        .fn_layout = LayoutIdx.named_fn,
                                         .args = ll_args_span,
                                         .ret_layout = ll_ret_layout,
                                         .called_via = .apply,
@@ -1861,7 +1876,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                     break :blk .{
                         .call = .{
                             .fn_expr = fn_expr_id,
-                            .fn_layout = .i64,
+                            .fn_layout = LayoutIdx.named_fn,
                             .args = args_span,
                             .ret_layout = ret_layout,
                             .called_via = .apply,
@@ -2261,7 +2276,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
 
             break :blk .{
                 .lambda = .{
-                    .fn_layout = .i64, // TODO: compute proper function layout
+                    .fn_layout = self.getExprLayoutFromIdx(module_env, expr_idx),
                     .params = params,
                     .body = body_id,
                     .ret_layout = ret_layout,
@@ -2421,7 +2436,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                 break :blk .{
                     .call = .{
                         .fn_expr = fn_expr_id,
-                        .fn_layout = .i64,
+                        .fn_layout = LayoutIdx.named_fn,
                         .args = MonoExprSpan.empty(),
                         .ret_layout = method_layout,
                         .called_via = .apply,
@@ -2432,7 +2447,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                 break :blk .{
                     .call = .{
                         .fn_expr = fn_expr_id,
-                        .fn_layout = .i64,
+                        .fn_layout = LayoutIdx.named_fn,
                         .args = args,
                         .ret_layout = method_layout,
                         .called_via = .apply,
@@ -3139,10 +3154,10 @@ fn lowerExprWithLambdaSet(
 
             const lambda_expr: MonoExpr = .{
                 .lambda = .{
-                    .fn_layout = .i64, // TODO
+                    .fn_layout = self.getExprLayoutFromIdx(module_env, expr_idx),
                     .params = params,
                     .body = body,
-                    .ret_layout = .i64, // TODO
+                    .ret_layout = self.getExprLayoutFromIdx(module_env, lambda.body),
                 },
             };
             const lambda_id = try self.store.addExpr(lambda_expr, Region.zero());

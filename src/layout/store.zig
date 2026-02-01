@@ -2270,6 +2270,12 @@ pub const Store = struct {
                             }
                         }
 
+                        // Flex var was not resolved through type scope. Mark as depending
+                        // on unresolved params so the result is NOT cached — a later call
+                        // with type scope mappings (e.g., from setupLocalCallLayoutHints)
+                        // may produce a different, correct layout.
+                        depends_on_unresolved_type_params = true;
+
                         // Unconstrained flex vars (like the element type of an empty list)
                         // have no concrete type, so they're zero-sized.
                         if (flex.constraints.isEmpty()) {
@@ -2322,6 +2328,11 @@ pub const Store = struct {
                                 break :blk self.getLayout(layout_idx);
                             }
                         }
+
+                        // Rigid var was not resolved through type scope. Mark as depending
+                        // on unresolved params so the result is NOT cached — a later call
+                        // with type scope mappings may produce a different, correct layout.
+                        depends_on_unresolved_type_params = true;
 
                         // Check if this rigid var has a from_numeral constraint, indicating
                         // it's an unresolved numeric type that should default to Dec.
