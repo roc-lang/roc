@@ -395,7 +395,8 @@ fn getExprLayoutFromIdx(self: *Self, _: *ModuleEnv, expr_idx: CIR.Expr.Idx) Layo
 /// The layout store sorts tag names alphabetically to assign discriminants,
 /// so we must replicate that sorting here.
 fn resolveTagDiscriminant(self: *Self, module_env: *ModuleEnv, type_var: types.Var, tag_name: Ident.Idx) u16 {
-    var resolved = module_env.types.resolveVar(type_var);
+    const types_store = &module_env.types;
+    var resolved = types_store.resolveVar(type_var);
 
     // Follow type scope if unresolved (flex/rigid)
     if (resolved.desc.content == .flex or resolved.desc.content == .rigid) {
@@ -408,26 +409,62 @@ fn resolveTagDiscriminant(self: *Self, module_env: *ModuleEnv, type_var: types.V
         }
     }
 
+    // Unwrap nominal types (e.g., Bool := [False, True]) to their backing type
+    if (resolved.desc.content.unwrapNominalType()) |nominal| {
+        const backing_var = types_store.getNominalBackingVar(nominal);
+        resolved = types_store.resolveVar(backing_var);
+    }
+
     const tag_union = resolved.desc.content.unwrapTagUnion() orelse return 0;
 
-    const tags_slice = module_env.types.getTagsSlice(tag_union.tags);
-    const tags_names = tags_slice.items(.name);
-    const num_tags = tags_names.len;
-
-    if (num_tags <= 1) return 0;
-
-    // Sort tag names alphabetically (same as the layout store does)
+    // Count how many tag names across the entire tag union (following extension
+    // variable chains) sort alphabetically before our target name. This matches
+    // the layout store's alphabetical discriminant assignment.
     const ident_store = module_env.getIdentStoreConst();
     const target_text = ident_store.getText(tag_name);
-
-    // Count how many tag names sort before our target
     var discriminant: u16 = 0;
-    for (tags_names) |other_name| {
+
+    // Process the initial tag union row
+    const tags_slice = types_store.getTagsSlice(tag_union.tags);
+    for (tags_slice.items(.name)) |other_name| {
         const other_text = ident_store.getText(other_name);
         if (std.mem.order(u8, other_text, target_text) == .lt) {
             discriminant += 1;
         }
     }
+
+    // Follow the extension variable chain to collect tags from all rows
+    var current_ext = tag_union.ext;
+    var guard: u32 = 0;
+    while (guard < 100) : (guard += 1) {
+        const ext_resolved = types_store.resolveVar(current_ext);
+        switch (ext_resolved.desc.content) {
+            .structure => |flat_type| switch (flat_type) {
+                .tag_union => |ext_tu| {
+                    const ext_tags = types_store.getTagsSlice(ext_tu.tags);
+                    for (ext_tags.items(.name)) |other_name| {
+                        const other_text = ident_store.getText(other_name);
+                        if (std.mem.order(u8, other_text, target_text) == .lt) {
+                            discriminant += 1;
+                        }
+                    }
+                    current_ext = ext_tu.ext;
+                },
+                .empty_tag_union => break,
+                .nominal_type => |nominal| {
+                    const backing_var = types_store.getNominalBackingVar(nominal);
+                    current_ext = backing_var;
+                },
+                else => break,
+            },
+            .alias => |alias| {
+                current_ext = types_store.getAliasBackingVar(alias);
+            },
+            .flex, .rigid => break,
+            else => break,
+        }
+    }
+
     return discriminant;
 }
 
@@ -2014,10 +2051,11 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             // alphabetically-sorted variant list of the tag union type.
             const type_var = ModuleEnv.varFrom(expr_idx);
             const discriminant = self.resolveTagDiscriminant(module_env, type_var, tag.name);
+            const tag_layout = self.getExprLayoutFromIdx(module_env, expr_idx);
 
             break :blk .{ .zero_arg_tag = .{
                 .discriminant = discriminant,
-                .union_layout = self.getExprLayoutFromIdx(module_env, expr_idx),
+                .union_layout = tag_layout,
             } };
         },
 
