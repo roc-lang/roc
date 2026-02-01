@@ -6769,7 +6769,17 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // Load RHS into a float register
             const rhs_reg = try self.ensureInFloatReg(rhs_loc);
 
-            // Allocate result register
+            // Comparisons produce integer results (0 or 1), not floats
+            const float_cond = floatCondition(op);
+            if (float_cond) |cond| {
+                const result_reg = try self.codegen.allocGeneralFor(0);
+                try self.codegen.emitCmpF64(result_reg, lhs_reg, rhs_reg, cond);
+                self.codegen.freeFloat(lhs_reg);
+                self.codegen.freeFloat(rhs_reg);
+                return .{ .general_reg = result_reg };
+            }
+
+            // Arithmetic operations produce float results
             const result_reg = try self.codegen.allocFloatFor(0);
 
             switch (op) {
@@ -6777,19 +6787,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 .sub => try self.codegen.emitSubF64(result_reg, lhs_reg, rhs_reg),
                 .mul => try self.codegen.emitMulF64(result_reg, lhs_reg, rhs_reg),
                 .div => try self.codegen.emitDivF64(result_reg, lhs_reg, rhs_reg),
-                else => {
-                    // TODO: PLACEHOLDER - Uses ADD for float comparisons/boolean ops
-                    // WHY: Float comparisons require:
-                    //   - AArch64: FCMP followed by CSET to materialize condition
-                    //   - x86: UCOMISD followed by SETcc to materialize condition
-                    // The result should be an integer (0 or 1), not a float!
-                    // IMPACT: Float comparisons return garbage (sum of operands as float)
-                    // PROPER FIX:
-                    //   1. Emit FCMP/UCOMISD to set condition flags
-                    //   2. Use CSET (AArch64) or SETcc (x86) to get 0/1 into integer reg
-                    //   3. Return that integer register, not a float register
-                    try self.codegen.emitAddF64(result_reg, lhs_reg, rhs_reg);
-                },
+                else => unreachable,
             }
 
             // Free operand registers
@@ -6797,6 +6795,42 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             self.codegen.freeFloat(rhs_reg);
 
             return .{ .float_reg = result_reg };
+        }
+
+        /// Map a BinOp comparison to the appropriate float condition code.
+        /// Returns null for non-comparison ops (arithmetic).
+        /// AArch64 FCMP and x86_64 UCOMISD set flags differently from integer CMP,
+        /// so float comparisons use unsigned/specific conditions rather than signed ones.
+        fn floatCondition(op: MonoExpr.BinOp) ?Condition {
+            return switch (op) {
+                .eq => condEqual(),
+                .neq => condNotEqual(),
+                .lt => if (comptime builtin.cpu.arch == .aarch64)
+                    // After FCMP: N=1 only when a < b
+                    @as(Condition, .mi)
+                else
+                    // After UCOMISD: CF=1 when a < b
+                    @as(Condition, .below),
+                .lte => if (comptime builtin.cpu.arch == .aarch64)
+                    // After FCMP: (C=0 or Z=1) for a <= b
+                    @as(Condition, .ls)
+                else
+                    // After UCOMISD: (CF=1 or ZF=1) for a <= b
+                    @as(Condition, .below_or_equal),
+                .gt => if (comptime builtin.cpu.arch == .aarch64)
+                    // After FCMP: (Z=0 and N=V) for a > b
+                    @as(Condition, .gt)
+                else
+                    // After UCOMISD: (CF=0 and ZF=0) for a > b
+                    @as(Condition, .above),
+                .gte => if (comptime builtin.cpu.arch == .aarch64)
+                    // After FCMP: N=V for a >= b
+                    @as(Condition, .ge)
+                else
+                    // After UCOMISD: CF=0 for a >= b
+                    @as(Condition, .above_or_equal),
+                else => null,
+            };
         }
 
         /// Generate code for unary minus

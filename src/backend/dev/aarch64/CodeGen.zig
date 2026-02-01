@@ -541,6 +541,12 @@ pub const AArch64CodeGen = struct {
         try self.emit.cset(width, dst, cond);
     }
 
+    /// Emit float64 compare and set: dst = (a cond b) ? 1 : 0
+    pub fn emitCmpF64(self: *Self, dst: GeneralReg, a: FloatReg, b: FloatReg, cond: Emit.Condition) !void {
+        try self.emit.fcmpRegReg(.double, a, b);
+        try self.emit.cset(.w64, dst, cond);
+    }
+
     // Floating-point operations
 
     /// Emit float64 addition: dst = a + b

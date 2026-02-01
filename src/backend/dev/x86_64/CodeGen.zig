@@ -557,6 +557,13 @@ pub const SystemVCodeGen = struct {
         try self.emit.andRegImm8(dst, 1);
     }
 
+    /// Emit float64 compare and set: dst = (a cond b) ? 1 : 0
+    pub fn emitCmpF64(self: *Self, dst: GeneralReg, a: FloatReg, b: FloatReg, cond: Emit.Condition) !void {
+        try self.emit.ucomisdRegReg(a, b);
+        try self.emit.setcc(cond, dst);
+        try self.emit.andRegImm8(dst, 1);
+    }
+
     // Floating-point operations
 
     /// Emit float64 addition: dst = a + b
