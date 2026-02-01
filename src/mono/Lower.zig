@@ -1327,12 +1327,20 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             }
             // For local function calls, set up layout hints so generic parameters
             // get the correct concrete layouts from the call arguments.
-            if (fn_expr == .e_lookup_local) {
+            const is_local_call_with_hints = fn_expr == .e_lookup_local;
+            if (is_local_call_with_hints) {
                 const lookup = fn_expr.e_lookup_local;
                 try self.setupLocalCallLayoutHints(module_env, lookup.pattern_idx, call.args);
+                // Set type_scope_caller_module so that fromTypeVar checks the type
+                // scope for flex/rigid vars inside the lambda body. Without this,
+                // layout computations for parameters with unresolved types (like list
+                // elements) would return ZST instead of the concrete type.
+                if (self.type_scope_caller_module == null and self.type_scope.scopes.items.len > 0) {
+                    self.type_scope_caller_module = self.current_module_idx;
+                }
             }
             // Clean up type scope after this expression, whether we exit normally or break early
-            defer if (is_external_call) {
+            defer if (is_external_call or is_local_call_with_hints) {
                 self.type_scope_caller_module = old_caller_module;
                 // Clear the type_scope mappings to avoid polluting subsequent calls
                 if (self.type_scope.scopes.items.len > 0) {
@@ -1598,6 +1606,8 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                         }
                     } else if (std.mem.eql(u8, field_name, "get")) {
                         // list.get(idx) -> list_get(list, idx)
+                        // The codegen handles bounds checking and Try wrapping when
+                        // ret_layout is a tag union (Try(elem, [OutOfBounds])).
                         if (arg_slice.len >= 1) {
                             const idx = try self.lowerExprFromIdx(module_env, arg_slice[0]);
                             const ret_layout = self.getExprLayoutFromIdx(module_env, expr_idx);

@@ -1313,8 +1313,14 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     } };
                 },
                 .list_get => {
-                    // list_get(list, index) -> element
-                    // Unsafe variant (no bounds checking), called by List.get_unsafe
+                    // list_get(list, index) -> element or Try(element, [OutOfBounds])
+                    //
+                    // When ret_layout is a tag_union (from List.get method dispatch),
+                    // this performs bounds checking and returns a proper Try result:
+                    //   if index < list.len then Ok(element) else Err(OutOfBounds)
+                    //
+                    // When ret_layout is NOT a tag_union (from list_get_unsafe),
+                    // this returns the bare element without bounds checking.
                     if (args.len < 2) return Error.UnsupportedExpression;
                     const list_loc = try self.generateExpr(args[0]);
                     const index_loc = try self.generateExpr(args[1]);
@@ -1326,13 +1332,40 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         else => return Error.UnsupportedExpression,
                     };
 
-                    // Get element size from ret_layout
                     const ls = self.layout_store orelse unreachable;
                     const ret_layout_val = ls.getLayout(ll.ret_layout);
-                    const elem_size: u32 = ls.layoutSizeAlign(ret_layout_val).size;
 
-                    if (elem_size == 0) {
-                        // ZST element - no actual data to load
+                    // Determine element layout: extract from the list arg's layout
+                    // (not from ret_layout, which may be a Try tag union)
+                    const elem_layout_idx: layout.Idx = blk: {
+                        // Try to get the list layout from the first argument
+                        if (self.getExprLayout(args[0])) |list_layout_idx| {
+                            const list_layout_val = ls.getLayout(list_layout_idx);
+                            if (list_layout_val.tag == .list) {
+                                break :blk list_layout_val.data.list;
+                            }
+                        }
+                        // Fallback: if ret_layout is a tag_union (Try), extract
+                        // the Ok variant's payload layout as element layout
+                        if (ret_layout_val.tag == .tag_union) {
+                            const tu_data = ls.getTagUnionData(ret_layout_val.data.tag_union.idx);
+                            const variants = ls.getTagUnionVariants(tu_data);
+                            // Ok is discriminant 1 (tags sorted alphabetically: Err=0, Ok=1)
+                            if (variants.len > 1) {
+                                break :blk variants.get(1).payload_layout;
+                            }
+                        }
+                        // Last resort: use ret_layout directly (for list_get_unsafe)
+                        break :blk ll.ret_layout;
+                    };
+                    const elem_layout_val = ls.getLayout(elem_layout_idx);
+                    const elem_size: u32 = ls.layoutSizeAlign(elem_layout_val).size;
+
+                    // Check if this is a safe List.get (ret_layout is a tag_union)
+                    const is_safe_get = ret_layout_val.tag == .tag_union;
+
+                    if (elem_size == 0 and !is_safe_get) {
+                        // ZST element with unsafe get - no actual data to load
                         return .{ .immediate_i64 = 0 };
                     }
 
@@ -1347,22 +1380,117 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                             self.codegen.freeGeneral(reg);
                         },
                         .stack => |off| {
-                            if (comptime builtin.cpu.arch == .aarch64) {
-                                try self.codegen.emit.ldrRegMemSoff(.w64, index_reg, .FP, off);
-                            } else {
-                                try self.codegen.emit.movRegMem(.w64, index_reg, .RBP, off);
-                            }
+                            try self.codegen.emitLoadStack(.w64, index_reg, off);
+                        },
+                        .stack_i128 => |off| {
+                            // Dec/i128 index - just load the low 64 bits as U64
+                            try self.codegen.emitLoadStack(.w64, index_reg, off);
+                        },
+                        .immediate_i128 => |val| {
+                            // i128 immediate - truncate to 64 bits for index
+                            const low: u64 = @truncate(@as(u128, @bitCast(val)));
+                            try self.codegen.emitLoadImm(index_reg, @bitCast(low));
                         },
                         else => return Error.UnsupportedExpression,
                     }
 
+                    if (is_safe_get) {
+                        // Safe List.get: bounds check + Try result construction
+                        const tu_data = ls.getTagUnionData(ret_layout_val.data.tag_union.idx);
+                        const tag_size = tu_data.size;
+                        const disc_offset = tu_data.discriminant_offset;
+                        const disc_size = tu_data.discriminant_size;
+
+                        // Allocate result slot for the tag union
+                        const result_slot = self.codegen.allocStackSlot(tag_size);
+                        try self.zeroStackArea(result_slot, tag_size);
+
+                        // Load list length (offset 8 in list struct)
+                        const len_reg = try self.allocTempGeneral();
+                        try self.codegen.emitLoadStack(.w64, len_reg, list_base + 8);
+
+                        // Compare: index < length (unsigned)
+                        try self.emitCmpRegReg(index_reg, len_reg);
+                        self.codegen.freeGeneral(len_reg);
+
+                        // Jump to else (Err) if index >= length (unsigned compare)
+                        // aarch64: cs = carry set = unsigned >=
+                        // x86_64: above_or_equal = unsigned >=
+                        const unsigned_ge = if (comptime builtin.cpu.arch == .aarch64) .cs else .above_or_equal;
+                        const else_patch = try self.codegen.emitCondJump(unsigned_ge);
+
+                        // === THEN branch: Ok(element) ===
+                        // Load list pointer
+                        const ptr_reg = try self.allocTempGeneral();
+                        try self.codegen.emitLoadStack(.w64, ptr_reg, list_base);
+
+                        // Calculate element address: ptr + index * elem_size
+                        if (elem_size == 0) {
+                            // ZST element - nothing to load, just store discriminant
+                            self.codegen.freeGeneral(ptr_reg);
+                        } else {
+                            const addr_reg = try self.allocTempGeneral();
+                            try self.codegen.emit.movRegReg(.w64, addr_reg, index_reg);
+
+                            if (elem_size != 1) {
+                                const size_reg = try self.allocTempGeneral();
+                                try self.codegen.emitLoadImm(size_reg, elem_size);
+                                if (comptime builtin.cpu.arch == .aarch64) {
+                                    try self.codegen.emit.mulRegRegReg(.w64, addr_reg, addr_reg, size_reg);
+                                } else {
+                                    try self.codegen.emit.imulRegReg(.w64, addr_reg, size_reg);
+                                }
+                                self.codegen.freeGeneral(size_reg);
+                            }
+
+                            if (comptime builtin.cpu.arch == .aarch64) {
+                                try self.codegen.emit.addRegRegReg(.w64, addr_reg, addr_reg, ptr_reg);
+                            } else {
+                                try self.codegen.emit.addRegReg(.w64, addr_reg, ptr_reg);
+                            }
+                            self.codegen.freeGeneral(ptr_reg);
+
+                            // Copy element into payload area of tag union (at result_slot + 0)
+                            const temp_reg = try self.allocTempGeneral();
+                            var copied: u32 = 0;
+                            while (copied < elem_size) : (copied += 8) {
+                                const chunk_size: u32 = @min(8, elem_size - copied);
+                                _ = chunk_size;
+                                if (comptime builtin.cpu.arch == .aarch64) {
+                                    try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, addr_reg, @intCast(copied));
+                                    try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, result_slot + @as(i32, @intCast(copied)));
+                                } else {
+                                    try self.codegen.emit.movRegMem(.w64, temp_reg, addr_reg, @intCast(copied));
+                                    try self.codegen.emit.movMemReg(.w64, .RBP, result_slot + @as(i32, @intCast(copied)), temp_reg);
+                                }
+                            }
+                            self.codegen.freeGeneral(temp_reg);
+                            self.codegen.freeGeneral(addr_reg);
+                        }
+
+                        // Store Ok discriminant (1)
+                        try self.storeDiscriminant(result_slot + @as(i32, @intCast(disc_offset)), 1, disc_size);
+
+                        // Jump to end
+                        const end_patch = try self.codegen.emitJump();
+
+                        // === ELSE branch: Err(OutOfBounds) ===
+                        self.codegen.patchJump(else_patch, self.codegen.currentOffset());
+                        // Result is already zeroed (payload = 0 for Err).
+                        // Store Err discriminant (0) — already 0 from zeroing, but be explicit
+                        try self.storeDiscriminant(result_slot + @as(i32, @intCast(disc_offset)), 0, disc_size);
+
+                        // === END ===
+                        self.codegen.patchJump(end_patch, self.codegen.currentOffset());
+
+                        self.codegen.freeGeneral(index_reg);
+                        return .{ .stack = result_slot };
+                    }
+
+                    // Unsafe list_get: no bounds checking, return bare element
                     // Load list pointer (offset 0 in list struct)
                     const ptr_reg = try self.allocTempGeneral();
-                    if (comptime builtin.cpu.arch == .aarch64) {
-                        try self.codegen.emit.ldrRegMemSoff(.w64, ptr_reg, .FP, list_base);
-                    } else {
-                        try self.codegen.emit.movRegMem(.w64, ptr_reg, .RBP, list_base);
-                    }
+                    try self.codegen.emitLoadStack(.w64, ptr_reg, list_base);
 
                     // Calculate element address: ptr + index * elem_size
                     const addr_reg = try self.allocTempGeneral();
@@ -1418,11 +1546,11 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     self.codegen.freeGeneral(addr_reg);
 
                     // Return with appropriate value location based on element type
-                    if (ll.ret_layout == .i128 or ll.ret_layout == .u128 or ll.ret_layout == .dec) {
+                    if (elem_layout_idx == .i128 or elem_layout_idx == .u128 or elem_layout_idx == .dec) {
                         return .{ .stack_i128 = elem_slot };
-                    } else if (ll.ret_layout == .str) {
+                    } else if (elem_layout_idx == .str) {
                         return .{ .stack_str = elem_slot };
-                    } else if (ret_layout_val.tag == .list or ret_layout_val.tag == .list_of_zst) {
+                    } else if (elem_layout_val.tag == .list or elem_layout_val.tag == .list_of_zst) {
                         return .{ .list_stack = .{
                             .struct_offset = elem_slot,
                             .data_offset = 0,
