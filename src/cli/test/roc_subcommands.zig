@@ -714,9 +714,7 @@ test "roc test with nested list chunks does not panic on layout upgrade" {
     // This test verifies that nested list operations with layout upgrades
     // (from list_of_zst to concrete list types) don't cause integer overflow panics.
     // The expect in the test file is designed to fail, but execution should not panic.
-    // Note: --no-cache is needed because the interpreter's runtime_layout_store may need
-    // to insert new identifiers, which fails if the module env's interner is deserialized.
-    const result = try util.runRoc(gpa, &.{ "test", "--no-cache" }, "test/cli/issue8699.roc");
+    const result = try util.runRoc(gpa, &.{"test"}, "test/cli/issue8699.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
