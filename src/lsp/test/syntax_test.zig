@@ -759,11 +759,13 @@ test "hover shows documentation for local function call" {
     const hover = try h.getHover(source, 6, 10);
     if (hover) |text| {
         defer h.allocator.free(text);
+        std.debug.print("\n=== HOVER TEXT ===\n{s}\n=== END ===\n", .{text});
         // Should contain the doc comment from the definition
         try std.testing.expect(std.mem.indexOf(u8, text, "Multiplies two numbers") != null);
         // Should contain the type signature
         try std.testing.expect(std.mem.indexOf(u8, text, "I64, I64 -> I64") != null);
     } else {
+        std.debug.print("\n=== HOVER RETURNED NULL ===\n", .{});
         return error.TestUnexpectedResult;
     }
 }
