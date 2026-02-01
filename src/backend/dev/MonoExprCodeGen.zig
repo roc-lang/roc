@@ -7113,7 +7113,6 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             var result_size: u32 = ls.layoutSizeAlign(result_layout_val).size;
             var use_stack_result = result_size > 8;
             const value_layout_val = ls.getLayout(when_expr.value_layout);
-
             const tu_disc_offset: i32 = if (value_layout_val.tag == .tag_union) blk: {
                 const tu_data = ls.getTagUnionData(value_layout_val.data.tag_union.idx);
                 break :blk @intCast(tu_data.discriminant_offset);
@@ -7250,6 +7249,12 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                                 break :vl_blk null;
                             } else null;
 
+                            // Determine if payload is a tuple (multi-field payload)
+                            const payload_is_tuple = if (variant_payload_layout) |pl| blk_pt: {
+                                const pl_val = ls.getLayout(pl);
+                                break :blk_pt pl_val.tag == .tuple;
+                            } else false;
+
                             for (args, 0..) |arg_pattern_id, arg_idx| {
                                 const arg_pattern = self.store.getPattern(arg_pattern_id);
                                 switch (arg_pattern) {
@@ -7257,10 +7262,16 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                                         const symbol_key: u48 = @bitCast(arg_bind.symbol);
                                         switch (value_loc) {
                                             .stack => |base_offset| {
-                                                // Payload starts at offset 0 in tag union
-                                                const payload_offset = base_offset + @as(i32, @intCast(arg_idx)) * 8;
-                                                // Use appropriate ValueLocation based on payload layout
-                                                const arg_loc: ValueLocation = if (variant_payload_layout) |pl| plblk: {
+                                                const arg_loc: ValueLocation = if (payload_is_tuple and variant_payload_layout != null) plblk: {
+                                                    // Multi-arg tag: payload is a tuple, use tuple element offsets/layouts
+                                                    const pl_val = ls.getLayout(variant_payload_layout.?);
+                                                    const elem_offset = ls.getTupleElementOffsetByOriginalIndex(pl_val.data.tuple.idx, @intCast(arg_idx));
+                                                    const elem_layout = ls.getTupleElementLayoutByOriginalIndex(pl_val.data.tuple.idx, @intCast(arg_idx));
+                                                    const arg_offset = base_offset + @as(i32, @intCast(elem_offset));
+                                                    break :plblk self.stackLocationForLayout(elem_layout, arg_offset);
+                                                } else if (variant_payload_layout) |pl| plblk: {
+                                                    // Single-arg tag: use variant payload layout directly
+                                                    const payload_offset = base_offset;
                                                     if (pl == .i128 or pl == .u128 or pl == .dec) {
                                                         break :plblk .{ .stack_i128 = payload_offset };
                                                     } else if (pl == .str) {
@@ -7308,7 +7319,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                                                         }
                                                         break :plblk .{ .stack = payload_offset };
                                                     }
-                                                } else .{ .stack = payload_offset };
+                                                } else .{ .stack = base_offset + @as(i32, @intCast(arg_idx)) * 8 };
                                                 try self.symbol_locations.put(symbol_key, arg_loc);
                                             },
                                             else => {
@@ -8296,12 +8307,25 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 try self.copyBytesToStackOffset(base_offset, arg_loc, payload_size);
             } else {
                 // Multiple arguments: use the variant's payload tuple layout to get
-                // field offsets and sizes. This correctly handles boxed/recursive types.
+                // field offsets and sizes. This correctly handles boxed/recursive types
+                // and types larger than 8 bytes (e.g. List=24, Str=24, i128=16).
+                const payload_tuple = if (variant_payload_layout) |pl| blk: {
+                    const pl_val = ls.getLayout(pl);
+                    break :blk if (pl_val.tag == .tuple) pl_val.data.tuple.idx else null;
+                } else null;
+
                 for (arg_exprs, 0..) |arg_expr_id, arg_i| {
                     const arg_loc = try self.generateExpr(arg_expr_id);
-                    // Use copyValueToStackOffset which dispatches correctly based on
-                    // the ValueLocation kind (stack_str→24 bytes, list_stack→24 bytes, etc.)
-                    try self.copyValueToStackOffset(base_offset + @as(i32, @intCast(arg_i * 8)), arg_loc);
+                    const elem_offset: i32 = if (payload_tuple) |tuple_idx|
+                        @intCast(ls.getTupleElementOffsetByOriginalIndex(tuple_idx, @intCast(arg_i)))
+                    else
+                        @as(i32, @intCast(arg_i)) * 8;
+                    const elem_size: u32 = if (payload_tuple) |tuple_idx| blk: {
+                        const elem_layout = ls.getTupleElementLayoutByOriginalIndex(tuple_idx, @intCast(arg_i));
+                        const elem_layout_val = ls.getLayout(elem_layout);
+                        break :blk ls.layoutSizeAlign(elem_layout_val).size;
+                    } else self.valueSizeFromLoc(arg_loc);
+                    try self.copyBytesToStackOffset(base_offset + elem_offset, arg_loc, elem_size);
                 }
             }
 
