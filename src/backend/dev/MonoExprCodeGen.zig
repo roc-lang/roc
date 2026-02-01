@@ -858,7 +858,6 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         /// Errors that can occur during code generation
         pub const Error = error{
             OutOfMemory,
-            UnsupportedExpression,
             NoRegisterToSpill,
             InvalidLocalLocation,
             LocalNotFound,
@@ -1220,7 +1219,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             switch (ll.op) {
                 .list_len => {
                     // List is a (ptr, len, capacity) triple - length is at offset 8
-                    if (args.len < 1) return Error.UnsupportedExpression;
+                    std.debug.assert(args.len >= 1);
                     const list_loc = try self.generateExpr(args[0]);
 
                     // Get base offset from either stack or list_stack location
@@ -1232,9 +1231,9 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                             if (val == 0) {
                                 return .{ .immediate_i64 = 0 };
                             }
-                            return Error.UnsupportedExpression;
+                            unreachable;
                         },
-                        else => return Error.UnsupportedExpression,
+                        else => unreachable,
                     };
 
                     // Length is at offset 8 in the list struct
@@ -1248,7 +1247,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 },
                 .list_is_empty => {
                     // List is empty if length is 0
-                    if (args.len < 1) return Error.UnsupportedExpression;
+                    std.debug.assert(args.len >= 1);
                     const list_loc = try self.generateExpr(args[0]);
 
                     const base_offset: i32 = switch (list_loc) {
@@ -1261,7 +1260,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                             }
                             unreachable;
                         },
-                        else => return Error.UnsupportedExpression,
+                        else => unreachable,
                     };
 
                     {
@@ -1661,7 +1660,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     //
                     // When ret_layout is NOT a tag_union (from list_get_unsafe),
                     // this returns the bare element without bounds checking.
-                    if (args.len < 2) return Error.UnsupportedExpression;
+                    std.debug.assert(args.len >= 2);
                     const list_loc = try self.generateExpr(args[0]);
                     const index_loc = try self.generateExpr(args[1]);
 
@@ -1669,7 +1668,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     const list_base: i32 = switch (list_loc) {
                         .stack => |off| off,
                         .list_stack => |ls_info| ls_info.struct_offset,
-                        else => return Error.UnsupportedExpression,
+                        else => unreachable,
                     };
 
                     const ls = self.layout_store orelse unreachable;
@@ -1731,7 +1730,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                             const low: u64 = @truncate(@as(u128, @bitCast(val)));
                             try self.codegen.emitLoadImm(index_reg, @bitCast(low));
                         },
-                        else => return Error.UnsupportedExpression,
+                        else => unreachable,
                     }
 
                     if (is_safe_get) {
@@ -2230,7 +2229,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 .i16_to_i64,
                 .i32_to_i64,
                 => {
-                    if (args.len < 1) return Error.UnsupportedExpression;
+                    std.debug.assert(args.len >= 1);
                     const src_loc = try self.generateExpr(args[0]);
                     const src_reg = try self.ensureInGeneralReg(src_loc);
                     // Sign-extend: shift left to put sign bit at bit 63, then arithmetic shift right
@@ -2265,7 +2264,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 .u32_to_i64,
                 .u32_to_u64,
                 => {
-                    if (args.len < 1) return Error.UnsupportedExpression;
+                    std.debug.assert(args.len >= 1);
                     const src_loc = try self.generateExpr(args[0]);
                     const src_reg = try self.ensureInGeneralReg(src_loc);
                     // Zero-extend: mask off upper bits
@@ -2326,7 +2325,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 .i64_to_u32_wrap,
                 .i64_to_u64_wrap,
                 => {
-                    if (args.len < 1) return Error.UnsupportedExpression;
+                    std.debug.assert(args.len >= 1);
                     const src_loc = try self.generateExpr(args[0]);
                     const src_reg = try self.ensureInGeneralReg(src_loc);
                     // Truncation: just mask the relevant bits
@@ -3342,14 +3341,14 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     if (args.len != 1) unreachable;
                     const list_loc = try self.generateExpr(args[0]);
                     _ = list_loc;
-                    return Error.UnsupportedExpression; // Complex: returns a record/tuple
+                    unreachable; // Complex: returns a record/tuple
                 },
                 .list_split_last => {
                     // list_split_last(list) -> {List, element}
                     if (args.len != 1) unreachable;
                     const list_loc = try self.generateExpr(args[0]);
                     _ = list_loc;
-                    return Error.UnsupportedExpression; // Complex: returns a record/tuple
+                    unreachable; // Complex: returns a record/tuple
                 },
 
                 // ── Integer-to-integer try conversions ──
@@ -3482,13 +3481,13 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 => {
                     std.debug.print("BUG: generic num op {s} should have been resolved by Mono IR lowering\n", .{@tagName(ll.op)});
                     if (std.debug.runtime_safety) unreachable;
-                    return Error.UnsupportedExpression;
+                    unreachable;
                 },
                 .box_box,
                 .box_unbox,
                 => {
                     std.debug.print("BUG: box operations not yet supported in dev backend: {s}\n", .{@tagName(ll.op)});
-                    return Error.UnsupportedExpression;
+                    unreachable;
                 },
                 .crash => {
                     // Runtime crash: abort execution
@@ -3840,7 +3839,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             const list_base: i32 = switch (list_loc) {
                 .stack => |off| off,
                 .list_stack => |ls_info| ls_info.struct_offset,
-                else => return Error.UnsupportedExpression,
+                else => unreachable,
             };
 
             const ls = self.layout_store orelse unreachable;
@@ -3903,7 +3902,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             const list_base: i32 = switch (list_loc) {
                 .stack => |off| off,
                 .list_stack => |ls_info| ls_info.struct_offset,
-                else => return Error.UnsupportedExpression,
+                else => unreachable,
             };
 
             const ls = self.layout_store orelse unreachable;
@@ -4018,7 +4017,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     // Empty list: contains always returns false
                     return .{ .immediate_i64 = 0 };
                 },
-                else => return Error.UnsupportedExpression,
+                else => unreachable,
             };
 
             // Save needle to stack
@@ -5544,7 +5543,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             const fn_addr = @intFromPtr(&builtins.dec.divC);
 
             // Get the saved RocOps register
-            const roc_ops_reg = self.roc_ops_reg orelse return Error.UnsupportedExpression;
+            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
 
             if (comptime builtin.cpu.arch == .aarch64) {
                 // aarch64 calling convention for divC(RocDec, RocDec, *RocOps) -> i128:
@@ -5638,7 +5637,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             const fn_addr = @intFromPtr(&builtins.dec.divTruncC);
 
             // Get the saved RocOps register
-            const roc_ops_reg = self.roc_ops_reg orelse return Error.UnsupportedExpression;
+            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
 
             if (comptime builtin.cpu.arch == .aarch64) {
                 // aarch64 calling convention for divTruncC(RocDec, RocDec, *RocOps) -> i128:
@@ -5743,7 +5742,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             else if (is_rem) @intFromPtr(&num_remTruncI128) else @intFromPtr(&num_divTruncI128);
 
             // Get the saved RocOps register
-            const roc_ops_reg = self.roc_ops_reg orelse return Error.UnsupportedExpression;
+            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
 
             if (comptime builtin.cpu.arch == .aarch64) {
                 // aarch64 calling convention for (i128, i128, *RocOps) -> i128:
@@ -6283,7 +6282,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // Get list elements for element-by-element comparison
             const lhs_list = switch (lhs_expr) {
                 .list => |l| l,
-                else => return Error.UnsupportedExpression,
+                else => unreachable,
             };
             const lhs_elems = self.store.getExprSpan(lhs_list.elems);
 
@@ -6310,7 +6309,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 .i32, .u32, .f32 => 4,
                 .i64, .u64, .f64, .str => 8,
                 .i128, .u128, .dec => 16,
-                else => return Error.UnsupportedExpression,
+                else => unreachable,
             };
 
             const result_reg = try self.allocTempGeneral();
@@ -6348,7 +6347,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         try self.codegen.emit.movRegMem(.w64, lhs_ptr_reg, .RBP, list_info.struct_offset);
                     }
                 },
-                else => return Error.UnsupportedExpression,
+                else => unreachable,
             }
 
             // Load rhs ptr
@@ -6369,7 +6368,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         try self.codegen.emit.movRegMem(.w64, rhs_ptr_reg, .RBP, list_info.struct_offset);
                     }
                 },
-                else => return Error.UnsupportedExpression,
+                else => unreachable,
             }
 
             // Compare each element through the pointers
@@ -6523,9 +6522,9 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             record_layout_idx: layout.Idx,
             op: MonoExpr.BinOp,
         ) Error!ValueLocation {
-            const ls = self.layout_store orelse return Error.UnsupportedExpression;
+            const ls = self.layout_store orelse unreachable;
             const stored_layout = ls.getLayout(record_layout_idx);
-            if (stored_layout.tag != .record) return Error.UnsupportedExpression;
+            if (stored_layout.tag != .record) unreachable;
 
             const record_idx = stored_layout.data.record.idx;
             const record_data = ls.getRecordData(record_idx);
@@ -6729,7 +6728,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     self.codegen.freeGeneral(temp);
                     break :blk slot;
                 },
-                else => return Error.UnsupportedExpression,
+                else => unreachable,
             };
         }
 
@@ -6742,7 +6741,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             _: MonoExpr.BinOp, // op
         ) Error!ValueLocation {
             // TODO: Implement tuple comparison by layout
-            return Error.UnsupportedExpression;
+            unreachable;
         }
 
         /// Generate list comparison using layout information
@@ -6754,7 +6753,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             _: MonoExpr.BinOp, // op
         ) Error!ValueLocation {
             // TODO: Implement list comparison by layout
-            return Error.UnsupportedExpression;
+            unreachable;
         }
 
         /// Generate floating-point binary operation
@@ -6915,7 +6914,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         .tag_union => ls.getTagUnionData(result_layout.data.tag_union.idx).size,
                         .zst => 0,
                         .scalar => ls.layoutSizeAlign(result_layout).size,
-                        else => return Error.UnsupportedExpression,
+                        else => unreachable,
                     };
                 } else unreachable,
             };
@@ -7071,11 +7070,11 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // Get the branches
             const branches = self.store.getWhenBranches(when_expr.branches);
             if (branches.len == 0) {
-                return Error.UnsupportedExpression;
+                unreachable;
             }
 
             // Determine result size to decide between register and stack result
-            const ls = self.layout_store orelse return Error.UnsupportedExpression;
+            const ls = self.layout_store orelse unreachable;
             const result_layout_val = ls.getLayout(when_expr.result_layout);
             var result_size: u32 = ls.layoutSizeAlign(result_layout_val).size;
             var use_stack_result = result_size > 8;
@@ -7188,7 +7187,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                             },
                             else => {
                                 self.codegen.freeGeneral(disc_reg);
-                                return Error.UnsupportedExpression;
+                                unreachable;
                             },
                         }
 
@@ -7318,7 +7317,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                             .stack => |off| off,
                             .stack_str => |off| off,
                             .list_stack => |list_info| list_info.struct_offset,
-                            else => return Error.UnsupportedExpression,
+                            else => unreachable,
                         };
 
                         // Load list length from stack (offset 8 from struct base)
@@ -7524,7 +7523,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         break;
                     },
                     else => {
-                        return Error.UnsupportedExpression;
+                        unreachable;
                     },
                 }
             }
@@ -7700,7 +7699,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             const elements_refcounted: bool = ls.layoutContainsRefcounted(elem_layout_data);
 
             // Get the saved RocOps register
-            const roc_ops_reg = self.roc_ops_reg orelse return Error.UnsupportedExpression;
+            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
 
             // Call allocateWithRefcountC(data_bytes, element_alignment, elements_refcounted, roc_ops)
             // Returns pointer to allocated memory (refcount is already initialized to 1)
@@ -7920,18 +7919,18 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
         /// Generate code for a record literal
         fn generateRecord(self: *Self, rec: anytype) Error!ValueLocation {
-            const ls = self.layout_store orelse return Error.UnsupportedExpression;
+            const ls = self.layout_store orelse unreachable;
 
             // Validate layout index before use
             if (@intFromEnum(rec.record_layout) >= ls.layouts.len()) {
                 std.debug.print("ERROR generateRecord: record_layout={} out of bounds (len={})\n", .{ @intFromEnum(rec.record_layout), ls.layouts.len() });
-                return Error.UnsupportedExpression;
+                unreachable;
             }
 
             // Get the record layout
             const record_layout = ls.getLayout(rec.record_layout);
             if (record_layout.tag != .record) {
-                return Error.UnsupportedExpression;
+                unreachable;
             }
 
             const record_data = ls.getRecordData(record_layout.data.record.idx);
@@ -8018,7 +8017,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         }
 
         fn generateFieldAccess(self: *Self, access: anytype) Error!ValueLocation {
-            const ls = self.layout_store orelse return Error.UnsupportedExpression;
+            const ls = self.layout_store orelse unreachable;
 
             // Generate code for the record expression
             const record_loc = try self.generateExpr(access.record_expr);
@@ -8058,7 +8057,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     // Record in register - only valid for small records (<=8 bytes)
                     // A record with a 16-byte field cannot fit in a register
                     if (field_size > 8) {
-                        return Error.UnsupportedExpression;
+                        unreachable;
                     }
                     if (field_offset == 0) {
                         return .{ .general_reg = reg };
@@ -8076,23 +8075,23 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 },
                 .immediate_i64 => |val| {
                     if (field_size > 8) {
-                        return Error.UnsupportedExpression;
+                        unreachable;
                     }
                     const shifted = val >> @intCast(field_offset * 8);
                     return .{ .immediate_i64 = shifted };
                 },
-                else => return Error.UnsupportedExpression,
+                else => unreachable,
             };
         }
 
         /// Generate code for a tuple literal
         fn generateTuple(self: *Self, tup: anytype) Error!ValueLocation {
-            const ls = self.layout_store orelse return Error.UnsupportedExpression;
+            const ls = self.layout_store orelse unreachable;
 
             // Get the tuple layout
             const tuple_layout = ls.getLayout(tup.tuple_layout);
             if (tuple_layout.tag != .tuple) {
-                return Error.UnsupportedExpression;
+                unreachable;
             }
 
             const tuple_data = ls.getTupleData(tuple_layout.data.tuple.idx);
@@ -8124,7 +8123,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
         /// Generate code for tuple element access
         fn generateTupleAccess(self: *Self, access: anytype) Error!ValueLocation {
-            const ls = self.layout_store orelse return Error.UnsupportedExpression;
+            const ls = self.layout_store orelse unreachable;
 
             // Generate code for the tuple expression
             const tuple_loc = try self.generateExpr(access.tuple_expr);
@@ -8132,7 +8131,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // Get the tuple layout to find element offset and size
             const tuple_layout = ls.getLayout(access.tuple_layout);
             if (tuple_layout.tag != .tuple) {
-                return Error.UnsupportedExpression;
+                unreachable;
             }
 
             const elem_offset = ls.getTupleElementOffset(tuple_layout.data.tuple.idx, access.elem_idx);
@@ -8160,7 +8159,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     // Tuple in register - only valid for small tuples (<=8 bytes)
                     // A tuple with a 16-byte element cannot fit in a register
                     if (elem_size > 8) {
-                        return Error.UnsupportedExpression;
+                        unreachable;
                     }
                     if (elem_offset == 0) {
                         return .{ .general_reg = reg };
@@ -8178,18 +8177,18 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 },
                 .immediate_i64 => |val| {
                     if (elem_size > 8) {
-                        return Error.UnsupportedExpression;
+                        unreachable;
                     }
                     const shifted = val >> @intCast(elem_offset * 8);
                     return .{ .immediate_i64 = shifted };
                 },
-                else => return Error.UnsupportedExpression,
+                else => unreachable,
             };
         }
 
         /// Generate code for a zero-argument tag (just discriminant)
         fn generateZeroArgTag(self: *Self, tag: anytype) Error!ValueLocation {
-            const ls = self.layout_store orelse return Error.UnsupportedExpression;
+            const ls = self.layout_store orelse unreachable;
 
             // Get the union layout
             const union_layout = ls.getLayout(tag.union_layout);
@@ -8228,12 +8227,12 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
         /// Generate code for a tag with payload arguments
         fn generateTag(self: *Self, tag: anytype) Error!ValueLocation {
-            const ls = self.layout_store orelse return Error.UnsupportedExpression;
+            const ls = self.layout_store orelse unreachable;
 
             // Get the union layout
             const union_layout = ls.getLayout(tag.union_layout);
             if (union_layout.tag != .tag_union) {
-                return Error.UnsupportedExpression;
+                unreachable;
             }
 
             const tu_data = ls.getTagUnionData(union_layout.data.tag_union.idx);
@@ -8586,7 +8585,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 self.codegen.freeGeneral(reg);
             } else {
                 // Large string: needs heap allocation
-                const roc_ops_reg = self.roc_ops_reg orelse return Error.UnsupportedExpression;
+                const roc_ops_reg = self.roc_ops_reg orelse unreachable;
                 const fn_addr: usize = @intFromPtr(&allocateWithRefcountC);
 
                 // Allocate stack slot to save the heap pointer
@@ -8717,7 +8716,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 .stack => |off| off,
                 .stack_str => |off| off,
                 .list_stack => |list_info| list_info.struct_offset,
-                else => return Error.UnsupportedExpression,
+                else => unreachable,
             };
 
             // Get element layout and size.
@@ -8959,7 +8958,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     try self.codegen.emit.movRegReg(.w64, reg, r);
                     break :blk reg;
                 },
-                else => return Error.UnsupportedExpression,
+                else => unreachable,
             };
 
             // Compare condition with 0 (false)
@@ -9143,7 +9142,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         /// Common helper: call a C wrapper fn(out: *RocStr, value: T, roc_ops: *RocOps)
         /// is_small_value: true if value fits in one register (≤8 bytes), false for 16-byte values
         fn callToStrC(self: *Self, fn_addr: usize, val_loc: ValueLocation, is_small_value: bool) Error!ValueLocation {
-            const roc_ops_reg = self.roc_ops_reg orelse return Error.UnsupportedExpression;
+            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
 
             // Allocate stack space for result (RocStr = 24 bytes)
             const result_offset = self.codegen.allocStackSlot(24);
@@ -9243,7 +9242,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // Get the value and read its discriminant
             const value_loc = try self.generateExpr(ds.value);
 
-            const ls = self.layout_store orelse return Error.UnsupportedExpression;
+            const ls = self.layout_store orelse unreachable;
             const union_layout = ls.getLayout(ds.union_layout);
 
             // Load discriminant value into a register
@@ -9254,7 +9253,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 const base_offset: i32 = switch (value_loc) {
                     .stack => |off| off,
                     .stack_str => |off| off,
-                    else => return Error.UnsupportedExpression,
+                    else => unreachable,
                 };
 
                 const reg = try self.allocTempGeneral();
@@ -9269,14 +9268,14 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 // the value itself IS the discriminant.
                 break :blk try self.ensureInGeneralReg(value_loc);
             } else {
-                return Error.UnsupportedExpression;
+                unreachable;
             };
 
             // Get the branches
             const branches = self.store.getExprSpan(ds.branches);
             if (branches.len == 0) {
                 self.codegen.freeGeneral(disc_reg);
-                return Error.UnsupportedExpression;
+                unreachable;
             }
 
             // For single branch, just return it
@@ -10010,7 +10009,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     if (inner == .lambda) {
                         return try self.callLambdaBodyDirect(inner.lambda, call.args);
                     }
-                    return Error.UnsupportedExpression;
+                    unreachable;
                 },
 
                 // Chained calls: evaluate inner call, then call result with outer args
@@ -10026,7 +10025,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     if (inner_result == .closure_value) {
                         return try self.generateClosureDispatch(inner_result.closure_value, call.args, call.ret_layout);
                     }
-                    return Error.UnsupportedExpression;
+                    unreachable;
                 },
 
                 // Block calls: evaluate block, if it returns lambda_code or closure_value, call it
@@ -10042,7 +10041,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     if (block_result == .closure_value) {
                         return try self.generateClosureDispatch(block_result.closure_value, call.args, call.ret_layout);
                     }
-                    return Error.UnsupportedExpression;
+                    unreachable;
                 },
 
                 // Lookup a function and call it
@@ -10067,7 +10066,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     return try self.generateLookupCall(lookup, call.args, call.ret_layout);
                 },
 
-                else => return Error.UnsupportedExpression,
+                else => unreachable,
             };
         }
 
@@ -10093,7 +10092,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 },
                 .union_repr => |repr| {
                     // Multiple functions with captures - store tag + captures as tagged union
-                    const ls = self.layout_store orelse return Error.UnsupportedExpression;
+                    const ls = self.layout_store orelse unreachable;
                     const union_layout = ls.getLayout(repr.union_layout);
                     const union_size = ls.layoutSizeAlign(union_layout).size;
                     const slot = self.codegen.allocStackSlot(@intCast(union_size));
@@ -10114,7 +10113,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 .unwrapped_capture => {
                     // Single function with one capture - materialize capture to stack
                     // and store as closure_value for dispatch at call sites.
-                    const ls = self.layout_store orelse return Error.UnsupportedExpression;
+                    const ls = self.layout_store orelse unreachable;
                     const capture_layout = ls.getLayout(closure.representation.unwrapped_capture.capture_layout);
                     const capture_size = ls.layoutSizeAlign(capture_layout).size;
                     const slot = self.codegen.allocStackSlot(@intCast(capture_size));
@@ -10128,7 +10127,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 },
                 .struct_captures => |sc| {
                     // Single function with multiple captures - materialize to struct on stack.
-                    const ls = self.layout_store orelse return Error.UnsupportedExpression;
+                    const ls = self.layout_store orelse unreachable;
                     const struct_layout = ls.getLayout(sc.struct_layout);
                     const struct_size = ls.layoutSizeAlign(struct_layout).size;
                     const slot = self.codegen.allocStackSlot(@intCast(struct_size));
@@ -10143,7 +10142,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 .direct_call => {
                     // Direct call - compile as procedure for direct calling
                     const inner = self.store.getExpr(closure.lambda);
-                    if (inner != .lambda) return Error.UnsupportedExpression;
+                    if (inner != .lambda) unreachable;
                     const code_offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda);
                     return .{ .lambda_code = .{
                         .code_offset = code_offset,
@@ -10162,7 +10161,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 const symbol_key: u48 = @bitCast(capture.symbol);
                 if (self.symbol_locations.get(symbol_key)) |capture_loc| {
                     // Get size of this capture
-                    const ls = self.layout_store orelse return Error.UnsupportedExpression;
+                    const ls = self.layout_store orelse unreachable;
                     const capture_layout = ls.getLayout(capture.layout_idx);
                     const capture_size = ls.layoutSizeAlign(capture_layout).size;
                     const is_i128 = (capture_size >= 16);
@@ -10272,9 +10271,9 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         .closure => |c| blk: {
                             const inner = self.store.getExpr(c.lambda);
                             if (inner == .lambda) break :blk inner.lambda;
-                            return Error.UnsupportedExpression;
+                            unreachable;
                         },
-                        else => return Error.UnsupportedExpression,
+                        else => unreachable,
                     };
                     return try self.callLambdaBodyDirect(lambda, args_span);
                 },
@@ -10293,7 +10292,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             const members = self.store.getLambdaSetMembers(lambda_set);
 
             if (members.len == 0) {
-                return Error.UnsupportedExpression;
+                unreachable;
             }
 
             if (members.len == 1) {
@@ -10357,7 +10356,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             const members = self.store.getLambdaSetMembers(repr.lambda_set);
 
             if (members.len == 0) {
-                return Error.UnsupportedExpression;
+                unreachable;
             }
 
             if (members.len == 1) {
@@ -10426,7 +10425,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             var offset: i32 = 0;
             for (captures) |capture| {
                 const symbol_key: u48 = @bitCast(capture.symbol);
-                const ls = self.layout_store orelse return Error.UnsupportedExpression;
+                const ls = self.layout_store orelse unreachable;
                 const capture_layout = ls.getLayout(capture.layout_idx);
                 const capture_size = ls.layoutSizeAlign(capture_layout).size;
                 // Use stack_i128 for 128-bit values (Dec, i128, u128)
@@ -10445,9 +10444,9 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 .closure => |c| blk: {
                     const inner = self.store.getExpr(c.lambda);
                     if (inner == .lambda) break :blk inner.lambda;
-                    return Error.UnsupportedExpression;
+                    unreachable;
                 },
-                else => return Error.UnsupportedExpression,
+                else => unreachable,
             };
 
             return try self.callLambdaBodyDirect(lambda, args_span);
@@ -10539,9 +10538,9 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         const code_offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda);
                         return try self.generateCallToLambda(code_offset, args_span, ret_layout);
                     }
-                    return Error.UnsupportedExpression;
+                    unreachable;
                 },
-                else => return Error.UnsupportedExpression,
+                else => unreachable,
             }
         }
 
@@ -10562,7 +10561,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             var offset: i32 = 0;
             for (captures) |capture| {
                 const symbol_key: u48 = @bitCast(capture.symbol);
-                const ls = self.layout_store orelse return Error.UnsupportedExpression;
+                const ls = self.layout_store orelse unreachable;
                 const capture_layout = ls.getLayout(capture.layout_idx);
                 const capture_size = ls.layoutSizeAlign(capture_layout).size;
                 try self.symbol_locations.put(symbol_key, .{ .stack = captures_offset + offset });
@@ -10576,9 +10575,9 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 .closure => |c| blk: {
                     const inner = self.store.getExpr(c.lambda);
                     if (inner == .lambda) break :blk inner.lambda;
-                    return Error.UnsupportedExpression;
+                    unreachable;
                 },
-                else => return Error.UnsupportedExpression,
+                else => unreachable,
             };
 
             return try self.callLambdaBodyDirect(lambda, args_span);
@@ -10740,7 +10739,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                             const offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda);
                             return try self.generateCallToLambda(offset, args_span, ret_layout);
                         }
-                        return Error.UnsupportedExpression;
+                        unreachable;
                     },
                     .block => {
                         // Definition is a block — evaluate the block which may produce a lambda/closure
@@ -10755,7 +10754,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         if (block_result == .closure_value) {
                             return try self.generateClosureDispatch(block_result.closure_value, args_span, ret_layout);
                         }
-                        return Error.UnsupportedExpression;
+                        unreachable;
                     },
                     .nominal => |nom| {
                         // Unwrap nominal and retry with the inner expression
@@ -10798,10 +10797,10 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                                 return try self.generateClosureDispatch(block_result.closure_value, args_span, ret_layout);
                             }
                         }
-                        return Error.UnsupportedExpression;
+                        unreachable;
                     },
                     .runtime_error => return Error.RuntimeError,
-                    else => return Error.UnsupportedExpression,
+                    else => unreachable,
                 };
             }
 
@@ -11447,7 +11446,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                                 }
                                 return;
                             },
-                            else => return Error.UnsupportedExpression,
+                            else => unreachable,
                         }
                     } else {
                         unreachable; // non-scalar layout must have layout store
@@ -11814,7 +11813,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             var reg_idx: u8 = 0;
 
             for (pattern_ids) |pattern_id| {
-                if (reg_idx >= max_arg_regs) return Error.UnsupportedExpression;
+                if (reg_idx >= max_arg_regs) unreachable;
                 const pattern = self.store.getPattern(pattern_id);
                 switch (pattern) {
                     .bind => |bind| {
@@ -11873,7 +11872,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                                     const size = ls.layoutSizeAlign(layout_val).size;
                                     if (size > 8) {
                                         const num_regs: u8 = @intCast((size + 7) / 8);
-                                        if (reg_idx + num_regs > max_arg_regs) return Error.UnsupportedExpression;
+                                        if (reg_idx + num_regs > max_arg_regs) unreachable;
                                         const stack_offset = self.codegen.allocStackSlot(@intCast(size));
                                         var ri: u8 = 0;
                                         while (ri < num_regs) : (ri += 1) {
@@ -11907,11 +11906,11 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     },
                     .record => |rec| {
                         // Record destructuring: store registers to stack, then delegate to bindPattern
-                        const ls = self.layout_store orelse return Error.UnsupportedExpression;
+                        const ls = self.layout_store orelse unreachable;
                         const record_layout = ls.getLayout(rec.record_layout);
                         const size = ls.layoutSizeAlign(record_layout).size;
                         const num_regs: u8 = @intCast((size + 7) / 8);
-                        if (reg_idx + num_regs > max_arg_regs) return Error.UnsupportedExpression;
+                        if (reg_idx + num_regs > max_arg_regs) unreachable;
                         const stack_offset = self.codegen.allocStackSlot(@intCast(size));
                         var ri: u8 = 0;
                         while (ri < num_regs) : (ri += 1) {
@@ -11923,7 +11922,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     },
                     .list => {
                         // List destructuring: lists are 24 bytes (ptr, len, capacity) = 3 registers
-                        if (reg_idx + 3 > max_arg_regs) return Error.UnsupportedExpression;
+                        if (reg_idx + 3 > max_arg_regs) unreachable;
                         const stack_offset = self.codegen.allocStackSlot(24);
                         const arg_reg0 = self.getArgumentRegister(reg_idx);
                         const arg_reg1 = self.getArgumentRegister(reg_idx + 1);
@@ -11936,11 +11935,11 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     },
                     .tuple => |tup| {
                         // Tuple destructuring: store registers to stack, then delegate to bindPattern
-                        const ls = self.layout_store orelse return Error.UnsupportedExpression;
+                        const ls = self.layout_store orelse unreachable;
                         const tuple_layout = ls.getLayout(tup.tuple_layout);
                         const size = ls.layoutSizeAlign(tuple_layout).size;
                         const num_regs: u8 = @intCast((size + 7) / 8);
-                        if (reg_idx + num_regs > max_arg_regs) return Error.UnsupportedExpression;
+                        if (reg_idx + num_regs > max_arg_regs) unreachable;
                         const stack_offset = self.codegen.allocStackSlot(@intCast(size));
                         var ri: u8 = 0;
                         while (ri < num_regs) : (ri += 1) {
@@ -12102,7 +12101,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     // Can't return a closure_value from a compiled procedure - the
                     // closure's capture data lives on this procedure's stack frame
                     // which is deallocated on return.
-                    return Error.UnsupportedExpression;
+                    unreachable;
                 },
                 else => {
                     // For other types (like float_reg), try to handle appropriately
@@ -13783,7 +13782,6 @@ pub const UnsupportedArchCodeGen = struct {
 
     pub const Error = error{
         UnsupportedArchitecture,
-        UnsupportedExpression,
         OutOfMemory,
     };
 

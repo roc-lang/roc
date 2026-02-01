@@ -271,7 +271,6 @@ pub const DevEvaluator = struct {
     pub const Error = error{
         OutOfMemory,
         UnsupportedType,
-        UnsupportedExpression,
         Crash,
         RuntimeError,
         ParseError,
@@ -484,7 +483,7 @@ pub const DevEvaluator = struct {
 
         // Lower CIR expression to Mono IR
         const lowered_expr_id = lowerer.lowerExpr(module_idx, expr_idx) catch {
-            return error.UnsupportedExpression;
+            return error.RuntimeError;
         };
 
         // Run RC insertion pass on the Mono IR
@@ -498,7 +497,7 @@ pub const DevEvaluator = struct {
         var type_scope = types.TypeScope.init(self.allocator);
         defer type_scope.deinit();
         const result_layout = layout_store_ptr.fromTypeVar(module_idx, type_var, &type_scope, null) catch {
-            return error.UnsupportedExpression;
+            return error.RuntimeError;
         };
 
         // Detect tuple expressions to set tuple_len
@@ -522,13 +521,13 @@ pub const DevEvaluator = struct {
         const procs = mono_store.getProcs();
         if (procs.len > 0) {
             codegen.compileAllProcs(procs) catch {
-                return error.UnsupportedExpression;
+                return error.RuntimeError;
             };
         }
 
         // Generate code for the expression
         const gen_result = codegen.generateCode(mono_expr_id, result_layout, tuple_len) catch {
-            return error.UnsupportedExpression;
+            return error.RuntimeError;
         };
 
         return CodeResult{
@@ -546,7 +545,7 @@ pub const DevEvaluator = struct {
     /// NOTE: Native code generation is not currently implemented.
     /// This function exists to maintain the API but always returns an error.
     pub fn generateCodeFromSource(_: *DevEvaluator, _: []const u8) Error!CodeResult {
-        return error.UnsupportedExpression;
+        return error.RuntimeError;
     }
 
     /// Result of evaluation
@@ -583,7 +582,7 @@ pub const DevEvaluator = struct {
             if (code_result.crash_message != null) {
                 return error.Crash;
             }
-            return error.UnsupportedExpression;
+            return error.RuntimeError;
         }
 
         var executable = backend.ExecutableMemory.initWithEntryOffset(code_result.code, code_result.entry_offset) catch return error.ExecutionError;
