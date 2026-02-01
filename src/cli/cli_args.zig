@@ -599,7 +599,7 @@ fn parseTest(args: []const []const u8) CliArgs {
     var max_threads: ?usize = null;
     for (args) |arg| {
         if (isHelpFlag(arg)) {
-            return CliArgs{ .help =
+            return CliArgs{ .help = 
             \\Run all top-level `expect`s in a main module and any modules it imports
             \\
             \\Usage: roc test [OPTIONS] [ROC_FILE]

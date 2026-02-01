@@ -45,9 +45,6 @@ const fmt = @import("fmt");
 const eval = @import("eval");
 const lsp = @import("lsp");
 const cli_repl = @import("repl.zig");
-const compiled_builtins = @import("compiled_builtins");
-const builtin_loading = eval.builtin_loading;
-const BuiltinTypes = eval.BuiltinTypes;
 
 const cli_args = @import("cli_args.zig");
 const roc_target = @import("target.zig");
@@ -3329,7 +3326,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     build_env.build(args.path) catch |err| {
         // Drain and display error reports
         const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
-        defer build_env.gpa.free(drained);
+        defer build_env.freeDrainedReports(drained);
 
         for (drained) |mod| {
             for (mod.reports) |*report| {
@@ -3343,7 +3340,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
 
     // Drain reports and count errors/warnings
     const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
-    defer build_env.gpa.free(drained);
+    defer build_env.freeDrainedReports(drained);
 
     var total_error_count: usize = 0;
     var total_warning_count: usize = 0;
@@ -3757,6 +3754,7 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
     build_env.build(args.path) catch |err| {
         // On build error, drain and display any reports
         const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
+        defer build_env.freeDrainedReports(drained);
         for (drained) |mod| {
             for (mod.reports) |*report| {
                 const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
@@ -3764,7 +3762,6 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
                 reporting.renderReportToTerminal(report, stderr, palette, config) catch {};
             }
         }
-        ctx.gpa.free(drained);
         try stderr.print("Build failed: {}\n", .{err});
         return err;
     };
@@ -3790,7 +3787,7 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
 
     // Drain any compilation reports first
     const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
-    defer ctx.gpa.free(drained);
+    defer build_env.freeDrainedReports(drained);
 
     var has_compilation_errors = false;
     for (drained) |mod| {
@@ -4345,7 +4342,7 @@ fn checkFileWithBuildEnvPreserved(
     build_env.build(filepath) catch |err| {
         // Even on error, try to drain and print any reports that were collected
         const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
-        defer build_env.gpa.free(drained);
+        defer build_env.freeDrainedReports(drained);
 
         // Print any error reports to stderr before failing
         return err;
@@ -4395,9 +4392,9 @@ fn checkFileWithBuildEnvPreserved(
         };
     }
 
-    // Free the original drained reports
-    // Note: abs_path is owned by BuildEnv, reports are moved to our array
-    ctx.gpa.free(drained);
+    // Free the original drained reports (abs_path strings and outer slice only)
+    // Note: reports ownership was transferred above, abs_path was duped
+    build_env.freeDrainedReportsPathsOnly(drained);
 
     // Get timing information from BuildEnv
     const timing = if (builtin.target.cpu.arch == .wasm32)
@@ -4456,7 +4453,7 @@ fn checkFileWithBuildEnv(
     build_env.build(filepath) catch {
         // Even on error, drain reports to show what went wrong
         const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
-        defer build_env.gpa.free(drained);
+        defer build_env.freeDrainedReportsPathsOnly(drained);
 
         // Count errors and warnings
         var error_count: u32 = 0;
@@ -4533,9 +4530,9 @@ fn checkFileWithBuildEnv(
         };
     }
 
-    // Free the original drained reports
-    // Note: abs_path is owned by BuildEnv, reports are moved to our array
-    ctx.gpa.free(drained);
+    // Free the original drained reports (abs_path strings and outer slice only)
+    // Note: reports ownership was transferred above, abs_path was duped
+    build_env.freeDrainedReportsPathsOnly(drained);
 
     // Get timing information from BuildEnv
     const timing = if (builtin.target.cpu.arch == .wasm32)

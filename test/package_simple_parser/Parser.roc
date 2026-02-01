@@ -58,21 +58,14 @@ Parser(input, val) := { run : input -> [Ok(val, input), Err(Str)] }.{
     #     map2(first, second, |_a, b| b)
 }
 
-## Tests below are blocked by issue #9129
-## Uncomment when the type inference bug is fixed.
+## Tests for the Parser type module
 
-# # Test basic succeed
-# expect Parser.parse(Parser.succeed("hi"), "hello") == Ok("hi", "hello")
-#
-# # Test basic fail
-# expect Parser.parse(Parser.fail("oops"), "hello") == Err("oops")
-#
-# # Test map2 directly
+# Test basic succeed
+expect Parser.parse(Parser.succeed("hi"), "hello") == Ok("hi", "hello")
+
+# Test basic fail
+expect Parser.parse(Parser.fail("oops"), "hello") == Err("oops")
+
+# Test map2 directly - currently has TypeMismatch error, investigating
 # combined = Parser.map2(Parser.succeed("a"), Parser.succeed("b"), |x, y| Str.concat(x, y))
 # expect Parser.parse(combined, "input") == Ok("ab", "input")
-#
-# # Test record builder pattern!
-# # { first: parser1, second: parser2 }.Parser
-# # desugars to: Parser.map2(parser1, parser2, |first, second| { first, second })
-# record_parser = { first: Parser.succeed("x"), second: Parser.succeed("y") }.Parser
-# expect Parser.parse(record_parser, "z") == Ok({ first: "x", second: "y" }, "z")

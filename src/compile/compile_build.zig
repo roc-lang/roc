@@ -1765,6 +1765,34 @@ pub const BuildEnv = struct {
         return out;
     }
 
+    /// Free memory allocated by drainReports.
+    /// This frees the abs_path strings, deinits each report, frees the reports slices, and frees the outer slice.
+    /// Safe to call with empty slices from catch handlers.
+    pub fn freeDrainedReports(self: *BuildEnv, drained: []const DrainedModuleReports) void {
+        // Skip if this is an empty slice (could be compile-time constant from catch handler)
+        if (drained.len == 0) return;
+        for (drained) |mod| {
+            self.gpa.free(mod.abs_path);
+            // Deinit each report and free the reports slice
+            for (mod.reports) |*report| {
+                @constCast(report).deinit();
+            }
+            self.gpa.free(mod.reports);
+        }
+        // Cast to non-const for freeing (safe since we allocated this ourselves)
+        self.gpa.free(@constCast(drained));
+    }
+
+    /// Free memory from drainReports when reports ownership is transferred elsewhere.
+    /// Only frees abs_path strings and outer slice, NOT the reports (caller now owns them).
+    pub fn freeDrainedReportsPathsOnly(self: *BuildEnv, drained: []const DrainedModuleReports) void {
+        if (drained.len == 0) return;
+        for (drained) |mod| {
+            self.gpa.free(mod.abs_path);
+        }
+        self.gpa.free(@constCast(drained));
+    }
+
     /// Get accumulated timing information from all ModuleBuild instances
     pub fn getTimingInfo(self: *BuildEnv) ModuleTimingInfo {
         var total = ModuleTimingInfo{
