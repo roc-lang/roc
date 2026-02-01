@@ -298,6 +298,54 @@ fn wrapStrFromUtf8Lossy(out: *RocStr, list_bytes: ?[*]u8, list_len: usize, list_
     out.* = strFromUtf8Lossy(list, roc_ops);
 }
 
+/// Wrapper: escape special characters and wrap in double quotes for Str.inspect
+fn wrapStrEscapeAndQuote(out: *RocStr, str_bytes: ?[*]u8, str_len: usize, str_cap: usize, roc_ops: *RocOps) callconv(.c) void {
+    // Reconstruct the RocStr so asSlice() handles both small and large strings
+    const s = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
+    const slice = s.asSlice();
+
+    // Count extra bytes needed for escaping backslashes and quotes
+    var extra: usize = 0;
+    for (slice) |ch| {
+        if (ch == '\\' or ch == '"') extra += 1;
+    }
+
+    const result_len = slice.len + extra + 2; // +2 for surrounding quotes
+
+    if (result_len < 24) {
+        // Small string: build inline
+        var buf: [24]u8 = .{0} ** 24;
+        buf[0] = '"';
+        var pos: usize = 1;
+        for (slice) |ch| {
+            if (ch == '\\' or ch == '"') {
+                buf[pos] = '\\';
+                pos += 1;
+            }
+            buf[pos] = ch;
+            pos += 1;
+        }
+        buf[pos] = '"';
+        buf[23] = @intCast(result_len | 0x80);
+        out.* = @bitCast(buf);
+    } else {
+        // Large string: allocate heap memory
+        const heap_ptr = allocateWithRefcountC(result_len, 1, false, roc_ops);
+        heap_ptr[0] = '"';
+        var pos: usize = 1;
+        for (slice) |ch| {
+            if (ch == '\\' or ch == '"') {
+                heap_ptr[pos] = '\\';
+                pos += 1;
+            }
+            heap_ptr[pos] = ch;
+            pos += 1;
+        }
+        heap_ptr[pos] = '"';
+        out.* = .{ .bytes = heap_ptr, .length = result_len, .capacity_or_alloc_ptr = result_len };
+    }
+}
+
 /// Wrapper for str_with_prefix: strConcatC(prefix, string, *RocOps) -> RocStr
 /// str_with_prefix(string, prefix) = concat(prefix, string) — prefix goes first!
 fn wrapStrWithPrefix(out: *RocStr, str_bytes: ?[*]u8, str_len: usize, str_cap: usize, pfx_bytes: ?[*]u8, pfx_len: usize, pfx_cap: usize, roc_ops: *RocOps) callconv(.c) void {
@@ -7520,9 +7568,9 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
         /// Generate code for str_escape_and_quote
         fn generateStrEscapeAndQuote(self: *Self, expr_id: anytype) Error!ValueLocation {
-            _ = self;
-            _ = expr_id;
-            return Error.UnsupportedExpression;
+            const str_loc = try self.generateExpr(expr_id);
+            const str_off = try self.ensureOnStack(str_loc, 24);
+            return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrEscapeAndQuote), .str);
         }
 
         /// Generate code for discriminant switch
