@@ -612,6 +612,14 @@ pub const Store = struct {
         return self.vars.iterRange(range);
     }
 
+    /// Get a var at a specific offset within a range.
+    /// Use this for index-based iteration when unification may trigger reallocations.
+    pub fn getVarAt(self: *const Self, range: VarSafeList.Range, offset: u32) Var {
+        std.debug.assert(offset < range.count);
+        const idx: VarSafeList.Idx = @enumFromInt(@intFromEnum(range.start) + offset);
+        return self.vars.get(idx).*;
+    }
+
     /// Given a range, get a slice of record fields from the backing array
     pub fn getRecordFieldsSlice(self: *const Self, range: RecordFieldSafeMultiList.Range) RecordFieldSafeMultiList.Slice {
         return self.record_fields.sliceRange(range);
