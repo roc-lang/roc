@@ -8,6 +8,7 @@
 //! types, allowing it to generate type-correct variable references and expressions.
 
 const std = @import("std");
+const FuzzReader = @import("FuzzReader.zig");
 
 const Self = @This();
 
@@ -268,8 +269,8 @@ output: std.ArrayList(u8),
 /// Stack of scopes for variable tracking
 scopes: std.ArrayList(Scope),
 
-/// Random number generator state (must be stored, not just the interface)
-prng: std.Random.Pcg,
+/// FuzzReader for consuming bytes from fuzzer input
+fuzz_reader: *FuzzReader,
 
 /// Counter for generating unique variable names
 var_counter: u32,
@@ -350,12 +351,12 @@ const float_methods = [_]MethodInfo{
 };
 
 /// Initialize a new TypedCodeGenerator
-pub fn init(allocator: std.mem.Allocator, seed: u64) Self {
+pub fn init(allocator: std.mem.Allocator, fuzz_reader: *FuzzReader) Self {
     return .{
         .allocator = allocator,
         .output = std.ArrayList(u8).empty,
         .scopes = std.ArrayList(Scope).empty,
-        .prng = std.Random.Pcg.init(seed),
+        .fuzz_reader = fuzz_reader,
         .var_counter = 0,
         .indent_level = 0,
         .type_pool = undefined,
@@ -364,9 +365,9 @@ pub fn init(allocator: std.mem.Allocator, seed: u64) Self {
     };
 }
 
-/// Get the random interface from the stored PRNG state
-fn random(self: *Self) std.Random {
-    return self.prng.random();
+/// Get the FuzzReader for making random choices
+fn reader(self: *Self) *FuzzReader {
+    return self.fuzz_reader;
 }
 
 /// Free resources used by the generator
@@ -389,7 +390,7 @@ pub fn getOutput(self: *const Self) []const u8 {
 }
 
 /// Reset the generator for reuse
-pub fn reset(self: *Self, new_seed: u64) void {
+pub fn reset(self: *Self, fuzz_reader: *FuzzReader) void {
     for (self.scopes.items) |*scope| {
         scope.deinit(self.allocator);
     }
@@ -400,7 +401,7 @@ pub fn reset(self: *Self, new_seed: u64) void {
         self.allocator.free(name);
     }
     self.allocated_var_names.clearRetainingCapacity();
-    self.prng = std.Random.Pcg.init(new_seed);
+    self.fuzz_reader = fuzz_reader;
     self.var_counter = 0;
     self.indent_level = 0;
     self.type_pool_count = 0;
@@ -417,7 +418,7 @@ pub fn generateModule(self: *Self) !void {
     // Nominal types can only wrap tag unions or records (not primitives)
 
     // Choose what kind of type to define: tag union or record
-    const type_choice = self.random().intRangeAtMost(u8, 0, 3);
+    const type_choice = self.reader().intRangeAtMost(u8, 0, 3);
     switch (type_choice) {
         0 => {
             // Result-like tag union: [Ok(T), Err(E)]
@@ -451,7 +452,7 @@ pub fn generateModule(self: *Self) !void {
     self.indent_level = 1;
 
     // Generate some associated functions with various return types
-    const num_funcs = self.random().intRangeAtMost(u8, 2, 5);
+    const num_funcs = self.reader().intRangeAtMost(u8, 2, 5);
     for (0..num_funcs) |_| {
         try self.generateAssociatedFunction();
     }
@@ -465,7 +466,7 @@ fn generateAssociatedFunction(self: *Self) !void {
     const return_type = self.randomTypeForReturn();
 
     // Randomly decide function style
-    const style = self.random().intRangeAtMost(u8, 0, 14);
+    const style = self.reader().intRangeAtMost(u8, 0, 14);
 
     switch (style) {
         0 => {
@@ -498,7 +499,7 @@ fn generateAssociatedFunction(self: *Self) !void {
             try self.write(arg_name);
             try self.write("| ");
             // Sometimes use the arg, sometimes not
-            if (extra_type.eql(return_type) and self.random().boolean()) {
+            if (extra_type.eql(return_type) and self.reader().boolean()) {
                 try self.write(arg_name);
             } else {
                 try self.generateSimpleLiteral(return_type);
@@ -534,7 +535,7 @@ fn generateAssociatedFunction(self: *Self) !void {
             } });
 
             // Generate 1-2 let bindings
-            const num_bindings = self.random().intRangeAtMost(u8, 1, 2);
+            const num_bindings = self.reader().intRangeAtMost(u8, 1, 2);
             for (0..num_bindings) |_| {
                 try self.generateLetBindingSimple();
             }
@@ -934,7 +935,7 @@ fn generateLetBindingSimple(self: *Self) !void {
 
 /// Generate let bindings for types that have useful methods
 fn generateLetBindingForMethodCall(self: *Self) !void {
-    const binding_type = self.random().intRangeAtMost(u8, 0, 3);
+    const binding_type = self.reader().intRangeAtMost(u8, 0, 3);
     switch (binding_type) {
         0 => {
             // String variable
@@ -952,7 +953,7 @@ fn generateLetBindingForMethodCall(self: *Self) !void {
             try self.write(var_name);
             try self.write(" = [");
             // Generate 1-3 elements
-            const num_elems = self.random().intRangeAtMost(u8, 1, 3);
+            const num_elems = self.reader().intRangeAtMost(u8, 1, 3);
             for (0..num_elems) |i| {
                 if (i > 0) try self.write(", ");
                 try self.generateSimpleLiteral(elem_type);
@@ -966,7 +967,7 @@ fn generateLetBindingForMethodCall(self: *Self) !void {
             // Signed integer (for abs, negate methods)
             const var_name = try self.freshVarName();
             const int_types = [_]Type{ .i8, .i16, .i32, .i64, .i128 };
-            const int_type = int_types[self.random().intRangeLessThan(usize, 0, int_types.len)];
+            const int_type = int_types[self.reader().intRangeLessThan(usize, 0, int_types.len)];
             try self.writeIndent();
             try self.write(var_name);
             try self.write(" = ");
@@ -1058,7 +1059,7 @@ fn generateMethodExprForType(self: *Self, target_type: Type) !bool {
                     for (scope.variables.items) |v| {
                         if (v.type_.eql(target_type)) {
                             // Try abs or negate for signed integers
-                            if (self.random().boolean()) {
+                            if (self.reader().boolean()) {
                                 try self.write(v.name);
                                 try self.write(".abs()");
                             } else {
@@ -1075,7 +1076,7 @@ fn generateMethodExprForType(self: *Self, target_type: Type) !bool {
                     for (scope.variables.items) |v| {
                         if (v.type_.eql(target_type)) {
                             // Try abs or negate for floats
-                            if (self.random().boolean()) {
+                            if (self.reader().boolean()) {
                                 try self.write(v.name);
                                 try self.write(".abs()");
                             } else {
@@ -1118,15 +1119,15 @@ fn generateLetBinding(self: *Self) !void {
 /// Generate an expression of the given type
 fn generateExpr(self: *Self, type_: Type) std.mem.Allocator.Error!void {
     // Decide what kind of expression to generate
-    const choice = self.random().intRangeAtMost(u8, 0, 14);
+    const choice = self.reader().intRangeAtMost(u8, 0, 14);
 
     // Try to use a variable if one exists with the right type
     if (choice < 3) {
         if (self.findVariableOfType(type_)) |var_name| {
             // For tuples, sometimes generate element access
-            if (type_ == .tuple and self.random().boolean()) {
+            if (type_ == .tuple and self.reader().boolean()) {
                 const t = type_.tuple;
-                const elem_idx = self.random().intRangeLessThan(usize, 0, t.len);
+                const elem_idx = self.reader().intRangeLessThan(usize, 0, t.len);
                 try self.generateTupleAccess(var_name, t, elem_idx);
                 // Note: This returns a different type, so we need to be careful
                 // For simplicity, just return the variable itself
@@ -1134,16 +1135,16 @@ fn generateExpr(self: *Self, type_: Type) std.mem.Allocator.Error!void {
                 return;
             }
             // For records, sometimes generate field access
-            if (type_ == .record and self.random().boolean()) {
+            if (type_ == .record and self.reader().boolean()) {
                 const r = type_.record;
-                const field_idx = self.random().intRangeLessThan(usize, 0, r.len);
+                const field_idx = self.reader().intRangeLessThan(usize, 0, r.len);
                 try self.generateRecordAccess(var_name, r.fields[field_idx].name);
                 // Same note as above
                 try self.write(var_name);
                 return;
             }
             // For functions, sometimes generate a function call
-            if (type_ == .func and self.random().boolean()) {
+            if (type_ == .func and self.reader().boolean()) {
                 try self.generateFunctionCall(var_name, type_.func);
                 return;
             }
@@ -1240,7 +1241,7 @@ fn generateExpr(self: *Self, type_: Type) std.mem.Allocator.Error!void {
         // Try common method patterns
         if (type_ == .u64) {
             // List.len() or Str.count_utf8_bytes() return U64
-            if (self.random().boolean()) {
+            if (self.reader().boolean()) {
                 // Generate list.len()
                 const list_type = self.randomListType();
                 if (try self.generateMethodCallOnLiteral(list_type, type_)) {
@@ -1255,13 +1256,13 @@ fn generateExpr(self: *Self, type_: Type) std.mem.Allocator.Error!void {
         } else if (type_ == .bool) {
             // Try is_empty, is_zero, etc.
             const receiver_choices = [_]Type{ .str, .u64, .i64 };
-            const receiver = receiver_choices[self.random().intRangeLessThan(usize, 0, receiver_choices.len)];
+            const receiver = receiver_choices[self.reader().intRangeLessThan(usize, 0, receiver_choices.len)];
             if (try self.generateMethodCallOnLiteral(receiver, type_)) {
                 return;
             }
         } else if (type_ == .str) {
             // Try numeric.to_str() or str.trim()
-            if (self.random().boolean()) {
+            if (self.reader().boolean()) {
                 const num_type = self.randomPrimitiveType();
                 if (num_type.isNumeric()) {
                     if (try self.generateMethodCallOnLiteral(num_type, type_)) {
@@ -1284,7 +1285,7 @@ fn generateExpr(self: *Self, type_: Type) std.mem.Allocator.Error!void {
 fn generateLiteral(self: *Self, type_: Type) !void {
     switch (type_) {
         .bool => {
-            if (self.random().boolean()) {
+            if (self.reader().boolean()) {
                 try self.write("True");
             } else {
                 try self.write("False");
@@ -1292,16 +1293,16 @@ fn generateLiteral(self: *Self, type_: Type) !void {
         },
         .str => {
             try self.write("\"");
-            const len = self.random().intRangeAtMost(u8, 0, 10);
+            const len = self.reader().intRangeAtMost(u8, 0, 10);
             for (0..len) |_| {
-                const char = self.random().intRangeAtMost(u8, 'a', 'z');
+                const char = self.reader().intRangeAtMost(u8, 'a', 'z');
                 try self.output.append(self.allocator, char);
             }
             try self.write("\"");
         },
         .list => |elem_type| {
             try self.write("[");
-            const len = self.random().intRangeAtMost(u8, 0, 3);
+            const len = self.reader().intRangeAtMost(u8, 0, 3);
             for (0..len) |i| {
                 if (i > 0) try self.write(", ");
                 // Use simple literals to avoid generating blocks inside lists
@@ -1337,8 +1338,8 @@ fn generateLiteral(self: *Self, type_: Type) !void {
         },
         // Integer types - sometimes use suffix, sometimes rely on type annotation
         .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128 => {
-            const val = self.random().intRangeAtMost(i32, 0, 100);
-            const use_suffix = self.random().boolean();
+            const val = self.reader().intRangeAtMost(i32, 0, 100);
+            const use_suffix = self.reader().boolean();
             if (use_suffix) {
                 const suffix = switch (type_) {
                     .u8 => ".U8",
@@ -1360,8 +1361,8 @@ fn generateLiteral(self: *Self, type_: Type) !void {
         },
         // Float types - sometimes use suffix, sometimes rely on inference
         .f32, .f64 => {
-            const val = self.random().intRangeAtMost(i32, 0, 100);
-            const use_suffix = self.random().boolean();
+            const val = self.reader().intRangeAtMost(i32, 0, 100);
+            const use_suffix = self.reader().boolean();
             if (use_suffix) {
                 const suffix = if (type_ == .f32) ".F32" else ".F64";
                 try self.writer().print("{d}{s}", .{ val, suffix });
@@ -1372,9 +1373,9 @@ fn generateLiteral(self: *Self, type_: Type) !void {
         },
         .dec => {
             // Dec - use decimal literal, optionally with suffix
-            const int_part = self.random().intRangeAtMost(i32, 0, 100);
-            const frac_part = self.random().intRangeAtMost(u32, 0, 99);
-            const use_suffix = self.random().boolean();
+            const int_part = self.reader().intRangeAtMost(i32, 0, 100);
+            const frac_part = self.reader().intRangeAtMost(u32, 0, 99);
+            const use_suffix = self.reader().boolean();
             if (use_suffix) {
                 try self.writer().print("{d}.{d}.Dec", .{ int_part, frac_part });
             } else {
@@ -1388,7 +1389,7 @@ fn generateLiteral(self: *Self, type_: Type) !void {
 fn generateSimpleLiteral(self: *Self, type_: Type) !void {
     switch (type_) {
         .bool => {
-            if (self.random().boolean()) {
+            if (self.reader().boolean()) {
                 try self.write("True");
             } else {
                 try self.write("False");
@@ -1396,17 +1397,17 @@ fn generateSimpleLiteral(self: *Self, type_: Type) !void {
         },
         .str => {
             try self.write("\"");
-            const len = self.random().intRangeAtMost(u8, 0, 5);
+            const len = self.reader().intRangeAtMost(u8, 0, 5);
             for (0..len) |_| {
-                const char = self.random().intRangeAtMost(u8, 'a', 'z');
+                const char = self.reader().intRangeAtMost(u8, 'a', 'z');
                 try self.output.append(self.allocator, char);
             }
             try self.write("\"");
         },
         // Integer types - randomly use suffix or rely on type inference
         .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128 => {
-            const val = self.random().intRangeAtMost(i32, 0, 100);
-            const use_suffix = self.random().boolean();
+            const val = self.reader().intRangeAtMost(i32, 0, 100);
+            const use_suffix = self.reader().boolean();
             if (use_suffix) {
                 const suffix = switch (type_) {
                     .u8 => ".U8",
@@ -1427,8 +1428,8 @@ fn generateSimpleLiteral(self: *Self, type_: Type) !void {
             }
         },
         .f32, .f64 => {
-            const val = self.random().intRangeAtMost(i32, 0, 100);
-            const use_suffix = self.random().boolean();
+            const val = self.reader().intRangeAtMost(i32, 0, 100);
+            const use_suffix = self.reader().boolean();
             if (use_suffix) {
                 const suffix = if (type_ == .f32) ".F32" else ".F64";
                 try self.writer().print("{d}{s}", .{ val, suffix });
@@ -1438,9 +1439,9 @@ fn generateSimpleLiteral(self: *Self, type_: Type) !void {
         },
         .dec => {
             // Dec - use decimal literal, optionally with suffix
-            const int_part = self.random().intRangeAtMost(i32, 0, 100);
-            const frac_part = self.random().intRangeAtMost(u32, 0, 99);
-            const use_suffix = self.random().boolean();
+            const int_part = self.reader().intRangeAtMost(i32, 0, 100);
+            const frac_part = self.reader().intRangeAtMost(u32, 0, 99);
+            const use_suffix = self.reader().boolean();
             if (use_suffix) {
                 try self.writer().print("{d}.{d}.Dec", .{ int_part, frac_part });
             } else {
@@ -1512,7 +1513,7 @@ fn generateBlock(self: *Self, type_: Type) !void {
     defer self.popScope();
 
     // Generate some let bindings
-    const num_bindings = self.random().intRangeAtMost(u8, 0, 2);
+    const num_bindings = self.reader().intRangeAtMost(u8, 0, 2);
     for (0..num_bindings) |_| {
         try self.generateLetBinding();
     }
@@ -1737,7 +1738,7 @@ fn generateMethodCallOnLiteral(self: *Self, receiver_type: Type, target_return_t
 /// Modern Roc syntax: TagName or TagName(payload)
 fn generateTagConstruction(self: *Self, t: Type.TagUnionType) !void {
     // Pick a random variant
-    const variant_idx = self.random().intRangeLessThan(usize, 0, t.len);
+    const variant_idx = self.reader().intRangeLessThan(usize, 0, t.len);
     const variant = t.variants[variant_idx];
 
     try self.write(variant.name);
@@ -1800,7 +1801,7 @@ fn generateListMatchExpr(self: *Self, elem_type: Type, result_type: Type) !void 
     } else {
         // Generate a list literal
         try self.write("[");
-        const num_elems = self.random().intRangeAtMost(u8, 0, 3);
+        const num_elems = self.reader().intRangeAtMost(u8, 0, 3);
         for (0..num_elems) |i| {
             if (i > 0) try self.write(", ");
             try self.generateSimpleLiteral(elem_type);
@@ -1812,7 +1813,7 @@ fn generateListMatchExpr(self: *Self, elem_type: Type, result_type: Type) !void 
     self.indent_level += 1;
 
     // Generate patterns based on random choice
-    const pattern_style = self.random().intRangeAtMost(u8, 0, 2);
+    const pattern_style = self.reader().intRangeAtMost(u8, 0, 2);
 
     switch (pattern_style) {
         0 => {
@@ -1890,7 +1891,7 @@ fn generateTupleMatchExpr(self: *Self, tuple_type: Type.TupleType, result_type: 
     for (0..tuple_type.len) |i| {
         if (i > 0) try self.write(", ");
         // Randomly use _ or a binding
-        if (self.random().boolean()) {
+        if (self.reader().boolean()) {
             try self.write("_");
         } else {
             try self.writer().print("elem{d}", .{i});
@@ -1910,7 +1911,7 @@ fn generateBinaryOp(self: *Self, type_: Type) !void {
     if (type_.isNumeric()) {
         // Arithmetic operator
         const ops = [_][]const u8{ "+", "-", "*" };
-        const op = ops[self.random().intRangeLessThan(usize, 0, ops.len)];
+        const op = ops[self.reader().intRangeLessThan(usize, 0, ops.len)];
         try self.write("(");
         try self.generateLiteral(type_);
         try self.write(" ");
@@ -1920,7 +1921,7 @@ fn generateBinaryOp(self: *Self, type_: Type) !void {
         try self.write(")");
     } else if (type_ == .bool) {
         // Boolean operator
-        const choice = self.random().intRangeAtMost(u8, 0, 2);
+        const choice = self.reader().intRangeAtMost(u8, 0, 2);
         if (choice == 0) {
             // Unary not
             try self.write("!");
@@ -1949,7 +1950,7 @@ fn generateBinaryOp(self: *Self, type_: Type) !void {
 /// Generate a comparison expression (returns Bool)
 fn generateComparisonOp(self: *Self) !void {
     const ops = [_][]const u8{ "==", "!=", ">", "<", ">=", "<=" };
-    const op = ops[self.random().intRangeLessThan(usize, 0, ops.len)];
+    const op = ops[self.reader().intRangeLessThan(usize, 0, ops.len)];
 
     // Use a numeric type for comparison
     const cmp_type = self.randomPrimitiveType();
@@ -1995,7 +1996,7 @@ fn findVariableOfType(self: *Self, type_: Type) ?[]const u8 {
     if (match_count == 0) return null;
 
     // Pick one randomly
-    const idx = self.random().intRangeLessThan(usize, 0, match_count);
+    const idx = self.reader().intRangeLessThan(usize, 0, match_count);
     return matches[idx];
 }
 
@@ -2014,7 +2015,7 @@ fn freshVarName(self: *Self) ![]const u8 {
 
 /// Choose a random type (including compound types)
 fn randomType(self: *Self) Type {
-    const choice = self.random().intRangeAtMost(u8, 0, 19);
+    const choice = self.reader().intRangeAtMost(u8, 0, 19);
     return switch (choice) {
         0 => .bool,
         1 => .str,
@@ -2042,7 +2043,7 @@ fn randomType(self: *Self) Type {
 
 /// Choose a random non-compound type (for simpler contexts)
 fn randomNonListType(self: *Self) Type {
-    const choice = self.random().intRangeAtMost(u8, 0, 14);
+    const choice = self.reader().intRangeAtMost(u8, 0, 14);
     return switch (choice) {
         0 => .bool,
         1 => .str,
@@ -2071,7 +2072,7 @@ fn randomPrimitiveType(self: *Self) Type {
 /// Choose a random type suitable for function return values
 /// Includes primitives, tuples, records, and tag unions (but not functions or lists)
 fn randomTypeForReturn(self: *Self) Type {
-    const choice = self.random().intRangeAtMost(u8, 0, 17);
+    const choice = self.reader().intRangeAtMost(u8, 0, 17);
     return switch (choice) {
         0 => .bool,
         1 => .str,
@@ -2118,7 +2119,7 @@ fn randomListType(self: *Self) Type {
 
 /// Generate a random tuple type (2-4 elements)
 fn randomTupleType(self: *Self) Type {
-    const len = self.random().intRangeAtMost(u8, 2, 4);
+    const len = self.reader().intRangeAtMost(u8, 2, 4);
     var tuple: Type.TupleType = .{
         .elem_types = undefined,
         .len = len,
@@ -2139,7 +2140,7 @@ fn randomTupleType(self: *Self) Type {
 
 /// Generate a random record type (1-4 fields)
 fn randomRecordType(self: *Self) Type {
-    const len = self.random().intRangeAtMost(u8, 1, 4);
+    const len = self.reader().intRangeAtMost(u8, 1, 4);
     var record: Type.RecordType = .{
         .fields = undefined,
         .len = len,
@@ -2149,7 +2150,7 @@ fn randomRecordType(self: *Self) Type {
     var used_indices: [6]bool = .{ false, false, false, false, false, false };
     for (0..len) |i| {
         // Find an unused field name
-        var idx = self.random().intRangeAtMost(usize, 0, field_names.len - 1);
+        var idx = self.reader().intRangeAtMost(usize, 0, field_names.len - 1);
         var attempts: u8 = 0;
         while (used_indices[idx] and attempts < 10) {
             idx = (idx + 1) % field_names.len;
@@ -2174,7 +2175,7 @@ fn randomRecordType(self: *Self) Type {
 
 /// Generate a random function type (0-3 args)
 fn randomFuncType(self: *Self) Type {
-    const arg_count = self.random().intRangeAtMost(u8, 0, 3);
+    const arg_count = self.reader().intRangeAtMost(u8, 0, 3);
     var func: Type.FuncType = .{
         .arg_types = undefined,
         .arg_count = arg_count,
@@ -2202,7 +2203,7 @@ fn randomFuncType(self: *Self) Type {
 
 /// Generate a random tag union type (Maybe or Result style)
 fn randomTagUnionType(self: *Self) Type {
-    const choice = self.random().intRangeAtMost(u8, 0, 2);
+    const choice = self.reader().intRangeAtMost(u8, 0, 2);
     return switch (choice) {
         0 => self.maybeLikeTagUnion(),
         1 => self.resultLikeTagUnion(),
@@ -2299,33 +2300,33 @@ fn writer(self: *Self) std.ArrayList(u8).Writer {
 // Tests
 test "generate simple module" {
     const allocator = std.testing.allocator;
-    var gen = Self.init(allocator, 12345);
+    // Use some test bytes as fuzzer input
+    var fuzz_reader = FuzzReader.init(&[_]u8{ 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88 });
+    var gen = Self.init(allocator, &fuzz_reader);
     defer gen.deinit();
 
     try gen.generateModule();
     const output = gen.getOutput();
 
-    // Should start with main declaration
-    try std.testing.expect(std.mem.startsWith(u8, output, "main : "));
-    // Should contain main =
-    try std.testing.expect(std.mem.indexOf(u8, output, "main =") != null);
+    // Should contain Main type definition
+    try std.testing.expect(std.mem.indexOf(u8, output, "Main :=") != null);
 }
 
 test "type formatting" {
     var buf: [64]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buf);
 
-    const bool_type = Type.bool;
+    const bool_type: Type = .bool;
     try bool_type.format(fbs.writer());
     try std.testing.expectEqualStrings("Bool", fbs.getWritten());
 
     fbs.reset();
-    const str_type = Type.str;
+    const str_type: Type = .str;
     try str_type.format(fbs.writer());
     try std.testing.expectEqualStrings("Str", fbs.getWritten());
 
     fbs.reset();
-    const i32_type = Type.i32;
+    const i32_type: Type = .i32;
     try i32_type.format(fbs.writer());
     try std.testing.expectEqualStrings("I32", fbs.getWritten());
 }

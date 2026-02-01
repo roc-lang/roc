@@ -29,6 +29,7 @@
 const std = @import("std");
 const compile = @import("compile");
 const roc_target = @import("roc_target");
+const FuzzReader = @import("FuzzReader.zig");
 const TypedCodeGenerator = @import("TypedCodeGenerator.zig");
 
 const BuildEnv = compile.BuildEnv;
@@ -53,20 +54,12 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
 
     const input = buf[0..@intCast(len)];
 
-    // Use input bytes as seed for the random number generator
-    // This ensures reproducibility - same input always generates same code
-    const seed = blk: {
-        if (input.len >= 8) {
-            break :blk std.mem.readInt(u64, input[0..8], .little);
-        } else {
-            var seed_bytes: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 };
-            @memcpy(seed_bytes[0..input.len], input);
-            break :blk std.mem.readInt(u64, &seed_bytes, .little);
-        }
-    };
+    // Create a FuzzReader that consumes bytes directly from the fuzzer input
+    // This gives AFL++ direct control over each decision in code generation
+    var fuzz_reader = FuzzReader.init(input);
 
     // Generate type-correct Roc code
-    var generator = TypedCodeGenerator.init(gpa, seed);
+    var generator = TypedCodeGenerator.init(gpa, &fuzz_reader);
     defer generator.deinit();
 
     generator.generateModule() catch |err| {
@@ -78,7 +71,7 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
     const generated_code = generator.getOutput();
 
     if (debug) {
-        std.debug.print("Seed: {d}\n", .{seed});
+        std.debug.print("Input length: {d}, bytes consumed: {d}\n", .{ input.len, fuzz_reader.position });
         std.debug.print("Generated code:\n==========\n{s}\n==========\n\n", .{generated_code});
     }
 
