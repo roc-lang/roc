@@ -1798,40 +1798,13 @@ pub const Interpreter = struct {
                 const string = string_arg.asRocStr().?;
                 const result_list = builtins.str.strToUtf8C(string.*, roc_ops);
 
-                // Get the result layout - should be List(U8).
-                // If return_rt_var is a flex that would default to a scalar,
-                // we need to ensure we get a proper list layout for correct refcounting.
-                const provided_rt_var = return_rt_var orelse {
-                    self.triggerCrash("str_to_utf8 requires return type info", false, roc_ops);
-                    return error.Crash;
-                };
-
-                // Get the result layout - should be List(U8).
-                // If the provided_rt_var leads to a non-list layout, we need to create
-                // a proper List(U8) type to ensure correct method dispatch.
+                // str_to_utf8 always returns List(U8). Build the canonical layout
+                // and type unconditionally — the provided return_rt_var may have an
+                // incorrect element type (e.g. Dec instead of U8) when the CT type
+                // store has unresolved numerals inside closures.
                 const u8_layout_idx = try self.runtime_layout_store.insertLayout(Layout.int(.u8));
-                const list_u8_layout = Layout.list(u8_layout_idx);
-
-                const maybe_layout = try self.getRuntimeLayout(provided_rt_var);
-                const result_rt_var, const result_layout = if (maybe_layout.tag == .list or maybe_layout.tag == .list_of_zst) blk: {
-                    // Layout is already a list - check if the type is also a List
-                    const resolved_rt = self.runtime_types.resolveVar(provided_rt_var);
-                    const is_list_type = switch (resolved_rt.desc.content) {
-                        .structure => |s| switch (s) {
-                            .nominal_type => true,
-                            else => false,
-                        },
-                        else => false,
-                    };
-                    if (is_list_type) {
-                        break :blk .{ provided_rt_var, maybe_layout };
-                    }
-                    // Layout is list but type is not nominal - create proper List(U8) type
-                    break :blk .{ try self.createListU8Type(), list_u8_layout };
-                } else blk: {
-                    // Layout is not a list - create both proper layout and type
-                    break :blk .{ try self.createListU8Type(), list_u8_layout };
-                };
+                const result_layout = Layout.list(u8_layout_idx);
+                const result_rt_var = try self.createListU8Type();
 
                 var out = try self.pushRaw(result_layout, 0, result_rt_var);
                 out.is_initialized = false;
@@ -12787,9 +12760,68 @@ pub const Interpreter = struct {
                             // behavior of downstream operations like `Str.inspect`.
                             const mapping_rt_var = try self.createTypeFromLayout(b.value.layout);
                             try self.propagateFlexMappings(self.env, arg_ct_var, mapping_rt_var);
+
+                            // If the CT type is a List nominal and the element type disagrees
+                            // with the binding's actual element layout, override the translate
+                            // cache for the CT element type variable. This corrects a CT type
+                            // store issue where numerals inside closures are not unified with
+                            // the concrete element type (e.g., Dec default instead of U8 from
+                            // Str.to_utf8). Without this, other arguments to the same call
+                            // (like list literals containing numerals) would be evaluated with
+                            // the wrong element type.
+                            if (arg_ct_resolved.desc.content == .structure and
+                                arg_ct_resolved.desc.content.structure == .nominal_type)
+                            {
+                                const seed_nom = arg_ct_resolved.desc.content.structure.nominal_type;
+                                const seed_args = self.env.types.sliceNominalArgs(seed_nom);
+                                if (seed_args.len == 1) {
+                                    const elem_ct_var = seed_args[0];
+                                    const elem_ct_resolved = self.env.types.resolveVar(elem_ct_var);
+                                    // Get the element layout from the binding's actual list layout
+                                    const elem_layout_idx = b.value.layout.data.list;
+                                    const elem_layout = self.runtime_layout_store.getLayout(elem_layout_idx);
+                                    // Check if the CT element type translates to a different layout
+                                    const ct_elem_layout = self.getRuntimeLayout(
+                                        try self.translateTypeVar(self.env, elem_ct_var),
+                                    ) catch null;
+                                    if (ct_elem_layout) |ct_el| {
+                                        if (!ct_el.eql(elem_layout)) {
+                                            // The CT type and actual layout disagree. Override the
+                                            // translate cache for the element CT variable so that
+                                            // translateTypeVar returns the correct type for other
+                                            // arguments that share this variable.
+                                            const elem_rt_var = try self.createTypeFromLayout(elem_layout);
+                                            const elem_key = ModuleVarKey{ .module = self.env, .var_ = elem_ct_resolved.var_ };
+                                            try self.translate_cache.put(elem_key, .{
+                                                .var_ = elem_rt_var,
+                                                .generation = self.poly_context_generation,
+                                            });
+                                        }
+                                    }
+                                }
+                            }
                             break;
                         }
                     }
+                }
+
+                // After seeding, invalidate stale translate_cache entries for arg
+                // and return CT vars. The seeding may have overridden a child type
+                // (e.g. the element type of a list), but parent types (e.g. the list
+                // itself) may already be cached with the old child. Removing them
+                // forces re-translation which picks up the corrected child type.
+                // This is done unconditionally since it's cheap (just hash removals)
+                // and translateTypeVar will re-translate on the next call.
+                for (arg_indices) |arg_idx| {
+                    const inv_ct_var = can.ModuleEnv.varFrom(arg_idx);
+                    const inv_resolved = self.env.types.resolveVar(inv_ct_var);
+                    const inv_key = ModuleVarKey{ .module = self.env, .var_ = inv_resolved.var_ };
+                    _ = self.translate_cache.remove(inv_key);
+                }
+                {
+                    const ret_ct_resolved = self.env.types.resolveVar(can.ModuleEnv.varFrom(expr_idx));
+                    const ret_key = ModuleVarKey{ .module = self.env, .var_ = ret_ct_resolved.var_ };
+                    _ = self.translate_cache.remove(ret_key);
                 }
 
                 // Compute argument runtime type variables
