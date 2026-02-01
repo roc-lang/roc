@@ -11422,8 +11422,36 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             }
 
             switch (result_layout) {
-                .i64, .i32, .i16, .i8, .u64, .u32, .u16, .u8, .bool => {
+                .i64, .i32, .i16, .u64, .u32, .u16, .bool => {
                     const reg = try self.ensureInGeneralReg(loc);
+                    try self.emitStoreToMem(saved_ptr_reg, reg);
+                },
+                .u8 => {
+                    // Zero-extend to 64 bits before storing, since the register
+                    // may have garbage in the upper bits from mutable variable loads.
+                    // Shift left 56, then logical shift right 56 to clear upper bits.
+                    const reg = try self.ensureInGeneralReg(loc);
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.lslRegRegImm(.w64, reg, reg, 56);
+                        try self.codegen.emit.lsrRegRegImm(.w64, reg, reg, 56);
+                    } else {
+                        try self.codegen.emit.shlRegImm8(.w64, reg, 56);
+                        try self.codegen.emit.shrRegImm8(.w64, reg, 56);
+                    }
+                    try self.emitStoreToMem(saved_ptr_reg, reg);
+                },
+                .i8 => {
+                    // Sign-extend to 64 bits before storing, since the register
+                    // may have garbage in the upper bits from mutable variable loads.
+                    // Shift left 56, then arithmetic shift right 56 to sign-extend.
+                    const reg = try self.ensureInGeneralReg(loc);
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.lslRegRegImm(.w64, reg, reg, 56);
+                        try self.codegen.emit.asrRegRegImm(.w64, reg, reg, 56);
+                    } else {
+                        try self.codegen.emit.shlRegImm8(.w64, reg, 56);
+                        try self.codegen.emit.sarRegImm8(.w64, reg, 56);
+                    }
                     try self.emitStoreToMem(saved_ptr_reg, reg);
                 },
                 .f64 => {
