@@ -12416,6 +12416,71 @@ pub const Interpreter = struct {
                             .layout_type = layout_type,
                         } } });
                     }
+                } else if (layout_val.tag == .box) {
+                    // Boxed tag union — this happens with recursive types or types that require
+                    // heap allocation. Construct the inner value, then box it.
+                    const inner_layout_idx = layout_val.data.box;
+                    const inner_layout = self.runtime_layout_store.getLayout(inner_layout_idx);
+
+                    // For recursive types, the inner layout may be scalar(opaque_ptr).
+                    // In that case, we need to resolve the backing type to get the actual
+                    // tag union structure.
+                    const effective_inner_layout = if (inner_layout.tag == .scalar and inner_layout.data.scalar.tag == .opaque_ptr) blk: {
+                        // Resolve the type variable to find the backing tag union layout.
+                        // For nominal types, vars[0] is the backing type variable.
+                        const box_resolved = self.runtime_types.resolveVar(layout_rt_var);
+                        if (box_resolved.desc.content == .structure) {
+                            const flat = box_resolved.desc.content.structure;
+                            if (flat == .nominal_type) {
+                                const nom = flat.nominal_type;
+                                const vars = self.runtime_types.sliceVars(nom.vars.nonempty);
+                                if (vars.len > 0) {
+                                    const backing_var = vars[0];
+                                    const backing_layout = self.getRuntimeLayout(backing_var) catch break :blk inner_layout;
+                                    break :blk backing_layout;
+                                }
+                            } else if (flat == .tag_union) {
+                                // Direct tag union - try to get the non-boxed layout
+                                // by looking at the tag union's backing type
+                                const tu = flat.tag_union;
+                                const ext_var = tu.ext;
+                                const ext_resolved = self.runtime_types.resolveVar(ext_var);
+                                if (ext_resolved.desc.content == .structure and ext_resolved.desc.content.structure == .nominal_type) {
+                                    const nom = ext_resolved.desc.content.structure.nominal_type;
+                                    const vars = self.runtime_types.sliceVars(nom.vars.nonempty);
+                                    if (vars.len > 0) {
+                                        const backing_var = vars[0];
+                                        const backing_layout = self.getRuntimeLayout(backing_var) catch break :blk inner_layout;
+                                        break :blk backing_layout;
+                                    }
+                                }
+                            }
+                        }
+                        break :blk inner_layout;
+                    } else inner_layout;
+
+                    const args_exprs = self.env.store.sliceExpr(tag.args);
+
+                    if (args_exprs.len == 0) {
+                        // No payload - construct inner tag, then box it
+                        const inner_value = try self.finalizeTagNoPayload(rt_var, tag_index, effective_inner_layout, roc_ops);
+                        const boxed = try self.makeBoxValueFromLayout(layout_val, inner_value, roc_ops, rt_var);
+                        try value_stack.push(boxed);
+                    } else {
+                        // Has payload - schedule collection with layout_type = 3 (boxed)
+                        const arg_vars_range = tag_list.items[tag_index].args;
+                        const arg_rt_vars = self.runtime_types.sliceVars(arg_vars_range);
+                        try work_stack.push(.{ .apply_continuation = .{ .tag_collect = .{
+                            .collected_count = 0,
+                            .remaining_args = args_exprs,
+                            .arg_rt_vars = arg_rt_vars,
+                            .expr_idx = expr_idx,
+                            .rt_var = rt_var,
+                            .layout_rt_var = layout_rt_var,
+                            .tag_index = tag_index,
+                            .layout_type = 3,
+                        } } });
+                    }
                 } else {
                     self.triggerCrash("e_tag: unexpected layout type", false, roc_ops);
                     return error.Crash;
@@ -15956,6 +16021,151 @@ pub const Interpreter = struct {
                         dest.is_initialized = true;
                         dest.rt_var = tc.rt_var;
                         try value_stack.push(dest);
+                    } else if (tc.layout_type == 3) {
+                        // Boxed tag union: construct the inner tag union value, then box it.
+                        // layout_val is .box (from getRuntimeLayout on the boxed type).
+                        // We need to resolve the actual backing layout for the inner value.
+                        const inner_layout_idx = layout_val.data.box;
+                        const raw_inner_layout = self.runtime_layout_store.getLayout(inner_layout_idx);
+
+                        // Resolve opaque_ptr to actual backing layout
+                        const backing_layout = if (raw_inner_layout.tag == .scalar and raw_inner_layout.data.scalar.tag == .opaque_ptr) blk: {
+                            const box_resolved = self.runtime_types.resolveVar(tc.layout_rt_var);
+                            if (box_resolved.desc.content == .structure) {
+                                const flat = box_resolved.desc.content.structure;
+                                if (flat == .nominal_type) {
+                                    const nom = flat.nominal_type;
+                                    const vars = self.runtime_types.sliceVars(nom.vars.nonempty);
+                                    if (vars.len > 0) {
+                                        break :blk self.getRuntimeLayout(vars[0]) catch raw_inner_layout;
+                                    }
+                                }
+                            }
+                            break :blk raw_inner_layout;
+                        } else raw_inner_layout;
+
+                        // Build the inner tag union value based on the backing layout type
+                        if (backing_layout.tag == .record or backing_layout.tag == .tuple or backing_layout.tag == .tag_union) {
+                            // Construct the inner value using the same approach as the unboxed case
+                            // For simplicity, build a record with {tag, payload}
+                            if (backing_layout.tag == .record) {
+                                var inner_dest = try self.pushRaw(backing_layout, 0, tc.rt_var);
+                                var acc = try inner_dest.asRecord(&self.runtime_layout_store);
+                                const tag_field_idx = acc.findFieldIndex(self.env.idents.tag) orelse {
+                                    for (values) |v| v.decref(&self.runtime_layout_store, roc_ops);
+                                    self.triggerCrash("boxed e_tag: tag field not found", false, roc_ops);
+                                    return error.Crash;
+                                };
+
+                                // Write tag discriminant
+                                const field_rt = try self.runtime_types.fresh();
+                                const tag_field = try acc.getFieldByIndex(tag_field_idx, field_rt);
+                                if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                                    var tmp = tag_field;
+                                    tmp.is_initialized = false;
+                                    try tmp.setInt(@intCast(tc.tag_index));
+                                }
+
+                                // Write payload
+                                if (acc.findFieldIndex(self.env.idents.payload)) |payload_field_idx| {
+                                    const field_rt2 = try self.runtime_types.fresh();
+                                    const payload_field = try acc.getFieldByIndex(payload_field_idx, field_rt2);
+                                    if (payload_field.ptr) |payload_ptr| {
+                                        if (total_count == 1) {
+                                            try values[0].copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
+                                        }
+                                    }
+                                }
+
+                                // Box the inner value
+                                const boxed = try self.makeBoxValueFromLayout(layout_val, inner_dest, roc_ops, tc.rt_var);
+                                for (values) |val| {
+                                    val.decref(&self.runtime_layout_store, roc_ops);
+                                }
+                                try value_stack.push(boxed);
+                            } else if (backing_layout.tag == .tag_union) {
+                                // Construct inner tag_union, then box
+                                const tu_idx = backing_layout.data.tag_union.idx;
+                                const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
+                                const disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(tu_idx);
+
+                                var inner_dest = try self.pushRaw(backing_layout, 0, tc.rt_var);
+                                const base_ptr: [*]u8 = @ptrCast(inner_dest.ptr.?);
+                                const payload_ptr: *anyopaque = @ptrCast(base_ptr);
+
+                                if (total_count == 1) {
+                                    const variants = self.runtime_layout_store.getTagUnionVariants(tu_data);
+                                    const expected_payload_layout = self.runtime_layout_store.getLayout(variants.get(tc.tag_index).payload_layout);
+
+                                    if (expected_payload_layout.tag == .box and values[0].layout.tag != .box and values[0].layout.tag != .box_of_zst) {
+                                        // Auto-box the payload for recursive types
+                                        const elem_layout = self.runtime_layout_store.getLayout(expected_payload_layout.data.box);
+                                        const elem_size = self.runtime_layout_store.layoutSize(elem_layout);
+                                        const target_usize = self.runtime_layout_store.targetUsize();
+                                        const elem_align: u32 = @intCast(elem_layout.alignment(target_usize).toByteUnits());
+                                        const data_ptr = builtins.utils.allocateWithRefcount(elem_size, elem_align, false, roc_ops);
+                                        if (elem_size > 0 and values[0].ptr != null) {
+                                            try values[0].copyToPtr(&self.runtime_layout_store, data_ptr, roc_ops);
+                                        }
+                                        const slot: *usize = @ptrCast(@alignCast(payload_ptr));
+                                        slot.* = @intFromPtr(data_ptr);
+                                    } else {
+                                        try values[0].copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
+                                    }
+                                }
+
+                                tu_data.writeDiscriminantToPtr(base_ptr + disc_offset, @intCast(tc.tag_index));
+
+                                inner_dest.is_initialized = true;
+                                const boxed = try self.makeBoxValueFromLayout(layout_val, inner_dest, roc_ops, tc.rt_var);
+                                for (values) |val| {
+                                    val.decref(&self.runtime_layout_store, roc_ops);
+                                }
+                                try value_stack.push(boxed);
+                            } else {
+                                // Tuple - similar to tag_union but uses tuple access
+                                var inner_dest = try self.pushRaw(backing_layout, 0, tc.rt_var);
+                                var tup_acc = try inner_dest.asTuple(&self.runtime_layout_store);
+                                const discriminant_rt_var = try self.runtime_types.fresh();
+                                const tag_field = try tup_acc.getElement(1, discriminant_rt_var);
+                                if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                                    var tmp = tag_field;
+                                    tmp.is_initialized = false;
+                                    try tmp.setInt(@intCast(tc.tag_index));
+                                }
+                                if (total_count == 1) {
+                                    const payload_field = try tup_acc.getElement(0, values[0].rt_var);
+                                    if (payload_field.ptr) |ptr| {
+                                        try values[0].copyToPtr(&self.runtime_layout_store, ptr, roc_ops);
+                                    }
+                                }
+                                inner_dest.is_initialized = true;
+                                const boxed = try self.makeBoxValueFromLayout(layout_val, inner_dest, roc_ops, tc.rt_var);
+                                for (values) |val| {
+                                    val.decref(&self.runtime_layout_store, roc_ops);
+                                }
+                                try value_stack.push(boxed);
+                            }
+                        } else if (backing_layout.tag == .scalar) {
+                            // Scalar backing layout (no payload variants, just discriminant)
+                            var inner_dest = try self.pushRaw(backing_layout, 0, tc.rt_var);
+                            if (backing_layout.data.scalar.tag == .int) {
+                                inner_dest.is_initialized = false;
+                                try inner_dest.setInt(@intCast(tc.tag_index));
+                                inner_dest.is_initialized = true;
+                            }
+                            const boxed = try self.makeBoxValueFromLayout(layout_val, inner_dest, roc_ops, tc.rt_var);
+                            for (values) |val| {
+                                val.decref(&self.runtime_layout_store, roc_ops);
+                            }
+                            try value_stack.push(boxed);
+                        } else {
+                            for (values) |val| {
+                                val.decref(&self.runtime_layout_store, roc_ops);
+                            }
+                            self.triggerCrash("boxed e_tag: unsupported backing layout", false, roc_ops);
+                            return error.Crash;
+                        }
                     }
                 }
                 return true;
