@@ -1670,13 +1670,14 @@ test "List.get method dispatch on Try type - issue 8665" {
 }
 
 test "List.get with list var and when destructure" {
-    // Test List.get with a list VARIABLE and when destructure
+    // Test List.get with a list VARIABLE and match destructure
     try runExpectStr(
         \\{
         \\    list = ["hello"]
-        \\    when List.get(list, 0) is
-        \\        Ok(val) -> val
-        \\        Err(_) -> "error"
+        \\    match List.get(list, 0) {
+        \\        Ok(val) => val
+        \\        Err(_) => "error"
+        \\    }
         \\}
     , "hello", .no_trace);
 }
