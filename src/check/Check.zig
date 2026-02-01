@@ -3791,15 +3791,19 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
             // Now, check if we have an expected function to validate against
             if (mb_anno_func) |anno_func| {
-                const anno_func_args = self.types.sliceVars(anno_func.args);
+                // Use index-based iteration instead of slices because unifyInContext
+                // may trigger reallocations that would invalidate slice pointers
+                const anno_func_args_range = anno_func.args;
+                const anno_func_args_len = anno_func_args_range.len();
 
                 // Next, check if the arguments arities match
-                if (anno_func_args.len == arg_pattern_idxs.len) {
+                if (anno_func_args_len == arg_pattern_idxs.len) {
                     // If so, check each argument, passing in the expected type
 
                     // First, find all the rigid variables in a the function's type
                     // and unify the matching corresponding lambda arguments together.
-                    for (anno_func_args, 0..) |anno_arg_1, i| {
+                    for (0..anno_func_args_len) |i| {
+                        const anno_arg_1 = self.types.getVarAt(anno_func_args_range, @intCast(i));
                         const anno_resolved_1 = self.types.resolveVar(anno_arg_1);
 
                         // The expected type is an annotation and as such,
@@ -3813,7 +3817,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         }
 
                         // Look for other arguments with the same type variable
-                        for (anno_func_args[i + 1 ..], i + 1..) |anno_arg_2, j| for_blk: {
+                        for (i + 1..anno_func_args_len) |j| for_blk: {
+                            const anno_arg_2 = self.types.getVarAt(anno_func_args_range, @intCast(j));
                             const anno_resolved_2 = self.types.resolveVar(anno_arg_2);
                             if (anno_resolved_1.var_ == anno_resolved_2.var_) {
                                 // These two argument indexes in the called *function's*
@@ -3845,7 +3850,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
                     // Then, lastly, we unify the annotation types against the
                     // actual type
-                    for (anno_func_args, arg_pattern_idxs) |expected_arg_var, pattern_idx| {
+                    for (arg_pattern_idxs, 0..) |pattern_idx, i| {
+                        const expected_arg_var = self.types.getVarAt(anno_func_args_range, @intCast(i));
                         _ = try self.unifyInContext(expected_arg_var, ModuleEnv.varFrom(pattern_idx), env, .type_annotation);
                     }
                 } else {
@@ -3965,9 +3971,12 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
                         // Now, check the call args against the type of function
                         if (mb_func) |func| {
-                            const func_args = self.types.sliceVars(func.args);
+                            // Use index-based iteration instead of slices because unifyInContext
+                            // may trigger reallocations that would invalidate slice pointers
+                            const func_args_range = func.args;
+                            const func_args_len = func_args_range.len();
 
-                            if (func_args.len == call_arg_expr_idxs.len) {
+                            if (func_args_len == call_arg_expr_idxs.len) {
                                 // First, find all the "rigid" variables in a the function's type
                                 // and unify the matching corresponding call arguments together.
                                 //
@@ -3975,7 +3984,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                                 // has been instantiated such that the rigid variables should all resolve
                                 // to the same exact flex variable. So we are actually checking for flex
                                 // variables here.
-                                for (func_args, 0..) |expected_arg_1, i| {
+                                for (0..func_args_len) |i| {
+                                    const expected_arg_1 = self.types.getVarAt(func_args_range, @intCast(i));
                                     const expected_resolved_1 = self.types.resolveVar(expected_arg_1);
 
                                     // Ensure the above comment is true. That is, that all
@@ -3989,7 +3999,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                                     }
 
                                     // Look for other arguments with the same type variable
-                                    for (func_args[i + 1 ..], i + 1..) |expected_arg_2, j| {
+                                    for (i + 1..func_args_len) |j| {
+                                        const expected_arg_2 = self.types.getVarAt(func_args_range, @intCast(j));
                                         const expected_resolved_2 = self.types.resolveVar(expected_arg_2);
                                         if (expected_resolved_1.var_ == expected_resolved_2.var_) {
                                             // These two argument indexes in the called *function's*
@@ -4021,7 +4032,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
                                 // Check the function's arguments against the actual
                                 // called arguments, unifying each one
-                                for (func_args, call_arg_expr_idxs, 0..) |expected_arg_var, call_expr_idx, arg_index| {
+                                for (call_arg_expr_idxs, 0..) |call_expr_idx, arg_index| {
+                                    const expected_arg_var = self.types.getVarAt(func_args_range, @intCast(arg_index));
                                     const unify_result = try self.unifyInContext(expected_arg_var, ModuleEnv.varFrom(call_expr_idx), env, .{ .fn_call_arg = .{
                                         .fn_name = func_name,
                                         .call_expr = expr_idx,
@@ -4055,7 +4067,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
                                 _ = try self.unifyInContext(func_var, call_func_var, env, .{ .fn_call_arity = .{
                                     .fn_name = func_name,
-                                    .expected_args = @intCast(func_args.len),
+                                    .expected_args = @intCast(func_args_len),
                                     .actual_args = @intCast(call_arg_expr_idxs.len),
                                 } });
 
@@ -5979,7 +5991,9 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Erro
                 // If there was a problem, then ensure the error gets propagated
                 // to all args and return types.
                 if (fn_result.isProblem()) {
-                    for (self.types.sliceVars(constraint_fn.args)) |arg| {
+                    // Use iterator instead of slice because unifyWith may trigger reallocations
+                    var args_iter = self.types.iterVars(constraint_fn.args);
+                    while (args_iter.next()) |arg| {
                         // Propagate the error to args — necessary because constraint fn args
                         // are shared with actual expression vars (e.g., binop lhs/rhs), and
                         // leaving them non-err after a dispatch failure causes type confusion.
