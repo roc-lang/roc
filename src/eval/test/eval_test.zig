@@ -2169,15 +2169,87 @@ test "decode: I16.decode negative" {
 // TODO: Test with multiple decode methods in same format has issues
 // test "decode: chained format with different types" { ... }
 
+test "debug 8783a: lambda with tag match called directly" {
+    try runExpectI64(
+        \\{
+        \\    f = |child|
+        \\        match child {
+        \\            Text(_) => 1.I64
+        \\            Element(_, _) => 10.I64
+        \\        }
+        \\    f(Text("hello"))
+        \\}
+    , 1, .no_trace);
+}
+
+test "debug 8783b: fold with simple addition lambda" {
+    try runExpectI64(
+        \\{
+        \\    items = [1.I64, 2.I64, 3.I64]
+        \\    List.fold(items, 0.I64, |acc, x| acc + x)
+        \\}
+    , 6, .no_trace);
+}
+
+// TODO: test for fold with no-payload tag match (no-payload tag discriminant issue in fold)
+// Tracked separately from the 8783f payload flex var resolution fix.
+
+test "debug 8783g: match on payload tag without fold" {
+    try runExpectI64(
+        \\{
+        \\    item = A(1.I64)
+        \\    match item {
+        \\        A(x) => x + 100.I64
+        \\        B(x) => x + 200.I64
+        \\    }
+        \\}
+    , 101, .no_trace);
+}
+
+test "debug 8783f: fold with tag match single payload" {
+    try runExpectI64(
+        \\{
+        \\    items = [A(1.I64), B(2.I64)]
+        \\    f = |acc, x|
+        \\        match x {
+        \\            A(_) => acc + 1.I64
+        \\            B(_) => acc + 10.I64
+        \\        }
+        \\    List.fold(items, 0.I64, f)
+        \\}
+    , 11, .no_trace);
+}
+
+test "debug 8783c: fold with tag match" {
+    try runExpectI64(
+        \\{
+        \\    children = [Text("hello")]
+        \\    count_child = |acc, child|
+        \\        match child {
+        \\            Text(_) => acc + 1.I64
+        \\            Element(_, _) => acc + 10.I64
+        \\        }
+        \\    List.fold(children, 0.I64, count_child)
+        \\}
+    , 1, .no_trace);
+}
+
 test "issue 8783: List.fold with match on tag union elements from pattern match" {
     // Regression test: List.fold with a callback that matches on elements extracted from pattern matching
     // would fail with TypeMismatch in match_branches continuation.
     try runExpectI64(
         \\{
         \\    elem = Element("div", [Text("hello")])
-        \\    children = match elem { Element(_tag, c) => c, Text(_) => [] }
-        \\    count_child = |acc, child| match child { Text(_) => acc + 1, Element(_, _) => acc + 10 }
-        \\    List.fold(children, 0, count_child)
+        \\    children = match elem {
+        \\        Element(_tag, c) => c
+        \\        Text(_) => []
+        \\    }
+        \\    count_child = |acc, child|
+        \\        match child {
+        \\            Text(_) => acc + 1.I64
+        \\            Element(_, _) => acc + 10.I64
+        \\        }
+        \\    List.fold(children, 0.I64, count_child)
         \\}
     , 1, .no_trace);
 }
@@ -2573,7 +2645,10 @@ test "issue 8978: incref alignment with recursive tag unions in tuples" {
         \\{
         \\    make_result = || {
         \\        elem = Element("div", [Text("hello"), Element("span", [Text("world")])])
-        \\        children = match elem { Element(_tag, c) => c, Text(_) => [] }
+        \\        children = match elem {
+        \\            Element(_tag, c) => c
+        \\            Text(_) => []
+        \\        }
         \\        (children, 42i64)
         \\    }
         \\    (_, n) = make_result()

@@ -1144,6 +1144,100 @@ fn collectRigidVars(self: *Self, env: *const ModuleEnv, type_var: types.Var, out
     }
 }
 
+/// Walk two types from the same module in parallel. When the first type has a
+/// flex var where the second has a concrete type, add a scope entry mapping the
+/// flex var to the concrete var. This bridges gaps when a callback parameter's
+/// type has unresolved flex payload vars but the actual argument's type (already
+/// unified by the type checker) has concrete payloads.
+fn addIntraModuleMappings(
+    self: *Self,
+    scope: *types.VarMap,
+    env: *const ModuleEnv,
+    unresolved_var: types.Var,
+    concrete_var: types.Var,
+) Allocator.Error!void {
+    const ur = env.types.resolveVar(unresolved_var);
+    const cr = env.types.resolveVar(concrete_var);
+
+    // If they resolve to the same var, nothing to do
+    if (ur.var_ == cr.var_) return;
+
+    // If the unresolved side is flex, add a mapping — but only if the concrete side
+    // is actually concrete (a structure or alias). Mapping flex→flex is pointless.
+    if (ur.desc.content == .flex or ur.desc.content == .rigid) {
+        if (cr.desc.content == .structure or cr.desc.content == .alias) {
+            if (scope.get(ur.var_) == null) {
+                try scope.put(ur.var_, cr.var_);
+            }
+        }
+        return;
+    }
+
+    // Both must be structures to recurse
+    if (ur.desc.content != .structure or cr.desc.content != .structure) return;
+
+    const us = ur.desc.content.structure;
+    const cs = cr.desc.content.structure;
+
+    switch (us) {
+        .tag_union => |u_tu| {
+            const c_tu = if (cs == .tag_union) cs.tag_union else return;
+            const u_tags = env.types.getTagsSlice(u_tu.tags);
+            const c_tags = env.types.getTagsSlice(c_tu.tags);
+            const ident = env.getIdentStoreConst();
+
+            for (u_tags.items(.name), u_tags.items(.args)) |u_name, u_args| {
+                const u_text = ident.getText(u_name);
+                const u_pvars = env.types.sliceVars(u_args);
+
+                for (c_tags.items(.name), c_tags.items(.args)) |c_name, c_args| {
+                    const c_text = ident.getText(c_name);
+                    if (std.mem.eql(u8, u_text, c_text)) {
+                        const c_pvars = env.types.sliceVars(c_args);
+                        const num = @min(u_pvars.len, c_pvars.len);
+                        for (0..num) |j| {
+                            try self.addIntraModuleMappings(scope, env, u_pvars[j], c_pvars[j]);
+                        }
+                        break;
+                    }
+                }
+            }
+            // Don't recurse into extension vars — they represent "no more tags"
+            // for closed tag unions and mapping them can interfere with layout computation.
+        },
+        .nominal_type => |u_nt| {
+            const c_nt = if (cs == .nominal_type) cs.nominal_type else return;
+            const u_args = env.types.sliceNominalArgs(u_nt);
+            const c_args = env.types.sliceNominalArgs(c_nt);
+            const num = @min(u_args.len, c_args.len);
+            for (0..num) |i| {
+                try self.addIntraModuleMappings(scope, env, u_args[i], c_args[i]);
+            }
+        },
+        .record => |u_rec| {
+            const c_rec = if (cs == .record) cs.record else return;
+            const u_fields = env.types.getRecordFieldsSlice(u_rec.fields);
+            const c_fields = env.types.getRecordFieldsSlice(c_rec.fields);
+            const num = @min(u_fields.len, c_fields.len);
+            for (0..num) |i| {
+                try self.addIntraModuleMappings(scope, env, u_fields.get(i).var_, c_fields.get(i).var_);
+            }
+        },
+        .tuple => |u_tup| {
+            if (cs == .tuple) {
+                const c_tup = cs.tuple;
+                const u_elems = env.types.sliceVars(u_tup.elems);
+                const c_elems = env.types.sliceVars(c_tup.elems);
+                const num = @min(u_elems.len, c_elems.len);
+                for (0..num) |i| {
+                    try self.addIntraModuleMappings(scope, env, u_elems[i], c_elems[i]);
+                }
+            }
+        },
+        else => {},
+    }
+}
+
 fn collectTypeMappings(
     self: *Self,
     scope: *types.VarMap,
@@ -1425,6 +1519,51 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             // Ensure the local definition is lowered if it's a top-level def
             const symbol_key: u48 = @bitCast(symbol);
             if (!self.lowered_symbols.contains(symbol_key)) {
+                // Bridge the lookup expression's resolved type with the definition's type.
+                // When a lambda is passed as an argument to a polymorphic function (e.g., List.fold),
+                // the lookup expression's type has concrete payloads (e.g., [A(I64), B(I64)])
+                // resolved through unification, but the lambda definition's internal type still has
+                // flex vars (e.g., [A(*12), B(*19)]). Adding intra-module mappings ensures layout
+                // computation inside the lambda body resolves these flex vars to concrete types.
+                //
+                // Only do this when we're in the caller module (not inside an external def).
+                // Inside external defs, current_module_idx differs from type_scope_caller_module,
+                // and adding external module vars to a scope resolved via the caller's type store
+                // would cause cross-module variable resolution errors.
+                const in_caller_module = self.type_scope_caller_module == null or
+                    self.type_scope_caller_module.? == self.current_module_idx;
+                if (in_caller_module and self.type_scope.scopes.items.len > 0) {
+                    const pattern_key = @intFromEnum(lookup.pattern_idx);
+                    const def_expr_idx: ?CIR.Expr.Idx = def_blk: {
+                        if (self.findDefForPattern(module_env, lookup.pattern_idx)) |def_idx| {
+                            break :def_blk module_env.store.getDef(def_idx).expr;
+                        }
+                        if (self.deferred_defs.get(pattern_key)) |deferred| {
+                            break :def_blk deferred;
+                        }
+                        break :def_blk null;
+                    };
+                    if (def_expr_idx) |def_idx| {
+                        // Only bridge function PARAMETER types, not the entire function type.
+                        // Bridging return types can add spurious scope entries that interfere
+                        // with layout computation for other expressions.
+                        const def_type_var = ModuleEnv.varFrom(def_idx);
+                        const lookup_type_var = ModuleEnv.varFrom(expr_idx);
+                        const def_resolved = module_env.types.resolveVar(def_type_var);
+                        const lookup_resolved = module_env.types.resolveVar(lookup_type_var);
+                        if (def_resolved.desc.content.unwrapFunc()) |def_func| {
+                            if (lookup_resolved.desc.content.unwrapFunc()) |lookup_func| {
+                                const scope = &self.type_scope.scopes.items[0];
+                                const def_params = module_env.types.sliceVars(def_func.args);
+                                const lookup_params = module_env.types.sliceVars(lookup_func.args);
+                                const num = @min(def_params.len, lookup_params.len);
+                                for (0..num) |i| {
+                                    try self.addIntraModuleMappings(scope, module_env, def_params[i], lookup_params[i]);
+                                }
+                            }
+                        }
+                    }
+                }
                 try self.lowerLocalDefByPattern(module_env, symbol, lookup.pattern_idx);
             }
 
