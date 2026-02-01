@@ -7532,28 +7532,39 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
             const ls = self.layout_store orelse return Error.UnsupportedExpression;
             const union_layout = ls.getLayout(ds.union_layout);
-            if (union_layout.tag != .tag_union) return Error.UnsupportedExpression;
 
-            const tu_data = ls.getTagUnionData(union_layout.data.tag_union.idx);
-            const disc_offset = tu_data.discriminant_offset;
+            // Load discriminant value into a register
+            const disc_reg: GeneralReg = if (union_layout.tag == .tag_union) blk: {
+                const tu_data = ls.getTagUnionData(union_layout.data.tag_union.idx);
+                const disc_offset = tu_data.discriminant_offset;
 
-            // Load discriminant value
-            const disc_reg = try self.allocTempGeneral();
-            const base_offset: i32 = switch (value_loc) {
-                .stack => |off| off,
-                .stack_str => |off| off,
-                else => return Error.UnsupportedExpression,
-            };
+                const base_offset: i32 = switch (value_loc) {
+                    .stack => |off| off,
+                    .stack_str => |off| off,
+                    else => return Error.UnsupportedExpression,
+                };
 
-            if (comptime builtin.cpu.arch == .aarch64) {
-                try self.codegen.emit.ldrRegMemSoff(.w64, disc_reg, .FP, base_offset + @as(i32, @intCast(disc_offset)));
+                const reg = try self.allocTempGeneral();
+                if (comptime builtin.cpu.arch == .aarch64) {
+                    try self.codegen.emit.ldrRegMemSoff(.w64, reg, .FP, base_offset + @as(i32, @intCast(disc_offset)));
+                } else {
+                    try self.codegen.emit.movRegMem(.w64, reg, .RBP, base_offset + @as(i32, @intCast(disc_offset)));
+                }
+                break :blk reg;
+            } else if (union_layout.tag == .scalar or union_layout.tag == .zst) blk: {
+                // For scalar layouts (e.g., Bool, enums with no payloads),
+                // the value itself IS the discriminant.
+                break :blk try self.ensureInGeneralReg(value_loc);
             } else {
-                try self.codegen.emit.movRegMem(.w64, disc_reg, .RBP, base_offset + @as(i32, @intCast(disc_offset)));
-            }
+                return Error.UnsupportedExpression;
+            };
 
             // Get the branches
             const branches = self.store.getExprSpan(ds.branches);
-            if (branches.len == 0) return Error.UnsupportedExpression;
+            if (branches.len == 0) {
+                self.codegen.freeGeneral(disc_reg);
+                return Error.UnsupportedExpression;
+            }
 
             // For single branch, just return it
             if (branches.len == 1) {
@@ -7565,17 +7576,22 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // For now, use if-else chain for small number of branches
 
             // Determine result size from the tag union's variant payloads
-            // The result could be Dec (16 bytes), String (24 bytes), or smaller types
             const result_slot_size: u32 = blk: {
-                const variants = ls.getTagUnionVariants(tu_data);
-                var max_size: u32 = 8;
-                for (0..variants.len) |vi| {
-                    const variant = variants.get(vi);
-                    const vl = ls.getLayout(variant.payload_layout);
-                    const vs = ls.layoutSizeAlign(vl).size;
-                    if (vs > max_size) max_size = vs;
+                if (union_layout.tag == .tag_union) {
+                    const tu_data = ls.getTagUnionData(union_layout.data.tag_union.idx);
+                    const variants = ls.getTagUnionVariants(tu_data);
+                    var max_size: u32 = 8;
+                    for (0..variants.len) |vi| {
+                        const variant = variants.get(vi);
+                        const vl = ls.getLayout(variant.payload_layout);
+                        const vs = ls.layoutSizeAlign(vl).size;
+                        if (vs > max_size) max_size = vs;
+                    }
+                    break :blk max_size;
+                } else {
+                    // Scalar discriminant switch: branches return values up to 8 bytes
+                    break :blk 8;
                 }
-                break :blk max_size;
             };
 
             // Allocate result slot sized for the largest payload
