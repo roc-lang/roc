@@ -87,16 +87,16 @@ fn increfLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
     }
     if (layout.tag == .record) {
         if (ptr == null) return;
-        const record_data = layout_cache.getRecordData(layout.data.record.idx);
-        if (record_data.fields.count == 0) return;
+        const record_info = layout_cache.getRecordInfo(layout);
+        if (record_info.data.fields.count == 0) return;
 
-        const field_layouts = layout_cache.record_fields.sliceRange(record_data.getFields());
+        const field_layouts = record_info.fields;
         const base_ptr = @as([*]u8, @ptrCast(ptr.?));
 
         var field_index: usize = 0;
         while (field_index < field_layouts.len) : (field_index += 1) {
-            const field_info = field_layouts.get(field_index);
-            const field_layout = layout_cache.getLayout(field_info.layout);
+            const field_data = field_layouts.get(field_index);
+            const field_layout = layout_cache.getLayout(field_data.layout);
             const field_offset = layout_cache.getRecordFieldOffset(layout.data.record.idx, @intCast(field_index));
             const field_ptr = @as(*anyopaque, @ptrCast(base_ptr + field_offset));
             increfLayoutPtr(field_layout, field_ptr, layout_cache, roc_ops, null);
@@ -105,16 +105,16 @@ fn increfLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
     }
     if (layout.tag == .tuple) {
         if (ptr == null) return;
-        const tuple_data = layout_cache.getTupleData(layout.data.tuple.idx);
-        if (tuple_data.fields.count == 0) return;
+        const tuple_info = layout_cache.getTupleInfo(layout);
+        if (tuple_info.data.fields.count == 0) return;
 
-        const element_layouts = layout_cache.tuple_fields.sliceRange(tuple_data.getFields());
+        const element_layouts = tuple_info.fields;
         const base_ptr = @as([*]u8, @ptrCast(ptr.?));
 
         var elem_index: usize = 0;
         while (elem_index < element_layouts.len) : (elem_index += 1) {
-            const elem_info = element_layouts.get(elem_index);
-            const elem_layout = layout_cache.getLayout(elem_info.layout);
+            const elem_data = element_layouts.get(elem_index);
+            const elem_layout = layout_cache.getLayout(elem_data.layout);
             const elem_offset = layout_cache.getTupleElementOffset(layout.data.tuple.idx, @intCast(elem_index));
             const elem_ptr = @as(*anyopaque, @ptrCast(base_ptr + elem_offset));
             increfLayoutPtr(elem_layout, elem_ptr, layout_cache, roc_ops, null);
@@ -125,12 +125,11 @@ fn increfLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
         if (ptr == null) return;
         const base_ptr = @as([*]const u8, @ptrCast(ptr.?));
         const discriminant = readTagUnionDiscriminant(layout, base_ptr, layout_cache);
-        const tu_data = layout_cache.getTagUnionData(layout.data.tag_union.idx);
-        const variants = layout_cache.getTagUnionVariants(tu_data);
+        const tu_info = layout_cache.getTagUnionInfo(layout);
 
-        if (discriminant < variants.len) {
+        if (discriminant < tu_info.variants.len) {
             // Fast path: discriminant in range for current layout
-            const variant_layout = layout_cache.getLayout(variants.get(discriminant).payload_layout);
+            const variant_layout = layout_cache.getLayout(tu_info.variants.get(discriminant).payload_layout);
             increfLayoutPtr(variant_layout, @as(*anyopaque, @ptrCast(@constCast(base_ptr))), layout_cache, roc_ops, null);
         } else if (original_tu_idx) |orig_idx| {
             // Use original layout for correct refcounting when discriminant is out of range
@@ -169,23 +168,19 @@ fn decrefLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
         const raw_ptr = ptr orelse return;
         const list_header: *const RocList = builtins.utils.alignedPtrCast(*const RocList, @as([*]u8, @ptrCast(raw_ptr)), @src());
         const list_value = list_header.*;
-        const elem_layout = layout_cache.getLayout(layout.data.list);
-        const alignment_u32: u32 = @intCast(elem_layout.alignment(layout_cache.targetUsize()).toByteUnits());
-        const element_width: usize = @intCast(layout_cache.layoutSize(elem_layout));
-        const elements_refcounted = layout_cache.layoutContainsRefcounted(elem_layout);
+        const list_info = layout_cache.getListInfo(layout);
 
         // Decref elements when unique
         if (list_value.isUnique(ops)) {
             if (list_value.getAllocationDataPtr(ops)) |source| {
-                const count = list_value.getAllocationElementCount(elements_refcounted, ops);
-                var idx: usize = 0;
-                while (idx < count) : (idx += 1) {
-                    const elem_ptr = source + idx * element_width;
-                    decrefLayoutPtr(elem_layout, @ptrCast(elem_ptr), layout_cache, ops, null);
+                const count = list_value.getAllocationElementCount(list_info.contains_refcounted, ops);
+                var iter = list_info.iterateElements(source, count);
+                while (iter.next()) |elem_ptr| {
+                    decrefLayoutPtr(list_info.elem_layout, @ptrCast(elem_ptr), layout_cache, ops, null);
                 }
             }
         }
-        list_value.decref(alignment_u32, element_width, elements_refcounted, null, &builtins.list.rcNone, ops);
+        list_value.decref(list_info.elem_alignment, list_info.elem_size, list_info.contains_refcounted, null, &builtins.list.rcNone, ops);
         return;
     }
     if (layout.tag == .box) {
@@ -194,9 +189,7 @@ fn decrefLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
         const raw_ptr = slot.*;
         if (raw_ptr == 0) return;
         const data_ptr = @as([*]u8, @ptrFromInt(raw_ptr));
-        const target_usize = layout_cache.targetUsize();
-        const elem_layout = layout_cache.getLayout(layout.data.box);
-        const elem_alignment: u32 = @intCast(elem_layout.alignment(target_usize).toByteUnits());
+        const box_info = layout_cache.getBoxInfo(layout);
 
         const ptr_int = @intFromPtr(data_ptr);
         const tag_mask: usize = if (@sizeOf(usize) == 8) 0b111 else 0b11;
@@ -217,26 +210,26 @@ fn decrefLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
         const refcount_ptr: *isize = @as(*isize, @ptrFromInt(refcount_addr));
 
         if (builtins.utils.rcUnique(refcount_ptr.*)) {
-            if (layout_cache.layoutContainsRefcounted(elem_layout)) {
-                decrefLayoutPtr(elem_layout, @ptrCast(payload_ptr), layout_cache, ops, null);
+            if (box_info.contains_refcounted) {
+                decrefLayoutPtr(box_info.elem_layout, @ptrCast(payload_ptr), layout_cache, ops, null);
             }
         }
-        builtins.utils.decrefDataPtrC(@as(?[*]u8, payload_ptr), elem_alignment, false, ops);
+        builtins.utils.decrefDataPtrC(@as(?[*]u8, payload_ptr), box_info.elem_alignment, false, ops);
         slot.* = 0;
         return;
     }
     if (layout.tag == .record) {
         if (ptr == null) return;
-        const record_data = layout_cache.getRecordData(layout.data.record.idx);
-        if (record_data.fields.count == 0) return;
+        const record_info = layout_cache.getRecordInfo(layout);
+        if (record_info.data.fields.count == 0) return;
 
-        const field_layouts = layout_cache.record_fields.sliceRange(record_data.getFields());
+        const field_layouts = record_info.fields;
         const base_ptr = @as([*]u8, @ptrCast(ptr.?));
 
         var field_index: usize = 0;
         while (field_index < field_layouts.len) : (field_index += 1) {
-            const field_info = field_layouts.get(field_index);
-            const field_layout = layout_cache.getLayout(field_info.layout);
+            const field_data = field_layouts.get(field_index);
+            const field_layout = layout_cache.getLayout(field_data.layout);
             const field_offset = layout_cache.getRecordFieldOffset(layout.data.record.idx, @intCast(field_index));
             const field_ptr = @as(*anyopaque, @ptrCast(base_ptr + field_offset));
             decrefLayoutPtr(field_layout, field_ptr, layout_cache, ops, null);
@@ -245,16 +238,16 @@ fn decrefLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
     }
     if (layout.tag == .tuple) {
         if (ptr == null) return;
-        const tuple_data = layout_cache.getTupleData(layout.data.tuple.idx);
-        if (tuple_data.fields.count == 0) return;
+        const tuple_info = layout_cache.getTupleInfo(layout);
+        if (tuple_info.data.fields.count == 0) return;
 
-        const element_layouts = layout_cache.tuple_fields.sliceRange(tuple_data.getFields());
+        const element_layouts = tuple_info.fields;
         const base_ptr = @as([*]u8, @ptrCast(ptr.?));
 
         var elem_index: usize = 0;
         while (elem_index < element_layouts.len) : (elem_index += 1) {
-            const elem_info = element_layouts.get(elem_index);
-            const elem_layout = layout_cache.getLayout(elem_info.layout);
+            const elem_data = element_layouts.get(elem_index);
+            const elem_layout = layout_cache.getLayout(elem_data.layout);
             const elem_offset = layout_cache.getTupleElementOffset(layout.data.tuple.idx, @intCast(elem_index));
             const elem_ptr = @as(*anyopaque, @ptrCast(base_ptr + elem_offset));
             decrefLayoutPtr(elem_layout, elem_ptr, layout_cache, ops, null);
@@ -311,12 +304,11 @@ fn decrefLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
         if (ptr == null) return;
         const base_ptr = @as([*]const u8, @ptrCast(ptr.?));
         const discriminant = readTagUnionDiscriminant(layout, base_ptr, layout_cache);
-        const tu_data = layout_cache.getTagUnionData(layout.data.tag_union.idx);
-        const variants = layout_cache.getTagUnionVariants(tu_data);
+        const tu_info = layout_cache.getTagUnionInfo(layout);
 
-        if (discriminant < variants.len) {
+        if (discriminant < tu_info.variants.len) {
             // Fast path: discriminant in range for current layout
-            const variant_layout = layout_cache.getLayout(variants.get(discriminant).payload_layout);
+            const variant_layout = layout_cache.getLayout(tu_info.variants.get(discriminant).payload_layout);
             decrefLayoutPtr(variant_layout, @as(*anyopaque, @ptrCast(@constCast(base_ptr))), layout_cache, ops, null);
         } else if (original_tu_idx) |orig_idx| {
             // Use original layout for correct refcounting when discriminant is out of range
@@ -442,8 +434,7 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
         const dest_list: *builtins.list.RocList = builtins.utils.alignedPtrCast(*builtins.list.RocList, @as([*]u8, @ptrCast(dest_ptr)), @src());
         dest_list.* = src_list.*;
 
-        const elem_layout = layout_cache.getLayout(self.layout.data.list);
-        const elements_refcounted = layout_cache.layoutContainsRefcounted(elem_layout);
+        const list_info = layout_cache.getListInfo(self.layout);
 
         // Incref the list allocation. For seamless slices, this is the parent allocation,
         // not the bytes pointer (which points within the parent allocation).
@@ -461,12 +452,12 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
                     src_list.len(),
                     rc_before,
                     @intFromBool(src_list.isSeamlessSlice()),
-                    @intFromBool(elements_refcounted),
+                    @intFromBool(list_info.contains_refcounted),
                 });
             }
             builtins.utils.increfDataPtrC(alloc_ptr, 1, roc_ops);
         }
-        storeListElementCount(dest_list, elements_refcounted, roc_ops);
+        storeListElementCount(dest_list, list_info.contains_refcounted, roc_ops);
         return;
     }
 
@@ -491,16 +482,15 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
         const dst = @as([*]u8, @ptrCast(dest_ptr))[0..result_size];
         @memmove(dst, src);
 
-        const record_data = layout_cache.getRecordData(self.layout.data.record.idx);
-        if (record_data.fields.count == 0) return;
+        const record_info = layout_cache.getRecordInfo(self.layout);
+        if (record_info.data.fields.count == 0) return;
 
-        const field_layouts = layout_cache.record_fields.sliceRange(record_data.getFields());
         const base_ptr = @as([*]u8, @ptrCast(self.ptr.?));
 
         var field_index: usize = 0;
-        while (field_index < field_layouts.len) : (field_index += 1) {
-            const field_info = field_layouts.get(field_index);
-            const field_layout = layout_cache.getLayout(field_info.layout);
+        while (field_index < record_info.fields.len) : (field_index += 1) {
+            const field_data = record_info.fields.get(field_index);
+            const field_layout = layout_cache.getLayout(field_data.layout);
 
             const field_offset = layout_cache.getRecordFieldOffset(self.layout.data.record.idx, @intCast(field_index));
             const field_ptr = @as(*anyopaque, @ptrCast(base_ptr + field_offset));
@@ -522,16 +512,15 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
         const dst = @as([*]u8, @ptrCast(dest_ptr))[0..result_size];
         @memmove(dst, src);
 
-        const tuple_data = layout_cache.getTupleData(self.layout.data.tuple.idx);
-        if (tuple_data.fields.count == 0) return;
+        const tuple_info = layout_cache.getTupleInfo(self.layout);
+        if (tuple_info.data.fields.count == 0) return;
 
-        const element_layouts = layout_cache.tuple_fields.sliceRange(tuple_data.getFields());
         const base_ptr = @as([*]u8, @ptrCast(self.ptr.?));
 
         var elem_index: usize = 0;
-        while (elem_index < element_layouts.len) : (elem_index += 1) {
-            const elem_info = element_layouts.get(elem_index);
-            const elem_layout = layout_cache.getLayout(elem_info.layout);
+        while (elem_index < tuple_info.fields.len) : (elem_index += 1) {
+            const elem_data = tuple_info.fields.get(elem_index);
+            const elem_layout = layout_cache.getLayout(elem_data.layout);
 
             const elem_offset = layout_cache.getTupleElementOffset(self.layout.data.tuple.idx, @intCast(elem_index));
             const elem_ptr = @as(*anyopaque, @ptrCast(base_ptr + elem_offset));
@@ -593,12 +582,11 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
 
         const base_ptr = @as([*]const u8, @ptrCast(self.ptr.?));
         const discriminant = readTagUnionDiscriminant(self.layout, base_ptr, layout_cache);
-        const tu_data = layout_cache.getTagUnionData(self.layout.data.tag_union.idx);
-        const variants = layout_cache.getTagUnionVariants(tu_data);
+        const tu_info = layout_cache.getTagUnionInfo(self.layout);
 
-        if (discriminant < variants.len) {
+        if (discriminant < tu_info.variants.len) {
             // Fast path: discriminant in range for current layout
-            const variant_layout = layout_cache.getLayout(variants.get(discriminant).payload_layout);
+            const variant_layout = layout_cache.getLayout(tu_info.variants.get(discriminant).payload_layout);
 
             if (comptime trace_refcount) {
                 traceRefcount("INCREF tag_union (copyToPtr) disc={} variant_layout.tag={}", .{
@@ -916,14 +904,13 @@ pub fn asTuple(self: StackValue, layout_cache: *LayoutStore) !TupleAccessor {
     std.debug.assert(self.ptr != null);
     std.debug.assert(self.layout.tag == .tuple);
 
-    const tuple_data = layout_cache.getTupleData(self.layout.data.tuple.idx);
-    const element_layouts = layout_cache.tuple_fields.sliceRange(tuple_data.getFields());
+    const tuple_info = layout_cache.getTupleInfo(self.layout);
 
     return TupleAccessor{
         .base_value = self,
         .layout_cache = layout_cache,
         .tuple_layout = self.layout,
-        .element_layouts = element_layouts,
+        .element_layouts = tuple_info.fields,
     };
 }
 
@@ -1011,12 +998,12 @@ pub fn asTagUnion(self: StackValue, layout_cache: *LayoutStore) !TagUnionAccesso
     std.debug.assert(self.ptr != null);
     std.debug.assert(self.layout.tag == .tag_union);
 
-    const tu_data = layout_cache.getTagUnionData(self.layout.data.tag_union.idx);
+    const tu_info = layout_cache.getTagUnionInfo(self.layout);
 
     return TagUnionAccessor{
         .base_value = self,
         .layout_cache = layout_cache,
-        .tu_data = tu_data.*,
+        .tu_data = tu_info.data.*,
     };
 }
 
@@ -1151,14 +1138,13 @@ pub fn asRecord(self: StackValue, layout_cache: *LayoutStore) !RecordAccessor {
     // Note: ptr can be null for records with all ZST fields
     std.debug.assert(self.layout.tag == .record);
 
-    const record_data = layout_cache.getRecordData(self.layout.data.record.idx);
-    const field_layouts = layout_cache.record_fields.sliceRange(record_data.getFields());
+    const record_info = layout_cache.getRecordInfo(self.layout);
 
     return RecordAccessor{
         .base_value = self,
         .layout_cache = layout_cache,
         .record_layout = self.layout,
-        .field_layouts = field_layouts,
+        .field_layouts = record_info.fields,
     };
 }
 
@@ -1417,10 +1403,9 @@ pub fn copyTo(self: StackValue, dest: StackValue, layout_cache: *LayoutStore, ro
         dest_list.* = src_list;
 
         if (self.layout.tag == .list) {
-            const elem_layout = layout_cache.getLayout(self.layout.data.list);
-            const elements_refcounted = layout_cache.layoutContainsRefcounted(elem_layout);
-            dest_list.incref(1, elements_refcounted, roc_ops);
-            storeListElementCount(dest_list, elements_refcounted, roc_ops);
+            const list_info = layout_cache.getListInfo(self.layout);
+            dest_list.incref(1, list_info.contains_refcounted, roc_ops);
+            storeListElementCount(dest_list, list_info.contains_refcounted, roc_ops);
         } else {
             dest_list.incref(1, false, roc_ops);
         }
@@ -1557,12 +1542,11 @@ pub fn incref(self: StackValue, layout_cache: *LayoutStore, roc_ops: *RocOps) vo
         // Use dynamic offset computation to handle recursive types correctly
         const discriminant = readTagUnionDiscriminant(self.layout, base_ptr, layout_cache);
 
-        const tu_data = layout_cache.getTagUnionData(self.layout.data.tag_union.idx);
-        const variants = layout_cache.getTagUnionVariants(tu_data);
+        const tu_info = layout_cache.getTagUnionInfo(self.layout);
 
-        if (discriminant < variants.len) {
+        if (discriminant < tu_info.variants.len) {
             // Fast path: discriminant in range for current layout
-            const variant_layout = layout_cache.getLayout(variants.get(discriminant).payload_layout);
+            const variant_layout = layout_cache.getLayout(tu_info.variants.get(discriminant).payload_layout);
 
             if (comptime trace_refcount) {
                 traceRefcount("INCREF tag_union disc={} variant_layout.tag={}", .{ discriminant, @intFromEnum(variant_layout.tag) });
@@ -1689,16 +1673,13 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
         .list => {
             const list_header = self.asRocList() orelse return;
             const list_value = list_header.*;
-            const elem_layout = layout_cache.getLayout(self.layout.data.list);
-            const alignment_u32: u32 = @intCast(elem_layout.alignment(layout_cache.targetUsize()).toByteUnits());
-            const element_width: usize = @intCast(layout_cache.layoutSize(elem_layout));
-            const elements_refcounted = layout_cache.layoutContainsRefcounted(elem_layout);
+            const list_info = layout_cache.getListInfo(self.layout);
 
             if (comptime trace_refcount) {
                 traceRefcount("DECREF list ptr=0x{x} len={} elems_rc={} unique={}", .{
                     @intFromPtr(list_value.getAllocationDataPtr()),
                     list_value.len(),
-                    @intFromBool(elements_refcounted),
+                    @intFromBool(list_info.contains_refcounted),
                     @intFromBool(list_value.isUnique(ops)),
                 });
             }
@@ -1708,22 +1689,21 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
             // Decref for non-refcounted types (like plain integers) is a no-op.
             if (list_value.isUnique(ops)) {
                 if (list_value.getAllocationDataPtr(ops)) |source| {
-                    const count = list_value.getAllocationElementCount(elements_refcounted, ops);
+                    const count = list_value.getAllocationElementCount(list_info.contains_refcounted, ops);
 
                     if (comptime trace_refcount) {
                         traceRefcount("DECREF list decref-ing {} elements", .{count});
                     }
 
-                    var idx: usize = 0;
-                    while (idx < count) : (idx += 1) {
-                        const elem_ptr = source + idx * element_width;
-                        decrefLayoutPtr(elem_layout, @ptrCast(elem_ptr), layout_cache, ops, null);
+                    var iter = list_info.iterateElements(source, count);
+                    while (iter.next()) |elem_ptr| {
+                        decrefLayoutPtr(list_info.elem_layout, @ptrCast(elem_ptr), layout_cache, ops, null);
                     }
                 }
             }
             // We already decreffed all elements above, so pass rcNone to avoid double-decref.
             // But we still need elements_refcounted=true for correct allocation layout.
-            list_value.decref(alignment_u32, element_width, elements_refcounted, null, &builtins.list.rcNone, ops);
+            list_value.decref(list_info.elem_alignment, list_info.elem_size, list_info.contains_refcounted, null, &builtins.list.rcNone, ops);
             return;
         },
         .list_of_zst => {
@@ -1739,9 +1719,7 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
             const raw_ptr = slot.*;
             if (raw_ptr == 0) return;
             const data_ptr: [*]u8 = @ptrFromInt(raw_ptr);
-            const target_usize = layout_cache.targetUsize();
-            const elem_layout = layout_cache.getLayout(self.layout.data.box);
-            const elem_alignment: u32 = @intCast(elem_layout.alignment(target_usize).toByteUnits());
+            const box_info = layout_cache.getBoxInfo(self.layout);
 
             const ptr_int = @intFromPtr(data_ptr);
             const tag_mask: usize = if (@sizeOf(usize) == 8) 0b111 else 0b11;
@@ -1753,29 +1731,29 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
                 traceRefcount("DECREF box ptr=0x{x} rc={} elem_rc={}", .{
                     unmasked_ptr,
                     refcount_ptr.*,
-                    @intFromBool(layout_cache.layoutContainsRefcounted(elem_layout)),
+                    @intFromBool(box_info.contains_refcounted),
                 });
             }
 
             if (builtins.utils.rcUnique(refcount_ptr.*)) {
-                if (layout_cache.layoutContainsRefcounted(elem_layout)) {
-                    decrefLayoutPtr(elem_layout, @ptrCast(@alignCast(payload_ptr)), layout_cache, ops, null);
+                if (box_info.contains_refcounted) {
+                    decrefLayoutPtr(box_info.elem_layout, @ptrCast(@alignCast(payload_ptr)), layout_cache, ops, null);
                 }
             }
 
-            builtins.utils.decrefDataPtrC(@as(?[*]u8, payload_ptr), elem_alignment, false, ops);
+            builtins.utils.decrefDataPtrC(@as(?[*]u8, payload_ptr), box_info.elem_alignment, false, ops);
             slot.* = 0;
             return;
         },
         .record => {
             if (self.ptr == null) return;
-            const record_data = layout_cache.getRecordData(self.layout.data.record.idx);
-            if (record_data.fields.count == 0) return;
+            const record_info = layout_cache.getRecordInfo(self.layout);
+            if (record_info.data.fields.count == 0) return;
 
             if (comptime trace_refcount) {
                 traceRefcount("DECREF record ptr=0x{x} fields={}", .{
                     @intFromPtr(self.ptr),
-                    record_data.fields.count,
+                    record_info.data.fields.count,
                 });
             }
 
@@ -1790,13 +1768,13 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
         },
         .tuple => {
             if (self.ptr == null) return;
-            const tuple_data = layout_cache.getTupleData(self.layout.data.tuple.idx);
-            if (tuple_data.fields.count == 0) return;
+            const tuple_info = layout_cache.getTupleInfo(self.layout);
+            if (tuple_info.data.fields.count == 0) return;
 
             if (comptime trace_refcount) {
                 traceRefcount("DECREF tuple ptr=0x{x} fields={}", .{
                     @intFromPtr(self.ptr),
-                    tuple_data.fields.count,
+                    tuple_info.data.fields.count,
                 });
             }
 
@@ -1814,12 +1792,11 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
             if (self.ptr == null) return;
             const base_ptr = @as([*]const u8, @ptrCast(self.ptr.?));
             const discriminant = readTagUnionDiscriminant(self.layout, base_ptr, layout_cache);
-            const tu_data = layout_cache.getTagUnionData(self.layout.data.tag_union.idx);
-            const variants = layout_cache.getTagUnionVariants(tu_data);
+            const tu_info = layout_cache.getTagUnionInfo(self.layout);
 
-            if (discriminant < variants.len) {
+            if (discriminant < tu_info.variants.len) {
                 // Fast path: discriminant in range for current layout
-                const variant_layout = layout_cache.getLayout(variants.get(discriminant).payload_layout);
+                const variant_layout = layout_cache.getLayout(tu_info.variants.get(discriminant).payload_layout);
 
                 if (comptime trace_refcount) {
                     traceRefcount("DECREF tag_union ptr=0x{x} disc={} variant_layout.tag={}", .{
