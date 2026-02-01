@@ -355,7 +355,7 @@ const DefinedType = struct {
 /// User-defined type name pool
 const user_type_names = [_][]const u8{
     "Color", "Status", "Mode",
-    "Wrapper", "Box", "Container",
+    "Wrapper", "Container", "Item",
     "Tree", "Node", "Expr",
 };
 
