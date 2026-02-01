@@ -3622,8 +3622,9 @@ fn lowerInspectByLayout(
 /// Inspect a boolean value
 fn lowerInspectBool(self: *Self, value_expr: MonoExprId, region: Region) Allocator.Error!MonoExprId {
     // Create branches for True (discriminant 1) and False (discriminant 0)
-    const false_str = try self.addStrLiteral("Bool.false", region);
-    const true_str = try self.addStrLiteral("Bool.true", region);
+    // Bool renders without the nominal prefix, matching interpreter behavior
+    const false_str = try self.addStrLiteral("False", region);
+    const true_str = try self.addStrLiteral("True", region);
 
     const branches = try self.store.addExprSpan(&[_]MonoExprId{ false_str, true_str });
 
@@ -3843,6 +3844,30 @@ fn lowerInspectNominal(
         return try self.lowerInspectBool(value_expr, region);
     }
 
+    // Check for numeric nominal types that should be rendered as their value.
+    // These are opaque but have well-known numeric representations.
+    const layout_store = self.layout_store orelse unreachable;
+    const lv = layout_store.getLayout(value_layout);
+    if (lv.tag == .scalar) {
+        switch (lv.data.scalar.tag) {
+            .int => return try self.store.addExpr(.{ .int_to_str = .{
+                .value = value_expr,
+                .int_precision = lv.data.scalar.data.int,
+            } }, region),
+            .frac => {
+                if (lv.data.scalar.data.frac == .dec) {
+                    return try self.store.addExpr(.{ .dec_to_str = value_expr }, region);
+                }
+                return try self.store.addExpr(.{ .float_to_str = .{
+                    .value = value_expr,
+                    .float_precision = lv.data.scalar.data.frac,
+                } }, region);
+            },
+            .str => return try self.store.addExpr(.{ .str_escape_and_quote = value_expr }, region),
+            .opaque_ptr => {},
+        }
+    }
+
     if (nom.is_opaque) {
         // Opaque types render as <opaque>
         return try self.addStrLiteral("<opaque>", region);
@@ -3863,7 +3888,6 @@ fn lowerInspectNominal(
     try parts.append(self.allocator, try self.addStrLiteral(type_name, region));
     try parts.append(self.allocator, try self.addStrLiteral(".", region));
     // For backing value, inspect by layout
-    const layout_store = self.layout_store orelse unreachable;
     const layout_val = layout_store.getLayout(value_layout);
     try parts.append(self.allocator, try self.lowerInspectByLayout(value_expr, layout_val, value_layout, region));
 

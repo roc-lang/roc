@@ -7575,32 +7575,32 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // TODO: Implement full switch with jump table for many branches
             // For now, use if-else chain for small number of branches
 
-            // Determine result size from the tag union's variant payloads
-            const result_slot_size: u32 = blk: {
-                if (union_layout.tag == .tag_union) {
-                    const tu_data = ls.getTagUnionData(union_layout.data.tag_union.idx);
-                    const variants = ls.getTagUnionVariants(tu_data);
-                    var max_size: u32 = 8;
-                    for (0..variants.len) |vi| {
-                        const variant = variants.get(vi);
-                        const vl = ls.getLayout(variant.payload_layout);
-                        const vs = ls.layoutSizeAlign(vl).size;
-                        if (vs > max_size) max_size = vs;
-                    }
-                    break :blk max_size;
-                } else {
-                    // Scalar discriminant switch: branches return values up to 8 bytes
-                    break :blk 8;
-                }
-            };
-
-            // Allocate result slot sized for the largest payload
-            const result_slot = self.codegen.allocStackSlot(result_slot_size);
             var exit_patches = std.ArrayList(usize).empty;
             defer exit_patches.deinit(self.allocator);
 
-            // Track what kind of value was stored to determine return type
+            // Track result characteristics to determine slot size and return type
+            var result_is_str = false;
             var result_is_i128 = false;
+
+            // Determine result slot size. For tag unions, use the variant payloads.
+            // For scalars, we defer allocation until the first branch is generated
+            // so we can use the actual result ValueLocation to determine the size.
+            var result_slot_size: u32 = 0;
+            var result_slot: i32 = 0;
+
+            if (union_layout.tag == .tag_union) {
+                const tu_data = ls.getTagUnionData(union_layout.data.tag_union.idx);
+                const variants = ls.getTagUnionVariants(tu_data);
+                var max_size: u32 = 8;
+                for (0..variants.len) |vi| {
+                    const variant = variants.get(vi);
+                    const vl = ls.getLayout(variant.payload_layout);
+                    const vs = ls.layoutSizeAlign(vl).size;
+                    if (vs > max_size) max_size = vs;
+                }
+                result_slot_size = max_size;
+                result_slot = self.codegen.allocStackSlot(result_slot_size);
+            }
 
             for (branches, 0..) |branch_expr, i| {
                 if (i < branches.len - 1) {
@@ -7611,6 +7611,15 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     // Generate branch body
                     const branch_loc = try self.generateExpr(branch_expr);
                     if (branch_loc == .stack_i128 or branch_loc == .immediate_i128) result_is_i128 = true;
+                    if (branch_loc == .stack_str) result_is_str = true;
+
+                    // For scalar switches, allocate result slot after first branch
+                    // so we know the actual result size from the ValueLocation.
+                    if (result_slot_size == 0) {
+                        result_slot_size = self.valueSizeFromLoc(branch_loc);
+                        result_slot = self.codegen.allocStackSlot(result_slot_size);
+                    }
+
                     try self.storeResultToSlot(result_slot, branch_loc, result_slot_size);
 
                     // Jump to end
@@ -7624,6 +7633,14 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     // Last branch is the default
                     const branch_loc = try self.generateExpr(branch_expr);
                     if (branch_loc == .stack_i128 or branch_loc == .immediate_i128) result_is_i128 = true;
+                    if (branch_loc == .stack_str) result_is_str = true;
+
+                    // For scalar switches, allocate result slot after first branch
+                    if (result_slot_size == 0) {
+                        result_slot_size = self.valueSizeFromLoc(branch_loc);
+                        result_slot = self.codegen.allocStackSlot(result_slot_size);
+                    }
+
                     try self.storeResultToSlot(result_slot, branch_loc, result_slot_size);
                 }
             }
@@ -7637,7 +7654,9 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             self.codegen.freeGeneral(disc_reg);
 
             // Return with appropriate value location type
-            if (result_is_i128 or result_slot_size == 16) {
+            if (result_is_str or result_slot_size == 24) {
+                return .{ .stack_str = result_slot };
+            } else if (result_is_i128 or result_slot_size == 16) {
                 return .{ .stack_i128 = result_slot };
             } else {
                 return .{ .stack = result_slot };
