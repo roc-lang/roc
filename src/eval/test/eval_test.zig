@@ -2247,19 +2247,50 @@ test "issue 8814: List.get with numeric literal on function parameter - regressi
     , "hello", .no_trace);
 }
 
+test "nominal: structural record unifies with nominal type via annotation" {
+    // Test that a structural record literal unifies with a nominal type
+    // when the variable has a type annotation.
+    try runExpectStr(
+        \\{
+        \\    Foo := { bar : Str }
+        \\    x : Foo
+        \\    x = { bar: "hello" }
+        \\    x.bar
+        \\}
+    , "hello", .no_trace);
+}
+
+test "nominal: empty record unifies with nominal type via annotation" {
+    // Test that {} unifies with a nominal type backed by {}
+    // when the variable has a type annotation.
+    try runExpectI64(
+        \\{
+        \\    Foo := {}
+        \\    x : Foo
+        \\    x = {}
+        \\    42.I64
+        \\}
+    , 42, .no_trace);
+}
+
 test "encode: Str.encode with local format type" {
     // Test cross-module dispatch: Str.encode (in Builtin) calls Fmt.encode_str
     // where Fmt is a local type defined in the test.
+    // Note: uses match instead of ? to avoid return_outside_fn at top level
+    // which causes the block's type variable to resolve to Content.err.
     try runExpectListI64(
         \\{
         \\    Utf8Format := {}.{
         \\        encode_str : Utf8Format, Str -> Try(List(U8), [])
         \\        encode_str = |_fmt, s| Ok(Str.to_utf8(s))
         \\    }
-        \\    fmt = Utf8Format
+        \\    fmt : Utf8Format
+        \\    fmt = {}
         \\    result = Str.encode("hi", fmt)
-        \\    bytes = result?
-        \\    List.map(bytes, |b| U8.to_i64(b))
+        \\    match result {
+        \\        Ok(bytes) => List.map(bytes, |b| U8.to_i64(b))
+        \\        Err(_) => []
+        \\    }
         \\}
     , &[_]i64{ 104, 105 }, .no_trace);
 }

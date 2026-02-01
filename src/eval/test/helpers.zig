@@ -56,7 +56,8 @@ const TraceWriter = struct {
 const DevEvalError = error{
     DevEvaluatorInitFailed,
     GenerateCodeFailed,
-    JitInitFailed,
+    ExecInitFailed,
+    RocCrashed,
     UnsupportedLayout,
     OutOfMemory,
 };
@@ -79,18 +80,18 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
     };
     defer code_result.deinit();
 
-    // JIT execute the code (with entry_offset for compiled procedures)
-    var jit = backend.JitCode.initWithEntryOffset(code_result.code, code_result.entry_offset) catch {
-        return error.JitInitFailed;
+    // Execute the compiled code (with entry_offset for compiled procedures)
+    var executable = backend.ExecutableMemory.initWithEntryOffset(code_result.code, code_result.entry_offset) catch {
+        return error.ExecInitFailed;
     };
-    defer jit.deinit();
+    defer executable.deinit();
 
     // Check if this is a tuple
     if (code_result.tuple_len > 1) {
         // Allocate buffer for tuple elements
         // Unsuffixed numeric literals default to Dec (i128 = 16 bytes each)
         var result_buf: [32]i128 align(16) = @splat(0);
-        jit.callWithResultPtrAndRocOps(@ptrCast(&result_buf), @constCast(&dev_eval.roc_ops));
+        try dev_eval.callWithCrashProtection(&executable, @ptrCast(&result_buf));
 
         // Format as "(elem1, elem2, ...)"
         var output = std.array_list.Managed(u8).initCapacity(allocator, 64) catch
@@ -132,33 +133,33 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
     return switch (code_result.result_layout) {
         layout_mod.Idx.i64, layout_mod.Idx.i8, layout_mod.Idx.i16, layout_mod.Idx.i32 => blk: {
             var result: i64 = 0;
-            jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&dev_eval.roc_ops));
+            try dev_eval.callWithCrashProtection(&executable, @ptrCast(&result));
             break :blk std.fmt.allocPrint(allocator, "{}", .{result});
         },
         layout_mod.Idx.u64, layout_mod.Idx.u8, layout_mod.Idx.u16, layout_mod.Idx.u32, layout_mod.Idx.bool => blk: {
             var result: u64 = 0;
-            jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&dev_eval.roc_ops));
+            try dev_eval.callWithCrashProtection(&executable, @ptrCast(&result));
             break :blk std.fmt.allocPrint(allocator, "{}", .{result});
         },
         layout_mod.Idx.f64 => blk: {
             var result: f64 = 0;
-            jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&dev_eval.roc_ops));
+            try dev_eval.callWithCrashProtection(&executable, @ptrCast(&result));
             break :blk std.fmt.allocPrint(allocator, "{d}", .{result});
         },
         layout_mod.Idx.f32 => blk: {
             // F32 stores 4 bytes, use f32 buffer and print at f32 precision
             var result: f32 = 0;
-            jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&dev_eval.roc_ops));
+            try dev_eval.callWithCrashProtection(&executable, @ptrCast(&result));
             break :blk std.fmt.allocPrint(allocator, "{d}", .{result});
         },
         layout_mod.Idx.i128, layout_mod.Idx.u128 => blk: {
             var result: i128 align(16) = 0; // Initialize to 0 and ensure 16-byte alignment
-            jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&dev_eval.roc_ops));
+            try dev_eval.callWithCrashProtection(&executable, @ptrCast(&result));
             break :blk std.fmt.allocPrint(allocator, "{}", .{result});
         },
         layout_mod.Idx.dec => blk: {
             var result: i128 align(16) = 0; // Initialize to 0 and ensure 16-byte alignment
-            jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&dev_eval.roc_ops));
+            try dev_eval.callWithCrashProtection(&executable, @ptrCast(&result));
             const dec = builtins.dec.RocDec{ .num = result };
             var buf: [builtins.dec.RocDec.max_str_length]u8 = undefined;
             const slice = dec.format_to_buf(&buf);
@@ -176,7 +177,7 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
                 .length = 0,
                 .capacity_or_alloc_ptr = 0,
             };
-            jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&dev_eval.roc_ops));
+            try dev_eval.callWithCrashProtection(&executable, @ptrCast(&result));
 
             // Check if small string (capacity_or_alloc_ptr is negative when cast to signed)
             if (@as(isize, @bitCast(result.capacity_or_alloc_ptr)) < 0) {
@@ -216,7 +217,7 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
                         .len = 0,
                         .capacity = 0,
                     };
-                    jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&dev_eval.roc_ops));
+                    try dev_eval.callWithCrashProtection(&executable, @ptrCast(&result));
 
                     // Format as [(), (), ...] based on the length
                     var output = std.array_list.Managed(u8).initCapacity(allocator, 64) catch
@@ -245,7 +246,7 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
                         .len = 0,
                         .capacity = 0,
                     };
-                    jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&dev_eval.roc_ops));
+                    try dev_eval.callWithCrashProtection(&executable, @ptrCast(&result));
 
                     var output = std.array_list.Managed(u8).initCapacity(allocator, 64) catch
                         return error.OutOfMemory;

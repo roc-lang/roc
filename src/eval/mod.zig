@@ -12,8 +12,6 @@ pub const comptime_value = @import("comptime_value.zig");
 /// Executable memory for running generated code (re-exported from backend module)
 const backend = @import("backend");
 pub const ExecutableMemory = backend.ExecutableMemory;
-/// Backwards compatibility alias
-pub const JitCode = ExecutableMemory;
 /// Layout module (re-exported for result type information)
 pub const layout = @import("layout");
 /// Utilities for loading compiled builtin modules

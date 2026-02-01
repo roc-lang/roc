@@ -22,6 +22,20 @@ const mono = @import("mono");
 const builtin_loading = @import("builtin_loading.zig");
 const builtins = @import("builtins");
 
+// Platform-specific jmp_buf for setjmp/longjmp crash recovery.
+// Used to unwind the stack when roc_crashed is called during execution.
+const JmpBuf = switch (builtin.os.tag) {
+    .macos => [48]c_int,
+    .linux => switch (builtin.cpu.arch) {
+        .aarch64 => [64]c_long,
+        .x86_64 => [25]c_long,
+        else => @compileError("Unsupported architecture for jmp_buf"),
+    },
+    else => @compileError("Unsupported OS for jmp_buf"),
+};
+extern "c" fn _setjmp(env: *JmpBuf) c_int;
+extern "c" fn _longjmp(env: *JmpBuf, val: c_int) noreturn;
+
 const Allocator = std.mem.Allocator;
 const ModuleEnv = can.ModuleEnv;
 const CIR = can.CIR;
@@ -42,10 +56,52 @@ const MonoLower = mono.Lower;
 
 // Static data interner for string literals
 const StaticDataInterner = backend.StaticDataInterner;
-const JitStaticBackend = StaticDataInterner.JitStaticBackend;
+const MemoryBackend = StaticDataInterner.MemoryBackend;
 
-/// Special layout index for List I64 type (beyond the 16 scalar types).
-/// Used by the dev evaluator to track list types for proper result formatting.
+/// Extract the result layout from a Mono IR expression for use as the overall
+/// expression result layout. For blocks and other compound expressions where the
+/// lowerer may have computed the layout from a CIR type variable with Content.err,
+/// this follows through to the final/inner expression to find the true layout.
+fn monoExprResultLayout(store: *const MonoExprStore, expr_id: mono.MonoIR.MonoExprId) ?layout.Idx {
+    const MonoExpr = mono.MonoIR.MonoExpr;
+    const expr: MonoExpr = store.getExpr(expr_id);
+    return switch (expr) {
+        // For blocks, the result_layout may be wrong if derived from a CIR type variable
+        // with Content.err. Follow through to the final expression instead.
+        .block => |b| monoExprResultLayout(store, b.final_expr),
+        // Same for if/match — the result_layout may be wrong, but branch bodies
+        // should have the correct layout from their own type variables.
+        .if_then_else => |ite| ite.result_layout,
+        .when => |w| w.result_layout,
+        .dbg => |d| d.result_layout,
+        .expect => |e| e.result_layout,
+        .binop => |b| b.result_layout,
+        .unary_minus => |um| um.result_layout,
+        .call => |c| c.ret_layout,
+        .low_level => |ll| ll.ret_layout,
+        .early_return => |er| er.ret_layout,
+        .lookup => |l| l.layout_idx,
+        .record => |r| r.record_layout,
+        .tuple => |t| t.tuple_layout,
+        .tag => |t| t.union_layout,
+        .zero_arg_tag => |z| z.union_layout,
+        .field_access => |fa| fa.field_layout,
+        .tuple_access => |ta| ta.elem_layout,
+        .closure => |c| c.closure_layout,
+        .nominal => |n| n.nominal_layout,
+        // Note: .list and .empty_list store element layout, not the overall list layout.
+        // They are handled by the fromTypeVar fallback.
+        .i64_literal => .i64,
+        .f64_literal => .f64,
+        .f32_literal => .f32,
+        .bool_literal => .bool,
+        .i128_literal => .i128,
+        .dec_literal => .dec,
+        .str_literal => .str,
+        .unary_not => .bool,
+        else => null,
+    };
+}
 
 /// Environment for RocOps in the DevEvaluator.
 /// Manages arena-backed allocation where free() is a no-op.
@@ -55,6 +111,12 @@ const DevRocEnv = struct {
     allocator: Allocator,
     /// Track allocations to know their sizes for deallocation
     allocations: std.AutoHashMap(usize, AllocInfo),
+    /// Set to true when roc_crashed is called during execution.
+    crashed: bool = false,
+    /// The crash message (duped from the callback argument).
+    crash_message: ?[]const u8 = null,
+    /// Jump buffer for unwinding from roc_crashed back to the call site.
+    jmp_buf: JmpBuf = undefined,
 
     const AllocInfo = struct {
         len: usize,
@@ -86,6 +148,7 @@ const DevRocEnv = struct {
             }
         }
         self.allocations.deinit();
+        if (self.crash_message) |msg| self.allocator.free(msg);
     }
 
     /// Allocation function for RocOps.
@@ -211,16 +274,15 @@ const DevRocEnv = struct {
         }
     }
 
-    /// Crash function.
-    fn rocCrashedFn(roc_crashed: *const RocCrashed, _: *anyopaque) callconv(.c) noreturn {
-        // On freestanding (WASM), just panic without debug output to avoid thread locking
-        if (builtin.os.tag == .freestanding) {
-            @panic("Roc crashed");
-        } else {
-            const msg = roc_crashed.utf8_bytes[0..roc_crashed.len];
-            std.debug.print("Roc crashed: {s}\n", .{msg});
-            unreachable;
-        }
+    /// Crash function — records the crash and longjmps back to the call site.
+    fn rocCrashedFn(roc_crashed: *const RocCrashed, env: *anyopaque) callconv(.c) void {
+        const self: *DevRocEnv = @ptrCast(@alignCast(env));
+        self.crashed = true;
+        const msg = roc_crashed.utf8_bytes[0..roc_crashed.len];
+        if (self.crash_message) |old| self.allocator.free(old);
+        self.crash_message = self.allocator.dupe(u8, msg) catch null;
+        // Unwind the stack back to the setjmp call site.
+        _longjmp(&self.jmp_buf, 1);
     }
 };
 
@@ -241,9 +303,9 @@ pub const DevEvaluator = struct {
     builtin_module: LoadedModule,
     builtin_indices: CIR.BuiltinIndices,
 
-    /// Backend for static data allocation (arena-based for JIT)
+    /// Backend for static data allocation (arena-based for in-memory compilation)
     /// Heap-allocated to ensure stable pointer for the interner's Backend reference
-    jit_backend: *JitStaticBackend,
+    memory_backend: *MemoryBackend,
 
     /// Global interner for static data (string literals, etc.)
     /// Lives for the duration of the evaluator session, enabling deduplication
@@ -296,12 +358,12 @@ pub const DevEvaluator = struct {
             compiled_builtins.builtin_source,
         ) catch return error.OutOfMemory;
 
-        // Heap-allocate the JIT backend so the pointer remains stable
-        const jit_backend = allocator.create(JitStaticBackend) catch return error.OutOfMemory;
-        jit_backend.* = JitStaticBackend.init(allocator);
+        // Heap-allocate the memory backend so the pointer remains stable
+        const memory_backend = allocator.create(MemoryBackend) catch return error.OutOfMemory;
+        memory_backend.* = MemoryBackend.init(allocator);
 
         // Initialize the interner with a pointer to the heap-allocated backend
-        const static_interner = StaticDataInterner.init(allocator, jit_backend.backend());
+        const static_interner = StaticDataInterner.init(allocator, memory_backend.backend());
 
         // Heap-allocate the RocOps environment so the pointer remains stable
         const roc_env = allocator.create(DevRocEnv) catch return error.OutOfMemory;
@@ -329,7 +391,7 @@ pub const DevEvaluator = struct {
             .allocator = allocator,
             .builtin_module = builtin_module,
             .builtin_indices = builtin_indices,
-            .jit_backend = jit_backend,
+            .memory_backend = memory_backend,
             .static_interner = static_interner,
             .roc_env = roc_env,
             .roc_ops = roc_ops,
@@ -362,6 +424,24 @@ pub const DevEvaluator = struct {
         return ls;
     }
 
+    /// Returns the crash message if roc_crashed was called during execution.
+    pub fn getCrashMessage(self: *const DevEvaluator) ?[]const u8 {
+        if (self.roc_env.crashed) return self.roc_env.crash_message orelse "roc_crashed called (no message)";
+        return null;
+    }
+
+    /// Execute compiled code with crash protection.
+    /// Uses setjmp/longjmp: if roc_crashed is called during execution,
+    /// the stack unwinds back here and this returns error.RocCrashed.
+    pub fn callWithCrashProtection(self: *DevEvaluator, executable: *const backend.ExecutableMemory, result_ptr: *anyopaque) error{RocCrashed}!void {
+        self.roc_env.crashed = false;
+        if (_setjmp(&self.roc_env.jmp_buf) != 0) {
+            // Returned via longjmp from rocCrashedFn.
+            return error.RocCrashed;
+        }
+        executable.callWithResultPtrAndRocOps(result_ptr, @constCast(&self.roc_ops));
+    }
+
     /// Clean up resources
     pub fn deinit(self: *DevEvaluator) void {
         // Clean up the global layout store if it exists
@@ -370,8 +450,8 @@ pub const DevEvaluator = struct {
             self.allocator.destroy(ls);
         }
         self.static_interner.deinit();
-        self.jit_backend.deinit();
-        self.allocator.destroy(self.jit_backend);
+        self.memory_backend.deinit();
+        self.allocator.destroy(self.memory_backend);
         self.roc_env.deinit();
         self.allocator.destroy(self.roc_env);
         self.builtin_module.deinit();
@@ -491,13 +571,20 @@ pub const DevEvaluator = struct {
         defer rc_pass.deinit();
         const mono_expr_id = rc_pass.insertRcOps(lowered_expr_id) catch lowered_expr_id;
 
-        // Determine the result layout from the expression's type variable
+        // Determine the result layout from the Mono IR expression.
+        // We prefer the layout embedded in the Mono expression because the CIR
+        // type variable can have Content.err for expressions involving the `?`
+        // operator at top level (where the Err branch desugars to runtime_error).
         const cir_expr = module_env.store.getExpr(expr_idx);
-        const type_var = can.ModuleEnv.varFrom(expr_idx);
-        var type_scope = types.TypeScope.init(self.allocator);
-        defer type_scope.deinit();
-        const result_layout = layout_store_ptr.fromTypeVar(module_idx, type_var, &type_scope, null) catch {
-            return error.RuntimeError;
+        // Trace the layout extraction chain
+        const result_layout = monoExprResultLayout(&mono_store, mono_expr_id) orelse blk: {
+            // Fallback: resolve from the CIR type variable
+            const type_var = can.ModuleEnv.varFrom(expr_idx);
+            var type_scope = types.TypeScope.init(self.allocator);
+            defer type_scope.deinit();
+            break :blk layout_store_ptr.fromTypeVar(module_idx, type_var, &type_scope, null) catch {
+                return error.RuntimeError;
+            };
         };
 
         // Detect tuple expressions to set tuple_len

@@ -669,11 +669,6 @@ fn wrapF64ToU128Trunc(val: f64) callconv(.c) u128 {
     return @intFromFloat(val);
 }
 
-/// Called when an `expect` assertion fails at runtime.
-fn expectFailureAbort() callconv(.c) noreturn {
-    std.posix.abort();
-}
-
 const MonoProc = mono.MonoProc;
 
 const Allocator = std.mem.Allocator;
@@ -862,7 +857,6 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             InvalidLocalLocation,
             LocalNotFound,
             Crash,
-            RuntimeError,
         };
 
         /// Initialize the code generator
@@ -1198,7 +1192,15 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
                 // Crash and runtime errors
                 .crash => return Error.Crash,
-                .runtime_error => return Error.RuntimeError,
+                .runtime_error => {
+                    // Emit a roc_crashed call for dead code paths (e.g., the Err
+                    // branch of a ? suffix at the top level, where the canonicalizer
+                    // emits e_runtime_error because there is no enclosing lambda
+                    // for early return). The branch is never taken at runtime, but
+                    // eager codegen must still emit something for it.
+                    try self.emitRocCrash("hit a runtime error (dead code path)");
+                    return .{ .immediate_i64 = 0 };
+                },
 
                 // String formatting for inspect
                 .str_concat => |exprs| try self.generateStrConcat(exprs),
@@ -3490,15 +3492,10 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     unreachable;
                 },
                 .crash => {
-                    // Runtime crash: abort execution
-                    const fn_addr: usize = @intFromPtr(&expectFailureAbort);
-                    if (comptime builtin.cpu.arch == .aarch64) {
-                        try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
-                        try self.codegen.emit.blrReg(.X9);
-                    } else {
-                        try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
-                        try self.codegen.emit.callReg(.R11);
-                    }
+                    // Runtime crash: call roc_crashed via RocOps.
+                    // TODO: Pass the user's crash message string from the args
+                    // instead of this static message.
+                    try self.emitRocCrash("Roc crashed");
                     return Error.Crash;
                 },
             }
@@ -9097,21 +9094,78 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // Jump over abort call if condition is true (non-zero)
             const skip_patch = try self.codegen.emitCondJump(condNotEqual());
 
-            // Condition was false: call expectFailureAbort() which calls abort()
-            const fn_addr: usize = @intFromPtr(&expectFailureAbort);
-            if (comptime builtin.cpu.arch == .aarch64) {
-                try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
-                try self.codegen.emit.blrReg(.X9);
-            } else {
-                try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
-                try self.codegen.emit.callReg(.R11);
-            }
+            // Condition was false: call roc_crashed via RocOps
+            try self.emitRocCrash("expect failed");
 
             // Patch the skip jump to land here
             self.codegen.patchJump(skip_patch, self.codegen.currentOffset());
 
             // Evaluate and return the body
             return try self.generateExpr(expect_expr.body);
+        }
+
+        /// Emit a roc_crashed call via RocOps with a static message.
+        /// Used for runtime_error expressions (dead code paths that should
+        /// never execute, e.g. the Err branch of `?` at the top level).
+        fn emitRocCrash(self: *Self, msg: []const u8) Error!void {
+            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+
+            // Allocate a 16-byte stack slot for the RocCrashed struct { utf8_bytes, len }
+            const crashed_slot = self.codegen.allocStackSlot(16);
+
+            const msg_ptr_val: i64 = @bitCast(@as(u64, @intFromPtr(msg.ptr)));
+            const msg_len_val: i64 = @bitCast(@as(u64, msg.len));
+
+            if (comptime builtin.cpu.arch == .aarch64) {
+                const tmp = try self.allocTempGeneral();
+
+                // Store utf8_bytes pointer at offset 0
+                try self.codegen.emitLoadImm(tmp, msg_ptr_val);
+                try self.codegen.emit.strRegMemSoff(.w64, tmp, .FP, crashed_slot);
+
+                // Store len at offset 8
+                try self.codegen.emitLoadImm(tmp, msg_len_val);
+                try self.codegen.emit.strRegMemSoff(.w64, tmp, .FP, crashed_slot + 8);
+
+                // Load roc_crashed fn pointer from RocOps offset 48
+                try self.codegen.emit.ldrRegMemSoff(.w64, .X9, roc_ops_reg, 48);
+
+                // X0 = &RocCrashed struct
+                try self.codegen.emit.movRegImm64(.X0, @bitCast(@as(i64, crashed_slot)));
+                try self.codegen.emit.addRegRegReg(.w64, .X0, .FP, .X0);
+
+                // X1 = env (from RocOps offset 0)
+                try self.codegen.emit.ldrRegMemSoff(.w64, .X1, roc_ops_reg, 0);
+
+                // Call roc_crashed
+                try self.codegen.emit.blrReg(.X9);
+
+                self.codegen.freeGeneral(tmp);
+            } else {
+                const tmp = try self.allocTempGeneral();
+
+                // Store utf8_bytes pointer at offset 0
+                try self.codegen.emit.movRegImm64(tmp, @bitCast(@as(u64, @intFromPtr(msg.ptr))));
+                try self.codegen.emit.movMemReg(.w64, .RBP, crashed_slot, tmp);
+
+                // Store len at offset 8
+                try self.codegen.emit.movRegImm64(tmp, @bitCast(@as(u64, msg.len)));
+                try self.codegen.emit.movMemReg(.w64, .RBP, crashed_slot + 8, tmp);
+
+                // RDI = &RocCrashed struct
+                try self.codegen.emit.leaRegMem(.RDI, .RBP, crashed_slot);
+
+                // RSI = env (from RocOps offset 0)
+                try self.codegen.emit.movRegMem(.w64, .RSI, roc_ops_reg, 0);
+
+                // Load roc_crashed fn ptr from RocOps offset 48
+                try self.codegen.emit.movRegMem(.w64, .R11, roc_ops_reg, 48);
+
+                // Call roc_crashed
+                try self.codegen.emit.callReg(.R11);
+
+                self.codegen.freeGeneral(tmp);
+            }
         }
 
         /// Generate code for string concatenation
@@ -10868,7 +10922,11 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         }
                         unreachable;
                     },
-                    .runtime_error => return Error.RuntimeError,
+                    .runtime_error => {
+                        // Dead code path in a call — emit roc_crashed and return dummy.
+                        try self.emitRocCrash("hit a runtime error in call (dead code path)");
+                        return .{ .immediate_i64 = 0 };
+                    },
                     else => unreachable,
                 };
             }
@@ -11515,7 +11573,19 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                                 }
                                 return;
                             },
-                            else => unreachable,
+                            .zst => {
+                                // Zero-sized type — nothing to store.
+                                return;
+                            },
+                            .closure => {
+                                const sa = ls.layoutSizeAlign(layout_val);
+                                try self.copyStackToPtr(loc, saved_ptr_reg, sa.size);
+                                return;
+                            },
+                            else => {
+                                std.debug.print("storeResultToSavedPtr: unhandled layout tag: {s}\n", .{@tagName(layout_val.tag)});
+                                unreachable;
+                            },
                         }
                     } else {
                         unreachable; // non-scalar layout must have layout store

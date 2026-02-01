@@ -36,8 +36,6 @@ pub const SymbolResolver = relocation_mod.SymbolResolver;
 pub const CodeGen = @import("CodeGen.zig");
 pub const Backend = @import("Backend.zig");
 pub const ExecutableMemory = @import("ExecutableMemory.zig").ExecutableMemory;
-/// Backwards compatibility alias
-pub const JitCode = ExecutableMemory;
 
 // Static data interner for string literals and other static data
 pub const StaticDataInterner = @import("StaticDataInterner.zig");
@@ -236,7 +234,7 @@ pub const AArch64Backend = DevBackend(
 );
 
 /// Resolve builtin function names to their addresses.
-/// This is used by JitCode to patch function call relocations.
+/// This is used by ExecutableMemory to patch function call relocations.
 ///
 /// Supported function names:
 /// - "incref_data_ptr" -> increfDataPtrC
