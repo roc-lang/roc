@@ -267,6 +267,9 @@ TYPE MISMATCH - syntax_grab_bag.md:70:5:70:8
 TYPE MISMATCH - syntax_grab_bag.md:84:2:84:2
 TOO FEW ARGS - syntax_grab_bag.md:155:2:157:3
 TYPE MISMATCH - syntax_grab_bag.md:167:3:167:3
+TYPE MISMATCH - syntax_grab_bag.md:146:15:146:18
+MISSING METHOD - syntax_grab_bag.md:176:12:176:22
++ - :0:0:0:0
 TYPE MISMATCH - syntax_grab_bag.md:144:9:196:2
 TYPE MISMATCH - syntax_grab_bag.md:150:3:150:6
 # PROBLEMS
@@ -952,6 +955,39 @@ This argument has the type:
 But `add_one` needs the first argument to be:
 
     U64
+
+**TYPE MISMATCH**
+This number is being used where a non-number type is needed:
+**syntax_grab_bag.md:146:15:146:18:**
+```roc
+	var number = 123
+```
+	             ^^^
+
+The type was determined to be non-numeric here:
+**syntax_grab_bag.md:175:34:175:40:**
+```roc
+		Stdout.line!("Adding ${n} to ${number}")
+```
+		                               ^^^^^^
+
+Other code expects this to have the type:
+
+    Str
+
+**MISSING METHOD**
+The value before this **+** operator has a type that doesn't have a **plus** method:
+**syntax_grab_bag.md:176:12:176:22:**
+```roc
+		number = number + n
+```
+		         ^^^^^^^^^^
+
+The value's type, which does not have a method named**plus**, is:
+
+    Str
+
+**Hint:** The **+** operator calls a method named **plus** on the value preceding it, passing the value after the operator as the one argument.
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -2729,7 +2765,7 @@ expect {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Error)])]"))
+		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "Error -> U64"))
 		(patt (type "[Red, ..[Blue, Green, ..]], _arg -> Error"))
 		(patt (type "List(Error) -> Try({  }, _d)"))
@@ -2775,7 +2811,7 @@ expect {
 				(ty-args
 					(ty-rigid-var (name "a"))))))
 	(expressions
-		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Error)])]"))
+		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "Error -> U64"))
 		(expr (type "[Red, ..[Blue, Green, ..]], _arg -> Error"))
 		(expr (type "List(Error) -> Try({  }, _d)"))
