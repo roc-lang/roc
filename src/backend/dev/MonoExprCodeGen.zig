@@ -1100,18 +1100,34 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
                     // Generate element value
                     const elem_loc = try self.generateExpr(args[1]);
-
-                    // Determine element size from layout - this is the reliable way to detect ZST
-                    // Using the LAYOUT rather than the generated value avoids issues with
-                    // test interference or stale values
+                    // Determine element size from layout.
+                    // Cross-module layout resolution can produce incorrect ret_layout
+                    // (e.g., list_of_zst instead of list(i64)) when the builtin function's
+                    // layout index refers to a layout in the wrong module context.
+                    // When this happens, derive the correct element size from the list
+                    // argument's layout.
                     const elem_size_align: layout.SizeAlign = blk: {
                         const ret_layout_val = ls.getLayout(ll.ret_layout);
-                        break :blk switch (ret_layout_val.tag) {
-                            .list => ls.layoutSizeAlign(ls.getLayout(ret_layout_val.data.list)),
-                            .list_of_zst => .{ .size = 0, .alignment = .@"1" },
-                            // Unspecialized layout (e.g. from polymorphic lambda)
-                            else => return Error.UnsupportedExpression,
-                        };
+                        if (ret_layout_val.tag == .list) {
+                            const sa = ls.layoutSizeAlign(ls.getLayout(ret_layout_val.data.list));
+                            if (sa.size > 0) break :blk sa;
+                        }
+                        // ret_layout is list_of_zst or has ZST element — try deriving
+                        // the correct element size from the list argument's layout
+                        if (self.getExprLayout(args[0])) |list_layout_idx| {
+                            const list_layout = ls.getLayout(list_layout_idx);
+                            if (list_layout.tag == .list) {
+                                const derived = ls.layoutSizeAlign(ls.getLayout(list_layout.data.list));
+                                if (derived.size > 0) break :blk derived;
+                            }
+                        }
+                        // Also check the element argument's layout
+                        if (self.getExprLayout(args[1])) |elem_layout_idx| {
+                            const sa = ls.layoutSizeAlign(ls.getLayout(elem_layout_idx));
+                            if (sa.size > 0) break :blk sa;
+                        }
+                        // Truly ZST
+                        break :blk .{ .size = 0, .alignment = .@"1" };
                     };
 
                     // ZST detection based on LAYOUT size, not generated value
@@ -4825,8 +4841,9 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             return .{ .general_reg = result_reg };
         }
 
-        /// Generate record comparison using layout information
-        /// Used when we have a call/lookup result that returns a record
+        /// Generate record comparison using layout information.
+        /// Compares records field-by-field using the correct comparison method
+        /// for each field type (i128 for Dec fields, i64 for smaller fields, etc.)
         fn generateRecordComparisonByLayout(
             self: *Self,
             lhs_loc: ValueLocation,
@@ -4838,127 +4855,210 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             const stored_layout = ls.getLayout(record_layout_idx);
             if (stored_layout.tag != .record) return Error.UnsupportedExpression;
 
-            const record_idx = stored_layout.data.record.idx.int_idx;
-            const record_data = ls.record_data.items.items[record_idx];
+            const record_idx = stored_layout.data.record.idx;
+            const record_data = ls.getRecordData(record_idx);
             const field_count = record_data.fields.count;
             if (field_count == 0) {
                 // Empty records are always equal
                 return .{ .immediate_i64 = if (op == .eq) 1 else 0 };
             }
 
+            // Get the record base offsets on the stack
+            const lhs_base = try self.ensureRecordOnStack(lhs_loc, ls.layoutSizeAlign(stored_layout).size);
+            const rhs_base = try self.ensureRecordOnStack(rhs_loc, ls.layoutSizeAlign(stored_layout).size);
 
-            // Get the record size to ensure values are on stack
-            const record_size = ls.layoutSizeAlign(stored_layout).size;
-
-            // Ensure LHS is on stack (small records might be in registers)
-            const lhs_stack = switch (lhs_loc) {
-                .stack, .stack_str, .stack_i128 => |off| off,
-                .general_reg => |reg| blk: {
-                    const slot = self.codegen.allocStackSlot(@intCast(record_size));
-                    if (comptime builtin.cpu.arch == .aarch64) {
-                        try self.codegen.emit.strRegMemSoff(.w64, reg, .FP, slot);
-                    } else {
-                        try self.codegen.emit.movMemReg(.w64, .RBP, slot, reg);
-                    }
-                    break :blk slot;
-                },
-                .immediate_i64 => |val| blk: {
-                    const slot = self.codegen.allocStackSlot(@intCast(record_size));
-                    const temp = try self.allocTempGeneral();
-                    try self.codegen.emitLoadImm(temp, val);
-                    if (comptime builtin.cpu.arch == .aarch64) {
-                        try self.codegen.emit.strRegMemSoff(.w64, temp, .FP, slot);
-                    } else {
-                        try self.codegen.emit.movMemReg(.w64, .RBP, slot, temp);
-                    }
-                    self.codegen.freeGeneral(temp);
-                    break :blk slot;
-                },
-                else => return Error.UnsupportedExpression,
-            };
-
-            // Ensure RHS is on stack (small records might be in registers)
-            const rhs_stack = switch (rhs_loc) {
-                .stack, .stack_str, .stack_i128 => |off| off,
-                .general_reg => |reg| blk: {
-                    const slot = self.codegen.allocStackSlot(@intCast(record_size));
-                    if (comptime builtin.cpu.arch == .aarch64) {
-                        try self.codegen.emit.strRegMemSoff(.w64, reg, .FP, slot);
-                    } else {
-                        try self.codegen.emit.movMemReg(.w64, .RBP, slot, reg);
-                    }
-                    break :blk slot;
-                },
-                .immediate_i64 => |val| blk: {
-                    const slot = self.codegen.allocStackSlot(@intCast(record_size));
-                    const temp = try self.allocTempGeneral();
-                    try self.codegen.emitLoadImm(temp, val);
-                    if (comptime builtin.cpu.arch == .aarch64) {
-                        try self.codegen.emit.strRegMemSoff(.w64, temp, .FP, slot);
-                    } else {
-                        try self.codegen.emit.movMemReg(.w64, .RBP, slot, temp);
-                    }
-                    self.codegen.freeGeneral(temp);
-                    break :blk slot;
-                },
-                else => return Error.UnsupportedExpression,
-            };
-
+            // Compare field by field, AND-ing the results together
+            // result = (field0_eq) AND (field1_eq) AND ...
             const result_reg = try self.allocTempGeneral();
-            const temp_lhs = try self.allocTempGeneral();
-            const temp_rhs = try self.allocTempGeneral();
+            try self.codegen.emitLoadImm(result_reg, 1); // Start with "all equal"
 
-            // Compare records in 8-byte chunks, masking the last chunk if record_size
-            // is not a multiple of 8 (to avoid comparing uninitialized stack bytes).
-            if (comptime builtin.cpu.arch == .aarch64) {
-                try self.codegen.emitLoadImm(result_reg, if (op == .eq) @as(i64, 1) else @as(i64, 0));
+            const fields_range = record_data.fields;
+            var field_i: u32 = 0;
+            while (field_i < field_count) : (field_i += 1) {
+                const field_offset = ls.getRecordFieldOffset(record_idx, @intCast(field_i));
+                const field_size = ls.getRecordFieldSize(record_idx, @intCast(field_i));
+                const field_layout_idx = ls.getRecordFieldLayout(record_idx, @intCast(field_i));
+                _ = fields_range;
 
-                var offset: i32 = 0;
-                while (offset < @as(i32, @intCast(record_size))) {
-                    try self.codegen.emit.ldrRegMemSoff(.w64, temp_lhs, .FP, lhs_stack + offset);
-                    try self.codegen.emit.ldrRegMemSoff(.w64, temp_rhs, .FP, rhs_stack + offset);
+                const lhs_field_off = lhs_base + @as(i32, @intCast(field_offset));
+                const rhs_field_off = rhs_base + @as(i32, @intCast(field_offset));
 
-                    // Mask the last chunk if it's a partial 8-byte read
-                    const remaining = record_size - @as(u32, @intCast(offset));
-                    if (remaining < 8) {
-                        const mask: u64 = (@as(u64, 1) << @intCast(remaining * 8)) - 1;
+                if (field_size == 0) {
+                    // Zero-sized fields are always equal
+                    continue;
+                }
+
+                // Compare this field based on its type
+                const field_eq_reg = try self.allocTempGeneral();
+
+                if (field_layout_idx == .dec or field_layout_idx == .i128 or field_layout_idx == .u128 or field_size == 16) {
+                    // 128-bit field: compare as i128 (two 64-bit parts)
+                    const lhs_parts = try self.getI128Parts(.{ .stack_i128 = lhs_field_off });
+                    const rhs_parts = try self.getI128Parts(.{ .stack_i128 = rhs_field_off });
+                    try self.generateI128Equality(lhs_parts, rhs_parts, field_eq_reg, true);
+                    self.codegen.freeGeneral(lhs_parts.low);
+                    self.codegen.freeGeneral(lhs_parts.high);
+                    self.codegen.freeGeneral(rhs_parts.low);
+                    self.codegen.freeGeneral(rhs_parts.high);
+                } else if (field_size <= 8) {
+                    // Small field: compare as single register value
+                    const lhs_reg = try self.allocTempGeneral();
+                    const rhs_reg = try self.allocTempGeneral();
+                    try self.codegen.emitLoadStack(.w64, lhs_reg, lhs_field_off);
+                    try self.codegen.emitLoadStack(.w64, rhs_reg, rhs_field_off);
+
+                    // Mask to field_size bytes if needed
+                    if (field_size < 8) {
+                        const mask: u64 = (@as(u64, 1) << @intCast(field_size * 8)) - 1;
                         const mask_reg = try self.allocTempGeneral();
                         try self.codegen.emitLoadImm(mask_reg, @bitCast(mask));
-                        try self.codegen.emit.andRegRegReg(.w64, temp_lhs, temp_lhs, mask_reg);
-                        try self.codegen.emit.andRegRegReg(.w64, temp_rhs, temp_rhs, mask_reg);
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            try self.codegen.emit.andRegRegReg(.w64, lhs_reg, lhs_reg, mask_reg);
+                            try self.codegen.emit.andRegRegReg(.w64, rhs_reg, rhs_reg, mask_reg);
+                        } else {
+                            try self.codegen.emit.andRegReg(.w64, lhs_reg, mask_reg);
+                            try self.codegen.emit.andRegReg(.w64, rhs_reg, mask_reg);
+                        }
                         self.codegen.freeGeneral(mask_reg);
                     }
 
-                    try self.codegen.emit.cmpRegReg(.w64, temp_lhs, temp_rhs);
-                    try self.codegen.emit.cset(.w64, temp_lhs, if (op == .eq) .eq else .ne);
-                    try self.codegen.emit.andRegRegReg(.w64, result_reg, result_reg, temp_lhs);
-                    offset += 8;
-                }
-            } else {
-                try self.codegen.emitLoadImm(result_reg, if (op == .eq) @as(i64, 1) else @as(i64, 0));
-                var offset: i32 = 0;
-                while (offset < @as(i32, @intCast(record_size))) {
-                    try self.codegen.emit.movRegMem(.w64, temp_lhs, .RBP, lhs_stack + offset);
-                    try self.codegen.emit.movRegMem(.w64, temp_rhs, .RBP, rhs_stack + offset);
+                    try self.emitCmpReg(lhs_reg, rhs_reg);
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.cset(.w64, field_eq_reg, .eq);
+                    } else {
+                        try self.codegen.emit.setcc(.equal, field_eq_reg);
+                        try self.codegen.emit.andRegImm32(field_eq_reg, 0xFF);
+                    }
+                    self.codegen.freeGeneral(lhs_reg);
+                    self.codegen.freeGeneral(rhs_reg);
+                } else if (field_size == 24) {
+                    // String/list-sized field: compare as 3 x 8-byte chunks (XOR+OR)
+                    const tmp_a = try self.allocTempGeneral();
+                    const tmp_b = try self.allocTempGeneral();
+                    const xor_acc = try self.allocTempGeneral();
+                    try self.codegen.emitLoadImm(xor_acc, 0);
 
-                    // Mask the last chunk if it's a partial 8-byte read
-                    const remaining = record_size - @as(u32, @intCast(offset));
-                    if (remaining < 8) {
-                        const mask: u64 = (@as(u64, 1) << @intCast(remaining * 8)) - 1;
-                        try self.codegen.emit.andRegImm32(temp_lhs, @intCast(mask));
-                        try self.codegen.emit.andRegImm32(temp_rhs, @intCast(mask));
+                    var chunk: i32 = 0;
+                    while (chunk < 24) : (chunk += 8) {
+                        try self.codegen.emitLoadStack(.w64, tmp_a, lhs_field_off + chunk);
+                        try self.codegen.emitLoadStack(.w64, tmp_b, rhs_field_off + chunk);
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            try self.codegen.emit.eorRegRegReg(.w64, tmp_a, tmp_a, tmp_b);
+                            try self.codegen.emit.orrRegRegReg(.w64, xor_acc, xor_acc, tmp_a);
+                        } else {
+                            try self.codegen.emit.xorRegReg(.w64, tmp_a, tmp_b);
+                            try self.codegen.emit.orRegReg(.w64, xor_acc, tmp_a);
+                        }
                     }
 
-                    try self.codegen.emit.cmpRegReg(.w64, temp_lhs, temp_rhs);
-                    try self.codegen.emit.setcc(if (op == .eq) .equal else .not_equal, temp_lhs);
-                    try self.codegen.emit.andRegImm32(temp_lhs, 0xFF);
-                    try self.codegen.emit.andRegRegReg(.w64, result_reg, result_reg, temp_lhs);
-                    offset += 8;
+                    try self.emitCmpImm(xor_acc, 0);
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.cset(.w64, field_eq_reg, .eq);
+                    } else {
+                        try self.codegen.emit.setcc(.equal, field_eq_reg);
+                        try self.codegen.emit.andRegImm32(field_eq_reg, 0xFF);
+                    }
+                    self.codegen.freeGeneral(tmp_a);
+                    self.codegen.freeGeneral(tmp_b);
+                    self.codegen.freeGeneral(xor_acc);
+                } else {
+                    // Other sizes: XOR-based byte comparison
+                    const tmp_a = try self.allocTempGeneral();
+                    const tmp_b = try self.allocTempGeneral();
+                    const xor_acc = try self.allocTempGeneral();
+                    try self.codegen.emitLoadImm(xor_acc, 0);
+
+                    var cmp_off: u32 = 0;
+                    while (cmp_off < field_size) {
+                        try self.codegen.emitLoadStack(.w64, tmp_a, lhs_field_off + @as(i32, @intCast(cmp_off)));
+                        try self.codegen.emitLoadStack(.w64, tmp_b, rhs_field_off + @as(i32, @intCast(cmp_off)));
+                        const remaining = field_size - cmp_off;
+                        if (remaining < 8) {
+                            const mask: u64 = (@as(u64, 1) << @intCast(remaining * 8)) - 1;
+                            const mask_reg = try self.allocTempGeneral();
+                            try self.codegen.emitLoadImm(mask_reg, @bitCast(mask));
+                            if (comptime builtin.cpu.arch == .aarch64) {
+                                try self.codegen.emit.andRegRegReg(.w64, tmp_a, tmp_a, mask_reg);
+                                try self.codegen.emit.andRegRegReg(.w64, tmp_b, tmp_b, mask_reg);
+                            } else {
+                                try self.codegen.emit.andRegReg(.w64, tmp_a, mask_reg);
+                                try self.codegen.emit.andRegReg(.w64, tmp_b, mask_reg);
+                            }
+                            self.codegen.freeGeneral(mask_reg);
+                        }
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            try self.codegen.emit.eorRegRegReg(.w64, tmp_a, tmp_a, tmp_b);
+                            try self.codegen.emit.orrRegRegReg(.w64, xor_acc, xor_acc, tmp_a);
+                        } else {
+                            try self.codegen.emit.xorRegReg(.w64, tmp_a, tmp_b);
+                            try self.codegen.emit.orRegReg(.w64, xor_acc, tmp_a);
+                        }
+                        cmp_off += 8;
+                    }
+
+                    try self.emitCmpImm(xor_acc, 0);
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.cset(.w64, field_eq_reg, .eq);
+                    } else {
+                        try self.codegen.emit.setcc(.equal, field_eq_reg);
+                        try self.codegen.emit.andRegImm32(field_eq_reg, 0xFF);
+                    }
+                    self.codegen.freeGeneral(tmp_a);
+                    self.codegen.freeGeneral(tmp_b);
+                    self.codegen.freeGeneral(xor_acc);
                 }
+
+                // AND field result into accumulator: result &= field_eq
+                if (comptime builtin.cpu.arch == .aarch64) {
+                    try self.codegen.emit.andRegRegReg(.w64, result_reg, result_reg, field_eq_reg);
+                } else {
+                    try self.codegen.emit.andRegReg(.w64, result_reg, field_eq_reg);
+                }
+                self.codegen.freeGeneral(field_eq_reg);
             }
-            self.codegen.freeGeneral(temp_lhs);
-            self.codegen.freeGeneral(temp_rhs);
+
+            // For neq, invert the result
+            if (op == .neq) {
+                const one_reg = try self.allocTempGeneral();
+                try self.codegen.emitLoadImm(one_reg, 1);
+                if (comptime builtin.cpu.arch == .aarch64) {
+                    try self.codegen.emit.eorRegRegReg(.w64, result_reg, result_reg, one_reg);
+                } else {
+                    try self.codegen.emit.xorRegReg(.w64, result_reg, one_reg);
+                }
+                self.codegen.freeGeneral(one_reg);
+            }
+
             return .{ .general_reg = result_reg };
+        }
+
+        /// Ensure a record value is on the stack, returning its base offset.
+        fn ensureRecordOnStack(self: *Self, loc: ValueLocation, record_size: u32) Error!i32 {
+            return switch (loc) {
+                .stack, .stack_str, .stack_i128 => |off| off,
+                .general_reg => |reg| blk: {
+                    const slot = self.codegen.allocStackSlot(@intCast(record_size));
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.strRegMemSoff(.w64, reg, .FP, slot);
+                    } else {
+                        try self.codegen.emit.movMemReg(.w64, .RBP, slot, reg);
+                    }
+                    break :blk slot;
+                },
+                .immediate_i64 => |val| blk: {
+                    const slot = self.codegen.allocStackSlot(@intCast(record_size));
+                    const temp = try self.allocTempGeneral();
+                    try self.codegen.emitLoadImm(temp, val);
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.strRegMemSoff(.w64, temp, .FP, slot);
+                    } else {
+                        try self.codegen.emit.movMemReg(.w64, .RBP, slot, temp);
+                    }
+                    self.codegen.freeGeneral(temp);
+                    break :blk slot;
+                },
+                else => return Error.UnsupportedExpression,
+            };
         }
 
         /// Generate tuple comparison using layout information
@@ -6872,9 +6972,46 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 else => return Error.UnsupportedExpression,
             };
 
-            // Get element size from layout - layout store MUST exist at codegen time
+            // Get element layout and size.
+            // Cross-module layout resolution can produce incorrect elem_layout indices
+            // (e.g., for builtin functions like List.fold where the for loop's elem_layout
+            // refers to a layout index in the wrong module context). When this happens,
+            // derive the correct element layout from the list expression's layout.
             const ls = self.layout_store orelse unreachable;
-            const elem_layout = ls.getLayout(for_loop.elem_layout);
+            const effective_elem_layout: layout.Idx = blk: {
+                const stored_layout = ls.getLayout(for_loop.elem_layout);
+                const stored_size = ls.layoutSizeAlign(stored_layout).size;
+                if (stored_size > 0 or for_loop.elem_layout == .bool) {
+                    // Stored layout has non-zero size, trust it
+                    break :blk for_loop.elem_layout;
+                }
+                // Stored layout is ZST — try to derive the correct element layout
+                if (self.getExprLayout(for_loop.list_expr)) |list_layout_idx| {
+                    const list_layout = ls.getLayout(list_layout_idx);
+                    if (list_layout.tag == .list) {
+                        const derived = list_layout.data.list;
+                        const derived_layout = ls.getLayout(derived);
+                        const derived_size = ls.layoutSizeAlign(derived_layout).size;
+                        if (derived_size > 0) {
+                            break :blk derived;
+                        }
+                    }
+                }
+                // Also check the element pattern's layout_idx
+                const elem_pattern = self.store.getPattern(for_loop.elem_pattern);
+                switch (elem_pattern) {
+                    .bind => |bind| {
+                        const pat_layout = ls.getLayout(bind.layout_idx);
+                        const pat_size = ls.layoutSizeAlign(pat_layout).size;
+                        if (pat_size > 0) {
+                            break :blk bind.layout_idx;
+                        }
+                    },
+                    else => {},
+                }
+                break :blk for_loop.elem_layout;
+            };
+            const elem_layout = ls.getLayout(effective_elem_layout);
             const elem_size: u32 = ls.layoutSizeAlign(elem_layout).size;
             // ZST elements (size 0) are valid - they have no data but we still iterate
             std.debug.assert(elem_size <= 1024 * 1024); // Sanity check: < 1MB
@@ -7006,8 +7143,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // Bind the element to the pattern, passing the element layout so list patterns
             // can use the correct inner element size (the pattern's stored elem_layout may be wrong)
             // For ZST elements, bind to immediate 0 (no actual data)
-            const elem_loc: ValueLocation = if (is_zst) .{ .immediate_i64 = 0 } else self.stackLocationForLayout(for_loop.elem_layout, elem_slot);
-            try self.bindPatternWithLayout(for_loop.elem_pattern, elem_loc, for_loop.elem_layout);
+            const elem_loc: ValueLocation = if (is_zst) .{ .immediate_i64 = 0 } else self.stackLocationForLayout(effective_elem_layout, elem_slot);
+            try self.bindPatternWithLayout(for_loop.elem_pattern, elem_loc, effective_elem_layout);
 
             // Execute the body (result is discarded)
             // NOTE: This may call C functions which clobber all caller-saved registers
@@ -9026,8 +9163,13 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 }
             }
 
+            // Spill scalar return value from the return register (X0/RAX) to the stack.
+            // The return register is caller-saved and will be clobbered by any subsequent
+            // code generation (e.g., setting up arguments for the next function call).
             const ret_reg = self.getReturnRegister();
-            return .{ .general_reg = ret_reg };
+            const stack_offset = self.codegen.allocStackSlot(8);
+            try self.codegen.emitStoreStack(.w64, stack_offset, ret_reg);
+            return .{ .stack = stack_offset };
         }
 
         /// Move a value to a specific register
@@ -10342,8 +10484,13 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 }
             }
 
+            // Spill scalar return value from the return register (X0/RAX) to the stack.
+            // The return register is caller-saved and will be clobbered by any subsequent
+            // code generation (e.g., setting up arguments for the next function call).
             const ret_reg = self.getReturnRegister();
-            return .{ .general_reg = ret_reg };
+            const stack_offset = self.codegen.allocStackSlot(8);
+            try self.codegen.emitStoreStack(.w64, stack_offset, ret_reg);
+            return .{ .stack = stack_offset };
         }
 
         /// Fixed stack frame size for procedures (includes space for spills)

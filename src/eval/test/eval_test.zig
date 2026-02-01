@@ -1164,6 +1164,22 @@ test "List.fold with record accumulator - string list" {
     );
 }
 
+test "simple fold without records - Dec result" {
+    try runExpectIntDec(
+        "List.fold([1, 2, 3], 0, |acc, item| acc + item)",
+        6,
+        .no_trace,
+    );
+}
+
+test "simple fold without records - Dec equality" {
+    try runExpectBool(
+        "List.fold([1, 2, 3], 0, |acc, item| acc + item) == 6",
+        true,
+        .no_trace,
+    );
+}
+
 test "List.fold with record accumulator - record equality comparison" {
     // Test that fold result can be compared with == to a record literal
     try runExpectBool(
