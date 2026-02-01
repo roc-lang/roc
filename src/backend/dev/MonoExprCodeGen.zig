@@ -9451,6 +9451,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         /// Store the result to the output buffer pointed to by a saved register
         /// This is used when the original result pointer (X0/RDI) may have been clobbered
         fn storeResultToSavedPtr(self: *Self, loc: ValueLocation, result_layout: layout.Idx, saved_ptr_reg: GeneralReg, tuple_len: usize) Error!void {
+
             // Handle tuples specially - copy all elements from stack to result buffer
             if (tuple_len > 1) {
                 switch (loc) {
@@ -9539,7 +9540,9 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     }
                 },
                 .f32 => {
-                    // F32: Convert from F64 and store 4 bytes
+                    // F32: Convert from F64 and store 4 bytes.
+                    // Note: `stabilize` spills float regs to the stack as 8-byte F64,
+                    // so .stack locations hold F64-encoded values that need conversion.
                     switch (loc) {
                         .float_reg => |reg| {
                             // Convert F64 to F32, then store 4 bytes
@@ -9563,6 +9566,20 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                                 try self.codegen.emit.movMemReg(.w32, saved_ptr_reg, 0, reg);
                             }
                             self.codegen.freeGeneral(reg);
+                        },
+                        .stack => |offset| {
+                            // Value was spilled to stack as F64 by stabilize.
+                            // Load as F64, convert to F32, then store 4 bytes.
+                            const freg = self.codegen.allocFloat() orelse return Error.NoRegisterToSpill;
+                            try self.codegen.emitLoadStackF64(freg, offset);
+                            if (comptime builtin.cpu.arch == .aarch64) {
+                                try self.codegen.emit.fcvtFloatFloat(.single, freg, .double, freg);
+                                try self.codegen.emit.fstrRegMemUoff(.single, freg, saved_ptr_reg, 0);
+                            } else {
+                                try self.codegen.emit.cvtsd2ssRegReg(freg, freg);
+                                try self.codegen.emit.movssMemReg(saved_ptr_reg, 0, freg);
+                            }
+                            self.codegen.freeFloat(freg);
                         },
                         else => {
                             // Store 4 bytes from general register
