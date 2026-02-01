@@ -1393,7 +1393,18 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                             },
                         };
                     }
-                    // Non-convertible ops fall through to general call handling
+                    // Non-convertible ops: check for str_inspekt which needs
+                    // type-directed expansion rather than a simple op conversion.
+                    if (ll.op == .str_inspekt) {
+                        const arg_indices = module_env.store.sliceExpr(call.args);
+                        if (arg_indices.len == 1) {
+                            const arg_idx = arg_indices[0];
+                            const arg_id = try self.lowerExprFromIdx(module_env, arg_idx);
+                            const arg_type_var = ModuleEnv.varFrom(arg_idx);
+                            const arg_layout = self.getExprLayoutFromIdx(module_env, arg_idx);
+                            return self.lowerStrInspekt(arg_id, arg_type_var, arg_layout, module_env, region);
+                        }
+                    }
                 }
             }
 
