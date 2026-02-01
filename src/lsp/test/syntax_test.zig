@@ -462,6 +462,40 @@ test "record field completion works" {
     try TestHarness.expectHasLabels(items, &.{ "foo", "bar" });
 }
 
+test "tuple index completion works" {
+    var h = try TestHarness.init();
+    defer h.deinit();
+
+    const clean = try h.formatSource(
+        \\app [main, get_first] {{ pf: platform "{s}" }}
+        \\
+        \\my_tuple = ("hello", 42, Bool.true)
+        \\
+        \\get_first = my_tuple.0
+        \\
+    );
+    defer h.allocator.free(clean);
+
+    try h.writeFile("tuple_completion.roc", clean);
+    try h.check(clean);
+
+    const incomplete = try h.formatSource(
+        \\app [main, get_first] {{ pf: platform "{s}" }}
+        \\
+        \\my_tuple = ("hello", 42, Bool.true)
+        \\
+        \\get_first = my_tuple.
+        \\
+    );
+    defer h.allocator.free(incomplete);
+
+    // Line 4: "get_first = my_tuple." — character 21 is right after the dot
+    const items = try h.getCompletions(incomplete, 4, 21);
+    defer h.freeCompletions(items);
+
+    try TestHarness.expectHasLabels(items, &.{ "0", "1", "2" });
+}
+
 test "record field completion with partial field name" {
     var h = try TestHarness.init();
     defer h.deinit();
