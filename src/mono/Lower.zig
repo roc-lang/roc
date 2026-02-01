@@ -1339,12 +1339,16 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                     self.type_scope_caller_module = self.current_module_idx;
                 }
             }
-            // Clean up type scope after this expression, whether we exit normally or break early
+            // Clean up type scope after this expression, whether we exit normally or break early.
+            // Only clear scope[0] if this call was the outermost one that set up the type scope
+            // (old_caller_module was null). Inner calls (where old_caller_module was already set)
+            // must not clear scope[0] because the outer call still needs those mappings.
             defer if (is_external_call or is_local_call_with_hints) {
                 self.type_scope_caller_module = old_caller_module;
-                // Clear the type_scope mappings to avoid polluting subsequent calls
-                if (self.type_scope.scopes.items.len > 0) {
-                    self.type_scope.scopes.items[0].clearRetainingCapacity();
+                if (old_caller_module == null) {
+                    if (self.type_scope.scopes.items.len > 0) {
+                        self.type_scope.scopes.items[0].clearRetainingCapacity();
+                    }
                 }
             };
 
