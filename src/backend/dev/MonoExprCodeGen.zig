@@ -669,6 +669,11 @@ fn wrapF64ToU128Trunc(val: f64) callconv(.c) u128 {
     return @intFromFloat(val);
 }
 
+/// Called when an `expect` assertion fails at runtime.
+fn expectFailureAbort() callconv(.c) noreturn {
+    std.posix.abort();
+}
+
 const MonoProc = mono.MonoProc;
 
 const Allocator = std.mem.Allocator;
@@ -3454,10 +3459,9 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     return try self.generateFloatDecTryUnsafeConversion(ll, args);
                 },
 
-                // ── Remaining generic numeric operations ──
-                // These are defined in the LowLevel enum but not currently emitted
-                // by the Mono IR lowering phase. Per-type arithmetic operations
-                // (int_add_wrap, dec_add, float_add, etc.) are used instead.
+                // ── Generic numeric operations (not emitted by Mono IR lowering) ──
+                // The Mono IR lowering phase resolves these to type-specific operations
+                // (int_add_wrap, dec_add, float_add, etc.) before code generation.
                 .num_add,
                 .num_sub,
                 .num_mul,
@@ -3474,13 +3478,29 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 .num_to_str,
                 .num_from_str,
                 .num_from_numeral,
+                .compare,
+                => {
+                    std.debug.print("BUG: generic num op {s} should have been resolved by Mono IR lowering\n", .{@tagName(ll.op)});
+                    if (std.debug.runtime_safety) unreachable;
+                    return Error.UnsupportedExpression;
+                },
                 .box_box,
                 .box_unbox,
-                .compare,
-                .crash,
                 => {
-                    std.debug.print("UNIMPLEMENTED low-level op in MonoExprCodeGen: {s}\n", .{@tagName(ll.op)});
+                    std.debug.print("BUG: box operations not yet supported in dev backend: {s}\n", .{@tagName(ll.op)});
                     return Error.UnsupportedExpression;
+                },
+                .crash => {
+                    // Runtime crash: abort execution
+                    const fn_addr: usize = @intFromPtr(&expectFailureAbort);
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
+                        try self.codegen.emit.blrReg(.X9);
+                    } else {
+                        try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
+                        try self.codegen.emit.callReg(.R11);
+                    }
+                    return Error.Crash;
                 },
             }
         }
@@ -8986,16 +9006,43 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
         /// Generate code for dbg expression (prints and returns value)
         fn generateDbg(self: *Self, dbg_expr: anytype) Error!ValueLocation {
-            _ = self;
-            _ = dbg_expr;
-            return Error.UnsupportedExpression;
+            // dbg evaluates its expression and returns the value.
+            // Debug printing is handled by the interpreter side in tests.
+            return try self.generateExpr(dbg_expr.expr);
         }
 
         /// Generate code for expect expression (assertion)
         fn generateExpect(self: *Self, expect_expr: anytype) Error!ValueLocation {
-            _ = self;
-            _ = expect_expr;
-            return Error.UnsupportedExpression;
+            // Evaluate the condition
+            const cond_loc = try self.generateExpr(expect_expr.cond);
+            const cond_reg = try self.ensureInGeneralReg(cond_loc);
+
+            // Check if condition is true (non-zero); if false, abort
+            if (comptime builtin.cpu.arch == .aarch64) {
+                try self.codegen.emit.cmpRegImm12(.w64, cond_reg, 0);
+            } else {
+                try self.codegen.emit.testRegReg(.w8, cond_reg, cond_reg);
+            }
+            self.codegen.freeGeneral(cond_reg);
+
+            // Jump over abort call if condition is true (non-zero)
+            const skip_patch = try self.codegen.emitCondJump(condNotEqual());
+
+            // Condition was false: call expectFailureAbort() which calls abort()
+            const fn_addr: usize = @intFromPtr(&expectFailureAbort);
+            if (comptime builtin.cpu.arch == .aarch64) {
+                try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
+                try self.codegen.emit.blrReg(.X9);
+            } else {
+                try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
+                try self.codegen.emit.callReg(.R11);
+            }
+
+            // Patch the skip jump to land here
+            self.codegen.patchJump(skip_patch, self.codegen.currentOffset());
+
+            // Evaluate and return the body
+            return try self.generateExpr(expect_expr.body);
         }
 
         /// Generate code for string concatenation
@@ -9009,7 +9056,20 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 // Single element, just return it
                 return try self.generateExpr(expr_ids[0]);
             }
-            return Error.UnsupportedExpression;
+
+            // Multi-element: fold-left concatenation
+            // result = concat(concat(...concat(a, b), c), ...)
+            var acc_loc = try self.generateExpr(expr_ids[0]);
+            var acc_off = try self.ensureOnStack(acc_loc, 24);
+
+            for (expr_ids[1..]) |next_expr| {
+                const next_loc = try self.generateExpr(next_expr);
+                const next_off = try self.ensureOnStack(next_loc, 24);
+                acc_loc = try self.callStr2RocOpsToStr(acc_off, next_off, @intFromPtr(&wrapStrConcat));
+                acc_off = try self.ensureOnStack(acc_loc, 24);
+            }
+
+            return acc_loc;
         }
 
         /// Generate an empty string
