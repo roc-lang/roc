@@ -361,7 +361,13 @@ pub const Store = struct {
 
     /// Make alias data type
     /// Does not insert content into the types store
-    pub fn mkAlias(self: *Self, ident: TypeIdent, backing_var: Var, args: []const Var) std.mem.Allocator.Error!Content {
+    pub fn mkAlias(
+        self: *Self,
+        ident: TypeIdent,
+        backing_var: Var,
+        args: []const Var,
+        origin_module: base.Ident.Idx,
+    ) std.mem.Allocator.Error!Content {
         const backing_idx = try self.appendVar(backing_var);
         var span = try self.appendVars(args);
 
@@ -373,6 +379,7 @@ pub const Store = struct {
             .alias = Alias{
                 .ident = ident,
                 .vars = .{ .nonempty = span },
+                .origin_module = origin_module,
             },
         };
     }

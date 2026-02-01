@@ -494,7 +494,9 @@ const Unifier = struct {
             },
             .alias => |b_alias| {
                 const b_backing_var = self.types_store.getAliasBackingVar(b_alias);
-                if (TypeIdent.eql(self.module_env.getIdentStore(), a_alias.ident, b_alias.ident)) {
+                if (a_alias.origin_module == b_alias.origin_module and
+                    a_alias.ident.ident_idx == b_alias.ident.ident_idx)
+                {
                     try self.unifyTwoAliases(vars, a_alias, b_alias);
                 } else {
                     try self.unifyGuarded(backing_var, b_backing_var);
@@ -1023,7 +1025,9 @@ const Unifier = struct {
             return;
         }
 
-        if (!TypeIdent.eql(self.module_env.getIdentStore(), a_type.ident, b_type.ident)) {
+        if (a_type.origin_module != b_type.origin_module or
+            a_type.ident.ident_idx != b_type.ident.ident_idx)
+        {
             return error.TypeMismatch;
         }
 

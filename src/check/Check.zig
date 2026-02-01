@@ -1837,12 +1837,20 @@ fn generateAliasDecl(
         .num_args = @intCast(header_args.len),
     } });
 
+    // Use the cached builtin_module_ident from the current module's ident store.
+    // This represents the "Builtin" module where List is defined.
+    const origin_module_id = if (self.builtin_ctx.builtin_module) |_|
+        self.cir.idents.builtin_module
+    else
+        self.builtin_ctx.module_name; // We're compiling Builtin module itself
+
     try self.unifyWith(
         decl_var,
         try self.types.mkAlias(
             .{ .ident_idx = header.relative_name },
             backing_var,
             header_vars,
+            origin_module_id,
         ),
         env,
     );
