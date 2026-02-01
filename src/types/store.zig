@@ -598,6 +598,13 @@ pub const Store = struct {
         return self.vars.sliceRange(range);
     }
 
+    /// Get an iterator over vars for the given range.
+    /// Use this instead of sliceVars when the iteration may trigger
+    /// reallocations (e.g., during unification).
+    pub fn iterVars(self: *const Self, range: VarSafeList.Range) VarSafeList.Iterator {
+        return self.vars.iterRange(range);
+    }
+
     /// Given a range, get a slice of record fields from the backing array
     pub fn getRecordFieldsSlice(self: *const Self, range: RecordFieldSafeMultiList.Range) RecordFieldSafeMultiList.Slice {
         return self.record_fields.sliceRange(range);

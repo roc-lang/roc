@@ -993,9 +993,11 @@ const Unifier = struct {
         }
 
         // Unify element types first (recursion guard in unifyGuarded prevents infinite loops)
-        const a_elems = self.types_store.sliceVars(a_tuple.elems);
-        const b_elems = self.types_store.sliceVars(b_tuple.elems);
-        for (a_elems, b_elems) |a_elem, b_elem| {
+        // Use iterators instead of slices because unifyGuarded may trigger reallocations
+        var a_elems_iter = self.types_store.iterVars(a_tuple.elems);
+        var b_elems_iter = self.types_store.iterVars(b_tuple.elems);
+        while (a_elems_iter.next()) |a_elem| {
+            const b_elem = b_elems_iter.next().?; // Safe: lengths verified equal
             try self.unifyGuarded(a_elem, b_elem);
         }
 
@@ -1030,9 +1032,11 @@ const Unifier = struct {
         }
 
         // Unify each pair of arguments first (recursion guard in unifyGuarded prevents infinite loops)
-        const a_slice = self.types_store.sliceNominalArgs(a_type);
-        const b_slice = self.types_store.sliceNominalArgs(b_type);
-        for (a_slice, b_slice) |a_arg, b_arg| {
+        // Use iterators instead of slices because unifyGuarded may trigger reallocations
+        var a_args_iter = self.types_store.iterNominalArgs(a_type);
+        var b_args_iter = self.types_store.iterNominalArgs(b_type);
+        while (a_args_iter.next()) |a_arg| {
+            const b_arg = b_args_iter.next().?; // Safe: lengths verified equal
             try self.unifyGuarded(a_arg, b_arg);
         }
 
@@ -1235,9 +1239,11 @@ const Unifier = struct {
             return error.TypeMismatch;
         }
 
-        const a_args = self.types_store.sliceVars(a_func.args);
-        const b_args = self.types_store.sliceVars(b_func.args);
-        for (a_args, b_args) |a_arg, b_arg| {
+        // Use iterators instead of slices because unifyGuarded may trigger reallocations
+        var a_args_iter = self.types_store.iterVars(a_func.args);
+        var b_args_iter = self.types_store.iterVars(b_func.args);
+        while (a_args_iter.next()) |a_arg| {
+            const b_arg = b_args_iter.next().?; // Safe: lengths verified equal
             try self.unifyGuarded(a_arg, b_arg);
         }
 
@@ -2135,12 +2141,13 @@ const Unifier = struct {
         // cause `in_both_tags` to reallocate, invalidating the slice pointer.
         var shared_tags_iter = self.scratch.in_both_tags.iterRange(shared_tags_range);
         while (shared_tags_iter.next()) |tags| {
-            const tag_a_args = self.types_store.sliceVars(tags.a.args);
-            const tag_b_args = self.types_store.sliceVars(tags.b.args);
+            if (tags.a.args.len() != tags.b.args.len()) return error.TypeMismatch;
 
-            if (tag_a_args.len != tag_b_args.len) return error.TypeMismatch;
-
-            for (tag_a_args, tag_b_args) |a_arg, b_arg| {
+            // Use iterators instead of slices because unifyGuarded may trigger reallocations
+            var tag_a_args_iter = self.types_store.iterVars(tags.a.args);
+            var tag_b_args_iter = self.types_store.iterVars(tags.b.args);
+            while (tag_a_args_iter.next()) |a_arg| {
+                const b_arg = tag_b_args_iter.next().?; // Safe: lengths verified equal
                 try self.unifyGuarded(a_arg, b_arg);
             }
         }
