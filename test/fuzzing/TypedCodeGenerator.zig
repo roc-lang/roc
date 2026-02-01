@@ -21,6 +21,12 @@ pub const Type = union(enum) {
     record: RecordType,
     func: FuncType,
     tag_union: TagUnionType,
+    // Type variable: 0='a', 1='b', etc.
+    type_var: u8,
+    // Reference to user-defined type by name
+    type_ref: []const u8,
+    // Parametric type application: Wrapper(Str)
+    nominal_app: NominalApp,
     // Integer types
     u8,
     i8,
@@ -71,6 +77,16 @@ pub const Type = union(enum) {
         name: []const u8,
         payload: ?*const Type,
     };
+
+    /// Parametric type application (e.g., Wrapper(Str), Box(Color))
+    pub const NominalApp = struct {
+        name: []const u8,
+        type_args: [2]*const Type,
+        type_arg_count: u8,
+    };
+
+    /// Type variable names
+    const type_var_names = [_][]const u8{ "a", "b" };
 
     /// Format type as a Roc type annotation string
     pub fn format(self: Type, out: anytype) !void {
@@ -128,6 +144,23 @@ pub const Type = union(enum) {
                     }
                 }
                 try out.writeAll("]");
+            },
+            .type_var => |idx| {
+                if (idx < type_var_names.len) {
+                    try out.writeAll(type_var_names[idx]);
+                } else {
+                    try out.writeAll("a");
+                }
+            },
+            .type_ref => |name| try out.writeAll(name),
+            .nominal_app => |app| {
+                try out.writeAll(app.name);
+                try out.writeAll("(");
+                for (0..app.type_arg_count) |i| {
+                    if (i > 0) try out.writeAll(", ");
+                    try app.type_args[i].format(out);
+                }
+                try out.writeAll(")");
             },
             .u8 => try out.writeAll("U8"),
             .i8 => try out.writeAll("I8"),
@@ -187,6 +220,17 @@ pub const Type = union(enum) {
                     const p2 = ot.variants[i].payload;
                     if ((p1 == null) != (p2 == null)) return false;
                     if (p1 != null and !p1.?.eql(p2.?.*)) return false;
+                }
+                return true;
+            },
+            .type_var => |idx| return idx == other.type_var,
+            .type_ref => |name| return std.mem.eql(u8, name, other.type_ref),
+            .nominal_app => |app| {
+                const oa = other.nominal_app;
+                if (!std.mem.eql(u8, app.name, oa.name)) return false;
+                if (app.type_arg_count != oa.type_arg_count) return false;
+                for (0..app.type_arg_count) |i| {
+                    if (!app.type_args[i].eql(oa.type_args[i].*)) return false;
                 }
                 return true;
             },
@@ -286,6 +330,38 @@ type_pool_count: u8,
 /// Track allocated variable names for cleanup
 allocated_var_names: std.ArrayList([]const u8),
 
+/// Defined types in the current module
+defined_types: [8]DefinedType,
+defined_type_count: u8,
+
+/// Number of type variables in current scope (0, 1, or 2)
+current_type_var_count: u8,
+
+/// A user-defined type (alias, parametric, or recursive)
+const DefinedType = struct {
+    name: []const u8,
+    kind: Kind,
+    type_param_count: u8, // 0 for non-parametric, 1-2 for parametric
+    payload_type: ?Type, // For recursive: the Leaf payload type
+    wrapped_type: ?Type, // For wrappers: the wrapped type (type_var for parametric)
+
+    const Kind = enum {
+        alias, // Color : [Red, Green, Blue]
+        parametric, // Wrapper(a) := { run: {} -> a }.{}
+        recursive, // Node := [Leaf(Color), Branch(List(Node))].{}
+    };
+};
+
+/// User-defined type name pool
+const user_type_names = [_][]const u8{
+    "Color", "Status", "Mode",
+    "Wrapper", "Box", "Container",
+    "Tree", "Node", "Expr",
+};
+
+/// Tag names for type aliases
+const alias_tag_names = [_][]const u8{ "Red", "Green", "Blue", "On", "Off", "Active", "Pending", "Done" };
+
 /// Field name pool for records
 const field_names = [_][]const u8{ "x", "y", "name", "value", "count", "result" };
 
@@ -362,6 +438,9 @@ pub fn init(allocator: std.mem.Allocator, fuzz_reader: *FuzzReader) Self {
         .type_pool = undefined,
         .type_pool_count = 0,
         .allocated_var_names = std.ArrayList([]const u8).empty,
+        .defined_types = undefined,
+        .defined_type_count = 0,
+        .current_type_var_count = 0,
     };
 }
 
@@ -405,18 +484,288 @@ pub fn reset(self: *Self, fuzz_reader: *FuzzReader) void {
     self.var_counter = 0;
     self.indent_level = 0;
     self.type_pool_count = 0;
+    self.defined_type_count = 0;
+    self.current_type_var_count = 0;
 }
 
 /// Generate a complete Roc type module
 /// Format: TypeName := TypeDef.{ associated functions }
+/// Uses multi-phase generation: type aliases, parametric types, recursive types, then Main
 pub fn generateModule(self: *Self) !void {
     // Push the module-level scope
     try self.pushScope();
     defer self.popScope();
 
-    // Generate a Type module - the type name should match the file
-    // Nominal types can only wrap tag unions or records (not primitives)
+    // Reset defined types for this module
+    self.defined_type_count = 0;
 
+    // Phase 1: Generate 0-2 type aliases
+    const num_aliases = self.reader().intRangeAtMost(u8, 0, 2);
+    for (0..num_aliases) |_| {
+        try self.generateTypeAlias();
+    }
+
+    // Phase 2: Maybe generate a parametric nominal type (40% chance)
+    // This generates the bug #9129 pattern with closure capturing type variable
+    if (self.reader().intRangeAtMost(u8, 0, 9) < 4) {
+        try self.generateParametricNominalType();
+    }
+
+    // Phase 3: Maybe generate a recursive nominal type (30% chance)
+    if (self.reader().intRangeAtMost(u8, 0, 9) < 3) {
+        try self.generateRecursiveNominalType();
+    }
+
+    // Phase 4: Generate Main nominal type
+    try self.generateMainNominalType();
+}
+
+/// Generate a type alias like `Color : [Red, Green, Blue]`
+fn generateTypeAlias(self: *Self) !void {
+    if (self.defined_type_count >= 8) return;
+    const name = self.pickUnusedTypeName() orelse return;
+
+    const num_tags = self.reader().intRangeAtMost(u8, 2, 4);
+
+    try self.write(name);
+    try self.write(" : [");
+    var used_tags: [8]bool = .{false} ** 8;
+    for (0..num_tags) |i| {
+        if (i > 0) try self.write(", ");
+        var tag_idx = self.reader().intRangeLessThan(usize, 0, alias_tag_names.len);
+        // Find an unused tag
+        var attempts: u8 = 0;
+        while (used_tags[tag_idx] and attempts < alias_tag_names.len) {
+            tag_idx = (tag_idx + 1) % alias_tag_names.len;
+            attempts += 1;
+        }
+        used_tags[tag_idx] = true;
+        try self.write(alias_tag_names[tag_idx]);
+    }
+    try self.write("]\n\n");
+
+    self.defined_types[self.defined_type_count] = .{
+        .name = name,
+        .kind = .alias,
+        .type_param_count = 0,
+        .payload_type = null,
+        .wrapped_type = null,
+    };
+    self.defined_type_count += 1;
+}
+
+/// Generate a parametric nominal type that triggers bug #9129
+/// Example: Wrapper(a) := { run : {} -> a }.{ wrap : a -> Wrapper(a) ... }
+fn generateParametricNominalType(self: *Self) !void {
+    if (self.defined_type_count >= 8) return;
+    const name = self.pickUnusedTypeName() orelse return;
+
+    // Set type var scope - just 'a' for simplicity
+    self.current_type_var_count = 1;
+
+    // Wrapper(a) := { run : {} -> a }.{
+    try self.write(name);
+    try self.write("(a) := { run : {} -> a }.{\n");
+    self.indent_level = 1;
+
+    // wrap : a -> Wrapper(a)
+    // wrap = |value| { run: |{}| value }
+    // This is the bug #9129 pattern - closure captures type-variable-typed value
+    try self.writeIndent();
+    try self.write("wrap : a -> ");
+    try self.write(name);
+    try self.write("(a)\n");
+    try self.writeIndent();
+    try self.write("wrap = |value| { run: |{}| value }\n\n");
+
+    // unwrap : Wrapper(a) -> a
+    // unwrap = |w| (w.run)({})
+    try self.writeIndent();
+    try self.write("unwrap : ");
+    try self.write(name);
+    try self.write("(a) -> a\n");
+    try self.writeIndent();
+    try self.write("unwrap = |w| (w.run)({})\n");
+
+    try self.write("}\n\n");
+    self.indent_level = 0;
+    self.current_type_var_count = 0;
+
+    self.defined_types[self.defined_type_count] = .{
+        .name = name,
+        .kind = .parametric,
+        .type_param_count = 1,
+        .payload_type = null,
+        .wrapped_type = .{ .type_var = 0 }, // 'a'
+    };
+    self.defined_type_count += 1;
+}
+
+/// Generate a recursive nominal type
+/// Example: Node := [Leaf(Color), Branch(List(Node))].{ ... }
+fn generateRecursiveNominalType(self: *Self) !void {
+    if (self.defined_type_count >= 8) return;
+    const name = self.pickUnusedTypeName() orelse return;
+
+    // Pick a payload type for the leaf variant (can use defined aliases)
+    const leaf_payload = self.randomPayloadType();
+
+    // Node := [
+    //     Leaf(PayloadType),
+    //     Branch(List(Node)),
+    // ].{
+    try self.write(name);
+    try self.write(" := [\n");
+    try self.write("    Leaf(");
+    try leaf_payload.format(self.writer());
+    try self.write("),\n");
+    try self.write("    Branch(List(");
+    try self.write(name);
+    try self.write(")),\n");
+    try self.write("].{\n");
+
+    self.indent_level = 1;
+
+    // leaf : PayloadType -> Node
+    // leaf = |x| Leaf(x)
+    try self.writeIndent();
+    try self.write("leaf : ");
+    try leaf_payload.format(self.writer());
+    try self.write(" -> ");
+    try self.write(name);
+    try self.write("\n");
+    try self.writeIndent();
+    try self.write("leaf = |x| Leaf(x)\n\n");
+
+    // branch : List(Node) -> Node
+    // branch = |children| Branch(children)
+    try self.writeIndent();
+    try self.write("branch : List(");
+    try self.write(name);
+    try self.write(") -> ");
+    try self.write(name);
+    try self.write("\n");
+    try self.writeIndent();
+    try self.write("branch = |children| Branch(children)\n\n");
+
+    // is_leaf : Node -> Bool
+    // is_leaf = |t| match t { Leaf(_) => True, Branch(_) => False }
+    try self.writeIndent();
+    try self.write("is_leaf : ");
+    try self.write(name);
+    try self.write(" -> Bool\n");
+    try self.writeIndent();
+    try self.write("is_leaf = |t| match t {\n");
+    self.indent_level += 1;
+    try self.writeIndent();
+    try self.write("Leaf(_) => True\n");
+    try self.writeIndent();
+    try self.write("Branch(_) => False\n");
+    self.indent_level -= 1;
+    try self.writeIndent();
+    try self.write("}\n");
+
+    try self.write("}\n\n");
+    self.indent_level = 0;
+
+    self.defined_types[self.defined_type_count] = .{
+        .name = name,
+        .kind = .recursive,
+        .type_param_count = 0,
+        .payload_type = leaf_payload,
+        .wrapped_type = null,
+    };
+    self.defined_type_count += 1;
+}
+
+/// Generate the Main nominal type using defined types
+fn generateMainNominalType(self: *Self) !void {
+    // Choose a style based on what types are available
+    const style = self.reader().intRangeAtMost(u8, 0, 3);
+
+    switch (style) {
+        0 => try self.generateMainWithDefinedTypes(),
+        1 => try self.generateMainWithParametricPayloads(),
+        else => try self.generateMainSimple(),
+    }
+}
+
+/// Generate Main using defined type aliases in payloads
+fn generateMainWithDefinedTypes(self: *Self) !void {
+    try self.write("Main := [");
+
+    const variant_names = [_][]const u8{ "First", "Second", "Third" };
+    const num_variants = self.reader().intRangeAtMost(u8, 2, 3);
+
+    for (0..num_variants) |i| {
+        if (i > 0) try self.write(", ");
+        try self.write(variant_names[i]);
+
+        // 60% chance to add payload
+        if (self.reader().intRangeAtMost(u8, 0, 9) < 6) {
+            try self.write("(");
+            // Try to use a defined alias type, otherwise use primitive
+            if (self.findAliasType()) |def| {
+                try self.write(def.name);
+            } else {
+                try self.randomPrimitiveType().format(self.writer());
+            }
+            try self.write(")");
+        }
+    }
+
+    try self.write("].{\n");
+    self.indent_level = 1;
+
+    // Generate methods
+    try self.generateMainMethods();
+
+    try self.write("}\n");
+    self.indent_level = 0;
+}
+
+/// Generate Main using parametric type payloads like Wrapper(Color)
+fn generateMainWithParametricPayloads(self: *Self) !void {
+    try self.write("Main := [");
+
+    const variant_names = [_][]const u8{ "Single", "Multiple", "Other" };
+    const num_variants = self.reader().intRangeAtMost(u8, 2, 3);
+
+    for (0..num_variants) |i| {
+        if (i > 0) try self.write(", ");
+        try self.write(variant_names[i]);
+
+        // Add payload
+        try self.write("(");
+
+        // Try to use parametric type with concrete arg
+        if (self.findParametricType()) |def| {
+            try self.write(def.name);
+            try self.write("(");
+            try self.generateConcreteTypeArg();
+            try self.write(")");
+        } else if (self.findRecursiveType()) |def| {
+            // Use recursive type
+            try self.write(def.name);
+        } else {
+            // Fallback to primitive
+            try self.randomPrimitiveType().format(self.writer());
+        }
+        try self.write(")");
+    }
+
+    try self.write("].{\n");
+    self.indent_level = 1;
+
+    // Generate methods
+    try self.generateMainMethods();
+
+    try self.write("}\n");
+    self.indent_level = 0;
+}
+
+/// Generate a simple Main type (original style)
+fn generateMainSimple(self: *Self) !void {
     // Choose what kind of type to define: tag union or record
     const type_choice = self.reader().intRangeAtMost(u8, 0, 3);
     switch (type_choice) {
@@ -458,6 +807,95 @@ pub fn generateModule(self: *Self) !void {
     }
 
     try self.write("}\n");
+    self.indent_level = 0;
+}
+
+/// Generate methods for Main type
+fn generateMainMethods(self: *Self) !void {
+    const num_funcs = self.reader().intRangeAtMost(u8, 2, 4);
+    for (0..num_funcs) |_| {
+        try self.generateAssociatedFunction();
+    }
+}
+
+/// Generate a concrete type argument for parametric types
+fn generateConcreteTypeArg(self: *Self) !void {
+    // 50% use a defined type alias, 50% use primitive
+    if (self.defined_type_count > 0 and self.reader().boolean()) {
+        // Find a non-parametric type (alias)
+        if (self.findAliasType()) |def| {
+            try self.write(def.name);
+            return;
+        }
+    }
+    try self.randomPrimitiveType().format(self.writer());
+}
+
+/// Pick an unused type name from the pool
+fn pickUnusedTypeName(self: *Self) ?[]const u8 {
+    const start_idx = self.reader().intRangeLessThan(usize, 0, user_type_names.len);
+    for (0..user_type_names.len) |offset| {
+        const idx = (start_idx + offset) % user_type_names.len;
+        const name = user_type_names[idx];
+        // Check if already used
+        var used = false;
+        for (self.defined_types[0..self.defined_type_count]) |def| {
+            if (std.mem.eql(u8, def.name, name)) {
+                used = true;
+                break;
+            }
+        }
+        if (!used) return name;
+    }
+    return null;
+}
+
+/// Find a type alias in defined types
+fn findAliasType(self: *Self) ?*const DefinedType {
+    for (&self.defined_types, 0..) |*def, i| {
+        if (i >= self.defined_type_count) break;
+        if (def.kind == .alias) return def;
+    }
+    return null;
+}
+
+/// Find a parametric type in defined types
+fn findParametricType(self: *Self) ?*const DefinedType {
+    for (&self.defined_types, 0..) |*def, i| {
+        if (i >= self.defined_type_count) break;
+        if (def.kind == .parametric) return def;
+    }
+    return null;
+}
+
+/// Find a recursive type in defined types
+fn findRecursiveType(self: *Self) ?*const DefinedType {
+    for (&self.defined_types, 0..) |*def, i| {
+        if (i >= self.defined_type_count) break;
+        if (def.kind == .recursive) return def;
+    }
+    return null;
+}
+
+/// Find a defined type by name
+fn findDefinedType(self: *Self, name: []const u8) ?*const DefinedType {
+    for (&self.defined_types, 0..) |*def, i| {
+        if (i >= self.defined_type_count) break;
+        if (std.mem.eql(u8, def.name, name)) return def;
+    }
+    return null;
+}
+
+/// Generate a random type suitable for payloads (can use defined aliases)
+fn randomPayloadType(self: *Self) Type {
+    // 40% chance to use a defined alias if available
+    if (self.defined_type_count > 0 and self.reader().intRangeAtMost(u8, 0, 9) < 4) {
+        if (self.findAliasType()) |def| {
+            return .{ .type_ref = def.name };
+        }
+    }
+    // Otherwise use primitive
+    return self.randomPrimitiveType();
 }
 
 /// Generate an associated function for a type module
@@ -1488,6 +1926,73 @@ fn generateSimpleLiteral(self: *Self, type_: Type) !void {
                 try self.write("(");
                 try self.generateSimpleLiteral(p.*);
                 try self.write(")");
+            }
+        },
+        .type_var => |_| {
+            // Type variables shouldn't appear in contexts where we generate literals directly
+            // This would only happen in parametric type bodies where we have concrete values
+            // Fallback to a simple numeric literal
+            try self.write("0");
+        },
+        .type_ref => |name| {
+            // Reference to a user-defined type - generate appropriate literal
+            if (self.findDefinedType(name)) |def| {
+                switch (def.kind) {
+                    .alias => {
+                        // For alias (tag union), use first tag name
+                        try self.write(alias_tag_names[0]); // "Red"
+                    },
+                    .parametric => {
+                        // For parametric type, use TypeName.wrap(value)
+                        try self.write(name);
+                        try self.write(".wrap(0)");
+                    },
+                    .recursive => {
+                        // For recursive type, use TypeName.leaf(value)
+                        try self.write(name);
+                        try self.write(".leaf(");
+                        // Use the payload type if known
+                        if (def.payload_type) |payload| {
+                            try self.generateSimpleLiteral(payload);
+                        } else {
+                            try self.write("0");
+                        }
+                        try self.write(")");
+                    },
+                }
+            } else {
+                // Unknown type, fallback
+                try self.write("0");
+            }
+        },
+        .nominal_app => |app| {
+            // Parametric type application like Wrapper(Str)
+            if (self.findDefinedType(app.name)) |def| {
+                if (def.kind == .parametric) {
+                    // Generate TypeName.wrap(concrete_value)
+                    try self.write(app.name);
+                    try self.write(".wrap(");
+                    if (app.type_arg_count > 0) {
+                        try self.generateSimpleLiteral(app.type_args[0].*);
+                    } else {
+                        try self.write("0");
+                    }
+                    try self.write(")");
+                } else if (def.kind == .recursive) {
+                    // Generate TypeName.leaf(concrete_value)
+                    try self.write(app.name);
+                    try self.write(".leaf(");
+                    if (app.type_arg_count > 0) {
+                        try self.generateSimpleLiteral(app.type_args[0].*);
+                    } else {
+                        try self.write("0");
+                    }
+                    try self.write(")");
+                } else {
+                    try self.write("0");
+                }
+            } else {
+                try self.write("0");
             }
         },
     }
