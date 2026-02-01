@@ -10357,7 +10357,48 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     }
                     offset += @intCast(capture_size);
                 } else {
-                    return Error.LocalNotFound;
+                    // Symbol not found in symbol_locations. Try generateLookup which
+                    // also checks top-level definitions via getSymbolDef.
+                    if (self.generateLookup(capture.symbol, capture.layout_idx)) |resolved_loc| {
+                        // Found via resolveSymbol - copy it to captures
+                        const ls = self.layout_store orelse unreachable;
+                        const capture_layout = ls.getLayout(capture.layout_idx);
+                        const capture_size = ls.layoutSizeAlign(capture_layout).size;
+                        const is_i128 = (capture_size >= 16);
+
+                        switch (resolved_loc) {
+                            .general_reg => |reg| {
+                                try self.codegen.emitStoreStack(.w64, base_offset + offset, reg);
+                                if (is_i128) {
+                                    const temp = try self.allocTempGeneral();
+                                    try self.codegen.emitLoadImm(temp, 0);
+                                    try self.codegen.emitStoreStack(.w64, base_offset + offset + 8, temp);
+                                    self.codegen.freeGeneral(temp);
+                                }
+                            },
+                            .lambda_code => |lc| {
+                                // Capturing a lambda (function pointer) - store the code address
+                                const temp = try self.allocTempGeneral();
+                                try self.codegen.emitLoadImm(temp, @intCast(lc.code_offset));
+                                try self.codegen.emitStoreStack(.w64, base_offset + offset, temp);
+                                self.codegen.freeGeneral(temp);
+                            },
+                            else => {
+                                const slot = try self.ensureOnStack(resolved_loc, if (is_i128) 16 else 8);
+                                const temp = try self.allocTempGeneral();
+                                try self.codegen.emitLoadStack(.w64, temp, slot);
+                                try self.codegen.emitStoreStack(.w64, base_offset + offset, temp);
+                                if (is_i128) {
+                                    try self.codegen.emitLoadStack(.w64, temp, slot + 8);
+                                    try self.codegen.emitStoreStack(.w64, base_offset + offset + 8, temp);
+                                }
+                                self.codegen.freeGeneral(temp);
+                            },
+                        }
+                        offset += @intCast(capture_size);
+                    } else |_| {
+                        return Error.LocalNotFound;
+                    }
                 }
             }
         }
