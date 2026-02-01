@@ -2086,9 +2086,11 @@ pub const SyntaxChecker = struct {
                         }
                         //NOTE[ELI]: I'm really not sure if we shouldn't always do this instead
                         if (resolved_type_var == null and record_access.dot_offset > 0) {
-                            // Fall back to the type of the expression immediately before the dot.
-                            // This is important for chained calls where no field name exists yet.
-                            if (cir_queries.findTypeAtOffset(module_env, record_access.dot_offset - 1)) |type_at| {
+                            // Find the outermost expression ending exactly at the dot.
+                            // Using findExprEndingAt (instead of findTypeAtOffset with
+                            // dot_offset-1) avoids matching a child expression whose
+                            // exclusive-end coincides with the delimiter character.
+                            if (cir_queries.findExprEndingAt(module_env, record_access.dot_offset)) |type_at| {
                                 resolved_type_var = type_at.type_var;
                             }
                         }
@@ -2121,9 +2123,8 @@ pub const SyntaxChecker = struct {
                     }
                     //NOTE[ELI]: I'm really not sure if we shouldn't always do this instead
                     if (resolved_type_var == null and info.dot_offset > 0) {
-                        // Fall back to the type of the expression immediately before the dot.
-                        // This is important for chained calls where no field name exists yet.
-                        if (cir_queries.findTypeAtOffset(module_env, info.dot_offset - 1)) |type_at| {
+                        // Find the outermost expression ending exactly at the dot.
+                        if (cir_queries.findExprEndingAt(module_env, info.dot_offset)) |type_at| {
                             resolved_type_var = type_at.type_var;
                         }
                     }

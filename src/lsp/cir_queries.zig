@@ -342,6 +342,44 @@ const FindDotReceiverContext = struct {
     }
 };
 
+/// Context for finding the expression whose region ends exactly at a target offset.
+/// Unlike FindTypeContext (which finds the smallest containing region), this finds
+/// the **largest** expression ending at the target offset. This is used for
+/// dot-completion: `expr.` where `dot_offset` equals the exclusive end of `expr`'s
+/// region. Selecting the largest match ensures we get the outermost expression
+/// (e.g., the full call in `func().`) rather than a child whose end coincides.
+const FindExprEndingAtContext = struct {
+    store: *const NodeStore,
+    target_offset: u32,
+    best_size: u32 = 0,
+    result: ?TypeAtOffsetResult = null,
+
+    /// Pre-visit callback for expressions.
+    fn visitExprPre(ctx: *FindExprEndingAtContext, expr_idx: CIR.Expr.Idx, expr: CIR.Expr) VisitAction {
+        _ = expr;
+        const region = ctx.store.getExprRegion(expr_idx);
+
+        // We only care about expressions whose region ends exactly at the target.
+        if (region.end.offset != ctx.target_offset) {
+            // If the region ends before the target, no child can match either.
+            if (region.end.offset < ctx.target_offset) return .skip_children;
+            return .continue_traversal;
+        }
+
+        // Among matches, keep the largest (outermost) region.
+        const size = regionSize(region);
+        if (size >= ctx.best_size) {
+            ctx.best_size = size;
+            ctx.result = .{
+                .type_var = ModuleEnv.varFrom(expr_idx),
+                .region = region,
+            };
+        }
+
+        return .continue_traversal;
+    }
+};
+
 // ============================================================================
 // Main Query Functions
 // ============================================================================
@@ -524,6 +562,38 @@ pub fn findDotReceiverTypeVar(module_env: *ModuleEnv, offset: u32) ?types.Var {
 
     var visitor = CirVisitor(FindDotReceiverContext).init(&ctx, .{
         .visit_expr_pre = FindDotReceiverContext.visitExprPre,
+    });
+
+    // Walk all top-level definitions
+    const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
+    for (defs_slice) |def_idx| {
+        const def = module_env.store.getDef(def_idx);
+        visitor.walkExpr(&module_env.store, def.expr);
+        if (visitor.stopped) break;
+    }
+
+    // Also walk all top-level statements
+    if (!visitor.stopped) {
+        visitor.walkModule(&module_env.store, module_env.all_statements);
+    }
+
+    return ctx.result;
+}
+
+/// Find the outermost expression whose region ends exactly at `offset`.
+///
+/// This is designed for dot-completion (`expr.`): the dot position equals
+/// the exclusive end of the preceding expression's region. By selecting
+/// the largest matching region we get the full expression (e.g. the call
+/// in `func().`) rather than a child that happens to share the same end.
+pub fn findExprEndingAt(module_env: *ModuleEnv, offset: u32) ?TypeAtOffsetResult {
+    var ctx = FindExprEndingAtContext{
+        .store = &module_env.store,
+        .target_offset = offset,
+    };
+
+    var visitor = CirVisitor(FindExprEndingAtContext).init(&ctx, .{
+        .visit_expr_pre = FindExprEndingAtContext.visitExprPre,
     });
 
     // Walk all top-level definitions

@@ -1133,10 +1133,14 @@ pub const CompletionBuilder = struct {
                     detail = std.fmt.allocPrint(self.allocator, "method on {s}", .{type_name}) catch null;
                 }
 
+                // Extract documentation for the method definition.
+                const documentation = self.findMethodDocumentation(module_env, qualified_ident);
+
                 _ = try self.addItem(.{
                     .label = method_name,
                     .kind = @intFromEnum(CompletionItemKind.method),
                     .detail = detail,
+                    .documentation = documentation,
                 });
             }
         }
@@ -1160,6 +1164,63 @@ pub const CompletionBuilder = struct {
         if (module_env.common.findIdent(qualified)) |type_ident| {
             try self.addMethodsForTypeIdentInEnv(module_env, type_ident);
         }
+    }
+
+    /// Find the documentation string for a method by its qualified identifier.
+    ///
+    /// Searches top-level definitions and statements for a def/decl whose
+    /// pattern ident matches `qualified_ident`, then extracts the doc comment.
+    fn findMethodDocumentation(self: *CompletionBuilder, module_env: *ModuleEnv, qualified_ident: base.Ident.Idx) ?[]const u8 {
+        // Search all_defs for a matching definition.
+        const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
+        for (defs_slice) |def_idx| {
+            const def = module_env.store.getDef(def_idx);
+            const pattern = module_env.store.getPattern(def.pattern);
+
+            const ident_idx = switch (pattern) {
+                .assign => |p| p.ident,
+                .as => |p| p.ident,
+                else => continue,
+            };
+
+            if (ident_idx == qualified_ident) {
+                return doc_comments.extractDocForDef(
+                    self.allocator,
+                    module_env.common.source,
+                    &module_env.store,
+                    def,
+                ) catch null;
+            }
+        }
+
+        // Fall back to statements (apps use s_decl for definitions).
+        const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
+        for (statements_slice) |stmt_idx| {
+            const stmt = module_env.store.getStatement(stmt_idx);
+            const pattern_idx = switch (stmt) {
+                .s_decl => |decl| decl.pattern,
+                else => continue,
+            };
+
+            const pattern = module_env.store.getPattern(pattern_idx);
+            const ident_idx = switch (pattern) {
+                .assign => |p| p.ident,
+                .as => |p| p.ident,
+                else => continue,
+            };
+
+            if (ident_idx == qualified_ident) {
+                return doc_comments.extractDocForStatement(
+                    self.allocator,
+                    module_env.common.source,
+                    &module_env.store,
+                    stmt,
+                    stmt_idx,
+                ) catch null;
+            }
+        }
+
+        return null;
     }
 
     /// Find the type of a method definition by its qualified identifier.
