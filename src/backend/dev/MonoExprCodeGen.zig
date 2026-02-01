@@ -7079,8 +7079,6 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             const result_layout_val = ls.getLayout(when_expr.result_layout);
             var result_size: u32 = ls.layoutSizeAlign(result_layout_val).size;
             var use_stack_result = result_size > 8;
-
-            // Get tag union layout info for proper discriminant/payload offsets
             const value_layout_val = ls.getLayout(when_expr.value_layout);
 
             const tu_disc_offset: i32 = if (value_layout_val.tag == .tag_union) blk: {
@@ -7553,7 +7551,14 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     } else if (result_layout_val.tag == .tag_union or result_layout_val.tag == .record or result_layout_val.tag == .tuple) {
                         // Non-scalar composite types stay as generic stack values
                         // so downstream code uses the layout for proper sizing.
-                        return .{ .stack = result_slot };
+                        // However, if result_size was dynamically upgraded (e.g., a branch
+                        // produced a larger value than the declared layout, which happens when
+                        // the ? operator's deferred type constraint munges the body type),
+                        // fall through to size-based heuristics for correct ValueLocation type.
+                        const declared_size = ls.layoutSizeAlign(result_layout_val).size;
+                        if (result_size <= declared_size or result_size <= 8) {
+                            return .{ .stack = result_slot };
+                        }
                     }
                 }
                 // Fallback: use size-based heuristics (covers dynamic upgrade case)
@@ -8233,7 +8238,6 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
             const tu_data = ls.getTagUnionData(union_layout.data.tag_union.idx);
             const stack_size = tu_data.size;
-
 
             // Allocate stack space for the tag union
             const base_offset = self.codegen.allocStackSlot(stack_size);
@@ -8989,19 +8993,16 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // Generate the return value
             const value_loc = try self.generateExpr(er.expr);
 
-            // If we're inside a compileLambdaAsProc, emit a jump to the epilogue
-            if (self.early_return_ret_layout) |ret_layout| {
-                // Move the value to the return register
-                try self.moveToReturnRegisterWithLayout(value_loc, ret_layout);
-                // Emit a jump (will be patched to the epilogue location)
-                const patch = try self.codegen.emitJump();
-                try self.early_return_patches.append(self.allocator, patch);
-                // Return a dummy value — this code is unreachable at runtime
-                return .{ .immediate_i64 = 0 };
-            }
-
-            // Inline lambda case: just return the value (best-effort fallback)
-            return value_loc;
+            // We must be inside a compileLambdaAsProc — early returns require the
+            // jump-to-epilogue infrastructure that compileLambdaAsProc sets up.
+            const ret_layout = self.early_return_ret_layout orelse unreachable;
+            // Move the value to the return register
+            try self.moveToReturnRegisterWithLayout(value_loc, ret_layout);
+            // Emit a jump (will be patched to the epilogue location)
+            const patch = try self.codegen.emitJump();
+            try self.early_return_patches.append(self.allocator, patch);
+            // Return a dummy value — this code is unreachable at runtime
+            return .{ .immediate_i64 = 0 };
         }
 
         /// Generate code for dbg expression (prints and returns value)
@@ -10505,10 +10506,9 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             return false;
         }
 
-        /// Call a lambda by binding its parameters to arguments and evaluating its body
-        /// directly in the current scope. Used for higher-order functions where function
-        /// parameters need to remain as callable values (lambda_code/closure_value) in
-        /// scope, rather than being demoted to opaque stack bytes in a compiled proc.
+        /// Evaluate a lambda body directly in the caller's scope, binding
+        /// parameters to argument values. Used when inlining is required
+        /// (e.g., lambdas returning callable values, or captures that must stay in scope).
         fn callLambdaBodyDirect(self: *Self, lambda: anytype, args_span: anytype) Error!ValueLocation {
             const args = self.store.getExprSpan(args_span);
             const params = self.store.getPatternSpan(lambda.params);
@@ -11748,7 +11748,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             const saved_early_return_ret_layout = self.early_return_ret_layout;
             const saved_early_return_patches_len = self.early_return_patches.items.len;
 
-            // Restore state on error so callers can fall back to callLambdaBodyDirect
+            // Restore state on error
             errdefer {
                 self.codegen.stack_offset = saved_stack_offset;
                 self.symbol_locations.deinit();
@@ -12011,6 +12011,23 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     }
                 }
             }
+            // i128/u128/Dec need two registers (X0/X1 or RAX/RDX)
+            if (ret_layout == .i128 or ret_layout == .u128 or ret_layout == .dec) {
+                switch (loc) {
+                    .stack, .stack_i128 => |offset| {
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            try self.codegen.emitLoadStack(.w64, .X0, offset);
+                            try self.codegen.emitLoadStack(.w64, .X1, offset + 8);
+                        } else {
+                            try self.codegen.emitLoadStack(.w64, .RAX, offset);
+                            try self.codegen.emitLoadStack(.w64, .RDX, offset + 8);
+                        }
+                        return;
+                    },
+                    else => {},
+                }
+            }
+
             // Fall back to regular handling
             return self.moveToReturnRegister(loc);
         }

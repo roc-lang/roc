@@ -3624,6 +3624,15 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 does_fx = try self.checkExpr(lambda.body, env, .no_expectation) or does_fx;
             }
 
+            // Process any pending return constraints (from early returns / ? operator) before
+            // creating the function type. This must happen after the body is fully checked
+            // (for correct error reporting) but before the function type is generalized
+            // (so instantiated copies at call sites have the complete type, including
+            // both Ok and Err variants from the ? operator).
+            // Only processes early_return/try_suffix_return constraints; anonymous
+            // constraints (e.g. from recursive lookups) are left for later.
+            try self.processReturnConstraints(env);
+
             // Create the function type
             if (does_fx) {
                 _ = try self.unifyWith(expr_var, try self.types.mkFuncEffectful(arg_vars, body_var), env);
@@ -4029,8 +4038,11 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             does_fx = try self.checkExpr(ret.expr, env, .no_expectation) or does_fx;
             const ret_var = ModuleEnv.varFrom(ret.expr);
 
-            // Write down this constraint for later validation
-            // We assert the lambda's type and the return type are equiv
+            // Write down this constraint for later validation.
+            // We assert the lambda's body type and the return value type are equivalent.
+            // This constraint is processed at the end of e_lambda (after the body is
+            // fully checked) to ensure proper error reporting while also running before
+            // generalization to prevent layout mismatches at instantiated call sites.
             const lambda_expr = self.cir.store.getExpr(ret.lambda);
             std.debug.assert(lambda_expr == .e_lambda);
             _ = try self.constraints.append(self.gpa, Constraint{ .eql = .{
@@ -5414,6 +5426,36 @@ fn finalizeNumericDefaults(self: *Self, env: *Env) std.mem.Allocator.Error!void 
 
     // Process the newly created constraints from the unification
     try self.checkAllConstraints(env);
+}
+
+/// Process only early_return and try_suffix_return constraints, keeping anonymous
+/// constraints for later processing. Called at the end of e_lambda to ensure return type
+/// information is unified with the body type before the function type is generalized,
+/// without prematurely processing anonymous constraints from recursive lookups.
+fn processReturnConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+    const original_len = self.constraints.items.items.len;
+    var write_idx: usize = 0;
+    for (0..original_len) |read_idx| {
+        const constraint = self.constraints.items.items[read_idx];
+        switch (constraint) {
+            .eql => |eql| switch (eql.ctx) {
+                .anonymous => {
+                    self.constraints.items.items[write_idx] = constraint;
+                    write_idx += 1;
+                },
+                .early_return => {
+                    const unify_result = try self.unify(eql.expected, eql.actual, env);
+                    self.setDetailIfTypeMismatch(unify_result, .early_return);
+                },
+                .try_suffix_return => {
+                    const unify_result = try self.unify(eql.expected, eql.actual, env);
+                    self.setDetailIfTypeMismatch(unify_result, .try_suffix_return);
+                },
+            },
+        }
+    }
+    std.debug.assert(self.constraints.items.items.len == original_len);
+    self.constraints.items.shrinkRetainingCapacity(write_idx);
 }
 
 /// Check any accumulated constraints

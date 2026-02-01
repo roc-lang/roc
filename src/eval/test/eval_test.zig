@@ -2644,3 +2644,36 @@ test "int conversion: U8.to_i16.to_i64" {
         \\{ 128u8.to_i16().to_i64() }
     , 128, .no_trace);
 }
+
+test "diag: match Ok extract payload" {
+    try runExpectI64(
+        \\match Ok(42) { Ok(v) => v, _ => 0 }
+    , 42, .no_trace);
+}
+
+test "diag: lambda returning tag union" {
+    try runExpectI64(
+        \\{
+        \\    f = |x| Ok(x)
+        \\    match f(42) { Ok(v) => v, _ => 0 }
+        \\}
+    , 42, .no_trace);
+}
+
+test "diag: identity lambda call" {
+    try runExpectI64(
+        \\{
+        \\    f = |x| x
+        \\    f(42)
+        \\}
+    , 42, .no_trace);
+}
+
+test "diag: lambda wrapping try suffix result in Ok" {
+    try runExpectI64(
+        \\{
+        \\    compute = |x| Ok(x?)
+        \\    match compute(Ok(42)) { Ok(v) => v, _ => 0 }
+        \\}
+    , 42, .no_trace);
+}
