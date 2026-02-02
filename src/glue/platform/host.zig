@@ -530,48 +530,65 @@ const JsonModuleTypeInfo = struct {
     hosted_functions: []const JsonHostedFunctionInfo,
 };
 
-/// Clean up all RocStr values in a ModuleTypeInfoRoc and free container allocations
-fn cleanupModuleTypeInfo(mod: *ModuleTypeInfoRoc, allocator: std.mem.Allocator, roc_ops: *builtins.host_abi.RocOps) void {
+/// Clean up all RocStr values in a ModuleTypeInfoRoc and decref container lists
+/// All allocations now use Roc's allocation scheme, so we use utils.decref instead of allocator.free
+fn cleanupModuleTypeInfo(mod: *ModuleTypeInfoRoc, roc_ops: *builtins.host_abi.RocOps) void {
     // Decref name and main_type strings
     mod.name.decref(roc_ops);
     mod.main_type.decref(roc_ops);
 
-    // Clean up functions list
+    // Clean up functions list - decref strings first, then decref the list container
     if (mod.functions.bytes) |func_bytes| {
         const funcs: [*]FunctionInfoRoc = @ptrCast(@alignCast(func_bytes));
         for (0..mod.functions.length) |i| {
             funcs[i].name.decref(roc_ops);
             funcs[i].type_str.decref(roc_ops);
         }
-        // Free the container (allocated via alignedAlloc, not roc_allocations)
-        const slice = func_bytes[0 .. mod.functions.length * @sizeOf(FunctionInfoRoc)];
-        allocator.free(@as([]align(@alignOf(FunctionInfoRoc)) u8, @alignCast(slice)));
     }
+    // Decref the functions list container (allocated via allocateWithRefcount)
+    builtins.utils.decref(
+        mod.functions.bytes,
+        mod.functions.length * @sizeOf(FunctionInfoRoc),
+        @alignOf(FunctionInfoRoc),
+        true, // elements ARE refcounted (FunctionInfoRoc contains RocStr)
+        roc_ops,
+    );
 
-    // Clean up hosted_functions list
+    // Clean up hosted_functions list - decref strings first, then decref the list container
     if (mod.hosted_functions.bytes) |hosted_bytes| {
         const hosted: [*]HostedFunctionInfoRoc = @ptrCast(@alignCast(hosted_bytes));
         for (0..mod.hosted_functions.length) |i| {
             hosted[i].name.decref(roc_ops);
             hosted[i].type_str.decref(roc_ops);
         }
-        // Free the container
-        const slice = hosted_bytes[0 .. mod.hosted_functions.length * @sizeOf(HostedFunctionInfoRoc)];
-        allocator.free(@as([]align(@alignOf(HostedFunctionInfoRoc)) u8, @alignCast(slice)));
     }
+    // Decref the hosted_functions list container
+    builtins.utils.decref(
+        mod.hosted_functions.bytes,
+        mod.hosted_functions.length * @sizeOf(HostedFunctionInfoRoc),
+        @alignOf(HostedFunctionInfoRoc),
+        true, // elements ARE refcounted (HostedFunctionInfoRoc contains RocStr)
+        roc_ops,
+    );
 }
 
 /// Clean up modules_list and all its contained allocations
-fn cleanupModulesList(modules_list: RocList, allocator: std.mem.Allocator, roc_ops: *builtins.host_abi.RocOps) void {
+/// All allocations now use Roc's allocation scheme, so we use utils.decref instead of allocator.free
+fn cleanupModulesList(modules_list: RocList, roc_ops: *builtins.host_abi.RocOps) void {
     if (modules_list.bytes) |mod_bytes| {
         const mods: [*]ModuleTypeInfoRoc = @ptrCast(@alignCast(mod_bytes));
         for (0..modules_list.length) |i| {
-            cleanupModuleTypeInfo(&mods[i], allocator, roc_ops);
+            cleanupModuleTypeInfo(&mods[i], roc_ops);
         }
-        // Free the modules container
-        const slice = mod_bytes[0 .. modules_list.length * @sizeOf(ModuleTypeInfoRoc)];
-        allocator.free(@as([]align(@alignOf(ModuleTypeInfoRoc)) u8, @alignCast(slice)));
     }
+    // Decref the modules list container
+    builtins.utils.decref(
+        modules_list.bytes,
+        modules_list.length * @sizeOf(ModuleTypeInfoRoc),
+        @alignOf(ModuleTypeInfoRoc),
+        true, // elements ARE refcounted (ModuleTypeInfoRoc contains RocStr/RocList)
+        roc_ops,
+    );
 }
 
 /// Clean up result payload from roc__make_glue
@@ -596,6 +613,8 @@ fn cleanupResult(result: *ResultListFileStr, roc_ops: *builtins.host_abi.RocOps)
 }
 
 /// Parse types_json and build RocList of ModuleTypeInfoRoc
+/// All list allocations use Roc's allocation scheme (allocateWithRefcount) so that
+/// Roc's compiled code can properly check refcounts at bytes-8.
 fn parseTypesJson(
     allocator: std.mem.Allocator,
     json_str: []const u8,
@@ -617,26 +636,31 @@ fn parseTypesJson(
         return RocList.empty();
     }
 
-    // Allocate array for ModuleTypeInfoRoc entries
-    const modules_bytes = allocator.alignedAlloc(
-        u8,
-        std.mem.Alignment.fromByteUnits(@alignOf(ModuleTypeInfoRoc)),
-        modules.len * @sizeOf(ModuleTypeInfoRoc),
-    ) catch return error.OutOfMemory;
-    errdefer allocator.free(modules_bytes);
+    // Allocate array for ModuleTypeInfoRoc entries using Roc's allocation scheme
+    // ModuleTypeInfoRoc contains RocStr and RocList fields which are refcounted
+    const modules_data_size = modules.len * @sizeOf(ModuleTypeInfoRoc);
+    const modules_bytes = builtins.utils.allocateWithRefcount(
+        modules_data_size,
+        @alignOf(ModuleTypeInfoRoc),
+        true, // elements ARE refcounted (ModuleTypeInfoRoc contains RocStr/RocList)
+        roc_ops,
+    );
 
-    const modules_ptr: [*]ModuleTypeInfoRoc = @ptrCast(@alignCast(modules_bytes.ptr));
+    const modules_ptr: [*]ModuleTypeInfoRoc = @ptrCast(@alignCast(modules_bytes));
 
     for (modules, 0..) |mod, mod_idx| {
-        // Build functions list
+        // Build functions list using Roc's allocation scheme
+        // FunctionInfoRoc contains RocStr fields which are refcounted
         const functions_list = if (mod.functions.len > 0) blk: {
-            const funcs_bytes = allocator.alignedAlloc(
-                u8,
-                std.mem.Alignment.fromByteUnits(@alignOf(FunctionInfoRoc)),
-                mod.functions.len * @sizeOf(FunctionInfoRoc),
-            ) catch return error.OutOfMemory;
+            const funcs_data_size = mod.functions.len * @sizeOf(FunctionInfoRoc);
+            const funcs_bytes = builtins.utils.allocateWithRefcount(
+                funcs_data_size,
+                @alignOf(FunctionInfoRoc),
+                true, // elements ARE refcounted (FunctionInfoRoc contains RocStr)
+                roc_ops,
+            );
 
-            const funcs_ptr: [*]FunctionInfoRoc = @ptrCast(@alignCast(funcs_bytes.ptr));
+            const funcs_ptr: [*]FunctionInfoRoc = @ptrCast(@alignCast(funcs_bytes));
 
             for (mod.functions, 0..) |func, func_idx| {
                 funcs_ptr[func_idx] = FunctionInfoRoc{
@@ -646,21 +670,24 @@ fn parseTypesJson(
             }
 
             break :blk RocList{
-                .bytes = funcs_bytes.ptr,
+                .bytes = funcs_bytes,
                 .length = mod.functions.len,
                 .capacity_or_alloc_ptr = mod.functions.len,
             };
         } else RocList.empty();
 
-        // Build hosted_functions list
+        // Build hosted_functions list using Roc's allocation scheme
+        // HostedFunctionInfoRoc contains RocStr fields which are refcounted
         const hosted_functions_list = if (mod.hosted_functions.len > 0) blk: {
-            const hosted_bytes = allocator.alignedAlloc(
-                u8,
-                std.mem.Alignment.fromByteUnits(@alignOf(HostedFunctionInfoRoc)),
-                mod.hosted_functions.len * @sizeOf(HostedFunctionInfoRoc),
-            ) catch return error.OutOfMemory;
+            const hosted_data_size = mod.hosted_functions.len * @sizeOf(HostedFunctionInfoRoc);
+            const hosted_bytes = builtins.utils.allocateWithRefcount(
+                hosted_data_size,
+                @alignOf(HostedFunctionInfoRoc),
+                true, // elements ARE refcounted (HostedFunctionInfoRoc contains RocStr)
+                roc_ops,
+            );
 
-            const hosted_ptr: [*]HostedFunctionInfoRoc = @ptrCast(@alignCast(hosted_bytes.ptr));
+            const hosted_ptr: [*]HostedFunctionInfoRoc = @ptrCast(@alignCast(hosted_bytes));
 
             for (mod.hosted_functions, 0..) |hosted, hosted_idx| {
                 hosted_ptr[hosted_idx] = HostedFunctionInfoRoc{
@@ -671,7 +698,7 @@ fn parseTypesJson(
             }
 
             break :blk RocList{
-                .bytes = hosted_bytes.ptr,
+                .bytes = hosted_bytes,
                 .length = mod.hosted_functions.len,
                 .capacity_or_alloc_ptr = mod.hosted_functions.len,
             };
@@ -686,7 +713,7 @@ fn parseTypesJson(
     }
 
     return RocList{
-        .bytes = modules_bytes.ptr,
+        .bytes = modules_bytes,
         .length = modules.len,
         .capacity_or_alloc_ptr = modules.len,
     };
@@ -790,18 +817,21 @@ fn platform_main(args: [][*:0]u8) !c_int {
     } else &default_entry_points;
     defer if (args.len > entry_point_start_idx) allocator.free(entry_point_names);
 
-    // Allocate array for EntryPoint entries with proper alignment
+    // Allocate array for EntryPoint entries using Roc's allocation scheme
+    // This ensures a valid refcount is present at bytes-8, which Roc's
+    // list operations expect when checking isUnique() etc.
+    // EntryPoint contains RocStr which is refcounted, so use elements_refcounted=true
+    // to allocate 16 bytes of header space (refcount + element count).
     const tuple1_size = @sizeOf(EntryPoint);
-    const entrypoints_bytes = allocator.alignedAlloc(
-        u8,
-        std.mem.Alignment.fromByteUnits(@alignOf(EntryPoint)),
-        entry_point_names.len * tuple1_size,
-    ) catch {
-        return error.OutOfMemory;
-    };
-    defer allocator.free(entrypoints_bytes);
+    const entrypoints_data_size = entry_point_names.len * tuple1_size;
+    const entrypoints_bytes = builtins.utils.allocateWithRefcount(
+        entrypoints_data_size,
+        @alignOf(EntryPoint),
+        true, // elements ARE refcounted (EntryPoint contains RocStr)
+        &roc_ops,
+    );
 
-    const entrypoints_ptr: [*]EntryPoint = @ptrCast(@alignCast(entrypoints_bytes.ptr));
+    const entrypoints_ptr: [*]EntryPoint = @ptrCast(@alignCast(entrypoints_bytes));
 
     // Build EntryPoint for each entry point
     for (entry_point_names, 0..) |name, idx| {
@@ -837,8 +867,8 @@ fn platform_main(args: [][*:0]u8) !c_int {
     }
 
     // Create RocList for entrypoints
-    var entrypoints_list = RocList{
-        .bytes = entrypoints_bytes.ptr,
+    const entrypoints_list = RocList{
+        .bytes = entrypoints_bytes,
         .length = entry_point_names.len,
         .capacity_or_alloc_ptr = entry_point_names.len,
     };
@@ -849,11 +879,18 @@ fn platform_main(args: [][*:0]u8) !c_int {
     else
         RocList.empty();
 
-    // Heap-allocate TypesInner with proper alignment
-    const types_inner_bytes = try allocator.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(@alignOf(TypesInner)), @sizeOf(TypesInner));
-    defer allocator.free(types_inner_bytes);
+    // Heap-allocate TypesInner using Roc's allocation scheme
+    // This ensures a valid refcount is present at bytes-8, which Roc's
+    // list operations expect when checking isUnique() etc.
+    // TypesInner contains RocList fields which are refcounted
+    const types_inner_bytes = builtins.utils.allocateWithRefcount(
+        @sizeOf(TypesInner),
+        @alignOf(TypesInner),
+        true, // elements ARE refcounted (TypesInner contains RocList)
+        &roc_ops,
+    );
 
-    const types_inner_ptr: *TypesInner = @ptrCast(@alignCast(types_inner_bytes.ptr));
+    const types_inner_ptr: *TypesInner = @ptrCast(@alignCast(types_inner_bytes));
     types_inner_ptr.* = TypesInner{
         .entrypoints = entrypoints_list,
         .modules = modules_list,
@@ -861,20 +898,16 @@ fn platform_main(args: [][*:0]u8) !c_int {
 
     // Create a List Types with one element (the Types structure)
     var types_list = RocList{
-        .bytes = types_inner_bytes.ptr,
+        .bytes = types_inner_bytes,
         .length = 1,
         .capacity_or_alloc_ptr = 1,
     };
 
     // Call the Roc glue spec
+    // Note: Roc consumes types_list (takes ownership), so it handles cleanup
+    // of all nested structures. We must NOT manually clean up after this call.
     var result: ResultListFileStr = undefined;
     roc__make_glue(&roc_ops, &result, &types_list);
-
-    // Clean up entrypoint strings
-    for (0..entry_point_names.len) |idx| {
-        entrypoints_ptr[idx].name.decref(&roc_ops);
-    }
-    entrypoints_list = RocList.empty();
 
     // Handle the result
     const stderr: std.fs.File = .stderr();
@@ -952,10 +985,12 @@ fn platform_main(args: [][*:0]u8) !c_int {
         },
     };
 
-    // Clean up modules_list (RocStr values and container allocations)
-    cleanupModulesList(modules_list, allocator, &roc_ops);
+    // Note: Do NOT manually clean up types_list, entrypoints_list, or modules_list here.
+    // Roc consumed types_list (which contains entrypoints and modules) and has already
+    // freed all that memory. Attempting to clean them up again would be a double-free.
 
     // Clean up result payload (File names/contents or error string)
+    // The result is returned FROM Roc, and the host is responsible for cleaning it up.
     cleanupResult(&result, &roc_ops);
 
     return exit_code;
