@@ -8004,6 +8004,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             const field_exprs = self.store.getExprSpan(rec.fields);
 
             // Copy each field to its offset within the record
+            // Fields are sorted by alignment descending, then alphabetically - matching the layout
             for (field_exprs, 0..) |field_expr_id, i| {
                 const field_offset = ls.getRecordFieldOffset(record_layout.data.record.idx, @intCast(i));
                 const field_size = ls.getRecordFieldSize(record_layout.data.record.idx, @intCast(i));
@@ -10683,7 +10684,57 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 const arg_loc = try self.generateExpr(args[i]);
                 try self.bindPattern(pattern_id, arg_loc);
             }
-            return try self.generateExpr(lambda.body);
+
+            // Set up early return context for inlined lambda.
+            // Early returns in inlined code will jump to the merge point after the body.
+            const saved_early_return_ret_layout = self.early_return_ret_layout;
+            const saved_early_return_patches_len = self.early_return_patches.items.len;
+            self.early_return_ret_layout = lambda.ret_layout;
+
+            // Generate the lambda body
+            const result_loc = try self.generateExpr(lambda.body);
+
+            // Check if any early returns were generated
+            const num_early_returns = self.early_return_patches.items.len - saved_early_return_patches_len;
+
+            if (num_early_returns == 0) {
+                // No early returns - just restore state and return result directly
+                self.early_return_ret_layout = saved_early_return_ret_layout;
+                return result_loc;
+            }
+
+            // Early returns were generated - set up merge point infrastructure
+            // Allocate stack slot to store the result (needed for merge point)
+            // Note: lambda.ret_layout can be wrong (Box placeholder) when the return type
+            // involves polymorphic type variables. Get the size from the actual result instead.
+            const result_size = self.getResultSizeFromLoc(result_loc, lambda.ret_layout);
+            const result_slot = self.codegen.allocStackSlot(@intCast(result_size));
+
+            // Store the normal return value to the result slot
+            try self.storeValueToStack(result_loc, result_slot, result_size, lambda.ret_layout);
+
+            // Jump over the early return merge point (normal path continues here)
+            const skip_merge_patch = try self.codegen.emitJump();
+
+            // Patch all early return jumps to land here (merge point)
+            const merge_point = self.codegen.currentOffset();
+            for (self.early_return_patches.items[saved_early_return_patches_len..]) |patch| {
+                self.codegen.patchJump(patch, merge_point);
+            }
+
+            // Early returns already stored their value in return registers.
+            // Store it to the same result slot so both paths have consistent location.
+            try self.storeReturnRegsToStack(result_slot, result_size, lambda.ret_layout);
+
+            // Patch the skip jump to land after the merge
+            self.codegen.patchJump(skip_merge_patch, self.codegen.currentOffset());
+
+            // Restore early return state
+            self.early_return_patches.shrinkRetainingCapacity(saved_early_return_patches_len);
+            self.early_return_ret_layout = saved_early_return_ret_layout;
+
+            // Return the result from the stack slot
+            return self.locationForStackSlot(result_slot, result_size, lambda.ret_layout);
         }
 
         /// Compile a lambda body expression as a procedure and call it.
@@ -11008,65 +11059,104 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         /// Generate a call to an already-compiled procedure.
         /// This is used for recursive functions that were compiled via compileAllProcs.
         fn generateCallToCompiledProc(self: *Self, proc: CompiledProc, args_span: anytype, ret_layout: layout.Idx) Error!ValueLocation {
-            // Evaluate arguments and place them in argument registers
-            // Track register index separately since some args use multiple registers
+            // Evaluate arguments and place them in argument registers or on stack.
+            // When registers are exhausted, spill remaining arguments to the stack.
             const args = self.store.getExprSpan(args_span);
-            var reg_idx: u8 = 0;
 
-            for (args) |arg_id| {
+            // Pre-computed argument info to avoid generating expressions twice
+            const ArgInfo = struct {
+                loc: ValueLocation,
+                layout_idx: ?layout.Idx,
+                num_regs: u8, // Number of registers this argument needs
+            };
+
+            // First pass: Generate all argument expressions and calculate register needs
+            var arg_infos: [16]ArgInfo = undefined;
+            var total_regs_needed: u8 = 0;
+
+            for (args, 0..) |arg_id, i| {
+                if (i >= 16) break;
                 const arg_loc = try self.generateExpr(arg_id);
                 const arg_layout = self.getExprLayout(arg_id);
 
-                // Handle i128/Dec arguments (need two registers)
-                // Check both the value location AND the argument layout, because
-                // mutable variables store Dec/i128 values as .stack (not .stack_i128)
-                const is_i128_arg = (arg_loc == .stack_i128 or arg_loc == .immediate_i128) or
-                    (arg_loc == .stack and arg_layout != null and
-                    (arg_layout.? == .dec or arg_layout.? == .i128 or arg_layout.? == .u128));
-                if (is_i128_arg) {
-                    const low_reg = self.getArgumentRegister(reg_idx);
-                    const high_reg = self.getArgumentRegister(reg_idx + 1);
-                    switch (arg_loc) {
-                        .stack_i128, .stack => |offset| {
-                            if (comptime builtin.cpu.arch == .aarch64) {
-                                try self.codegen.emitLoadStack(.w64, low_reg, offset);
-                                try self.codegen.emitLoadStack(.w64, high_reg, offset + 8);
-                            } else {
-                                try self.codegen.emitLoadStack(.w64, low_reg, offset);
-                                try self.codegen.emitLoadStack(.w64, high_reg, offset + 8);
-                            }
-                        },
-                        .immediate_i128 => |val| {
-                            const low: u64 = @truncate(@as(u128, @bitCast(val)));
-                            const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
-                            try self.codegen.emitLoadImm(low_reg, @bitCast(low));
-                            try self.codegen.emitLoadImm(high_reg, @bitCast(high));
-                        },
-                        else => unreachable,
-                    }
-                    reg_idx += 2;
-                } else {
-                    // Check if this is a list argument (24 bytes)
-                    const is_list = if (arg_layout) |al| blk: {
-                        if (self.layout_store) |ls| {
-                            const layout_val = ls.getLayout(al);
-                            break :blk layout_val.tag == .list or layout_val.tag == .list_of_zst;
-                        }
-                        break :blk false;
-                    } else (arg_loc == .list_stack);
+                // Calculate how many registers this argument needs
+                const num_regs: u8 = self.calcArgRegCount(arg_loc, arg_layout);
+                arg_infos[i] = .{ .loc = arg_loc, .layout_idx = arg_layout, .num_regs = num_regs };
+                total_regs_needed += num_regs;
+            }
 
-                    if (is_list) {
-                        // List arguments need 3 registers
+            // Calculate stack spill size (for arguments that don't fit in registers)
+            var stack_spill_size: i32 = 0;
+            {
+                var reg_count: u8 = 0;
+                for (0..args.len) |i| {
+                    if (i >= 16) break;
+                    const info = arg_infos[i];
+                    if (reg_count + info.num_regs <= max_arg_regs) {
+                        reg_count += info.num_regs;
+                    } else {
+                        // This argument (and all following) go on the stack
+                        stack_spill_size += @as(i32, info.num_regs) * 8;
+                        reg_count = max_arg_regs; // Mark registers as exhausted
+                    }
+                }
+            }
+
+            // Allocate stack space for spilled arguments (before placing any arguments)
+            // On x86_64, stack args are placed at [RSP+0], [RSP+8], etc. before the call
+            if (stack_spill_size > 0) {
+                if (comptime builtin.cpu.arch == .x86_64) {
+                    try self.codegen.emit.subRegImm32(.w64, .RSP, stack_spill_size);
+                } else {
+                    // aarch64: also need to allocate stack space
+                    try self.codegen.emit.subRegRegImm12(.w64, .ZRSP, .ZRSP, @intCast(stack_spill_size));
+                }
+            }
+
+            // Second pass: Place arguments in registers or on stack
+            var reg_idx: u8 = 0;
+            var stack_arg_offset: i32 = 0; // Offset from RSP for stack arguments
+
+            for (args, 0..) |_, i| {
+                if (i >= 16) break;
+                const info = arg_infos[i];
+                const arg_loc = info.loc;
+                const arg_layout = info.layout_idx;
+
+                // Check if this argument fits in registers
+                if (reg_idx + info.num_regs <= max_arg_regs) {
+                    // Place in registers (existing logic)
+                    const is_i128_arg = (arg_loc == .stack_i128 or arg_loc == .immediate_i128) or
+                        (arg_loc == .stack and arg_layout != null and
+                        (arg_layout.? == .dec or arg_layout.? == .i128 or arg_layout.? == .u128));
+                    if (is_i128_arg) {
+                        const low_reg = self.getArgumentRegister(reg_idx);
+                        const high_reg = self.getArgumentRegister(reg_idx + 1);
+                        switch (arg_loc) {
+                            .stack_i128, .stack => |offset| {
+                                try self.codegen.emitLoadStack(.w64, low_reg, offset);
+                                try self.codegen.emitLoadStack(.w64, high_reg, offset + 8);
+                            },
+                            .immediate_i128 => |val| {
+                                const low: u64 = @truncate(@as(u128, @bitCast(val)));
+                                const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
+                                try self.codegen.emitLoadImm(low_reg, @bitCast(low));
+                                try self.codegen.emitLoadImm(high_reg, @bitCast(high));
+                            },
+                            else => unreachable,
+                        }
+                        reg_idx += 2;
+                    } else if (info.num_regs == 3) {
+                        // List or string (24 bytes)
                         const offset: i32 = switch (arg_loc) {
                             .stack => |off| off,
                             .list_stack => |li| li.struct_offset,
-                            else => unreachable, // Lists must always be on the stack
+                            .stack_str => |off| off,
+                            else => unreachable,
                         };
-
                         const reg0 = self.getArgumentRegister(reg_idx);
                         const reg1 = self.getArgumentRegister(reg_idx + 1);
                         const reg2 = self.getArgumentRegister(reg_idx + 2);
-
                         if (comptime builtin.cpu.arch == .aarch64) {
                             try self.codegen.emit.ldrRegMemSoff(.w64, reg0, .FP, offset);
                             try self.codegen.emit.ldrRegMemSoff(.w64, reg1, .FP, offset + 8);
@@ -11077,41 +11167,49 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                             try self.codegen.emit.movRegMem(.w64, reg2, .RBP, offset + 16);
                         }
                         reg_idx += 3;
-                    } else if (arg_layout != null and self.layout_store != null) blk: {
-                        // Check if this is a record > 8 bytes that needs multiple registers
-                        const ls = self.layout_store.?;
-                        const layout_val = ls.getLayout(arg_layout.?);
-                        if (layout_val.tag == .record) {
-                            const size = ls.layoutSizeAlign(layout_val).size;
-                            if (size > 8) {
-                                const offset: i32 = switch (arg_loc) {
-                                    .stack => |off| off,
-                                    else => break :blk,
-                                };
-                                const num_regs: u8 = @intCast((size + 7) / 8);
-                                var ri: u8 = 0;
-                                while (ri < num_regs) : (ri += 1) {
-                                    const r = self.getArgumentRegister(reg_idx + ri);
-                                    try self.codegen.emitLoadStack(.w64, r, offset + @as(i32, ri) * 8);
-                                }
-                                reg_idx += num_regs;
+                    } else if (info.num_regs > 1) {
+                        // Multi-register struct (record > 8 bytes)
+                        const offset: i32 = switch (arg_loc) {
+                            .stack => |off| off,
+                            else => {
+                                // Fall back to single register
+                                const arg_reg = self.getArgumentRegister(reg_idx);
+                                try self.moveToReg(arg_loc, arg_reg);
+                                reg_idx += 1;
                                 continue;
-                            }
+                            },
+                        };
+                        var ri: u8 = 0;
+                        while (ri < info.num_regs) : (ri += 1) {
+                            const r = self.getArgumentRegister(reg_idx + ri);
+                            try self.codegen.emitLoadStack(.w64, r, offset + @as(i32, ri) * 8);
                         }
-                        // Default: single register
-                        const arg_reg = self.getArgumentRegister(reg_idx);
-                        try self.moveToReg(arg_loc, arg_reg);
-                        reg_idx += 1;
+                        reg_idx += info.num_regs;
                     } else {
+                        // Single register argument
                         const arg_reg = self.getArgumentRegister(reg_idx);
                         try self.moveToReg(arg_loc, arg_reg);
                         reg_idx += 1;
                     }
+                } else {
+                    // Spill to stack - registers exhausted
+                    try self.spillArgToStack(arg_loc, stack_arg_offset, info.num_regs);
+                    stack_arg_offset += @as(i32, info.num_regs) * 8;
+                    reg_idx = max_arg_regs; // Mark all registers as used
                 }
             }
 
             // Emit the call instruction
             try self.emitCallToOffset(proc.code_start);
+
+            // Clean up stack space for spilled arguments (after call returns)
+            if (stack_spill_size > 0) {
+                if (comptime builtin.cpu.arch == .x86_64) {
+                    try self.codegen.emit.addRegImm32(.w64, .RSP, stack_spill_size);
+                } else {
+                    try self.codegen.emit.addRegRegImm12(.w64, .ZRSP, .ZRSP, @intCast(stack_spill_size));
+                }
+            }
 
             // Handle i128/Dec return values (returned in two registers)
             if (ret_layout == .i128 or ret_layout == .u128 or ret_layout == .dec) {
@@ -11245,6 +11343,256 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     return Error.InvalidLocalLocation;
                 },
             }
+        }
+
+        /// Calculate the number of registers an argument needs based on its location and layout.
+        fn calcArgRegCount(self: *Self, arg_loc: ValueLocation, arg_layout: ?layout.Idx) u8 {
+            // Check for 128-bit types (i128, u128, Dec) - need 2 registers
+            const is_i128_arg = (arg_loc == .stack_i128 or arg_loc == .immediate_i128) or
+                (arg_loc == .stack and arg_layout != null and
+                (arg_layout.? == .dec or arg_layout.? == .i128 or arg_layout.? == .u128));
+            if (is_i128_arg) return 2;
+
+            // Check for list types - need 3 registers (24 bytes: ptr, len, capacity)
+            if (arg_loc == .list_stack) return 3;
+            if (arg_layout) |al| {
+                if (al == .str) return 3; // Strings are 24 bytes
+                if (self.layout_store) |ls| {
+                    const layout_val = ls.getLayout(al);
+                    if (layout_val.tag == .list or layout_val.tag == .list_of_zst) return 3;
+                    // Check for records/tuples > 8 bytes
+                    if (layout_val.tag == .record or layout_val.tag == .tuple or layout_val.tag == .tag_union) {
+                        const size = ls.layoutSizeAlign(layout_val).size;
+                        if (size > 8) return @intCast((size + 7) / 8);
+                    }
+                }
+            }
+
+            // Default: single register
+            return 1;
+        }
+
+        /// Spill an argument to the stack (for arguments that don't fit in registers).
+        /// stack_offset is the offset from RSP (x86_64) or SP (aarch64) where the argument should be placed.
+        fn spillArgToStack(self: *Self, arg_loc: ValueLocation, stack_offset: i32, num_regs: u8) Error!void {
+            // Use a temporary register for copying
+            const temp_reg: GeneralReg = if (comptime builtin.cpu.arch == .aarch64) .X9 else .R11;
+
+            switch (arg_loc) {
+                .stack, .stack_i128, .stack_str => |src_offset| {
+                    // Copy from local stack to argument stack area
+                    var ri: u8 = 0;
+                    while (ri < num_regs) : (ri += 1) {
+                        const off: i32 = @as(i32, ri) * 8;
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, src_offset + off);
+                            try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .ZRSP, stack_offset + off);
+                        } else {
+                            try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, src_offset + off);
+                            try self.codegen.emit.movMemReg(.w64, .RSP, stack_offset + off, temp_reg);
+                        }
+                    }
+                },
+                .list_stack => |info| {
+                    // List is 24 bytes (3 registers)
+                    var ri: u8 = 0;
+                    while (ri < num_regs) : (ri += 1) {
+                        const off: i32 = @as(i32, ri) * 8;
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, info.struct_offset + off);
+                            try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .ZRSP, stack_offset + off);
+                        } else {
+                            try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, info.struct_offset + off);
+                            try self.codegen.emit.movMemReg(.w64, .RSP, stack_offset + off, temp_reg);
+                        }
+                    }
+                },
+                .immediate_i64 => |val| {
+                    try self.codegen.emitLoadImm(temp_reg, val);
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .ZRSP, stack_offset);
+                    } else {
+                        try self.codegen.emit.movMemReg(.w64, .RSP, stack_offset, temp_reg);
+                    }
+                },
+                .immediate_i128 => |val| {
+                    const low: u64 = @truncate(@as(u128, @bitCast(val)));
+                    const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
+                    try self.codegen.emitLoadImm(temp_reg, @bitCast(low));
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .ZRSP, stack_offset);
+                    } else {
+                        try self.codegen.emit.movMemReg(.w64, .RSP, stack_offset, temp_reg);
+                    }
+                    try self.codegen.emitLoadImm(temp_reg, @bitCast(high));
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .ZRSP, stack_offset + 8);
+                    } else {
+                        try self.codegen.emit.movMemReg(.w64, .RSP, stack_offset + 8, temp_reg);
+                    }
+                },
+                .general_reg => |reg| {
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.strRegMemSoff(.w64, reg, .ZRSP, stack_offset);
+                    } else {
+                        try self.codegen.emit.movMemReg(.w64, .RSP, stack_offset, reg);
+                    }
+                },
+                else => {
+                    // For other types, try to move to temp register first
+                    try self.moveToReg(arg_loc, temp_reg);
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .ZRSP, stack_offset);
+                    } else {
+                        try self.codegen.emit.movMemReg(.w64, .RSP, stack_offset, temp_reg);
+                    }
+                },
+            }
+        }
+
+        /// Get the size in bytes for a layout index.
+        fn getLayoutSizeForIdx(self: *Self, layout_idx: layout.Idx) u32 {
+            // Handle well-known types first
+            if (layout_idx == .str) return 24;
+            if (layout_idx == .i128 or layout_idx == .u128 or layout_idx == .dec) return 16;
+            if (layout_idx == .i64 or layout_idx == .u64 or layout_idx == .f64) return 8;
+            if (layout_idx == .i32 or layout_idx == .u32 or layout_idx == .f32) return 4;
+            if (layout_idx == .i16 or layout_idx == .u16) return 2;
+            if (layout_idx == .i8 or layout_idx == .u8 or layout_idx == .bool) return 1;
+
+            if (self.layout_store) |ls| {
+                const layout_val = ls.getLayout(layout_idx);
+                if (layout_val.tag == .list or layout_val.tag == .list_of_zst) return 24;
+                return ls.layoutSizeAlign(layout_val).size;
+            }
+            return 8; // Default to pointer size
+        }
+
+        /// Get the size of a result from its location and fallback layout.
+        /// This is needed because lambda ret_layout can be a Box placeholder when
+        /// the return type involves polymorphic type variables that weren't fully resolved.
+        fn getResultSizeFromLoc(self: *Self, loc: ValueLocation, fallback_layout: layout.Idx) u32 {
+            // Use the location type to infer size when possible
+            switch (loc) {
+                .stack_i128 => return 16,
+                .stack_str => return 24,
+                .list_stack => return 24,
+                .immediate_i128 => return 16,
+                .immediate_i64, .general_reg => return 8,
+                .stack => {
+                    // Stack location doesn't carry size info, use layout
+                    // But first check if the layout is a placeholder (Box)
+                    if (self.layout_store) |ls| {
+                        const layout_val = ls.getLayout(fallback_layout);
+                        if (layout_val.tag == .box) {
+                            // Placeholder layout - can't trust the size
+                            // For tag unions, assume 16 bytes (payload + discriminant)
+                            // This is a conservative estimate that works for Result
+                            return 16;
+                        }
+                        return ls.layoutSizeAlign(layout_val).size;
+                    }
+                    return self.getLayoutSizeForIdx(fallback_layout);
+                },
+                else => return self.getLayoutSizeForIdx(fallback_layout),
+            }
+        }
+
+        /// Store a ValueLocation to a stack slot (FP-relative).
+        fn storeValueToStack(self: *Self, loc: ValueLocation, slot: i32, size: u32, layout_idx: layout.Idx) Error!void {
+            _ = layout_idx;
+            const temp_reg: GeneralReg = if (comptime builtin.cpu.arch == .aarch64) .X9 else .R11;
+            const num_regs: u32 = (size + 7) / 8;
+
+            switch (loc) {
+                .stack, .stack_i128, .stack_str => |src_offset| {
+                    var i: u32 = 0;
+                    while (i < num_regs) : (i += 1) {
+                        const off: i32 = @intCast(i * 8);
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, src_offset + off);
+                            try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, slot + off);
+                        } else {
+                            try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, src_offset + off);
+                            try self.codegen.emit.movMemReg(.w64, .RBP, slot + off, temp_reg);
+                        }
+                    }
+                },
+                .list_stack => |info| {
+                    var i: u32 = 0;
+                    while (i < num_regs) : (i += 1) {
+                        const off: i32 = @intCast(i * 8);
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, info.struct_offset + off);
+                            try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, slot + off);
+                        } else {
+                            try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, info.struct_offset + off);
+                            try self.codegen.emit.movMemReg(.w64, .RBP, slot + off, temp_reg);
+                        }
+                    }
+                },
+                .immediate_i64 => |val| {
+                    try self.codegen.emitLoadImm(temp_reg, val);
+                    try self.codegen.emitStoreStack(.w64, slot, temp_reg);
+                },
+                .immediate_i128 => |val| {
+                    const low: u64 = @truncate(@as(u128, @bitCast(val)));
+                    const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
+                    try self.codegen.emitLoadImm(temp_reg, @bitCast(low));
+                    try self.codegen.emitStoreStack(.w64, slot, temp_reg);
+                    try self.codegen.emitLoadImm(temp_reg, @bitCast(high));
+                    try self.codegen.emitStoreStack(.w64, slot + 8, temp_reg);
+                },
+                .general_reg => |reg| {
+                    try self.codegen.emitStoreStack(.w64, slot, reg);
+                },
+                else => {
+                    try self.moveToReg(loc, temp_reg);
+                    try self.codegen.emitStoreStack(.w64, slot, temp_reg);
+                },
+            }
+        }
+
+        /// Store return registers to a stack slot (for early return merge).
+        fn storeReturnRegsToStack(self: *Self, slot: i32, size: u32, layout_idx: layout.Idx) Error!void {
+            const num_regs: u32 = (size + 7) / 8;
+
+            if (comptime builtin.cpu.arch == .aarch64) {
+                const regs = [_]GeneralReg{ .X0, .X1, .X2, .X3, .X4, .X5, .X6, .X7 };
+                for (0..@min(num_regs, regs.len)) |i| {
+                    try self.codegen.emit.strRegMemSoff(.w64, regs[i], .FP, slot + @as(i32, @intCast(i * 8)));
+                }
+            } else {
+                // x86_64: return values in RAX, RDX, RCX for large types
+                if (layout_idx == .str or (self.layout_store != null and blk: {
+                    const ls = self.layout_store.?;
+                    const lv = ls.getLayout(layout_idx);
+                    break :blk lv.tag == .list or lv.tag == .list_of_zst;
+                })) {
+                    try self.codegen.emit.movMemReg(.w64, .RBP, slot, .RAX);
+                    try self.codegen.emit.movMemReg(.w64, .RBP, slot + 8, .RDX);
+                    try self.codegen.emit.movMemReg(.w64, .RBP, slot + 16, .RCX);
+                } else if (num_regs >= 2) {
+                    try self.codegen.emit.movMemReg(.w64, .RBP, slot, .RAX);
+                    try self.codegen.emit.movMemReg(.w64, .RBP, slot + 8, .RDX);
+                } else {
+                    try self.codegen.emit.movMemReg(.w64, .RBP, slot, .RAX);
+                }
+            }
+        }
+
+        /// Create a ValueLocation for a stack slot based on the type.
+        fn locationForStackSlot(self: *Self, slot: i32, size: u32, layout_idx: layout.Idx) ValueLocation {
+            _ = size;
+            if (layout_idx == .str) return .{ .stack_str = slot };
+            if (layout_idx == .i128 or layout_idx == .u128 or layout_idx == .dec) return .{ .stack_i128 = slot };
+            if (self.layout_store) |ls| {
+                const layout_val = ls.getLayout(layout_idx);
+                if (layout_val.tag == .list or layout_val.tag == .list_of_zst) {
+                    return .{ .list_stack = .{ .struct_offset = slot, .data_offset = 0, .num_elements = 0 } };
+                }
+            }
+            return .{ .stack = slot };
         }
 
         /// Allocate a general register with a unique temporary local ID.
@@ -12236,102 +12584,181 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
         /// Bind lambda parameters from argument registers.
         /// Similar to bindProcParams but works with pattern spans.
+        /// Handles stack spilling when arguments exceed available registers.
         const max_arg_regs: u8 = if (builtin.cpu.arch == .aarch64) 8 else 6;
+
+        /// Calculate the number of registers a parameter needs based on its layout.
+        fn calcParamRegCount(self: *Self, layout_idx: layout.Idx) u8 {
+            // String parameters need 3 registers (24 bytes)
+            if (layout_idx == .str) return 3;
+            // i128/u128/Dec parameters need 2 registers (16 bytes)
+            if (layout_idx == .i128 or layout_idx == .u128 or layout_idx == .dec) return 2;
+
+            if (self.layout_store) |ls| {
+                if (@intFromEnum(layout_idx) < ls.layouts.len()) {
+                    const layout_val = ls.getLayout(layout_idx);
+                    // List parameters need 3 registers (24 bytes)
+                    if (layout_val.tag == .list or layout_val.tag == .list_of_zst) return 3;
+                    // Record, tag union, and tuple parameters may need multiple registers
+                    if (layout_val.tag == .record or layout_val.tag == .tag_union or layout_val.tag == .tuple) {
+                        const size = ls.layoutSizeAlign(layout_val).size;
+                        if (size > 8) return @intCast((size + 7) / 8);
+                    }
+                }
+            }
+            // Default: single register
+            return 1;
+        }
+
+        /// Copy parameter data from caller's stack frame to local stack.
+        /// caller_offset is the offset from RBP/FP to the caller's argument.
+        /// For x86_64: first stack arg is at [RBP+16], second at [RBP+24], etc.
+        /// For aarch64: first stack arg is at [FP+16], second at [FP+24], etc.
+        fn copyFromCallerStack(self: *Self, caller_offset: i32, local_offset: i32, num_regs: u8) Error!void {
+            const temp_reg: GeneralReg = if (comptime builtin.cpu.arch == .aarch64) .X9 else .R11;
+            var ri: u8 = 0;
+            while (ri < num_regs) : (ri += 1) {
+                const off: i32 = @as(i32, ri) * 8;
+                if (comptime builtin.cpu.arch == .aarch64) {
+                    try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, caller_offset + off);
+                    try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, local_offset + off);
+                } else {
+                    try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, caller_offset + off);
+                    try self.codegen.emit.movMemReg(.w64, .RBP, local_offset + off, temp_reg);
+                }
+            }
+        }
 
         fn bindLambdaParams(self: *Self, params: mono.MonoPatternSpan) Error!void {
             const pattern_ids = self.store.getPatternSpan(params);
             var reg_idx: u8 = 0;
+            // Track offset for stack arguments (first stack arg at RBP+16/FP+16)
+            var stack_arg_offset: i32 = 16;
+
             for (pattern_ids) |pattern_id| {
-                if (reg_idx >= max_arg_regs) unreachable;
                 const pattern = self.store.getPattern(pattern_id);
                 switch (pattern) {
                     .bind => |bind| {
                         const symbol_key: u48 = @bitCast(bind.symbol);
+                        const num_regs = self.calcParamRegCount(bind.layout_idx);
 
-                        // Check if this is a string parameter (24 bytes, 3 registers)
-                        if (bind.layout_idx == .str) {
-                            const arg_reg0 = self.getArgumentRegister(reg_idx);
-                            const arg_reg1 = self.getArgumentRegister(reg_idx + 1);
-                            const arg_reg2 = self.getArgumentRegister(reg_idx + 2);
+                        // Check if this parameter fits in registers
+                        if (reg_idx + num_regs <= max_arg_regs) {
+                            // Fits in registers - use register-based loading
+                            if (bind.layout_idx == .str) {
+                                const arg_reg0 = self.getArgumentRegister(reg_idx);
+                                const arg_reg1 = self.getArgumentRegister(reg_idx + 1);
+                                const arg_reg2 = self.getArgumentRegister(reg_idx + 2);
 
-                            const stack_offset = self.codegen.allocStackSlot(24);
-                            try self.codegen.emitStoreStack(.w64, stack_offset, arg_reg0);
-                            try self.codegen.emitStoreStack(.w64, stack_offset + 8, arg_reg1);
-                            try self.codegen.emitStoreStack(.w64, stack_offset + 16, arg_reg2);
+                                const stack_offset = self.codegen.allocStackSlot(24);
+                                try self.codegen.emitStoreStack(.w64, stack_offset, arg_reg0);
+                                try self.codegen.emitStoreStack(.w64, stack_offset + 8, arg_reg1);
+                                try self.codegen.emitStoreStack(.w64, stack_offset + 16, arg_reg2);
 
-                            try self.symbol_locations.put(symbol_key, .{ .stack_str = stack_offset });
-                            reg_idx += 3;
-                        }
-                        // Check if this is an i128/Dec parameter (16 bytes, 2 registers)
-                        else if (bind.layout_idx == .i128 or bind.layout_idx == .u128 or bind.layout_idx == .dec) {
-                            const arg_reg0 = self.getArgumentRegister(reg_idx);
-                            const arg_reg1 = self.getArgumentRegister(reg_idx + 1);
+                                try self.symbol_locations.put(symbol_key, .{ .stack_str = stack_offset });
+                                reg_idx += 3;
+                            } else if (bind.layout_idx == .i128 or bind.layout_idx == .u128 or bind.layout_idx == .dec) {
+                                const arg_reg0 = self.getArgumentRegister(reg_idx);
+                                const arg_reg1 = self.getArgumentRegister(reg_idx + 1);
 
-                            const stack_offset = self.codegen.allocStackSlot(16);
-                            try self.codegen.emitStoreStack(.w64, stack_offset, arg_reg0);
-                            try self.codegen.emitStoreStack(.w64, stack_offset + 8, arg_reg1);
+                                const stack_offset = self.codegen.allocStackSlot(16);
+                                try self.codegen.emitStoreStack(.w64, stack_offset, arg_reg0);
+                                try self.codegen.emitStoreStack(.w64, stack_offset + 8, arg_reg1);
 
-                            try self.symbol_locations.put(symbol_key, .{ .stack_i128 = stack_offset });
-                            reg_idx += 2;
-                        }
-                        // Check if this is a list, record, tag union, or tuple parameter needing multiple registers
-                        else if (self.layout_store) |ls| {
-                            if (@intFromEnum(bind.layout_idx) < ls.layouts.len()) {
-                                const layout_val = ls.getLayout(bind.layout_idx);
-                                if (layout_val.tag == .list or layout_val.tag == .list_of_zst) {
-                                    const arg_reg0 = self.getArgumentRegister(reg_idx);
-                                    const arg_reg1 = self.getArgumentRegister(reg_idx + 1);
-                                    const arg_reg2 = self.getArgumentRegister(reg_idx + 2);
+                                try self.symbol_locations.put(symbol_key, .{ .stack_i128 = stack_offset });
+                                reg_idx += 2;
+                            } else if (self.layout_store) |ls| {
+                                if (@intFromEnum(bind.layout_idx) < ls.layouts.len()) {
+                                    const layout_val = ls.getLayout(bind.layout_idx);
+                                    if (layout_val.tag == .list or layout_val.tag == .list_of_zst) {
+                                        const arg_reg0 = self.getArgumentRegister(reg_idx);
+                                        const arg_reg1 = self.getArgumentRegister(reg_idx + 1);
+                                        const arg_reg2 = self.getArgumentRegister(reg_idx + 2);
 
-                                    const stack_offset = self.codegen.allocStackSlot(24);
-                                    try self.codegen.emitStoreStack(.w64, stack_offset, arg_reg0);
-                                    try self.codegen.emitStoreStack(.w64, stack_offset + 8, arg_reg1);
-                                    try self.codegen.emitStoreStack(.w64, stack_offset + 16, arg_reg2);
+                                        const stack_offset = self.codegen.allocStackSlot(24);
+                                        try self.codegen.emitStoreStack(.w64, stack_offset, arg_reg0);
+                                        try self.codegen.emitStoreStack(.w64, stack_offset + 8, arg_reg1);
+                                        try self.codegen.emitStoreStack(.w64, stack_offset + 16, arg_reg2);
 
-                                    try self.symbol_locations.put(symbol_key, .{ .list_stack = .{
-                                        .struct_offset = stack_offset,
-                                        .data_offset = 0,
-                                        .num_elements = 0,
-                                    } });
-                                    reg_idx += 3;
-                                    continue;
-                                }
-                                // Record, tag union, and tuple parameters > 8 bytes need multiple registers
-                                if (layout_val.tag == .record or layout_val.tag == .tag_union or layout_val.tag == .tuple) {
-                                    const size = ls.layoutSizeAlign(layout_val).size;
-                                    if (size > 8) {
-                                        const num_regs: u8 = @intCast((size + 7) / 8);
-                                        if (reg_idx + num_regs > max_arg_regs) unreachable;
-                                        const stack_offset = self.codegen.allocStackSlot(@intCast(size));
-                                        var ri: u8 = 0;
-                                        while (ri < num_regs) : (ri += 1) {
-                                            const arg_r = self.getArgumentRegister(reg_idx + ri);
-                                            try self.codegen.emitStoreStack(.w64, stack_offset + @as(i32, ri) * 8, arg_r);
-                                        }
-                                        try self.symbol_locations.put(symbol_key, .{ .stack = stack_offset });
-                                        reg_idx += num_regs;
+                                        try self.symbol_locations.put(symbol_key, .{ .list_stack = .{
+                                            .struct_offset = stack_offset,
+                                            .data_offset = 0,
+                                            .num_elements = 0,
+                                        } });
+                                        reg_idx += 3;
                                         continue;
                                     }
+                                    if (layout_val.tag == .record or layout_val.tag == .tag_union or layout_val.tag == .tuple) {
+                                        const size = ls.layoutSizeAlign(layout_val).size;
+                                        if (size > 8) {
+                                            const local_stack_offset = self.codegen.allocStackSlot(@intCast(size));
+                                            var ri: u8 = 0;
+                                            while (ri < num_regs) : (ri += 1) {
+                                                const arg_r = self.getArgumentRegister(reg_idx + ri);
+                                                try self.codegen.emitStoreStack(.w64, local_stack_offset + @as(i32, ri) * 8, arg_r);
+                                            }
+                                            try self.symbol_locations.put(symbol_key, .{ .stack = local_stack_offset });
+                                            reg_idx += num_regs;
+                                            continue;
+                                        }
+                                    }
                                 }
+                                // Default: single 8-byte value
+                                const arg_reg = self.getArgumentRegister(reg_idx);
+                                const stack_offset = self.codegen.allocStackSlot(8);
+                                try self.codegen.emitStoreStack(.w64, stack_offset, arg_reg);
+                                try self.symbol_locations.put(symbol_key, .{ .stack = stack_offset });
+                                reg_idx += 1;
+                            } else {
+                                // Default: single 8-byte value
+                                const arg_reg = self.getArgumentRegister(reg_idx);
+                                const stack_offset = self.codegen.allocStackSlot(8);
+                                try self.codegen.emitStoreStack(.w64, stack_offset, arg_reg);
+                                try self.symbol_locations.put(symbol_key, .{ .stack = stack_offset });
+                                reg_idx += 1;
                             }
-                            // Default: single 8-byte value
-                            const arg_reg = self.getArgumentRegister(reg_idx);
-                            const stack_offset = self.codegen.allocStackSlot(8);
-                            try self.codegen.emitStoreStack(.w64, stack_offset, arg_reg);
-                            try self.symbol_locations.put(symbol_key, .{ .stack = stack_offset });
-                            reg_idx += 1;
                         } else {
-                            // Default: single 8-byte value
-                            const arg_reg = self.getArgumentRegister(reg_idx);
-                            const stack_offset = self.codegen.allocStackSlot(8);
-                            try self.codegen.emitStoreStack(.w64, stack_offset, arg_reg);
-                            try self.symbol_locations.put(symbol_key, .{ .stack = stack_offset });
-                            reg_idx += 1;
+                            // Doesn't fit in registers - read from caller's stack frame
+                            const size: u32 = @as(u32, num_regs) * 8;
+                            const local_stack_offset = self.codegen.allocStackSlot(@intCast(size));
+                            try self.copyFromCallerStack(stack_arg_offset, local_stack_offset, num_regs);
+
+                            // Set up symbol location based on type
+                            if (bind.layout_idx == .str) {
+                                try self.symbol_locations.put(symbol_key, .{ .stack_str = local_stack_offset });
+                            } else if (bind.layout_idx == .i128 or bind.layout_idx == .u128 or bind.layout_idx == .dec) {
+                                try self.symbol_locations.put(symbol_key, .{ .stack_i128 = local_stack_offset });
+                            } else if (self.layout_store) |ls| {
+                                if (@intFromEnum(bind.layout_idx) < ls.layouts.len()) {
+                                    const layout_val = ls.getLayout(bind.layout_idx);
+                                    if (layout_val.tag == .list or layout_val.tag == .list_of_zst) {
+                                        try self.symbol_locations.put(symbol_key, .{ .list_stack = .{
+                                            .struct_offset = local_stack_offset,
+                                            .data_offset = 0,
+                                            .num_elements = 0,
+                                        } });
+                                    } else {
+                                        try self.symbol_locations.put(symbol_key, .{ .stack = local_stack_offset });
+                                    }
+                                } else {
+                                    try self.symbol_locations.put(symbol_key, .{ .stack = local_stack_offset });
+                                }
+                            } else {
+                                try self.symbol_locations.put(symbol_key, .{ .stack = local_stack_offset });
+                            }
+
+                            stack_arg_offset += @as(i32, num_regs) * 8;
+                            reg_idx = max_arg_regs; // Mark all registers as consumed
                         }
                     },
                     .wildcard => {
-                        // Skip this argument register
-                        reg_idx += 1;
+                        // Skip this argument - but need to determine its size
+                        // For simplicity, assume 1 register for wildcards
+                        if (reg_idx < max_arg_regs) {
+                            reg_idx += 1;
+                        } else {
+                            stack_arg_offset += 8;
+                        }
                     },
                     .record => |rec| {
                         // Record destructuring: store registers to stack, then delegate to bindPattern
@@ -12339,28 +12766,45 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         const record_layout = ls.getLayout(rec.record_layout);
                         const size = ls.layoutSizeAlign(record_layout).size;
                         const num_regs: u8 = @intCast((size + 7) / 8);
-                        if (reg_idx + num_regs > max_arg_regs) unreachable;
-                        const stack_offset = self.codegen.allocStackSlot(@intCast(size));
-                        var ri: u8 = 0;
-                        while (ri < num_regs) : (ri += 1) {
-                            const arg_r = self.getArgumentRegister(reg_idx + ri);
-                            try self.codegen.emitStoreStack(.w64, stack_offset + @as(i32, ri) * 8, arg_r);
+
+                        if (reg_idx + num_regs <= max_arg_regs) {
+                            const stack_offset = self.codegen.allocStackSlot(@intCast(size));
+                            var ri: u8 = 0;
+                            while (ri < num_regs) : (ri += 1) {
+                                const arg_r = self.getArgumentRegister(reg_idx + ri);
+                                try self.codegen.emitStoreStack(.w64, stack_offset + @as(i32, ri) * 8, arg_r);
+                            }
+                            reg_idx += num_regs;
+                            try self.bindPattern(pattern_id, .{ .stack = stack_offset });
+                        } else {
+                            // Read from caller's stack
+                            const stack_offset = self.codegen.allocStackSlot(@intCast(size));
+                            try self.copyFromCallerStack(stack_arg_offset, stack_offset, num_regs);
+                            stack_arg_offset += @as(i32, num_regs) * 8;
+                            reg_idx = max_arg_regs;
+                            try self.bindPattern(pattern_id, .{ .stack = stack_offset });
                         }
-                        reg_idx += num_regs;
-                        try self.bindPattern(pattern_id, .{ .stack = stack_offset });
                     },
                     .list => {
                         // List destructuring: lists are 24 bytes (ptr, len, capacity) = 3 registers
-                        if (reg_idx + 3 > max_arg_regs) unreachable;
-                        const stack_offset = self.codegen.allocStackSlot(24);
-                        const arg_reg0 = self.getArgumentRegister(reg_idx);
-                        const arg_reg1 = self.getArgumentRegister(reg_idx + 1);
-                        const arg_reg2 = self.getArgumentRegister(reg_idx + 2);
-                        try self.codegen.emitStoreStack(.w64, stack_offset, arg_reg0);
-                        try self.codegen.emitStoreStack(.w64, stack_offset + 8, arg_reg1);
-                        try self.codegen.emitStoreStack(.w64, stack_offset + 16, arg_reg2);
-                        reg_idx += 3;
-                        try self.bindPattern(pattern_id, .{ .stack = stack_offset });
+                        if (reg_idx + 3 <= max_arg_regs) {
+                            const stack_offset = self.codegen.allocStackSlot(24);
+                            const arg_reg0 = self.getArgumentRegister(reg_idx);
+                            const arg_reg1 = self.getArgumentRegister(reg_idx + 1);
+                            const arg_reg2 = self.getArgumentRegister(reg_idx + 2);
+                            try self.codegen.emitStoreStack(.w64, stack_offset, arg_reg0);
+                            try self.codegen.emitStoreStack(.w64, stack_offset + 8, arg_reg1);
+                            try self.codegen.emitStoreStack(.w64, stack_offset + 16, arg_reg2);
+                            reg_idx += 3;
+                            try self.bindPattern(pattern_id, .{ .stack = stack_offset });
+                        } else {
+                            // Read from caller's stack
+                            const stack_offset = self.codegen.allocStackSlot(24);
+                            try self.copyFromCallerStack(stack_arg_offset, stack_offset, 3);
+                            stack_arg_offset += 24;
+                            reg_idx = max_arg_regs;
+                            try self.bindPattern(pattern_id, .{ .stack = stack_offset });
+                        }
                     },
                     .tuple => |tup| {
                         // Tuple destructuring: store registers to stack, then delegate to bindPattern
@@ -12368,19 +12812,32 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         const tuple_layout = ls.getLayout(tup.tuple_layout);
                         const size = ls.layoutSizeAlign(tuple_layout).size;
                         const num_regs: u8 = @intCast((size + 7) / 8);
-                        if (reg_idx + num_regs > max_arg_regs) unreachable;
-                        const stack_offset = self.codegen.allocStackSlot(@intCast(size));
-                        var ri: u8 = 0;
-                        while (ri < num_regs) : (ri += 1) {
-                            const arg_r = self.getArgumentRegister(reg_idx + ri);
-                            try self.codegen.emitStoreStack(.w64, stack_offset + @as(i32, ri) * 8, arg_r);
+
+                        if (reg_idx + num_regs <= max_arg_regs) {
+                            const stack_offset = self.codegen.allocStackSlot(@intCast(size));
+                            var ri: u8 = 0;
+                            while (ri < num_regs) : (ri += 1) {
+                                const arg_r = self.getArgumentRegister(reg_idx + ri);
+                                try self.codegen.emitStoreStack(.w64, stack_offset + @as(i32, ri) * 8, arg_r);
+                            }
+                            reg_idx += num_regs;
+                            try self.bindPattern(pattern_id, .{ .stack = stack_offset });
+                        } else {
+                            // Read from caller's stack
+                            const stack_offset = self.codegen.allocStackSlot(@intCast(size));
+                            try self.copyFromCallerStack(stack_arg_offset, stack_offset, num_regs);
+                            stack_arg_offset += @as(i32, num_regs) * 8;
+                            reg_idx = max_arg_regs;
+                            try self.bindPattern(pattern_id, .{ .stack = stack_offset });
                         }
-                        reg_idx += num_regs;
-                        try self.bindPattern(pattern_id, .{ .stack = stack_offset });
                     },
                     else => {
-                        // For now, skip complex patterns
-                        reg_idx += 1;
+                        // For now, skip complex patterns - assume 1 register
+                        if (reg_idx < max_arg_regs) {
+                            reg_idx += 1;
+                        } else {
+                            stack_arg_offset += 8;
+                        }
                     },
                 }
             }
@@ -12548,174 +13005,171 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         ///
         /// This prevents a bug where generating arg[1] could clobber argument
         /// registers (X2-X7) that were already loaded with arg[0]'s data.
+        ///
+        /// When registers are exhausted, spills remaining arguments to the stack.
         fn generateCallToLambda(self: *Self, code_offset: usize, args_span: anytype, ret_layout: layout.Idx) Error!ValueLocation {
             const args = self.store.getExprSpan(args_span);
 
-            // Pass 1: Generate all argument expressions and ensure results are
-            // in stable locations (stack or immediate). This prevents subsequent
-            // arg generation from clobbering earlier results via temp registers.
+            // Pass 1: Generate all argument expressions and calculate register needs
             const ArgInfo = struct {
                 loc: ValueLocation,
                 layout_idx: ?layout.Idx,
+                num_regs: u8,
             };
-            var arg_infos: [8]ArgInfo = undefined;
+            var arg_infos: [16]ArgInfo = undefined;
             for (args, 0..) |arg_id, i| {
-                if (i >= 8) break;
+                if (i >= 16) break;
                 const arg_loc = try self.generateExpr(arg_id);
                 const arg_layout = self.getExprLayout(arg_id);
-                arg_infos[i] = .{ .loc = arg_loc, .layout_idx = arg_layout };
+                const num_regs = self.calcArgRegCount(arg_loc, arg_layout);
+                arg_infos[i] = .{ .loc = arg_loc, .layout_idx = arg_layout, .num_regs = num_regs };
             }
 
-            // Pass 2: Load all argument values into registers from stable locations
-            var reg_idx: u8 = 0;
-            for (0..args.len) |i| {
-                if (i >= 8) break;
-                const arg_loc = arg_infos[i].loc;
-                const arg_layout = arg_infos[i].layout_idx;
-
-                // Handle i128/Dec arguments (need two registers)
-                const is_i128_arg = (arg_loc == .stack_i128 or arg_loc == .immediate_i128) or
-                    (arg_loc == .stack and arg_layout != null and
-                    (arg_layout.? == .dec or arg_layout.? == .i128 or arg_layout.? == .u128));
-                if (is_i128_arg) {
-                    const low_reg = self.getArgumentRegister(reg_idx);
-                    const high_reg = self.getArgumentRegister(reg_idx + 1);
-                    switch (arg_loc) {
-                        .stack_i128, .stack => |offset| {
-                            if (comptime builtin.cpu.arch == .aarch64) {
-                                try self.codegen.emitLoadStack(.w64, low_reg, offset);
-                                try self.codegen.emitLoadStack(.w64, high_reg, offset + 8);
-                            } else {
-                                try self.codegen.emitLoadStack(.w64, low_reg, offset);
-                                try self.codegen.emitLoadStack(.w64, high_reg, offset + 8);
-                            }
-                        },
-                        .immediate_i128 => |val| {
-                            const low: u64 = @truncate(@as(u128, @bitCast(val)));
-                            const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
-                            try self.codegen.emitLoadImm(low_reg, @bitCast(low));
-                            try self.codegen.emitLoadImm(high_reg, @bitCast(high));
-                        },
-                        else => unreachable,
+            // Calculate stack spill size (for arguments that don't fit in registers)
+            var stack_spill_size: i32 = 0;
+            {
+                var reg_count: u8 = 0;
+                for (0..args.len) |i| {
+                    if (i >= 16) break;
+                    const info = arg_infos[i];
+                    if (reg_count + info.num_regs <= max_arg_regs) {
+                        reg_count += info.num_regs;
+                    } else {
+                        stack_spill_size += @as(i32, info.num_regs) * 8;
+                        reg_count = max_arg_regs;
                     }
-                    reg_idx += 2;
-                    continue;
                 }
+            }
 
-                const arg_reg = self.getArgumentRegister(reg_idx);
+            // Allocate stack space for spilled arguments
+            if (stack_spill_size > 0) {
+                if (comptime builtin.cpu.arch == .x86_64) {
+                    try self.codegen.emit.subRegImm32(.w64, .RSP, stack_spill_size);
+                } else {
+                    try self.codegen.emit.subRegRegImm12(.w64, .ZRSP, .ZRSP, @intCast(stack_spill_size));
+                }
+            }
 
-                switch (arg_loc) {
-                    .general_reg => |reg| {
-                        // Should not happen after spilling in pass 1, but handle anyway
-                        if (reg != arg_reg) {
-                            try self.codegen.emit.movRegReg(.w64, arg_reg, reg);
-                        }
-                        reg_idx += 1;
-                    },
-                    .stack => |offset| {
-                        // Check if this is a multi-register struct (record, tag_union, tuple > 8 bytes)
-                        var handled_as_record = false;
-                        if (arg_layout != null and self.layout_store != null) {
-                            const ls = self.layout_store.?;
-                            const layout_val = ls.getLayout(arg_layout.?);
-                            if (layout_val.tag == .record or layout_val.tag == .tag_union or layout_val.tag == .tuple) {
-                                const size = ls.layoutSizeAlign(layout_val).size;
-                                if (size > 8) {
-                                    const num_regs: u8 = @intCast((size + 7) / 8);
-                                    var ri: u8 = 0;
-                                    while (ri < num_regs) : (ri += 1) {
-                                        const r = self.getArgumentRegister(reg_idx + ri);
-                                        try self.codegen.emitLoadStack(.w64, r, offset + @as(i32, ri) * 8);
-                                    }
-                                    reg_idx += num_regs;
-                                    handled_as_record = true;
-                                }
-                            }
-                        }
-                        if (!handled_as_record) {
-                            try self.codegen.emitLoadStack(.w64, arg_reg, offset);
-                            reg_idx += 1;
-                        }
-                    },
-                    .immediate_i64 => |val| {
-                        try self.codegen.emitLoadImm(arg_reg, @bitCast(val));
-                        reg_idx += 1;
-                    },
-                    .stack_str => |offset| {
-                        // Strings need 3 registers (24 bytes: ptr/data, len, capacity)
-                        const arg_reg0 = self.getArgumentRegister(reg_idx);
-                        const arg_reg1 = self.getArgumentRegister(reg_idx + 1);
-                        const arg_reg2 = self.getArgumentRegister(reg_idx + 2);
-                        if (comptime builtin.cpu.arch == .aarch64) {
-                            try self.codegen.emit.ldrRegMemSoff(.w64, arg_reg0, .FP, offset);
-                            try self.codegen.emit.ldrRegMemSoff(.w64, arg_reg1, .FP, offset + 8);
-                            try self.codegen.emit.ldrRegMemSoff(.w64, arg_reg2, .FP, offset + 16);
-                        } else {
-                            try self.codegen.emit.movRegMem(.w64, arg_reg0, .RBP, offset);
-                            try self.codegen.emit.movRegMem(.w64, arg_reg1, .RBP, offset + 8);
-                            try self.codegen.emit.movRegMem(.w64, arg_reg2, .RBP, offset + 16);
-                        }
-                        reg_idx += 3;
-                    },
-                    .list_stack => |info| {
-                        // Lists need 3 registers (24 bytes: ptr, len, capacity)
-                        const arg_reg0 = self.getArgumentRegister(reg_idx);
-                        const arg_reg1 = self.getArgumentRegister(reg_idx + 1);
-                        const arg_reg2 = self.getArgumentRegister(reg_idx + 2);
-                        if (comptime builtin.cpu.arch == .aarch64) {
-                            try self.codegen.emit.ldrRegMemSoff(.w64, arg_reg0, .FP, info.struct_offset);
-                            try self.codegen.emit.ldrRegMemSoff(.w64, arg_reg1, .FP, info.struct_offset + 8);
-                            try self.codegen.emit.ldrRegMemSoff(.w64, arg_reg2, .FP, info.struct_offset + 16);
-                        } else {
-                            try self.codegen.emit.movRegMem(.w64, arg_reg0, .RBP, info.struct_offset);
-                            try self.codegen.emit.movRegMem(.w64, arg_reg1, .RBP, info.struct_offset + 8);
-                            try self.codegen.emit.movRegMem(.w64, arg_reg2, .RBP, info.struct_offset + 16);
-                        }
-                        reg_idx += 3;
-                    },
-                    .stack_i128, .immediate_i128 => {
-                        // i128 needs 2 registers (handled by is_i128_arg above, but kept for exhaustiveness)
-                        const arg_reg0 = self.getArgumentRegister(reg_idx);
-                        const arg_reg1 = self.getArgumentRegister(reg_idx + 1);
+            // Pass 2: Load all argument values into registers or spill to stack
+            var reg_idx: u8 = 0;
+            var stack_arg_offset: i32 = 0;
+
+            for (0..args.len) |i| {
+                if (i >= 16) break;
+                const info = arg_infos[i];
+                const arg_loc = info.loc;
+                const arg_layout = info.layout_idx;
+
+                // Check if this argument fits in registers
+                if (reg_idx + info.num_regs <= max_arg_regs) {
+                    // Handle i128/Dec arguments (need two registers)
+                    const is_i128_arg = (arg_loc == .stack_i128 or arg_loc == .immediate_i128) or
+                        (arg_loc == .stack and arg_layout != null and
+                        (arg_layout.? == .dec or arg_layout.? == .i128 or arg_layout.? == .u128));
+                    if (is_i128_arg) {
+                        const low_reg = self.getArgumentRegister(reg_idx);
+                        const high_reg = self.getArgumentRegister(reg_idx + 1);
                         switch (arg_loc) {
-                            .stack_i128 => |offset| {
-                                if (comptime builtin.cpu.arch == .aarch64) {
-                                    try self.codegen.emit.ldrRegMemSoff(.w64, arg_reg0, .FP, offset);
-                                    try self.codegen.emit.ldrRegMemSoff(.w64, arg_reg1, .FP, offset + 8);
-                                } else {
-                                    try self.codegen.emit.movRegMem(.w64, arg_reg0, .RBP, offset);
-                                    try self.codegen.emit.movRegMem(.w64, arg_reg1, .RBP, offset + 8);
-                                }
+                            .stack_i128, .stack => |offset| {
+                                try self.codegen.emitLoadStack(.w64, low_reg, offset);
+                                try self.codegen.emitLoadStack(.w64, high_reg, offset + 8);
                             },
                             .immediate_i128 => |val| {
                                 const low: u64 = @truncate(@as(u128, @bitCast(val)));
                                 const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
-                                try self.codegen.emitLoadImm(arg_reg0, @bitCast(low));
-                                try self.codegen.emitLoadImm(arg_reg1, @bitCast(high));
+                                try self.codegen.emitLoadImm(low_reg, @bitCast(low));
+                                try self.codegen.emitLoadImm(high_reg, @bitCast(high));
                             },
                             else => unreachable,
                         }
                         reg_idx += 2;
-                    },
-                    .lambda_code => |lc| {
-                        // For lambda_code, pass the code offset as a pointer-sized value
-                        try self.codegen.emitLoadImm(arg_reg, @bitCast(@as(i64, @intCast(lc.code_offset))));
+                        continue;
+                    }
+
+                    if (info.num_regs == 3) {
+                        // List or string (24 bytes)
+                        const offset: i32 = switch (arg_loc) {
+                            .stack => |off| off,
+                            .list_stack => |li| li.struct_offset,
+                            .stack_str => |off| off,
+                            else => unreachable,
+                        };
+                        const reg0 = self.getArgumentRegister(reg_idx);
+                        const reg1 = self.getArgumentRegister(reg_idx + 1);
+                        const reg2 = self.getArgumentRegister(reg_idx + 2);
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            try self.codegen.emit.ldrRegMemSoff(.w64, reg0, .FP, offset);
+                            try self.codegen.emit.ldrRegMemSoff(.w64, reg1, .FP, offset + 8);
+                            try self.codegen.emit.ldrRegMemSoff(.w64, reg2, .FP, offset + 16);
+                        } else {
+                            try self.codegen.emit.movRegMem(.w64, reg0, .RBP, offset);
+                            try self.codegen.emit.movRegMem(.w64, reg1, .RBP, offset + 8);
+                            try self.codegen.emit.movRegMem(.w64, reg2, .RBP, offset + 16);
+                        }
+                        reg_idx += 3;
+                    } else if (info.num_regs > 1) {
+                        // Multi-register struct (record > 8 bytes)
+                        const offset: i32 = switch (arg_loc) {
+                            .stack => |off| off,
+                            else => {
+                                const arg_reg = self.getArgumentRegister(reg_idx);
+                                try self.moveToReg(arg_loc, arg_reg);
+                                reg_idx += 1;
+                                continue;
+                            },
+                        };
+                        var ri: u8 = 0;
+                        while (ri < info.num_regs) : (ri += 1) {
+                            const r = self.getArgumentRegister(reg_idx + ri);
+                            try self.codegen.emitLoadStack(.w64, r, offset + @as(i32, ri) * 8);
+                        }
+                        reg_idx += info.num_regs;
+                    } else {
+                        // Single register argument
+                        const arg_reg = self.getArgumentRegister(reg_idx);
+                        switch (arg_loc) {
+                            .general_reg => |reg| {
+                                if (reg != arg_reg) {
+                                    try self.codegen.emit.movRegReg(.w64, arg_reg, reg);
+                                }
+                            },
+                            .stack => |offset| {
+                                try self.codegen.emitLoadStack(.w64, arg_reg, offset);
+                            },
+                            .immediate_i64 => |val| {
+                                try self.codegen.emitLoadImm(arg_reg, @bitCast(val));
+                            },
+                            .lambda_code => |lc| {
+                                try self.codegen.emitLoadImm(arg_reg, @bitCast(@as(i64, @intCast(lc.code_offset))));
+                            },
+                            .closure_value => |cv| {
+                                try self.codegen.emitLoadStack(.w64, arg_reg, cv.stack_offset);
+                            },
+                            else => {
+                                try self.moveToReg(arg_loc, arg_reg);
+                            },
+                        }
                         reg_idx += 1;
-                    },
-                    .closure_value => |cv| {
-                        // For closure_value, pass the stack offset pointer
-                        try self.codegen.emitLoadStack(.w64, arg_reg, cv.stack_offset);
-                        reg_idx += 1;
-                    },
-                    else => {
-                        // For other types (float_reg, immediate_f64), skip
-                        reg_idx += 1;
-                    },
+                    }
+                } else {
+                    // Spill to stack - registers exhausted
+                    try self.spillArgToStack(arg_loc, stack_arg_offset, info.num_regs);
+                    stack_arg_offset += @as(i32, info.num_regs) * 8;
+                    reg_idx = max_arg_regs;
                 }
             }
 
             // Emit call to the procedure
             try self.emitCallToOffset(code_offset);
+
+            // Clean up stack space for spilled arguments
+            if (stack_spill_size > 0) {
+                if (comptime builtin.cpu.arch == .x86_64) {
+                    try self.codegen.emit.addRegImm32(.w64, .RSP, stack_spill_size);
+                } else {
+                    try self.codegen.emit.addRegRegImm12(.w64, .ZRSP, .ZRSP, @intCast(stack_spill_size));
+                }
+            }
 
             // Handle i128/Dec return values (returned in two registers)
             if (ret_layout == .i128 or ret_layout == .u128 or ret_layout == .dec) {
@@ -12938,7 +13392,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             }
         }
 
-        /// Bind procedure parameters to argument registers
+        /// Bind procedure parameters to argument registers.
+        /// Handles stack spilling when arguments exceed available registers.
         fn bindProcParams(self: *Self, params: mono.MonoPatternSpan, param_layouts: LayoutIdxSpan) Error!void {
             const pattern_ids = self.store.getPatternSpan(params);
             const layouts = self.store.getLayoutIdxSpan(param_layouts);
@@ -12946,6 +13401,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // Track current register index separately from parameter index
             // because 128-bit parameters consume 2 registers
             var reg_idx: u8 = 0;
+            // Track offset for stack arguments (first stack arg at RBP+16/FP+16)
+            var stack_arg_offset: i32 = 16;
 
             for (pattern_ids, 0..) |pattern_id, param_idx| {
                 const pattern = self.store.getPattern(pattern_id);
@@ -12959,70 +13416,44 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                             break :blk param_layout == .i128 or param_layout == .u128 or param_layout == .dec;
                         } else false;
 
-                        if (is_128bit) {
-                            // 128-bit types need to be spilled to stack
-                            // They arrive in two consecutive registers (e.g., X0+X1)
-                            if (comptime builtin.cpu.arch == .aarch64) {
-                                // For aarch64, 128-bit values must be 16-byte aligned
-                                // and use an even-odd register pair
-                                if (reg_idx % 2 != 0) {
-                                    reg_idx += 1; // Skip to even register
+                        // Check if this is a list type (24 bytes)
+                        const is_list = if (param_idx < layouts.len) blk: {
+                            const param_layout = layouts[param_idx];
+                            if (self.layout_store) |ls| {
+                                if (@intFromEnum(param_layout) >= ls.layouts.len()) {
+                                    break :blk false;
                                 }
-
-                                const low_reg = self.getArgumentRegister(reg_idx);
-                                const high_reg = self.getArgumentRegister(reg_idx + 1);
-
-                                // Allocate 16-byte stack slot
-                                const stack_offset = self.codegen.allocStack(16);
-
-                                // Store both registers to stack
-                                try self.codegen.emitStoreStack(.w64, stack_offset, low_reg);
-                                try self.codegen.emitStoreStack(.w64, stack_offset + 8, high_reg);
-
-                                // Track as stack_i128
-                                try self.symbol_locations.put(symbol_key, .{ .stack_i128 = stack_offset });
-
-                                // Mark both registers as NOT in use since we spilled them
-                                // (Actually, don't mark them in use since we moved to stack)
-                                reg_idx += 2;
-                            } else {
-                                // x86_64: 128-bit values are typically passed on stack or in RDI+RSI
-                                // For now, handle like aarch64
-                                const low_reg = self.getArgumentRegister(reg_idx);
-                                const high_reg = self.getArgumentRegister(reg_idx + 1);
-
-                                const stack_offset = self.codegen.allocStack(16);
-                                try self.codegen.emitStoreStack(.w64, stack_offset, low_reg);
-                                try self.codegen.emitStoreStack(.w64, stack_offset + 8, high_reg);
-
-                                try self.symbol_locations.put(symbol_key, .{ .stack_i128 = stack_offset });
-                                reg_idx += 2;
+                                const layout_val = ls.getLayout(param_layout);
+                                break :blk layout_val.tag == .list or layout_val.tag == .list_of_zst;
                             }
-                        } else {
-                            // Check if this is a list type (24 bytes)
-                            const is_list = if (param_idx < layouts.len) blk: {
-                                const param_layout = layouts[param_idx];
-                                if (self.layout_store) |ls| {
-                                    // Bounds check for cross-module layouts
-                                    if (@intFromEnum(param_layout) >= ls.layouts.len()) {
-                                        break :blk false;
+                            break :blk false;
+                        } else false;
+
+                        // Determine number of registers needed
+                        const num_regs: u8 = if (is_128bit) 2 else if (is_list) 3 else 1;
+
+                        if (reg_idx + num_regs <= max_arg_regs) {
+                            // Fits in registers - use register-based loading
+                            if (is_128bit) {
+                                if (comptime builtin.cpu.arch == .aarch64) {
+                                    if (reg_idx % 2 != 0) {
+                                        reg_idx += 1; // Skip to even register for alignment
                                     }
-                                    const layout_val = ls.getLayout(param_layout);
-                                    break :blk layout_val.tag == .list or layout_val.tag == .list_of_zst;
                                 }
-                                break :blk false;
-                            } else false;
 
-                            if (is_list) {
-                                // List types arrive in 3 consecutive registers (X0+X1+X2)
-                                // Spill to 24-byte stack slot
+                                const low_reg = self.getArgumentRegister(reg_idx);
+                                const high_reg = self.getArgumentRegister(reg_idx + 1);
+                                const stack_offset = self.codegen.allocStack(16);
+                                try self.codegen.emitStoreStack(.w64, stack_offset, low_reg);
+                                try self.codegen.emitStoreStack(.w64, stack_offset + 8, high_reg);
+                                try self.symbol_locations.put(symbol_key, .{ .stack_i128 = stack_offset });
+                                reg_idx += 2;
+                            } else if (is_list) {
                                 const stack_offset = self.codegen.allocStackSlot(24);
-
                                 if (comptime builtin.cpu.arch == .aarch64) {
                                     const reg0 = self.getArgumentRegister(reg_idx);
                                     const reg1 = self.getArgumentRegister(reg_idx + 1);
                                     const reg2 = self.getArgumentRegister(reg_idx + 2);
-
                                     try self.codegen.emit.strRegMemSoff(.w64, reg0, .FP, stack_offset);
                                     try self.codegen.emit.strRegMemSoff(.w64, reg1, .FP, stack_offset + 8);
                                     try self.codegen.emit.strRegMemSoff(.w64, reg2, .FP, stack_offset + 16);
@@ -13030,32 +13461,55 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                                     const reg0 = self.getArgumentRegister(reg_idx);
                                     const reg1 = self.getArgumentRegister(reg_idx + 1);
                                     const reg2 = self.getArgumentRegister(reg_idx + 2);
-
                                     try self.codegen.emit.movMemReg(.w64, .RBP, stack_offset, reg0);
                                     try self.codegen.emit.movMemReg(.w64, .RBP, stack_offset + 8, reg1);
                                     try self.codegen.emit.movMemReg(.w64, .RBP, stack_offset + 16, reg2);
                                 }
-
-                                // Store as .list_stack so that when this parameter is used as an argument
-                                // or returned, it's properly detected as a list
                                 try self.symbol_locations.put(symbol_key, .{ .list_stack = .{
                                     .struct_offset = stack_offset,
-                                    .data_offset = 0, // Data location is stored in the list struct itself
-                                    .num_elements = 0, // Unknown at compile time
+                                    .data_offset = 0,
+                                    .num_elements = 0,
                                 } });
                                 reg_idx += 3;
                             } else {
-                                // Normal 64-bit or smaller parameter — spill to stack
+                                // Normal 64-bit or smaller parameter
                                 const arg_reg = self.getArgumentRegister(reg_idx);
                                 const stack_offset = self.codegen.allocStackSlot(8);
                                 try self.codegen.emitStoreStack(.w64, stack_offset, arg_reg);
                                 try self.symbol_locations.put(symbol_key, .{ .stack = stack_offset });
                                 reg_idx += 1;
                             }
+                        } else {
+                            // Doesn't fit in registers - read from caller's stack frame
+                            const size: u32 = @as(u32, num_regs) * 8;
+                            const local_stack_offset = self.codegen.allocStackSlot(@intCast(size));
+                            try self.copyFromCallerStack(stack_arg_offset, local_stack_offset, num_regs);
+
+                            // Set up symbol location based on type
+                            if (is_128bit) {
+                                try self.symbol_locations.put(symbol_key, .{ .stack_i128 = local_stack_offset });
+                            } else if (is_list) {
+                                try self.symbol_locations.put(symbol_key, .{ .list_stack = .{
+                                    .struct_offset = local_stack_offset,
+                                    .data_offset = 0,
+                                    .num_elements = 0,
+                                } });
+                            } else {
+                                try self.symbol_locations.put(symbol_key, .{ .stack = local_stack_offset });
+                            }
+
+                            stack_arg_offset += @as(i32, num_regs) * 8;
+                            reg_idx = max_arg_regs; // Mark all registers as consumed
                         }
                     },
                     else => {
                         // Complex parameter patterns not yet supported
+                        // Assume 1 register for now
+                        if (reg_idx < max_arg_regs) {
+                            reg_idx += 1;
+                        } else {
+                            stack_arg_offset += 8;
+                        }
                     },
                 }
             }

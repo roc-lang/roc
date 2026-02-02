@@ -1827,7 +1827,7 @@ test "early return: basic ? operator with Ok" {
     try runExpectI64(
         \\{
         \\    compute = |x| Ok(x?)
-        \\    match compute(Ok(42)) { Ok(v) => v, _ => 0 }
+        \\    match compute(Ok(42.I64)) { Ok(v) => v, _ => 0 }
         \\}
     , 42, .no_trace);
 }
@@ -2839,7 +2839,7 @@ test "diag: lambda wrapping try suffix result in Ok" {
     try runExpectI64(
         \\{
         \\    compute = |x| Ok(x?)
-        \\    match compute(Ok(42)) { Ok(v) => v, _ => 0 }
+        \\    match compute(Ok(42.I64)) { Ok(v) => v, _ => 0 }
         \\}
     , 42, .no_trace);
 }
