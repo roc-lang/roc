@@ -202,3 +202,92 @@ test "execute aarch64 code" {
     const result = mem.callReturnI64();
     try std.testing.expectEqual(@as(i64, 42), result);
 }
+
+test "execute x86_64 with result ptr" {
+    if (builtin.cpu.arch != .x86_64) return error.SkipZigTest;
+
+    // Windows x64: RCX = result_ptr, RDX = roc_ops (ignored)
+    // System V: RDI = result_ptr, RSI = roc_ops (ignored)
+    // mov qword [arg0], 42; ret
+    const code = if (builtin.os.tag == .windows)
+        // Windows: mov qword ptr [rcx], 42; ret
+        [_]u8{ 0x48, 0xC7, 0x01, 0x2A, 0x00, 0x00, 0x00, 0xC3 }
+    else
+        // System V: mov qword ptr [rdi], 42; ret
+        [_]u8{ 0x48, 0xC7, 0x07, 0x2A, 0x00, 0x00, 0x00, 0xC3 };
+
+    var mem = try ExecutableMemory.init(&code);
+    defer mem.deinit();
+
+    var result: i64 = 0;
+    var dummy_roc_ops: u64 = 0xDEADBEEF;
+    mem.callWithResultPtrAndRocOps(@ptrCast(&result), @ptrCast(&dummy_roc_ops));
+    try std.testing.expectEqual(@as(i64, 42), result);
+}
+
+test "execute x86_64 with full prologue/epilogue" {
+    if (builtin.cpu.arch != .x86_64) return error.SkipZigTest;
+
+    // This mimics the generated code structure:
+    // - Prologue: push rbp; mov rbp,rsp; push rbx; push r12; sub rsp,1024
+    // - Save args: mov rbx, rcx/rdi (result ptr); mov r12, rdx/rsi (roc_ops - ignored)
+    // - Compute: mov rax, 42
+    // - Store result: mov [rbx], rax
+    // - Epilogue: add rsp,1024; pop r12; pop rbx; pop rbp; ret
+
+    const code = if (builtin.os.tag == .windows) blk: {
+        // Windows x64: RCX = result_ptr, RDX = roc_ops
+        break :blk [_]u8{
+            // Prologue
+            0x55, // push rbp
+            0x48, 0x89, 0xE5, // mov rbp, rsp
+            0x53, // push rbx
+            0x41, 0x54, // push r12
+            0x48, 0x81, 0xEC, 0x00, 0x04, 0x00, 0x00, // sub rsp, 1024
+            // Save args
+            0x48, 0x89, 0xCB, // mov rbx, rcx (result ptr)
+            0x49, 0x89, 0xD4, // mov r12, rdx (roc_ops)
+            // Compute result
+            0x48, 0xC7, 0xC0, 0x2A, 0x00, 0x00, 0x00, // mov rax, 42
+            // Store to result ptr
+            0x48, 0x89, 0x03, // mov [rbx], rax
+            // Epilogue
+            0x48, 0x81, 0xC4, 0x00, 0x04, 0x00, 0x00, // add rsp, 1024
+            0x41, 0x5C, // pop r12
+            0x5B, // pop rbx
+            0x5D, // pop rbp
+            0xC3, // ret
+        };
+    } else blk: {
+        // System V: RDI = result_ptr, RSI = roc_ops
+        break :blk [_]u8{
+            // Prologue
+            0x55, // push rbp
+            0x48, 0x89, 0xE5, // mov rbp, rsp
+            0x53, // push rbx
+            0x41, 0x54, // push r12
+            0x48, 0x81, 0xEC, 0x00, 0x04, 0x00, 0x00, // sub rsp, 1024
+            // Save args
+            0x48, 0x89, 0xFB, // mov rbx, rdi (result ptr)
+            0x49, 0x89, 0xF4, // mov r12, rsi (roc_ops)
+            // Compute result
+            0x48, 0xC7, 0xC0, 0x2A, 0x00, 0x00, 0x00, // mov rax, 42
+            // Store to result ptr
+            0x48, 0x89, 0x03, // mov [rbx], rax
+            // Epilogue
+            0x48, 0x81, 0xC4, 0x00, 0x04, 0x00, 0x00, // add rsp, 1024
+            0x41, 0x5C, // pop r12
+            0x5B, // pop rbx
+            0x5D, // pop rbp
+            0xC3, // ret
+        };
+    };
+
+    var mem = try ExecutableMemory.init(&code);
+    defer mem.deinit();
+
+    var result: i64 = 0;
+    var dummy_roc_ops: u64 = 0xDEADBEEF;
+    mem.callWithResultPtrAndRocOps(@ptrCast(&result), @ptrCast(&dummy_roc_ops));
+    try std.testing.expectEqual(@as(i64, 42), result);
+}

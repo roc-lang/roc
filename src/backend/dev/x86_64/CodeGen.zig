@@ -4,11 +4,13 @@
 //! function prologues/epilogues and instruction selection.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 
 const Emit = @import("Emit.zig");
 const Registers = @import("Registers.zig");
 const SystemV = @import("SystemV.zig");
+const WindowsFastcall = @import("WindowsFastcall.zig");
 const Relocation = @import("../Relocation.zig").Relocation;
 const GenericCodeGen = @import("../CodeGen.zig");
 
@@ -16,10 +18,11 @@ const GeneralReg = Registers.GeneralReg;
 const FloatReg = Registers.FloatReg;
 const RegisterWidth = Registers.RegisterWidth;
 
-/// x86_64 code generator for System V ABI (Linux, macOS, BSD)
+/// x86_64 code generator with OS-specific calling convention
 pub const SystemVCodeGen = struct {
     const Self = @This();
-    const CC = SystemV;
+    /// Use Windows x64 calling convention on Windows, System V on other platforms
+    const CC = if (builtin.os.tag == .windows) WindowsFastcall else SystemV;
 
     /// Number of general-purpose registers
     const NUM_GENERAL_REGS = 16;
@@ -27,13 +30,22 @@ pub const SystemVCodeGen = struct {
     const NUM_FLOAT_REGS = 16;
 
     /// Bitmask of callee-saved general registers available for allocation
-    /// RBX, R12, R13, R14, R15 (not RBP - it's the frame pointer)
-    const CALLEE_SAVED_GENERAL_MASK: u32 =
+    /// System V: RBX, R12, R13, R14, R15 (not RBP - it's the frame pointer)
+    /// Windows: RBX, RSI, RDI, R12, R13, R14, R15 (not RBP - it's the frame pointer)
+    const CALLEE_SAVED_GENERAL_MASK: u32 = if (builtin.os.tag == .windows)
         (1 << @intFromEnum(GeneralReg.RBX)) |
-        (1 << @intFromEnum(GeneralReg.R12)) |
-        (1 << @intFromEnum(GeneralReg.R13)) |
-        (1 << @intFromEnum(GeneralReg.R14)) |
-        (1 << @intFromEnum(GeneralReg.R15));
+            (1 << @intFromEnum(GeneralReg.RSI)) |
+            (1 << @intFromEnum(GeneralReg.RDI)) |
+            (1 << @intFromEnum(GeneralReg.R12)) |
+            (1 << @intFromEnum(GeneralReg.R13)) |
+            (1 << @intFromEnum(GeneralReg.R14)) |
+            (1 << @intFromEnum(GeneralReg.R15))
+    else
+        (1 << @intFromEnum(GeneralReg.RBX)) |
+            (1 << @intFromEnum(GeneralReg.R12)) |
+            (1 << @intFromEnum(GeneralReg.R13)) |
+            (1 << @intFromEnum(GeneralReg.R14)) |
+            (1 << @intFromEnum(GeneralReg.R15));
 
     emit: Emit,
     allocator: Allocator,
@@ -345,16 +357,30 @@ pub const SystemVCodeGen = struct {
     /// Callee-saved register stack offsets (relative to RBP).
     /// These are fixed offsets that don't depend on which registers are saved,
     /// which simplifies the deferred prologue pattern where we generate body first.
-    const CALLEE_SAVED_SLOTS = [_]struct { reg: GeneralReg, offset: i32 }{
-        .{ .reg = .RBX, .offset = -8 },
-        .{ .reg = .R12, .offset = -16 },
-        .{ .reg = .R13, .offset = -24 },
-        .{ .reg = .R14, .offset = -32 },
-        .{ .reg = .R15, .offset = -40 },
-    };
+    /// Windows has 7 callee-saved regs (RBX, RSI, RDI, R12-R15), System V has 5 (RBX, R12-R15).
+    const CALLEE_SAVED_SLOTS = if (builtin.os.tag == .windows)
+        [_]struct { reg: GeneralReg, offset: i32 }{
+            .{ .reg = .RBX, .offset = -8 },
+            .{ .reg = .RSI, .offset = -16 },
+            .{ .reg = .RDI, .offset = -24 },
+            .{ .reg = .R12, .offset = -32 },
+            .{ .reg = .R13, .offset = -40 },
+            .{ .reg = .R14, .offset = -48 },
+            .{ .reg = .R15, .offset = -56 },
+        }
+    else
+        [_]struct { reg: GeneralReg, offset: i32 }{
+            .{ .reg = .RBX, .offset = -8 },
+            .{ .reg = .R12, .offset = -16 },
+            .{ .reg = .R13, .offset = -24 },
+            .{ .reg = .R14, .offset = -32 },
+            .{ .reg = .R15, .offset = -40 },
+        };
 
-    /// Size of the callee-saved register area (5 registers * 8 bytes each)
-    pub const CALLEE_SAVED_AREA_SIZE: i32 = 40;
+    /// Size of the callee-saved register area
+    /// Windows: 7 registers * 8 bytes = 56 bytes
+    /// System V: 5 registers * 8 bytes = 40 bytes
+    pub const CALLEE_SAVED_AREA_SIZE: i32 = if (builtin.os.tag == .windows) 56 else 40;
 
     /// Emit function prologue (called at start of function)
     /// Note: Call this AFTER register allocation is complete to know which
@@ -823,9 +849,12 @@ test "use callee-saved registers when caller-saved exhausted" {
     var cg = SystemVCodeGen.init(std.testing.allocator);
     defer cg.deinit();
 
-    // Allocate all caller-saved registers (9 in System V: RAX, RCX, RDX, RSI, RDI, R8-R11)
+    // Allocate all caller-saved registers
+    // System V: 9 (RAX, RCX, RDX, RSI, RDI, R8-R11)
+    // Windows: 7 (RAX, RCX, RDX, R8-R11)
+    const num_caller_saved: usize = if (builtin.os.tag == .windows) 7 else 9;
     var regs: [9]GeneralReg = undefined;
-    for (0..9) |i| {
+    for (0..num_caller_saved) |i| {
         regs[i] = try cg.allocGeneralFor(@intCast(i));
     }
 
@@ -833,30 +862,35 @@ test "use callee-saved registers when caller-saved exhausted" {
     try std.testing.expectEqual(@as(u16, 0), cg.callee_saved_used);
 
     // Next allocation should use a callee-saved register
-    const callee_reg = try cg.allocGeneralFor(9);
+    const callee_reg = try cg.allocGeneralFor(@intCast(num_caller_saved));
 
     // Now callee_saved_used should have a bit set
     try std.testing.expect(cg.callee_saved_used != 0);
 
     // The register should be one of the callee-saved ones
-    try std.testing.expect(SystemV.isCalleeSaved(callee_reg));
+    // Use the OS-appropriate calling convention module
+    const isCalleeSaved = if (builtin.os.tag == .windows) WindowsFastcall.isCalleeSaved else SystemV.isCalleeSaved;
+    try std.testing.expect(isCalleeSaved(callee_reg));
 }
 
 test "spill register when all exhausted" {
     var cg = SystemVCodeGen.init(std.testing.allocator);
     defer cg.deinit();
 
-    // Allocate all available registers (9 caller-saved + 5 callee-saved = 14)
+    // Allocate all available registers
+    // System V: 9 caller-saved + 5 callee-saved = 14
+    // Windows: 7 caller-saved + 7 callee-saved = 14
     // Note: RSP and RBP are not available
+    const total_regs: usize = 14;
     var regs: [14]GeneralReg = undefined;
-    for (0..14) |i| {
+    for (0..total_regs) |i| {
         regs[i] = try cg.allocGeneralFor(@intCast(i));
     }
 
     // At this point all registers should be allocated
     // The next allocation should trigger a spill
     const initial_code_len = cg.getCode().len;
-    const spilled_reg = try cg.allocGeneralFor(14);
+    const spilled_reg = try cg.allocGeneralFor(@intCast(total_regs));
 
     // Code should have been emitted (the spill store)
     try std.testing.expect(cg.getCode().len > initial_code_len);
@@ -875,13 +909,14 @@ test "reload spilled value" {
     var cg = SystemVCodeGen.init(std.testing.allocator);
     defer cg.deinit();
 
-    // Allocate all registers
-    for (0..14) |i| {
+    // Allocate all registers (14 total: RSP and RBP are not available)
+    const total_regs: usize = 14;
+    for (0..total_regs) |i| {
         _ = try cg.allocGeneralFor(@intCast(i));
     }
 
     // Allocate one more to cause a spill
-    _ = try cg.allocGeneralFor(14);
+    _ = try cg.allocGeneralFor(@intCast(total_regs));
 
     // Local 0 should be on the stack now
     const loc0 = cg.locals.get(0);
@@ -912,7 +947,10 @@ test "prologue saves callee-saved registers with MOV" {
     defer cg.deinit();
 
     // Use some callee-saved registers by exhausting caller-saved first
-    for (0..11) |i| {
+    // System V: 9 caller-saved, need 11 total to use 2 callee-saved
+    // Windows: 7 caller-saved, need 9 total to use 2 callee-saved
+    const num_caller_saved: usize = if (builtin.os.tag == .windows) 7 else 9;
+    for (0..num_caller_saved + 2) |i| {
         _ = try cg.allocGeneralFor(@intCast(i));
     }
 
@@ -922,16 +960,22 @@ test "prologue saves callee-saved registers with MOV" {
     const code = cg.getCode();
     // Basic prologue: push rbp (1) + mov rbp, rsp (3) = 4 bytes
     // Plus MOV saves for callee-saved registers (each MOV [rbp+disp], reg is 4-7 bytes)
-    // With 2 callee-saved regs (RBX and R12), we expect ~4 + 2*7 = ~18 bytes
+    // With 2 callee-saved regs, we expect ~4 + 2*7 = ~18 bytes
     try std.testing.expect(code.len > 4);
 
     // First byte should still be push rbp (0x55)
     try std.testing.expectEqual(@as(u8, 0x55), code[0]);
 
-    // callee_saved_used should have bits set for RBX and R12
+    // callee_saved_used should have bits set for at least 2 callee-saved registers
     try std.testing.expect(cg.callee_saved_used != 0);
-    try std.testing.expect((cg.callee_saved_used & (@as(u16, 1) << @intFromEnum(GeneralReg.RBX))) != 0);
-    try std.testing.expect((cg.callee_saved_used & (@as(u16, 1) << @intFromEnum(GeneralReg.R12))) != 0);
+    // Count number of bits set
+    var bits_set: u32 = 0;
+    var mask = cg.callee_saved_used;
+    while (mask != 0) {
+        bits_set += 1;
+        mask &= mask - 1;
+    }
+    try std.testing.expect(bits_set >= 2);
 }
 
 test "free register returns it to correct pool" {
@@ -940,14 +984,17 @@ test "free register returns it to correct pool" {
 
     // Allocate a caller-saved register
     const caller_reg = try cg.allocGeneralFor(0);
-    try std.testing.expect(!SystemV.isCalleeSaved(caller_reg));
+    const isCalleeSaved = if (builtin.os.tag == .windows) WindowsFastcall.isCalleeSaved else SystemV.isCalleeSaved;
+    try std.testing.expect(!isCalleeSaved(caller_reg));
 
     // Exhaust caller-saved to get a callee-saved one
-    for (1..10) |i| {
+    // System V: 9 caller-saved, Windows: 7 caller-saved
+    const num_caller_saved: usize = if (builtin.os.tag == .windows) 7 else 9;
+    for (1..num_caller_saved + 1) |i| {
         _ = try cg.allocGeneralFor(@intCast(i));
     }
-    const callee_reg = try cg.allocGeneralFor(10);
-    try std.testing.expect(SystemV.isCalleeSaved(callee_reg));
+    const callee_reg = try cg.allocGeneralFor(@intCast(num_caller_saved + 1));
+    try std.testing.expect(isCalleeSaved(callee_reg));
 
     // Free both
     cg.freeGeneral(caller_reg);
@@ -964,8 +1011,10 @@ test "epilogue restores callee-saved registers with MOV" {
     var cg = SystemVCodeGen.init(std.testing.allocator);
     defer cg.deinit();
 
-    // Use some callee-saved registers
-    for (0..11) |i| {
+    // Use some callee-saved registers by allocating more than caller-saved count
+    // System V: 9 caller-saved, Windows: 7 caller-saved
+    const num_caller_saved: usize = if (builtin.os.tag == .windows) 7 else 9;
+    for (0..num_caller_saved + 2) |i| {
         _ = try cg.allocGeneralFor(@intCast(i));
     }
 
@@ -986,6 +1035,9 @@ test "epilogue restores callee-saved registers with MOV" {
 }
 
 test "CALLEE_SAVED_AREA_SIZE constant" {
-    // Verify the constant matches the expected size for 5 callee-saved registers
-    try std.testing.expectEqual(@as(i32, 40), SystemVCodeGen.CALLEE_SAVED_AREA_SIZE);
+    // Verify the constant matches the expected size for callee-saved registers
+    // Windows: 7 registers * 8 bytes = 56 bytes
+    // System V: 5 registers * 8 bytes = 40 bytes
+    const expected: i32 = if (builtin.os.tag == .windows) 56 else 40;
+    try std.testing.expectEqual(expected, SystemVCodeGen.CALLEE_SAVED_AREA_SIZE);
 }

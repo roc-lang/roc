@@ -113,6 +113,192 @@ test "longjmp with value 0 returns 1" {
     }
 }
 
+test "setjmp followed by function pointer call" {
+    // Allocate executable memory and call code after setjmp
+    // This tests the same pattern as dev_evaluator.callWithCrashProtection
+    const os = std.os;
+
+    // Simple code: mov qword ptr [rcx], 42; ret
+    // Windows: first arg in RCX
+    const code = [_]u8{ 0x48, 0xC7, 0x01, 0x2A, 0x00, 0x00, 0x00, 0xC3 };
+
+    // Allocate executable memory
+    const mem = os.windows.VirtualAlloc(
+        null,
+        4096,
+        os.windows.MEM_COMMIT | os.windows.MEM_RESERVE,
+        os.windows.PAGE_READWRITE,
+    ) catch return error.VirtualAllocFailed;
+    defer _ = os.windows.VirtualFree(mem, 0, os.windows.MEM_RELEASE);
+
+    // Copy code
+    const ptr: [*]u8 = @ptrCast(mem);
+    @memcpy(ptr[0..code.len], &code);
+
+    // Make executable
+    var old_protect: os.windows.DWORD = undefined;
+    os.windows.VirtualProtect(
+        mem,
+        4096,
+        os.windows.PAGE_EXECUTE_READ,
+        &old_protect,
+    ) catch return error.VirtualProtectFailed;
+
+    // Call pattern: setjmp, then call the function
+    var result: i64 = 0;
+
+    var jmp_buf: JmpBuf = undefined;
+    if (setjmp(&jmp_buf) == 0) {
+        const func: *const fn (*i64) callconv(.c) void = @ptrCast(@alignCast(mem));
+        func(&result);
+    } else {
+        return error.UnexpectedLongjmp;
+    }
+
+    try std.testing.expectEqual(@as(i64, 42), result);
+}
+
+test "setjmp with full prologue/epilogue code" {
+    // Test with code that has full Windows x64 prologue/epilogue like MonoExprCodeGen generates
+    const os = std.os;
+
+    // This mimics MonoExprCodeGen's generated code structure:
+    // - Prologue: push rbp; mov rbp,rsp; push rbx; push r12; sub rsp,1024
+    // - Save args: mov rbx, rcx (result ptr); mov r12, rdx (roc_ops - ignored)
+    // - Compute: mov rax, 42
+    // - Store result: mov [rbx], rax
+    // - Epilogue: add rsp,1024; pop r12; pop rbx; pop rbp; ret
+    const code = [_]u8{
+        // Prologue
+        0x55, // push rbp
+        0x48, 0x89, 0xE5, // mov rbp, rsp
+        0x53, // push rbx
+        0x41, 0x54, // push r12
+        0x48, 0x81, 0xEC, 0x00, 0x04, 0x00, 0x00, // sub rsp, 1024
+        // Save args
+        0x48, 0x89, 0xCB, // mov rbx, rcx (result ptr)
+        0x49, 0x89, 0xD4, // mov r12, rdx (roc_ops)
+        // Compute result
+        0x48, 0xC7, 0xC0, 0x2A, 0x00, 0x00, 0x00, // mov rax, 42
+        // Store to result ptr
+        0x48, 0x89, 0x03, // mov [rbx], rax
+        // Epilogue
+        0x48, 0x81, 0xC4, 0x00, 0x04, 0x00, 0x00, // add rsp, 1024
+        0x41, 0x5C, // pop r12
+        0x5B, // pop rbx
+        0x5D, // pop rbp
+        0xC3, // ret
+    };
+
+    // Allocate executable memory
+    const mem = os.windows.VirtualAlloc(
+        null,
+        4096,
+        os.windows.MEM_COMMIT | os.windows.MEM_RESERVE,
+        os.windows.PAGE_READWRITE,
+    ) catch return error.VirtualAllocFailed;
+    defer _ = os.windows.VirtualFree(mem, 0, os.windows.MEM_RELEASE);
+
+    // Copy code
+    const ptr: [*]u8 = @ptrCast(mem);
+    @memcpy(ptr[0..code.len], &code);
+
+    // Make executable
+    var old_protect: os.windows.DWORD = undefined;
+    os.windows.VirtualProtect(
+        mem,
+        4096,
+        os.windows.PAGE_EXECUTE_READ,
+        &old_protect,
+    ) catch return error.VirtualProtectFailed;
+
+    // Call pattern: setjmp, then call the function with 2 args
+    var result: i64 = 0;
+    var dummy_roc_ops: u64 = 0xDEADBEEF;
+
+    var jmp_buf: JmpBuf = undefined;
+    if (setjmp(&jmp_buf) == 0) {
+        const func: *const fn (*i64, *u64) callconv(.c) void = @ptrCast(@alignCast(mem));
+        func(&result, &dummy_roc_ops);
+    } else {
+        return error.UnexpectedLongjmp;
+    }
+
+    try std.testing.expectEqual(@as(i64, 42), result);
+}
+
+test "setjmp with i128 result (Dec pattern)" {
+    // Test the exact pattern used for Dec (i128) results
+    const os = std.os;
+
+    // Code that stores a 128-bit value (like Dec):
+    // - mov rax, low_64_bits
+    // - mov [rbx+0], rax
+    // - mov rax, high_64_bits
+    // - mov [rbx+8], rax
+    const code = [_]u8{
+        // Prologue
+        0x55, // push rbp
+        0x48, 0x89, 0xE5, // mov rbp, rsp
+        0x53, // push rbx
+        0x41, 0x54, // push r12
+        0x48, 0x81, 0xEC, 0x00, 0x04, 0x00, 0x00, // sub rsp, 1024
+        // Save args
+        0x48, 0x89, 0xCB, // mov rbx, rcx (result ptr)
+        0x49, 0x89, 0xD4, // mov r12, rdx (roc_ops)
+        // Load and store low 64 bits (42 as Dec = 42 * 10^18)
+        0x48, 0xB8, 0x00, 0x00, 0x64, 0xA7, 0xB3, 0xB6, 0xE0, 0x0D, // mov rax, 0x0DE0B6B3A7640000
+        0x48, 0x89, 0x03, // mov [rbx], rax
+        // Load and store high 64 bits (0 for positive Dec)
+        0x48, 0xC7, 0xC0, 0x00, 0x00, 0x00, 0x00, // mov rax, 0
+        0x48, 0x89, 0x43, 0x08, // mov [rbx+8], rax
+        // Epilogue
+        0x48, 0x81, 0xC4, 0x00, 0x04, 0x00, 0x00, // add rsp, 1024
+        0x41, 0x5C, // pop r12
+        0x5B, // pop rbx
+        0x5D, // pop rbp
+        0xC3, // ret
+    };
+
+    // Allocate executable memory
+    const mem = os.windows.VirtualAlloc(
+        null,
+        4096,
+        os.windows.MEM_COMMIT | os.windows.MEM_RESERVE,
+        os.windows.PAGE_READWRITE,
+    ) catch return error.VirtualAllocFailed;
+    defer _ = os.windows.VirtualFree(mem, 0, os.windows.MEM_RELEASE);
+
+    // Copy code
+    const ptr: [*]u8 = @ptrCast(mem);
+    @memcpy(ptr[0..code.len], &code);
+
+    // Make executable
+    var old_protect: os.windows.DWORD = undefined;
+    os.windows.VirtualProtect(
+        mem,
+        4096,
+        os.windows.PAGE_EXECUTE_READ,
+        &old_protect,
+    ) catch return error.VirtualProtectFailed;
+
+    // Call pattern with i128 result (aligned like actual code)
+    var result: i128 align(16) = 0;
+    var dummy_roc_ops: u64 = 0xDEADBEEF;
+
+    var jmp_buf: JmpBuf = undefined;
+    if (setjmp(&jmp_buf) == 0) {
+        const func: *const fn (*i128, *u64) callconv(.c) void = @ptrCast(@alignCast(mem));
+        func(&result, &dummy_roc_ops);
+    } else {
+        return error.UnexpectedLongjmp;
+    }
+
+    // Dec value for 42 = 42 * 10^18 = 0x0DE0B6B3A7640000
+    const expected: i128 = 0x0DE0B6B3A7640000;
+    try std.testing.expectEqual(expected, result);
+}
+
 test "crash protection pattern (nested callback)" {
     // This test mimics the dev_evaluator crash protection pattern:
     // setjmp is called, then a nested function (like generated code calling roc_crashed)

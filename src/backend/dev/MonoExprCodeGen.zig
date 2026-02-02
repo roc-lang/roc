@@ -966,15 +966,27 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             else
                 x86_64.GeneralReg.R12;
 
-            try self.emitMovRegReg(result_ptr_save_reg, if (comptime builtin.cpu.arch == .aarch64)
+            // Get the argument registers for the current platform's calling convention
+            // aarch64: X0, X1
+            // x86_64 System V (Linux, macOS): RDI, RSI
+            // x86_64 Windows: RCX, RDX
+            const arg0_reg = if (comptime builtin.cpu.arch == .aarch64)
                 aarch64.GeneralReg.X0
+            else if (comptime builtin.os.tag == .windows)
+                x86_64.GeneralReg.RCX
             else
-                x86_64.GeneralReg.RDI);
+                x86_64.GeneralReg.RDI;
 
-            try self.emitMovRegReg(roc_ops_save_reg, if (comptime builtin.cpu.arch == .aarch64)
+            const arg1_reg = if (comptime builtin.cpu.arch == .aarch64)
                 aarch64.GeneralReg.X1
+            else if (comptime builtin.os.tag == .windows)
+                x86_64.GeneralReg.RDX
             else
-                x86_64.GeneralReg.RSI);
+                x86_64.GeneralReg.RSI;
+
+            try self.emitMovRegReg(result_ptr_save_reg, arg0_reg);
+
+            try self.emitMovRegReg(roc_ops_save_reg, arg1_reg);
 
             // Store RocOps save reg for use by Dec operations
             self.roc_ops_reg = roc_ops_save_reg;
@@ -1016,9 +1028,17 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 const x19_bit = @as(u32, 1) << @intFromEnum(aarch64.GeneralReg.X19);
                 const x20_bit = @as(u32, 1) << @intFromEnum(aarch64.GeneralReg.X20);
                 self.codegen.callee_saved_available &= ~(x19_bit | x20_bit);
+            } else if (comptime builtin.os.tag == .windows) {
+                // Windows x64: Clear RCX and RDX from the free register mask
+                const rcx_bit = @as(u32, 1) << @intFromEnum(x86_64.GeneralReg.RCX);
+                const rdx_bit = @as(u32, 1) << @intFromEnum(x86_64.GeneralReg.RDX);
+                self.codegen.free_general &= ~(rcx_bit | rdx_bit);
+                // Reserve RBX (result pointer) and R12 (RocOps pointer)
+                const rbx_bit = @as(u32, 1) << @intFromEnum(x86_64.GeneralReg.RBX);
+                const r12_bit = @as(u32, 1) << @intFromEnum(x86_64.GeneralReg.R12);
+                self.codegen.callee_saved_available &= ~(rbx_bit | r12_bit);
             } else {
-                // Clear RDI and RSI from the free register mask
-                // RDI = 7, RSI = 6
+                // System V (Linux, macOS): Clear RDI and RSI from the free register mask
                 const rdi_bit = @as(u32, 1) << @intFromEnum(x86_64.GeneralReg.RDI);
                 const rsi_bit = @as(u32, 1) << @intFromEnum(x86_64.GeneralReg.RSI);
                 self.codegen.free_general &= ~(rdi_bit | rsi_bit);
@@ -10021,6 +10041,13 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     unreachable;
                 }
                 return @enumFromInt(index);
+            } else if (comptime builtin.os.tag == .windows) {
+                // Windows x64: RCX, RDX, R8, R9
+                const arg_regs = [_]x86_64.GeneralReg{ .RCX, .RDX, .R8, .R9 };
+                if (index >= arg_regs.len) {
+                    unreachable;
+                }
+                return arg_regs[index];
             } else {
                 // x86_64 System V: RDI, RSI, RDX, RCX, R8, R9
                 const arg_regs = [_]x86_64.GeneralReg{ .RDI, .RSI, .RDX, .RCX, .R8, .R9 };
