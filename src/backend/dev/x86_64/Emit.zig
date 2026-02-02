@@ -162,6 +162,16 @@ pub fn addRegImm32(self: *Emit, width: RegisterWidth, dst: GeneralReg, imm: i32)
     try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(imm)));
 }
 
+/// ADD reg, imm (convenience wrapper using 64-bit width)
+pub fn addImm(self: *Emit, dst: GeneralReg, imm: i32) !void {
+    try self.addRegImm32(.w64, dst, imm);
+}
+
+/// ADD reg, imm (small immediate, alias for addRegImm32)
+pub fn addRegImm(self: *Emit, width: RegisterWidth, dst: GeneralReg, imm: i32) !void {
+    try self.addRegImm32(width, dst, imm);
+}
+
 /// SUB reg, imm32 (sign-extended)
 pub fn subRegImm32(self: *Emit, width: RegisterWidth, dst: GeneralReg, imm: i32) !void {
     if (width.requiresSizeOverride()) {
@@ -284,6 +294,16 @@ pub fn andRegImm8(self: *Emit, dst: GeneralReg, imm: i8) !void {
     // ModRM: mod=11 (register), reg=4 (/4 for AND), rm=dst
     try self.buf.append(self.allocator, modRM(0b11, 4, dst.enc()));
     try self.buf.append(self.allocator, @bitCast(imm));
+}
+
+/// AND r64, imm32 - AND register with 32-bit immediate
+pub fn andRegImm32(self: *Emit, dst: GeneralReg, imm: i32) !void {
+    // REX.W prefix (0x48) + REX.B if dst is R8-R15
+    try self.buf.append(self.allocator, rex(1, 0, 0, dst.rexB()));
+    try self.buf.append(self.allocator, 0x81); // AND r/m64, imm32
+    // ModRM: mod=11 (register), reg=4 (/4 for AND), rm=dst
+    try self.buf.append(self.allocator, modRM(0b11, 4, dst.enc()));
+    try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(imm)));
 }
 
 /// OR reg, reg
@@ -485,6 +505,11 @@ pub fn jne(self: *Emit, rel: i32) !void {
     try self.jccRel32(.not_equal, rel);
 }
 
+/// JAE rel32 (jump if above or equal, unsigned >=)
+pub fn jae(self: *Emit, rel: i32) !void {
+    try self.jccRel32(.above_or_equal, rel);
+}
+
 /// CMOVcc reg, reg (conditional move)
 pub fn cmovcc(self: *Emit, cond: Condition, width: RegisterWidth, dst: GeneralReg, src: GeneralReg) !void {
     if (width.requiresSizeOverride()) {
@@ -567,7 +592,7 @@ pub fn movMemImm32(self: *Emit, width: RegisterWidth, base: GeneralReg, disp: i3
 }
 
 /// LEA reg, [base + disp32] (load effective address)
-pub fn lea(self: *Emit, dst: GeneralReg, base: GeneralReg, disp: i32) !void {
+pub fn leaRegMem(self: *Emit, dst: GeneralReg, base: GeneralReg, disp: i32) !void {
     try self.emitRex(.w64, dst, base);
     try self.buf.append(self.allocator, 0x8D); // LEA
 
