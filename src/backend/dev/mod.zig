@@ -66,6 +66,11 @@ pub const Arm64WinMonoExprCodeGen = MonoExprCodeGenMod.Arm64WinMonoExprCodeGen;
 /// ARM64 macOS
 pub const Arm64MacMonoExprCodeGen = MonoExprCodeGenMod.Arm64MacMonoExprCodeGen;
 
+/// Native compiler for generating object files from Mono IR
+pub const NativeCompiler = @import("NativeCompiler.zig").NativeCompiler;
+pub const Entrypoint = @import("NativeCompiler.zig").Entrypoint;
+pub const CompilationResult = @import("NativeCompiler.zig").CompilationResult;
+
 /// Generic development backend parameterized by architecture-specific types.
 ///
 /// This struct provides the common code generation logic shared across

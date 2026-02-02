@@ -3181,9 +3181,45 @@ fn rocBuild(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         return;
     }
 
-    // Use embedded interpreter build approach
-    // This compiles the Roc app, serializes the ModuleEnv, and embeds it in the binary
-    try rocBuildEmbedded(ctx, args);
+    // Select build path based on backend
+    switch (args.backend) {
+        .dev => {
+            // Use native code generation backend
+            try rocBuildNative(ctx, args);
+        },
+        .interpreter => {
+            // Use embedded interpreter build approach
+            // This compiles the Roc app, serializes the ModuleEnv, and embeds it in the binary
+            try rocBuildEmbedded(ctx, args);
+        },
+    }
+}
+
+/// Build using the dev backend to generate native machine code.
+/// This produces truly compiled executables without an interpreter.
+///
+/// NOTE: This is currently a work-in-progress. The infrastructure (NativeCompiler,
+/// generateEntrypointWrapper, etc.) is in place, but the full Mono IR lowering
+/// pipeline needs to be integrated to actually compile Roc code to native objects.
+/// For now, this falls back to interpreter mode.
+fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
+    const stdout = ctx.io.stdout();
+
+    // The native dev backend compilation is not yet fully integrated.
+    // Full integration requires:
+    // 1. Lowering CIR to Mono IR (the Mono IR lowering pipeline)
+    // 2. Extracting the main expression and procedures from compiled modules
+    // 3. Generating proper entrypoint wrappers
+    //
+    // The infrastructure (NativeCompiler, generateEntrypointWrapper, etc.) is in place
+    // in src/backend/dev/NativeCompiler.zig and can be wired up once the
+    // Mono IR lowering pipeline is available in the build system.
+
+    try stdout.print("Note: Native dev backend (--backend=dev) is not yet fully integrated.\n", .{});
+    try stdout.print("Falling back to interpreter mode.\n\n", .{});
+
+    // For now, fall back to interpreter mode
+    return rocBuildEmbedded(ctx, args);
 }
 
 /// Build a standalone binary with the interpreter and embedded module data.

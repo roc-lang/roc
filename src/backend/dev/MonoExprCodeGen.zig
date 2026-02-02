@@ -913,6 +913,27 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             entry_offset: usize = 0,
         };
 
+        /// Information about an exported symbol for object file generation.
+        /// Used when compiling to object files for linking with platform hosts.
+        pub const ExportedSymbol = struct {
+            /// Symbol name (e.g., "roc__main")
+            name: []const u8,
+            /// Byte offset of the symbol in the code buffer
+            offset: usize,
+            /// Size of the function in bytes
+            size: usize,
+        };
+
+        /// Result of entrypoint compilation for native code generation.
+        pub const EntrypointResult = struct {
+            /// Generated machine code containing all entrypoints
+            code: []const u8,
+            /// Exported symbols for object file generation
+            symbols: []const ExportedSymbol,
+            /// Relocations for external references
+            relocations: []const Relocation,
+        };
+
         /// Errors that can occur during code generation
         pub const Error = error{
             OutOfMemory,
@@ -15068,6 +15089,169 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 self.codegen.patchCall(call_site, call_rel);
             }
         }
+
+        /// Generate a RocCall-compatible entrypoint wrapper function.
+        ///
+        /// The RocCall ABI is:
+        ///   fn(*RocOps, *anyopaque ret_ptr, *anyopaque args_ptr) callconv(.c) void
+        ///
+        /// This generates a function that:
+        /// 1. Receives (roc_ops, ret_ptr, args_ptr) per C calling convention
+        /// 2. Saves RocOps pointer for use by Roc code
+        /// 3. Unpacks arguments from the args tuple at args_ptr
+        /// 4. Calls the compiled Roc function body
+        /// 5. Stores the result to ret_ptr
+        /// 6. Returns void
+        ///
+        /// Returns the code offset where the wrapper function starts.
+        pub fn generateEntrypointWrapper(
+            self: *Self,
+            name: []const u8,
+            body_expr: MonoExprId,
+            arg_layouts: []const layout.Idx,
+            ret_layout: layout.Idx,
+        ) Error!ExportedSymbol {
+            _ = name; // Used for the symbol name, passed through to result
+
+            // Record start position
+            const func_start = self.codegen.currentOffset();
+
+            // Clear state for this entrypoint
+            self.symbol_locations.clearRetainingCapacity();
+            self.mutable_var_slots.clearRetainingCapacity();
+            self.codegen.callee_saved_used = 0;
+
+            // On entry, arguments are in:
+            // x86_64 System V: RDI=roc_ops, RSI=ret_ptr, RDX=args_ptr
+            // aarch64 AAPCS64: X0=roc_ops, X1=ret_ptr, X2=args_ptr
+
+            if (comptime builtin.cpu.arch == .aarch64) {
+                // Reserve space for callee-saved registers and locals
+                // FP and LR are saved by STP instruction
+                const frame_size: i32 = 64; // Space for saved regs + locals
+                const scaled_offset: i7 = @intCast(@divExact(-frame_size, 8));
+                try self.codegen.emit.stpPreIndex(.w64, .FP, .LR, .ZRSP, scaled_offset);
+                try self.codegen.emit.movRegReg(.w64, .FP, .ZRSP);
+
+                // Save RocOps pointer (X0) to callee-saved register X19
+                try self.codegen.emit.movRegReg(.w64, .X19, .X0);
+                // Save ret_ptr (X1) to callee-saved register X20
+                try self.codegen.emit.movRegReg(.w64, .X20, .X1);
+                // Save args_ptr (X2) to callee-saved register X21
+                try self.codegen.emit.movRegReg(.w64, .X21, .X2);
+
+                self.roc_ops_reg = .X19;
+
+                // Unpack arguments from args_ptr (X21) to argument registers
+                var args_offset: i32 = 0;
+                for (arg_layouts, 0..) |arg_layout, i| {
+                    const arg_size = self.getLayoutSize(arg_layout);
+                    const dest_reg = self.getArgumentRegister(@intCast(i));
+
+                    // Load from [X21 + args_offset]
+                    try self.codegen.emit.ldrRegMemSoff(.w64, dest_reg, .X21, args_offset);
+                    args_offset += @intCast(arg_size);
+                }
+
+                // Generate the body expression
+                const result_loc = try self.generateExpr(body_expr);
+
+                // Store result to ret_ptr (X20)
+                try self.storeResultToSavedPtr(result_loc, ret_layout, .X20, 1);
+
+                // Epilogue: restore FP/LR and return
+                try self.codegen.emit.ldpPostIndex(.w64, .FP, .LR, .ZRSP, @intCast(@divExact(frame_size, 8)));
+                try self.codegen.emit.ret();
+            } else {
+                // x86_64: emit prologue
+                try self.codegen.emit.pushReg(.RBP);
+                try self.codegen.emit.movRegReg(.w64, .RBP, .RSP);
+
+                // Save callee-saved registers we'll use
+                try self.codegen.emit.pushReg(.RBX); // Will hold ret_ptr
+                try self.codegen.emit.pushReg(.R12); // Will hold RocOps
+                try self.codegen.emit.pushReg(.R13); // Will hold args_ptr
+
+                // Align stack to 16 bytes (we pushed 4 regs = 32 bytes, already aligned)
+                // Reserve space for locals
+                const local_space: i32 = 64;
+                try self.codegen.emit.subRegImm(.w64, .RSP, @intCast(local_space));
+
+                // Save RocOps pointer (RDI) to R12
+                try self.codegen.emit.movRegReg(.w64, .R12, .RDI);
+                // Save ret_ptr (RSI) to RBX
+                try self.codegen.emit.movRegReg(.w64, .RBX, .RSI);
+                // Save args_ptr (RDX) to R13
+                try self.codegen.emit.movRegReg(.w64, .R13, .RDX);
+
+                self.roc_ops_reg = .R12;
+
+                // Initialize stack offset for code generation
+                self.codegen.stack_offset = -local_space;
+
+                // Unpack arguments from args_ptr (R13) to argument registers
+                // System V: RDI, RSI, RDX, RCX, R8, R9 for first 6 args
+                var args_offset: i32 = 0;
+                for (arg_layouts, 0..) |arg_layout, i| {
+                    const arg_size = self.getLayoutSize(arg_layout);
+                    const dest_reg = self.getArgumentRegister(@intCast(i));
+
+                    // Load from [R13 + args_offset]
+                    try self.codegen.emit.movRegMem(.w64, dest_reg, .R13, args_offset);
+                    args_offset += @intCast(arg_size);
+                }
+
+                // Generate the body expression
+                const result_loc = try self.generateExpr(body_expr);
+
+                // Store result to ret_ptr (RBX)
+                try self.storeResultToSavedPtr(result_loc, ret_layout, .RBX, 1);
+
+                // Epilogue: deallocate locals, restore callee-saved, return
+                try self.codegen.emit.addRegImm(.w64, .RSP, @intCast(local_space));
+                try self.codegen.emit.popReg(.R13);
+                try self.codegen.emit.popReg(.R12);
+                try self.codegen.emit.popReg(.RBX);
+                try self.codegen.emit.popReg(.RBP);
+                try self.codegen.emit.ret();
+            }
+
+            const func_end = self.codegen.currentOffset();
+
+            return ExportedSymbol{
+                .name = "", // Caller should set this
+                .offset = func_start,
+                .size = func_end - func_start,
+            };
+        }
+
+        /// Get the size of a layout in bytes for argument unpacking
+        fn getLayoutSize(self: *Self, layout_idx: layout.Idx) u32 {
+            if (self.layout_store) |ls| {
+                const layout_val = ls.getLayout(layout_idx);
+                return ls.layoutSizeAlign(layout_val).size;
+            }
+            // Default sizes for well-known layouts
+            return switch (layout_idx) {
+                .i8, .u8, .bool => 1,
+                .i16, .u16 => 2,
+                .i32, .u32, .f32 => 4,
+                .i64, .u64, .f64 => 8,
+                .i128, .u128, .dec => 16,
+                .str => 24,
+                else => 8, // Default to 8 bytes
+            };
+        }
+
+        /// Get the generated code buffer (for object file generation)
+        pub fn getGeneratedCode(self: *const Self) []const u8 {
+            return self.codegen.getCode();
+        }
+
+        /// Get the relocations for the generated code
+        pub fn getRelocations(self: *const Self) []const Relocation {
+            return self.codegen.relocations.items;
+        }
     };
 }
 
@@ -15120,6 +15304,12 @@ pub const UnsupportedArchCodeGen = struct {
         entry_offset: usize,
     };
 
+    pub const ExportedSymbol = struct {
+        name: []const u8,
+        offset: usize,
+        size: usize,
+    };
+
     allocator: Allocator,
 
     pub fn init(
@@ -15149,12 +15339,24 @@ pub const UnsupportedArchCodeGen = struct {
         return error.UnsupportedArchitecture;
     }
 
+    pub fn generateEntrypointWrapper(_: *Self, _: []const u8, _: anytype, _: anytype, _: anytype) Error!ExportedSymbol {
+        return error.UnsupportedArchitecture;
+    }
+
     pub fn finalize(_: *Self) Error![]const u8 {
         return error.UnsupportedArchitecture;
     }
 
     pub fn getCode(_: *const Self) []const u8 {
         return &[_]u8{};
+    }
+
+    pub fn getGeneratedCode(_: *const Self) []const u8 {
+        return &[_]u8{};
+    }
+
+    pub fn getRelocations(_: *const Self) []const Relocation {
+        return &[_]Relocation{};
     }
 };
 
