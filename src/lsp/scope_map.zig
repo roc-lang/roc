@@ -282,6 +282,9 @@ pub const ScopeMap = struct {
             .e_dot_access => |dot| {
                 try self.traverseExpr(module_env, dot.receiver, scope_end, depth + 1);
             },
+            .e_tuple_access => |ta| {
+                try self.traverseExpr(module_env, ta.tuple, scope_end, depth + 1);
+            },
             .e_str => |str| {
                 const segments = module_env.store.sliceExpr(str.span);
                 for (segments) |seg_idx| {

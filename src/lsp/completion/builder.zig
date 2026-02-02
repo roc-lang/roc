@@ -632,6 +632,67 @@ pub const CompletionBuilder = struct {
         try self.addFieldsFromContent(module_env, content, 0);
     }
 
+    /// Extract and add tuple element index completions from a type variable.
+    /// For tuple types, adds completions like "0", "1", "2" for each element.
+    pub fn addTupleIndexCompletions(self: *CompletionBuilder, module_env: *ModuleEnv, type_var: types.Var) !void {
+        const type_store = &module_env.types;
+
+        var resolved = type_store.resolveVar(type_var);
+        var content = resolved.desc.content;
+
+        var steps: usize = 0;
+        while (true) : (steps += 1) {
+            if (steps > 8) break;
+
+            switch (content) {
+                .structure => |flat_type| {
+                    switch (flat_type) {
+                        .tuple => |tuple| {
+                            const elem_vars = type_store.sliceVars(tuple.elems);
+
+                            var type_writer = module_env.initTypeWriter() catch null;
+                            defer if (type_writer) |*tw| tw.deinit();
+
+                            for (elem_vars, 0..) |elem_var, i| {
+                                var detail: ?[]const u8 = null;
+                                if (type_writer) |*tw| {
+                                    tw.write(elem_var, .one_line) catch {};
+                                    const type_str = tw.get();
+                                    if (type_str.len > 0) {
+                                        detail = self.allocator.dupe(u8, type_str) catch null;
+                                    }
+                                    tw.reset();
+                                }
+
+                                const label = std.fmt.allocPrint(self.allocator, "{d}", .{i}) catch continue;
+                                _ = try self.addItem(.{
+                                    .label = label,
+                                    .kind = @intFromEnum(CompletionItemKind.field),
+                                    .detail = detail,
+                                });
+                            }
+                            return;
+                        },
+                        .nominal_type => |nominal| {
+                            const backing_var = type_store.getNominalBackingVar(nominal);
+                            resolved = type_store.resolveVar(backing_var);
+                            content = resolved.desc.content;
+                            continue;
+                        },
+                        else => break,
+                    }
+                },
+                .alias => |alias| {
+                    const backing_var = type_store.getAliasBackingVar(alias);
+                    resolved = type_store.resolveVar(backing_var);
+                    content = resolved.desc.content;
+                    continue;
+                },
+                else => break,
+            }
+        }
+    }
+
     /// Add record field completions for a named definition in a specific module.
     ///
     /// This is used for module member accesses (e.g., Module.value.) where the

@@ -204,6 +204,9 @@ pub fn CirVisitor(comptime Context: type) type {
                         }
                     }
                 },
+                .e_tuple_access => |ta| {
+                    self.walkExpr(store, ta.tuple);
+                },
                 .e_list => |list| {
                     for (store.sliceExpr(list.elems)) |elem| {
                         self.walkExpr(store, elem);

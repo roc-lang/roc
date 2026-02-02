@@ -2072,6 +2072,7 @@ pub const SyntaxChecker = struct {
                     if (resolveAccessChainTypeVar(self, &builder, module_env, module_lookup_env, env, record_access.access_chain, record_access.chain_start)) |resolved| {
                         chain_resolved = true;
                         try builder.addFieldsFromTypeVar(resolved.module_env, resolved.type_var);
+                        try builder.addTupleIndexCompletions(resolved.module_env, resolved.type_var);
                         try builder.addMethodsFromTypeVar(resolved.module_env, resolved.type_var);
                     }
 
@@ -2102,6 +2103,7 @@ pub const SyntaxChecker = struct {
                         } else if (resolved_type_var) |type_var| {
                             std.debug.print("completion: using CIR-based lookup with type_var={}", .{type_var});
                             try builder.addFieldsFromTypeVar(module_env, type_var);
+                            try builder.addTupleIndexCompletions(module_env, type_var);
                             try builder.addMethodsFromTypeVar(module_env, type_var);
                         }
                     }
@@ -2134,10 +2136,12 @@ pub const SyntaxChecker = struct {
                             if (resolveAccessChainTypeVar(self, &builder, module_env, module_lookup_env, env, call_chain, info.chain_start)) |resolved| {
                                 const ret_type = extractReturnType(resolved.module_env, resolved.type_var);
                                 try builder.addFieldsFromTypeVar(resolved.module_env, ret_type);
+                                try builder.addTupleIndexCompletions(resolved.module_env, ret_type);
                                 try builder.addMethodsFromTypeVar(resolved.module_env, ret_type);
                             }
                         } else if (resolved_type_var) |type_var| {
                             try builder.addFieldsFromTypeVar(module_env, type_var);
+                            try builder.addTupleIndexCompletions(module_env, type_var);
                             try builder.addMethodsFromTypeVar(module_env, type_var);
                         } else {
                             std.debug.print("completion: after_receiver_dot no CIR receiver type found and no call_chain\n", .{});
@@ -2145,6 +2149,7 @@ pub const SyntaxChecker = struct {
                     } else if (resolved_type_var) |type_var| {
                         std.debug.print("completion: after_receiver_dot using CIR type_var={}", .{type_var});
                         try builder.addFieldsFromTypeVar(module_env, type_var);
+                        try builder.addTupleIndexCompletions(module_env, type_var);
                         try builder.addMethodsFromTypeVar(module_env, type_var);
                     }
                 } else {
