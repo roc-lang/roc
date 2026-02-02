@@ -24,24 +24,25 @@ const builtins = @import("builtins");
 
 // Platform-specific jmp_buf for setjmp/longjmp crash recovery.
 // Used to unwind the stack when roc_crashed is called during execution.
-// On platforms without setjmp (e.g. wasm32), we use a dummy type since
-// the DevEvaluator won't be used there (the interpreter is used instead).
-const has_setjmp = switch (builtin.os.tag) {
-    .macos, .linux => true,
-    else => false,
-};
-const JmpBuf = if (has_setjmp) switch (builtin.os.tag) {
+const JmpBuf = switch (builtin.os.tag) {
     .macos => [48]c_int,
     .linux => switch (builtin.cpu.arch) {
         .aarch64 => [64]c_long,
         .x86_64 => [25]c_long,
         else => @compileError("Unsupported architecture for jmp_buf"),
     },
-    else => unreachable,
-} else [1]u8;
-
-extern "c" fn _setjmp(env: *JmpBuf) c_int;
-extern "c" fn _longjmp(env: *JmpBuf, val: c_int) noreturn;
+    .windows => switch (builtin.cpu.arch) {
+        .x86_64 => [16]c_ulonglong,
+        else => @compileError("Unsupported architecture for jmp_buf on Windows"),
+    },
+    else => @compileError("Unsupported OS for jmp_buf"),
+};
+// Platform-specific setjmp/longjmp declarations
+const setjmp = @extern(*const fn (env: *JmpBuf) callconv(.c) c_int, .{ .name = "_setjmp" });
+const longjmp = if (builtin.os.tag == .windows)
+    @extern(*const fn (env: *JmpBuf, val: c_int) callconv(.c) noreturn, .{ .name = "longjmp" })
+else
+    @extern(*const fn (env: *JmpBuf, val: c_int) callconv(.c) noreturn, .{ .name = "_longjmp" });
 
 const Allocator = std.mem.Allocator;
 const ModuleEnv = can.ModuleEnv;
@@ -289,9 +290,7 @@ const DevRocEnv = struct {
         if (self.crash_message) |old| self.allocator.free(old);
         self.crash_message = self.allocator.dupe(u8, msg) catch null;
         // Unwind the stack back to the setjmp call site.
-        if (has_setjmp) {
-            _longjmp(&self.jmp_buf, 1);
-        }
+        longjmp(&self.jmp_buf, 1);
     }
 };
 
@@ -444,11 +443,9 @@ pub const DevEvaluator = struct {
     /// the stack unwinds back here and this returns error.RocCrashed.
     pub fn callWithCrashProtection(self: *DevEvaluator, executable: *const backend.ExecutableMemory, result_ptr: *anyopaque) error{RocCrashed}!void {
         self.roc_env.crashed = false;
-        if (has_setjmp) {
-            if (_setjmp(&self.roc_env.jmp_buf) != 0) {
-                // Returned via longjmp from rocCrashedFn.
-                return error.RocCrashed;
-            }
+        if (setjmp(&self.roc_env.jmp_buf) != 0) {
+            // Returned via longjmp from rocCrashedFn.
+            return error.RocCrashed;
         }
         executable.callWithResultPtrAndRocOps(result_ptr, @constCast(&self.roc_ops));
     }
