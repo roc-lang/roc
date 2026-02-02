@@ -944,7 +944,7 @@ test "interpreter: List.fold from Builtin using numbers" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
@@ -963,7 +963,7 @@ test "interpreter: List.any True on integers" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
@@ -983,7 +983,7 @@ test "interpreter: List.any False on unsigned integers" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
@@ -1003,7 +1003,7 @@ test "interpreter: List.any False on empty list" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
@@ -1023,7 +1023,7 @@ test "interpreter: List.all False when some elements are False" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
@@ -1043,7 +1043,7 @@ test "interpreter: List.all True on small integers" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
@@ -1063,7 +1063,7 @@ test "interpreter: List.all False on empty list" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
@@ -1083,7 +1083,7 @@ test "interpreter: List.contains is False for a missing element" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
@@ -1103,7 +1103,7 @@ test "interpreter: List.contains is True when element is found" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
@@ -1123,7 +1123,7 @@ test "interpreter: List.contains is False on empty list" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 

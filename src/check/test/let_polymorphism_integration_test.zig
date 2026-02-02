@@ -175,7 +175,8 @@ test "polymorphic option type simulation" {
         \\    { opt1, opt2, opt3 }
         \\}
     ;
-    try typeCheck(source,
+    try typeCheck(
+        source,
         "{ opt1: { tag: Str, value: Dec }, opt2: { tag: Str, value: Str }, opt3: { tag: Str } }",
     );
 }

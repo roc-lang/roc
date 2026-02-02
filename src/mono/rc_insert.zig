@@ -18,18 +18,17 @@ const base = @import("base");
 const MonoIR = @import("MonoIR.zig");
 const MonoExprStore = @import("MonoExprStore.zig");
 
-const MonoExpr = MonoIR.MonoExpr;
 const MonoExprId = MonoIR.MonoExprId;
 const MonoSymbol = MonoIR.MonoSymbol;
 const MonoStmt = MonoIR.MonoStmt;
 const MonoStmtSpan = MonoIR.MonoStmtSpan;
 const MonoPatternId = MonoIR.MonoPatternId;
-const MonoExprSpan = MonoIR.MonoExprSpan;
 const MonoIfBranch = MonoIR.MonoIfBranch;
 const MonoWhenBranch = MonoIR.MonoWhenBranch;
 const LayoutIdx = layout_mod.Idx;
 const Region = base.Region;
 
+/// Inserts reference counting operations (incref/decref) into Mono IR expressions.
 pub const RcInsertPass = struct {
     allocator: Allocator,
     store: *MonoExprStore,
@@ -72,9 +71,7 @@ pub const RcInsertPass = struct {
         return self.processExpr(expr_id);
     }
 
-    // =========================================================================
     // Phase 1: Use counting
-    // =========================================================================
 
     /// Count how many times each symbol is referenced in the expression tree.
     /// Also records the layout for each symbol found in bind patterns.
@@ -298,9 +295,7 @@ pub const RcInsertPass = struct {
         }
     }
 
-    // =========================================================================
     // Phase 2: RC insertion
-    // =========================================================================
 
     /// Check if a layout needs reference counting (directly or transitively).
     fn layoutNeedsRc(self: *const RcInsertPass, layout_idx: LayoutIdx) bool {
@@ -498,9 +493,7 @@ pub const RcInsertPass = struct {
         } }, region);
     }
 
-    // =========================================================================
     // RC emission helpers
-    // =========================================================================
 
     /// Emit an incref statement into the statement buffer.
     fn emitIncref(self: *RcInsertPass, symbol: MonoSymbol, layout_idx: LayoutIdx, count: u16, region: Region) Allocator.Error!void {

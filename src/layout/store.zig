@@ -47,7 +47,6 @@ const ScalarInfo = layout_mod.ScalarInfo;
 const Work = work.Work;
 
 /// Errors that can occur during layout computation
-
 /// Stores Layout instances by Idx.
 ///
 /// This is a GLOBAL layout store that serves all modules in the build.

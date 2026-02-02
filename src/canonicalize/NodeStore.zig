@@ -2172,7 +2172,6 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 .body = @intFromEnum(e.body),
             } });
         },
-
     }
 
     const node_idx = try store.nodes.append(store.gpa, node);

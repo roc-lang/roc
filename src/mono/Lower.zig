@@ -1966,7 +1966,6 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                     recv_resolved = recv_type_source_env.types.resolveVar(backing);
                 }
 
-
                 // Determine nominal type
                 const recv_nominal: ?struct { origin: Ident.Idx, ident: Ident.Idx } = switch (recv_resolved.desc.content) {
                     .structure => |s| switch (s) {
@@ -2013,8 +2012,10 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                     const origin_env = self.all_module_envs[origin_module_idx];
 
                     const qualified_method = origin_env.lookupMethodIdentFromTwoEnvsConst(
-                        recv_type_source_env, rn.ident,
-                        module_env, dot.field_name,
+                        recv_type_source_env,
+                        rn.ident,
+                        module_env,
+                        dot.field_name,
                     ) orelse {
                         unreachable;
                     };
@@ -2553,8 +2554,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             // Use the function's RETURN type for ret_layout, not the function type itself
             const ret_layout = if (func_type) |ft| ret_blk: {
                 break :ret_blk ls.fromTypeVar(self.current_module_idx, ft.ret, &self.type_scope, self.type_scope_caller_module) catch unreachable;
-            } else
-                self.getExprLayoutFromIdx(module_env, expr_idx);
+            } else self.getExprLayoutFromIdx(module_env, expr_idx);
 
             // Create the low-level call as the body
             const body_id = try self.store.addExpr(.{
@@ -2684,8 +2684,10 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
 
             // Step 5: Look up method in origin module (cross-ident-store lookup)
             const qualified_method = origin_env.lookupMethodIdentFromTwoEnvsConst(
-                type_source_env, info.ident,
-                module_env, tvd.method_name,
+                type_source_env,
+                info.ident,
+                module_env,
+                tvd.method_name,
             ) orelse {
                 unreachable;
             };

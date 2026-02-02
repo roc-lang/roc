@@ -51,7 +51,6 @@ const RocList = builtins.list.RocList;
 const listConcat = builtins.list.listConcat;
 const listPrepend = builtins.list.listPrepend;
 const listSublist = builtins.list.listSublist;
-const listDropAt = builtins.list.listDropAt;
 const listReplace = builtins.list.listReplace;
 const listReserve = builtins.list.listReserve;
 const listReleaseExcessCapacity = builtins.list.listReleaseExcessCapacity;
@@ -80,7 +79,6 @@ const strDropSuffix = builtins.str.strDropSuffix;
 const strWithAsciiLowercased = builtins.str.strWithAsciiLowercased;
 const strWithAsciiUppercased = builtins.str.strWithAsciiUppercased;
 const strFromUtf8Lossy = builtins.str.fromUtf8Lossy;
-const strFromUtf8C = builtins.str.fromUtf8C;
 
 const Relocation = @import("Relocation.zig").Relocation;
 const StaticDataInterner = @import("StaticDataInterner.zig");
@@ -90,7 +88,6 @@ const MonoExpr = mono.MonoExpr;
 const MonoExprId = mono.MonoExprId;
 const MonoPatternId = mono.MonoPatternId;
 const MonoSymbol = mono.MonoSymbol;
-const SelfRecursive = mono.SelfRecursive;
 const JoinPointId = mono.JoinPointId;
 const LambdaSetMember = mono.LambdaSetMember;
 const LambdaSetMemberSpan = mono.LambdaSetMemberSpan;
@@ -390,12 +387,6 @@ fn wrapListReserve(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap:
 fn wrapListReleaseExcessCapacity(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, element_width: usize, roc_ops: *RocOps) callconv(.c) void {
     const list = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
     out.* = listReleaseExcessCapacity(list, alignment, element_width, false, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), .Immutable, roc_ops);
-}
-
-/// Wrapper: listDropAt for list operations that drop by index
-fn wrapListDropAt(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, element_width: usize, drop_index: u64, roc_ops: *RocOps) callconv(.c) void {
-    const list = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
-    out.* = listDropAt(list, alignment, element_width, false, drop_index, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), roc_ops);
 }
 
 /// Try integer conversion: checks if a signed 64-bit value is in [min, max] range.
@@ -1393,11 +1384,13 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     }
 
                     // Return as .list_stack so recursive calls properly detect this as a list argument
-                    return .{ .list_stack = .{
-                        .struct_offset = result_offset,
-                        .data_offset = 0, // Data location is stored in the list struct itself
-                        .num_elements = 0, // Unknown at compile time
-                    } };
+                    return .{
+                        .list_stack = .{
+                            .struct_offset = result_offset,
+                            .data_offset = 0, // Data location is stored in the list struct itself
+                            .num_elements = 0, // Unknown at compile time
+                        },
+                    };
                 },
                 .list_append => {
                     // list_append(list, element) -> List
@@ -1638,11 +1631,13 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     }
 
                     // Return as .list_stack so recursive calls properly detect this as a list argument
-                    return .{ .list_stack = .{
-                        .struct_offset = result_offset,
-                        .data_offset = 0, // Data location is stored in the list struct itself
-                        .num_elements = 0, // Unknown at compile time
-                    } };
+                    return .{
+                        .list_stack = .{
+                            .struct_offset = result_offset,
+                            .data_offset = 0, // Data location is stored in the list struct itself
+                            .num_elements = 0, // Unknown at compile time
+                        },
+                    };
                 },
                 .list_get => {
                     // list_get(list, index) -> element or Try(element, [OutOfBounds])
@@ -2631,8 +2626,14 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     const src_reg = try self.ensureInGeneralReg(src_loc);
 
                     const is_signed = switch (ll.op) {
-                        .i8_to_i128, .i16_to_i128, .i32_to_i128, .i64_to_i128,
-                        .i8_to_u128_wrap, .i16_to_u128_wrap, .i32_to_u128_wrap, .i64_to_u128_wrap,
+                        .i8_to_i128,
+                        .i16_to_i128,
+                        .i32_to_i128,
+                        .i64_to_i128,
+                        .i8_to_u128_wrap,
+                        .i16_to_u128_wrap,
+                        .i32_to_u128_wrap,
+                        .i64_to_u128_wrap,
                         => true,
                         else => false,
                     };
@@ -7043,11 +7044,13 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     return .{ .stack_str = slot };
                 }
                 if (is_list_result) {
-                    return .{ .list_stack = .{
-                        .struct_offset = slot,
-                        .data_offset = 0, // Data location is stored in the list struct itself
-                        .num_elements = 0, // Unknown at compile time
-                    } };
+                    return .{
+                        .list_stack = .{
+                            .struct_offset = slot,
+                            .data_offset = 0, // Data location is stored in the list struct itself
+                            .num_elements = 0, // Unknown at compile time
+                        },
+                    };
                 }
                 return .{ .stack = slot };
             } else if (result_reg) |reg| {
@@ -8017,25 +8020,6 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 .immediate_i64, .general_reg, .stack, .float_reg, .immediate_f64 => 8,
                 else => 8,
             };
-        }
-
-        /// Determine the size of a value from its ValueLocation and expression layout.
-        fn valueSizeFromLocOrLayout(self: *Self, loc: ValueLocation, expr_id: MonoExprId) u32 {
-            // First try the value location (most reliable for multi-word types)
-            switch (loc) {
-                .stack_str, .list_stack => return 24,
-                .stack_i128, .immediate_i128 => return 16,
-                else => {},
-            }
-            // Then try the expression layout
-            if (self.getExprLayout(expr_id)) |layout_idx| {
-                if (self.layout_store) |ls| {
-                    const layout_val = ls.getLayout(layout_idx);
-                    return ls.layoutSizeAlign(layout_val).size;
-                }
-            }
-            // Default based on loc
-            return self.valueSizeFromLoc(loc);
         }
 
         /// Given a field's stack base offset, size, and layout index, return the appropriate ValueLocation.
@@ -10998,7 +10982,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 // mutable variables store Dec/i128 values as .stack (not .stack_i128)
                 const is_i128_arg = (arg_loc == .stack_i128 or arg_loc == .immediate_i128) or
                     (arg_loc == .stack and arg_layout != null and
-                    (arg_layout.? == .dec or arg_layout.? == .i128 or arg_layout.? == .u128));
+                        (arg_layout.? == .dec or arg_layout.? == .i128 or arg_layout.? == .u128));
                 if (is_i128_arg) {
                     const low_reg = self.getArgumentRegister(reg_idx);
                     const high_reg = self.getArgumentRegister(reg_idx + 1);
@@ -11137,11 +11121,13 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     try self.codegen.emit.movMemReg(.w64, .RBP, stack_offset + 8, .RDX);
                     try self.codegen.emit.movMemReg(.w64, .RBP, stack_offset + 16, .RCX);
                 }
-                return .{ .list_stack = .{
-                    .struct_offset = stack_offset,
-                    .data_offset = 0, // Data location is stored in the list struct itself
-                    .num_elements = 0, // Unknown at compile time for returned lists
-                } };
+                return .{
+                    .list_stack = .{
+                        .struct_offset = stack_offset,
+                        .data_offset = 0, // Data location is stored in the list struct itself
+                        .num_elements = 0, // Unknown at compile time for returned lists
+                    },
+                };
             }
 
             // Check if return type is a multi-register struct (record, tag_union, tuple > 8 bytes)
@@ -12343,7 +12329,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 // Handle i128/Dec arguments (need two registers)
                 const is_i128_arg = (arg_loc == .stack_i128 or arg_loc == .immediate_i128) or
                     (arg_loc == .stack and arg_layout != null and
-                    (arg_layout.? == .dec or arg_layout.? == .i128 or arg_layout.? == .u128));
+                        (arg_layout.? == .dec or arg_layout.? == .i128 or arg_layout.? == .u128));
                 if (is_i128_arg) {
                     const low_reg = self.getArgumentRegister(reg_idx);
                     const high_reg = self.getArgumentRegister(reg_idx + 1);
@@ -12810,11 +12796,13 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
                                 // Store as .list_stack so that when this parameter is used as an argument
                                 // or returned, it's properly detected as a list
-                                try self.symbol_locations.put(symbol_key, .{ .list_stack = .{
-                                    .struct_offset = stack_offset,
-                                    .data_offset = 0, // Data location is stored in the list struct itself
-                                    .num_elements = 0, // Unknown at compile time
-                                } });
+                                try self.symbol_locations.put(symbol_key, .{
+                                    .list_stack = .{
+                                        .struct_offset = stack_offset,
+                                        .data_offset = 0, // Data location is stored in the list struct itself
+                                        .num_elements = 0, // Unknown at compile time
+                                    },
+                                });
                                 reg_idx += 3;
                             } else {
                                 // Normal 64-bit or smaller parameter — spill to stack
@@ -12905,7 +12893,6 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 .ret => |r| {
                     // Evaluate the return value
                     const value_loc = try self.generateExpr(r.value);
-
 
                     // Handle i128/Dec return values specially (need two registers)
                     if (value_loc == .stack_i128 or value_loc == .immediate_i128) {
@@ -13118,11 +13105,13 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
                                 // Store as .list_stack so that when this parameter is used as an argument
                                 // or returned, it's properly detected as a list
-                                try self.symbol_locations.put(symbol_key, .{ .list_stack = .{
-                                    .struct_offset = stack_offset,
-                                    .data_offset = 0, // Data location is stored in the list struct itself
-                                    .num_elements = 0, // Unknown at compile time
-                                } });
+                                try self.symbol_locations.put(symbol_key, .{
+                                    .list_stack = .{
+                                        .struct_offset = stack_offset,
+                                        .data_offset = 0, // Data location is stored in the list struct itself
+                                        .num_elements = 0, // Unknown at compile time
+                                    },
+                                });
                                 reg_idx += 3;
                             } else {
                                 // Normal 64-bit or smaller parameter — spill to stack

@@ -320,7 +320,9 @@ test "check type - record" {
         \\  world: 10,
         \\}
     ;
-    try checkTypesExpr(source, .pass,
+    try checkTypesExpr(
+        source,
+        .pass,
         "{ hello: Str, world: Dec }",
     );
 }

@@ -117,8 +117,8 @@ EndOfFile,
 (inferred-types
 	(defs
 		(patt (type "a -> a where [a.plus : a, b -> a]"))
-		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, _arg -> a]")))
+		(patt (type "Dec")))
 	(expressions
-		(expr (type "a -> b where [a.plus : a, _arg -> a, b.from_numeral : Numeral -> Try(b, a -> b)]"))
-		(expr (type "_a where [_b.from_numeral : Numeral -> Try(c, d -> c), d.plus : d, _arg -> d]"))))
+		(expr (type "a -> Dec where [a.plus : a, _arg -> a]"))
+		(expr (type "Dec"))))
 ~~~

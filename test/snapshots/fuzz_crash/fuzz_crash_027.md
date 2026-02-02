@@ -231,8 +231,8 @@ TYPE MISMATCH - fuzz_crash_027.md:125:6:125:9
 TYPE MISMATCH - fuzz_crash_027.md:102:15:102:18
 MISSING METHOD - fuzz_crash_027.md:129:12:129:22
 + - :0:0:0:0
-TYPE MISMATCH - fuzz_crash_027.md:100:9:148:2
 TYPE MISMATCH - fuzz_crash_027.md:106:3:106:6
+TYPE MISMATCH - fuzz_crash_027.md:100:9:148:2
 # PROBLEMS
 **LEADING ZERO**
 Numbers cannot have leading zeros.
@@ -1023,6 +1023,24 @@ The value's type, which does not have a method named**plus**, is:
 **Hint:** The **+** operator calls a method named **plus** on the value preceding it, passing the value after the operator as the one argument.
 
 **TYPE MISMATCH**
+This `return` does not match the function's return type:
+**fuzz_crash_027.md:106:3:106:6:**
+```roc
+		tag
+```
+		^^^
+
+It has the type:
+
+    [Blue, ..]
+
+But the function's return type is:
+
+    Try({  }, _d)
+
+**Hint:** All `return` statements and the final expression in a function must have the same type.
+
+**TYPE MISMATCH**
 This expression is used in an unexpected way:
 **fuzz_crash_027.md:100:9:148:2:**
 ```roc
@@ -1079,31 +1097,13 @@ e[, # afarg
 
 It has the type:
 
-    List(Error) => Try({  }, _d)
+    List(Error) => Error
 
 But the annotation say it should be:
 
-    List(Error) -> Try({  }, _d)
+    List(Error) -> Error
 
 **Hint:** This function is effectful, but a pure function is expected.
-
-**TYPE MISMATCH**
-This `return` does not match the function's return type:
-**fuzz_crash_027.md:106:3:106:6:**
-```roc
-		tag
-```
-		^^^
-
-It has the type:
-
-    [Blue, ..]
-
-But the function's return type is:
-
-    Try({  }, _d)
-
-**Hint:** All `return` statements and the final expression in a function must have the same type.
 
 # TOKENS
 ~~~zig
@@ -2512,7 +2512,7 @@ expect {
 (inferred-types
 	(defs
 		(patt (type "(Error, Error)"))
-		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(patt (type "Bool -> Dec"))
 		(patt (type "U64 -> U64"))
 		(patt (type "[Red, Blue, ..], _arg -> Error"))
 		(patt (type "List(Error) -> Try({  }, _d)"))
@@ -2549,7 +2549,7 @@ expect {
 					(ty-rigid-var (name "a"))))))
 	(expressions
 		(expr (type "(Error, Error)"))
-		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(expr (type "Bool -> Dec"))
 		(expr (type "U64 -> U64"))
 		(expr (type "[Red, Blue, ..], _arg -> Error"))
 		(expr (type "List(Error) -> Try({  }, _d)"))

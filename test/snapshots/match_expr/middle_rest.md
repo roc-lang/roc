@@ -156,5 +156,5 @@ match items {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), c.plus : c, c -> c]"))
+(expr (type "Dec"))
 ~~~

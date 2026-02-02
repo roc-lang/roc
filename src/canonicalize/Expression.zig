@@ -2050,7 +2050,6 @@ pub const Expr = union(enum) {
 
                 try tree.endNode(begin, attrs);
             },
-
         }
     }
 
