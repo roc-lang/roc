@@ -1294,19 +1294,16 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     // listWithCapacity(capacity, alignment, elem_width, elements_refcounted,
                     //                  inc_context, inc, roc_ops) -> RocList
                     if (args.len < 1) {
-                        std.debug.print("BUG: list_with_capacity requires at least 1 argument\n", .{});
                         unreachable;
                     }
 
                     const roc_ops_reg = self.roc_ops_reg orelse {
-                        std.debug.print("BUG: list_with_capacity requires roc_ops_reg\n", .{});
                         unreachable;
                     };
                     const capacity_loc = try self.generateExpr(args[0]);
 
                     // Get element layout from return type (which is List(elem))
                     const ls = self.layout_store orelse {
-                        std.debug.print("BUG: list_with_capacity requires layout_store\n", .{});
                         unreachable;
                     };
                     const ret_layout = ls.getLayout(ll.ret_layout);
@@ -1406,17 +1403,14 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     // list_append(list, element) -> List
                     // Uses SAFE listAppendSafeC that reserves capacity if needed
                     if (args.len != 2) {
-                        std.debug.print("BUG: list_append requires exactly 2 arguments, got {}\n", .{args.len});
                         unreachable;
                     }
 
                     const ls = self.layout_store orelse {
-                        std.debug.print("BUG: list_append requires layout_store\n", .{});
                         unreachable;
                     };
 
                     const roc_ops_reg = self.roc_ops_reg orelse {
-                        std.debug.print("BUG: list_append requires roc_ops_reg\n", .{});
                         unreachable;
                     };
 
@@ -1462,7 +1456,6 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         .immediate_i64 => |val| blk: {
                             // Empty list case: materialize on stack (ptr=0, len=0, capacity=0)
                             if (val != 0) {
-                                std.debug.print("BUG: list_append got immediate_i64 that's not 0: {}\n", .{val});
                                 unreachable;
                             }
                             const slot = self.codegen.allocStackSlot(24);
@@ -1481,7 +1474,6 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                             break :blk slot;
                         },
                         else => {
-                            std.debug.print("BUG: list_append list arg must be on stack: {s}\n", .{@tagName(list_loc)});
                             unreachable;
                         },
                     };
@@ -3480,14 +3472,12 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 .num_from_numeral,
                 .compare,
                 => {
-                    std.debug.print("BUG: generic num op {s} should have been resolved by Mono IR lowering\n", .{@tagName(ll.op)});
                     if (std.debug.runtime_safety) unreachable;
                     unreachable;
                 },
                 .box_box,
                 .box_unbox,
                 => {
-                    std.debug.print("BUG: box operations not yet supported in dev backend: {s}\n", .{@tagName(ll.op)});
                     unreachable;
                 },
                 .crash => {
@@ -7975,7 +7965,6 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
             // Validate layout index before use
             if (@intFromEnum(rec.record_layout) >= ls.layouts.len()) {
-                std.debug.print("ERROR generateRecord: record_layout={} out of bounds (len={})\n", .{ @intFromEnum(rec.record_layout), ls.layouts.len() });
                 unreachable;
             }
 
@@ -8093,9 +8082,6 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     return record_loc;
                 }
                 // Any other field access on non-record is a compiler bug
-                std.debug.print("BUG: field access on non-record layout\n", .{});
-                std.debug.print("  layout tag: {s}\n", .{@tagName(record_layout.tag)});
-                std.debug.print("  field_idx: {}\n", .{access.field_idx});
                 unreachable;
             }
 
@@ -10079,7 +10065,6 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             if (comptime builtin.cpu.arch == .aarch64) {
                 // AArch64: X0-X7 for arguments
                 if (index >= 8) {
-                    std.debug.print("BUG: getArgumentRegister called with index {} >= 8 (only X0-X7 available)\n", .{index});
                     unreachable;
                 }
                 return @enumFromInt(index);
@@ -10087,7 +10072,6 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 // x86_64 System V: RDI, RSI, RDX, RCX, R8, R9
                 const arg_regs = [_]x86_64.GeneralReg{ .RDI, .RSI, .RDX, .RCX, .R8, .R9 };
                 if (index >= arg_regs.len) {
-                    std.debug.print("BUG: getArgumentRegister called with index {} >= 6 (only 6 arg regs available)\n", .{index});
                     unreachable;
                 }
                 return arg_regs[index];
@@ -11297,7 +11281,6 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     break :blk slot;
                 },
                 else => {
-                    std.debug.print("BUG: ensureOnStack unsupported loc: {s}\n", .{@tagName(loc)});
                     unreachable;
                 },
             };
@@ -11659,7 +11642,6 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                                 return;
                             },
                             else => {
-                                std.debug.print("storeResultToSavedPtr: unhandled layout tag: {s}\n", .{@tagName(layout_val.tag)});
                                 unreachable;
                             },
                         }

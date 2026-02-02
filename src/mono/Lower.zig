@@ -2008,7 +2008,6 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
 
                 if (recv_nominal) |rn| {
                     const origin_module_idx = self.findModuleForOrigin(recv_type_source_env, rn.origin) orelse {
-                        std.debug.print("e_dot_access method dispatch: could not find origin module\n", .{});
                         unreachable;
                     };
                     const origin_env = self.all_module_envs[origin_module_idx];
@@ -2017,12 +2016,10 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                         recv_type_source_env, rn.ident,
                         module_env, dot.field_name,
                     ) orelse {
-                        std.debug.print("e_dot_access method dispatch: method lookup failed for {s}.{s}\n", .{ recv_type_source_env.getIdent(rn.ident), field_name });
                         unreachable;
                     };
 
                     const node_idx = origin_env.getExposedNodeIndexById(qualified_method) orelse {
-                        std.debug.print("e_dot_access method dispatch: no exposed node for method\n", .{});
                         unreachable;
                     };
 
@@ -2619,8 +2616,6 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             const type_var = ModuleEnv.varFrom(type_var_binding.type_var_anno);
             var resolved = module_env.types.resolveVar(type_var);
 
-            const method_name_str = module_env.getIdent(tvd.method_name);
-
             // Step 2: If flex/rigid, check type_scope for concrete mapping (polymorphic calls)
             var type_source_env: *const ModuleEnv = module_env;
             if (resolved.desc.content == .flex or resolved.desc.content == .rigid) {
@@ -2678,16 +2673,11 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             };
 
             const info = nominal_info orelse {
-                std.debug.print("e_type_var_dispatch: could not resolve to nominal/opaque type, content={s}\n", .{@tagName(resolved.desc.content)});
                 unreachable;
             };
 
-            const origin_name = type_source_env.getIdent(info.origin);
-            const ident_name = type_source_env.getIdent(info.ident);
-
             // Step 4: Find origin module index via imports
             const origin_module_idx = self.findModuleForOrigin(type_source_env, info.origin) orelse {
-                std.debug.print("e_type_var_dispatch: could not find origin module\n", .{});
                 unreachable;
             };
             const origin_env = self.all_module_envs[origin_module_idx];
@@ -2697,13 +2687,11 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                 type_source_env, info.ident,
                 module_env, tvd.method_name,
             ) orelse {
-                std.debug.print("e_type_var_dispatch: method lookup failed for origin={s} ident={s} method={s}\n", .{ origin_name, ident_name, method_name_str });
                 unreachable;
             };
 
             // Get the node index for the method definition
             const node_idx = origin_env.getExposedNodeIndexById(qualified_method) orelse {
-                std.debug.print("e_type_var_dispatch: no exposed node for method\n", .{});
                 unreachable;
             };
 
@@ -2751,7 +2739,6 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
         },
 
         else => {
-            std.debug.print("UNHANDLED EXPR TYPE in Lower.zig: {s}\n", .{@tagName(expr)});
             unreachable;
         },
     };
