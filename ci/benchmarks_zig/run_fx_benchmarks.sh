@@ -40,6 +40,43 @@ print_file_diff() {
     git diff "$base_branch".."$pr_branch" -- "$file" 2>/dev/null | sed 's/^/    /'
 }
 
+# Run hyperfine benchmark and return percentage change via global variable
+# Returns 0 on success, 1 on failure
+# Sets BENCH_PCT_CHANGE on success
+run_benchmark() {
+    local json_file="$1"
+    local extra_args="$2"
+    local main_roc="$3"
+    local pr_roc="$4"
+    local fx_file="$5"
+    local roc_extra_args="$6"
+
+    if ! hyperfine \
+        --warmup 1 \
+        --min-runs 3 \
+        --shell=none \
+        --show-output \
+        --export-json "$json_file" \
+        $extra_args \
+        -n "main" "$main_roc $fx_file --no-cache $roc_extra_args" \
+        -n "pr" "$pr_roc $fx_file --no-cache $roc_extra_args" \
+        2>&1; then
+        return 1
+    fi
+
+    if [ -f "$json_file" ]; then
+        local main_median pr_median
+        main_median=$(jq -r '.results[] | select(.command | contains("main")) | .median' "$json_file")
+        pr_median=$(jq -r '.results[] | select(.command | contains("pr")) | .median' "$json_file")
+
+        if [ -n "$main_median" ] && [ -n "$pr_median" ] && [ "$main_median" != "null" ] && [ "$pr_median" != "null" ]; then
+            BENCH_PCT_CHANGE=$(awk "BEGIN {printf \"%.2f\", (($pr_median - $main_median) / $main_median) * 100}")
+            return 0
+        fi
+    fi
+    return 1
+}
+
 echo "=== Building FX platform ==="
 zig build test-platforms -Dplatform=fx
 
@@ -107,49 +144,47 @@ for fx_file in $FX_FILES; do
     esac
 
     # Run hyperfine comparison
-    if ! hyperfine \
-        --warmup 1 \
-        --min-runs 3 \
-        --shell=none \
-        --show-output \
-        --export-json "/tmp/bench_${filename}.json" \
-        $EXTRA_ARGS \
-        -n "main" "$MAIN_ROC $fx_file --no-cache $ROC_EXTRA_ARGS" \
-        -n "pr" "$PR_ROC $fx_file --no-cache $ROC_EXTRA_ARGS" \
-        2>&1; then
+    # Using median for robustness against outliers.
+    # Note: Our "Change" percentage may differ slightly from hyperfine's "X times faster"
+    # summary because hyperfine uses mean while we use median.
+    if ! run_benchmark "/tmp/bench_${filename}.json" "$EXTRA_ARGS" "$MAIN_ROC" "$PR_ROC" "$fx_file" "$ROC_EXTRA_ARGS"; then
         echo "ERROR: Benchmark failed for $filename"
         exit 1
     fi
 
-    # Parse JSON to detect slower execution (PR slower than main by >5%)
-    # Using median for robustness against outliers.
-    # Note: Our "Change" percentage may differ slightly from hyperfine's "X times faster"
-    # summary because hyperfine uses mean while we use median.
-    if [ -f "/tmp/bench_${filename}.json" ]; then
-        main_median=$(jq -r '.results[] | select(.command | contains("main")) | .median' "/tmp/bench_${filename}.json")
-        pr_median=$(jq -r '.results[] | select(.command | contains("pr")) | .median' "/tmp/bench_${filename}.json")
+    pct_change="$BENCH_PCT_CHANGE"
+    echo "  Change: ${pct_change}%"
 
-        # Calculate percentage change (using awk for floating point precision)
-        if [ -n "$main_median" ] && [ -n "$pr_median" ] && [ "$main_median" != "null" ] && [ "$pr_median" != "null" ]; then
-            pct_change=$(awk "BEGIN {printf \"%.2f\", (($pr_median - $main_median) / $main_median) * 100}")
-            echo "  Change: ${pct_change}%"
+    # Check for >5% slower execution - requires confirmation run
+    is_slower=$(awk "BEGIN {print ($pct_change > 5) ? 1 : 0}")
+    if [ "$is_slower" = "1" ]; then
+        echo "  Potential slowdown detected (${pct_change}%), running confirmation..."
 
-            # Check for >5% slower execution
-            is_slower=$(awk "BEGIN {print ($pct_change > 5) ? 1 : 0}")
-            if [ "$is_slower" = "1" ]; then
-                echo "  SLOWER EXECUTION in $filename (${pct_change}% slower)"
-                SLOWER_DETECTED=1
-                SLOWER_FILES="$SLOWER_FILES $filename"
+        if ! run_benchmark "/tmp/bench_${filename}_confirm.json" "$EXTRA_ARGS" "$MAIN_ROC" "$PR_ROC" "$fx_file" "$ROC_EXTRA_ARGS"; then
+            echo "ERROR: Confirmation benchmark failed for $filename"
+            exit 1
+        fi
 
-                # Check if file content changed between branches
-                check_file_changed "$fx_file" "$BASE_BRANCH" "$PR_BRANCH" || check_result=$?
-                if [ "${check_result:-0}" = "1" ]; then
-                    echo "    NOTE: File content differs between branches - comparison may not be meaningful"
-                    print_file_diff "$fx_file" "$BASE_BRANCH" "$PR_BRANCH"
-                    CHANGED_FILES="$CHANGED_FILES $filename"
-                fi
-                unset check_result
+        confirm_pct_change="$BENCH_PCT_CHANGE"
+        echo "  Confirmation change: ${confirm_pct_change}%"
+
+        # Only report slowdown if both runs show >5% slower
+        confirm_is_slower=$(awk "BEGIN {print ($confirm_pct_change > 5) ? 1 : 0}")
+        if [ "$confirm_is_slower" = "1" ]; then
+            echo "  SLOWER EXECUTION CONFIRMED in $filename (${pct_change}% then ${confirm_pct_change}%)"
+            SLOWER_DETECTED=1
+            SLOWER_FILES="$SLOWER_FILES $filename"
+
+            # Check if file content changed between branches
+            check_file_changed "$fx_file" "$BASE_BRANCH" "$PR_BRANCH" || check_result=$?
+            if [ "${check_result:-0}" = "1" ]; then
+                echo "    NOTE: File content differs between branches - comparison may not be meaningful"
+                print_file_diff "$fx_file" "$BASE_BRANCH" "$PR_BRANCH"
+                CHANGED_FILES="$CHANGED_FILES $filename"
             fi
+            unset check_result
+        else
+            echo "  Slowdown NOT confirmed (first: ${pct_change}%, second: ${confirm_pct_change}%)"
         fi
     fi
     echo ""
