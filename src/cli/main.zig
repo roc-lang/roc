@@ -3737,58 +3737,9 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     var entrypoints = try std.ArrayList(backend.Entrypoint).initCapacity(ctx.gpa, entrypoint_info.items.len);
     defer entrypoints.deinit(ctx.gpa);
 
-    const platform_stmts = platform_module.env.store.sliceStatements(platform_module.env.all_statements);
     const platform_defs = platform_module.env.store.sliceDefs(platform_module.env.all_defs);
 
-    // Debug: print all declarations in platform module
-    const stderr = ctx.io.stderr();
-    try stderr.print("DEBUG: Platform module '{s}' has {} statements, {} defs\n", .{ platform_module.name, platform_stmts.len, platform_defs.len });
-
-    // Debug: print all defs
-    for (platform_defs, 0..) |def_idx, i| {
-        const def = platform_module.env.store.getDef(def_idx);
-        const pattern = platform_module.env.store.getPattern(def.pattern);
-        switch (pattern) {
-            .assign => |assign| {
-                const ident_name = platform_module.env.getIdent(assign.ident);
-                try stderr.print("DEBUG: def[{}] assign: '{s}'\n", .{ i, ident_name });
-            },
-            else => |other| {
-                try stderr.print("DEBUG: def[{}] other pattern: {}\n", .{ i, std.meta.activeTag(other) });
-            },
-        }
-    }
-    var stmt_count: usize = 0;
-    for (platform_stmts) |stmt_idx| {
-        stmt_count += 1;
-        try stderr.print("DEBUG: Processing stmt #{} (idx={})\n", .{ stmt_count, @intFromEnum(stmt_idx) });
-        const stmt = platform_module.env.store.getStatement(stmt_idx);
-        switch (stmt) {
-            .s_decl => |decl| {
-                const pattern = platform_module.env.store.getPattern(decl.pattern);
-                switch (pattern) {
-                    .assign => |assign| {
-                        const ident_name = platform_module.env.getIdent(assign.ident);
-                        try stderr.print("DEBUG:   s_decl (assign): '{s}'\n", .{ident_name});
-                    },
-                    else => |other| {
-                        try stderr.print("DEBUG:   s_decl (other pattern): {}\n", .{std.meta.activeTag(other)});
-                    },
-                }
-            },
-            .s_import => try stderr.print("DEBUG:   s_import\n", .{}),
-            .s_alias_decl => try stderr.print("DEBUG:   s_alias_decl\n", .{}),
-            .s_nominal_decl => try stderr.print("DEBUG:   s_nominal_decl\n", .{}),
-            .s_type_anno => |anno| {
-                const ident_name = platform_module.env.getIdent(anno.name);
-                try stderr.print("DEBUG:   s_type_anno: '{s}'\n", .{ident_name});
-            },
-            else => |other| try stderr.print("DEBUG:   other statement: {}\n", .{std.meta.activeTag(other)}),
-        }
-    }
-
     for (entrypoint_info.items) |ep_info| {
-        try stderr.print("DEBUG: Looking for entrypoint: '{s}'\n", .{ep_info.roc_ident});
         // Find declaration matching the Roc identifier in the platform module's defs
         var found_expr: ?can.CIR.Expr.Idx = null;
         for (platform_defs) |def_idx| {

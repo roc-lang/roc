@@ -4757,27 +4757,21 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
         /// Generate code for a symbol lookup
         fn generateLookup(self: *Self, symbol: MonoSymbol, _: layout.Idx) Error!ValueLocation {
-            std.debug.print("[LOOKUP] symbol: module={d}, ident={d}\n", .{ symbol.module_idx, @as(u32, @bitCast(symbol.ident_idx)) });
-
             // Check if we have a location for this symbol
             const symbol_key: u48 = @bitCast(symbol);
             if (self.symbol_locations.get(symbol_key)) |loc| {
-                std.debug.print("[LOOKUP] Found in symbol_locations\n", .{});
                 return loc;
             }
 
             // Symbol not found - it might be a top-level definition
             if (self.store.getSymbolDef(symbol)) |def_expr_id| {
-                std.debug.print("[LOOKUP] Found symbol def, expr_id={d}\n", .{@intFromEnum(def_expr_id)});
                 // Generate code for the definition
                 const loc = try self.generateExpr(def_expr_id);
-                std.debug.print("[LOOKUP] Generated loc: {s}\n", .{@tagName(loc)});
                 // Cache the location
                 try self.symbol_locations.put(symbol_key, loc);
                 return loc;
             }
 
-            std.debug.print("[LOOKUP] Symbol not found!\n", .{});
             return Error.LocalNotFound;
         }
 
@@ -10395,15 +10389,11 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
         /// Generate code for a block
         fn generateBlock(self: *Self, block: anytype) Error!ValueLocation {
             const stmts = self.store.getStmts(block.stmts);
-            std.debug.print("[BLOCK] stmts.len={d}, final_expr={d}\n", .{ stmts.len, @intFromEnum(block.final_expr) });
 
             // Process each statement
-            for (stmts, 0..) |stmt, i| {
+            for (stmts) |stmt| {
                 // Generate code for the expression
-                const stmt_expr = self.store.getExpr(stmt.expr);
-                std.debug.print("[BLOCK] stmt[{d}] expr type: {s}\n", .{ i, @tagName(stmt_expr) });
                 const expr_loc = try self.generateExpr(stmt.expr);
-                std.debug.print("[BLOCK] stmt[{d}] generated, result: {s}\n", .{ i, @tagName(expr_loc) });
                 // Get the expression's layout (for mutable variable binding with correct size)
                 const expr_layout = self.getExprLayout(stmt.expr);
                 // Bind the result to the pattern, using expr layout for mutable vars
@@ -10411,7 +10401,6 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             }
 
             // Generate the final expression
-            std.debug.print("[BLOCK] generating final_expr\n", .{});
             return self.generateExpr(block.final_expr);
         }
 
@@ -11136,7 +11125,6 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             args_span: anytype,
             ret_layout: layout.Idx,
         ) Error!ValueLocation {
-            std.debug.print("[CLOSURE_DISPATCH] representation: {s}\n", .{@tagName(cv.representation)});
             switch (cv.representation) {
                 .enum_dispatch => |repr| {
                     return try self.dispatchEnumClosure(cv.stack_offset, repr.lambda_set, args_span, ret_layout);
@@ -11306,11 +11294,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             cv: anytype,
             args_span: anytype,
         ) Error!ValueLocation {
-            std.debug.print("[SINGLE_CLOSURE] entering, lambda_id={d}\n", .{@intFromEnum(cv.lambda)});
-
             // Bind captures from the closure's stack data to their symbols
             const captures = self.store.getCaptures(cv.captures);
-            std.debug.print("[SINGLE_CLOSURE] captures len={d}\n", .{captures.len});
             var offset: i32 = 0;
             for (captures) |capture| {
                 const symbol_key: u48 = @bitCast(capture.symbol);
@@ -11328,7 +11313,6 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
             // Get the lambda body and evaluate it with captures in scope
             const lambda_expr = self.store.getExpr(cv.lambda);
-            std.debug.print("[SINGLE_CLOSURE] lambda_expr type: {s}\n", .{@tagName(lambda_expr)});
             const lambda = switch (lambda_expr) {
                 .lambda => |l| l,
                 .closure => |c| blk: {
@@ -11336,13 +11320,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     if (inner == .lambda) break :blk inner.lambda;
                     unreachable;
                 },
-                else => {
-                    std.debug.print("[SINGLE_CLOSURE] unexpected lambda_expr type!\n", .{});
-                    unreachable;
-                },
+                else => unreachable,
             };
 
-            std.debug.print("[SINGLE_CLOSURE] calling callLambdaBodyDirect\n", .{});
             return try self.callLambdaBodyDirect(lambda, args_span);
         }
 
@@ -11406,10 +11386,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
         /// parameters to argument values. Used when inlining is required
         /// (e.g., lambdas returning callable values, or captures that must stay in scope).
         fn callLambdaBodyDirect(self: *Self, lambda: anytype, args_span: anytype) Error!ValueLocation {
-            std.debug.print("[LAMBDA_BODY_DIRECT] entering, body={d}\n", .{@intFromEnum(lambda.body)});
             const args = self.store.getExprSpan(args_span);
             const params = self.store.getPatternSpan(lambda.params);
-            std.debug.print("[LAMBDA_BODY_DIRECT] args.len={d}, params.len={d}\n", .{ args.len, params.len });
             for (params, 0..) |pattern_id, i| {
                 if (i >= args.len) break;
                 const arg_loc = try self.generateExpr(args[i]);
@@ -11423,11 +11401,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             self.early_return_ret_layout = lambda.ret_layout;
 
             // Generate the lambda body
-            std.debug.print("[LAMBDA_BODY_DIRECT] generating body...\n", .{});
-            const body_expr = self.store.getExpr(lambda.body);
-            std.debug.print("[LAMBDA_BODY_DIRECT] body expr type: {s}\n", .{@tagName(body_expr)});
             const result_loc = try self.generateExpr(lambda.body);
-            std.debug.print("[LAMBDA_BODY_DIRECT] body generated, result: {s}\n", .{@tagName(result_loc)});
 
             // Check if any early returns were generated
             const num_early_returns = self.early_return_patches.items.len - saved_early_return_patches_len;
