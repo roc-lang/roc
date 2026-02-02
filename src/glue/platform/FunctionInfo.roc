@@ -1,2 +1,1 @@
-## Function information
-FunctionInfo := { name : Str, type_str : Str }.{}
+FunctionInfo := { name : Str, type_str : Str }

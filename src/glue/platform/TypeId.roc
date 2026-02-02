@@ -1,1 +1,1 @@
-TypeId :: [TypeId(U64)].{}
+TypeId :: [TypeId(U64)]

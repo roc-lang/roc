@@ -1,4 +1,3 @@
-## Hosted function information (includes global index)
 HostedFunctionInfo := {
     index : U64,
     name : Str,
