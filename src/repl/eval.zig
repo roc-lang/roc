@@ -10,6 +10,7 @@ const check = @import("check");
 const Check = check.Check;
 const builtins = @import("builtins");
 const eval_mod = @import("eval");
+const roc_target = @import("roc_target");
 const CrashContext = eval_mod.CrashContext;
 const BuiltinTypes = eval_mod.BuiltinTypes;
 const builtin_loading = eval_mod.builtin_loading;
@@ -646,7 +647,7 @@ pub const Repl = struct {
     /// Evaluate using the interpreter (fallback path)
     fn evaluateWithInterpreter(self: *Repl, module_env: *ModuleEnv, final_expr_idx: can.CIR.Expr.Idx, imported_modules: *const [1]*const ModuleEnv, checker: *Check) !StepResult {
         const builtin_types_for_eval = BuiltinTypes.init(self.builtin_indices, self.builtin_module.env, self.builtin_module.env, self.builtin_module.env);
-        var interpreter = eval_mod.Interpreter.init(self.allocator, module_env, builtin_types_for_eval, self.builtin_module.env, imported_modules, &checker.import_mapping, null, null) catch |err| {
+        var interpreter = eval_mod.Interpreter.init(self.allocator, module_env, builtin_types_for_eval, self.builtin_module.env, imported_modules, &checker.import_mapping, null, null, roc_target.RocTarget.detectNative()) catch |err| {
             return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "Interpreter init error: {}", .{err}) };
         };
         defer interpreter.deinitAndFreeOtherEnvs();

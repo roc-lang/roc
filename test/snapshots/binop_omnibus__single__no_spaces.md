@@ -9,7 +9,6 @@ Err(foo)??12>5*5 or 13+2<5 and 10-1>=16 or 12<=3/5
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - binop_omnibus__single__no_spaces.md:1:5:1:8
-NOT IMPLEMENTED - binop_omnibus__single__no_spaces.md:1:1:1:13
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `foo` in this scope.
@@ -20,18 +19,6 @@ Is there an `import` or `exposing` missing up-top?
 Err(foo)??12>5*5 or 13+2<5 and 10-1>=16 or 12<=3/5
 ```
     ^^^
-
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: unsupported operator
-
-**binop_omnibus__single__no_spaces.md:1:1:1:13:**
-```roc
-Err(foo)??12>5*5 or 13+2<5 and 10-1>=16 or 12<=3/5
-```
-^^^^^^^^^^^^
-
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 
 # TOKENS
@@ -77,7 +64,28 @@ Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
 ~~~clojure
 (e-binop (op "or")
 	(e-binop (op "gt")
-		(e-runtime-error (tag "not_implemented"))
+		(e-match
+			(match
+				(cond
+					(e-tag (name "Err")
+						(args
+							(e-runtime-error (tag "ident_not_in_scope")))))
+				(branches
+					(branch
+						(patterns
+							(pattern (degenerate false)
+								(p-nominal-external (builtin)
+									(p-applied-tag))))
+						(value
+							(e-lookup-local
+								(p-assign (ident "#ok")))))
+					(branch
+						(patterns
+							(pattern (degenerate false)
+								(p-nominal-external (builtin)
+									(p-applied-tag))))
+						(value
+							(e-num (value "12")))))))
 		(e-binop (op "mul")
 			(e-num (value "5"))
 			(e-num (value "5"))))

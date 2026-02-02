@@ -38,6 +38,14 @@ pub const ClosureLayout = @import("layout.zig").ClosureLayout;
 pub const RocAlignment = @import("layout.zig").RocAlignment;
 pub const SizeAlign = @import("layout.zig").SizeAlign;
 
+// Re-export Info types
+pub const ListInfo = @import("layout.zig").ListInfo;
+pub const BoxInfo = @import("layout.zig").BoxInfo;
+pub const RecordInfo = @import("layout.zig").RecordInfo;
+pub const TupleInfo = @import("layout.zig").TupleInfo;
+pub const TagUnionInfo = @import("layout.zig").TagUnionInfo;
+pub const ScalarInfo = @import("layout.zig").ScalarInfo;
+
 // Re-export store functionality
 pub const Store = @import("store.zig").Store;
 pub const ModuleVarKey = @import("store.zig").ModuleVarKey;

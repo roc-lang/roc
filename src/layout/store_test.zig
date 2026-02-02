@@ -32,7 +32,7 @@ const LayoutTest = struct {
         result.type_scope = TypeScope.init(gpa);
         // Create single-element slice for all_module_envs
         result.module_env_ptr[0] = &result.module_env;
-        result.layout_store = try Store.init(&result.module_env_ptr, null, gpa);
+        result.layout_store = try Store.init(&result.module_env_ptr, null, gpa, base.target.TargetUsize.native);
         return result;
     }
 
@@ -48,7 +48,7 @@ const LayoutTest = struct {
     }
 
     fn initLayoutStore(self: *LayoutTest) !void {
-        self.layout_store = try Store.init(&self.module_env_ptr, null, self.gpa);
+        self.layout_store = try Store.init(&self.module_env_ptr, null, self.gpa, base.target.TargetUsize.native);
     }
 
     fn deinit(self: *LayoutTest) void {
@@ -129,7 +129,7 @@ test "fromTypeVar - zero-sized types (ZST)" {
     lt.module_env.idents.builtin_module = builtin_module_idx;
 
     lt.module_env_ptr[0] = &lt.module_env;
-    lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa);
+    lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa, base.target.TargetUsize.native);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -171,7 +171,7 @@ test "fromTypeVar - record with only zero-sized fields" {
     lt.module_env.idents.builtin_module = builtin_module_idx;
 
     lt.module_env_ptr[0] = &lt.module_env;
-    lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa);
+    lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa, base.target.TargetUsize.native);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -201,7 +201,7 @@ test "record extension with empty_record succeeds" {
     lt.module_env = try ModuleEnv.init(lt.gpa, "");
     lt.type_store = try types_store.Store.init(lt.gpa);
     lt.module_env_ptr[0] = &lt.module_env;
-    lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa);
+    lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa, base.target.TargetUsize.native);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -231,7 +231,7 @@ test "deeply nested containers with inner ZST" {
     lt.module_env.idents.builtin_module = builtin_module_idx;
 
     lt.module_env_ptr[0] = &lt.module_env;
-    lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa);
+    lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa, base.target.TargetUsize.native);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -286,7 +286,7 @@ test "nested ZST detection - List of record with ZST field" {
     lt.module_env.idents.builtin_module = builtin_module_idx;
 
     lt.module_env_ptr[0] = &lt.module_env;
-    lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa);
+    lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa, base.target.TargetUsize.native);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -316,7 +316,7 @@ test "nested ZST detection - Box of tuple with ZST elements" {
     lt.module_env.idents.builtin_module = builtin_module_idx;
 
     lt.module_env_ptr[0] = &lt.module_env;
-    lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa);
+    lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa, base.target.TargetUsize.native);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -351,7 +351,7 @@ test "nested ZST detection - deeply nested" {
     lt.module_env.idents.builtin_module = builtin_module_idx;
 
     lt.module_env_ptr[0] = &lt.module_env;
-    lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa);
+    lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa, base.target.TargetUsize.native);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -407,7 +407,7 @@ test "fromTypeVar - flex var with method constraint returning open tag union" {
     const first_ident_idx = try lt.module_env.insertIdent(Ident.for_text("first"));
 
     lt.module_env_ptr[0] = &lt.module_env;
-    lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa);
+    lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa, base.target.TargetUsize.native);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -525,7 +525,7 @@ test "fromTypeVar - type alias inside Try nominal (issue #8708)" {
     lt.module_env.idents.builtin_module = builtin_module_idx;
 
     lt.module_env_ptr[0] = &lt.module_env;
-    lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa);
+    lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa, base.target.TargetUsize.native);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -613,7 +613,7 @@ test "fromTypeVar - recursive nominal type with nested Box at depth 2+ (issue #8
     lt.module_env.idents.builtin_module = builtin_module_idx;
 
     lt.module_env_ptr[0] = &lt.module_env;
-    lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa);
+    lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa, base.target.TargetUsize.native);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -708,7 +708,7 @@ test "layoutSizeAlign - recursive nominal type with record containing List (issu
     lt.module_env.idents.builtin_module = builtin_module_idx;
 
     lt.module_env_ptr[0] = &lt.module_env;
-    lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa);
+    lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa, base.target.TargetUsize.native);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -819,7 +819,7 @@ test "fromTypeVar - recursive nominal with Box has no double-boxing (issue #8916
     lt.module_env.idents.builtin_module = builtin_module_idx;
 
     lt.module_env_ptr[0] = &lt.module_env;
-    lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa);
+    lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa, base.target.TargetUsize.native);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 

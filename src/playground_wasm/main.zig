@@ -39,7 +39,6 @@ const Check = check.Check;
 const SExprTree = base.SExprTree;
 const ModuleEnv = can.ModuleEnv;
 const Allocator = std.mem.Allocator;
-const problem = check.problem;
 const AST = parse.AST;
 const Repl = repl.Repl;
 const RocOps = builtins.host_abi.RocOps;
@@ -1004,31 +1003,31 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
             const base_ptr = @intFromPtr(buffer.ptr);
 
             logDebug("loadCompiledModule: About to deserialize common\n", .{});
-            const common = serialized_ptr.common.deserialize(base_ptr, module_source).*;
+            const common = serialized_ptr.common.deserializeInto(base_ptr, module_source);
 
             logDebug("loadCompiledModule: Deserializing ModuleEnv fields\n", .{});
             module_env_ptr.* = ModuleEnv{
                 .gpa = gpa,
                 .common = common,
-                .types = serialized_ptr.types.deserialize(base_ptr, gpa).*,
+                .types = serialized_ptr.types.deserializeInto(base_ptr, gpa),
                 .module_kind = serialized_ptr.module_kind.decode(),
                 .all_defs = serialized_ptr.all_defs,
                 .all_statements = serialized_ptr.all_statements,
                 .exports = serialized_ptr.exports,
-                .requires_types = serialized_ptr.requires_types.deserialize(base_ptr).*,
-                .for_clause_aliases = serialized_ptr.for_clause_aliases.deserialize(base_ptr).*,
+                .requires_types = serialized_ptr.requires_types.deserializeInto(base_ptr),
+                .for_clause_aliases = serialized_ptr.for_clause_aliases.deserializeInto(base_ptr),
                 .builtin_statements = serialized_ptr.builtin_statements,
-                .external_decls = serialized_ptr.external_decls.deserialize(base_ptr).*,
-                .imports = (try serialized_ptr.imports.deserialize(base_ptr, gpa)).*,
+                .external_decls = serialized_ptr.external_decls.deserializeInto(base_ptr),
+                .imports = try serialized_ptr.imports.deserializeInto(base_ptr, gpa),
                 .module_name = module_name_param,
                 .module_name_idx = undefined, // Not used for deserialized modules
                 .diagnostics = serialized_ptr.diagnostics,
-                .store = serialized_ptr.store.deserialize(base_ptr, gpa).*,
+                .store = serialized_ptr.store.deserializeInto(base_ptr, gpa),
                 .evaluation_order = null,
                 .idents = ModuleEnv.CommonIdents.find(&common),
                 .deferred_numeric_literals = try ModuleEnv.DeferredNumericLiteral.SafeList.initCapacity(gpa, 0),
                 .import_mapping = types.import_mapping.ImportMapping.init(gpa),
-                .method_idents = serialized_ptr.method_idents.deserialize(base_ptr).*,
+                .method_idents = serialized_ptr.method_idents.deserializeInto(base_ptr),
                 .rigid_vars = std.AutoHashMapUnmanaged(base.Ident.Idx, types.Var){},
             };
             logDebug("loadCompiledModule: ModuleEnv deserialized successfully\n", .{});
@@ -1148,7 +1147,7 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
         logDebug("compileSource: Type checking complete\n", .{});
 
         // Collect type checking problems and convert them to reports using ReportBuilder
-        var report_builder = problem.ReportBuilder.init(
+        var report_builder = check.report.ReportBuilder.init(
             allocator,
             result.module_env,
             type_can_ir,
@@ -1157,8 +1156,11 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
             "main.roc",
             &.{}, // other_modules - empty for playground
             &solver.import_mapping,
-            &solver.regions,
-        );
+        ) catch |err| {
+            // On allocation failure, return result with current reports
+            logDebug("compileSource: ReportBuilder.init failed: {}\n", .{err});
+            return result;
+        };
         defer report_builder.deinit();
 
         for (solver.problems.problems.items) |type_problem| {

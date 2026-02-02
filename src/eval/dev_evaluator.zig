@@ -414,7 +414,7 @@ pub const DevEvaluator = struct {
 
         // Create the global layout store
         const ls = self.allocator.create(layout.Store) catch return error.OutOfMemory;
-        ls.* = layout.Store.init(all_module_envs, builtin_str, self.allocator) catch {
+        ls.* = layout.Store.init(all_module_envs, builtin_str, self.allocator, base.target.TargetUsize.native) catch {
             self.allocator.destroy(ls);
             return error.OutOfMemory;
         };

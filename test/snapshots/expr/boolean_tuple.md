@@ -35,5 +35,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "([True, .._others], [False, .._others2])"))
+(expr (type "([True, ..], [False, ..])"))
 ~~~

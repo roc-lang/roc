@@ -201,7 +201,7 @@ NO CHANGE
 		(patt (type "List(Error) -> Try({  }, _b)"))
 		(patt (type "Error"))
 		(patt (type "{ a: U8 }"))
-		(patt (type "{ .._others, a: U8 }")))
+		(patt (type "{ .., a: U8 }")))
 	(expressions
 		(expr (type "U64"))
 		(expr (type "Error"))
@@ -210,5 +210,5 @@ NO CHANGE
 		(expr (type "List(Error) -> Try({  }, _b)"))
 		(expr (type "Error"))
 		(expr (type "{ a: U8 }"))
-		(expr (type "{ .._others, a: U8 }"))))
+		(expr (type "{ .., a: U8 }"))))
 ~~~

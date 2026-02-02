@@ -332,6 +332,104 @@ test "check type - record" {
     );
 }
 
+test "check type - record - field typo" {
+    // spellchecker:off
+    const source =
+        \\main! = |_| {}
+        \\
+        \\MyRecord : { hello: Str }
+        \\
+        \\my_record : MyRecord
+        \\my_record = { helo : "world" }
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**TYPE MISMATCH**
+        \\This expression is used in an unexpected way:
+        \\**test:6:13:6:31:**
+        \\```roc
+        \\my_record = { helo : "world" }
+        \\```
+        \\            ^^^^^^^^^^^^^^^^^^
+        \\
+        \\It has the type:
+        \\
+        \\    { helo: Str }
+        \\
+        \\But the annotation say it should be:
+        \\
+        \\    MyRecord
+        \\
+        \\**Hint:** Maybe `helo` should be `hello`?
+        \\
+        \\
+    );
+    // spellchecker:on
+}
+
+test "check type - record - field missing" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\MyRecord : { hello: Str, world: U8 }
+        \\
+        \\my_record : MyRecord
+        \\my_record = { hello : "world" }
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**TYPE MISMATCH**
+        \\This expression is used in an unexpected way:
+        \\**test:6:13:6:32:**
+        \\```roc
+        \\my_record = { hello : "world" }
+        \\```
+        \\            ^^^^^^^^^^^^^^^^^^^
+        \\
+        \\It has the type:
+        \\
+        \\    { hello: Str }
+        \\
+        \\But the annotation say it should be:
+        \\
+        \\    MyRecord
+        \\
+        \\**Hint:** This record is missing the field: `world`
+        \\
+        \\
+    );
+}
+
+test "check type - record - ext - field missing" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\MyRecord(ext) : {  hello: Str, ..ext }
+        \\
+        \\my_record : MyRecord({ world: U8 })
+        \\my_record = { hello : "world" }
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**TYPE MISMATCH**
+        \\This expression is used in an unexpected way:
+        \\**test:6:13:6:32:**
+        \\```roc
+        \\my_record = { hello : "world" }
+        \\```
+        \\            ^^^^^^^^^^^^^^^^^^^
+        \\
+        \\It has the type:
+        \\
+        \\    { hello: Str }
+        \\
+        \\But the annotation say it should be:
+        \\
+        \\    MyRecord({ world: U8 })
+        \\
+        \\**Hint:** This record is missing the field: `world`
+        \\
+        \\
+    );
+}
+
 // anonymous type equality (is_eq) //
 
 test "check type - record equality - same records are equal" {
@@ -525,7 +623,7 @@ test "check type - tag" {
     const source =
         \\MyTag
     ;
-    try checkTypesExpr(source, .pass, "[MyTag, .._others]");
+    try checkTypesExpr(source, .pass, "[MyTag, ..]");
 }
 
 test "check type - tag - args" {
@@ -535,9 +633,73 @@ test "check type - tag - args" {
     try checkTypesExpr(
         source,
         .pass,
-        \\[MyTag(Str, a), .._others]
+        \\[MyTag(Str, a), ..]
         \\  where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
         ,
+    );
+}
+
+test "check type - tag union - tag typo" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Color : [Red, Green, Blue]
+        \\
+        \\color : Color
+        \\color = Greeen
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**TYPE MISMATCH**
+        \\This expression is used in an unexpected way:
+        \\**test:6:9:6:15:**
+        \\```roc
+        \\color = Greeen
+        \\```
+        \\        ^^^^^^
+        \\
+        \\It has the type:
+        \\
+        \\    [Greeen, ..]
+        \\
+        \\But the annotation say it should be:
+        \\
+        \\    Color
+        \\
+        \\**Hint:** Maybe `Greeen` should be `Green`?
+        \\
+        \\
+    );
+}
+
+test "check type - tag - ext - typo" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Color(ext) : [Red, Blue, ..ext]
+        \\
+        \\color : Color([Green])
+        \\color = Greeen
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**TYPE MISMATCH**
+        \\This expression is used in an unexpected way:
+        \\**test:6:9:6:15:**
+        \\```roc
+        \\color = Greeen
+        \\```
+        \\        ^^^^^^
+        \\
+        \\It has the type:
+        \\
+        \\    [Greeen, ..]
+        \\
+        \\But the annotation say it should be:
+        \\
+        \\    Color([Green])
+        \\
+        \\**Hint:** Maybe `Greeen` should be `Green`?
+        \\
+        \\
     );
 }
 
@@ -679,6 +841,39 @@ test "check type - def - nested lambda with wrong annotation" {
     try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
+test "check type - def - wrong arg" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\func : Str, U8 -> U8
+        \\func = |_str, u8| u8
+        \\
+        \\test = func("hello", "world")
+    ;
+    try checkTypesModule(
+        source,
+        .fail_with,
+        \\**TYPE MISMATCH**
+        \\The second argument being passed to this function has the wrong type:
+        \\**test:6:8:**
+        \\```roc
+        \\test = func("hello", "world")
+        \\```
+        \\                     ^^^^^^^
+        \\
+        \\This argument has the type:
+        \\
+        \\    Str
+        \\
+        \\But `func` needs the second argument to be:
+        \\
+        \\    U8
+        \\
+        \\
+        ,
+    );
+}
+
 // calling functions
 
 test "check type - def - monomorphic id" {
@@ -785,6 +980,93 @@ test "check type - polymorphic function function param should be constrained" {
     ;
     // Number literal 42 used where Str is expected (function type unified from both calls)
     try checkTypesModule(source, .fail, "TYPE MISMATCH");
+}
+
+test "check type - def - call with wrong fn arity - too many" {
+    const source =
+        \\idStr : Str -> Str
+        \\idStr = |x| x
+        \\
+        \\test = idStr("hello", 10.U8)
+    ;
+    try checkTypesModule(
+        source,
+        .fail_with,
+        \\**TOO MANY ARGS**
+        \\The `idStr` function expects 1 argument, but it got 2 instead:
+        \\**test:4:8:4:29:**
+        \\```roc
+        \\test = idStr("hello", 10.U8)
+        \\```
+        \\       ^^^^^^^^^^^^^^^^^^^^^
+        \\
+        \\The `idStr` function has the type:
+        \\
+        \\    Str -> Str
+        \\
+        \\
+        ,
+    );
+}
+
+test "check type - def - call with wrong fn arity - too few" {
+    const source =
+        \\idStr : Str, U8 -> Str
+        \\idStr = |x, _| x
+        \\
+        \\test = idStr("hello")
+    ;
+    try checkTypesModule(
+        source,
+        .fail_with,
+        \\**TOO FEW ARGS**
+        \\The `idStr` function expects 2 arguments, but it got 1 instead:
+        \\**test:4:8:4:22:**
+        \\```roc
+        \\test = idStr("hello")
+        \\```
+        \\       ^^^^^^^^^^^^^^
+        \\
+        \\The `idStr` function has the type:
+        \\
+        \\    Str, U8 -> Str
+        \\
+        \\Are there any missing commas?
+        \\
+        \\
+        ,
+    );
+}
+
+test "check type - def - call with mismatch arg" {
+    const source =
+        \\idStr : Str, U8 -> Str
+        \\idStr = |x, _| x
+        \\
+        \\test = idStr("hello", "world")
+    ;
+    try checkTypesModule(
+        source,
+        .fail_with,
+        \\**TYPE MISMATCH**
+        \\The second argument being passed to this function has the wrong type:
+        \\**test:4:8:**
+        \\```roc
+        \\test = idStr("hello", "world")
+        \\```
+        \\                      ^^^^^^^
+        \\
+        \\This argument has the type:
+        \\
+        \\    Str
+        \\
+        \\But `idStr` needs the second argument to be:
+        \\
+        \\    U8
+        \\
+        \\
+        ,
+    );
 }
 
 // value restriction //
@@ -1158,22 +1440,20 @@ test "check type - nominal - local - fail" {
         source,
         .fail_with,
         \\**TYPE MISMATCH**
-        \\`Utf8Format` can't be used here because its `encode_str` method has an incompatible type:
+        \\The `encode_str` method on `Utf8Format` has an incompatible type:
         \\**test:9:20:9:23:**
         \\```roc
         \\  Str.encode("hi", fmt)
         \\```
         \\                   ^^^
         \\
-        \\`Utf8Format`.`encode_str` has the type:
+        \\The method `encode_str` has the type:
         \\
         \\    Utf8Format, Str -> List(U8)
         \\
-        \\But the expected signature is:
+        \\But I need it to have the type:
         \\
         \\    Utf8Format, Str -> Try(encoded, err)
-        \\
-        \\**Hint:** Check that the method signature matches what's expected, including argument and return types.
         \\
         \\
         ,
@@ -1225,10 +1505,29 @@ test "check type - if else - qualified bool" {
 test "check type - if else - invalid condition 1" {
     const source =
         \\x : Str
-        \\x = if 5 "true" else "false"
+        \\x = if 5.I64 "true" else "false"
     ;
     // Number literal 5 used where Bool is expected
-    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+    try checkTypesModule(
+        source,
+        .fail_with,
+        \\**TYPE MISMATCH**
+        \\This `if` condition must evaluate to a `Bool`–either `True` or `False`:
+        \\**test:2:8:2:13:**
+        \\```roc
+        \\x = if 5.I64 "true" else "false"
+        \\```
+        \\       ^^^^^
+        \\
+        \\It is:
+        \\
+        \\    I64
+        \\
+        \\But I need this to be a `Bool` value.
+        \\
+        \\
+        ,
+    );
 }
 
 test "check type - if else - invalid condition 2" {
@@ -1245,15 +1544,35 @@ test "check type - if else - invalid condition 3" {
         \\x : Str
         \\x = if "True" "true" else "false"
     ;
-    try checkTypesModule(source, .fail, "INVALID IF CONDITION");
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 test "check type - if else - different branch types 1" {
     const source =
-        \\x = if True "true" else 10
+        \\x = if True "true" else 10.U8
     ;
-    // Number literal 10 used where Str is expected (first branch type)
-    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+    try checkTypesModule(
+        source,
+        .fail_with,
+        \\**TYPE MISMATCH**
+        \\The second branch of this `if` does not match the previous branch :
+        \\**test:1:25:1:30:**
+        \\```roc
+        \\x = if True "true" else 10.U8
+        \\```
+        \\                        ^^^^^
+        \\
+        \\The second branch is:
+        \\
+        \\    U8
+        \\
+        \\But the previous branch results in:
+        \\
+        \\    Str
+        \\
+        \\
+        ,
+    );
 }
 
 test "check type - if else - different branch types 2" {
@@ -1293,7 +1612,33 @@ test "check type - match - diff cond types 1" {
         \\    False => "false"
         \\  }
     ;
-    try checkTypesModule(source, .fail, "INCOMPATIBLE MATCH PATTERNS");
+    try checkTypesModule(
+        source,
+        .fail_with,
+        \\**TYPE MISMATCH**
+        \\The first pattern in this `match` is incompatible:
+        \\**test:2:3:**
+        \\```roc
+        \\  match "hello" {
+        \\    True => "true"
+        \\    False => "false"
+        \\  }
+        \\```
+        \\    ^^^^
+        \\
+        \\The first pattern is trying to match:
+        \\
+        \\    [True, ..]
+        \\
+        \\But the expression between the `match` parenthesis has the type:
+        \\
+        \\    Str
+        \\
+        \\These can never match! Either the pattern or expression has a problem.
+        \\
+        \\
+        ,
+    );
 }
 
 test "check type - match - diff branch types" {
@@ -1407,7 +1752,7 @@ test "check type - binops and mismatch" {
     const source =
         \\x = "Hello" and False
     ;
-    try checkTypesModule(source, .fail, "INVALID BOOL OPERATION");
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 test "check type - binops or" {
@@ -1421,7 +1766,7 @@ test "check type - binops or mismatch" {
     const source =
         \\x = "Hello" or False
     ;
-    try checkTypesModule(source, .fail, "INVALID BOOL OPERATION");
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 // record access
@@ -1439,11 +1784,45 @@ test "check type - record - access" {
     try checkTypesModule(source, .{ .pass = .last_def }, "Str");
 }
 
+test "check type - record access - field typo" {
+    // spellchecker:off
+    const source =
+        \\main! = |_| {}
+        \\
+        \\r =
+        \\  {
+        \\    hello: "Hello",
+        \\    world: 10,
+        \\  }
+        \\
+        \\x = r.helo
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**TYPE MISMATCH**
+        \\This record does not have a `helo` field:
+        \\**test:9:6:9:11:**
+        \\```roc
+        \\x = r.helo
+        \\```
+        \\     ^^^^^
+        \\
+        \\This is often due to a typo. The most similar fields are:
+        \\
+        \\    - `hello`
+        \\    - `world`
+        \\
+        \\So maybe `helo` should be `hello`?
+        \\
+        \\
+    );
+    // spellchecker:on
+}
+
 test "check type - record - access func polymorphic" {
     const source =
         \\x = |r| r.my_field
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "{ my_field: a } -> a");
+    try checkTypesModule(source, .{ .pass = .last_def }, "{ .., my_field: a } -> a");
 }
 
 test "check type - record - access - not a record" {
@@ -1490,17 +1869,194 @@ test "check type - record - update 2" {
     );
 }
 
-test "check type - record - update fail" {
+test "check type - record - update - fold" {
+    const source =
+        \\test = List.fold([1.U8, 2, 3], {sum: 0.U8, count: 0.U8}, |acc, item| {..acc, sum: acc.sum + item, count: acc.count + 1})
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "test" } },
+        "{ count: U8, sum: U8 }",
+    );
+}
+
+test "check type - record - update - fail - empty record" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\test = {
+        \\  r = {}
+        \\  { ..r, hello: 10.U8 }
+        \\}
+    ;
+    // Number literal 10 used where Str is expected (data field type)
+    try checkTypesModule(source, .fail_with,
+        \\**TYPE MISMATCH**
+        \\The `r` record does not have a `hello` field:
+        \\**test:5:7:5:8:**
+        \\```roc
+        \\  { ..r, hello: 10.U8 }
+        \\```
+        \\      ^
+        \\
+        \\It is actually a record with no fields.
+        \\
+        \\
+    );
+}
+
+test "check type - record - update - fail - missing field" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\test = {
+        \\  r = { hello: "world" }
+        \\  { ..r, hllo: "goodbye" }
+        \\}
+    ;
+    // Number literal 10 used where Str is expected (data field type)
+    try checkTypesModule(source, .fail_with,
+        \\**TYPE MISMATCH**
+        \\This record does not have a `hllo` field:
+        \\**test:5:7:5:8:**
+        \\```roc
+        \\  { ..r, hllo: "goodbye" }
+        \\```
+        \\      ^
+        \\
+        \\This is often due to a typo. The most similar fields are:
+        \\
+        \\    - `hello`
+        \\
+        \\So maybe `hllo` should be `hello`?
+        \\
+        \\__Note:__ You cannot add new fields to a record with the record update syntax.
+        \\
+        \\
+    );
+}
+
+test "check type - record - update - fail - field mismatch" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\test = {
+        \\  r = { hello: "world" }
+        \\  { ..r, hello: 10.U8 }
+        \\}
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**TYPE MISMATCH**
+        \\The type of the field `hello` is incompatible:
+        \\**test:5:17:5:22:**
+        \\```roc
+        \\  { ..r, hello: 10.U8 }
+        \\```
+        \\                ^^^^^
+        \\
+        \\You are trying to update the `hello` field to be the type:
+        \\
+        \\    U8
+        \\
+        \\But the `r` record needs it to be
+        \\
+        \\    Str
+        \\
+        \\__Note:__ You cannot change the type of a record field with the record update syntax. You can do that by create a new record, copying over the unchanged fields, then transforming `hello` to be the new type.
+        \\
+        \\
+    );
+}
+
+test "check type - record - update - fail - field mismatch 2" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\test = {
+        \\  r = { hello: "world", nice: 10.U8 }
+        \\  { ..r, hello: 10.Dec }
+        \\}
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**TYPE MISMATCH**
+        \\The type of the field `hello` is incompatible:
+        \\**test:5:17:5:23:**
+        \\```roc
+        \\  { ..r, hello: 10.Dec }
+        \\```
+        \\                ^^^^^^
+        \\
+        \\You are trying to update the `hello` field to be the type:
+        \\
+        \\    Dec
+        \\
+        \\But the `r` record needs it to be
+        \\
+        \\    Str
+        \\
+        \\__Note:__ You cannot change the type of a record field with the record update syntax. You can do that by create a new record, copying over the unchanged fields, then transforming `hello` to be the new type.
+        \\
+        \\
+    );
+}
+
+test "check type - record - update - fail - field mismatch 3" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\test = {
+        \\  r = { hello: "world", nice: 10.U8 }
+        \\  { ..r, nice: 10.Dec }
+        \\}
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**TYPE MISMATCH**
+        \\The type of the field `nice` is incompatible:
+        \\**test:5:16:5:22:**
+        \\```roc
+        \\  { ..r, nice: 10.Dec }
+        \\```
+        \\               ^^^^^^
+        \\
+        \\You are trying to update the `nice` field to be the type:
+        \\
+        \\    Dec
+        \\
+        \\But the `r` record needs it to be
+        \\
+        \\    U8
+        \\
+        \\__Note:__ You cannot change the type of a record field with the record update syntax. You can do that by create a new record, copying over the unchanged fields, then transforming `nice` to be the new type.
+        \\
+        \\
+    );
+}
+
+test "check type - record - update - fail 2" {
     const source =
         \\set_data = |container, new_value| { ..container, data: new_value }
         \\
-        \\updated = set_data({ data: "hello" }, 10)
+        \\updated = set_data({ data: "hello" }, 10.U8)
     ;
     // Number literal 10 used where Str is expected (data field type)
-    try checkTypesModule(
-        source,
-        .fail,
-        "TYPE MISMATCH",
+    try checkTypesModule(source, .fail_with,
+        \\**TYPE MISMATCH**
+        \\The second argument being passed to this function has the wrong type:
+        \\**test:3:11:**
+        \\```roc
+        \\updated = set_data({ data: "hello" }, 10.U8)
+        \\```
+        \\                                      ^^^^^
+        \\
+        \\This argument has the type:
+        \\
+        \\    U8
+        \\
+        \\But `set_data` needs the second argument to be:
+        \\
+        \\    Str
+        \\
+        \\
     );
 }
 
@@ -1516,7 +2072,7 @@ test "check type - patterns - wrong type" {
         \\  }
         \\}
     ;
-    try checkTypesExpr(source, .fail, "INCOMPATIBLE MATCH PATTERNS");
+    try checkTypesExpr(source, .fail, "TYPE MISMATCH");
 }
 
 test "check type - patterns tag without payload" {
@@ -1558,7 +2114,7 @@ test "check type - patterns tag with payload mismatch" {
         \\  }
         \\}
     ;
-    try checkTypesExpr(source, .fail, "INCOMPATIBLE MATCH PATTERNS");
+    try checkTypesExpr(source, .fail, "TYPE MISMATCH");
 }
 
 test "check type - patterns str" {
@@ -1602,7 +2158,7 @@ test "check type - patterns int mismatch" {
         \\  }
         \\}
     ;
-    try checkTypesExpr(source, .fail, "INCOMPATIBLE MATCH PATTERNS");
+    try checkTypesExpr(source, .fail, "TYPE MISMATCH");
 }
 
 test "check type - patterns frac 1" {
@@ -1712,7 +2268,7 @@ test "check type - patterns record field mismatch" {
         \\  }
         \\}
     ;
-    try checkTypesExpr(source, .fail, "INCOMPATIBLE MATCH PATTERNS");
+    try checkTypesExpr(source, .fail, "TYPE MISMATCH");
 }
 
 // vars + reassignment //
@@ -1766,13 +2322,32 @@ test "check type - expect" {
 test "check type - expect not bool" {
     const source =
         \\main = {
-        \\  x = 1
+        \\  x = 1.U8
         \\  expect x
         \\  x
         \\}
     ;
     // Number literal used where Bool is expected
-    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+    try checkTypesModule(
+        source,
+        .fail_with,
+        \\**TYPE MISMATCH**
+        \\This `expect` statement must evaluate to a `Bool`–either `True` or `False`:
+        \\**test:3:10:3:11:**
+        \\```roc
+        \\  expect x
+        \\```
+        \\         ^
+        \\
+        \\It is:
+        \\
+        \\    U8
+        \\
+        \\But I need this to be a `Bool` value.
+        \\
+        \\
+        ,
+    );
 }
 
 // crash //
@@ -2864,6 +3439,79 @@ test "top-level: type annotation followed by body should not create duplicate de
     }
 }
 
+// recursive errors //
+
+test "check type - recursive type - infinite" {
+    const source =
+        \\func = |a| func([a])
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**INFINITE TYPE**
+        \\I am inferring a weird self-referential type:
+        \\**test:1:1:1:21:**
+        \\```roc
+        \\func = |a| func([a])
+        \\```
+        \\^^^^^^^^^^^^^^^^^^^^
+        \\
+        \\Here is my best effort at writing down the type. You will see `<RecursiveType>` for parts of the type that repeat infinitely.
+        \\
+        \\    List(<RecursiveType>)
+        \\
+        \\
+        \\
+    );
+}
+
+test "check type - recursive type - recursive alias" {
+    const source =
+        \\LinkedList(a) : [Nil, Cons(a, LinkedList(a))]
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**RECURSIVE ALIAS**
+        \\The type alias _LinkedList_ references itself, which is not allowed:
+        \\**test:1:31:1:44:**
+        \\```roc
+        \\LinkedList(a) : [Nil, Cons(a, LinkedList(a))]
+        \\```
+        \\                              ^^^^^^^^^^^^^
+        \\
+        \\Type aliases cannot be recursive. If you need a recursive type, use a nominal type `:=` instead of an alias`:`.
+        \\
+        \\
+    );
+}
+
+test "check type - recursive type - anonymous recursion" {
+    const source =
+        \\len = |linked_list|
+        \\  match linked_list {
+        \\    Cons(_a, rest) => 1 + len(rest)
+        \\    Nil => 0.U8
+        \\  }
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**ANONYMOUS RECURSION**
+        \\I am inferring a recursive type that has no name somewhere in `len`:
+        \\**test:1:1:5:4:**
+        \\```roc
+        \\len = |linked_list|
+        \\  match linked_list {
+        \\    Cons(_a, rest) => 1 + len(rest)
+        \\    Nil => 0.U8
+        \\  }
+        \\```
+        \\
+        \\Here is the type I'm inferring. You will see `<RecursiveType>` for parts of the type that repeat.
+        \\
+        \\    [Cons(_a, <RecursiveType>), Nil, ..]
+        \\
+        \\**Hint:** Recursive types are only allowed through nominal types. If you need a recursive data structure, define a nominal type using `:=`.
+        \\
+        \\
+    );
+}
+
 // equirecursive static dispatch //
 
 test "check type - equirecursive static dispatch" {
@@ -3138,7 +3786,7 @@ test "check type - try return with match and error propagation should type-check
         \\}
     ;
     // Expected: should pass type-checking with combined error type (open tag union)
-    try checkTypesModule(source, .{ .pass = .last_def }, "{  } -> Try(Str, [Impossible, ListWasEmpty, .._others])");
+    try checkTypesModule(source, .{ .pass = .last_def }, "{  } -> Try(Str, [Impossible, ListWasEmpty, ..])");
 }
 
 test "check type - try operator on method call should apply to whole expression (#8646)" {
@@ -3154,7 +3802,7 @@ test "check type - try operator on method call should apply to whole expression 
         \\    Ok(first_str)
         \\}
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "List(Str) -> Try(Str, [ListWasEmpty, .._others])");
+    try checkTypesModule(source, .{ .pass = .last_def }, "List(Str) -> Try(Str, [ListWasEmpty, ..])");
 }
 
 // record extension in type annotations //
@@ -3227,7 +3875,7 @@ test "check type - List.get method syntax" {
     try checkTypesModule(
         source,
         .{ .pass = .last_def },
-        \\Try(item, [OutOfBounds, .._others])
+        \\Try(item, [OutOfBounds, ..])
         \\  where [item.from_numeral : Numeral -> Try(item, [InvalidNumeral(Str)])]
         ,
     );
@@ -3278,7 +3926,7 @@ test "check type - List.first method syntax should not create cyclic types" {
     // cyclic rigid var mappings in the TypeScope when building layouts.
     //
     // The bug: method syntax creates a StaticDispatchConstraint on a flex var.
-    // When the return type is Try(item, [ListWasEmpty, .._others]) with an open tag union,
+    // When the return type is Try(item, [ListWasEmpty, ..]) with an open tag union,
     // the interpreter was creating cyclic rigid -> rigid mappings in the empty_scope TypeScope.
     //
     // Method syntax: [1].first()
@@ -3289,11 +3937,11 @@ test "check type - List.first method syntax should not create cyclic types" {
     const source =
         \\result = [1].first()
     ;
-    // Expected: Try(item, [ListWasEmpty, .._others]) with item having from_numeral constraint
+    // Expected: Try(item, [ListWasEmpty, ..]) with item having from_numeral constraint
     try checkTypesModule(
         source,
         .{ .pass = .last_def },
-        \\Try(item, [ListWasEmpty, .._others])
+        \\Try(item, [ListWasEmpty, ..])
         \\  where [item.from_numeral : Numeral -> Try(item, [InvalidNumeral(Str)])]
         ,
     );
@@ -3520,7 +4168,7 @@ test "check type - self recursive function - fibonacci - fail" {
         source,
         .fail_with,
         \\**TYPE MISMATCH**
-        \\This expression is used in an unexpected way:
+        \\The recursive definition `fib` is used in an unexpected way:
         \\**test:5:5:5:8:**
         \\```roc
         \\    fib("bad arg") + fib(n - 2.U8)
@@ -3531,7 +4179,7 @@ test "check type - self recursive function - fibonacci - fail" {
         \\
         \\    Str -> U8
         \\
-        \\But I expected it to be:
+        \\But other places expect it to be:
         \\
         \\    U8 -> U8
         \\

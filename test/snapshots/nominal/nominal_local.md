@@ -20,22 +20,20 @@ test = |{}| {
 TYPE MISMATCH - nominal_local.md:9:22:9:25
 # PROBLEMS
 **TYPE MISMATCH**
-`Utf8Format` can't be used here because its `encode_str` method has an incompatible type:
+The `encode_str` method on `Utf8Format` has an incompatible type:
 **nominal_local.md:9:22:9:25:**
 ```roc
     Str.encode("hi", fmt)
 ```
                      ^^^
 
-`Utf8Format`.`encode_str` has the type:
+The method `encode_str` has the type:
 
     Utf8Format, Str -> List(U8)
 
-But the expected signature is:
+But I need it to have the type:
 
     Utf8Format, Str -> Try(encoded, err)
-
-**Hint:** Check that the method signature matches what's expected, including argument and return types.
 
 # TOKENS
 ~~~zig

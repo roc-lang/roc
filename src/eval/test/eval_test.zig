@@ -8,6 +8,7 @@ const check = @import("check");
 const builtins = @import("builtins");
 const collections = @import("collections");
 const compiled_builtins = @import("compiled_builtins");
+const roc_target = @import("roc_target");
 
 const helpers = @import("helpers.zig");
 const builtin_loading = @import("../builtin_loading.zig");
@@ -413,7 +414,7 @@ fn runExpectSuccess(src: []const u8, should_trace: enum { trace, no_trace }) !vo
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interpreter = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interpreter = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -771,7 +772,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
     // Test 1: Evaluate with the original ModuleEnv
     {
         const builtin_types_local = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
-        var interpreter = try Interpreter.init(gpa, &original_env, builtin_types_local, builtin_module.env, &[_]*const can.ModuleEnv{}, &checker.import_mapping, null, null);
+        var interpreter = try Interpreter.init(gpa, &original_env, builtin_types_local, builtin_module.env, &[_]*const can.ModuleEnv{}, &checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
         defer interpreter.deinit();
 
         const ops = test_env_instance.get_ops();
@@ -827,9 +828,12 @@ test "ModuleEnv serialization and interpreter evaluation" {
 
         // Deserialize the ModuleEnv
         const deserialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(buffer.ptr + env_start_offset)));
-        var deserialized_env = try deserialized_ptr.deserialize(@intFromPtr(buffer.ptr), gpa, source, "TestModule");
-        // Free the imports map that was allocated during deserialization
-        defer deserialized_env.imports.map.deinit(gpa);
+        const deserialized_env = try deserialized_ptr.deserializeInto(@intFromPtr(buffer.ptr), gpa, source, "TestModule");
+        // Free the heap-allocated ModuleEnv and its imports map
+        defer {
+            deserialized_env.imports.map.deinit(gpa);
+            gpa.destroy(deserialized_env);
+        }
 
         // Verify basic deserialization worked
         try testing.expectEqualStrings("TestModule", deserialized_env.module_name);
@@ -862,7 +866,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
             }
 
             const builtin_types_local = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
-            var interpreter = try Interpreter.init(gpa, deserialized_env, builtin_types_local, builtin_module.env, &[_]*const can.ModuleEnv{}, &checker.import_mapping, null, null);
+            var interpreter = try Interpreter.init(gpa, deserialized_env, builtin_types_local, builtin_module.env, &[_]*const can.ModuleEnv{}, &checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
             defer interpreter.deinit();
 
             const ops = test_env_instance.get_ops();
@@ -2838,4 +2842,27 @@ test "diag: lambda wrapping try suffix result in Ok" {
         \\    match compute(Ok(42)) { Ok(v) => v, _ => 0 }
         \\}
     , 42, .no_trace);
+}
+
+test "Bool.True and Bool.False raw values - bug confirmation" {
+    // Test that Bool.True and Bool.False have different raw byte values
+    // Bug report: both Bool.True and Bool.False write 0x00 to memory
+    try runExpectBool("Bool.True", true, .no_trace);
+    try runExpectBool("Bool.False", false, .no_trace);
+}
+
+test "Bool in record field - bug confirmation" {
+    // Test Bool values when stored in record fields
+    // This is closer to the bug report scenario where Bool is in a struct
+    try runExpectBool("{ flag: Bool.True }.flag", true, .no_trace);
+    try runExpectBool("{ flag: Bool.False }.flag", false, .no_trace);
+}
+
+test "Bool in record with mixed alignment fields - bug confirmation" {
+    // Test Bool in a record with fields of different alignments
+    // Similar to the bug report: { key: U64, childCount: U32, isElement: Bool }
+    try runExpectBool("{ key: 42u64, flag: Bool.True }.flag", true, .no_trace);
+    try runExpectBool("{ key: 42u64, flag: Bool.False }.flag", false, .no_trace);
+    try runExpectBool("{ key: 42u64, count: 1u32, flag: Bool.True }.flag", true, .no_trace);
+    try runExpectBool("{ key: 42u64, count: 1u32, flag: Bool.False }.flag", false, .no_trace);
 }

@@ -1998,6 +1998,7 @@ fn setupTestPlatforms(
     test_platforms_step: *Step,
     strip: bool,
     omit_frame_pointer: ?bool,
+    platform_filter: ?[]const u8,
 ) void {
     // Clear the Roc cache when test platforms are rebuilt to ensure stale cached hosts aren't used
     const clear_cache_step = createClearCacheStep(b);
@@ -2005,6 +2006,9 @@ fn setupTestPlatforms(
 
     // Build all test platforms for native target
     for (all_test_platform_dirs) |platform_dir| {
+        if (platform_filter) |filter| {
+            if (!std.mem.eql(u8, platform_dir, filter)) continue;
+        }
         const copy_step = buildAndCopyTestPlatformHostLib(
             b,
             platform_dir,
@@ -2023,6 +2027,9 @@ fn setupTestPlatforms(
         const cross_resolved_target = b.resolveTargetQuery(cross_target.query);
 
         for (all_test_platform_dirs) |platform_dir| {
+            if (platform_filter) |filter| {
+                if (!std.mem.eql(u8, platform_dir, filter)) continue;
+            }
             const copy_step = buildAndCopyTestPlatformHostLib(
                 b,
                 platform_dir,
@@ -2042,6 +2049,9 @@ fn setupTestPlatforms(
         const cross_resolved_target = b.resolveTargetQuery(cross_target.query);
 
         for (all_test_platform_dirs) |platform_dir| {
+            if (platform_filter) |filter| {
+                if (!std.mem.eql(u8, platform_dir, filter)) continue;
+            }
             const copy_step = buildAndCopyTestPlatformHostLib(
                 b,
                 platform_dir,
@@ -2116,6 +2126,7 @@ pub fn build(b: *std.Build) void {
     const trace_eval = b.option(bool, "trace-eval", "Enable detailed evaluation tracing for debugging") orelse (optimize == .Debug);
     const trace_refcount = b.option(bool, "trace-refcount", "Enable detailed refcount tracing for debugging memory issues") orelse false;
     const trace_modules = b.option(bool, "trace-modules", "Enable module compilation and import resolution tracing") orelse false;
+    const platform_filter = b.option([]const u8, "platform", "Filter which test platform to build (e.g., fx, str, int, fx-open)");
     const trace_build = b.option(bool, "trace-build", "Enable detailed build pipeline tracing") orelse false;
 
     const parsed_args = parseBuildArgs(b);
@@ -2203,42 +2214,18 @@ pub fn build(b: *std.Build) void {
 
     const roc_modules = modules.RocModules.create(b, build_options, zstd);
 
-    // Build-time compiler for builtin .roc modules with caching
+    // Build-time compiler for builtin .roc modules
     //
-    // Changes to .roc files in src/build/roc/ are automatically detected and trigger recompilation.
-    // However, if you modify the compiler itself (e.g., parse, can, check modules) and want those
-    // changes reflected in the builtin .bin files, you need to run: zig build rebuild-builtins
-    //
-    // We cache the builtin compiler executable to avoid ~doubling normal build times.
-    // CI always rebuilds from scratch, so it's not affected by this caching.
+    // Always rebuild builtins when building roc to ensure they match the compiler.
+    // The builtin_compiler is cached by zig, so this only adds overhead when
+    // compiler sources actually change.
     const builtin_roc_path = "src/build/roc/Builtin.roc";
-
-    // Check if we need to rebuild builtins by comparing .roc and .bin file timestamps
-    const should_rebuild_builtins = blk: {
-        const builtin_bin_path = "zig-out/builtins/Builtin.bin";
-
-        const roc_stat = std.fs.cwd().statFile(builtin_roc_path) catch break :blk true;
-        const bin_stat = std.fs.cwd().statFile(builtin_bin_path) catch break :blk true;
-
-        // If .roc file is newer than .bin file, rebuild
-        if (roc_stat.mtime > bin_stat.mtime) {
-            break :blk true;
-        }
-
-        // Check if builtin_indices.bin exists
-        _ = std.fs.cwd().statFile("zig-out/builtins/builtin_indices.bin") catch break :blk true;
-
-        // Builtin.bin exists and is up-to-date
-        break :blk false;
-    };
 
     const write_compiled_builtins = b.addWriteFiles();
 
-    // Regenerate .bin files if necessary
-    if (should_rebuild_builtins) {
-        const run_builtin_compiler = createAndRunBuiltinCompiler(b, roc_modules, flag_enable_tracy, &.{builtin_roc_path});
-        write_compiled_builtins.step.dependOn(&run_builtin_compiler.step);
-    }
+    // Always regenerate .bin files to ensure they match the current compiler
+    const run_builtin_compiler = createAndRunBuiltinCompiler(b, roc_modules, flag_enable_tracy, &.{builtin_roc_path});
+    write_compiled_builtins.step.dependOn(&run_builtin_compiler.step);
 
     // Copy Builtin.bin from zig-out/builtins/
     _ = write_compiled_builtins.addCopyFile(
@@ -2281,7 +2268,7 @@ pub fn build(b: *std.Build) void {
     roc_modules.lsp.addImport("compiled_builtins", compiled_builtins_module);
 
     // Setup test platform host libraries
-    setupTestPlatforms(b, target, optimize, roc_modules, test_platforms_step, strip, omit_frame_pointer);
+    setupTestPlatforms(b, target, optimize, roc_modules, test_platforms_step, strip, omit_frame_pointer, platform_filter);
 
     const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, omit_frame_pointer, use_system_llvm, user_llvm_path, flag_enable_tracy, zstd, compiled_builtins_module, write_compiled_builtins, flag_enable_tracy) orelse return;
     roc_modules.addAll(roc_exe);
@@ -3051,6 +3038,10 @@ fn add_fuzz_target(
     // Required for fuzzing.
     fuzz_obj.root_module.link_libc = true;
     fuzz_obj.root_module.stack_check = false;
+    // Enable coverage instrumentation for AFL++ when building fuzz targets.
+    if (fuzz and build_afl) {
+        fuzz_obj.sanitize_coverage_trace_pc_guard = true;
+    }
 
     roc_modules.addAll(fuzz_obj);
     add_tracy(b, roc_modules.build_options, fuzz_obj, target, false, tracy);
@@ -3268,6 +3259,7 @@ fn addMainExe(
             cross_shim_lib.root_module.addImport("reporting", roc_modules.reporting);
             cross_shim_lib.root_module.addImport("tracy", roc_modules.tracy);
             cross_shim_lib.root_module.addImport("build_options", roc_modules.build_options);
+            cross_shim_lib.root_module.addImport("roc_target", roc_modules.roc_target);
             // Note: ipc module is NOT added for wasm32-freestanding as it uses POSIX calls
             // The interpreter shim main.zig has a stub for wasm32
         } else {

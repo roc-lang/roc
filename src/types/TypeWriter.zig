@@ -380,7 +380,7 @@ fn writeVarWithContext(self: *TypeWriter, writer: *ByteWrite, var_: Var, context
     }
 
     if (self.hasSeenVar(resolved.var_)) {
-        _ = try writer.write("...");
+        _ = try writer.write("<RecursiveType>");
     } else {
         try self.seen.append(resolved.var_);
         defer _ = self.seen.pop();
@@ -614,7 +614,11 @@ fn writeRecord(self: *TypeWriter, writer: *ByteWrite, record: Record, root_var: 
                 // TODO: ^ here, we should consider polarity
 
                 _ = try writer.write("..");
-                try self.writeFlexVarName(writer, flex.var_, .RecordExtension, root_var);
+                const occurrences = try self.countVarOccurrences(record.ext, root_var);
+                if (occurrences > 1) {
+                    try self.writeFlexVarName(writer, flex.var_, .RecordExtension, root_var);
+                }
+
                 if (num_fields > 0) _ = try writer.write(", ");
             }
 
@@ -741,7 +745,10 @@ fn writeTagUnion(self: *TypeWriter, writer: *ByteWrite, tag_union: TagUnion, roo
                 _ = try writer.write(self.getIdent(ident_idx));
             } else if (true) {
                 // TODO: ^ here, we should consider polarity
-                try self.writeFlexVarName(writer, tag_union.ext, .TagUnionExtension, root_var);
+                const occurrences = try self.countVarOccurrences(ext_resolved.var_, root_var);
+                if (occurrences > 1) {
+                    try self.writeFlexVarName(writer, tag_union.ext, .TagUnionExtension, root_var);
+                }
             }
 
             _ = try writer.write("]");

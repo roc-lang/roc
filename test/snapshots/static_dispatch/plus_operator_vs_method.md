@@ -40,11 +40,11 @@ result1 = a + b
 ```
           ^^^^^
 
-The value's type, which does not have a method named **plus**, is:
+The value's type, which does not have a method named**plus**, is:
 
     MyType
 
-**Hint:**The **+** operator calls a method named **plus** on the value preceding it, passing the value after the operator as the one argument.
+**Hint:** The **+** operator calls a method named **plus** on the value preceding it, passing the value after the operator as the one argument.
 
 **MISSING METHOD**
 This **plus** method is being called on a value whose type doesn't have that method:
@@ -54,7 +54,7 @@ result2 = c.plus(d)
 ```
             ^^^^
 
-The value's type, which does not have a method named **plus**, is:
+The value's type, which does not have a method named**plus**, is:
 
     MyType
 

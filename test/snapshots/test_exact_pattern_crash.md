@@ -34,7 +34,7 @@ main = {
 ~~~
 # EXPECTED
 UNUSED VARIABLE - test_exact_pattern_crash.md:19:5:19:7
-TOO MANY ARGUMENTS - test_exact_pattern_crash.md:23:10:23:50
+TOO MANY ARGS - test_exact_pattern_crash.md:23:10:23:50
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable `p1` is not used anywhere in your code.
@@ -48,15 +48,15 @@ The unused variable is declared here:
     ^^
 
 
-**TOO MANY ARGUMENTS**
-The function `map_pair` expects 3 arguments, but 4 were provided:
+**TOO MANY ARGS**
+The `map_pair` function expects 3 arguments, but it got 4 instead:
 **test_exact_pattern_crash.md:23:10:23:50:**
 ```roc
     p2 = map_pair(3, 4, (|x| x + 1), (|y| y * 2))
 ```
          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-The function has the signature:
+The `map_pair` function has the type:
 
     Pair(a, b), (a -> c), (b -> d) -> Pair(c, d)
 
@@ -325,7 +325,7 @@ main = {
 	(defs
 		(patt (type "Pair(a, b) -> Pair(b, a)"))
 		(patt (type "Pair(a, b), (a -> c), (b -> d) -> Pair(c, d)"))
-		(patt (type "Error")))
+		(patt (type "_e")))
 	(type_decls
 		(alias (type "Pair(a, b)")
 			(ty-header (name "Pair")
@@ -335,5 +335,5 @@ main = {
 	(expressions
 		(expr (type "Pair(a, b) -> Pair(b, a)"))
 		(expr (type "Pair(a, b), (a -> c), (b -> d) -> Pair(c, d)"))
-		(expr (type "Error"))))
+		(expr (type "_e"))))
 ~~~

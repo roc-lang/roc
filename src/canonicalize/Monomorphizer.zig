@@ -1608,6 +1608,21 @@ fn duplicateExpr(
             }, base.Region.zero());
         },
 
+        .e_tuple_access => |tuple_access| {
+            const new_tuple = try self.duplicateExpr(tuple_access.tuple, type_subs);
+
+            if (new_tuple == tuple_access.tuple) {
+                return expr_idx;
+            }
+
+            return try self.module_env.store.addExpr(Expr{
+                .e_tuple_access = .{
+                    .tuple = new_tuple,
+                    .elem_index = tuple_access.elem_index,
+                },
+            }, base.Region.zero());
+        },
+
         .e_record => |record| {
             const field_indices = self.module_env.store.sliceRecordFields(record.fields);
             const fields_start = self.module_env.store.scratch.?.record_fields.top();
@@ -1815,6 +1830,7 @@ fn duplicateExpr(
         .e_str,
         .e_lookup_local,
         .e_lookup_external,
+        .e_lookup_pending,
         .e_empty_list,
         .e_empty_record,
         .e_zero_argument_tag,

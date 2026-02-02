@@ -255,15 +255,16 @@ test "fx platform all_syntax_test.roc prints expected output" {
         "Line 3\n" ++
         "Unicode escape sequence: \u{00A0}\n" ++
         "This is an effectful function!\n" ++
-        "15.0\n" ++
-        "42.0\n" ++
+        "15\n" ++
+        "10\n" ++
+        "42\n" ++
         "NotOneTwoNotFive\n" ++
-        "(\"Roc\", 1.0)\n" ++
+        "(\"Roc\", 1)\n" ++
         "Builtin.List.[\"a\", \"b\"]\n" ++
-        "(\"Roc\", 1.0, 1.0, \"Roc\")\n" ++
-        "10.0\n" ++
+        "(\"Roc\", 1, 1, \"Roc\")\n" ++
+        "10\n" ++
         "{ age: 31, name: \"Alice\" }\n" ++
-        "{ binary: 5, explicit_dec: 5.0, explicit_i128: 5, explicit_i16: 5, explicit_i32: 5, explicit_i64: 5, explicit_i8: 5, explicit_u128: 5, explicit_u16: 5, explicit_u32: 5, explicit_u64: 5, explicit_u8: 5, hex: 5, octal: 5, usage_based: 5 }\n" ++
+        "{ binary: 5, explicit_dec: 5, explicit_i128: 5, explicit_i16: 5, explicit_i32: 5, explicit_i64: 5, explicit_i8: 5, explicit_u128: 5, explicit_u16: 5, explicit_u32: 5, explicit_u64: 5, explicit_u8: 5, hex: 5, octal: 5, usage_based: 5 }\n" ++
         "False\n" ++
         "99\n" ++
         "\"12345.0\"\n" ++
@@ -273,7 +274,7 @@ test "fx platform all_syntax_test.roc prints expected output" {
         "\"other letter\"\n";
 
     try testing.expectEqualStrings(expected_stdout, run_result.stdout);
-    try testing.expectEqualStrings("ROC DBG: 42.0\n", run_result.stderr);
+    try testing.expectEqualStrings("ROC DBG: 42\n", run_result.stderr);
 }
 
 test "fx platform match returning string" {
@@ -296,6 +297,22 @@ test "fx platform match with wildcard" {
     defer allocator.free(result.stderr);
 
     try checkTestSuccess(result);
+}
+
+test "fx platform wildcard match on open union" {
+    // Tests that wildcard patterns on open tag unions work correctly.
+    // Bug: When error propagates through open tag unions [Exit(I64), ..],
+    // Err(_) wildcard match was returning 0 instead of the expected value 42.
+    const allocator = testing.allocator;
+
+    const run_result = try runRoc(allocator, "test/fx/wildcard_match_open_union_bug.roc", .{});
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    try checkSuccess(run_result);
+
+    // Verify that the wildcard match worked correctly
+    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "PASS: Wildcard match worked correctly") != null);
 }
 
 test "fx platform dbg missing return value" {
@@ -537,7 +554,8 @@ test "fx platform string interpolation type mismatch" {
     try testing.expect(std.mem.indexOf(u8, run_result.stderr, "TYPE MISMATCH") != null);
     try testing.expect(std.mem.indexOf(u8, run_result.stderr, "U8") != null);
     try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Str") != null);
-    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Found 1 error") != null);
+    // The coordinator now detects additional errors (COMPTIME EVAL ERROR) beyond TYPE MISMATCH
+    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Found 2 error") != null);
 
     // The program should still produce output (it runs despite errors)
     try testing.expect(std.mem.indexOf(u8, run_result.stdout, "two:") != null);
@@ -723,108 +741,6 @@ test "fx platform expect with toplevel numeric" {
         },
     }
 }
-
-// TODO: Fix test7.roc - currently fails with "UNRECOGNIZED SYNTAX" for `_ = x` pattern
-// test "fx platform test7" {
-//     const allocator = testing.allocator;
-//
-//     const run_result = try std.process.Child.run(.{
-//         .allocator = allocator,
-//         .argv = &[_][]const u8{
-//             "roc_binary_path",
-//             "test/fx/test7.roc",
-//         },
-//     });
-//     defer allocator.free(run_result.stdout);
-//     defer allocator.free(run_result.stderr);
-
-//     switch (run_result.term) {
-//         .Exited => |code| {
-//             if (code != 0) {
-//                 std.debug.print("Run failed with exit code {}\n", .{code});
-//                 std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
-//                 std.debug.print("STDERR: {s}\n", .{run_result.stderr});
-//                 return error.RunFailed;
-//             }
-//         },
-//         else => {
-//             std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
-//             std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
-//             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
-//             return error.RunFailed;
-//         },
-//     }
-
-//     try testing.expect(std.mem.indexOf(u8, run_result.stdout, "done") != null);
-// }
-
-// TODO: Fix test8.roc - currently fails with "UNRECOGNIZED SYNTAX" for `_ = x` pattern
-// test "fx platform test8" {
-//     const allocator = testing.allocator;
-//
-//     const run_result = try std.process.Child.run(.{
-//         .allocator = allocator,
-//         .argv = &[_][]const u8{
-//             "roc_binary_path",
-//             "test/fx/test8.roc",
-//         },
-//     });
-//     defer allocator.free(run_result.stdout);
-//     defer allocator.free(run_result.stderr);
-
-//     switch (run_result.term) {
-//         .Exited => |code| {
-//             if (code != 0) {
-//                 std.debug.print("Run failed with exit code {}\n", .{code});
-//                 std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
-//                 std.debug.print("STDERR: {s}\n", .{run_result.stderr});
-//                 return error.RunFailed;
-//             }
-//         },
-//         else => {
-//             std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
-//             std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
-//             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
-//             return error.RunFailed;
-//         },
-//     }
-
-//     try testing.expect(std.mem.indexOf(u8, run_result.stdout, "done") != null);
-// }
-
-// TODO: Fix test9.roc - currently fails with "UNRECOGNIZED SYNTAX" for `_ = y` pattern
-// test "fx platform test9" {
-//     const allocator = testing.allocator;
-//
-//     const run_result = try std.process.Child.run(.{
-//         .allocator = allocator,
-//         .argv = &[_][]const u8{
-//             "roc_binary_path",
-//             "test/fx/test9.roc",
-//         },
-//     });
-//     defer allocator.free(run_result.stdout);
-//     defer allocator.free(run_result.stderr);
-
-//     switch (run_result.term) {
-//         .Exited => |code| {
-//             if (code != 0) {
-//                 std.debug.print("Run failed with exit code {}\n", .{code});
-//                 std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
-//                 std.debug.print("STDERR: {s}\n", .{run_result.stderr});
-//                 return error.RunFailed;
-//             }
-//         },
-//         else => {
-//             std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
-//             std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
-//             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
-//             return error.RunFailed;
-//         },
-//     }
-
-//     try testing.expect(std.mem.indexOf(u8, run_result.stdout, "done") != null);
-// }
 
 // The platform requires `main! : () => {}` but test_type_mismatch.roc returns Str.
 // This should be a type error.
@@ -1341,13 +1257,13 @@ test "fx platform issue8943 error message memory corruption" {
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
 
-    // This file is expected to fail with EXPECTED TRY TYPE and COMPTIME CRASH errors
+    // This file is expected to fail with TYPE MISMATCH and COMPTIME CRASH errors
     try checkFailure(run_result);
 
-    // Check that the EXPECTED TRY TYPE error is present
-    const has_try_type_error = std.mem.indexOf(u8, run_result.stderr, "EXPECTED TRY TYPE") != null;
+    // Check that the TYPE MISMATCH error is present
+    const has_try_type_error = std.mem.indexOf(u8, run_result.stderr, "TYPE MISMATCH") != null;
     if (!has_try_type_error) {
-        std.debug.print("Expected 'EXPECTED TRY TYPE' error but got:\n", .{});
+        std.debug.print("Expected 'TYPE MISMATCH' error but got:\n", .{});
         std.debug.print("STDERR: {s}\n", .{run_result.stderr});
         return error.ExpectedTryTypeError;
     }
@@ -1370,7 +1286,7 @@ test "fx platform issue8943 error message memory corruption" {
         search_start = pos + 1;
     }
 
-    // We expect at least 2 occurrences: one in EXPECTED TRY TYPE and one in COMPTIME CRASH
+    // We expect at least 2 occurrences: one in TYPE MISMATCH and one in COMPTIME CRASH
     // Plus one more at the end in "Found X error(s)..."
     if (filename_count < 3) {
         std.debug.print("Error output appears corrupted - filename 'issue8943.roc' found only {d} times (expected at least 3):\n", .{filename_count});
@@ -1401,5 +1317,59 @@ test "fx platform issue8943 error message memory corruption" {
         std.debug.print("Crash message appears corrupted - expected 'Try' not found:\n", .{});
         std.debug.print("STDERR: {s}\n", .{run_result.stderr});
         return error.CorruptedCrashMessage;
+    }
+}
+
+test "fx platform issue9118 try operator on tuple in type method" {
+    // Regression test for https://github.com/roc-lang/roc/issues/9118
+    // The bug was that using the ? operator on a tuple (instead of a Try type)
+    // inside a type method would cause a segfault in the interpreter.
+    // The ? operator expects a Try type [Ok(a), Err(e)] but was given a tuple.
+    const allocator = testing.allocator;
+
+    const run_result = try runRoc(allocator, "test/fx/for_var_in_type_method.roc", .{
+        .extra_args = &[_][]const u8{"test"},
+    });
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    // This file is expected to fail with a TYPE MISMATCH error because
+    // the ? operator is used on a tuple (Value, [Ok, Err(Str)]) instead of
+    // a Try type [Ok(Value), Err(Str)].
+    // The important thing is that it should NOT segfault - it should report
+    // the type error gracefully.
+
+    switch (run_result.term) {
+        .Exited => |code| {
+            if (code == 0) {
+                std.debug.print("Expected type error but test succeeded\n", .{});
+                return error.UnexpectedSuccess;
+            }
+            // Expected to fail - check for type mismatch error message
+            const has_type_error = std.mem.indexOf(u8, run_result.stderr, "TYPE MISMATCH") != null;
+            if (!has_type_error) {
+                std.debug.print("Expected 'TYPE MISMATCH' error but got:\n", .{});
+                std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+                return error.ExpectedTypeError;
+            }
+            // Verify it mentions the ? operator and Try type
+            const mentions_try = std.mem.indexOf(u8, run_result.stderr, "Try") != null;
+            if (!mentions_try) {
+                std.debug.print("Expected error to mention 'Try' type but got:\n", .{});
+                std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+                return error.ExpectedTryMention;
+            }
+        },
+        .Signal => |sig| {
+            // This is the bug we're testing for - it should NOT crash with a signal
+            std.debug.print("CRITICAL: Test crashed with signal {} (this is the bug we're testing for)\n", .{sig});
+            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+            return error.Segfault;
+        },
+        else => {
+            std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
+            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+            return error.RunTerminatedAbnormally;
+        },
     }
 }

@@ -303,6 +303,8 @@ fn collectClosuresFromExpr(self: *Self, module: *ModuleEnv, expr_idx: Expr.Idx) 
         .e_ellipsis,
         .e_anno_only,
         .e_return,
+        .e_lookup_pending,
+        .e_tuple_access,
         => {},
     }
 }

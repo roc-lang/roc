@@ -54,8 +54,7 @@ pub fn handler(comptime ServerType: type) type {
             };
 
             // Use the syntax checker to get the canonicalized module
-            const symbols = self.syntax_checker.getDocumentSymbols(self.allocator, uri, source) catch |err| {
-                std.log.err("document symbol extraction failed: {s}", .{@errorName(err)});
+            const symbols = self.syntax_checker.getDocumentSymbols(self.allocator, uri, source) catch {
                 try self.sendResponse(id, &[_]SymbolInformation{});
                 return;
             };
@@ -71,7 +70,7 @@ pub fn handler(comptime ServerType: type) type {
     };
 }
 
-/// LSP SymbolKind values
+/// LSP SymbolKind values - must be serialized as integers per LSP spec
 pub const SymbolKind = enum(u32) {
     file = 1,
     module = 2,
@@ -99,6 +98,11 @@ pub const SymbolKind = enum(u32) {
     event = 24,
     operator = 25,
     type_parameter = 26,
+
+    /// Custom JSON serialization to output as integer (LSP spec requirement)
+    pub fn jsonStringify(self: SymbolKind, jw: anytype) !void {
+        try jw.write(@intFromEnum(self));
+    }
 };
 
 /// A position in a text document (line and character offset).
