@@ -115,7 +115,97 @@ test "glue command with CGlue generates expected C header" {
     }
 }
 
-test "generated C header compiles with zig cc" {
+// Test for Windows-specific crash when returning non-empty List(OpaqueType) in Ok()
+// See PLAN.md for detailed investigation of this bug.
+// This test documents the expected behavior - it should succeed on all platforms.
+// Currently crashes on Windows with stack overflow (exit code 134).
+test "glue command with MinimalGlue returns non-empty file list" {
+    const allocator = std.testing.allocator;
+
+    // Create temp directory for output
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const tmp_path = tmp_dir.dir.realpathAlloc(allocator, ".") catch unreachable;
+    defer allocator.free(tmp_path);
+
+    // Run: roc experimental-glue src/glue/src/MinimalGlue.roc <tmp_path> test/fx/platform/main.roc
+    // MinimalGlue returns Ok([{ name: "test.txt", content: "hello" }])
+    const result = try util.runRocCommand(allocator, &.{
+        "experimental-glue",
+        "src/glue/src/MinimalGlue.roc",
+        tmp_path,
+        "test/fx/platform/main.roc",
+    });
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    // Should not panic or hit unreachable
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "PANIC") == null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "unreachable") == null);
+
+    // Should complete successfully (exit code 0)
+    // On Windows, this currently fails with stack overflow (exit code 134)
+    if (result.term != .Exited or result.term.Exited != 0) {
+        std.debug.print("\nMinimalGlue command failed!\n", .{});
+        std.debug.print("Exit term: {}\n", .{result.term});
+        std.debug.print("stderr:\n{s}\n", .{result.stderr});
+        std.debug.print("stdout:\n{s}\n", .{result.stdout});
+        try std.testing.expect(false);
+    }
+
+    // Should have written the output file
+    const output_path = std.fs.path.join(allocator, &.{ tmp_path, "test.txt" }) catch unreachable;
+    defer allocator.free(output_path);
+
+    const content = std.fs.cwd().readFileAlloc(allocator, output_path, 1024) catch |err| {
+        std.debug.print("\nFailed to read output file '{s}': {}\n", .{ output_path, err });
+        try std.testing.expect(false);
+        unreachable;
+    };
+    defer allocator.free(content);
+
+    try std.testing.expectEqualStrings("hello", content);
+}
+
+// Contrast test: Empty list works fine on all platforms including Windows
+test "glue command with EmptyListGlue returns empty file list" {
+    const allocator = std.testing.allocator;
+
+    // Create temp directory for output
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const tmp_path = tmp_dir.dir.realpathAlloc(allocator, ".") catch unreachable;
+    defer allocator.free(tmp_path);
+
+    // Run: roc experimental-glue src/glue/src/EmptyListGlue.roc <tmp_path> test/fx/platform/main.roc
+    // EmptyListGlue returns Ok([])
+    const result = try util.runRocCommand(allocator, &.{
+        "experimental-glue",
+        "src/glue/src/EmptyListGlue.roc",
+        tmp_path,
+        "test/fx/platform/main.roc",
+    });
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    // Should not panic
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "PANIC") == null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "unreachable") == null);
+
+    // Should complete successfully on all platforms
+    if (result.term != .Exited or result.term.Exited != 0) {
+        std.debug.print("\nEmptyListGlue command failed!\n", .{});
+        std.debug.print("Exit term: {}\n", .{result.term});
+        std.debug.print("stderr:\n{s}\n", .{result.stderr});
+        std.debug.print("stdout:\n{s}\n", .{result.stdout});
+        try std.testing.expect(false);
+    }
+
+    // Output should indicate 0 files were generated
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "0 file") != null);
+}
+
+test "glue command generated C header compiles with zig cc" {
     const allocator = std.testing.allocator;
 
     // Create temp directory for output
