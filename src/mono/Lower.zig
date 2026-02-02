@@ -296,8 +296,7 @@ fn lowerExternalDefByIdx(self: *Self, symbol: MonoSymbol, target_def_idx: u16) A
 
 /// Find the definition index for a given pattern (if it's a top-level def).
 /// Returns null if the pattern doesn't correspond to a top-level definition.
-fn findDefForPattern(self: *Self, module_env: *ModuleEnv, pattern_idx: CIR.Pattern.Idx) ?CIR.Def.Idx {
-    _ = self;
+fn findDefForPattern(_: *Self, module_env: *ModuleEnv, pattern_idx: CIR.Pattern.Idx) ?CIR.Def.Idx {
     const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
     for (defs_slice) |def_idx| {
         const def = module_env.store.getDef(def_idx);

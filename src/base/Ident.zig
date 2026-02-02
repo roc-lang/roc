@@ -93,12 +93,10 @@ pub const Idx = packed struct(u32) {
     /// Custom formatter for std.fmt - allows printing with `{}`
     pub fn format(
         self: Idx,
-        comptime fmt: []const u8,
-        options: std.fmt.FormatOptions,
+        comptime _: []const u8,
+        _: std.fmt.FormatOptions,
         writer: anytype,
     ) !void {
-        _ = fmt;
-        _ = options;
         // Extract from packed struct to avoid formatting issues
         const idx_val: u32 = @intCast(self.idx);
         try writer.print("Ident({?})", .{idx_val});
