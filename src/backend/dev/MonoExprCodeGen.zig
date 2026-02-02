@@ -7023,7 +7023,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 self.codegen.patchJump(patch, end_offset);
             }
 
-            // Return the result location - use .stack_str/.list_stack for 24-byte types so nested operations work correctly
+            // Return the result location - use appropriate types for multi-word values
             if (result_slot) |slot| {
                 if (is_str_result) {
                     return .{ .stack_str = slot };
@@ -7036,6 +7036,10 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                             .num_elements = 0, // Unknown at compile time
                         },
                     };
+                }
+                // Return stack_i128 for 128-bit types (Dec, i128, u128)
+                if (result_size == 16) {
+                    return .{ .stack_i128 = slot };
                 }
                 return .{ .stack = slot };
             } else if (result_reg) |reg| {
@@ -11822,22 +11826,14 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         }
 
         /// Compile a single procedure as a complete unit.
-        /// Generates prologue, body, and epilogue (including RET).
+        /// Uses deferred prologue pattern: generates body first to determine which
+        /// callee-saved registers are used, then prepends prologue and adjusts relocations.
         fn compileProc(self: *Self, proc: MonoProc) Error!void {
-            const code_start = self.codegen.currentOffset();
             const key: u48 = @bitCast(proc.name);
-
-            // CRITICAL: Register the procedure BEFORE generating the body
-            // so that recursive calls within the body can find this procedure.
-            // We'll update code_end after generation is complete.
-            try self.proc_registry.put(key, .{
-                .code_start = code_start,
-                .code_end = 0, // Placeholder, updated below
-                .name = proc.name,
-            });
 
             // Save current state - procedure has its own scope that shouldn't pollute caller
             const saved_stack_offset = self.codegen.stack_offset;
+            const saved_callee_saved_used = self.codegen.callee_saved_used;
             var saved_symbol_locations = self.symbol_locations.clone() catch return Error.OutOfMemory;
             defer saved_symbol_locations.deinit();
             var saved_mutable_var_slots = self.mutable_var_slots.clone() catch return Error.OutOfMemory;
@@ -11846,9 +11842,29 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // Clear state for procedure's scope
             self.symbol_locations.clearRetainingCapacity();
             self.mutable_var_slots.clearRetainingCapacity();
+            self.codegen.callee_saved_used = 0;
 
-            // Generate function prologue (save frame, allocate stack)
-            try self.emitPrologue();
+            // PHASE 1: Generate body first (to determine callee_saved_used)
+            // Initialize stack_offset to reserve space for callee-saved area
+            if (comptime builtin.cpu.arch == .x86_64) {
+                // Reserve 40 bytes for 5 callee-saved registers at fixed offsets
+                self.codegen.stack_offset = -CodeGen.CALLEE_SAVED_AREA_SIZE;
+            } else {
+                // aarch64: FP-relative addressing, first slot at FP+16
+                self.codegen.stack_offset = 16;
+            }
+
+            const body_start = self.codegen.currentOffset();
+            const relocs_before = self.codegen.relocations.items.len;
+
+            // CRITICAL: Register the procedure BEFORE generating the body
+            // so that recursive calls within the body can find this procedure.
+            // We use body_start as a temporary code_start; will be updated after prologue prepend.
+            try self.proc_registry.put(key, .{
+                .code_start = body_start,
+                .code_end = 0, // Placeholder, updated below
+                .name = proc.name,
+            });
 
             // Set up recursive context
             const old_recursive_symbol = self.current_recursive_symbol;
@@ -11873,14 +11889,107 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             self.current_recursive_symbol = old_recursive_symbol;
             self.current_recursive_join_point = old_recursive_join_point;
 
-            // Update the code_end now that generation is complete
-            const code_end = self.codegen.currentOffset();
-            if (self.proc_registry.getPtr(key)) |entry| {
-                entry.code_end = code_end;
+            const body_end = self.codegen.currentOffset();
+
+            // PHASE 2: Extract body and prepend prologue (x86_64 only - uses deferred pattern)
+            if (comptime builtin.cpu.arch == .x86_64) {
+                // Save body bytes
+                var body_bytes = self.allocator.dupe(u8, self.codegen.emit.buf.items[body_start..body_end]) catch return Error.OutOfMemory;
+                defer self.allocator.free(body_bytes);
+
+                // Truncate buffer back to body_start
+                self.codegen.emit.buf.shrinkRetainingCapacity(body_start);
+
+                // Emit prologue using CodeGen (now knows callee_saved_used)
+                const prologue_start = self.codegen.currentOffset();
+                try self.codegen.emitPrologue();
+                try self.codegen.emitStackAlloc(@intCast(-self.codegen.stack_offset));
+                const prologue_size = self.codegen.currentOffset() - prologue_start;
+
+                // PHASE 2.5: Patch self-calls in body_bytes
+                // Self-calls target body_start (0) but after prepending prologue,
+                // they need to target prologue_start (0) which means adjusting
+                // the relative offset by -prologue_size.
+                // x86_64 CALL rel32: E8 [4-byte signed offset]
+                var i: usize = 0;
+                while (i + 5 <= body_bytes.len) : (i += 1) {
+                    if (body_bytes[i] == 0xE8) { // CALL opcode
+                        // Read the 4-byte relative offset (little-endian)
+                        const rel_bytes = body_bytes[i + 1 ..][0..4];
+                        const rel_offset: i32 = @bitCast(rel_bytes.*);
+                        // The call lands at: (body_offset + 5) + rel_offset
+                        // where body_offset = i (offset within body)
+                        // For self-calls, this should equal body_start (0)
+                        const call_end_offset: i64 = @intCast(i + 5);
+                        const target: i64 = call_end_offset + rel_offset;
+                        if (target == @as(i64, @intCast(body_start))) {
+                            // This is a self-call targeting body_start
+                            // After prepending prologue, the call is at (prologue_size + i)
+                            // and should still target prologue_start (0)
+                            // New relative offset = 0 - (prologue_size + i + 5)
+                            //                     = -(prologue_size + i + 5)
+                            // Old relative offset = -(i + 5)
+                            // Adjustment = new - old = -prologue_size
+                            const new_rel: i32 = rel_offset - @as(i32, @intCast(prologue_size));
+                            const new_bytes: [4]u8 = @bitCast(new_rel);
+                            @memcpy(body_bytes[i + 1 ..][0..4], &new_bytes);
+                        }
+                    }
+                }
+
+                // Re-append body
+                self.codegen.emit.buf.appendSlice(self.allocator, body_bytes) catch return Error.OutOfMemory;
+
+                // PHASE 3: Adjust relocation offsets
+                for (self.codegen.relocations.items[relocs_before..]) |*reloc| {
+                    reloc.adjustOffset(prologue_size);
+                }
+
+                // Update procedure registry with correct code_start (prologue_start)
+                if (self.proc_registry.getPtr(key)) |entry| {
+                    entry.code_start = prologue_start;
+                    entry.code_end = self.codegen.currentOffset();
+                }
+
+            } else {
+                // aarch64: Use existing approach (prologue emitted upfront)
+                // We need to emit prologue at the start, so we insert it before body_start
+                // For now, keep the simpler approach for aarch64
+
+                // Actually for aarch64, we should emit prologue first.
+                // Since body was generated without prologue, we need to prepend it.
+                const body_bytes = self.allocator.dupe(u8, self.codegen.emit.buf.items[body_start..body_end]) catch return Error.OutOfMemory;
+                defer self.allocator.free(body_bytes);
+
+                // Truncate buffer back to body_start
+                self.codegen.emit.buf.shrinkRetainingCapacity(body_start);
+
+                // Emit aarch64 prologue
+                const prologue_start = self.codegen.currentOffset();
+                const total_frame = 16 + PROC_STACK_SIZE;
+                const scaled_offset: i7 = @intCast(@divExact(-total_frame, 8));
+                try self.codegen.emit.stpPreIndex(.w64, .FP, .LR, .ZRSP, scaled_offset);
+                try self.codegen.emit.movRegReg(.w64, .FP, .ZRSP);
+                const prologue_size = self.codegen.currentOffset() - prologue_start;
+
+                // Re-append body
+                self.codegen.emit.buf.appendSlice(self.allocator, body_bytes) catch return Error.OutOfMemory;
+
+                // Adjust relocation offsets
+                for (self.codegen.relocations.items[relocs_before..]) |*reloc| {
+                    reloc.adjustOffset(prologue_size);
+                }
+
+                // Update procedure registry
+                if (self.proc_registry.getPtr(key)) |entry| {
+                    entry.code_start = prologue_start;
+                    entry.code_end = self.codegen.currentOffset();
+                }
             }
 
             // Restore state
             self.codegen.stack_offset = saved_stack_offset;
+            self.codegen.callee_saved_used = saved_callee_saved_used;
             self.symbol_locations.deinit();
             self.symbol_locations = saved_symbol_locations.clone() catch return Error.OutOfMemory;
             self.mutable_var_slots.deinit();
@@ -11890,6 +11999,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         /// Compile a lambda expression as a standalone procedure.
         /// Returns the code offset where the procedure starts.
         /// If the lambda was already compiled, returns the cached offset.
+        /// Uses deferred prologue pattern for x86_64 to properly save callee-saved registers.
         fn compileLambdaAsProc(self: *Self, lambda_expr_id: MonoExprId, lambda: anytype) Error!usize {
             const key = @intFromEnum(lambda_expr_id);
 
@@ -11901,16 +12011,12 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // Emit a jump over the lambda code to prevent fall-through
             // The lambda code is emitted inline, so we need to skip it during normal execution
             const skip_jump = try self.codegen.emitJump();
-            // Record the start offset (after the jump, this is where calls will land)
-            const code_start = self.codegen.currentOffset();
-
-            // Register before generating (for potential recursive calls)
-            try self.compiled_lambdas.put(key, code_start);
 
             // Save current state - both stack offset AND symbol locations
             // IMPORTANT: We must save symbol_locations because the procedure has its own
             // parameter bindings that shouldn't pollute the caller's symbol map
             const saved_stack_offset = self.codegen.stack_offset;
+            const saved_callee_saved_used = self.codegen.callee_saved_used;
             var saved_symbol_locations = self.symbol_locations.clone() catch return Error.OutOfMemory;
             defer saved_symbol_locations.deinit();
             var saved_mutable_var_slots = self.mutable_var_slots.clone() catch return Error.OutOfMemory;
@@ -11919,14 +12025,31 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // Clear state for the procedure's scope
             self.symbol_locations.clearRetainingCapacity();
             self.mutable_var_slots.clearRetainingCapacity();
+            self.codegen.callee_saved_used = 0;
 
             // Save early return state before generating body
             const saved_early_return_ret_layout = self.early_return_ret_layout;
             const saved_early_return_patches_len = self.early_return_patches.items.len;
 
+            // PHASE 1: Generate body first (to determine callee_saved_used)
+            // Initialize stack_offset to reserve space for callee-saved area
+            if (comptime builtin.cpu.arch == .x86_64) {
+                self.codegen.stack_offset = -CodeGen.CALLEE_SAVED_AREA_SIZE;
+            } else {
+                self.codegen.stack_offset = 16;
+            }
+
+            const body_start = self.codegen.currentOffset();
+            const relocs_before = self.codegen.relocations.items.len;
+
+            // Register before generating (for potential recursive calls)
+            // Use body_start as temporary; will be updated after prologue prepend
+            try self.compiled_lambdas.put(key, body_start);
+
             // Restore state on error
             errdefer {
                 self.codegen.stack_offset = saved_stack_offset;
+                self.codegen.callee_saved_used = saved_callee_saved_used;
                 self.symbol_locations.deinit();
                 self.symbol_locations = saved_symbol_locations.clone() catch unreachable;
                 self.mutable_var_slots.deinit();
@@ -11936,9 +12059,6 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 self.early_return_ret_layout = saved_early_return_ret_layout;
                 self.early_return_patches.shrinkRetainingCapacity(saved_early_return_patches_len);
             }
-
-            // Emit prologue
-            try self.emitPrologue();
 
             // Bind parameters from argument registers
             try self.bindLambdaParams(lambda.params);
@@ -11953,32 +12073,124 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // Pass the return layout so we can handle records > 8 bytes
             try self.moveToReturnRegisterWithLayout(result_loc, lambda.ret_layout);
 
-            // Record epilogue location for early return patches
-            const epilogue_offset = self.codegen.currentOffset();
+            // Record epilogue location (relative to body, will adjust after prepending prologue)
+            const body_epilogue_offset = self.codegen.currentOffset();
 
             // Emit epilogue and return
             try self.emitEpilogue();
 
-            // Patch all early return jumps to point to the epilogue
-            for (self.early_return_patches.items[saved_early_return_patches_len..]) |patch| {
-                self.codegen.patchJump(patch, epilogue_offset);
+            const body_end = self.codegen.currentOffset();
+
+            // PHASE 2: Extract body and prepend prologue
+            if (comptime builtin.cpu.arch == .x86_64) {
+                // Save body bytes
+                const body_bytes = self.allocator.dupe(u8, self.codegen.emit.buf.items[body_start..body_end]) catch return Error.OutOfMemory;
+                defer self.allocator.free(body_bytes);
+
+                // Truncate buffer back to body_start
+                self.codegen.emit.buf.shrinkRetainingCapacity(body_start);
+
+                // Emit prologue using CodeGen (now knows callee_saved_used)
+                const prologue_start = self.codegen.currentOffset();
+                try self.codegen.emitPrologue();
+                try self.codegen.emitStackAlloc(@intCast(-self.codegen.stack_offset));
+                const prologue_size = self.codegen.currentOffset() - prologue_start;
+
+                // Re-append body
+                self.codegen.emit.buf.appendSlice(self.allocator, body_bytes) catch return Error.OutOfMemory;
+
+                // PHASE 3: Adjust relocation offsets
+                for (self.codegen.relocations.items[relocs_before..]) |*reloc| {
+                    reloc.adjustOffset(prologue_size);
+                }
+
+                // Adjust early return patches (they point to locations within the body)
+                for (self.early_return_patches.items[saved_early_return_patches_len..]) |*patch| {
+                    patch.* += prologue_size;
+                }
+
+                // Update compiled lambda entry with correct code_start
+                try self.compiled_lambdas.put(key, prologue_start);
+
+                // Patch early return jumps to point to the epilogue (now at adjusted offset)
+                const final_epilogue_offset = body_epilogue_offset - body_start + prologue_size + prologue_start;
+                for (self.early_return_patches.items[saved_early_return_patches_len..]) |patch| {
+                    self.codegen.patchJump(patch, final_epilogue_offset);
+                }
+
+                // Restore early return state (trim patches back)
+                self.early_return_patches.shrinkRetainingCapacity(saved_early_return_patches_len);
+                self.early_return_ret_layout = saved_early_return_ret_layout;
+
+                // Restore state
+                self.codegen.stack_offset = saved_stack_offset;
+                self.codegen.callee_saved_used = saved_callee_saved_used;
+                self.symbol_locations.deinit();
+                self.symbol_locations = saved_symbol_locations.clone() catch return Error.OutOfMemory;
+                self.mutable_var_slots.deinit();
+                self.mutable_var_slots = saved_mutable_var_slots.clone() catch return Error.OutOfMemory;
+
+                // Patch the skip jump to point here (after the lambda code)
+                const after_lambda = self.codegen.currentOffset();
+                self.codegen.patchJump(skip_jump, after_lambda);
+
+                return prologue_start;
+            } else {
+                // aarch64: Use deferred prologue pattern too for consistency
+                const body_bytes = self.allocator.dupe(u8, self.codegen.emit.buf.items[body_start..body_end]) catch return Error.OutOfMemory;
+                defer self.allocator.free(body_bytes);
+
+                // Truncate buffer back to body_start
+                self.codegen.emit.buf.shrinkRetainingCapacity(body_start);
+
+                // Emit aarch64 prologue
+                const prologue_start = self.codegen.currentOffset();
+                const total_frame = 16 + PROC_STACK_SIZE;
+                const scaled_offset: i7 = @intCast(@divExact(-total_frame, 8));
+                try self.codegen.emit.stpPreIndex(.w64, .FP, .LR, .ZRSP, scaled_offset);
+                try self.codegen.emit.movRegReg(.w64, .FP, .ZRSP);
+                const prologue_size = self.codegen.currentOffset() - prologue_start;
+
+                // Re-append body
+                self.codegen.emit.buf.appendSlice(self.allocator, body_bytes) catch return Error.OutOfMemory;
+
+                // Adjust relocation offsets
+                for (self.codegen.relocations.items[relocs_before..]) |*reloc| {
+                    reloc.adjustOffset(prologue_size);
+                }
+
+                // Adjust early return patches
+                for (self.early_return_patches.items[saved_early_return_patches_len..]) |*patch| {
+                    patch.* += prologue_size;
+                }
+
+                // Update compiled lambda entry
+                try self.compiled_lambdas.put(key, prologue_start);
+
+                // Patch early return jumps
+                const final_epilogue_offset = body_epilogue_offset - body_start + prologue_size + prologue_start;
+                for (self.early_return_patches.items[saved_early_return_patches_len..]) |patch| {
+                    self.codegen.patchJump(patch, final_epilogue_offset);
+                }
+
+                // Restore early return state
+                self.early_return_patches.shrinkRetainingCapacity(saved_early_return_patches_len);
+                self.early_return_ret_layout = saved_early_return_ret_layout;
+
+                // Restore state
+                self.codegen.stack_offset = saved_stack_offset;
+                self.codegen.callee_saved_used = saved_callee_saved_used;
+                self.symbol_locations.deinit();
+                self.symbol_locations = saved_symbol_locations.clone() catch return Error.OutOfMemory;
+                self.mutable_var_slots.deinit();
+                self.mutable_var_slots = saved_mutable_var_slots.clone() catch return Error.OutOfMemory;
+
+                // Patch the skip jump to point here (after the lambda code)
+                const after_lambda = self.codegen.currentOffset();
+                self.codegen.patchJump(skip_jump, after_lambda);
+
+                return prologue_start;
             }
-            // Restore early return state (trim patches back)
-            self.early_return_patches.shrinkRetainingCapacity(saved_early_return_patches_len);
-            self.early_return_ret_layout = saved_early_return_ret_layout;
-
-            // Restore state
-            self.codegen.stack_offset = saved_stack_offset;
-            self.symbol_locations.deinit();
-            self.symbol_locations = saved_symbol_locations.clone() catch return Error.OutOfMemory;
-            self.mutable_var_slots.deinit();
-            self.mutable_var_slots = saved_mutable_var_slots.clone() catch return Error.OutOfMemory;
-
-            // Patch the skip jump to point here (after the lambda code)
-            const after_lambda = self.codegen.currentOffset();
-            self.codegen.patchJump(skip_jump, after_lambda);
-
-            return code_start;
         }
 
         /// Bind lambda parameters from argument registers.
@@ -11988,7 +12200,6 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         fn bindLambdaParams(self: *Self, params: mono.MonoPatternSpan) Error!void {
             const pattern_ids = self.store.getPatternSpan(params);
             var reg_idx: u8 = 0;
-
             for (pattern_ids) |pattern_id| {
                 if (reg_idx >= max_arg_regs) unreachable;
                 const pattern = self.store.getPattern(pattern_id);
@@ -12602,13 +12813,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 try self.codegen.emit.ldpPostIndex(.w64, .FP, .LR, .ZRSP, scaled_offset);
                 try self.codegen.emit.ret();
             } else {
-                // x86_64 epilogue:
-                // mov rsp, rbp                ; Restore stack pointer (deallocates locals)
-                // pop rbp                     ; Restore frame pointer
-                // ret                          ; Return to caller
-                try self.codegen.emit.movRegReg(.w64, .RSP, .RBP);
-                try self.codegen.emit.pop(.RBP);
-                try self.codegen.emit.ret();
+                // x86_64 epilogue: Use CodeGen's epilogue which handles callee-saved restore
+                try self.codegen.emitEpilogue();
             }
         }
 

@@ -54,6 +54,20 @@ pub const Relocation = union(enum) {
             .jmp_to_return => |r| r.inst_loc,
         };
     }
+
+    /// Adjust all offset fields by a given delta.
+    /// Used when prepending prologue code to shift relocations forward.
+    pub fn adjustOffset(self: *Relocation, delta: usize) void {
+        switch (self.*) {
+            .local_data => |*ld| ld.offset += delta,
+            .linked_function => |*lf| lf.offset += delta,
+            .linked_data => |*ld| ld.offset += delta,
+            .jmp_to_return => |*jr| {
+                jr.inst_loc += delta;
+                jr.offset += delta;
+            },
+        }
+    }
 };
 
 /// Function that resolves a symbol name to its address.
