@@ -22,27 +22,11 @@ const mono = @import("mono");
 const builtin_loading = @import("builtin_loading.zig");
 const builtins = @import("builtins");
 
-// Platform-specific jmp_buf for setjmp/longjmp crash recovery.
-// Used to unwind the stack when roc_crashed is called during execution.
-const JmpBuf = switch (builtin.os.tag) {
-    .macos => [48]c_int,
-    .linux => switch (builtin.cpu.arch) {
-        .aarch64 => [64]c_long,
-        .x86_64 => [25]c_long,
-        else => @compileError("Unsupported architecture for jmp_buf"),
-    },
-    .windows => switch (builtin.cpu.arch) {
-        .x86_64 => [16]c_ulonglong,
-        else => @compileError("Unsupported architecture for jmp_buf on Windows"),
-    },
-    else => @compileError("Unsupported OS for jmp_buf"),
-};
-// Platform-specific setjmp/longjmp declarations
-const setjmp = @extern(*const fn (env: *JmpBuf) callconv(.c) c_int, .{ .name = "_setjmp" });
-const longjmp = if (builtin.os.tag == .windows)
-    @extern(*const fn (env: *JmpBuf, val: c_int) callconv(.c) noreturn, .{ .name = "longjmp" })
-else
-    @extern(*const fn (env: *JmpBuf, val: c_int) callconv(.c) noreturn, .{ .name = "_longjmp" });
+// Cross-platform setjmp/longjmp for crash recovery.
+const sljmp = @import("sljmp");
+const JmpBuf = sljmp.JmpBuf;
+const setjmp = sljmp.setjmp;
+const longjmp = sljmp.longjmp;
 
 const Allocator = std.mem.Allocator;
 const ModuleEnv = can.ModuleEnv;
