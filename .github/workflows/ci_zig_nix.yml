@@ -34,6 +34,9 @@ jobs:
           nix_path: nixpkgs=channel:nixos-25.05
 
       - name: Build inside nix
-        run: |
-          # Don't run coverage in nix - it uses the custom kcov fork built outside nix
-          nix develop ./src/ -c bash -c "zig build ${{ matrix.target_flag }} && zig build snapshot ${{ matrix.target_flag }} && zig build test ${{ matrix.target_flag }}"
+        uses: ./.github/actions/flaky-retry
+        with:
+          command: 'nix develop ./src/ -c bash -c "zig build ${{ matrix.target_flag }} && zig build snapshot ${{ matrix.target_flag }} && zig build test ${{ matrix.target_flag }}"'
+          error_string_contains: "double roundtrip bundle|build.zig.zon"
+          retry_count: 3
+          
