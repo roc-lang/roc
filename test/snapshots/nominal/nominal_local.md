@@ -31,7 +31,7 @@ The method `encode_str` has the type:
 
     Utf8Format, Str -> List(U8)
 
-But is needs to have the type:
+But I need it to have the type:
 
     Utf8Format, Str -> Try(encoded, err)
 

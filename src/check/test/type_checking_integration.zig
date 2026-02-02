@@ -1451,7 +1451,7 @@ test "check type - nominal - local - fail" {
         \\
         \\    Utf8Format, Str -> List(U8)
         \\
-        \\But is needs to have the type:
+        \\But I need it to have the type:
         \\
         \\    Utf8Format, Str -> Try(encoded, err)
         \\
@@ -4168,7 +4168,7 @@ test "check type - self recursive function - fibonacci - fail" {
         source,
         .fail_with,
         \\**TYPE MISMATCH**
-        \\This expression is used in an unexpected way:
+        \\The recursive definition `fib` is used in an unexpected way:
         \\**test:5:5:5:8:**
         \\```roc
         \\    fib("bad arg") + fib(n - 2.U8)
@@ -4179,7 +4179,7 @@ test "check type - self recursive function - fibonacci - fail" {
         \\
         \\    Str -> U8
         \\
-        \\But you are trying to use it as:
+        \\But other places expect it to be:
         \\
         \\    U8 -> U8
         \\

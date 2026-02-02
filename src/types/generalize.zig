@@ -149,7 +149,12 @@ pub const Generalizer = struct {
         for (vars_to_generalize) |var_| {
             const resolved = self.store.resolveVar(var_);
             try self.tmp_var_pool.addVarToRank(resolved.var_, resolved.desc.rank);
-            try self.vars_to_generalized.put(resolved.var_, {});
+            // Only add to vars_to_generalized if not already generalized.
+            // A var that was already generalized in a previous pass should not be
+            // re-processed (which could incorrectly change its rank).
+            if (resolved.desc.rank != .generalized) {
+                try self.vars_to_generalized.put(resolved.var_, {});
+            }
         }
 
         // Adjust ranks to maintain invariant: ranks never increase going deeper.

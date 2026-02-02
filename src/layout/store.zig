@@ -30,6 +30,12 @@ const TagUnionVariant = layout_mod.TagUnionVariant;
 const TagUnionData = layout_mod.TagUnionData;
 const TagUnionIdx = layout_mod.TagUnionIdx;
 const SizeAlign = layout_mod.SizeAlign;
+const ListInfo = layout_mod.ListInfo;
+const BoxInfo = layout_mod.BoxInfo;
+const RecordInfo = layout_mod.RecordInfo;
+const TupleInfo = layout_mod.TupleInfo;
+const TagUnionInfo = layout_mod.TagUnionInfo;
+const ScalarInfo = layout_mod.ScalarInfo;
 const Work = work.Work;
 
 /// Errors that can occur during layout computation
@@ -443,6 +449,85 @@ pub const Store = struct {
 
     pub fn getTagUnionVariants(self: *const Self, data: *const TagUnionData) TagUnionVariant.SafeMultiList.Slice {
         return self.tag_union_variants.sliceRange(data.getVariants());
+    }
+
+    /// Get bundled information about a list layout's element
+    pub fn getListInfo(self: *const Self, layout: Layout) ListInfo {
+        std.debug.assert(layout.tag == .list or layout.tag == .list_of_zst);
+        const elem_layout_idx = layout.data.list;
+        const elem_layout = self.getLayout(elem_layout_idx);
+        return ListInfo{
+            .elem_layout_idx = elem_layout_idx,
+            .elem_layout = elem_layout,
+            .elem_size = self.layoutSize(elem_layout),
+            .elem_alignment = @intCast(elem_layout.alignment(self.targetUsize()).toByteUnits()),
+            .contains_refcounted = self.layoutContainsRefcounted(elem_layout),
+        };
+    }
+
+    /// Get bundled information about a box layout's element
+    pub fn getBoxInfo(self: *const Self, layout: Layout) BoxInfo {
+        std.debug.assert(layout.tag == .box or layout.tag == .box_of_zst);
+        const elem_layout_idx = layout.data.box;
+        const elem_layout = self.getLayout(elem_layout_idx);
+        return BoxInfo{
+            .elem_layout_idx = elem_layout_idx,
+            .elem_layout = elem_layout,
+            .elem_size = self.layoutSize(elem_layout),
+            .elem_alignment = @intCast(elem_layout.alignment(self.targetUsize()).toByteUnits()),
+            .contains_refcounted = self.layoutContainsRefcounted(elem_layout),
+        };
+    }
+
+    /// Get bundled information about a record layout
+    pub fn getRecordInfo(self: *const Self, layout: Layout) RecordInfo {
+        std.debug.assert(layout.tag == .record);
+        const record_data = self.getRecordData(layout.data.record.idx);
+        return RecordInfo{
+            .data = record_data,
+            .alignment = layout.data.record.alignment,
+            .fields = self.record_fields.sliceRange(record_data.getFields()),
+            .contains_refcounted = self.layoutContainsRefcounted(layout),
+        };
+    }
+
+    /// Get bundled information about a tuple layout
+    pub fn getTupleInfo(self: *const Self, layout: Layout) TupleInfo {
+        std.debug.assert(layout.tag == .tuple);
+        const tuple_data = self.getTupleData(layout.data.tuple.idx);
+        return TupleInfo{
+            .data = tuple_data,
+            .alignment = layout.data.tuple.alignment,
+            .fields = self.tuple_fields.sliceRange(tuple_data.getFields()),
+            .contains_refcounted = self.layoutContainsRefcounted(layout),
+        };
+    }
+
+    /// Get bundled information about a tag union layout
+    pub fn getTagUnionInfo(self: *const Self, layout: Layout) TagUnionInfo {
+        std.debug.assert(layout.tag == .tag_union);
+        const tu_data = self.getTagUnionData(layout.data.tag_union.idx);
+        return TagUnionInfo{
+            .idx = layout.data.tag_union.idx,
+            .data = tu_data,
+            .alignment = layout.data.tag_union.alignment,
+            .variants = self.tag_union_variants.sliceRange(tu_data.getVariants()),
+            .contains_refcounted = self.layoutContainsRefcounted(layout),
+        };
+    }
+
+    /// Get bundled information about a scalar layout
+    pub fn getScalarInfo(self: *const Self, layout: Layout) ScalarInfo {
+        std.debug.assert(layout.tag == .scalar);
+        const scalar = layout.data.scalar;
+        const size_align = self.layoutSizeAlign(layout);
+        return ScalarInfo{
+            .tag = scalar.tag,
+            .size = size_align.size,
+            .alignment = @as(u32, 1) << @intFromEnum(size_align.alignment),
+            .int_precision = if (scalar.tag == .int) scalar.data.int else null,
+            .frac_precision = if (scalar.tag == .frac) scalar.data.frac else null,
+        };
     }
 
     /// Dynamically compute the discriminant offset for a tag union.

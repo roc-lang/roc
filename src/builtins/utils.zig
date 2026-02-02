@@ -52,6 +52,40 @@ pub inline fn alignedPtrCast(comptime T: type, ptr: anytype, src: std.builtin.So
     return @ptrCast(@alignCast(ptr));
 }
 
+/// Reads a typed value from a raw pointer with debug-mode alignment verification.
+///
+/// In debug builds, verifies that the pointer is properly aligned for the target type
+/// and panics with diagnostic information if alignment is incorrect.
+/// In release builds, this is equivalent to `@as(*const T, @ptrCast(@alignCast(ptr))).*`.
+///
+/// Usage:
+/// ```
+/// const value = readAs(u64, raw_ptr, @src());
+/// ```
+///
+/// The `src` parameter should always be `@src()` at the call site - this captures
+/// the file, function, and line number to aid in reproducing alignment bugs.
+pub inline fn readAs(comptime T: type, ptr: anytype, src: std.builtin.SourceLocation) T {
+    return alignedPtrCast(*const T, ptr, src).*;
+}
+
+/// Writes a typed value to a raw pointer with debug-mode alignment verification.
+///
+/// In debug builds, verifies that the pointer is properly aligned for the target type
+/// and panics with diagnostic information if alignment is incorrect.
+/// In release builds, this is equivalent to `@as(*T, @ptrCast(@alignCast(ptr))).* = value`.
+///
+/// Usage:
+/// ```
+/// writeAs(u64, raw_ptr, 42, @src());
+/// ```
+///
+/// The `src` parameter should always be `@src()` at the call site - this captures
+/// the file, function, and line number to aid in reproducing alignment bugs.
+pub inline fn writeAs(comptime T: type, ptr: anytype, value: T, src: std.builtin.SourceLocation) void {
+    alignedPtrCast(*T, ptr, src).* = value;
+}
+
 /// Tracks allocations for testing purposes with C ABI compatibility. Uses a single global testing allocator to track allocations. If we need multiple independent allocators we will need to modify this and use comptime.
 pub const TestEnv = struct {
     const AllocationInfo = struct {
