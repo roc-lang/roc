@@ -61,6 +61,15 @@ const LayoutIdx = layout_mod.Idx;
 const LayoutStore = layout_mod.Store;
 const TypeScope = types.TypeScope;
 
+/// Map of (global_module_idx << 32 | node_idx) → hosted_function_index.
+/// Used for fast lookup of hosted function indices during lowering.
+pub const HostedFunctionMap = std.AutoHashMap(u64, u32);
+
+/// Helper to create a key for the hosted function map.
+pub fn hostedFunctionKey(global_module_idx: u16, node_idx: u32) u64 {
+    return @as(u64, global_module_idx) << 32 | node_idx;
+}
+
 const Self = @This();
 
 /// Lowering context
@@ -127,6 +136,10 @@ expr_layout_hints: std.AutoHashMap(types.Var, LayoutIdx),
 /// until call time (when type_scope is populated). Maps pattern_idx → CIR expr_idx.
 deferred_defs: std.AutoHashMap(u32, CIR.Expr.Idx),
 
+/// Map of hosted function indices for fast lookup during lowering.
+/// Key: (global_module_idx << 32 | node_idx), Value: hosted_function_index
+hosted_functions: ?*const HostedFunctionMap = null,
+
 /// Initialize a new Lowerer
 pub fn init(
     allocator: Allocator,
@@ -135,6 +148,7 @@ pub fn init(
     lambda_inference: ?*LambdaSetInference,
     layout_store: ?*LayoutStore,
     app_module_idx: ?u16,
+    hosted_functions: ?*const HostedFunctionMap,
 ) Self {
     return .{
         .allocator = allocator,
@@ -149,6 +163,7 @@ pub fn init(
         .type_env = std.AutoHashMap(u32, LayoutIdx).init(allocator),
         .expr_layout_hints = std.AutoHashMap(types.Var, LayoutIdx).init(allocator),
         .deferred_defs = std.AutoHashMap(u32, CIR.Expr.Idx).init(allocator),
+        .hosted_functions = hosted_functions,
     };
 }
 
@@ -952,83 +967,12 @@ fn getExternalLowLevelLambda(self: *Self, caller_env: *ModuleEnv, lookup: anytyp
 }
 
 /// Look up whether an external definition is a hosted lambda.
-/// Returns the hosted lambda data if so, null otherwise.
-fn getExternalHostedLambda(self: *Self, caller_env: *ModuleEnv, lookup: anytype) ?@FieldType(CIR.Expr, "e_hosted_lambda") {
+/// Returns the hosted function index if so, null otherwise.
+fn getExternalHostedLambdaIndex(self: *Self, caller_env: *ModuleEnv, lookup: anytype) ?u32 {
+    const hosted_fns = self.hosted_functions orelse return null;
     const ext_module_idx = caller_env.imports.getResolvedModule(lookup.module_idx) orelse return null;
     if (ext_module_idx >= self.all_module_envs.len) return null;
-    const ext_env = self.all_module_envs[ext_module_idx];
-
-    // Try multiple approaches to find the hosted lambda
-
-    // Approach 1: Check if target_node_idx directly points to a def node
-    const node_id: CIR.Node.Idx = @enumFromInt(lookup.target_node_idx);
-    const node = ext_env.store.nodes.get(node_id);
-
-    if (node.tag == .def) {
-        const def_idx: CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
-        const def = ext_env.store.getDef(def_idx);
-        const def_expr = ext_env.store.getExpr(def.expr);
-        if (def_expr == .e_hosted_lambda) return def_expr.e_hosted_lambda;
-    }
-
-    if (node.tag == .expr_hosted_lambda) {
-        const expr_idx: CIR.Expr.Idx = @enumFromInt(lookup.target_node_idx);
-        const expr = ext_env.store.getExpr(expr_idx);
-        if (expr == .e_hosted_lambda) return expr.e_hosted_lambda;
-    }
-
-    // Approach 2: Scan the module's exports for hosted lambdas matching the ident
-    // This handles cases where the exposed_items index points to a pattern instead of a def
-    const exports = ext_env.store.sliceDefs(ext_env.exports);
-    for (exports) |def_idx| {
-        const def = ext_env.store.getDef(def_idx);
-        const def_expr = ext_env.store.getExpr(def.expr);
-        if (def_expr == .e_hosted_lambda) {
-            // Check if this def's pattern uses the target identifier
-            const pattern = ext_env.store.getPattern(def.pattern);
-            if (pattern == .assign) {
-                // Compare pattern index to target
-                if (@intFromEnum(def.pattern) == lookup.target_node_idx) {
-                    return def_expr.e_hosted_lambda;
-                }
-            }
-        }
-    }
-
-    // Approach 3: Scan all_defs for hosted lambdas with matching pattern
-    const all_defs = ext_env.store.sliceDefs(ext_env.all_defs);
-    for (all_defs) |def_idx| {
-        const def = ext_env.store.getDef(def_idx);
-        const def_expr = ext_env.store.getExpr(def.expr);
-        if (def_expr == .e_hosted_lambda) {
-            const pattern = ext_env.store.getPattern(def.pattern);
-            if (pattern == .assign) {
-                if (@intFromEnum(def.pattern) == lookup.target_node_idx) {
-                    return def_expr.e_hosted_lambda;
-                }
-            }
-        }
-    }
-
-    // Approach 4: If we have the ident, search by ident name match
-    const lookup_ident_text = caller_env.getIdent(lookup.ident_idx);
-    for (all_defs) |def_idx| {
-        const def = ext_env.store.getDef(def_idx);
-        const def_expr = ext_env.store.getExpr(def.expr);
-        if (def_expr == .e_hosted_lambda) {
-            const hosted_name = ext_env.getIdent(def_expr.e_hosted_lambda.symbol_name);
-            // Extract unqualified name from lookup (e.g., "Stdout.line!" -> "line!")
-            const lookup_name = if (std.mem.lastIndexOfScalar(u8, lookup_ident_text, '.')) |dot_idx|
-                lookup_ident_text[dot_idx + 1 ..]
-            else
-                lookup_ident_text;
-            if (std.mem.eql(u8, hosted_name, lookup_name)) {
-                return def_expr.e_hosted_lambda;
-            }
-        }
-    }
-
-    return null;
+    return hosted_fns.get(hostedFunctionKey(@intCast(ext_module_idx), lookup.target_node_idx));
 }
 
 /// Set up layout hints for a local function call.
@@ -1766,11 +1710,11 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             // Check for hosted lambda EARLY - before setupExternalCallTypeScope which doesn't handle them
             if (is_external_call) {
                 const lookup = fn_expr.e_lookup_external;
-                if (self.getExternalHostedLambda(module_env, lookup)) |hosted| {
+                if (self.getExternalHostedLambdaIndex(module_env, lookup)) |hosted_index| {
                     const args = try self.lowerExprSpan(module_env, call.args);
                     const hosted_expr = MonoExpr{
                         .hosted_call = .{
-                            .index = hosted.index,
+                            .index = hosted_index,
                             .args = args,
                             .ret_layout = self.getExprLayoutFromIdx(module_env, expr_idx),
                         },

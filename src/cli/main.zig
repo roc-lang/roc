@@ -3589,10 +3589,11 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         }
     }
 
-    // Process hosted functions - assign global indices based on alphabetical order.
-    // This must happen before lowering so the correct indices are in the CIR.
-    // NOTE: We process using `modules` from getModulesInSerializationOrder because
-    // that's the same module list that populates `all_module_envs` used by the lowerer.
+    // Process hosted functions - assign global indices based on alphabetical order
+    // and build a map for fast lookup during lowering.
+    var hosted_functions = mono.Lower.HostedFunctionMap.init(ctx.gpa);
+    defer hosted_functions.deinit();
+
     {
         const HostedCompiler = can.HostedCompiler;
         var all_hosted_fns = std.ArrayList(HostedCompiler.HostedFunctionInfo).empty;
@@ -3642,8 +3643,8 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
             }
             all_hosted_fns.shrinkRetainingCapacity(write_idx);
 
-            // Reassign global indices for platform sibling modules
-            for (modules) |mod| {
+            // Assign global indices and register in the hosted function registry
+            for (modules, 0..) |mod, global_module_idx| {
                 if (!mod.is_platform_sibling) continue;
                 const platform_env = mod.env;
 
@@ -3666,12 +3667,24 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
 
                         for (all_hosted_fns.items, 0..) |fn_info, idx| {
                             if (std.mem.eql(u8, fn_info.name_text, stripped_name)) {
+                                const hosted_index: u32 = @intCast(idx);
+
+                                // Update the CIR expression with the global index
                                 const expr_node_idx = @as(@TypeOf(platform_env.store.nodes).Idx, @enumFromInt(@intFromEnum(def.expr)));
                                 var expr_node = platform_env.store.nodes.get(expr_node_idx);
                                 var payload = expr_node.getPayload().expr_hosted_lambda;
-                                payload.index = @intCast(idx);
+                                payload.index = hosted_index;
                                 expr_node.setPayload(.{ .expr_hosted_lambda = payload });
                                 platform_env.store.nodes.set(expr_node_idx, expr_node);
+
+                                // Register in the hosted function map for fast lookup during lowering
+                                // Store mappings for def_idx, pattern_idx, and expr_idx so lookup
+                                // succeeds regardless of which node target_node_idx points to
+                                const mod_idx: u16 = @intCast(global_module_idx);
+                                hosted_functions.put(mono.Lower.hostedFunctionKey(mod_idx, @intFromEnum(def_idx)), hosted_index) catch {};
+                                hosted_functions.put(mono.Lower.hostedFunctionKey(mod_idx, @intFromEnum(def.pattern)), hosted_index) catch {};
+                                hosted_functions.put(mono.Lower.hostedFunctionKey(mod_idx, @intFromEnum(def.expr)), hosted_index) catch {};
+
                                 break;
                             }
                         }
@@ -3714,8 +3727,8 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     var mono_store = mono.MonoExprStore.init(ctx.gpa);
     defer mono_store.deinit();
 
-    // Create lowerer
-    var lowerer = mono.Lower.init(ctx.gpa, &mono_store, all_module_envs, &lambda_inference, &layout_store, app_module_idx);
+    // Create lowerer with hosted function map
+    var lowerer = mono.Lower.init(ctx.gpa, &mono_store, all_module_envs, &lambda_inference, &layout_store, app_module_idx, &hosted_functions);
     defer lowerer.deinit();
 
     // Find and lower entrypoint expressions from platform module

@@ -679,7 +679,8 @@ pub const DevEvaluator = struct {
 
         // Create the lowerer with the layout store
         // Note: app_module_idx is null for JIT evaluation (no platform/app distinction)
-        var lowerer = MonoLower.init(self.allocator, &mono_store, all_module_envs, null, layout_store_ptr, null);
+        // Note: hosted_functions is null because dev evaluator uses interpreter for hosted calls
+        var lowerer = MonoLower.init(self.allocator, &mono_store, all_module_envs, null, layout_store_ptr, null, null);
         defer lowerer.deinit();
 
         // Lower CIR expression to Mono IR
