@@ -149,11 +149,27 @@ pub const ReportBuilder = struct {
 
     // Helpers
 
+    /// Safely get a region by index, returning Region.zero() for out-of-bounds indices.
+    /// During type checking, fresh type variables may be created with indices beyond
+    /// the NodeStore's region count (e.g., during instantiation of imported types).
+    /// Check's regions grow to accommodate these, but NodeStore's regions don't.
+    fn getRegionSafe(self: *const Self, region_idx: Region.Idx) Region {
+        const idx = @intFromEnum(region_idx);
+        return if (idx < self.can_ir.store.regions.len())
+            self.can_ir.store.regions.get(region_idx).*
+        else
+            Region.zero();
+    }
+
+    /// Safely get a region for a type variable.
+    fn getRegionForVar(self: *const Self, var_: Var) Region {
+        return self.getRegionSafe(@enumFromInt(@intFromEnum(var_)));
+    }
+
     /// Add source code highlighting for a variable's region.
     /// Consolidates the common pattern of: get region -> calc info -> add to document.
     fn addSourceHighlight(self: *Self, report: *Report, region_idx: Region.Idx) !void {
-        const region = self.can_ir.store.regions.get(region_idx);
-        return self.addSourceHighlightRegion(report, region.*);
+        return self.addSourceHighlightRegion(report, self.getRegionSafe(region_idx));
     }
 
     /// Add source code highlighting for a region.
@@ -171,11 +187,8 @@ pub const ReportBuilder = struct {
     /// Add source code highlighting for a variable's region.
     /// Consolidates the common pattern of: get region -> calc info -> add to document.
     fn addFocusedSourceHighlight(self: *Self, report: *Report, outer_region_idx: Region.Idx, inner_region_idx: Region.Idx) !void {
-        const outer_region = self.can_ir.store.regions.get(outer_region_idx);
-        const outer_region_info = self.module_env.calcRegionInfo(outer_region.*);
-
-        const inner_region = self.can_ir.store.regions.get(inner_region_idx);
-        const inner_region_info = self.module_env.calcRegionInfo(inner_region.*);
+        const outer_region_info = self.module_env.calcRegionInfo(self.getRegionSafe(outer_region_idx));
+        const inner_region_info = self.module_env.calcRegionInfo(self.getRegionSafe(inner_region_idx));
 
         const display_region = SourceCodeDisplayRegion{
             .line_text = try self.gpa.dupe(u8, outer_region_info.calculateLineText(self.source, self.module_env.getLineStarts())),
@@ -1276,8 +1289,8 @@ pub const ReportBuilder = struct {
         try report.document.addText("I'm having trouble with this nominal tag:");
         try report.document.addLineBreak();
 
-        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
-        const region_info = self.module_env.calcRegionInfo(region.*);
+        const region = self.getRegionForVar(types.actual_var);
+        const region_info = self.module_env.calcRegionInfo(region);
         try report.document.addSourceRegion(
             region_info,
             .error_highlight,
@@ -1347,8 +1360,8 @@ pub const ReportBuilder = struct {
         try report.document.addText("I'm having trouble with this nominal type that wraps a record:");
         try report.document.addLineBreak();
 
-        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
-        const region_info = self.module_env.calcRegionInfo(region.*);
+        const region = self.getRegionForVar(types.actual_var);
+        const region_info = self.module_env.calcRegionInfo(region);
         try report.document.addSourceRegion(
             region_info,
             .error_highlight,
@@ -1387,8 +1400,8 @@ pub const ReportBuilder = struct {
         try report.document.addText("I'm having trouble with this nominal type that wraps a tuple:");
         try report.document.addLineBreak();
 
-        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
-        const region_info = self.module_env.calcRegionInfo(region.*);
+        const region = self.getRegionForVar(types.actual_var);
+        const region_info = self.module_env.calcRegionInfo(region);
         try report.document.addSourceRegion(
             region_info,
             .error_highlight,
@@ -1427,8 +1440,8 @@ pub const ReportBuilder = struct {
         try report.document.addText("I'm having trouble with this nominal type:");
         try report.document.addLineBreak();
 
-        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
-        const region_info = self.module_env.calcRegionInfo(region.*);
+        const region = self.getRegionForVar(types.actual_var);
+        const region_info = self.module_env.calcRegionInfo(region);
         try report.document.addSourceRegion(
             region_info,
             .error_highlight,
@@ -1674,8 +1687,8 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         // Add source region highlighting
-        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.fn_var)));
-        const region_info = self.module_env.calcRegionInfo(region.*);
+        const region = self.getRegionForVar(data.fn_var);
+        const region_info = self.module_env.calcRegionInfo(region);
         try report.document.addSourceRegion(
             region_info,
             .error_highlight,
@@ -1744,8 +1757,8 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         // Add source region highlighting
-        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.fn_var)));
-        const region_info = self.module_env.calcRegionInfo(region.*);
+        const region = self.getRegionForVar(data.fn_var);
+        const region_info = self.module_env.calcRegionInfo(region);
         try report.document.addSourceRegion(
             region_info,
             .error_highlight,
@@ -1846,7 +1859,7 @@ pub const ReportBuilder = struct {
 
         // Get the region of the dispatcher (the type that was expected)
         // This might be different if the type came from somewhere else (e.g., a type annotation)
-        const dispatcher_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.dispatcher_var))).*;
+        const dispatcher_region = self.getRegionForVar(data.dispatcher_var);
 
         try D.renderSlice(&.{
             D.bytes("This number is being used where a non-number type is needed:"),
@@ -1902,8 +1915,8 @@ pub const ReportBuilder = struct {
 
         const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
 
-        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.fn_var)));
-        const region_info = self.module_env.calcRegionInfo(region.*);
+        const region = self.getRegionForVar(data.fn_var);
+        const region_info = self.module_env.calcRegionInfo(region);
 
         try D.renderSlice(&.{
             D.bytes("This expression is doing an equality check on a type that doesn't support equality:"),
@@ -2304,8 +2317,8 @@ pub const ReportBuilder = struct {
         var report = Report.init(self.gpa, "CANNOT USE OPAQUE NOMINAL TYPE", .runtime_error);
         errdefer report.deinit();
 
-        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.var_)));
-        const region_info = self.module_env.calcRegionInfo(region.*);
+        const region = self.getRegionForVar(data.var_);
+        const region_info = self.module_env.calcRegionInfo(region);
 
         try D.renderSlice(&.{
             D.bytes("You're attempting to create an instance of"),
@@ -2347,8 +2360,8 @@ pub const ReportBuilder = struct {
         var report = Report.init(self.gpa, "COMPILER BUG", .runtime_error);
         errdefer report.deinit();
 
-        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.var_)));
-        const region_info = self.module_env.calcRegionInfo(region.*);
+        const region = self.getRegionForVar(data.var_);
+        const region_info = self.module_env.calcRegionInfo(region);
 
         try D.renderSlice(&.{
             D.bytes("An internal compiler error occurred while checking this nominal type usage:"),
@@ -2732,8 +2745,8 @@ pub const ReportBuilder = struct {
         }, self, &report);
         try report.document.addLineBreak();
 
-        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.var_)));
-        const region_info = self.module_env.calcRegionInfo(region.*);
+        const region = self.getRegionForVar(data.var_);
+        const region_info = self.module_env.calcRegionInfo(region);
         try report.document.addSourceRegion(
             region_info,
             .error_highlight,
@@ -2776,8 +2789,8 @@ pub const ReportBuilder = struct {
         }
         try report.document.addLineBreak();
 
-        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.var_)));
-        const region_info = self.module_env.calcRegionInfo(region.*);
+        const region = self.getRegionForVar(data.var_);
+        const region_info = self.module_env.calcRegionInfo(region);
         try report.document.addSourceRegion(
             region_info,
             .error_highlight,
@@ -3007,8 +3020,8 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         // Add source region highlighting
-        const match_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.match_expr)));
-        const region_info = self.module_env.calcRegionInfo(match_region.*);
+        const match_region = self.getRegionSafe(@enumFromInt(@intFromEnum(data.match_expr)));
+        const region_info = self.module_env.calcRegionInfo(match_region);
         try report.document.addSourceRegion(
             region_info,
             .error_highlight,
