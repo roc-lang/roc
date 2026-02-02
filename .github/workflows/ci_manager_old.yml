@@ -1,5 +1,5 @@
 on:
-  workflow_call:
+#  workflow_call:
 
 name: Old CI manager
 
