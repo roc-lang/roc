@@ -780,6 +780,7 @@ pub const BuildEnv = struct {
                 app_root_module.path,
                 &.{},
                 &checker.import_mapping,
+                &checker.regions,
             );
             defer rb.deinit();
 

@@ -2206,6 +2206,7 @@ pub const Coordinator = struct {
             task.path,
             task.imported_envs,
             &checker.import_mapping,
+            &checker.regions,
         ) catch {
             // On allocation failure, return result with empty reports
             self.gpa.free(task.imported_envs);

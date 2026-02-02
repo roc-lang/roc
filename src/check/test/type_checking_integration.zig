@@ -15,7 +15,7 @@ test "check type - num - unbound" {
     try checkTypesExpr(
         source,
         .pass,
-        "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]",
+        "Dec",
     );
 }
 
@@ -60,7 +60,7 @@ test "check type - num - float" {
     try checkTypesExpr(
         source,
         .pass,
-        "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]",
+        "Dec",
     );
 }
 
@@ -215,13 +215,7 @@ test "check type - binop operands same type works - unbound plus unbound" {
     try checkTypesModule(
         source,
         .{ .pass = .last_def },
-        \\a
-        \\  where [
-        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        \\    a.plus : a, b -> a,
-        \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
-        \\  ]
-        ,
+        "Dec",
     );
 }
 
@@ -270,7 +264,7 @@ test "check type - list - same elems 2" {
     try checkTypesExpr(
         source,
         .pass,
-        "List(a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]",
+        "List(Dec)",
     );
 }
 
@@ -327,8 +321,7 @@ test "check type - record" {
         \\}
     ;
     try checkTypesExpr(source, .pass,
-        \\{ hello: Str, world: a }
-        \\  where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
+        "{ hello: Str, world: Dec }",
     );
 }
 
@@ -633,9 +626,7 @@ test "check type - tag - args" {
     try checkTypesExpr(
         source,
         .pass,
-        \\[MyTag(Str, a), ..]
-        \\  where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
-        ,
+        "[MyTag(Str, Dec), ..]",
     );
 }
 
@@ -750,7 +741,7 @@ test "check type - def - func" {
     try checkTypesModule(
         source,
         .{ .pass = .last_def },
-        "_arg -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]",
+        "_arg -> Dec",
     );
 }
 
@@ -798,13 +789,7 @@ test "check type - def - nested lambda" {
     try checkTypesModule(
         source,
         .{ .pass = .last_def },
-        \\d
-        \\  where [
-        \\    d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),
-        \\    d.plus : d, e -> d,
-        \\    e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]),
-        \\  ]
-        ,
+        "Dec",
     );
 }
 
@@ -896,7 +881,7 @@ test "check type - def - polymorphic id 1" {
     try checkTypesModule(
         source,
         .{ .pass = .last_def },
-        "x where [x.from_numeral : Numeral -> Try(x, [InvalidNumeral(Str)])]",
+        "Dec",
     );
 }
 
@@ -910,7 +895,7 @@ test "check type - def - polymorphic id 2" {
     try checkTypesModule(
         source,
         .{ .pass = .last_def },
-        "(x, Str) where [x.from_numeral : Numeral -> Try(x, [InvalidNumeral(Str)])]",
+        "(Dec, Str)",
     );
 }
 
@@ -947,7 +932,7 @@ test "check type - top level polymorphic function is generalized" {
     try checkTypesModule(
         source,
         .{ .pass = .last_def },
-        "b where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]",
+        "Dec",
     );
 }
 
@@ -963,7 +948,7 @@ test "check type - let-def polymorphic function is generalized" {
     try checkTypesModule(
         source,
         .{ .pass = .last_def },
-        "b where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]",
+        "Dec",
     );
 }
 
@@ -1417,7 +1402,7 @@ test "check type - nominal w/ polymorphic function" {
     try checkTypesModule(
         source,
         .{ .pass = .last_def },
-        "Pair(Str, a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]",
+        "Pair(Str, Dec)",
     );
 }
 
@@ -1678,7 +1663,7 @@ test "check type - unary minus" {
     try checkTypesModule(
         source,
         .{ .pass = .last_def },
-        "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]",
+        "Dec",
     );
 }
 
@@ -1703,12 +1688,7 @@ test "check type - binops math plus" {
     try checkTypesModule(
         source,
         .{ .pass = .last_def },
-        \\a
-        \\  where [
-        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        \\    a.plus : a, U32 -> a,
-        \\  ]
-        ,
+        "U32",
     );
 }
 
@@ -1719,13 +1699,7 @@ test "check type - binops math sub" {
     try checkTypesModule(
         source,
         .{ .pass = .last_def },
-        \\a
-        \\  where [
-        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        \\    a.minus : a, b -> a,
-        \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
-        \\  ]
-        ,
+        "Dec",
     );
 }
 
@@ -1860,12 +1834,7 @@ test "check type - record - update 2" {
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "final" } },
-        \\({ data: a }, { data: b, other: Str }, { data: Str })
-        \\  where [
-        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
-        \\  ]
-        ,
+        "({ data: Dec }, { data: Dec, other: Str }, { data: Str })",
     );
 }
 
@@ -2253,7 +2222,7 @@ test "check type - patterns record 2" {
     try checkTypesExpr(
         source,
         .pass,
-        "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]",
+        "Dec",
     );
 }
 
@@ -2284,13 +2253,7 @@ test "check type - var reassignment" {
     try checkTypesModule(
         source,
         .{ .pass = .last_def },
-        \\a
-        \\  where [
-        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        \\    a.plus : a, b -> a,
-        \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
-        \\  ]
-        ,
+        "Dec",
     );
 }
 
@@ -2310,12 +2273,7 @@ test "check type - expect" {
     try checkTypesModule(
         source,
         .{ .pass = .last_def },
-        \\a
-        \\  where [
-        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        \\    a.is_eq : a, a -> Bool,
-        \\  ]
-        ,
+        "Dec",
     );
 }
 
@@ -2368,12 +2326,7 @@ test "check type - crash" {
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "main" } },
-        \\a
-        \\  where [
-        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        \\    a.plus : a, U64 -> a,
-        \\  ]
-        ,
+        "U64",
     );
 }
 
@@ -2397,12 +2350,7 @@ test "check type - dbg" {
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "main" } },
-        \\a
-        \\  where [
-        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        \\    a.plus : a, U64 -> a,
-        \\  ]
-        ,
+        "U64",
     );
 }
 
@@ -2460,13 +2408,7 @@ test "check type - for" {
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "main" } },
-        \\a
-        \\  where [
-        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        \\    a.plus : a, b -> a,
-        \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
-        \\  ]
-        ,
+        "Dec",
     );
 }
 
@@ -2783,7 +2725,7 @@ test "check type - comprehensive - multiple layers of let-polymorphism" {
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "func" } },
-        "(a, Str, Bool) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]",
+        "(Dec, Str, Bool)",
     );
 }
 
@@ -2803,12 +2745,7 @@ test "check type - comprehensive - multiple layers of lambdas" {
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "func" } },
-        \\a
-        \\  where [
-        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        \\    a.plus : a, a -> a,
-        \\  ]
-        ,
+        "Dec",
     );
 }
 
@@ -2859,15 +2796,7 @@ test "check type - comprehensive - static dispatch with multiple methods 1" {
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "func" } },
-        \\a
-        \\  where [
-        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        \\    a.plus : a, c -> a,
-        \\    a.plus : a, d -> a,
-        \\    c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]),
-        \\    d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),
-        \\  ]
-        ,
+        "Dec",
     );
 }
 
@@ -2921,13 +2850,7 @@ test "check type - comprehensive - static dispatch with multiple methods 2" {
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "func" } },
-        \\Container(b)
-        \\  where [
-        \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
-        \\    b.plus : b, c -> b,
-        \\    c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]),
-        \\  ]
-        ,
+        "Container(Dec)",
     );
 }
 
@@ -3145,23 +3068,7 @@ test "check type - comprehensive: polymorphism + lambdas + dispatch + annotation
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "main" } },
-        // TODO: Look at why constraints are not deduped!
-        \\{ chained: b, final: b, id_results: (e, Str, Bool), processed: c, transformed: a }
-        \\  where [
-        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        \\    a.plus : a, a -> a,
-        \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
-        \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
-        \\    b.plus : b, h -> b,
-        \\    b.plus : b, i -> b,
-        \\    c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]),
-        \\    c.plus : c, j -> c,
-        \\    e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]),
-        \\    h.from_numeral : Numeral -> Try(h, [InvalidNumeral(Str)]),
-        \\    i.from_numeral : Numeral -> Try(i, [InvalidNumeral(Str)]),
-        \\    j.from_numeral : Numeral -> Try(j, [InvalidNumeral(Str)]),
-        \\  ]
-        ,
+        "{ chained: Dec, final: Dec, id_results: (Dec, Str, Bool), processed: Dec, transformed: Dec }",
     );
 }
 
@@ -3360,13 +3267,7 @@ test "List.fold works as builtin associated item" {
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "x" } },
-        \\state
-        \\  where [
-        \\    item.from_numeral : Numeral -> Try(item, [InvalidNumeral(Str)]),
-        \\    state.from_numeral : Numeral -> Try(state, [InvalidNumeral(Str)]),
-        \\    state.plus : state, item -> state,
-        \\  ]
-        ,
+        "Dec",
     );
 }
 
@@ -3393,7 +3294,7 @@ test "associated item: type annotation followed by body should not create duplic
 
     // Verify the types
     try test_env.assertDefType("Test.apply", "(a -> b), a -> b");
-    try test_env.assertDefType("result", "b where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]");
+    try test_env.assertDefType("result", "Dec");
 }
 
 // TODO: Move this test to can
@@ -3875,9 +3776,7 @@ test "check type - List.get method syntax" {
     try checkTypesModule(
         source,
         .{ .pass = .last_def },
-        \\Try(item, [OutOfBounds, ..])
-        \\  where [item.from_numeral : Numeral -> Try(item, [InvalidNumeral(Str)])]
-        ,
+        "Try(Dec, [OutOfBounds, ..])",
     );
 }
 
@@ -3937,13 +3836,11 @@ test "check type - List.first method syntax should not create cyclic types" {
     const source =
         \\result = [1].first()
     ;
-    // Expected: Try(item, [ListWasEmpty, ..]) with item having from_numeral constraint
+    // Expected: Try(Dec, [ListWasEmpty, ..]) after from_numeral resolution
     try checkTypesModule(
         source,
         .{ .pass = .last_def },
-        \\Try(item, [ListWasEmpty, ..])
-        \\  where [item.from_numeral : Numeral -> Try(item, [InvalidNumeral(Str)])]
-        ,
+        "Try(Dec, [ListWasEmpty, ..])",
     );
 }
 
@@ -3956,17 +3853,11 @@ test "check type - lambda capturing top-level constant with plus - mono_pure_lam
         \\add_one = |x| x + one
         \\result = add_one(5)
     ;
-    // Expected: result should have numeric type with from_numeral and plus constraints
+    // Expected: result should have numeric type resolved to Dec
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "result" } },
-        \\a
-        \\  where [
-        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        \\    a.plus : a, b -> a,
-        \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
-        \\  ]
-        ,
+        "Dec",
     );
 }
 
@@ -3976,17 +3867,11 @@ test "check type - simple function call should have return type" {
         \\add_one = |x| x + 1
         \\result = add_one(5)
     ;
-    // Both add_one and result should have numeric types with from_numeral and plus constraints
+    // Both add_one and result should have numeric types resolved to Dec
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "result" } },
-        \\a
-        \\  where [
-        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        \\    a.plus : a, b -> a,
-        \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
-        \\  ]
-        ,
+        "Dec",
     );
 }
 
@@ -4015,9 +3900,8 @@ test "check type - range inferred" {
         \\    a.is_lt : a, a -> Bool,
         \\    a.is_lte : a, a -> Bool,
         \\    a.minus : a, a -> a,
-        \\    a.plus : a, b -> a,
+        \\    a.plus : a, Dec -> a,
         \\    a.to_u64 : a -> U64,
-        \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
         \\  ]
         ,
     );

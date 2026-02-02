@@ -7996,13 +7996,22 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // Allocate stack space for the record
             const base_offset = self.codegen.allocStackSlot(stack_size);
 
-            // Get field expressions
+            // Get field expressions and their names
             const field_exprs = self.store.getExprSpan(rec.fields);
+            const field_names = self.store.getFieldNameSpan(rec.field_names);
 
-            // Copy each field to its offset within the record
-            for (field_exprs, 0..) |field_expr_id, i| {
-                const field_offset = ls.getRecordFieldOffset(record_layout.data.record.idx, @intCast(i));
-                const field_size = ls.getRecordFieldSize(record_layout.data.record.idx, @intCast(i));
+            // Copy each field to its offset within the record.
+            // Field expressions are in alphabetical order by name (from Lower.zig),
+            // but the layout store sorts fields by alignment descending, then alphabetically.
+            // We must use field names to find the correct layout offset for each field.
+            const sorted_fields = ls.record_fields.sliceRange(record_data.getFields());
+            const sorted_names = sorted_fields.items(.name);
+            for (field_exprs, field_names) |field_expr_id, field_name| {
+                const sorted_idx: u32 = for (sorted_names, 0..) |sn, idx| {
+                    if (sn == field_name) break @intCast(idx);
+                } else unreachable; // field name must exist in layout
+                const field_offset = ls.getRecordFieldOffset(record_layout.data.record.idx, sorted_idx);
+                const field_size = ls.getRecordFieldSize(record_layout.data.record.idx, sorted_idx);
                 const field_loc = try self.generateExpr(field_expr_id);
                 try self.copyBytesToStackOffset(base_offset + @as(i32, @intCast(field_offset)), field_loc, field_size);
             }

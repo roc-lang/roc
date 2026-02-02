@@ -98,6 +98,9 @@ pub const ReportBuilder = struct {
     filename: []const u8,
     other_modules: []const *const ModuleEnv,
     import_mapping: *const @import("types").import_mapping.ImportMapping,
+    /// The checker's full region list, which includes regions for type variables
+    /// created during type checking that don't have corresponding CIR nodes.
+    checker_regions: *const Region.List,
     diff_fields: SnapshotRecordFieldSafeList,
     diff_tags: SnapshotTagSafeList,
     typo_suggestions: diff.TypoSuggestion.ArrayList,
@@ -113,6 +116,7 @@ pub const ReportBuilder = struct {
         filename: []const u8,
         other_modules: []const *const ModuleEnv,
         import_mapping: *const @import("types").import_mapping.ImportMapping,
+        checker_regions: *const Region.List,
     ) !Self {
         return .{
             .gpa = gpa,
@@ -122,6 +126,7 @@ pub const ReportBuilder = struct {
             .snapshots = snapshots,
             .problems = problems,
             .import_mapping = import_mapping,
+            .checker_regions = checker_regions,
             .source = module_env.common.source,
             .filename = filename,
             .other_modules = other_modules,
@@ -149,10 +154,19 @@ pub const ReportBuilder = struct {
 
     // Helpers
 
+    /// Look up a region by index using the checker's full region list.
+    /// The checker's regions include both CIR node regions and regions for type variables
+    /// created during type checking. Returns null only if the index is beyond even
+    /// the checker's region list (shouldn't happen in normal operation).
+    fn getRegionSafe(self: *const Self, region_idx: Region.Idx) ?*Region {
+        if (@intFromEnum(region_idx) >= self.checker_regions.len()) return null;
+        return self.checker_regions.get(region_idx);
+    }
+
     /// Add source code highlighting for a variable's region.
     /// Consolidates the common pattern of: get region -> calc info -> add to document.
     fn addSourceHighlight(self: *Self, report: *Report, region_idx: Region.Idx) !void {
-        const region = self.can_ir.store.regions.get(region_idx);
+        const region = self.getRegionSafe(region_idx) orelse return;
         return self.addSourceHighlightRegion(report, region.*);
     }
 
@@ -171,10 +185,10 @@ pub const ReportBuilder = struct {
     /// Add source code highlighting for a variable's region.
     /// Consolidates the common pattern of: get region -> calc info -> add to document.
     fn addFocusedSourceHighlight(self: *Self, report: *Report, outer_region_idx: Region.Idx, inner_region_idx: Region.Idx) !void {
-        const outer_region = self.can_ir.store.regions.get(outer_region_idx);
+        const outer_region = self.getRegionSafe(outer_region_idx) orelse return;
         const outer_region_info = self.module_env.calcRegionInfo(outer_region.*);
 
-        const inner_region = self.can_ir.store.regions.get(inner_region_idx);
+        const inner_region = self.getRegionSafe(inner_region_idx) orelse return;
         const inner_region_info = self.module_env.calcRegionInfo(inner_region.*);
 
         const display_region = SourceCodeDisplayRegion{
@@ -1276,16 +1290,17 @@ pub const ReportBuilder = struct {
         try report.document.addText("I'm having trouble with this nominal tag:");
         try report.document.addLineBreak();
 
-        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
-        const region_info = self.module_env.calcRegionInfo(region.*);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
-        try report.document.addLineBreak();
+        if (self.getRegionSafe(@enumFromInt(@intFromEnum(types.actual_var)))) |region| {
+            const region_info = self.module_env.calcRegionInfo(region.*);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                self.filename,
+                self.source,
+                self.module_env.getLineStarts(),
+            );
+            try report.document.addLineBreak();
+        }
 
         // Show the invalid tag
         try report.document.addText("The tag is:");
@@ -1347,16 +1362,17 @@ pub const ReportBuilder = struct {
         try report.document.addText("I'm having trouble with this nominal type that wraps a record:");
         try report.document.addLineBreak();
 
-        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
-        const region_info = self.module_env.calcRegionInfo(region.*);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
-        try report.document.addLineBreak();
+        if (self.getRegionSafe(@enumFromInt(@intFromEnum(types.actual_var)))) |region| {
+            const region_info = self.module_env.calcRegionInfo(region.*);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                self.filename,
+                self.source,
+                self.module_env.getLineStarts(),
+            );
+            try report.document.addLineBreak();
+        }
 
         const actual_type = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
         const expected_type = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
@@ -1387,16 +1403,17 @@ pub const ReportBuilder = struct {
         try report.document.addText("I'm having trouble with this nominal type that wraps a tuple:");
         try report.document.addLineBreak();
 
-        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
-        const region_info = self.module_env.calcRegionInfo(region.*);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
-        try report.document.addLineBreak();
+        if (self.getRegionSafe(@enumFromInt(@intFromEnum(types.actual_var)))) |region| {
+            const region_info = self.module_env.calcRegionInfo(region.*);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                self.filename,
+                self.source,
+                self.module_env.getLineStarts(),
+            );
+            try report.document.addLineBreak();
+        }
 
         const actual_type = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
         const expected_type = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
@@ -1427,16 +1444,17 @@ pub const ReportBuilder = struct {
         try report.document.addText("I'm having trouble with this nominal type:");
         try report.document.addLineBreak();
 
-        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
-        const region_info = self.module_env.calcRegionInfo(region.*);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
-        try report.document.addLineBreak();
+        if (self.getRegionSafe(@enumFromInt(@intFromEnum(types.actual_var)))) |region| {
+            const region_info = self.module_env.calcRegionInfo(region.*);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                self.filename,
+                self.source,
+                self.module_env.getLineStarts(),
+            );
+            try report.document.addLineBreak();
+        }
 
         const actual_type = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
         const expected_type = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
@@ -1674,16 +1692,17 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         // Add source region highlighting
-        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.fn_var)));
-        const region_info = self.module_env.calcRegionInfo(region.*);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
-        try report.document.addLineBreak();
+        if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.fn_var)))) |region| {
+            const region_info = self.module_env.calcRegionInfo(region.*);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                self.filename,
+                self.source,
+                self.module_env.getLineStarts(),
+            );
+            try report.document.addLineBreak();
+        }
 
         try D.renderSlice(&.{
             D.bytes("The value's type, which does not have a method named"),
@@ -1744,16 +1763,17 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         // Add source region highlighting
-        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.fn_var)));
-        const region_info = self.module_env.calcRegionInfo(region.*);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
-        try report.document.addLineBreak();
+        if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.fn_var)))) |region| {
+            const region_info = self.module_env.calcRegionInfo(region.*);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                self.filename,
+                self.source,
+                self.module_env.getLineStarts(),
+            );
+            try report.document.addLineBreak();
+        }
 
         try D.renderSlice(&.{
             D.bytes("The value's type, which does not have a method named"),
@@ -1846,7 +1866,7 @@ pub const ReportBuilder = struct {
 
         // Get the region of the dispatcher (the type that was expected)
         // This might be different if the type came from somewhere else (e.g., a type annotation)
-        const dispatcher_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.dispatcher_var))).*;
+        const dispatcher_region = if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.dispatcher_var)))) |r| r.* else Region.zero();
 
         try D.renderSlice(&.{
             D.bytes("This number is being used where a non-number type is needed:"),
@@ -1902,22 +1922,22 @@ pub const ReportBuilder = struct {
 
         const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
 
-        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.fn_var)));
-        const region_info = self.module_env.calcRegionInfo(region.*);
-
         try D.renderSlice(&.{
             D.bytes("This expression is doing an equality check on a type that doesn't support equality:"),
         }, self, &report);
         try report.document.addLineBreak();
 
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
-        try report.document.addLineBreak();
+        if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.fn_var)))) |region| {
+            const region_info = self.module_env.calcRegionInfo(region.*);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                self.filename,
+                self.source,
+                self.module_env.getLineStarts(),
+            );
+            try report.document.addLineBreak();
+        }
 
         try D.renderSlice(&.{
             D.bytes("The type is:"),
@@ -2304,9 +2324,6 @@ pub const ReportBuilder = struct {
         var report = Report.init(self.gpa, "CANNOT USE OPAQUE NOMINAL TYPE", .runtime_error);
         errdefer report.deinit();
 
-        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.var_)));
-        const region_info = self.module_env.calcRegionInfo(region.*);
-
         try D.renderSlice(&.{
             D.bytes("You're attempting to create an instance of"),
             D.ident(data.nominal_type_name).withAnnotation(.inline_code).withNoPrecedingSpace(),
@@ -2317,13 +2334,16 @@ pub const ReportBuilder = struct {
         }, self, &report);
         try report.document.addLineBreak();
 
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.var_)))) |region| {
+            const region_info = self.module_env.calcRegionInfo(region.*);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                self.filename,
+                self.source,
+                self.module_env.getLineStarts(),
+            );
+        }
 
         try report.document.addLineBreak();
         try D.renderSlice(&.{
@@ -2347,21 +2367,21 @@ pub const ReportBuilder = struct {
         var report = Report.init(self.gpa, "COMPILER BUG", .runtime_error);
         errdefer report.deinit();
 
-        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.var_)));
-        const region_info = self.module_env.calcRegionInfo(region.*);
-
         try D.renderSlice(&.{
             D.bytes("An internal compiler error occurred while checking this nominal type usage:"),
         }, self, &report);
         try report.document.addLineBreak();
 
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.var_)))) |region| {
+            const region_info = self.module_env.calcRegionInfo(region.*);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                self.filename,
+                self.source,
+                self.module_env.getLineStarts(),
+            );
+        }
 
         try report.document.addLineBreak();
         try D.renderSlice(&.{
@@ -2732,16 +2752,17 @@ pub const ReportBuilder = struct {
         }, self, &report);
         try report.document.addLineBreak();
 
-        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.var_)));
-        const region_info = self.module_env.calcRegionInfo(region.*);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
-        try report.document.addLineBreak();
+        if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.var_)))) |region| {
+            const region_info = self.module_env.calcRegionInfo(region.*);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                self.filename,
+                self.source,
+                self.module_env.getLineStarts(),
+            );
+            try report.document.addLineBreak();
+        }
 
         try D.renderSlice(&.{
             D.bytes("Here is my best effort at writing down the type. You will see"),
@@ -2776,16 +2797,17 @@ pub const ReportBuilder = struct {
         }
         try report.document.addLineBreak();
 
-        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.var_)));
-        const region_info = self.module_env.calcRegionInfo(region.*);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
-        try report.document.addLineBreak();
+        if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.var_)))) |region| {
+            const region_info = self.module_env.calcRegionInfo(region.*);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                self.filename,
+                self.source,
+                self.module_env.getLineStarts(),
+            );
+            try report.document.addLineBreak();
+        }
 
         try D.renderSlice(&.{
             D.bytes("Here is the type I'm inferring. You will see"),
@@ -3007,16 +3029,17 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         // Add source region highlighting
-        const match_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.match_expr)));
-        const region_info = self.module_env.calcRegionInfo(match_region.*);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
-        try report.document.addLineBreak();
+        if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.match_expr)))) |match_region| {
+            const region_info = self.module_env.calcRegionInfo(match_region.*);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                self.filename,
+                self.source,
+                self.module_env.getLineStarts(),
+            );
+            try report.document.addLineBreak();
+        }
 
         const condition_type = self.getFormattedString(data.condition_snapshot);
         try D.renderSlice(&.{
