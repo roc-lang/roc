@@ -2784,10 +2784,11 @@ fn lowerRecordFields(self: *Self, module_env: *ModuleEnv, fields: CIR.RecordFiel
         .field_names = MonoFieldNameSpan.empty(),
     };
 
-    // Collect (name, value) pairs for sorting
+    // Collect (name, value, alignment) for sorting
     const FieldPair = struct {
         name: base.Ident.Idx,
         value: CIR.Expr.Idx,
+        alignment: u32,
     };
 
     var pairs = std.ArrayList(FieldPair).empty;
@@ -2795,13 +2796,25 @@ fn lowerRecordFields(self: *Self, module_env: *ModuleEnv, fields: CIR.RecordFiel
 
     for (field_indices) |field_idx| {
         const field = module_env.store.getRecordField(field_idx);
-        try pairs.append(self.allocator, .{ .name = field.name, .value = field.value });
+        // Get alignment from the field value's layout
+        const field_layout_idx = self.getExprLayoutFromIdx(module_env, field.value);
+        const alignment: u32 = if (self.layout_store) |ls| blk: {
+            const field_layout = ls.getLayout(field_layout_idx);
+            break :blk @intCast(ls.layoutSizeAlign(field_layout).alignment.toByteUnits());
+        } else 1;
+        try pairs.append(self.allocator, .{ .name = field.name, .value = field.value, .alignment = alignment });
     }
 
-    // Sort fields alphabetically by name (matches layout order for same-alignment fields)
+    // Sort fields by alignment descending, then alphabetically by name
+    // This matches the layout store's field ordering
     const SortContext = struct {
         module_env: *ModuleEnv,
         pub fn lessThan(ctx: @This(), a: FieldPair, b: FieldPair) bool {
+            // First sort by alignment descending (larger alignment first)
+            if (a.alignment != b.alignment) {
+                return a.alignment > b.alignment;
+            }
+            // Then sort alphabetically by name
             const a_str = ctx.module_env.getIdent(a.name);
             const b_str = ctx.module_env.getIdent(b.name);
             return std.mem.order(u8, a_str, b_str) == .lt;
