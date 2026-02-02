@@ -16,7 +16,6 @@ const base = @import("base");
 const can = @import("can");
 const types_mod = @import("types");
 const layout_mod = @import("layout");
-const type_extractor = @import("type_extractor");
 
 const trace_refcount = build_options.trace_refcount;
 

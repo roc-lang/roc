@@ -1,3 +1,4 @@
+## A glue script for generating a C header file.
 app [make_glue] { pf: platform "../platform/main.roc" }
 
 import pf.Types exposing [Types]

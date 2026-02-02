@@ -3005,17 +3005,6 @@ pub fn build(b: *std.Build) void {
         glue_platform_host_lib.root_module.addImport("eval", roc_modules.eval);
         glue_platform_host_lib.root_module.addImport("collections", roc_modules.collections);
 
-        // Add type_extractor module
-        const type_extractor_mod = b.addModule("type_extractor", .{
-            .root_source_file = b.path("src/glue/type_extractor.zig"),
-        });
-        type_extractor_mod.addImport("base", roc_modules.base);
-        type_extractor_mod.addImport("can", roc_modules.can);
-        type_extractor_mod.addImport("types", roc_modules.types);
-        type_extractor_mod.addImport("layout", roc_modules.layout);
-        type_extractor_mod.addImport("roc_target", roc_modules.roc_target);
-        glue_platform_host_lib.root_module.addImport("type_extractor", type_extractor_mod);
-
         // Copy the glue platform host library to the source directory
         const copy_glue_host = b.addUpdateSourceFiles();
         const glue_host_filename = if (target.result.os.tag == .windows) "host.lib" else "libhost.a";

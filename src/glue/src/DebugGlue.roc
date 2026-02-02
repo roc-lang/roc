@@ -1,3 +1,5 @@
+## A glue script intended for debugging, rather than generating files.
+## Logs the reflected types passed to the glue script and generates nothing.
 app [make_glue] { pf: platform "../platform/main.roc" }
 
 import pf.Types exposing [Types]
