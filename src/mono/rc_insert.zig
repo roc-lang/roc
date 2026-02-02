@@ -28,7 +28,7 @@ const MonoWhenBranch = MonoIR.MonoWhenBranch;
 const LayoutIdx = layout_mod.Idx;
 const Region = base.Region;
 
-/// Inserts reference counting operations (incref/decref) into Mono IR expressions.
+/// Inserts reference counting operations (incref/decref) into the mono IR.
 pub const RcInsertPass = struct {
     allocator: Allocator,
     store: *MonoExprStore,
@@ -70,8 +70,6 @@ pub const RcInsertPass = struct {
         // Phase 2: Walk the tree and insert RC operations
         return self.processExpr(expr_id);
     }
-
-    // Phase 1: Use counting
 
     /// Count how many times each symbol is referenced in the expression tree.
     /// Also records the layout for each symbol found in bind patterns.
@@ -295,8 +293,6 @@ pub const RcInsertPass = struct {
         }
     }
 
-    // Phase 2: RC insertion
-
     /// Check if a layout needs reference counting (directly or transitively).
     fn layoutNeedsRc(self: *const RcInsertPass, layout_idx: LayoutIdx) bool {
         const l = self.layout_store.getLayout(layout_idx);
@@ -492,8 +488,6 @@ pub const RcInsertPass = struct {
             .result_layout = result_layout,
         } }, region);
     }
-
-    // RC emission helpers
 
     /// Emit an incref statement into the statement buffer.
     fn emitIncref(self: *RcInsertPass, symbol: MonoSymbol, layout_idx: LayoutIdx, count: u16, region: Region) Allocator.Error!void {
