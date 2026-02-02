@@ -72,6 +72,9 @@ store: *MonoExprStore,
 /// All module environments (for resolving cross-module references)
 all_module_envs: []const *ModuleEnv,
 
+/// Index of the app module in all_module_envs (for resolving e_lookup_required)
+app_module_idx: ?u16,
+
 /// Lambda set inference results (for closure dispatch)
 lambda_inference: ?*LambdaSetInference,
 
@@ -131,11 +134,13 @@ pub fn init(
     all_module_envs: []const *ModuleEnv,
     lambda_inference: ?*LambdaSetInference,
     layout_store: ?*LayoutStore,
+    app_module_idx: ?u16,
 ) Self {
     return .{
         .allocator = allocator,
         .store = store,
         .all_module_envs = all_module_envs,
+        .app_module_idx = app_module_idx,
         .lambda_inference = lambda_inference,
         .layout_store = layout_store,
         .type_scope = TypeScope.init(allocator),
@@ -257,6 +262,13 @@ fn lowerExternalDefByIdx(self: *Self, symbol: MonoSymbol, target_def_idx: u16) A
 
     // Get the external module environment
     const ext_module_env = self.all_module_envs[symbol.module_idx];
+
+    // Check if this is actually a def node (type modules with hosted functions may have different node types)
+    if (!ext_module_env.store.isDefNode(target_def_idx)) {
+        // Not a def node - this could be a hosted lambda or other special node type
+        // Skip lowering; the node will be handled elsewhere (e.g., in e_call for hosted lambdas)
+        return;
+    }
 
     // Get the definition directly using the index
     const def_idx: CIR.Def.Idx = @enumFromInt(target_def_idx);
@@ -931,10 +943,92 @@ fn getExternalLowLevelLambda(self: *Self, caller_env: *ModuleEnv, lookup: anytyp
     const ext_module_idx = caller_env.imports.getResolvedModule(lookup.module_idx) orelse return null;
     if (ext_module_idx >= self.all_module_envs.len) return null;
     const ext_env = self.all_module_envs[ext_module_idx];
+    // Check if this is actually a def node (type modules with hosted functions may have different node types)
+    if (!ext_env.store.isDefNode(lookup.target_node_idx)) return null;
     const def_idx: CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
     const def = ext_env.store.getDef(def_idx);
     const def_expr = ext_env.store.getExpr(def.expr);
     return if (def_expr == .e_low_level_lambda) def_expr.e_low_level_lambda else null;
+}
+
+/// Look up whether an external definition is a hosted lambda.
+/// Returns the hosted lambda data if so, null otherwise.
+fn getExternalHostedLambda(self: *Self, caller_env: *ModuleEnv, lookup: anytype) ?@FieldType(CIR.Expr, "e_hosted_lambda") {
+    const ext_module_idx = caller_env.imports.getResolvedModule(lookup.module_idx) orelse return null;
+    if (ext_module_idx >= self.all_module_envs.len) return null;
+    const ext_env = self.all_module_envs[ext_module_idx];
+
+    // Try multiple approaches to find the hosted lambda
+
+    // Approach 1: Check if target_node_idx directly points to a def node
+    const node_id: CIR.Node.Idx = @enumFromInt(lookup.target_node_idx);
+    const node = ext_env.store.nodes.get(node_id);
+
+    if (node.tag == .def) {
+        const def_idx: CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
+        const def = ext_env.store.getDef(def_idx);
+        const def_expr = ext_env.store.getExpr(def.expr);
+        if (def_expr == .e_hosted_lambda) return def_expr.e_hosted_lambda;
+    }
+
+    if (node.tag == .expr_hosted_lambda) {
+        const expr_idx: CIR.Expr.Idx = @enumFromInt(lookup.target_node_idx);
+        const expr = ext_env.store.getExpr(expr_idx);
+        if (expr == .e_hosted_lambda) return expr.e_hosted_lambda;
+    }
+
+    // Approach 2: Scan the module's exports for hosted lambdas matching the ident
+    // This handles cases where the exposed_items index points to a pattern instead of a def
+    const exports = ext_env.store.sliceDefs(ext_env.exports);
+    for (exports) |def_idx| {
+        const def = ext_env.store.getDef(def_idx);
+        const def_expr = ext_env.store.getExpr(def.expr);
+        if (def_expr == .e_hosted_lambda) {
+            // Check if this def's pattern uses the target identifier
+            const pattern = ext_env.store.getPattern(def.pattern);
+            if (pattern == .assign) {
+                // Compare pattern index to target
+                if (@intFromEnum(def.pattern) == lookup.target_node_idx) {
+                    return def_expr.e_hosted_lambda;
+                }
+            }
+        }
+    }
+
+    // Approach 3: Scan all_defs for hosted lambdas with matching pattern
+    const all_defs = ext_env.store.sliceDefs(ext_env.all_defs);
+    for (all_defs) |def_idx| {
+        const def = ext_env.store.getDef(def_idx);
+        const def_expr = ext_env.store.getExpr(def.expr);
+        if (def_expr == .e_hosted_lambda) {
+            const pattern = ext_env.store.getPattern(def.pattern);
+            if (pattern == .assign) {
+                if (@intFromEnum(def.pattern) == lookup.target_node_idx) {
+                    return def_expr.e_hosted_lambda;
+                }
+            }
+        }
+    }
+
+    // Approach 4: If we have the ident, search by ident name match
+    const lookup_ident_text = caller_env.getIdent(lookup.ident_idx);
+    for (all_defs) |def_idx| {
+        const def = ext_env.store.getDef(def_idx);
+        const def_expr = ext_env.store.getExpr(def.expr);
+        if (def_expr == .e_hosted_lambda) {
+            const hosted_name = ext_env.getIdent(def_expr.e_hosted_lambda.symbol_name);
+            // Extract unqualified name from lookup (e.g., "Stdout.line!" -> "line!")
+            const lookup_name = if (std.mem.lastIndexOfScalar(u8, lookup_ident_text, '.')) |dot_idx|
+                lookup_ident_text[dot_idx + 1 ..]
+            else
+                lookup_ident_text;
+            if (std.mem.eql(u8, hosted_name, lookup_name)) {
+                return def_expr.e_hosted_lambda;
+            }
+        }
+    }
+
+    return null;
 }
 
 /// Set up layout hints for a local function call.
@@ -1034,9 +1128,20 @@ fn setupExternalCallTypeScope(
     call_expr_idx: CIR.Expr.Idx,
 ) Allocator.Error!void {
     // Get the external module
-    const ext_module_idx = caller_module_env.imports.getResolvedModule(lookup.module_idx) orelse return;
-    if (ext_module_idx >= self.all_module_envs.len) return;
+    const ext_module_idx = caller_module_env.imports.getResolvedModule(lookup.module_idx) orelse {
+        std.debug.print("setupExternalCallTypeScope: import not resolved for module_idx={}\n", .{@intFromEnum(lookup.module_idx)});
+        return;
+    };
+    if (ext_module_idx >= self.all_module_envs.len) {
+        std.debug.print("setupExternalCallTypeScope: ext_module_idx={} out of bounds (len={})\n", .{ ext_module_idx, self.all_module_envs.len });
+        return;
+    }
     const ext_module_env = self.all_module_envs[ext_module_idx];
+
+    // Check if this is actually a def node (type modules with hosted functions may have different node types)
+    if (!ext_module_env.store.isDefNode(lookup.target_node_idx)) {
+        return;
+    }
 
     // Get the external definition
     const def_idx: CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
@@ -1588,6 +1693,68 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             } };
         },
 
+        .e_lookup_required => |lookup| blk: {
+            // Required lookups reference values from the app module that satisfy
+            // the platform's `requires` clause. E.g., `main!` in `requires { main! : ... }`
+
+            // Get the app module index (set during lowerer initialization)
+            const app_idx = self.app_module_idx orelse {
+                std.debug.print("e_lookup_required: app_module_idx not set\n", .{});
+                break :blk .{ .runtime_error = {} };
+            };
+
+            if (app_idx >= self.all_module_envs.len) {
+                std.debug.print("e_lookup_required: app_module_idx {} out of bounds\n", .{app_idx});
+                break :blk .{ .runtime_error = {} };
+            }
+
+            const app_env = self.all_module_envs[app_idx];
+
+            // Get the required identifier name from the platform's requires_types
+            const required_type = module_env.requires_types.get(lookup.requires_idx);
+            const required_name = module_env.getIdent(required_type.ident);
+
+            // Find the matching export in the app module's exports
+            const exports = app_env.store.sliceDefs(app_env.exports);
+            var found_def_idx: ?CIR.Def.Idx = null;
+            var found_ident_idx: ?Ident.Idx = null;
+
+            for (exports) |def_idx| {
+                const def = app_env.store.getDef(def_idx);
+                const pattern = app_env.store.getPattern(def.pattern);
+                if (pattern == .assign) {
+                    const name = app_env.getIdent(pattern.assign.ident);
+                    if (std.mem.eql(u8, name, required_name)) {
+                        found_def_idx = def_idx;
+                        found_ident_idx = pattern.assign.ident;
+                        break;
+                    }
+                }
+            }
+
+            if (found_def_idx == null or found_ident_idx == null) {
+                std.debug.print("e_lookup_required: '{s}' not found in app exports (exports.len={})\n", .{ required_name, exports.len });
+                break :blk .{ .runtime_error = {} };
+            }
+
+            // Create symbol for the app's export
+            const symbol = MonoSymbol{
+                .module_idx = app_idx,
+                .ident_idx = found_ident_idx.?,
+            };
+
+            // Ensure the app definition is lowered
+            const symbol_key: u48 = @bitCast(symbol);
+            if (!self.lowered_symbols.contains(symbol_key)) {
+                try self.lowerExternalDefByIdx(symbol, @intCast(@intFromEnum(found_def_idx.?)));
+            }
+
+            break :blk .{ .lookup = .{
+                .symbol = symbol,
+                .layout_idx = self.getExprLayoutFromIdx(module_env, expr_idx),
+            } };
+        },
+
         .e_call => |call| blk: {
             // Check if this is a call to a low-level lambda (like str_inspekt)
             const fn_expr = module_env.store.getExpr(call.func);
@@ -1595,6 +1762,23 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             // If calling an external function, set up type scope mappings before lowering.
             // We need to clean up after the call is done to avoid polluting subsequent calls.
             const is_external_call = fn_expr == .e_lookup_external;
+
+            // Check for hosted lambda EARLY - before setupExternalCallTypeScope which doesn't handle them
+            if (is_external_call) {
+                const lookup = fn_expr.e_lookup_external;
+                if (self.getExternalHostedLambda(module_env, lookup)) |hosted| {
+                    const args = try self.lowerExprSpan(module_env, call.args);
+                    const hosted_expr = MonoExpr{
+                        .hosted_call = .{
+                            .index = hosted.index,
+                            .args = args,
+                            .ret_layout = self.getExprLayoutFromIdx(module_env, expr_idx),
+                        },
+                    };
+                    return try self.store.addExpr(hosted_expr, region);
+                }
+            }
+
             const old_caller_module = self.type_scope_caller_module;
             if (is_external_call) {
                 const lookup = fn_expr.e_lookup_external;
@@ -2561,6 +2745,80 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             const body_id = try self.store.addExpr(.{
                 .low_level = .{
                     .op = mono_op,
+                    .args = args_span,
+                    .ret_layout = ret_layout,
+                },
+            }, region);
+
+            break :blk .{
+                .lambda = .{
+                    .fn_layout = self.getExprLayoutFromIdx(module_env, expr_idx),
+                    .params = params,
+                    .body = body_id,
+                    .ret_layout = ret_layout,
+                },
+            };
+        },
+
+        // Hosted lambda - these are platform-provided effects (I/O, etc.)
+        // When a hosted lambda is evaluated directly (not called), we create a lambda
+        // wrapper that will call the hosted function. This happens when a hosted
+        // function is passed as a value.
+        .e_hosted_lambda => |hosted| blk: {
+            // Get the function type from the expression to extract parameter types
+            const expr_type_var = ModuleEnv.varFrom(expr_idx);
+            const expr_resolved = module_env.types.resolveVar(expr_type_var);
+            const func_type = expr_resolved.desc.content.unwrapFunc();
+            const ls = self.layout_store orelse unreachable;
+
+            // Lower the parameter patterns (AFTER type scope setup so layouts resolve correctly)
+            const params = try self.lowerPatternSpan(module_env, hosted.args);
+
+            // Create argument expressions from the parameter patterns
+            // Each parameter becomes a lookup to itself
+            const param_patterns = module_env.store.slicePatterns(hosted.args);
+            var arg_list = std.ArrayList(ir.MonoExprId).empty;
+            defer arg_list.deinit(self.allocator);
+
+            var param_idx: usize = 0;
+            for (param_patterns) |patt_idx| {
+                const symbol = self.patternToSymbol(patt_idx);
+
+                // Get the layout from the function's parameter type, not the pattern's type variable.
+                // The pattern type in hosted lambdas may be generic, but the function type has the
+                // concrete types through the type scope mappings.
+                const patt_layout = if (func_type) |ft| layout_blk: {
+                    const param_vars = module_env.types.sliceVars(ft.args);
+                    if (param_idx < param_vars.len) {
+                        const param_type_var = param_vars[param_idx];
+                        break :layout_blk ls.fromTypeVar(self.current_module_idx, param_type_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
+                    }
+                    unreachable; // Pattern count should match function parameter count
+                } else {
+                    unreachable; // e_hosted_lambda should always have a function type
+                };
+                param_idx += 1;
+
+                const arg_id = try self.store.addExpr(.{
+                    .lookup = .{
+                        .symbol = symbol,
+                        .layout_idx = patt_layout,
+                    },
+                }, region);
+                try arg_list.append(self.allocator, arg_id);
+            }
+            const args_span = try self.store.addExprSpan(arg_list.items);
+
+            // Use the function's RETURN type for ret_layout
+            const ret_layout = if (func_type) |ft| ret_blk: {
+                break :ret_blk ls.fromTypeVar(self.current_module_idx, ft.ret, &self.type_scope, self.type_scope_caller_module) catch unreachable;
+            } else
+                self.getExprLayoutFromIdx(module_env, expr_idx);
+
+            // Create the hosted call as the body
+            const body_id = try self.store.addExpr(.{
+                .hosted_call = .{
+                    .index = hosted.index,
                     .args = args_span,
                     .ret_layout = ret_layout,
                 },

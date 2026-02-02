@@ -192,6 +192,12 @@ pub const RcInsertPass = struct {
                     try self.countUses(arg_id);
                 }
             },
+            .hosted_call => |hc| {
+                const args = self.store.getExprSpan(hc.args);
+                for (args) |arg_id| {
+                    try self.countUses(arg_id);
+                }
+            },
             .str_concat => |span| {
                 const parts = self.store.getExprSpan(span);
                 for (parts) |part_id| {

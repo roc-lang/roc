@@ -1167,6 +1167,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 .unary_minus => |um| um.result_layout,
                 .call => |call| call.ret_layout,
                 .low_level => |ll| ll.ret_layout,
+                .hosted_call => |hc| hc.ret_layout,
                 // Compound expressions with result layouts
                 .if_then_else => |ite| ite.result_layout,
                 .when => |w| w.result_layout,
@@ -1280,6 +1281,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
                 // Low-level operations
                 .low_level => |ll| try self.generateLowLevel(ll),
+
+                // Hosted function calls (platform-provided effects)
+                .hosted_call => |hc| try self.generateHostedCall(hc),
 
                 // Nominal types (transparent wrappers)
                 .nominal => |nom| try self.generateExpr(nom.backing_expr),
@@ -4046,6 +4050,255 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             }
         }
 
+        /// Generate code for hosted function calls (platform-provided effects).
+        /// Hosted functions follow the RocCall ABI: fn(roc_ops, ret_ptr, args_ptr) -> void
+        fn generateHostedCall(self: *Self, hc: anytype) Error!ValueLocation {
+            const roc_ops_reg = self.roc_ops_reg orelse {
+                std.debug.print("BUG: hosted_call requires roc_ops_reg\n", .{});
+                unreachable;
+            };
+
+            const ls = self.layout_store orelse {
+                std.debug.print("BUG: hosted_call requires layout_store\n", .{});
+                unreachable;
+            };
+
+            // Get the arguments
+            const args = self.store.getExprSpan(hc.args);
+
+            // Determine return value size
+            const ret_layout = ls.getLayout(hc.ret_layout);
+            const ret_size = ls.layoutSize(ret_layout);
+
+            // Allocate return slot (even for ZST, we need a valid pointer)
+            const ret_slot = if (ret_size > 0)
+                self.codegen.allocStackSlot(@intCast(ret_size))
+            else
+                self.codegen.allocStackSlot(8); // Minimum slot for ZST
+
+            // Marshal arguments into a contiguous buffer on the stack
+            // First, calculate total size needed for all arguments
+            var total_args_size: usize = 0;
+            var max_alignment: usize = 1;
+            for (args) |arg_id| {
+                if (self.getExprLayout(arg_id)) |arg_layout_idx| {
+                    const arg_layout = ls.getLayout(arg_layout_idx);
+                    const arg_size = ls.layoutSize(arg_layout);
+                    const arg_align = arg_layout.alignment(ls.targetUsize());
+                    max_alignment = @max(max_alignment, arg_align.toByteUnits());
+                    // Align to the argument's alignment
+                    total_args_size = std.mem.alignForward(usize, total_args_size, arg_align.toByteUnits());
+                    total_args_size += arg_size;
+                }
+            }
+
+            // Allocate args buffer (at least 8 bytes for empty args case)
+            const args_slot = self.codegen.allocStackSlot(@intCast(@max(total_args_size, 8)));
+
+            // Copy each argument into the args buffer
+            var offset: usize = 0;
+            for (args) |arg_id| {
+                const arg_loc = try self.generateExpr(arg_id);
+                if (self.getExprLayout(arg_id)) |arg_layout_idx| {
+                    const arg_layout = ls.getLayout(arg_layout_idx);
+                    const arg_size = ls.layoutSize(arg_layout);
+                    const arg_align = arg_layout.alignment(ls.targetUsize());
+                    // Align offset
+                    offset = std.mem.alignForward(usize, offset, arg_align.toByteUnits());
+
+                    if (arg_size > 0) {
+                        // Copy argument to args buffer at current offset
+                        const dest_offset: i32 = args_slot + @as(i32, @intCast(offset));
+                        try self.copyValueToStack(arg_loc, dest_offset, arg_size);
+                    }
+                    offset += arg_size;
+                }
+            }
+
+            // RocOps.hosted_fns is at offset 56 (7 pointers * 8 bytes)
+            // HostedFunctions.fns is at offset 8 within HostedFunctions (after count u32 + padding)
+            // So hosted_fns.fns is at roc_ops + 56 + 8 = roc_ops + 64
+
+            if (comptime builtin.cpu.arch == .aarch64) {
+                // Load hosted_fns.fns pointer: [roc_ops + 64]
+                const fns_ptr_reg = try self.allocTempGeneral();
+                try self.codegen.emit.ldrRegMemSoff(.w64, fns_ptr_reg, roc_ops_reg, 64);
+
+                // Load function pointer: fns[index] = [fns_ptr + index * 8]
+                const fn_ptr_reg = try self.allocTempGeneral();
+                const fn_offset: i32 = @intCast(hc.index * 8);
+                try self.codegen.emit.ldrRegMemSoff(.w64, fn_ptr_reg, fns_ptr_reg, fn_offset);
+                self.codegen.freeGeneral(fns_ptr_reg);
+
+                // Set up arguments for the hosted function call:
+                // X0 = roc_ops pointer
+                // X1 = return pointer (FP + ret_slot)
+                // X2 = args pointer (FP + args_slot)
+
+                try self.emitMovRegReg(.X0, roc_ops_reg);
+
+                // X1 = ret_ptr
+                try self.codegen.emit.movRegImm64(.X1, @bitCast(@as(i64, ret_slot)));
+                try self.codegen.emit.addRegRegReg(.w64, .X1, .FP, .X1);
+
+                // X2 = args_ptr
+                try self.codegen.emit.movRegImm64(.X2, @bitCast(@as(i64, args_slot)));
+                try self.codegen.emit.addRegRegReg(.w64, .X2, .FP, .X2);
+
+                // Call the hosted function
+                try self.codegen.emit.blrReg(fn_ptr_reg);
+                self.codegen.freeGeneral(fn_ptr_reg);
+            } else if (comptime builtin.cpu.arch == .x86_64) {
+                // Load hosted_fns.fns pointer: [roc_ops + 64]
+                const fns_ptr_reg = try self.allocTempGeneral();
+                try self.codegen.emit.movRegMem(.w64, fns_ptr_reg, roc_ops_reg, 64);
+
+                // Load function pointer: fns[index] = [fns_ptr + index * 8]
+                const fn_ptr_reg = try self.allocTempGeneral();
+                const fn_offset: i32 = @intCast(hc.index * 8);
+                try self.codegen.emit.movRegMem(.w64, fn_ptr_reg, fns_ptr_reg, fn_offset);
+                self.codegen.freeGeneral(fns_ptr_reg);
+
+                // Set up arguments for the hosted function call (System V ABI):
+                // RDI = roc_ops pointer
+                // RSI = return pointer (RBP + ret_slot)
+                // RDX = args pointer (RBP + args_slot)
+
+                try self.emitMovRegReg(.RDI, roc_ops_reg);
+
+                // RSI = ret_ptr
+                try self.codegen.emit.leaRegMem(.RSI, .RBP, ret_slot);
+
+                // RDX = args_ptr
+                try self.codegen.emit.leaRegMem(.RDX, .RBP, args_slot);
+
+                // Call the hosted function
+                try self.codegen.emit.callReg(fn_ptr_reg);
+                self.codegen.freeGeneral(fn_ptr_reg);
+            }
+
+            // Return the result location based on return type
+            if (ret_size == 0) {
+                // ZST - return unit/empty record
+                return .{ .immediate_i64 = 0 };
+            } else if (hc.ret_layout == .i128 or hc.ret_layout == .u128 or hc.ret_layout == .dec) {
+                return .{ .stack_i128 = ret_slot };
+            } else if (hc.ret_layout == .str) {
+                return .{ .stack_str = ret_slot };
+            } else if (ret_layout.tag == .list or ret_layout.tag == .list_of_zst) {
+                return .{ .list_stack = .{ .struct_offset = ret_slot, .data_offset = 0, .num_elements = 0 } };
+            } else {
+                return .{ .stack = ret_slot };
+            }
+        }
+
+        /// Copy a value to a stack location
+        fn copyValueToStack(self: *Self, src_loc: ValueLocation, dest_offset: i32, size: usize) Error!void {
+            if (size == 0) return;
+
+            switch (src_loc) {
+                .immediate_i64 => |val| {
+                    const temp = try self.allocTempGeneral();
+                    try self.codegen.emitLoadImm(temp, val);
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.strRegMemSoff(.w64, temp, .FP, dest_offset);
+                    } else {
+                        try self.codegen.emit.movMemReg(.w64, .RBP, dest_offset, temp);
+                    }
+                    self.codegen.freeGeneral(temp);
+                },
+                .general_reg => |reg| {
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.strRegMemSoff(.w64, reg, .FP, dest_offset);
+                    } else {
+                        try self.codegen.emit.movMemReg(.w64, .RBP, dest_offset, reg);
+                    }
+                },
+                .stack => |src_offset| {
+                    try self.copyStackToStack(src_offset, dest_offset, size);
+                },
+                .stack_i128 => |src_offset| {
+                    try self.copyStackToStack(src_offset, dest_offset, 16);
+                },
+                .stack_str => |src_offset| {
+                    try self.copyStackToStack(src_offset, dest_offset, 24);
+                },
+                .list_stack => |ls_info| {
+                    try self.copyStackToStack(ls_info.struct_offset, dest_offset, 24);
+                },
+                else => {
+                    std.debug.print("BUG: copyValueToStack unhandled location: {s}\n", .{@tagName(src_loc)});
+                    unreachable;
+                },
+            }
+        }
+
+        /// Copy data from one stack location to another
+        fn copyStackToStack(self: *Self, src_offset: i32, dest_offset: i32, size: usize) Error!void {
+            if (size == 0) return;
+
+            const temp = try self.allocTempGeneral();
+
+            // Copy 8 bytes at a time
+            var copied: usize = 0;
+            while (copied + 8 <= size) : (copied += 8) {
+                const src_off: i32 = src_offset + @as(i32, @intCast(copied));
+                const dest_off: i32 = dest_offset + @as(i32, @intCast(copied));
+                if (comptime builtin.cpu.arch == .aarch64) {
+                    try self.codegen.emit.ldrRegMemSoff(.w64, temp, .FP, src_off);
+                    try self.codegen.emit.strRegMemSoff(.w64, temp, .FP, dest_off);
+                } else {
+                    try self.codegen.emit.movRegMem(.w64, temp, .RBP, src_off);
+                    try self.codegen.emit.movMemReg(.w64, .RBP, dest_off, temp);
+                }
+            }
+
+            // Handle remaining bytes (1-7)
+            if (copied < size) {
+                const remaining = size - copied;
+                const src_off: i32 = src_offset + @as(i32, @intCast(copied));
+                const dest_off: i32 = dest_offset + @as(i32, @intCast(copied));
+
+                if (remaining >= 4) {
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.ldrRegMemSoff(.w32, temp, .FP, src_off);
+                        try self.codegen.emit.strRegMemSoff(.w32, temp, .FP, dest_off);
+                    } else {
+                        try self.codegen.emit.movRegMem(.w32, temp, .RBP, src_off);
+                        try self.codegen.emit.movMemReg(.w32, .RBP, dest_off, temp);
+                    }
+                    copied += 4;
+                }
+
+                // For simplicity, handle remaining 1-3 bytes by copying as 32-bit
+                // (which may copy extra bytes, but they'll be overwritten or unused)
+                if (copied < size) {
+                    const final_src: i32 = src_offset + @as(i32, @intCast(copied));
+                    const final_dest: i32 = dest_offset + @as(i32, @intCast(copied));
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        // Load byte by byte for remaining
+                        const bytes_left = size - copied;
+                        for (0..bytes_left) |i| {
+                            const byte_src = final_src + @as(i32, @intCast(i));
+                            const byte_dest = final_dest + @as(i32, @intCast(i));
+                            try self.codegen.emit.ldrRegMemSoff(.w8, temp, .FP, byte_src);
+                            try self.codegen.emit.strRegMemSoff(.w8, temp, .FP, byte_dest);
+                        }
+                    } else {
+                        const bytes_left = size - copied;
+                        for (0..bytes_left) |i| {
+                            const byte_src = final_src + @as(i32, @intCast(i));
+                            const byte_dest = final_dest + @as(i32, @intCast(i));
+                            try self.codegen.emit.movRegMem(.w8, temp, .RBP, byte_src);
+                            try self.codegen.emit.movMemReg(.w8, .RBP, byte_dest, temp);
+                        }
+                    }
+                }
+            }
+
+            self.codegen.freeGeneral(temp);
+        }
+
         /// Generate list_contains: linear scan comparing each element
         fn generateListContains(self: *Self, list_loc: ValueLocation, needle_loc: ValueLocation) Error!ValueLocation {
             const list_base: i32 = switch (list_loc) {
@@ -4504,22 +4757,27 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
         /// Generate code for a symbol lookup
         fn generateLookup(self: *Self, symbol: MonoSymbol, _: layout.Idx) Error!ValueLocation {
+            std.debug.print("[LOOKUP] symbol: module={d}, ident={d}\n", .{ symbol.module_idx, @as(u32, @bitCast(symbol.ident_idx)) });
 
             // Check if we have a location for this symbol
             const symbol_key: u48 = @bitCast(symbol);
             if (self.symbol_locations.get(symbol_key)) |loc| {
+                std.debug.print("[LOOKUP] Found in symbol_locations\n", .{});
                 return loc;
             }
 
             // Symbol not found - it might be a top-level definition
             if (self.store.getSymbolDef(symbol)) |def_expr_id| {
+                std.debug.print("[LOOKUP] Found symbol def, expr_id={d}\n", .{@intFromEnum(def_expr_id)});
                 // Generate code for the definition
                 const loc = try self.generateExpr(def_expr_id);
+                std.debug.print("[LOOKUP] Generated loc: {s}\n", .{@tagName(loc)});
                 // Cache the location
                 try self.symbol_locations.put(symbol_key, loc);
                 return loc;
             }
 
+            std.debug.print("[LOOKUP] Symbol not found!\n", .{});
             return Error.LocalNotFound;
         }
 
@@ -10137,11 +10395,15 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
         /// Generate code for a block
         fn generateBlock(self: *Self, block: anytype) Error!ValueLocation {
             const stmts = self.store.getStmts(block.stmts);
+            std.debug.print("[BLOCK] stmts.len={d}, final_expr={d}\n", .{ stmts.len, @intFromEnum(block.final_expr) });
 
             // Process each statement
-            for (stmts) |stmt| {
+            for (stmts, 0..) |stmt, i| {
                 // Generate code for the expression
+                const stmt_expr = self.store.getExpr(stmt.expr);
+                std.debug.print("[BLOCK] stmt[{d}] expr type: {s}\n", .{ i, @tagName(stmt_expr) });
                 const expr_loc = try self.generateExpr(stmt.expr);
+                std.debug.print("[BLOCK] stmt[{d}] generated, result: {s}\n", .{ i, @tagName(expr_loc) });
                 // Get the expression's layout (for mutable variable binding with correct size)
                 const expr_layout = self.getExprLayout(stmt.expr);
                 // Bind the result to the pattern, using expr layout for mutable vars
@@ -10149,6 +10411,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             }
 
             // Generate the final expression
+            std.debug.print("[BLOCK] generating final_expr\n", .{});
             return self.generateExpr(block.final_expr);
         }
 
@@ -10873,6 +11136,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             args_span: anytype,
             ret_layout: layout.Idx,
         ) Error!ValueLocation {
+            std.debug.print("[CLOSURE_DISPATCH] representation: {s}\n", .{@tagName(cv.representation)});
             switch (cv.representation) {
                 .enum_dispatch => |repr| {
                     return try self.dispatchEnumClosure(cv.stack_offset, repr.lambda_set, args_span, ret_layout);
@@ -11042,9 +11306,11 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             cv: anytype,
             args_span: anytype,
         ) Error!ValueLocation {
+            std.debug.print("[SINGLE_CLOSURE] entering, lambda_id={d}\n", .{@intFromEnum(cv.lambda)});
 
             // Bind captures from the closure's stack data to their symbols
             const captures = self.store.getCaptures(cv.captures);
+            std.debug.print("[SINGLE_CLOSURE] captures len={d}\n", .{captures.len});
             var offset: i32 = 0;
             for (captures) |capture| {
                 const symbol_key: u48 = @bitCast(capture.symbol);
@@ -11062,6 +11328,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
             // Get the lambda body and evaluate it with captures in scope
             const lambda_expr = self.store.getExpr(cv.lambda);
+            std.debug.print("[SINGLE_CLOSURE] lambda_expr type: {s}\n", .{@tagName(lambda_expr)});
             const lambda = switch (lambda_expr) {
                 .lambda => |l| l,
                 .closure => |c| blk: {
@@ -11069,9 +11336,13 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     if (inner == .lambda) break :blk inner.lambda;
                     unreachable;
                 },
-                else => unreachable,
+                else => {
+                    std.debug.print("[SINGLE_CLOSURE] unexpected lambda_expr type!\n", .{});
+                    unreachable;
+                },
             };
 
+            std.debug.print("[SINGLE_CLOSURE] calling callLambdaBodyDirect\n", .{});
             return try self.callLambdaBodyDirect(lambda, args_span);
         }
 
@@ -11135,8 +11406,10 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
         /// parameters to argument values. Used when inlining is required
         /// (e.g., lambdas returning callable values, or captures that must stay in scope).
         fn callLambdaBodyDirect(self: *Self, lambda: anytype, args_span: anytype) Error!ValueLocation {
+            std.debug.print("[LAMBDA_BODY_DIRECT] entering, body={d}\n", .{@intFromEnum(lambda.body)});
             const args = self.store.getExprSpan(args_span);
             const params = self.store.getPatternSpan(lambda.params);
+            std.debug.print("[LAMBDA_BODY_DIRECT] args.len={d}, params.len={d}\n", .{ args.len, params.len });
             for (params, 0..) |pattern_id, i| {
                 if (i >= args.len) break;
                 const arg_loc = try self.generateExpr(args[i]);
@@ -11150,7 +11423,11 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             self.early_return_ret_layout = lambda.ret_layout;
 
             // Generate the lambda body
+            std.debug.print("[LAMBDA_BODY_DIRECT] generating body...\n", .{});
+            const body_expr = self.store.getExpr(lambda.body);
+            std.debug.print("[LAMBDA_BODY_DIRECT] body expr type: {s}\n", .{@tagName(body_expr)});
             const result_loc = try self.generateExpr(lambda.body);
+            std.debug.print("[LAMBDA_BODY_DIRECT] body generated, result: {s}\n", .{@tagName(result_loc)});
 
             // Check if any early returns were generated
             const num_early_returns = self.early_return_patches.items.len - saved_early_return_patches_len;
@@ -11811,8 +12088,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     (arg_layout.? == .dec or arg_layout.? == .i128 or arg_layout.? == .u128));
             if (is_i128_arg) return 2;
 
-            // Check for list types - need 3 registers (24 bytes: ptr, len, capacity)
-            if (arg_loc == .list_stack) return 3;
+            // Check for list/string types - need 3 registers (24 bytes: ptr, len, capacity)
+            if (arg_loc == .list_stack or arg_loc == .stack_str) return 3;
             if (arg_layout) |al| {
                 if (al == .str) return 3; // Strings are 24 bytes
                 if (self.layout_store) |ls| {
@@ -15156,8 +15433,30 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 // Generate the body expression
                 const result_loc = try self.generateExpr(body_expr);
 
+                // If the body is a lambda or closure (function value), we need to CALL it, not return it.
+                // This happens when the entrypoint is defined as `main_for_host! = main!` where
+                // `main!` is a lambda/closure.
+                const final_result = switch (result_loc) {
+                    .lambda_code => |lc| blk: {
+                        // Call the lambda with BL instruction (aarch64)
+                        // Calculate relative offset from current position
+                        const current_offset = self.codegen.currentOffset();
+                        const rel_offset: i28 = @intCast(@as(i32, @intCast(lc.code_offset)) - @as(i32, @intCast(current_offset)));
+                        try self.codegen.emit.bl(rel_offset);
+
+                        // Result is in X0
+                        break :blk ValueLocation{ .general_reg = .X0 };
+                    },
+                    .closure_value => |cv| blk: {
+                        // Dispatch the closure call with no arguments
+                        const empty_span = mono.MonoIR.MonoExprSpan.empty();
+                        break :blk try self.generateClosureDispatch(cv, empty_span, ret_layout);
+                    },
+                    else => result_loc,
+                };
+
                 // Store result to ret_ptr (X20)
-                try self.storeResultToSavedPtr(result_loc, ret_layout, .X20, 1);
+                try self.storeResultToSavedPtr(final_result, ret_layout, .X20, 1);
 
                 // Epilogue: restore FP/LR and return
                 try self.codegen.emit.ldpPostIndex(.w64, .FP, .LR, .ZRSP, @intCast(@divExact(frame_size, 8)));
@@ -15202,10 +15501,39 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 }
 
                 // Generate the body expression
+                std.debug.print("[ENTRYPOINT x86_64] Generating body expr {d}\n", .{@intFromEnum(body_expr)});
+                const body_mono_expr = self.store.getExpr(body_expr);
+                std.debug.print("[ENTRYPOINT x86_64] Body expr type: {s}\n", .{@tagName(body_mono_expr)});
                 const result_loc = try self.generateExpr(body_expr);
+                std.debug.print("[ENTRYPOINT x86_64] Result loc: {s}\n", .{@tagName(result_loc)});
+
+                // If the body is a lambda or closure (function value), we need to CALL it, not return it.
+                // This happens when the entrypoint is defined as `main_for_host! = main!` where
+                // `main!` is a lambda/closure. Evaluating the body gives us the function, but we need
+                // to invoke it to get the actual result.
+                const final_result = switch (result_loc) {
+                    .lambda_code => |lc| blk: {
+                        std.debug.print("[ENTRYPOINT x86_64] Body is lambda_code, calling at offset {d}\n", .{lc.code_offset});
+                        // Call the lambda with no arguments (entrypoint lambdas take no args)
+                        // The lambda's code is at lc.code_offset
+                        const rel_offset = @as(i32, @intCast(lc.code_offset)) - @as(i32, @intCast(self.codegen.currentOffset() + 5));
+                        try self.codegen.emit.callRel32(rel_offset);
+
+                        // Result is in RAX (for small return values)
+                        break :blk ValueLocation{ .general_reg = .RAX };
+                    },
+                    .closure_value => |cv| blk: {
+                        std.debug.print("[ENTRYPOINT x86_64] Body is closure_value, dispatching\n", .{});
+                        // Dispatch the closure call with no arguments
+                        // Use an empty span - entrypoint functions take no user-visible args
+                        const empty_span = mono.MonoIR.MonoExprSpan.empty();
+                        break :blk try self.generateClosureDispatch(cv, empty_span, ret_layout);
+                    },
+                    else => result_loc,
+                };
 
                 // Store result to ret_ptr (RBX)
-                try self.storeResultToSavedPtr(result_loc, ret_layout, .RBX, 1);
+                try self.storeResultToSavedPtr(final_result, ret_layout, .RBX, 1);
 
                 // Epilogue: deallocate locals, restore callee-saved, return
                 try self.codegen.emit.addRegImm32(.w64, .RSP, @intCast(local_space));

@@ -463,7 +463,15 @@ pub const BuildEnv = struct {
         try coord.coordinatorLoop();
 
         if (comptime trace_build) {
-            std.debug.print("[BUILD] Coordinator loop complete, transferring results...\n", .{});
+            std.debug.print("[BUILD] Coordinator loop complete, processing hosted functions...\n", .{});
+        }
+
+        // Process hosted functions and assign global indices
+        // This must happen before lowering so the CIR has correct indices
+        try self.processHostedFunctions();
+
+        if (comptime trace_build) {
+            std.debug.print("[BUILD] Hosted functions processed, transferring results...\n", .{});
         }
 
         // Transfer results back to PackageEnv for compatibility
@@ -615,6 +623,144 @@ pub const BuildEnv = struct {
                     }
                 }
             }
+        }
+    }
+
+    /// Process hosted functions from all platform modules and assign global indices.
+    /// This must be called after compilation but before lowering/code generation.
+    /// The indices are used at runtime to call the correct function from RocOps.hosted_fns.
+    pub fn processHostedFunctions(self: *BuildEnv) !void {
+        if (comptime trace_build) {
+            std.debug.print("[BUILD] processHostedFunctions: starting\n", .{});
+        }
+        const coord = self.coordinator orelse return;
+        const HostedCompiler = can.HostedCompiler;
+
+        var all_hosted_fns = std.ArrayList(HostedCompiler.HostedFunctionInfo).empty;
+        defer all_hosted_fns.deinit(self.gpa);
+
+        // Find the platform package
+        var platform_pkg: ?*coordinator_mod.PackageState = null;
+        var pkg_it = coord.packages.iterator();
+        while (pkg_it.next()) |entry| {
+            const pkg_name = entry.key_ptr.*;
+            if (self.packages.get(pkg_name)) |pkg_info| {
+                if (pkg_info.kind == .platform) {
+                    platform_pkg = entry.value_ptr.*;
+                    break;
+                }
+            }
+        }
+        const pf_pkg = platform_pkg orelse return;
+
+        // Collect hosted functions from all platform modules (except main)
+        for (pf_pkg.modules.items, 0..) |*mod, mod_idx| {
+            // Skip platform main.roc
+            if (pf_pkg.root_module_id) |root_id| {
+                if (mod_idx == root_id) continue;
+            }
+
+            if (mod.env) |platform_env| {
+                var module_fns = HostedCompiler.collectAndSortHostedFunctions(platform_env) catch continue;
+                defer module_fns.deinit(platform_env.gpa);
+
+                for (module_fns.items) |fn_info| {
+                    // Copy the name_text with our gpa
+                    const name_copy = self.gpa.dupe(u8, fn_info.name_text) catch continue;
+                    // Free original
+                    platform_env.gpa.free(fn_info.name_text);
+                    all_hosted_fns.append(self.gpa, .{
+                        .symbol_name = fn_info.symbol_name,
+                        .expr_idx = fn_info.expr_idx,
+                        .name_text = name_copy,
+                    }) catch {
+                        self.gpa.free(name_copy);
+                        continue;
+                    };
+                }
+            }
+        }
+
+        if (all_hosted_fns.items.len == 0) return;
+
+        // Sort globally by qualified name
+        const SortContext = struct {
+            pub fn lessThan(_: void, a: HostedCompiler.HostedFunctionInfo, b: HostedCompiler.HostedFunctionInfo) bool {
+                return std.mem.order(u8, a.name_text, b.name_text) == .lt;
+            }
+        };
+        std.mem.sort(HostedCompiler.HostedFunctionInfo, all_hosted_fns.items, {}, SortContext.lessThan);
+
+        // Deduplicate
+        var write_idx: usize = 0;
+        for (all_hosted_fns.items, 0..) |fn_info, read_idx| {
+            if (write_idx == 0 or !std.mem.eql(u8, all_hosted_fns.items[write_idx - 1].name_text, fn_info.name_text)) {
+                if (write_idx != read_idx) {
+                    all_hosted_fns.items[write_idx] = fn_info;
+                }
+                write_idx += 1;
+            } else {
+                self.gpa.free(fn_info.name_text);
+            }
+        }
+        all_hosted_fns.shrinkRetainingCapacity(write_idx);
+
+        if (comptime trace_build) {
+            std.debug.print("[BUILD] Hosted functions (sorted globally, count={d}):\n", .{all_hosted_fns.items.len});
+            for (all_hosted_fns.items, 0..) |fn_info, idx| {
+                std.debug.print("[BUILD]   [{d}] {s}\n", .{ idx, fn_info.name_text });
+            }
+        }
+
+        // Reassign global indices for all platform modules (except main)
+        for (pf_pkg.modules.items, 0..) |*mod, mod_idx| {
+            if (pf_pkg.root_module_id) |root_id| {
+                if (mod_idx == root_id) continue;
+            }
+
+            if (mod.env) |platform_env| {
+                const all_defs = platform_env.store.sliceDefs(platform_env.all_defs);
+                for (all_defs) |def_idx| {
+                    const def = platform_env.store.getDef(def_idx);
+                    const expr = platform_env.store.getExpr(def.expr);
+
+                    if (expr == .e_hosted_lambda) {
+                        const hosted = expr.e_hosted_lambda;
+                        const local_name = platform_env.getIdent(hosted.symbol_name);
+
+                        // Build qualified name
+                        const plat_module_name = base.module_path.getModuleName(platform_env.module_name);
+                        const qualified_name = std.fmt.allocPrint(self.gpa, "{s}.{s}", .{ plat_module_name, local_name }) catch continue;
+                        defer self.gpa.free(qualified_name);
+
+                        const stripped_name = if (std.mem.endsWith(u8, qualified_name, "!"))
+                            qualified_name[0 .. qualified_name.len - 1]
+                        else
+                            qualified_name;
+
+                        // Find matching global index and assign
+                        for (all_hosted_fns.items, 0..) |fn_info, idx| {
+                            if (std.mem.eql(u8, fn_info.name_text, stripped_name)) {
+                                const expr_node_idx = @as(@TypeOf(platform_env.store.nodes).Idx, @enumFromInt(@intFromEnum(def.expr)));
+                                var expr_node = platform_env.store.nodes.get(expr_node_idx);
+                                var payload = expr_node.getPayload().expr_hosted_lambda;
+                                payload.index = @intCast(idx);
+                                expr_node.setPayload(.{ .expr_hosted_lambda = payload });
+                                platform_env.store.nodes.set(expr_node_idx, expr_node);
+                                if (comptime trace_build) {
+                                    std.debug.print("[BUILD] Assigned global index {d} to {s}\n", .{ idx, stripped_name });
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Free name_text strings
+        for (all_hosted_fns.items) |fn_info| {
+            self.gpa.free(fn_info.name_text);
         }
     }
 

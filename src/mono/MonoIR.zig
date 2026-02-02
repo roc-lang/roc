@@ -637,6 +637,18 @@ pub const MonoExpr = union(enum) {
         layout_idx: layout.Idx,
     },
 
+    /// Call a hosted function by index into RocOps.hosted_fns
+    /// Used for platform-provided effects (I/O, etc.)
+    /// The host provides these functions at runtime via the RocOps struct.
+    hosted_call: struct {
+        /// Index into the RocOps.hosted_fns.fns array
+        index: u32,
+        /// Arguments to pass (marshaled to args buffer)
+        args: MonoExprSpan,
+        /// Layout of the return type
+        ret_layout: layout.Idx,
+    },
+
     /// Binary operation types
     pub const BinOp = enum {
         // Arithmetic
