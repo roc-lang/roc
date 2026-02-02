@@ -10842,7 +10842,16 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         //    are opaque stack values that can't be dispatched.
                         // 2. Body returns a callable — compiled procs can't return
                         //    closure values (capture data on proc's stack frame).
+                        // 3. Lambda is polymorphic and call site has different ret_layout
+                        //    than the lambda's compiled ret_layout. This handles cases like
+                        //    identity(5) followed by identity("Hello") where the first call
+                        //    compiles the lambda with i64 layout, but the second call needs
+                        //    str layout.
                         if (self.hasCallableArguments(args_span) or self.bodyReturnsCallable(lambda.body)) {
+                            return try self.callLambdaBodyDirect(lambda, args_span);
+                        }
+                        if (lambda.ret_layout != ret_layout) {
+                            // Polymorphic lambda with different layout at this call site
                             return try self.callLambdaBodyDirect(lambda, args_span);
                         }
                         const offset = try self.compileLambdaAsProc(def_expr_id, lambda);
@@ -10856,6 +10865,10 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                                 return try self.callLambdaBodyDirect(inner.lambda, args_span);
                             }
                             if (self.hasCallableArguments(args_span) or self.bodyReturnsCallable(inner.lambda.body)) {
+                                return try self.callLambdaBodyDirect(inner.lambda, args_span);
+                            }
+                            if (inner.lambda.ret_layout != ret_layout) {
+                                // Polymorphic closure with different layout at this call site
                                 return try self.callLambdaBodyDirect(inner.lambda, args_span);
                             }
                             const offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda);
