@@ -12341,11 +12341,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 }
 
             } else {
-                // aarch64: Use existing approach (prologue emitted upfront)
-                // We need to emit prologue at the start, so we insert it before body_start
-                // For now, keep the simpler approach for aarch64
-
-                // Actually for aarch64, we should emit prologue first.
+                // aarch64: Prepend prologue to generated body
                 // Since body was generated without prologue, we need to prepend it.
                 const body_bytes = self.allocator.dupe(u8, self.codegen.emit.buf.items[body_start..body_end]) catch return Error.OutOfMemory;
                 defer self.allocator.free(body_bytes);
@@ -12360,6 +12356,41 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 try self.codegen.emit.stpPreIndex(.w64, .FP, .LR, .ZRSP, scaled_offset);
                 try self.codegen.emit.movRegReg(.w64, .FP, .ZRSP);
                 const prologue_size = self.codegen.currentOffset() - prologue_start;
+
+                // PHASE 2.5: Patch self-calls in body_bytes
+                // Self-calls target body_start but after prepending prologue,
+                // they need to target prologue_start which means adjusting
+                // the relative offset by -prologue_size.
+                // aarch64 BL: 1 00101 imm26 (4-byte instruction, imm26 is signed offset in words)
+                var i: usize = 0;
+                while (i + 4 <= body_bytes.len) : (i += 4) {
+                    const inst: u32 = @bitCast(body_bytes[i..][0..4].*);
+                    // Check for BL opcode (bits 31-26 = 100101 = 37)
+                    if ((inst >> 26) == 0b100101) {
+                        // Extract 26-bit signed offset (in words)
+                        const imm26: u26 = @truncate(inst);
+                        const offset_words: i26 = @bitCast(imm26);
+                        const offset_bytes: i32 = @as(i32, offset_words) * 4;
+                        // For aarch64, offset is relative to instruction address (not end like x86_64)
+                        const inst_offset: i64 = @intCast(i);
+                        const target: i64 = inst_offset + offset_bytes;
+                        if (target == @as(i64, @intCast(body_start))) {
+                            // This is a self-call targeting body_start
+                            // After prepending prologue, the instruction is at (prologue_size + i)
+                            // and should still target prologue_start (body_start)
+                            // New relative offset = body_start - (body_start + prologue_size + i)
+                            //                     = -(prologue_size + i)
+                            // Old relative offset = -(i)
+                            // Adjustment = new - old = -prologue_size
+                            const new_offset_bytes: i32 = offset_bytes - @as(i32, @intCast(prologue_size));
+                            const new_offset_words: i26 = @intCast(@divExact(new_offset_bytes, 4));
+                            const new_imm26: u26 = @bitCast(new_offset_words);
+                            const new_inst: u32 = (@as(u32, 0b100101) << 26) | new_imm26;
+                            const new_bytes: [4]u8 = @bitCast(new_inst);
+                            @memcpy(body_bytes[i..][0..4], &new_bytes);
+                        }
+                    }
+                }
 
                 // Re-append body
                 self.codegen.emit.buf.appendSlice(self.allocator, body_bytes) catch return Error.OutOfMemory;
