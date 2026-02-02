@@ -51,16 +51,21 @@ run_benchmark() {
     local fx_file="$5"
     local roc_extra_args="$6"
 
-    if ! hyperfine \
-        --warmup 1 \
-        --min-runs 3 \
-        --shell=none \
-        --show-output \
-        --export-json "$json_file" \
-        $extra_args \
-        -n "main" "$main_roc $fx_file --no-cache $roc_extra_args" \
-        -n "pr" "$pr_roc $fx_file --no-cache $roc_extra_args" \
-        2>&1; then
+    local cmd=(
+        hyperfine
+        --warmup 1
+        --min-runs 3
+        --shell=none
+        --show-output
+        --export-json "$json_file"
+        $extra_args
+        -n "main" "$main_roc $fx_file --no-cache $roc_extra_args"
+        -n "pr" "$pr_roc $fx_file --no-cache $roc_extra_args"
+    )
+
+    echo "Running: ${cmd[*]}"
+
+    if ! "${cmd[@]}" 2>&1; then
         return 1
     fi
 
