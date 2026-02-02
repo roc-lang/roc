@@ -227,6 +227,10 @@ TOO FEW ARGS - fuzz_crash_027.md:21:3:22:4
 TYPE MISMATCH - fuzz_crash_027.md:50:5:50:8
 TYPE MISMATCH - fuzz_crash_027.md:64:2:64:2
 TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
+TYPE MISMATCH - fuzz_crash_027.md:125:6:125:9
+TYPE MISMATCH - fuzz_crash_027.md:102:15:102:18
+MISSING METHOD - fuzz_crash_027.md:129:12:129:22
++ - :0:0:0:0
 TYPE MISMATCH - fuzz_crash_027.md:100:9:148:2
 TYPE MISMATCH - fuzz_crash_027.md:106:3:106:6
 # PROBLEMS
@@ -965,6 +969,58 @@ The `match_time` function has the type:
     [Blue, Red, ..], _arg -> Error
 
 Are there any missing commas?
+
+**TYPE MISMATCH**
+This number is being used where a non-number type is needed:
+**fuzz_crash_027.md:125:6:125:9:**
+```roc
+		),	456, # ee
+```
+		  	^^^
+
+The type was determined to be non-numeric here:
+**fuzz_crash_027.md:128:18:128:19:**
+```roc
+	line!("Adding ${n} to ${number}")
+```
+	                ^
+
+Other code expects this to have the type:
+
+    Str
+
+**TYPE MISMATCH**
+This number is being used where a non-number type is needed:
+**fuzz_crash_027.md:102:15:102:18:**
+```roc
+	var number = 123
+```
+	             ^^^
+
+The type was determined to be non-numeric here:
+**fuzz_crash_027.md:128:26:128:32:**
+```roc
+	line!("Adding ${n} to ${number}")
+```
+	                        ^^^^^^
+
+Other code expects this to have the type:
+
+    Str
+
+**MISSING METHOD**
+The value before this **+** operator has a type that doesn't have a **plus** method:
+**fuzz_crash_027.md:129:12:129:22:**
+```roc
+		number = number + n
+```
+		         ^^^^^^^^^^
+
+The value's type, which does not have a method named**plus**, is:
+
+    Str
+
+**Hint:** The **+** operator calls a method named **plus** on the value preceding it, passing the value after the operator as the one argument.
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -2456,7 +2512,7 @@ expect {
 (inferred-types
 	(defs
 		(patt (type "(Error, Error)"))
-		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Error)])]"))
+		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "U64 -> U64"))
 		(patt (type "[Red, Blue, ..], _arg -> Error"))
 		(patt (type "List(Error) -> Try({  }, _d)"))
@@ -2493,7 +2549,7 @@ expect {
 					(ty-rigid-var (name "a"))))))
 	(expressions
 		(expr (type "(Error, Error)"))
-		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Error)])]"))
+		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "U64 -> U64"))
 		(expr (type "[Red, Blue, ..], _arg -> Error"))
 		(expr (type "List(Error) -> Try({  }, _d)"))
