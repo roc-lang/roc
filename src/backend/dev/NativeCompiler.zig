@@ -82,8 +82,12 @@ pub const NativeCompiler = struct {
             return CompilationError.NoEntrypoints;
         }
 
+        // Create memory backend for static data allocation
+        var memory_backend = StaticDataInterner.MemoryBackend.init(self.allocator);
+        defer memory_backend.deinit();
+
         // Create static data interner for string literals
-        var static_interner = StaticDataInterner.init(self.allocator);
+        var static_interner = StaticDataInterner.init(self.allocator, memory_backend.backend());
         defer static_interner.deinit();
 
         // Initialize the code generator
@@ -103,8 +107,8 @@ pub const NativeCompiler = struct {
         }
 
         // Track symbols for object file generation
-        var symbols = std.ArrayList(Backend.Symbol).init(self.allocator);
-        defer symbols.deinit();
+        var symbols = std.ArrayList(Backend.Symbol).empty;
+        defer symbols.deinit(self.allocator);
 
         // Generate entrypoint wrappers
         for (entrypoints) |entrypoint| {
@@ -117,7 +121,7 @@ pub const NativeCompiler = struct {
                 return CompilationError.CodeGenerationFailed;
             };
 
-            symbols.append(.{
+            symbols.append(self.allocator, .{
                 .name = entrypoint.symbol_name,
                 .offset = export_info.offset,
                 .size = export_info.size,
@@ -146,7 +150,7 @@ pub const NativeCompiler = struct {
                         }
                     }
                     if (!found) {
-                        symbols.append(.{
+                        symbols.append(self.allocator, .{
                             .name = f.name,
                             .offset = 0,
                             .size = 0,
@@ -167,7 +171,7 @@ pub const NativeCompiler = struct {
                         }
                     }
                     if (!found) {
-                        symbols.append(.{
+                        symbols.append(self.allocator, .{
                             .name = d.name,
                             .offset = 0,
                             .size = 0,
@@ -184,8 +188,8 @@ pub const NativeCompiler = struct {
         }
 
         // Generate object file
-        var output = std.ArrayList(u8).init(self.allocator);
-        errdefer output.deinit();
+        var output = std.ArrayList(u8).empty;
+        errdefer output.deinit(self.allocator);
 
         const arch = switch (target_arch) {
             .x86_64 => Backend.Architecture.x86_64,
@@ -213,7 +217,7 @@ pub const NativeCompiler = struct {
         };
 
         return CompilationResult{
-            .object_bytes = output.toOwnedSlice() catch {
+            .object_bytes = output.toOwnedSlice(self.allocator) catch {
                 return CompilationError.OutOfMemory;
             },
             .allocator = self.allocator,

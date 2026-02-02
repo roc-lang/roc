@@ -15175,7 +15175,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 // Align stack to 16 bytes (we pushed 4 regs = 32 bytes, already aligned)
                 // Reserve space for locals
                 const local_space: i32 = 64;
-                try self.codegen.emit.subRegImm(.w64, .RSP, @intCast(local_space));
+                try self.codegen.emit.subRegImm32(.w64, .RSP, @intCast(local_space));
 
                 // Save RocOps pointer (RDI) to R12
                 try self.codegen.emit.movRegReg(.w64, .R12, .RDI);
@@ -15208,7 +15208,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 try self.storeResultToSavedPtr(result_loc, ret_layout, .RBX, 1);
 
                 // Epilogue: deallocate locals, restore callee-saved, return
-                try self.codegen.emit.addRegImm(.w64, .RSP, @intCast(local_space));
+                try self.codegen.emit.addRegImm32(.w64, .RSP, @intCast(local_space));
                 try self.codegen.emit.popReg(.R13);
                 try self.codegen.emit.popReg(.R12);
                 try self.codegen.emit.popReg(.RBX);
@@ -15244,12 +15244,12 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
         }
 
         /// Get the generated code buffer (for object file generation)
-        pub fn getGeneratedCode(self: *const Self) []const u8 {
+        pub fn getGeneratedCode(self: *Self) []const u8 {
             return self.codegen.getCode();
         }
 
         /// Get the relocations for the generated code
-        pub fn getRelocations(self: *const Self) []const Relocation {
+        pub fn getRelocations(self: *Self) []const Relocation {
             return self.codegen.relocations.items;
         }
     };
