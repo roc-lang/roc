@@ -342,35 +342,45 @@ pub const SystemVCodeGen = struct {
 
     // Function prologue/epilogue
 
-    /// Callee-saved registers in the order they should be saved/restored
-    const CALLEE_SAVED_ORDER = [_]GeneralReg{ .RBX, .R12, .R13, .R14, .R15 };
+    /// Callee-saved register stack offsets (relative to RBP).
+    /// These are fixed offsets that don't depend on which registers are saved,
+    /// which simplifies the deferred prologue pattern where we generate body first.
+    const CALLEE_SAVED_SLOTS = [_]struct { reg: GeneralReg, offset: i32 }{
+        .{ .reg = .RBX, .offset = -8 },
+        .{ .reg = .R12, .offset = -16 },
+        .{ .reg = .R13, .offset = -24 },
+        .{ .reg = .R14, .offset = -32 },
+        .{ .reg = .R15, .offset = -40 },
+    };
+
+    /// Size of the callee-saved register area (5 registers * 8 bytes each)
+    pub const CALLEE_SAVED_AREA_SIZE: i32 = 40;
 
     /// Emit function prologue (called at start of function)
     /// Note: Call this AFTER register allocation is complete to know which
     /// callee-saved registers need to be preserved.
+    /// Uses MOV-based selective save at fixed RBP-relative offsets.
     pub fn emitPrologue(self: *Self) !void {
         // push rbp
         try self.emit.pushReg(.RBP);
         // mov rbp, rsp
         try self.emit.movRegReg(.w64, .RBP, .RSP);
 
-        // Push any callee-saved registers we used
-        for (CALLEE_SAVED_ORDER) |reg| {
-            if ((self.callee_saved_used & (@as(u16, 1) << @intCast(@intFromEnum(reg)))) != 0) {
-                try self.emit.pushReg(reg);
+        // Save only the callee-saved registers that were actually used (MOV-based)
+        for (CALLEE_SAVED_SLOTS) |slot| {
+            if ((self.callee_saved_used & (@as(u16, 1) << @intCast(@intFromEnum(slot.reg)))) != 0) {
+                try self.emit.movMemReg(.w64, .RBP, slot.offset, slot.reg);
             }
         }
     }
 
     /// Emit function epilogue and return
+    /// Restores callee-saved registers using MOV from fixed RBP-relative offsets.
     pub fn emitEpilogue(self: *Self) !void {
-        // Pop callee-saved registers in reverse order
-        var i: usize = CALLEE_SAVED_ORDER.len;
-        while (i > 0) {
-            i -= 1;
-            const reg = CALLEE_SAVED_ORDER[i];
-            if ((self.callee_saved_used & (@as(u16, 1) << @intCast(@intFromEnum(reg)))) != 0) {
-                try self.emit.popReg(reg);
+        // Restore only the callee-saved registers that were used (MOV-based)
+        for (CALLEE_SAVED_SLOTS) |slot| {
+            if ((self.callee_saved_used & (@as(u16, 1) << @intCast(@intFromEnum(slot.reg)))) != 0) {
+                try self.emit.movRegMem(.w64, slot.reg, .RBP, slot.offset);
             }
         }
 
@@ -745,8 +755,11 @@ test "prologue and epilogue" {
     try cg.emitEpilogue();
 
     const code = cg.getCode();
+    // With no callee-saved registers used:
     // push rbp: 55 (1 byte)
     // mov rbp, rsp: 48 89 E5 (3 bytes)
+    // (no MOV saves since callee_saved_used = 0)
+    // (no MOV restores since callee_saved_used = 0)
     // mov rsp, rbp: 48 89 EC (3 bytes)
     // pop rbp: 5D (1 byte)
     // ret: C3 (1 byte)
@@ -894,7 +907,7 @@ test "reload spilled value" {
     try std.testing.expectEqual(GenericCodeGen.ValueLoc{ .general_reg = @intFromEnum(reloaded_reg) }, loc0_after.?);
 }
 
-test "prologue saves callee-saved registers" {
+test "prologue saves callee-saved registers with MOV" {
     var cg = SystemVCodeGen.init(std.testing.allocator);
     defer cg.deinit();
 
@@ -903,15 +916,22 @@ test "prologue saves callee-saved registers" {
         _ = try cg.allocGeneralFor(@intCast(i));
     }
 
-    // Now emit prologue - it should include pushes for callee-saved regs
+    // Now emit prologue - it should include MOV saves for callee-saved regs
     try cg.emitPrologue();
 
     const code = cg.getCode();
-    // Should be longer than basic prologue (push rbp + mov rbp, rsp = 4 bytes)
+    // Basic prologue: push rbp (1) + mov rbp, rsp (3) = 4 bytes
+    // Plus MOV saves for callee-saved registers (each MOV [rbp+disp], reg is 4-7 bytes)
+    // With 2 callee-saved regs (RBX and R12), we expect ~4 + 2*7 = ~18 bytes
     try std.testing.expect(code.len > 4);
 
     // First byte should still be push rbp (0x55)
     try std.testing.expectEqual(@as(u8, 0x55), code[0]);
+
+    // callee_saved_used should have bits set for RBX and R12
+    try std.testing.expect(cg.callee_saved_used != 0);
+    try std.testing.expect((cg.callee_saved_used & (@as(u16, 1) << @intFromEnum(GeneralReg.RBX))) != 0);
+    try std.testing.expect((cg.callee_saved_used & (@as(u16, 1) << @intFromEnum(GeneralReg.R12))) != 0);
 }
 
 test "free register returns it to correct pool" {
@@ -938,4 +958,34 @@ test "free register returns it to correct pool" {
 
     // callee_reg should be back in callee_saved_available
     try std.testing.expect((cg.callee_saved_available & (@as(u32, 1) << @intFromEnum(callee_reg))) != 0);
+}
+
+test "epilogue restores callee-saved registers with MOV" {
+    var cg = SystemVCodeGen.init(std.testing.allocator);
+    defer cg.deinit();
+
+    // Use some callee-saved registers
+    for (0..11) |i| {
+        _ = try cg.allocGeneralFor(@intCast(i));
+    }
+
+    // Emit prologue and epilogue
+    try cg.emitPrologue();
+    const prologue_len = cg.getCode().len;
+    try cg.emitEpilogue();
+
+    const code = cg.getCode();
+    const epilogue_len = code.len - prologue_len;
+
+    // Epilogue should include MOV restores + mov rsp,rbp + pop rbp + ret
+    // MOV restores for 2 regs (~14 bytes) + mov rsp,rbp (3) + pop rbp (1) + ret (1) = ~19 bytes
+    try std.testing.expect(epilogue_len > 5);
+
+    // Last byte should be ret (0xC3)
+    try std.testing.expectEqual(@as(u8, 0xC3), code[code.len - 1]);
+}
+
+test "CALLEE_SAVED_AREA_SIZE constant" {
+    // Verify the constant matches the expected size for 5 callee-saved registers
+    try std.testing.expectEqual(@as(i32, 40), SystemVCodeGen.CALLEE_SAVED_AREA_SIZE);
 }
