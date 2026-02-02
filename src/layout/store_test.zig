@@ -30,12 +30,9 @@ const LayoutTest = struct {
         result.module_env = try ModuleEnv.init(gpa, "");
         result.type_store = try types_store.Store.init(gpa);
         result.type_scope = TypeScope.init(gpa);
-        // Create single-element slice for all_module_envs
-        result.module_env_ptr[0] = &result.module_env;
-        result.layout_store = try Store.init(&result.module_env_ptr, null, gpa, base.target.TargetUsize.native);
-        // Tests create types in a separate type_store, not in module_env.types,
-        // so we must override the types store the layout store uses for resolution.
-        result.layout_store.setOverrideTypesStore(&result.type_store);
+        // Note: module_env_ptr must be set AFTER the struct is in its final location
+        // (after the function returns), otherwise the pointer becomes stale.
+        // For simple init, we call initLayoutStore after return.
         return result;
     }
 
@@ -45,15 +42,20 @@ const LayoutTest = struct {
         result.module_env = try ModuleEnv.init(gpa, "");
         result.type_store = try types_store.Store.init(gpa);
         result.type_scope = TypeScope.init(gpa);
-        // Note: layout_store should be initialized AFTER idents are set up
-        result.module_env_ptr[0] = &result.module_env;
+        // Note: layout_store and module_env_ptr should be initialized AFTER
+        // idents are set up AND after the struct is in its final location.
         return result;
     }
 
     fn initLayoutStore(self: *LayoutTest) !void {
-        // Refresh the pointer in case the struct moved after initWithIdents returned
+        // Set module_env_ptr HERE, after the struct is in its final memory location.
+        // Setting it in init/initWithIdents causes stale pointer bugs since the
+        // struct is moved when returned.
         self.module_env_ptr[0] = &self.module_env;
         self.layout_store = try Store.init(&self.module_env_ptr, null, self.gpa, base.target.TargetUsize.native);
+        // The layout store uses all_module_envs[module_idx].types by default, but our test
+        // creates types in self.type_store (a separate store). Set the override so the
+        // layout store uses our test's type store when resolving type variables.
         self.layout_store.setOverrideTypesStore(&self.type_store);
     }
 
@@ -80,6 +82,7 @@ const LayoutTest = struct {
 
 test "fromTypeVar - bool type" {
     var lt = try LayoutTest.init(testing.allocator);
+    try lt.initLayoutStore();
     defer lt.deinit();
 
     const bool_layout = layout.Layout.boolType();
@@ -92,7 +95,7 @@ test "fromTypeVar - bool type" {
     try testing.expectEqual(@as(u32, 1), lt.layout_store.layoutSize(retrieved_layout));
 }
 
-test "fromTypeVar - host opaque types compile to opaque_ptr" {
+test "fromTypeVar - type params in Box: flex becomes box_of_zst, rigid uses opaque_ptr" {
     var lt = try LayoutTest.initWithIdents(testing.allocator);
     defer lt.deinit();
 
@@ -103,15 +106,15 @@ test "fromTypeVar - host opaque types compile to opaque_ptr" {
 
     try lt.initLayoutStore();
 
-    // Box of flex_var
+    // Box of flex_var - unconstrained flex vars are ZST, so Box(flex) becomes box_of_zst
     const flex_var = try lt.type_store.freshFromContent(.{ .flex = types.Flex.init() });
     const box_flex_var = try lt.mkBoxType(flex_var, box_ident_idx, builtin_module_idx);
     const box_flex_idx = try lt.layout_store.fromTypeVar(0, box_flex_var, &lt.type_scope, null);
     const box_flex_layout = lt.layout_store.getLayout(box_flex_idx);
-    try testing.expect(box_flex_layout.tag == .box);
-    try testing.expectEqual(layout.Idx.opaque_ptr, box_flex_layout.data.box);
+    try testing.expect(box_flex_layout.tag == .box_of_zst);
 
-    // Box of rigid_var
+    // Box of rigid_var - rigid vars inside containers use opaque_ptr for host interop
+    // (see store.zig handling for rigid vars in pending_containers)
     const ident_idx = try lt.module_env.insertIdent(base.Ident.for_text("a"));
     const rigid_var = try lt.type_store.freshFromContent(.{ .rigid = types.Rigid.init(ident_idx) });
     const box_rigid_var = try lt.mkBoxType(rigid_var, box_ident_idx, builtin_module_idx);
