@@ -160,8 +160,8 @@ for fx_file in $FX_FILES; do
     pct_change="$BENCH_PCT_CHANGE"
     echo "  Change: ${pct_change}%"
 
-    # Check for >5% slower execution - requires confirmation run
-    is_slower=$(awk "BEGIN {print ($pct_change > 5) ? 1 : 0}")
+    # Check for >4% slower execution - requires confirmation run
+    is_slower=$(awk "BEGIN {print ($pct_change > 4) ? 1 : 0}")
     if [ "$is_slower" = "1" ]; then
         echo "  Potential slowdown detected (${pct_change}%), running confirmation..."
 
@@ -173,8 +173,8 @@ for fx_file in $FX_FILES; do
         confirm_pct_change="$BENCH_PCT_CHANGE"
         echo "  Confirmation change: ${confirm_pct_change}%"
 
-        # Only report slowdown if both runs show >5% slower
-        confirm_is_slower=$(awk "BEGIN {print ($confirm_pct_change > 5) ? 1 : 0}")
+        # Only report slowdown if both runs show >4% slower
+        confirm_is_slower=$(awk "BEGIN {print ($confirm_pct_change > 4) ? 1 : 0}")
         if [ "$confirm_is_slower" = "1" ]; then
             echo "  SLOWER EXECUTION CONFIRMED in $filename (${pct_change}% then ${confirm_pct_change}%)"
             SLOWER_DETECTED=1
@@ -211,5 +211,5 @@ if [ "$SLOWER_DETECTED" = "1" ]; then
     echo "Ask Richard, Anton, or Luke to override this failure if you believe it is justified."
     exit 1
 else
-    echo "No significant slowdowns detected (threshold: >5%)"
+    echo "No significant slowdowns detected (threshold: >4%)"
 fi
