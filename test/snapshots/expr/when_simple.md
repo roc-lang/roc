@@ -1,7 +1,7 @@
 # META
 ~~~ini
 description=Simple when expression
-type=expr
+type=snippet
 ~~~
 # SOURCE
 ~~~roc
@@ -10,17 +10,113 @@ when x is
     Err(msg) -> msg
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - when_simple.md:1:1:1:5
+PARSE ERROR - when_simple.md:1:1:1:5
+PARSE ERROR - when_simple.md:1:6:1:7
+PARSE ERROR - when_simple.md:1:8:1:10
+PARSE ERROR - when_simple.md:2:15:2:17
+PARSE ERROR - when_simple.md:2:18:2:23
+PARSE ERROR - when_simple.md:3:14:3:16
+PARSE ERROR - when_simple.md:3:17:3:20
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `when` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 **when_simple.md:1:1:1:5:**
 ```roc
 when x is
 ```
 ^^^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**when_simple.md:1:6:1:7:**
+```roc
+when x is
+```
+     ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**when_simple.md:1:8:1:10:**
+```roc
+when x is
+```
+       ^^
+
+
+**PARSE ERROR**
+Type applications require parentheses around their type arguments.
+
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+Instead of:
+    **List U8**
+
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Try(a, Str)`
+    `Maybe(List(U64))`
+
+**when_simple.md:2:15:2:17:**
+```roc
+    Ok(value) -> value
+```
+              ^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**when_simple.md:2:18:2:23:**
+```roc
+    Ok(value) -> value
+```
+                 ^^^^^
+
+
+**PARSE ERROR**
+Type applications require parentheses around their type arguments.
+
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+Instead of:
+    **List U8**
+
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Try(a, Str)`
+    `Maybe(List(U64))`
+
+**when_simple.md:3:14:3:16:**
+```roc
+    Err(msg) -> msg
+```
+             ^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**when_simple.md:3:17:3:20:**
+```roc
+    Err(msg) -> msg
+```
+                ^^^
 
 
 # TOKENS
@@ -32,17 +128,27 @@ EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-ident (raw "when"))
+(file
+	(type-module)
+	(statements
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "expected_colon_after_type_annotation"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "expected_colon_after_type_annotation"))
+		(s-malformed (tag "statement_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
-when
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-runtime-error (tag "ident_not_in_scope"))
+(can-ir (empty true))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Error"))
+(inferred-types
+	(defs)
+	(expressions))
 ~~~

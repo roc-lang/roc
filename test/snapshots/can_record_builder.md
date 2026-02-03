@@ -1,24 +1,72 @@
 # META
 ~~~ini
 description=Test record builder expression (not yet implemented)
-type=expr
+type=snippet
 ~~~
 # SOURCE
 ~~~roc
 {build} foo bar
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - can_record_builder.md:1:2:1:7
+PARSE ERROR - can_record_builder.md:1:1:1:2
+PARSE ERROR - can_record_builder.md:1:2:1:7
+PARSE ERROR - can_record_builder.md:1:7:1:8
+PARSE ERROR - can_record_builder.md:1:9:1:12
+PARSE ERROR - can_record_builder.md:1:13:1:16
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `build` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**can_record_builder.md:1:1:1:2:**
+```roc
+{build} foo bar
+```
+^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 **can_record_builder.md:1:2:1:7:**
 ```roc
 {build} foo bar
 ```
  ^^^^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**can_record_builder.md:1:7:1:8:**
+```roc
+{build} foo bar
+```
+      ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**can_record_builder.md:1:9:1:12:**
+```roc
+{build} foo bar
+```
+        ^^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**can_record_builder.md:1:13:1:16:**
+```roc
+{build} foo bar
+```
+            ^^^
 
 
 # TOKENS
@@ -28,22 +76,25 @@ EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-block
+(file
+	(type-module)
 	(statements
-		(e-ident (raw "build"))))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
-{
-	build
-}
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-block
-	(e-runtime-error (tag "ident_not_in_scope")))
+(can-ir (empty true))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Error"))
+(inferred-types
+	(defs)
+	(expressions))
 ~~~

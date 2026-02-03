@@ -227,7 +227,7 @@ pub const LlvmEvaluator = struct {
         var module_env = ModuleEnv.init(self.allocator, source) catch return error.OutOfMemory;
         defer module_env.deinit();
 
-        var parse_ast = parse.parseExpr(&module_env.common, self.allocator) catch {
+        var parse_ast = parse.parseExprLenient(&module_env.common, self.allocator) catch {
             return error.ParseError;
         };
         defer parse_ast.deinit(self.allocator);

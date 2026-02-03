@@ -1,16 +1,98 @@
 # META
 ~~~ini
 description=Pizza operator (|>) parsing
-type=expr
+type=snippet
 ~~~
 # SOURCE
 ~~~roc
 1 |> add 2 |> mul 3
 ~~~
 # EXPECTED
-NIL
+PARSE ERROR - parse_pizza_operator.md:1:1:1:2
+PARSE ERROR - parse_pizza_operator.md:1:3:1:5
+PARSE ERROR - parse_pizza_operator.md:1:6:1:9
+PARSE ERROR - parse_pizza_operator.md:1:10:1:11
+PARSE ERROR - parse_pizza_operator.md:1:12:1:14
+PARSE ERROR - parse_pizza_operator.md:1:15:1:18
+PARSE ERROR - parse_pizza_operator.md:1:19:1:20
 # PROBLEMS
-NIL
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**parse_pizza_operator.md:1:1:1:2:**
+```roc
+1 |> add 2 |> mul 3
+```
+^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**parse_pizza_operator.md:1:3:1:5:**
+```roc
+1 |> add 2 |> mul 3
+```
+  ^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**parse_pizza_operator.md:1:6:1:9:**
+```roc
+1 |> add 2 |> mul 3
+```
+     ^^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**parse_pizza_operator.md:1:10:1:11:**
+```roc
+1 |> add 2 |> mul 3
+```
+         ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**parse_pizza_operator.md:1:12:1:14:**
+```roc
+1 |> add 2 |> mul 3
+```
+           ^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**parse_pizza_operator.md:1:15:1:18:**
+```roc
+1 |> add 2 |> mul 3
+```
+              ^^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**parse_pizza_operator.md:1:19:1:20:**
+```roc
+1 |> add 2 |> mul 3
+```
+                  ^
+
+
 # TOKENS
 ~~~zig
 Int,OpPizza,LowerIdent,Int,OpPizza,LowerIdent,Int,
@@ -18,17 +100,27 @@ EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-int (raw "1"))
+(file
+	(type-module)
+	(statements
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
-1
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-num (value "1"))
+(can-ir (empty true))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+(inferred-types
+	(defs)
+	(expressions))
 ~~~

@@ -715,7 +715,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
     try original_env.common.calcLineStarts(original_env.gpa);
 
     // Parse the source code
-    var parse_ast = try parse.parseExpr(&original_env.common, original_env.gpa);
+    var parse_ast = try parse.parseExprLenient(&original_env.common, original_env.gpa);
     defer parse_ast.deinit(gpa);
 
     // Empty scratch space (required before canonicalization)

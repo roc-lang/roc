@@ -412,7 +412,7 @@ pub const Repl = struct {
         }
 
         // Try expression parsing
-        if (parse.parseExpr(&module_env.common, self.allocator)) |ast_const| {
+        if (parse.parseExprLenient(&module_env.common, self.allocator)) |ast_const| {
             var ast = ast_const;
             defer ast.deinit(self.allocator);
             if (ast.root_node_idx != 0) {
@@ -470,11 +470,11 @@ pub const Repl = struct {
 
         // Parse appropriately based on whether we have definitions
         var parse_ast = if (has_definitions)
-            parse.parseExpr(&module_env.common, self.allocator) catch |err| {
+            parse.parseExprLenient(&module_env.common, self.allocator) catch |err| {
                 return .{ .parse_error = try std.fmt.allocPrint(self.allocator, "Parse error: {}", .{err}) };
             }
         else
-            parse.parseExpr(&module_env.common, self.allocator) catch |err| {
+            parse.parseExprLenient(&module_env.common, self.allocator) catch |err| {
                 return .{ .parse_error = try std.fmt.allocPrint(self.allocator, "Parse error: {}", .{err}) };
             };
         defer parse_ast.deinit(self.allocator);

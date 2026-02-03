@@ -303,7 +303,7 @@ test "Repl - minimal interpreter integration" {
     defer module_env.deinit();
 
     // Step 2: Parse as expression
-    var parse_ast = try parse.parseExpr(&module_env.common, gpa);
+    var parse_ast = try parse.parseExprLenient(&module_env.common, gpa);
     defer parse_ast.deinit(gpa);
 
     // Empty scratch space (required before canonicalization)
