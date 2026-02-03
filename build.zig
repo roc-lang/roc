@@ -3046,7 +3046,6 @@ pub fn build(b: *std.Build) void {
         // Run `zig build glue-host` after modifying src/glue/platform/host.zig.
         const glue_host_step = b.step("glue-host", "Build the glue platform host library");
         glue_host_step.dependOn(final_glue_host_step);
-
     }
 
     var build_afl = false;
