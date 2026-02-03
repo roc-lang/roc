@@ -673,6 +673,9 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
     return struct {
         const Self = @This();
 
+        /// CallBuilder type alias for this architecture's emit type
+        const Builder = CallBuilder.CallBuilder(@TypeOf(@as(CodeGen, undefined).emit));
+
         allocator: Allocator,
 
         /// Target platform for code generation (determines calling convention)
@@ -3780,50 +3783,14 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             const roc_ops_reg = self.roc_ops_reg orelse unreachable;
             const result_offset = self.codegen.allocStackSlot(24);
 
-            if (comptime builtin.cpu.arch == .aarch64) {
-                // (out, str_bytes, str_len, str_cap, roc_ops)
-                try self.codegen.emit.movRegImm64(.X0, @bitCast(@as(i64, result_offset)));
-                try self.codegen.emit.addRegRegReg(.w64, .X0, .FP, .X0);
-                try self.codegen.emit.ldrRegMemSoff(.w64, .X1, .FP, str_off);
-                try self.codegen.emit.ldrRegMemSoff(.w64, .X2, .FP, str_off + 8);
-                try self.codegen.emit.ldrRegMemSoff(.w64, .X3, .FP, str_off + 16);
-                try self.codegen.emit.movRegReg(.w64, .X4, roc_ops_reg);
-                try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
-                try self.codegen.emit.blrReg(.X9);
-            } else {
-                // x86_64: fn(out, str_bytes, str_len, str_cap, roc_ops) - 5 args
-                if (self.cc.is_windows) {
-                    // Windows x64: 4 register args, 1 on stack
-                    // Stack: [shadow 32] [arg5 8] + 8 padding for 16-byte alignment
-                    const stack_space: i32 = 32 + 16; // shadow + 1 stack arg + padding
-
-                    try self.codegen.emit.subRegImm32(.w64, .RSP, stack_space);
-
-                    // Store roc_ops on stack (5th arg goes at RSP+32)
-                    try self.codegen.emit.movMemReg(.w64, .RSP, 32, roc_ops_reg);
-
-                    // Set register args: RCX=out, RDX=str_bytes, R8=str_len, R9=str_cap
-                    try self.codegen.emit.leaRegMem(.RCX, .RBP, result_offset);
-                    try self.codegen.emit.movRegMem(.w64, .RDX, .RBP, str_off);
-                    try self.codegen.emit.movRegMem(.w64, .R8, .RBP, str_off + 8);
-                    try self.codegen.emit.movRegMem(.w64, .R9, .RBP, str_off + 16);
-
-                    try self.codegen.emitLoadImm(.R11, @intCast(fn_addr));
-                    try self.codegen.emit.callReg(.R11);
-
-                    try self.codegen.emit.addRegImm32(.w64, .RSP, stack_space);
-                } else {
-                    // System V x86_64: 5 args all fit in registers
-                    try self.codegen.emit.leaRegMem(.RDI, .RBP, result_offset);
-                    try self.codegen.emit.movRegMem(.w64, .RSI, .RBP, str_off);
-                    try self.codegen.emit.movRegMem(.w64, .RDX, .RBP, str_off + 8);
-                    try self.codegen.emit.movRegMem(.w64, .RCX, .RBP, str_off + 16);
-                    try self.codegen.emit.movRegReg(.w64, .R8, roc_ops_reg);
-
-                    try self.codegen.emitLoadImm(.R11, @intCast(fn_addr));
-                    try self.codegen.emit.callReg(.R11);
-                }
-            }
+            // fn(out, str_bytes, str_len, str_cap, roc_ops) - 5 args
+            var builder = Builder.init(&self.codegen.emit);
+            try builder.addLeaArg(if (comptime builtin.cpu.arch == .aarch64) .FP else .RBP, result_offset);
+            try builder.addMemArg(if (comptime builtin.cpu.arch == .aarch64) .FP else .RBP, str_off);
+            try builder.addMemArg(if (comptime builtin.cpu.arch == .aarch64) .FP else .RBP, str_off + 8);
+            try builder.addMemArg(if (comptime builtin.cpu.arch == .aarch64) .FP else .RBP, str_off + 16);
+            try builder.addRegArg(roc_ops_reg);
+            try builder.call(fn_addr);
 
             return switch (result_kind) {
                 .str => .{ .stack_str = result_offset },
@@ -3834,86 +3801,46 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         /// Call a C wrapper: fn(str_f0, str_f1, str_f2) -> scalar (bool or u64)
         /// Used for str->bool and str->u64 ops that take 1 string
         fn callStr1ToScalar(self: *Self, str_off: i32, fn_addr: usize) Error!ValueLocation {
+            // fn(str_bytes, str_len, str_cap) -> scalar - 3 args
+            const base_ptr = if (comptime builtin.cpu.arch == .aarch64) .FP else .RBP;
+            var builder = Builder.init(&self.codegen.emit);
+            try builder.addMemArg(base_ptr, str_off);
+            try builder.addMemArg(base_ptr, str_off + 8);
+            try builder.addMemArg(base_ptr, str_off + 16);
+            try builder.call(fn_addr);
+
+            // Result is in return register (X0 or RAX)
+            const result_reg = try self.allocTempGeneral();
             if (comptime builtin.cpu.arch == .aarch64) {
-                try self.codegen.emit.ldrRegMemSoff(.w64, .X0, .FP, str_off);
-                try self.codegen.emit.ldrRegMemSoff(.w64, .X1, .FP, str_off + 8);
-                try self.codegen.emit.ldrRegMemSoff(.w64, .X2, .FP, str_off + 16);
-                try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
-                try self.codegen.emit.blrReg(.X9);
-                // Result is in X0
-                const result_reg = try self.allocTempGeneral();
                 try self.codegen.emit.movRegReg(.w64, result_reg, .X0);
-                return .{ .general_reg = result_reg };
             } else {
-                try self.codegen.emit.movRegMem(.w64, self.cc.getParamReg(0), .RBP, str_off);
-                try self.codegen.emit.movRegMem(.w64, self.cc.getParamReg(1), .RBP, str_off + 8);
-                try self.codegen.emit.movRegMem(.w64, self.cc.getParamReg(2), .RBP, str_off + 16);
-                try self.codegen.emitLoadImm(.R11, @intCast(fn_addr));
-                try self.codegen.emit.callReg(.R11);
-                // Result is in RAX
-                const result_reg = try self.allocTempGeneral();
                 try self.codegen.emit.movRegReg(.w64, result_reg, .RAX);
-                return .{ .general_reg = result_reg };
             }
+            return .{ .general_reg = result_reg };
         }
 
         /// Call a C wrapper: fn(a_f0, a_f1, a_f2, b_f0, b_f1, b_f2) -> scalar
         /// Used for (str, str) -> bool ops
         fn callStr2ToScalar(self: *Self, a_off: i32, b_off: i32, fn_addr: usize) Error!ValueLocation {
+            // fn(a_bytes, a_len, a_cap, b_bytes, b_len, b_cap) -> scalar - 6 args
+            const base_ptr = if (comptime builtin.cpu.arch == .aarch64) .FP else .RBP;
+            var builder = Builder.init(&self.codegen.emit);
+            try builder.addMemArg(base_ptr, a_off);
+            try builder.addMemArg(base_ptr, a_off + 8);
+            try builder.addMemArg(base_ptr, a_off + 16);
+            try builder.addMemArg(base_ptr, b_off);
+            try builder.addMemArg(base_ptr, b_off + 8);
+            try builder.addMemArg(base_ptr, b_off + 16);
+            try builder.call(fn_addr);
+
+            // Result is in return register (X0 or RAX)
+            const result_reg = try self.allocTempGeneral();
             if (comptime builtin.cpu.arch == .aarch64) {
-                try self.codegen.emit.ldrRegMemSoff(.w64, .X0, .FP, a_off);
-                try self.codegen.emit.ldrRegMemSoff(.w64, .X1, .FP, a_off + 8);
-                try self.codegen.emit.ldrRegMemSoff(.w64, .X2, .FP, a_off + 16);
-                try self.codegen.emit.ldrRegMemSoff(.w64, .X3, .FP, b_off);
-                try self.codegen.emit.ldrRegMemSoff(.w64, .X4, .FP, b_off + 8);
-                try self.codegen.emit.ldrRegMemSoff(.w64, .X5, .FP, b_off + 16);
-                try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
-                try self.codegen.emit.blrReg(.X9);
-                const result_reg = try self.allocTempGeneral();
                 try self.codegen.emit.movRegReg(.w64, result_reg, .X0);
-                return .{ .general_reg = result_reg };
             } else {
-                // x86_64: fn(a_bytes, a_len, a_cap, b_bytes, b_len, b_cap) -> scalar
-                // 6 args
-                if (self.cc.is_windows) {
-                    // Windows x64: 4 register args, 2 on stack
-                    const stack_space: i32 = 32 + 16; // shadow + 2 stack args
-
-                    try self.codegen.emit.subRegImm32(.w64, .RSP, stack_space);
-
-                    // Store stack args (b_len, b_cap)
-                    try self.codegen.emit.movRegMem(.w64, .R11, .RBP, b_off + 8);
-                    try self.codegen.emit.movMemReg(.w64, .RSP, 32, .R11); // b_len
-                    try self.codegen.emit.movRegMem(.w64, .R11, .RBP, b_off + 16);
-                    try self.codegen.emit.movMemReg(.w64, .RSP, 40, .R11); // b_cap
-
-                    // Set register args: RCX=a_bytes, RDX=a_len, R8=a_cap, R9=b_bytes
-                    try self.codegen.emit.movRegMem(.w64, .RCX, .RBP, a_off);
-                    try self.codegen.emit.movRegMem(.w64, .RDX, .RBP, a_off + 8);
-                    try self.codegen.emit.movRegMem(.w64, .R8, .RBP, a_off + 16);
-                    try self.codegen.emit.movRegMem(.w64, .R9, .RBP, b_off);
-
-                    try self.codegen.emitLoadImm(.R11, @intCast(fn_addr));
-                    try self.codegen.emit.callReg(.R11);
-
-                    try self.codegen.emit.addRegImm32(.w64, .RSP, stack_space);
-                } else {
-                    // System V x86_64: all 6 args fit in registers
-                    try self.codegen.emit.movRegMem(.w64, .RDI, .RBP, a_off);
-                    try self.codegen.emit.movRegMem(.w64, .RSI, .RBP, a_off + 8);
-                    try self.codegen.emit.movRegMem(.w64, .RDX, .RBP, a_off + 16);
-                    try self.codegen.emit.movRegMem(.w64, .RCX, .RBP, b_off);
-                    try self.codegen.emit.movRegMem(.w64, .R8, .RBP, b_off + 8);
-                    try self.codegen.emit.movRegMem(.w64, .R9, .RBP, b_off + 16);
-
-                    try self.codegen.emitLoadImm(.R11, @intCast(fn_addr));
-                    try self.codegen.emit.callReg(.R11);
-                }
-
-                const result_reg = try self.allocTempGeneral();
                 try self.codegen.emit.movRegReg(.w64, result_reg, .RAX);
-                return .{ .general_reg = result_reg };
             }
+            return .{ .general_reg = result_reg };
         }
 
         /// Call a C wrapper: fn(out, a_f0, a_f1, a_f2, b_f0, b_f1, b_f2, roc_ops) -> void
@@ -3926,65 +3853,18 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             const roc_ops_reg = self.roc_ops_reg orelse unreachable;
             const result_offset = self.codegen.allocStackSlot(24);
 
-            if (comptime builtin.cpu.arch == .aarch64) {
-                // 8 args: X0-X7
-                try self.codegen.emit.movRegImm64(.X0, @bitCast(@as(i64, result_offset)));
-                try self.codegen.emit.addRegRegReg(.w64, .X0, .FP, .X0);
-                try self.codegen.emit.ldrRegMemSoff(.w64, .X1, .FP, a_off);
-                try self.codegen.emit.ldrRegMemSoff(.w64, .X2, .FP, a_off + 8);
-                try self.codegen.emit.ldrRegMemSoff(.w64, .X3, .FP, a_off + 16);
-                try self.codegen.emit.ldrRegMemSoff(.w64, .X4, .FP, b_off);
-                try self.codegen.emit.ldrRegMemSoff(.w64, .X5, .FP, b_off + 8);
-                try self.codegen.emit.ldrRegMemSoff(.w64, .X6, .FP, b_off + 16);
-                try self.codegen.emit.movRegReg(.w64, .X7, roc_ops_reg);
-                try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
-                try self.codegen.emit.blrReg(.X9);
-            } else {
-                // x86_64: fn(out, a_bytes, a_len, a_cap, b_bytes, b_len, b_cap, roc_ops) -> void
-                // 8 args
-                if (self.cc.is_windows) {
-                    // Windows x64: 4 register args, 4 on stack
-                    const stack_space: i32 = 32 + 32; // shadow + 4 stack args
-
-                    try self.codegen.emit.subRegImm32(.w64, .RSP, stack_space);
-
-                    // Store stack args (b_bytes, b_len, b_cap, roc_ops)
-                    try self.codegen.emit.movRegMem(.w64, .R11, .RBP, b_off);
-                    try self.codegen.emit.movMemReg(.w64, .RSP, 32, .R11); // b_bytes
-                    try self.codegen.emit.movRegMem(.w64, .R11, .RBP, b_off + 8);
-                    try self.codegen.emit.movMemReg(.w64, .RSP, 40, .R11); // b_len
-                    try self.codegen.emit.movRegMem(.w64, .R11, .RBP, b_off + 16);
-                    try self.codegen.emit.movMemReg(.w64, .RSP, 48, .R11); // b_cap
-                    try self.codegen.emit.movMemReg(.w64, .RSP, 56, roc_ops_reg); // roc_ops
-
-                    // Set register args: RCX=out, RDX=a_bytes, R8=a_len, R9=a_cap
-                    try self.codegen.emit.leaRegMem(.RCX, .RBP, result_offset);
-                    try self.codegen.emit.movRegMem(.w64, .RDX, .RBP, a_off);
-                    try self.codegen.emit.movRegMem(.w64, .R8, .RBP, a_off + 8);
-                    try self.codegen.emit.movRegMem(.w64, .R9, .RBP, a_off + 16);
-
-                    try self.codegen.emitLoadImm(.R11, @intCast(fn_addr));
-                    try self.codegen.emit.callReg(.R11);
-
-                    try self.codegen.emit.addRegImm32(.w64, .RSP, stack_space);
-                } else {
-                    // System V x86_64: 6 in regs + 2 on stack
-                    try self.codegen.emit.pushReg(roc_ops_reg);
-                    try self.codegen.emit.movRegMem(.w64, .R11, .RBP, b_off + 16);
-                    try self.codegen.emit.pushReg(.R11);
-
-                    try self.codegen.emit.leaRegMem(.RDI, .RBP, result_offset);
-                    try self.codegen.emit.movRegMem(.w64, .RSI, .RBP, a_off);
-                    try self.codegen.emit.movRegMem(.w64, .RDX, .RBP, a_off + 8);
-                    try self.codegen.emit.movRegMem(.w64, .RCX, .RBP, a_off + 16);
-                    try self.codegen.emit.movRegMem(.w64, .R8, .RBP, b_off);
-                    try self.codegen.emit.movRegMem(.w64, .R9, .RBP, b_off + 8);
-
-                    try self.codegen.emitLoadImm(.R11, @intCast(fn_addr));
-                    try self.codegen.emit.callReg(.R11);
-                    try self.codegen.emit.addImm(.RSP, 16);
-                }
-            }
+            // fn(out, a_bytes, a_len, a_cap, b_bytes, b_len, b_cap, roc_ops) -> void - 8 args
+            const base_ptr = if (comptime builtin.cpu.arch == .aarch64) .FP else .RBP;
+            var builder = Builder.init(&self.codegen.emit);
+            try builder.addLeaArg(base_ptr, result_offset);
+            try builder.addMemArg(base_ptr, a_off);
+            try builder.addMemArg(base_ptr, a_off + 8);
+            try builder.addMemArg(base_ptr, a_off + 16);
+            try builder.addMemArg(base_ptr, b_off);
+            try builder.addMemArg(base_ptr, b_off + 8);
+            try builder.addMemArg(base_ptr, b_off + 16);
+            try builder.addRegArg(roc_ops_reg);
+            try builder.call(fn_addr);
 
             return switch (result_kind) {
                 .str => .{ .stack_str = result_offset },
@@ -3998,54 +3878,16 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             const roc_ops_reg = self.roc_ops_reg orelse unreachable;
             const result_offset = self.codegen.allocStackSlot(24);
 
-            if (comptime builtin.cpu.arch == .aarch64) {
-                // 6 args: X0-X5
-                try self.codegen.emit.movRegImm64(.X0, @bitCast(@as(i64, result_offset)));
-                try self.codegen.emit.addRegRegReg(.w64, .X0, .FP, .X0);
-                try self.codegen.emit.ldrRegMemSoff(.w64, .X1, .FP, str_off);
-                try self.codegen.emit.ldrRegMemSoff(.w64, .X2, .FP, str_off + 8);
-                try self.codegen.emit.ldrRegMemSoff(.w64, .X3, .FP, str_off + 16);
-                try self.codegen.emit.ldrRegMemSoff(.w64, .X4, .FP, u64_off);
-                try self.codegen.emit.movRegReg(.w64, .X5, roc_ops_reg);
-                try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
-                try self.codegen.emit.blrReg(.X9);
-            } else {
-                // x86_64: fn(out, str_bytes, str_len, str_cap, u64_val, roc_ops) -> void
-                // 6 args
-                if (self.cc.is_windows) {
-                    // Windows x64: 4 register args, 2 on stack
-                    const stack_space: i32 = 32 + 16; // shadow + 2 stack args
-
-                    try self.codegen.emit.subRegImm32(.w64, .RSP, stack_space);
-
-                    // Store stack args (u64_val, roc_ops)
-                    try self.codegen.emit.movRegMem(.w64, .R11, .RBP, u64_off);
-                    try self.codegen.emit.movMemReg(.w64, .RSP, 32, .R11); // u64_val
-                    try self.codegen.emit.movMemReg(.w64, .RSP, 40, roc_ops_reg); // roc_ops
-
-                    // Set register args: RCX=out, RDX=str_bytes, R8=str_len, R9=str_cap
-                    try self.codegen.emit.leaRegMem(.RCX, .RBP, result_offset);
-                    try self.codegen.emit.movRegMem(.w64, .RDX, .RBP, str_off);
-                    try self.codegen.emit.movRegMem(.w64, .R8, .RBP, str_off + 8);
-                    try self.codegen.emit.movRegMem(.w64, .R9, .RBP, str_off + 16);
-
-                    try self.codegen.emitLoadImm(.R11, @intCast(fn_addr));
-                    try self.codegen.emit.callReg(.R11);
-
-                    try self.codegen.emit.addRegImm32(.w64, .RSP, stack_space);
-                } else {
-                    // System V x86_64: all 6 args fit in registers
-                    try self.codegen.emit.leaRegMem(.RDI, .RBP, result_offset);
-                    try self.codegen.emit.movRegMem(.w64, .RSI, .RBP, str_off);
-                    try self.codegen.emit.movRegMem(.w64, .RDX, .RBP, str_off + 8);
-                    try self.codegen.emit.movRegMem(.w64, .RCX, .RBP, str_off + 16);
-                    try self.codegen.emit.movRegMem(.w64, .R8, .RBP, u64_off);
-                    try self.codegen.emit.movRegReg(.w64, .R9, roc_ops_reg);
-
-                    try self.codegen.emitLoadImm(.R11, @intCast(fn_addr));
-                    try self.codegen.emit.callReg(.R11);
-                }
-            }
+            // fn(out, str_bytes, str_len, str_cap, u64_val, roc_ops) -> void - 6 args
+            const base_ptr = if (comptime builtin.cpu.arch == .aarch64) .FP else .RBP;
+            var builder = Builder.init(&self.codegen.emit);
+            try builder.addLeaArg(base_ptr, result_offset);
+            try builder.addMemArg(base_ptr, str_off);
+            try builder.addMemArg(base_ptr, str_off + 8);
+            try builder.addMemArg(base_ptr, str_off + 16);
+            try builder.addMemArg(base_ptr, u64_off);
+            try builder.addRegArg(roc_ops_reg);
+            try builder.call(fn_addr);
 
             return .{ .stack_str = result_offset };
         }
@@ -8448,50 +8290,17 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // Allocate stack slot to save the heap pointer (will be clobbered during element generation)
             const heap_ptr_slot: i32 = self.codegen.allocStackSlot(8);
 
+            var builder = Builder.init(&self.codegen.emit);
+            try builder.addImmArg(@intCast(total_data_bytes));
+            try builder.addImmArg(@intCast(elem_alignment));
+            try builder.addImmArg(if (elements_refcounted) 1 else 0);
+            try builder.addRegArg(roc_ops_reg);
+            try builder.call(fn_addr);
+
+            // Save heap pointer from return register to stack slot
             if (comptime builtin.cpu.arch == .aarch64) {
-                // aarch64 calling convention:
-                // X0 = data_bytes, X1 = element_alignment, X2 = elements_refcounted, X3 = roc_ops
-                // Return: X0 = heap pointer
-
-                try self.codegen.emit.movRegImm64(.X0, @intCast(total_data_bytes));
-                try self.codegen.emit.movRegImm64(.X1, @intCast(elem_alignment));
-                try self.codegen.emit.movRegImm64(.X2, if (elements_refcounted) 1 else 0);
-                try self.codegen.emit.movRegReg(.w64, .X3, roc_ops_reg);
-
-                // Load function address into X9 (caller-saved, not an arg register) and call
-                try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
-                try self.codegen.emit.blrReg(.X9);
-
-                // Save heap pointer from X0 to stack slot
                 try self.codegen.emit.strRegMemSoff(.w64, .X0, .FP, heap_ptr_slot);
             } else {
-                // x86_64 calling convention:
-                // RDI = data_bytes, RSI = element_alignment, RDX = elements_refcounted, RCX = roc_ops
-                // Return: RAX = heap pointer
-
-                // Load function address into R11 first (caller-saved, not an arg register)
-                try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
-
-                // Allocate shadow space on Windows
-                if (self.cc.is_windows) {
-                    try self.codegen.emit.subRegImm32(.w64, .RSP, self.cc.shadow_space);
-                }
-
-                // Set up arguments
-                try self.codegen.emit.movRegImm64(self.cc.getParamReg(0), @intCast(total_data_bytes));
-                try self.codegen.emit.movRegImm64(self.cc.getParamReg(1), @intCast(elem_alignment));
-                try self.codegen.emit.movRegImm64(self.cc.getParamReg(2), if (elements_refcounted) 1 else 0);
-                try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(3), roc_ops_reg);
-
-                // Call the function
-                try self.codegen.emit.callReg(.R11);
-
-                // Clean up shadow space on Windows
-                if (self.cc.is_windows) {
-                    try self.codegen.emit.addRegImm32(.w64, .RSP, self.cc.shadow_space);
-                }
-
-                // Save heap pointer from RAX to stack slot
                 try self.codegen.emit.movMemReg(.w64, .RBP, heap_ptr_slot, .RAX);
             }
 
@@ -9332,50 +9141,17 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 // Allocate stack slot to save the heap pointer
                 const heap_ptr_slot: i32 = self.codegen.allocStackSlot(8);
 
+                var builder = Builder.init(&self.codegen.emit);
+                try builder.addImmArg(@intCast(str_bytes.len));
+                try builder.addImmArg(1); // byte alignment
+                try builder.addImmArg(0); // elements_refcounted = false
+                try builder.addRegArg(roc_ops_reg);
+                try builder.call(fn_addr);
+
+                // Save heap pointer from return register to stack slot
                 if (comptime builtin.cpu.arch == .aarch64) {
-                    // aarch64 calling convention:
-                    // X0 = data_bytes, X1 = element_alignment, X2 = elements_refcounted, X3 = roc_ops
-                    // Return: X0 = heap pointer
-
-                    try self.codegen.emit.movRegImm64(.X0, @intCast(str_bytes.len));
-                    try self.codegen.emit.movRegImm64(.X1, 1); // byte alignment
-                    try self.codegen.emit.movRegImm64(.X2, 0); // elements_refcounted = false
-                    try self.codegen.emit.movRegReg(.w64, .X3, roc_ops_reg);
-
-                    // Load function address into X9 (caller-saved, not an arg register) and call
-                    try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
-                    try self.codegen.emit.blrReg(.X9);
-
-                    // Save heap pointer from X0 to stack slot
                     try self.codegen.emit.strRegMemSoff(.w64, .X0, .FP, heap_ptr_slot);
                 } else {
-                    // x86_64 calling convention:
-                    // allocateWithRefcountC(data_bytes, element_alignment, elements_refcounted, roc_ops)
-                    // Return: RAX = heap pointer
-
-                    // Load function address into R11 first (caller-saved, not an arg register)
-                    try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
-
-                    // Allocate shadow space on Windows
-                    if (self.cc.is_windows) {
-                        try self.codegen.emit.subRegImm32(.w64, .RSP, self.cc.shadow_space);
-                    }
-
-                    // Set up arguments (all 4 fit in registers on both Windows and System V)
-                    try self.codegen.emit.movRegImm64(self.cc.getParamReg(0), @intCast(str_bytes.len));
-                    try self.codegen.emit.movRegImm64(self.cc.getParamReg(1), 1); // byte alignment
-                    try self.codegen.emit.movRegImm64(self.cc.getParamReg(2), 0); // elements_refcounted = false
-                    try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(3), roc_ops_reg);
-
-                    // Call the function
-                    try self.codegen.emit.callReg(.R11);
-
-                    // Clean up shadow space on Windows
-                    if (self.cc.is_windows) {
-                        try self.codegen.emit.addRegImm32(.w64, .RSP, self.cc.shadow_space);
-                    }
-
-                    // Save heap pointer from RAX to stack slot
                     try self.codegen.emit.movMemReg(.w64, .RBP, heap_ptr_slot, .RAX);
                 }
 
@@ -14939,28 +14715,11 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             }
 
             // Call increfDataPtrC(ptr, count, roc_ops)
-            if (comptime builtin.cpu.arch == .aarch64) {
-                try self.codegen.emit.movRegReg(.w64, .X0, ptr_reg);
-                try self.codegen.emit.movRegImm64(.X1, @intCast(count));
-                try self.codegen.emit.movRegReg(.w64, .X2, roc_ops_reg);
-
-                try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
-                try self.codegen.emit.blrReg(.X9);
-            } else {
-                try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
-                // Allocate shadow space on Windows
-                if (self.cc.is_windows) {
-                    try self.codegen.emit.subRegImm32(.w64, .RSP, self.cc.shadow_space);
-                }
-                try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(0), ptr_reg);
-                try self.codegen.emit.movRegImm64(self.cc.getParamReg(1), @intCast(count));
-                try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(2), roc_ops_reg);
-                try self.codegen.emit.callReg(.R11);
-                // Clean up shadow space on Windows
-                if (self.cc.is_windows) {
-                    try self.codegen.emit.addRegImm32(.w64, .RSP, self.cc.shadow_space);
-                }
-            }
+            var builder = Builder.init(&self.codegen.emit);
+            try builder.addRegArg(ptr_reg);
+            try builder.addImmArg(@intCast(count));
+            try builder.addRegArg(roc_ops_reg);
+            try builder.call(fn_addr);
         }
 
         /// Emit decref for a list value
@@ -14992,30 +14751,12 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
             // Call decrefDataPtrC(ptr, alignment, elements_refcounted, roc_ops)
             // Lists have 8-byte alignment by default
-            if (comptime builtin.cpu.arch == .aarch64) {
-                try self.codegen.emit.movRegReg(.w64, .X0, ptr_reg);
-                try self.codegen.emit.movRegImm64(.X1, 8); // alignment
-                try self.codegen.emit.movRegImm64(.X2, 0); // elements_refcounted = false
-                try self.codegen.emit.movRegReg(.w64, .X3, roc_ops_reg);
-
-                try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
-                try self.codegen.emit.blrReg(.X9);
-            } else {
-                try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
-                // Allocate shadow space on Windows
-                if (self.cc.is_windows) {
-                    try self.codegen.emit.subRegImm32(.w64, .RSP, self.cc.shadow_space);
-                }
-                try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(0), ptr_reg);
-                try self.codegen.emit.movRegImm64(self.cc.getParamReg(1), 8); // alignment
-                try self.codegen.emit.movRegImm64(self.cc.getParamReg(2), 0); // elements_refcounted
-                try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(3), roc_ops_reg);
-                try self.codegen.emit.callReg(.R11);
-                // Clean up shadow space on Windows
-                if (self.cc.is_windows) {
-                    try self.codegen.emit.addRegImm32(.w64, .RSP, self.cc.shadow_space);
-                }
-            }
+            var builder = Builder.init(&self.codegen.emit);
+            try builder.addRegArg(ptr_reg);
+            try builder.addImmArg(8); // alignment
+            try builder.addImmArg(0); // elements_refcounted = false
+            try builder.addRegArg(roc_ops_reg);
+            try builder.call(fn_addr);
         }
 
         /// Emit free for a list value
@@ -15045,30 +14786,12 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             }
 
             // Call freeDataPtrC(ptr, alignment, elements_refcounted, roc_ops)
-            if (comptime builtin.cpu.arch == .aarch64) {
-                try self.codegen.emit.movRegReg(.w64, .X0, ptr_reg);
-                try self.codegen.emit.movRegImm64(.X1, 8);
-                try self.codegen.emit.movRegImm64(.X2, 0);
-                try self.codegen.emit.movRegReg(.w64, .X3, roc_ops_reg);
-
-                try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
-                try self.codegen.emit.blrReg(.X9);
-            } else {
-                try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
-                // Allocate shadow space on Windows
-                if (self.cc.is_windows) {
-                    try self.codegen.emit.subRegImm32(.w64, .RSP, self.cc.shadow_space);
-                }
-                try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(0), ptr_reg);
-                try self.codegen.emit.movRegImm64(self.cc.getParamReg(1), 8);
-                try self.codegen.emit.movRegImm64(self.cc.getParamReg(2), 0);
-                try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(3), roc_ops_reg);
-                try self.codegen.emit.callReg(.R11);
-                // Clean up shadow space on Windows
-                if (self.cc.is_windows) {
-                    try self.codegen.emit.addRegImm32(.w64, .RSP, self.cc.shadow_space);
-                }
-            }
+            var builder = Builder.init(&self.codegen.emit);
+            try builder.addRegArg(ptr_reg);
+            try builder.addImmArg(8); // alignment
+            try builder.addImmArg(0); // elements_refcounted = false
+            try builder.addRegArg(roc_ops_reg);
+            try builder.call(fn_addr);
         }
 
         /// Emit incref for a string value
@@ -15123,28 +14846,11 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             }
 
             // Call increfDataPtrC(ptr, count, roc_ops)
-            if (comptime builtin.cpu.arch == .aarch64) {
-                try self.codegen.emit.movRegReg(.w64, .X0, ptr_reg);
-                try self.codegen.emit.movRegImm64(.X1, @intCast(count));
-                try self.codegen.emit.movRegReg(.w64, .X2, roc_ops_reg);
-
-                try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
-                try self.codegen.emit.blrReg(.X9);
-            } else {
-                try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
-                // Allocate shadow space on Windows
-                if (self.cc.is_windows) {
-                    try self.codegen.emit.subRegImm32(.w64, .RSP, self.cc.shadow_space);
-                }
-                try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(0), ptr_reg);
-                try self.codegen.emit.movRegImm64(self.cc.getParamReg(1), @intCast(count));
-                try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(2), roc_ops_reg);
-                try self.codegen.emit.callReg(.R11);
-                // Clean up shadow space on Windows
-                if (self.cc.is_windows) {
-                    try self.codegen.emit.addRegImm32(.w64, .RSP, self.cc.shadow_space);
-                }
-            }
+            var builder = Builder.init(&self.codegen.emit);
+            try builder.addRegArg(ptr_reg);
+            try builder.addImmArg(@intCast(count));
+            try builder.addRegArg(roc_ops_reg);
+            try builder.call(fn_addr);
 
             // Patch the skip jump to here
             self.codegen.patchJump(skip_patch, self.codegen.currentOffset());
@@ -15196,30 +14902,12 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
             // Call decrefDataPtrC(ptr, alignment, elements_refcounted, roc_ops)
             // Strings have 1-byte alignment for the data
-            if (comptime builtin.cpu.arch == .aarch64) {
-                try self.codegen.emit.movRegReg(.w64, .X0, ptr_reg);
-                try self.codegen.emit.movRegImm64(.X1, 1); // alignment
-                try self.codegen.emit.movRegImm64(.X2, 0); // elements_refcounted = false
-                try self.codegen.emit.movRegReg(.w64, .X3, roc_ops_reg);
-
-                try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
-                try self.codegen.emit.blrReg(.X9);
-            } else {
-                try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
-                // Allocate shadow space on Windows
-                if (self.cc.is_windows) {
-                    try self.codegen.emit.subRegImm32(.w64, .RSP, self.cc.shadow_space);
-                }
-                try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(0), ptr_reg);
-                try self.codegen.emit.movRegImm64(self.cc.getParamReg(1), 1);
-                try self.codegen.emit.movRegImm64(self.cc.getParamReg(2), 0);
-                try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(3), roc_ops_reg);
-                try self.codegen.emit.callReg(.R11);
-                // Clean up shadow space on Windows
-                if (self.cc.is_windows) {
-                    try self.codegen.emit.addRegImm32(.w64, .RSP, self.cc.shadow_space);
-                }
-            }
+            var builder = Builder.init(&self.codegen.emit);
+            try builder.addRegArg(ptr_reg);
+            try builder.addImmArg(1); // alignment
+            try builder.addImmArg(0); // elements_refcounted = false
+            try builder.addRegArg(roc_ops_reg);
+            try builder.call(fn_addr);
 
             // Patch the skip jump to here
             self.codegen.patchJump(skip_patch, self.codegen.currentOffset());
@@ -15270,30 +14958,12 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             }
 
             // Call freeDataPtrC(ptr, alignment, elements_refcounted, roc_ops)
-            if (comptime builtin.cpu.arch == .aarch64) {
-                try self.codegen.emit.movRegReg(.w64, .X0, ptr_reg);
-                try self.codegen.emit.movRegImm64(.X1, 1);
-                try self.codegen.emit.movRegImm64(.X2, 0);
-                try self.codegen.emit.movRegReg(.w64, .X3, roc_ops_reg);
-
-                try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
-                try self.codegen.emit.blrReg(.X9);
-            } else {
-                try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
-                // Allocate shadow space on Windows
-                if (self.cc.is_windows) {
-                    try self.codegen.emit.subRegImm32(.w64, .RSP, self.cc.shadow_space);
-                }
-                try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(0), ptr_reg);
-                try self.codegen.emit.movRegImm64(self.cc.getParamReg(1), 1);
-                try self.codegen.emit.movRegImm64(self.cc.getParamReg(2), 0);
-                try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(3), roc_ops_reg);
-                try self.codegen.emit.callReg(.R11);
-                // Clean up shadow space on Windows
-                if (self.cc.is_windows) {
-                    try self.codegen.emit.addRegImm32(.w64, .RSP, self.cc.shadow_space);
-                }
-            }
+            var builder = Builder.init(&self.codegen.emit);
+            try builder.addRegArg(ptr_reg);
+            try builder.addImmArg(1); // alignment
+            try builder.addImmArg(0); // elements_refcounted = false
+            try builder.addRegArg(roc_ops_reg);
+            try builder.call(fn_addr);
 
             // Patch the skip jump to here
             self.codegen.patchJump(skip_patch, self.codegen.currentOffset());
@@ -15327,28 +14997,11 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             }
 
             // Call increfDataPtrC(ptr, count, roc_ops)
-            if (comptime builtin.cpu.arch == .aarch64) {
-                try self.codegen.emit.movRegReg(.w64, .X0, ptr_reg);
-                try self.codegen.emit.movRegImm64(.X1, @intCast(count));
-                try self.codegen.emit.movRegReg(.w64, .X2, roc_ops_reg);
-
-                try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
-                try self.codegen.emit.blrReg(.X9);
-            } else {
-                try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
-                // Allocate shadow space on Windows
-                if (self.cc.is_windows) {
-                    try self.codegen.emit.subRegImm32(.w64, .RSP, self.cc.shadow_space);
-                }
-                try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(0), ptr_reg);
-                try self.codegen.emit.movRegImm64(self.cc.getParamReg(1), @intCast(count));
-                try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(2), roc_ops_reg);
-                try self.codegen.emit.callReg(.R11);
-                // Clean up shadow space on Windows
-                if (self.cc.is_windows) {
-                    try self.codegen.emit.addRegImm32(.w64, .RSP, self.cc.shadow_space);
-                }
-            }
+            var builder = Builder.init(&self.codegen.emit);
+            try builder.addRegArg(ptr_reg);
+            try builder.addImmArg(@intCast(count));
+            try builder.addRegArg(roc_ops_reg);
+            try builder.call(fn_addr);
         }
 
         /// Emit decref for a box value
@@ -15379,30 +15032,12 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
             // Call decrefDataPtrC(ptr, alignment, elements_refcounted, roc_ops)
             // Boxes use 8-byte alignment
-            if (comptime builtin.cpu.arch == .aarch64) {
-                try self.codegen.emit.movRegReg(.w64, .X0, ptr_reg);
-                try self.codegen.emit.movRegImm64(.X1, 8);
-                try self.codegen.emit.movRegImm64(.X2, 0);
-                try self.codegen.emit.movRegReg(.w64, .X3, roc_ops_reg);
-
-                try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
-                try self.codegen.emit.blrReg(.X9);
-            } else {
-                try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
-                // Allocate shadow space on Windows
-                if (self.cc.is_windows) {
-                    try self.codegen.emit.subRegImm32(.w64, .RSP, self.cc.shadow_space);
-                }
-                try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(0), ptr_reg);
-                try self.codegen.emit.movRegImm64(self.cc.getParamReg(1), 8);
-                try self.codegen.emit.movRegImm64(self.cc.getParamReg(2), 0);
-                try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(3), roc_ops_reg);
-                try self.codegen.emit.callReg(.R11);
-                // Clean up shadow space on Windows
-                if (self.cc.is_windows) {
-                    try self.codegen.emit.addRegImm32(.w64, .RSP, self.cc.shadow_space);
-                }
-            }
+            var builder = Builder.init(&self.codegen.emit);
+            try builder.addRegArg(ptr_reg);
+            try builder.addImmArg(8); // alignment
+            try builder.addImmArg(0); // elements_refcounted = false
+            try builder.addRegArg(roc_ops_reg);
+            try builder.call(fn_addr);
         }
 
         /// Emit free for a box value
@@ -15432,30 +15067,12 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             }
 
             // Call freeDataPtrC(ptr, alignment, elements_refcounted, roc_ops)
-            if (comptime builtin.cpu.arch == .aarch64) {
-                try self.codegen.emit.movRegReg(.w64, .X0, ptr_reg);
-                try self.codegen.emit.movRegImm64(.X1, 8);
-                try self.codegen.emit.movRegImm64(.X2, 0);
-                try self.codegen.emit.movRegReg(.w64, .X3, roc_ops_reg);
-
-                try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
-                try self.codegen.emit.blrReg(.X9);
-            } else {
-                try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
-                // Allocate shadow space on Windows
-                if (self.cc.is_windows) {
-                    try self.codegen.emit.subRegImm32(.w64, .RSP, self.cc.shadow_space);
-                }
-                try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(0), ptr_reg);
-                try self.codegen.emit.movRegImm64(self.cc.getParamReg(1), 8);
-                try self.codegen.emit.movRegImm64(self.cc.getParamReg(2), 0);
-                try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(3), roc_ops_reg);
-                try self.codegen.emit.callReg(.R11);
-                // Clean up shadow space on Windows
-                if (self.cc.is_windows) {
-                    try self.codegen.emit.addRegImm32(.w64, .RSP, self.cc.shadow_space);
-                }
-            }
+            var builder = Builder.init(&self.codegen.emit);
+            try builder.addRegArg(ptr_reg);
+            try builder.addImmArg(8); // alignment
+            try builder.addImmArg(0); // elements_refcounted = false
+            try builder.addRegArg(roc_ops_reg);
+            try builder.call(fn_addr);
         }
 
         pub fn patchPendingCalls(self: *Self) Error!void {
