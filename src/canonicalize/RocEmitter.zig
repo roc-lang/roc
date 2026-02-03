@@ -237,6 +237,10 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
             const ident_text = self.module_env.getIdent(ext.ident_idx);
             try self.emitIdent(ident_text);
         },
+        .e_lookup_pending => {
+            // Pending lookups must be resolved before emission
+            unreachable;
+        },
         .e_list => |list| {
             try self.write("[");
             const elems = self.module_env.store.sliceExpr(list.elems);
@@ -257,6 +261,10 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
                 try self.emitExpr(elem_idx);
             }
             try self.write(")");
+        },
+        .e_tuple_access => |tuple_access| {
+            try self.emitExpr(tuple_access.tuple);
+            try self.writer().print(".{d}", .{tuple_access.elem_index});
         },
         .e_if => |if_expr| {
             const branch_indices = self.module_env.store.sliceIfBranches(if_expr.branches);

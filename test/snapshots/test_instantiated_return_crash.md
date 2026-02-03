@@ -16,11 +16,11 @@ type=expr
 }
 ~~~
 # EXPECTED
-TYPE MISMATCH - test_instantiated_return_crash.md:6:26:6:35
+TYPE MISMATCH - test_instantiated_return_crash.md:6:24:6:24
 # PROBLEMS
 **TYPE MISMATCH**
 The first argument being passed to this function has the wrong type:
-**test_instantiated_return_crash.md:6:26:6:35:**
+**test_instantiated_return_crash.md:6:24:**
 ```roc
     needs_string = |f| f(["hello"])
 ```

@@ -169,6 +169,10 @@ pub const Diagnostic = union(enum) {
         module_name: Ident.Idx,
         region: Region,
     },
+    type_module_has_alias_not_nominal: struct {
+        module_name: Ident.Idx,
+        region: Region,
+    },
     default_app_missing_main: struct {
         module_name: Ident.Idx,
         region: Region,

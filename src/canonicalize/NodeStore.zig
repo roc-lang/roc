@@ -272,9 +272,9 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 65;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 66;
 /// Count of the expression nodes in the ModuleEnv
-pub const MODULEENV_EXPR_NODE_COUNT = 42;
+pub const MODULEENV_EXPR_NODE_COUNT = 44;
 /// Count of the statement nodes in the ModuleEnv
 pub const MODULEENV_STATEMENT_NODE_COUNT = 17;
 /// Count of the type annotation nodes in the ModuleEnv
@@ -542,6 +542,15 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 .region = store.getRegionAt(node_idx),
             } };
         },
+        .expr_pending_lookup => {
+            const p = payload.expr_pending_lookup;
+            // Handle pending lookups (deferred external)
+            return CIR.Expr{ .e_lookup_pending = .{
+                .module_idx = @enumFromInt(p.module_idx),
+                .ident_idx = @bitCast(p.ident_idx),
+                .region = store.getRegionAt(node_idx),
+            } };
+        },
         .expr_required_lookup => {
             const p = payload.expr_required_lookup;
             // Handle required lookups (platform requires clause)
@@ -575,6 +584,15 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             return CIR.Expr{
                 .e_tuple = .{
                     .elems = .{ .span = .{ .start = p.elems_start, .len = p.elems_len } },
+                },
+            };
+        },
+        .expr_tuple_access => {
+            const p = payload.expr_tuple_access;
+            return CIR.Expr{
+                .e_tuple_access = .{
+                    .tuple = @enumFromInt(p.tuple),
+                    .elem_index = p.elem_index,
                 },
             };
         },
@@ -1381,6 +1399,10 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
                     .module_idx = @enumFromInt(apply_data.value1),
                     .target_node_idx = @intCast(apply_data.value2),
                 } },
+                .pending => .{ .pending = .{
+                    .module_idx = @enumFromInt(apply_data.value1),
+                    .type_name = @bitCast(apply_data.value2),
+                } },
             };
 
             return CIR.TypeAnno{ .apply = .{
@@ -1412,6 +1434,10 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
                 .external => .{ .external = .{
                     .module_idx = @enumFromInt(base_data.start),
                     .target_node_idx = @intCast(base_data.len),
+                } },
+                .pending => .{ .pending = .{
+                    .module_idx = @enumFromInt(base_data.start),
+                    .type_name = @bitCast(base_data.len),
                 } },
             };
 
@@ -1770,6 +1796,14 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 .ident_idx = @bitCast(e.ident_idx),
             } });
         },
+        .e_lookup_pending => |e| {
+            // For pending lookups (deferred external), store the module index and ident
+            node.tag = .expr_pending_lookup;
+            node.setPayload(.{ .expr_pending_lookup = .{
+                .module_idx = @intFromEnum(e.module_idx),
+                .ident_idx = @bitCast(e.ident_idx),
+            } });
+        },
         .e_lookup_required => |e| {
             // For required lookups (platform requires clause), store the index
             node.tag = .expr_required_lookup;
@@ -1802,6 +1836,13 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             node.setPayload(.{ .expr_tuple = .{
                 .elems_start = e.elems.span.start,
                 .elems_len = e.elems.span.len,
+            } });
+        },
+        .e_tuple_access => |e| {
+            node.tag = .expr_tuple_access;
+            node.setPayload(.{ .expr_tuple_access = .{
+                .tuple = @intFromEnum(e.tuple),
+                .elem_index = e.elem_index,
             } });
         },
         .e_frac_f32 => |e| {
@@ -2134,9 +2175,10 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
     }
 
     const node_idx = try store.nodes.append(store.gpa, node);
-    // For e_lookup_external, use the region from the expression itself
+    // For e_lookup_external and e_lookup_pending, use the region from the expression itself
     const actual_region = switch (expr) {
         .e_lookup_external => |e| e.region,
+        .e_lookup_pending => |e| e.region,
         else => region,
     };
     _ = try store.regions.append(store.gpa, actual_region);
@@ -2465,6 +2507,12 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
                     .value1 = @intFromEnum(ext.module_idx),
                     .value2 = @intCast(ext.target_node_idx),
                 },
+                .pending => |pend| .{
+                    .args_len = a.args.span.len,
+                    .base_tag = @intFromEnum(CIR.TypeAnno.LocalOrExternal.Tag.pending),
+                    .value1 = @intFromEnum(pend.module_idx),
+                    .value2 = @bitCast(pend.type_name),
+                },
             };
             _ = try store.type_apply_data.append(store.gpa, apply_data);
             node.setPayload(.{ .ty_apply = .{
@@ -2503,6 +2551,10 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
                 .external => |ext| .{
                     .start = @intFromEnum(ext.module_idx),
                     .len = @intCast(ext.target_node_idx),
+                },
+                .pending => |pend| .{
+                    .start = @intFromEnum(pend.module_idx),
+                    .len = @bitCast(pend.type_name),
                 },
             };
             _ = try store.span2_data.append(store.gpa, base_data);
@@ -3238,6 +3290,11 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
             region = r.region;
             node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.module_name) } });
         },
+        .type_module_has_alias_not_nominal => |r| {
+            node.tag = .diag_type_module_has_alias_not_nominal;
+            region = r.region;
+            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.module_name) } });
+        },
         .default_app_missing_main => |r| {
             node.tag = .diag_default_app_missing_main;
             region = r.region;
@@ -3683,6 +3740,10 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .module_name = @bitCast(payload.diag_single_ident.ident),
             .region = store.getRegionAt(node_idx),
         } },
+        .diag_type_module_has_alias_not_nominal => return CIR.Diagnostic{ .type_module_has_alias_not_nominal = .{
+            .module_name = @bitCast(payload.diag_single_ident.ident),
+            .region = store.getRegionAt(node_idx),
+        } },
         .diag_default_app_missing_main => return CIR.Diagnostic{ .default_app_missing_main = .{
             .module_name = @bitCast(payload.diag_single_ident.ident),
             .region = store.getRegionAt(node_idx),
@@ -3971,56 +4032,336 @@ pub const Serialized = extern struct {
         try self.index_data.serialize(&store.index_data, allocator, writer);
     }
 
-    /// Deserialize this Serialized struct into a NodeStore
+    /// Deserialize into a NodeStore value (no in-place modification of cache buffer).
     /// The base_addr parameter is the base address of the serialized buffer in memory.
-    pub fn deserialize(self: *Serialized, base_addr: usize, gpa: Allocator) *NodeStore {
-        // Note: Serialized may be smaller than the runtime struct.
-        // On 32-bit platforms, deserializing nodes in-place corrupts the adjacent
-        // fields. We must deserialize in REVERSE order (last to first)
-        // so that each deserialization doesn't corrupt fields that haven't been deserialized yet.
-
-        // Deserialize in reverse order (last serialized to first serialized)
-        // int128_values is serialized FIRST (for alignment), so it's deserialized LAST
-        const deserialized_index_data = self.index_data.deserialize(base_addr).*;
-        const deserialized_pattern_list_data = self.pattern_list_data.deserialize(base_addr).*;
-        const deserialized_type_apply_data = self.type_apply_data.deserialize(base_addr).*;
-        const deserialized_import_data = self.import_data.deserialize(base_addr).*;
-        const deserialized_def_data = self.def_data.deserialize(base_addr).*;
-        const deserialized_zero_arg_tag_data = self.zero_arg_tag_data.deserialize(base_addr).*;
-        const deserialized_closure_data = self.closure_data.deserialize(base_addr).*;
-        const deserialized_match_branch_data = self.match_branch_data.deserialize(base_addr).*;
-        const deserialized_match_data = self.match_data.deserialize(base_addr).*;
-        const deserialized_span_with_node_data = self.span_with_node_data.deserialize(base_addr).*;
-        const deserialized_span2_data = self.span2_data.deserialize(base_addr).*;
-        const deserialized_regions = self.regions.deserialize(base_addr).*;
-        const deserialized_nodes = self.nodes.deserialize(base_addr).*;
-        const deserialized_int128_values = self.int128_values.deserialize(base_addr).*;
-
-        // Overwrite ourself with the deserialized version, and return our pointer after casting it to NodeStore
-        const store = @as(*NodeStore, @ptrFromInt(@intFromPtr(self)));
-
-        store.* = NodeStore{
+    /// WARNING: The returned NodeStore points into the cache buffer and is read-only.
+    /// Use deserializeWithCopy() if the store needs to be mutable.
+    pub fn deserializeInto(self: *const Serialized, base_addr: usize, gpa: Allocator) NodeStore {
+        return NodeStore{
             .gpa = gpa,
-            .nodes = deserialized_nodes,
-            .regions = deserialized_regions,
-            .int128_values = deserialized_int128_values,
-            .span2_data = deserialized_span2_data,
-            .span_with_node_data = deserialized_span_with_node_data,
-            .match_data = deserialized_match_data,
-            .match_branch_data = deserialized_match_branch_data,
-            .closure_data = deserialized_closure_data,
-            .zero_arg_tag_data = deserialized_zero_arg_tag_data,
-            .def_data = deserialized_def_data,
-            .import_data = deserialized_import_data,
-            .type_apply_data = deserialized_type_apply_data,
-            .pattern_list_data = deserialized_pattern_list_data,
-            .index_data = deserialized_index_data,
+            .nodes = self.nodes.deserializeInto(base_addr),
+            .regions = self.regions.deserializeInto(base_addr),
+            .int128_values = self.int128_values.deserializeInto(base_addr),
+            .span2_data = self.span2_data.deserializeInto(base_addr),
+            .span_with_node_data = self.span_with_node_data.deserializeInto(base_addr),
+            .match_data = self.match_data.deserializeInto(base_addr),
+            .match_branch_data = self.match_branch_data.deserializeInto(base_addr),
+            .closure_data = self.closure_data.deserializeInto(base_addr),
+            .zero_arg_tag_data = self.zero_arg_tag_data.deserializeInto(base_addr),
+            .def_data = self.def_data.deserializeInto(base_addr),
+            .import_data = self.import_data.deserializeInto(base_addr),
+            .type_apply_data = self.type_apply_data.deserializeInto(base_addr),
+            .pattern_list_data = self.pattern_list_data.deserializeInto(base_addr),
+            .index_data = self.index_data.deserializeInto(base_addr),
             .scratch = null, // A deserialized NodeStore is read-only, so it has no need for scratch memory!
         };
+    }
 
-        return store;
+    /// Deserialize into a NodeStore value with fresh memory allocation for fields that may need to grow.
+    /// Use this for cache modules where regions may need to be extended during type checking.
+    pub fn deserializeWithCopy(self: *const Serialized, base_addr: usize, gpa: Allocator) Allocator.Error!NodeStore {
+        return NodeStore{
+            .gpa = gpa,
+            .nodes = self.nodes.deserializeInto(base_addr),
+            // Regions needs to be mutable (grown during type checking)
+            .regions = try self.regions.deserializeWithCopy(base_addr, gpa),
+            .int128_values = self.int128_values.deserializeInto(base_addr),
+            .span2_data = self.span2_data.deserializeInto(base_addr),
+            .span_with_node_data = self.span_with_node_data.deserializeInto(base_addr),
+            .match_data = self.match_data.deserializeInto(base_addr),
+            .match_branch_data = self.match_branch_data.deserializeInto(base_addr),
+            .closure_data = self.closure_data.deserializeInto(base_addr),
+            .zero_arg_tag_data = self.zero_arg_tag_data.deserializeInto(base_addr),
+            .def_data = self.def_data.deserializeInto(base_addr),
+            .import_data = self.import_data.deserializeInto(base_addr),
+            .type_apply_data = self.type_apply_data.deserializeInto(base_addr),
+            .pattern_list_data = self.pattern_list_data.deserializeInto(base_addr),
+            .index_data = self.index_data.deserializeInto(base_addr),
+            .scratch = null,
+        };
     }
 };
+
+/// Resolve all pending lookups in this store.
+/// Called before type-checking, when all dependencies are canonicalized.
+/// This converts expr_pending_lookup to expr_external_lookup (or leaves as-is for error).
+pub fn resolvePendingLookups(store: *NodeStore, env: anytype, imported_envs: []const *@TypeOf(env.*)) void {
+    const trace_pending = @import("build_options").trace_build;
+
+    const nodes_len = store.nodes.len();
+
+    if (comptime trace_pending) {
+        std.debug.print("[PENDING] resolvePendingLookups: module={s} nodes_len={} imported_envs.len={}\n", .{ env.module_name, nodes_len, imported_envs.len });
+        for (imported_envs) |ie| {
+            std.debug.print("[PENDING]   imported: {s}\n", .{ie.module_name});
+        }
+    }
+
+    // Iterate through all nodes to find pending lookups
+    var i: usize = 0;
+    while (i < nodes_len) : (i += 1) {
+        const node_idx: Node.Idx = @enumFromInt(@as(u32, @intCast(i)));
+        const node = store.nodes.get(node_idx);
+
+        if (node.tag == .expr_pending_lookup) {
+            const payload = node.getPayload().expr_pending_lookup;
+            const ident_idx: Ident.Idx = @bitCast(payload.ident_idx);
+
+            // Get the import name from the module index
+            const module_idx_int = payload.module_idx;
+            if (module_idx_int < env.imports.imports.items.items.len) {
+                const import_str_idx = env.imports.imports.items.items[module_idx_int];
+                const import_name = env.getString(import_str_idx);
+                const member_name = env.getIdent(ident_idx);
+
+                if (comptime trace_pending) {
+                    std.debug.print("[PENDING] Found pending lookup: import={s} member={s}\n", .{ import_name, member_name });
+                }
+
+                // Extract base module name for qualified imports (e.g., "pf.Stdout" -> "Stdout")
+                const base_import_name = if (std.mem.lastIndexOfScalar(u8, import_name, '.')) |dot_idx|
+                    import_name[dot_idx + 1 ..]
+                else
+                    import_name;
+
+                // Extract base member name (e.g., "pf.Stdout.line!" -> "line!")
+                // The member_name may be fully qualified, so we take everything after the last dot
+                const base_member_name = if (std.mem.lastIndexOfScalar(u8, member_name, '.')) |dot_idx|
+                    member_name[dot_idx + 1 ..]
+                else
+                    member_name;
+
+                if (comptime trace_pending) {
+                    std.debug.print("[PENDING]   base_import_name={s} base_member_name={s}\n", .{ base_import_name, base_member_name });
+                }
+
+                // Find the target module env
+                var target_env: ?*@TypeOf(env.*) = null;
+                for (imported_envs) |imported_env| {
+                    if (std.mem.eql(u8, imported_env.module_name, base_import_name)) {
+                        target_env = imported_env;
+                        break;
+                    }
+                }
+
+                if (target_env) |tenv| {
+                    if (comptime trace_pending) {
+                        std.debug.print("[PENDING]   Found target env: {s}\n", .{tenv.module_name});
+                    }
+
+                    // For methods on opaque types, the exposed name is qualified like "Stdout.line!"
+                    // Build the qualified name: {module_name}.{member_name}
+                    var qualified_buf: [512]u8 = undefined;
+                    const qualified_member_name = std.fmt.bufPrint(&qualified_buf, "{s}.{s}", .{ base_import_name, base_member_name }) catch base_member_name;
+
+                    if (comptime trace_pending) {
+                        std.debug.print("[PENDING]   Looking for qualified name: {s}\n", .{qualified_member_name});
+                    }
+
+                    // Try to resolve the pending lookup in order of preference:
+                    // 1. Full member_name directly (for nested module access like "Outer.Inner.inner")
+                    // 2. Qualified name (for methods on opaque types like "Outer.method")
+                    // 3. Base member name only (for simple exports)
+                    const target_node_idx_opt: ?u16 = blk: {
+                        // First try the full member_name (for nested module access)
+                        if (tenv.common.findIdent(member_name)) |full_ident| {
+                            if (tenv.getExposedNodeIndexById(full_ident)) |idx| {
+                                if (comptime trace_pending) {
+                                    std.debug.print("[PENDING]   Found via full member name: {}\n", .{idx});
+                                }
+                                break :blk idx;
+                            }
+                        }
+                        // Try the qualified name (for methods on opaque types)
+                        if (tenv.common.findIdent(qualified_member_name)) |qident| {
+                            if (tenv.getExposedNodeIndexById(qident)) |idx| {
+                                if (comptime trace_pending) {
+                                    std.debug.print("[PENDING]   Found via qualified name: {}\n", .{idx});
+                                }
+                                break :blk idx;
+                            }
+                        }
+                        // Fall back to base member name (for regular exports)
+                        if (tenv.common.findIdent(base_member_name)) |member_ident| {
+                            if (comptime trace_pending) {
+                                std.debug.print("[PENDING]   Found member ident: {}\n", .{@as(u32, @bitCast(member_ident))});
+                            }
+                            if (tenv.getExposedNodeIndexById(member_ident)) |idx| {
+                                if (comptime trace_pending) {
+                                    std.debug.print("[PENDING]   Found via base name: {}\n", .{idx});
+                                }
+                                break :blk idx;
+                            }
+                        }
+                        break :blk null;
+                    };
+
+                    if (target_node_idx_opt) |target_node_idx| {
+                        // Successfully resolved - update to external lookup
+                        var new_node = Node.init(.expr_external_lookup);
+                        new_node.setPayload(.{ .expr_external_lookup = .{
+                            .module_idx = payload.module_idx,
+                            .target_node_idx = target_node_idx,
+                            .ident_idx = payload.ident_idx,
+                        } });
+                        store.nodes.set(node_idx, new_node);
+                    }
+                } else {
+                    if (comptime trace_pending) {
+                        std.debug.print("[PENDING]   Target env not found\n", .{});
+                    }
+                }
+            }
+        } else if (node.tag == .ty_apply) {
+            // Check if this type apply has a pending base
+            const payload = node.getPayload().ty_apply;
+            const apply_data = store.type_apply_data.items.items[payload.type_apply_data_idx];
+            const base_enum: CIR.TypeAnno.LocalOrExternal.Tag = @enumFromInt(apply_data.base_tag);
+
+            if (base_enum == .pending) {
+                const module_idx: CIR.Import.Idx = @enumFromInt(apply_data.value1);
+                const type_name_ident: Ident.Idx = @bitCast(apply_data.value2);
+
+                // Get the import name from the module index
+                const module_idx_int = @intFromEnum(module_idx);
+                if (module_idx_int < env.imports.imports.items.items.len) {
+                    const import_str_idx = env.imports.imports.items.items[module_idx_int];
+                    const import_name = env.getString(import_str_idx);
+                    const type_name = env.getIdent(type_name_ident);
+
+                    if (comptime trace_pending) {
+                        std.debug.print("[PENDING] Found pending ty_apply: import={s} type={s}\n", .{ import_name, type_name });
+                    }
+
+                    // Extract base module name for qualified imports (e.g., "pf.Simple" -> "Simple")
+                    const base_import_name = if (std.mem.lastIndexOfScalar(u8, import_name, '.')) |dot_idx|
+                        import_name[dot_idx + 1 ..]
+                    else
+                        import_name;
+
+                    // Find the target module env
+                    var target_env: ?*@TypeOf(env.*) = null;
+                    for (imported_envs) |imported_env| {
+                        if (std.mem.eql(u8, imported_env.module_name, base_import_name)) {
+                            target_env = imported_env;
+                            break;
+                        }
+                    }
+
+                    if (target_env) |tenv| {
+                        if (comptime trace_pending) {
+                            std.debug.print("[PENDING]   Found target env for ty_apply: {s}\n", .{tenv.module_name});
+                        }
+
+                        // Find the type by name
+                        if (tenv.common.findIdent(type_name)) |type_ident| {
+                            if (tenv.getExposedNodeIndexById(type_ident)) |target_node_idx| {
+                                if (comptime trace_pending) {
+                                    std.debug.print("[PENDING]   Resolved ty_apply to node: {}\n", .{target_node_idx});
+                                }
+                                // Update type_apply_data to external
+                                store.type_apply_data.items.items[payload.type_apply_data_idx] = .{
+                                    .args_len = apply_data.args_len,
+                                    .base_tag = @intFromEnum(CIR.TypeAnno.LocalOrExternal.Tag.external),
+                                    .value1 = apply_data.value1, // Keep module_idx
+                                    .value2 = target_node_idx, // Set target_node_idx
+                                };
+                            } else {
+                                if (comptime trace_pending) {
+                                    std.debug.print("[PENDING]   Type not exposed in ty_apply\n", .{});
+                                }
+                            }
+                        } else {
+                            if (comptime trace_pending) {
+                                std.debug.print("[PENDING]   Type ident not found in ty_apply\n", .{});
+                            }
+                        }
+                    } else {
+                        if (comptime trace_pending) {
+                            std.debug.print("[PENDING]   Target env not found for ty_apply\n", .{});
+                        }
+                    }
+                }
+            }
+        } else if (node.tag == .ty_lookup) {
+            // Check if this type lookup has a pending base
+            const payload = node.getPayload().ty_lookup;
+            const base_enum: CIR.TypeAnno.LocalOrExternal.Tag = @enumFromInt(payload.base);
+
+            if (base_enum == .pending) {
+                const base_data = store.span2_data.items.items[payload.base_span2_idx];
+                const module_idx: CIR.Import.Idx = @enumFromInt(base_data.start);
+                const type_name_ident: Ident.Idx = @bitCast(base_data.len);
+
+                // Get the import name from the module index
+                const module_idx_int = @intFromEnum(module_idx);
+                if (module_idx_int < env.imports.imports.items.items.len) {
+                    const import_str_idx = env.imports.imports.items.items[module_idx_int];
+                    const import_name = env.getString(import_str_idx);
+                    const type_name = env.getIdent(type_name_ident);
+
+                    if (comptime trace_pending) {
+                        std.debug.print("[PENDING] Found pending ty_lookup: import={s} type={s}\n", .{ import_name, type_name });
+                    }
+
+                    // Extract base module name for qualified imports
+                    const base_import_name = if (std.mem.lastIndexOfScalar(u8, import_name, '.')) |dot_idx|
+                        import_name[dot_idx + 1 ..]
+                    else
+                        import_name;
+
+                    // Find the target module env
+                    var target_env: ?*@TypeOf(env.*) = null;
+                    for (imported_envs) |imported_env| {
+                        if (std.mem.eql(u8, imported_env.module_name, base_import_name)) {
+                            target_env = imported_env;
+                            break;
+                        }
+                    }
+
+                    if (target_env) |tenv| {
+                        if (comptime trace_pending) {
+                            std.debug.print("[PENDING]   Found target env for ty_lookup: {s}\n", .{tenv.module_name});
+                        }
+
+                        // Find the type by name
+                        if (tenv.common.findIdent(type_name)) |type_ident| {
+                            if (tenv.getExposedNodeIndexById(type_ident)) |target_node_idx| {
+                                if (comptime trace_pending) {
+                                    std.debug.print("[PENDING]   Resolved ty_lookup to node: {}\n", .{target_node_idx});
+                                }
+                                // Update the node payload's base tag and span2_data
+                                var new_payload = payload;
+                                new_payload.base = @intFromEnum(CIR.TypeAnno.LocalOrExternal.Tag.external);
+                                var new_node = node;
+                                new_node.setPayload(.{ .ty_lookup = new_payload });
+                                store.nodes.set(node_idx, new_node);
+
+                                // Update span2_data to store (module_idx, target_node_idx)
+                                store.span2_data.items.items[payload.base_span2_idx] = .{
+                                    .start = base_data.start, // Keep module_idx
+                                    .len = target_node_idx, // Set target_node_idx
+                                };
+                            } else {
+                                if (comptime trace_pending) {
+                                    std.debug.print("[PENDING]   Type not exposed in ty_lookup\n", .{});
+                                }
+                            }
+                        } else {
+                            if (comptime trace_pending) {
+                                std.debug.print("[PENDING]   Type ident not found in ty_lookup\n", .{});
+                            }
+                        }
+                    } else {
+                        if (comptime trace_pending) {
+                            std.debug.print("[PENDING]   Target env not found for ty_lookup\n", .{});
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
 
 test "NodeStore empty CompactWriter roundtrip" {
     const testing = std.testing;
@@ -4057,7 +4398,7 @@ test "NodeStore empty CompactWriter roundtrip" {
 
     // Cast and deserialize
     const serialized_ptr: *NodeStore.Serialized = @ptrCast(@alignCast(buffer.ptr));
-    const deserialized = serialized_ptr.deserialize(@intFromPtr(buffer.ptr), gpa);
+    const deserialized = serialized_ptr.deserializeInto(@intFromPtr(buffer.ptr), gpa);
 
     // Verify empty
     try testing.expectEqual(@as(usize, 0), deserialized.nodes.len());
@@ -4122,7 +4463,7 @@ test "NodeStore basic CompactWriter roundtrip" {
 
     // Cast and deserialize
     const serialized_ptr: *NodeStore.Serialized = @ptrCast(@alignCast(buffer.ptr));
-    const deserialized = serialized_ptr.deserialize(@intFromPtr(buffer.ptr), gpa);
+    const deserialized = serialized_ptr.deserializeInto(@intFromPtr(buffer.ptr), gpa);
 
     // Verify nodes
     try testing.expectEqual(@as(usize, 1), deserialized.nodes.len());
@@ -4213,7 +4554,7 @@ test "NodeStore multiple nodes CompactWriter roundtrip" {
 
     // Cast and deserialize
     const serialized_ptr: *NodeStore.Serialized = @ptrCast(@alignCast(buffer.ptr));
-    const deserialized = serialized_ptr.deserialize(@intFromPtr(buffer.ptr), gpa);
+    const deserialized = serialized_ptr.deserializeInto(@intFromPtr(buffer.ptr), gpa);
 
     // Verify nodes
     try testing.expectEqual(@as(usize, 3), deserialized.nodes.len());

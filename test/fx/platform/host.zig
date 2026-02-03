@@ -908,13 +908,36 @@ fn hostedBuilderPrintValue(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, 
     hostedStdoutLine(ops, @ptrCast(&empty_ret), @ptrCast(&line3));
 }
 
+/// Hosted function: Host.get_greeting! (index 1 - sorted alphabetically)
+/// This tests hosted effects on opaque types with data (not just []).
+/// Takes Host { name: Str } as first argument, returns Str
+fn hostedHostGetGreeting(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, args_ptr: *anyopaque) callconv(.c) void {
+    // Host is { name: Str }, so args contains the Host record
+    const Args = extern struct {
+        name: RocStr,
+    };
+
+    const args: *Args = @ptrCast(@alignCast(args_ptr));
+    const name_slice = args.name.asSlice();
+
+    // Create the result string: "Hello, <name>!"
+    var buf: [256]u8 = undefined;
+    const result_str = std.fmt.bufPrint(&buf, "Hello, {s}!", .{name_slice}) catch "Hello!";
+    const result = RocStr.fromSlice(result_str, ops);
+
+    // Write result to return pointer
+    const ret: *RocStr = @ptrCast(@alignCast(ret_ptr));
+    ret.* = result;
+}
+
 /// Array of hosted function pointers, sorted alphabetically by fully-qualified name
-/// These correspond to the hosted functions defined in Stderr, Stdin, Stdout, and Builder Type Modules
+/// These correspond to the hosted functions defined in Stderr, Stdin, Stdout, Builder, and Host Type Modules
 const hosted_function_ptrs = [_]builtins.host_abi.HostedFn{
     hostedBuilderPrintValue, // Builder.print_value! (index 0)
-    hostedStderrLine, // Stderr.line! (index 1)
-    hostedStdinLine, // Stdin.line! (index 2)
-    hostedStdoutLine, // Stdout.line! (index 3)
+    hostedHostGetGreeting, // Host.get_greeting! (index 1)
+    hostedStderrLine, // Stderr.line! (index 2)
+    hostedStdinLine, // Stdin.line! (index 3)
+    hostedStdoutLine, // Stdout.line! (index 4)
 };
 
 /// Platform host entrypoint

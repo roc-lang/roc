@@ -409,6 +409,10 @@ pub const Tag = enum {
     /// * lhs - LHS DESCRIPTION
     /// * rhs - RHS DESCRIPTION
     field_access,
+    /// Tuple element access: tuple.0, tuple.1, etc.
+    /// * lhs - node index of tuple expression
+    /// * main_token - the element index token (NoSpaceDotInt or DotInt)
+    tuple_access,
     /// DESCRIPTION
     /// Example: EXAMPLE
     /// * lhs - LHS DESCRIPTION

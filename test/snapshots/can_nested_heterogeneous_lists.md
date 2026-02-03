@@ -38,6 +38,13 @@ This number is being used where a non-number type is needed:
 ```
                    ^
 
+The type was determined to be non-numeric here:
+**can_nested_heterogeneous_lists.md:1:17:1:18:**
+```roc
+[[1, "hello"], [2, 3]]
+```
+                ^
+
 Other code expects this to have the type:
 
     Str

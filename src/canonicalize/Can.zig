@@ -38,6 +38,9 @@ pub const AutoImportedType = struct {
     /// Whether this is a package-qualified import (e.g., "pf.Stdout" vs "Bool")
     /// Used to determine the correct module name for auto-imports
     is_package_qualified: bool = false,
+    /// Whether this is a placeholder entry for a module that hasn't been compiled yet.
+    /// When true, member lookup failures are not errors - they'll be validated during type checking.
+    is_placeholder: bool = false,
 };
 
 /// Information about a placeholder identifier, tracking its component parts
@@ -102,6 +105,9 @@ scratch_free_vars: base.Scratch(Pattern.Idx),
 scratch_captures: base.Scratch(Pattern.Idx),
 /// Scratch bound variables (for filtering out locally-bound vars from captures)
 scratch_bound_vars: base.Scratch(Pattern.Idx),
+/// Local type declarations found inside function bodies.
+/// Collected during canonicalization, then added to all_statements at the end.
+scratch_local_type_decls: std.ArrayList(CIR.Statement.Idx),
 /// Counter for generating unique malformed import placeholder names
 malformed_import_count: u32 = 0,
 /// Counter for generating unique closure tag names (e.g., "Closure_addX_1", "Closure_addX_2")
@@ -231,6 +237,7 @@ pub fn deinit(
     self.scratch_free_vars.deinit();
     self.scratch_captures.deinit();
     self.scratch_bound_vars.deinit();
+    self.scratch_local_type_decls.deinit(gpa);
 }
 
 /// Options for initializing the canonicalizer.
@@ -263,6 +270,7 @@ pub fn init(
         .scratch_free_vars = try base.Scratch(Pattern.Idx).init(gpa),
         .scratch_captures = try base.Scratch(Pattern.Idx).init(gpa),
         .scratch_bound_vars = try base.Scratch(Pattern.Idx).init(gpa),
+        .scratch_local_type_decls = try std.ArrayList(CIR.Statement.Idx).initCapacity(gpa, 0),
     };
 
     // Top-level scope is not a function boundary
@@ -2609,6 +2617,11 @@ pub fn canonicalizeFile(
     // Check for exposed but not implemented items
     try self.checkExposedButNotImplemented();
 
+    // Add local type declarations to all_statements
+    for (self.scratch_local_type_decls.items) |stmt_idx| {
+        try self.env.store.addScratchStatement(stmt_idx);
+    }
+
     // Create the span of all top-level defs and statements
     self.env.all_defs = try self.env.store.defSpanFrom(scratch_defs_start);
     self.env.all_statements = try self.env.store.statementSpanFrom(scratch_statements_start);
@@ -2644,18 +2657,36 @@ pub fn validateForChecking(self: *Self) std.mem.Allocator.Error!void {
     switch (self.env.module_kind) {
         .type_module => |*main_type_ident| {
             const main_status = try self.checkMainFunction();
-            const matching_type_ident = self.findMatchingTypeIdent();
+            const matching_type_result = self.findMatchingTypeIdent();
 
-            // Store the matching type ident in module_kind if found
-            if (matching_type_ident) |type_ident| {
-                main_type_ident.* = type_ident;
-                // The main type and associated items are already exposed in canonicalize()
-            }
+            // Check if we found a matching type and whether it's a nominal type
+            const has_valid_type_module = if (matching_type_result) |result| blk: {
+                // Type modules require nominal types (:= or ::), not aliases (:)
+                if (result.kind == .nominal or result.kind == .@"opaque") {
+                    // Store the matching type ident in module_kind
+                    main_type_ident.* = result.ident;
+                    break :blk true;
+                } else {
+                    // Found alias instead of nominal type - emit specific error
+                    const file = self.parse_ir.store.getFile();
+                    const module_name_text = self.env.module_name;
+                    const module_name_ident = try self.env.insertIdent(base.Ident.for_text(module_name_text));
+                    const file_region = self.parse_ir.tokenizedRegionToRegion(file.region);
 
-            // Valid if either we have a valid main! or a matching type declaration
-            const is_valid = (main_status == .valid) or (matching_type_ident != null);
+                    try self.env.pushDiagnostic(.{
+                        .type_module_has_alias_not_nominal = .{
+                            .module_name = module_name_ident,
+                            .region = file_region,
+                        },
+                    });
+                    break :blk false;
+                }
+            } else false;
 
-            if (!is_valid and main_status == .not_found) {
+            // Valid if either we have a valid main! or a valid nominal type declaration
+            const is_valid = (main_status == .valid) or has_valid_type_module;
+
+            if (!is_valid and main_status == .not_found and matching_type_result == null) {
                 // Neither valid main! nor matching type - report helpful error
                 try self.reportTypeModuleOrDefaultAppError();
             }
@@ -3568,6 +3599,22 @@ fn introduceItemsAliased(
             }
             return;
         };
+
+        // If module is a placeholder (not yet compiled), skip validation and introduce items directly
+        // This matches the behavior in type annotation canonicalization where placeholders create pending lookups
+        if (module_entry.is_placeholder) {
+            for (exposed_items_slice) |exposed_item_idx| {
+                const exposed_item = self.env.store.getExposedItem(exposed_item_idx);
+                const item_name = exposed_item.alias orelse exposed_item.name;
+                const item_info = Scope.ExposedItemInfo{
+                    .module_name = module_name,
+                    .original_name = exposed_item.name,
+                };
+                try self.scopeIntroduceExposedItem(item_name, item_info, import_region);
+            }
+            return;
+        }
+
         const module_env = module_entry.env;
 
         // Auto-expose the module's main type for type modules
@@ -4421,8 +4468,9 @@ pub fn canonicalizeExpr(
                             // Check if this module is imported in the current scope
                             // For auto-imported nested types (Bool, Str), use the parent module name (Builtin)
                             // For package-qualified imports (pf.Stdout), use the qualified name as-is
+                            // For placeholder modules, use the original module text (not the placeholder's env.module_name)
                             const lookup_module_name = if (auto_imported_type_info) |info|
-                                if (info.is_package_qualified) module_text else info.env.module_name
+                                if (info.is_placeholder) module_text else if (info.is_package_qualified) module_text else info.env.module_name
                             else
                                 module_text;
 
@@ -4430,9 +4478,10 @@ pub fn canonicalizeExpr(
                             const import_idx = self.scopeLookupImportedModule(lookup_module_name) orelse blk: {
                                 // Check if this is an auto-imported module
                                 if (auto_imported_type_info) |info| {
+                                    // For placeholders, use the original module text
                                     // For auto-imported nested types (like Bool, Str), import the parent module (Builtin)
                                     // For package-qualified imports (pf.Stdout), use the qualified name
-                                    const actual_module_name = if (info.is_package_qualified) module_text else info.env.module_name;
+                                    const actual_module_name = if (info.is_placeholder) module_text else if (info.is_package_qualified) module_text else info.env.module_name;
                                     break :blk try self.getOrCreateAutoImport(actual_module_name);
                                 }
 
@@ -4450,22 +4499,69 @@ pub fn canonicalizeExpr(
                             // Need to convert identifier from current module to target module
                             const field_text = self.env.getIdent(ident);
 
+                            // For nested module access like Outer.Inner.inner, build the nested path
+                            // from all qualifiers after the first one, plus the final ident.
+                            // e.g., for Outer.Inner.inner: qualifiers[1..] = [Inner], field = inner
+                            // Result: "Inner.inner"
+                            // For simple access like Outer.outer, this is just "outer" (field_text)
+                            var nested_path_buf: [512]u8 = undefined;
+                            const nested_path: []const u8 = if (qualifier_tokens.len > 1) nested_blk: {
+                                var pos: usize = 0;
+                                for (qualifier_tokens[1..]) |qtok| {
+                                    const qtok_idx = @as(Token.Idx, @intCast(qtok));
+                                    if (self.parse_ir.tokens.resolveIdentifier(qtok_idx)) |q_ident| {
+                                        const q_text = self.env.getIdent(q_ident);
+                                        if (pos + q_text.len + 1 > nested_path_buf.len) break :nested_blk field_text;
+                                        @memcpy(nested_path_buf[pos..][0..q_text.len], q_text);
+                                        pos += q_text.len;
+                                        nested_path_buf[pos] = '.';
+                                        pos += 1;
+                                    }
+                                }
+                                if (pos + field_text.len > nested_path_buf.len) break :nested_blk field_text;
+                                @memcpy(nested_path_buf[pos..][0..field_text.len], field_text);
+                                pos += field_text.len;
+                                break :nested_blk nested_path_buf[0..pos];
+                            } else field_text;
+
                             const target_node_idx_opt: ?u16 = if (auto_imported_type_info) |info| blk: {
                                 const module_env = info.env;
 
                                 // For auto-imported types with statement_idx (builtin types and platform modules),
                                 // build the full qualified name using qualified_type_ident.
-                                // For regular user module imports (statement_idx is null), use field_text directly.
+                                // For regular user module imports (statement_idx is null), build the full path
+                                // using module name + nested path (for nested access like Outer.Inner.inner).
+                                var full_lookup_buf: [512]u8 = undefined;
                                 const lookup_name: []const u8 = if (info.statement_idx) |_| name_blk: {
                                     // Build the fully qualified member name using the type's qualified ident
                                     // e.g., for U8.to_i16: "Builtin.Num.U8" + "to_i16" -> "Builtin.Num.U8.to_i16"
                                     // e.g., for Str.concat: "Builtin.Str" + "concat" -> "Builtin.Str.concat"
+                                    // For nested module access like Outer.Inner.inner, use nested_path
+                                    // e.g., "Outer" + "Inner.inner" -> "Outer.Inner.inner"
                                     // Note: qualified_type_ident is always stored in the calling module's ident store
                                     // (self.env), since Ident.Idx values are not transferable between stores.
                                     const qualified_text = self.env.getIdent(info.qualified_type_ident);
-                                    const fully_qualified_idx = try self.env.insertQualifiedIdent(qualified_text, field_text);
+                                    const fully_qualified_idx = try self.env.insertQualifiedIdent(qualified_text, nested_path);
                                     break :name_blk self.env.getIdent(fully_qualified_idx);
-                                } else field_text;
+                                } else name_blk: {
+                                    // For nested module access (qualifier_tokens.len > 1), exposed items
+                                    // are stored with the full module-qualified path.
+                                    // Build: module_name + "." + nested_path
+                                    // e.g., "Outer.Inner.inner" for Inner.inner in Outer module
+                                    // For simple access (qualifier_tokens.len == 1), just use field_text
+                                    // e.g., for A.main!: just "main!" (not "A.main!")
+                                    if (qualifier_tokens.len == 1) {
+                                        break :name_blk field_text;
+                                    }
+                                    const mod_name = module_env.module_name;
+                                    if (mod_name.len + 1 + nested_path.len > full_lookup_buf.len) {
+                                        break :name_blk nested_path;
+                                    }
+                                    @memcpy(full_lookup_buf[0..mod_name.len], mod_name);
+                                    full_lookup_buf[mod_name.len] = '.';
+                                    @memcpy(full_lookup_buf[mod_name.len + 1 ..][0..nested_path.len], nested_path);
+                                    break :name_blk full_lookup_buf[0 .. mod_name.len + 1 + nested_path.len];
+                                };
 
                                 // Look up the associated item by its name
                                 const qname_ident = module_env.common.findIdent(lookup_name) orelse {
@@ -4476,8 +4572,8 @@ pub fn canonicalizeExpr(
                                 break :blk module_env.getExposedNodeIndexById(qname_ident);
                             } else null;
 
-                            const target_node_idx = target_node_idx_opt orelse {
-                                // The identifier doesn't exist in the module or isn't exposed
+                            // If target_node_idx_opt is null, we need to handle the error case
+                            if (target_node_idx_opt == null) {
                                 // Check if the module is in module_envs - if not, the import failed (MODULE NOT FOUND)
                                 // and we shouldn't report a redundant error here
                                 if (auto_imported_type_info == null) {
@@ -4486,24 +4582,47 @@ pub fn canonicalizeExpr(
                                     break :blk_qualified;
                                 }
 
+                                // If this is a placeholder module (not yet compiled), create a pending lookup
+                                // that will be resolved after all modules are canonicalized.
+                                if (auto_imported_type_info.?.is_placeholder) {
+                                    const info = auto_imported_type_info.?;
+                                    // Build the fully qualified member name like we do for non-placeholder modules.
+                                    // For builtin types with statement_idx, use qualified_type_ident + field_text
+                                    // e.g., for Message.msg: "Message" + "msg" -> "Message.msg"
+                                    // For nested module access (qualifier_tokens.len > 1), use module_name + nested_path
+                                    // e.g., for Outer.Inner.inner: "Outer" + "Inner.inner" -> "Outer.Inner.inner"
+                                    // For simple access (qualifier_tokens.len == 1), just use field_text
+                                    // e.g., for A.main!: just "main!" (not "A.main!")
+                                    const qualified_ident_idx: Ident.Idx = if (info.statement_idx != null) idx_blk: {
+                                        const qualified_text = self.env.getIdent(info.qualified_type_ident);
+                                        break :idx_blk try self.env.insertQualifiedIdent(qualified_text, field_text);
+                                    } else if (qualifier_tokens.len > 1)
+                                        try self.env.insertQualifiedIdent(self.env.getIdent(module_name), nested_path)
+                                    else
+                                        ident;
+
+                                    const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_pending = .{
+                                        .module_idx = import_idx,
+                                        .ident_idx = qualified_ident_idx,
+                                        .region = region,
+                                    } }, region);
+                                    return CanonicalizedExpr{
+                                        .idx = expr_idx,
+                                        .free_vars = DataSpan.empty(),
+                                    };
+                                }
+
                                 // Generate a more helpful error for auto-imported types (List, Bool, Try, etc.)
-                                const diagnostic = if (auto_imported_type_info != null)
-                                    Diagnostic{ .nested_value_not_found = .{
+                                return CanonicalizedExpr{
+                                    .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .nested_value_not_found = .{
                                         .parent_name = module_name,
                                         .nested_name = ident,
                                         .region = region,
-                                    } }
-                                else
-                                    Diagnostic{ .qualified_ident_does_not_exist = .{
-                                        .ident = qualified_ident,
-                                        .region = region,
-                                    } };
-
-                                return CanonicalizedExpr{
-                                    .idx = try self.env.pushMalformed(Expr.Idx, diagnostic),
+                                    } }),
                                     .free_vars = DataSpan.empty(),
                                 };
-                            };
+                            }
+                            const target_node_idx = target_node_idx_opt.?;
 
                             // Create the e_lookup_external expression with Import.Idx
                             const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_external = .{
@@ -5400,6 +5519,44 @@ pub fn canonicalizeExpr(
                 .free_vars = free_vars_span,
             };
         },
+        .tuple_access => |tuple_access| {
+            // Tuple element access: tuple.0, tuple.1, etc.
+            const region = self.parse_ir.tokenizedRegionToRegion(tuple_access.region);
+            const free_vars_start = self.scratch_free_vars.top();
+
+            // Canonicalize the tuple expression
+            const can_tuple = try self.canonicalizeExpr(tuple_access.expr) orelse return null;
+
+            // Get the element index from the token
+            const elem_index_str = self.parse_ir.resolve(tuple_access.elem_token);
+            // The token includes the leading dot, so skip it (e.g., ".0" -> "0")
+            const index_str = if (elem_index_str.len > 0 and elem_index_str[0] == '.') elem_index_str[1..] else elem_index_str;
+
+            // Parse the index
+            const elem_index = std.fmt.parseInt(u32, index_str, 10) catch {
+                // Invalid index - this shouldn't happen if the tokenizer is correct
+                const feature = try self.env.insertString("tuple element access with invalid index");
+                const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
+                    .feature = feature,
+                    .region = region,
+                } });
+                return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
+            };
+
+            // Create a tuple access expression
+            const expr_idx = try self.env.addExpr(Expr{
+                .e_tuple_access = .{
+                    .tuple = can_tuple.idx,
+                    .elem_index = elem_index,
+                },
+            }, region);
+
+            const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
+            return CanonicalizedExpr{
+                .idx = expr_idx,
+                .free_vars = free_vars_span,
+            };
+        },
         .local_dispatch => |local_dispatch| {
             // Desugar `arg1->fn(arg2, arg3)` to `fn(arg1, arg2, arg3)`
             // and `arg1->fn` to `fn(arg1)`
@@ -5561,14 +5718,18 @@ pub fn canonicalizeExpr(
                 .OpDoubleSlash => .div_trunc,
                 .OpAnd => .@"and",
                 .OpOr => .@"or",
-                // OpCaret (^), OpPizza (|>), OpDoubleQuestion (?) are not supported
-                .OpCaret, .OpPizza, .OpDoubleQuestion => {
+                // OpCaret (^), OpPizza (|>) are not supported
+                .OpCaret, .OpPizza => {
                     const feature = try self.env.insertString("unsupported operator");
                     const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
                         .feature = feature,
                         .region = region,
                     } });
                     return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
+                },
+                // OpDoubleQuestion (??) is desugared into a match expression
+                .OpDoubleQuestion => {
+                    return try self.canonicalizeDoubleQuestionOp(e, region, can_lhs, can_rhs, free_vars_start);
                 },
                 else => {
                     // Unknown operator
@@ -6295,6 +6456,199 @@ fn canonicalizeExprOrMalformed(
             .free_vars = DataSpan.empty(),
         };
     };
+}
+
+/// Canonicalize the `??` (double question) operator.
+/// Desugars `expr ?? fallback` into:
+///   match expr {
+///       Ok(#ok) => #ok,
+///       Err(_) => fallback,
+///   }
+fn canonicalizeDoubleQuestionOp(
+    self: *Self,
+    e: AST.BinOp,
+    region: base.Region,
+    can_lhs: CanonicalizedExpr,
+    can_rhs: CanonicalizedExpr,
+    free_vars_start: u32,
+) std.mem.Allocator.Error!CanonicalizedExpr {
+    // Use pre-interned identifiers for the Ok value and tag names
+    const ok_val_ident = self.env.idents.question_ok;
+    const ok_tag_ident = self.env.idents.ok;
+    const err_tag_ident = self.env.idents.err;
+
+    // Look up Try type for nominal wrapping (improves error messages)
+    const try_ident = self.env.idents.@"try";
+    const try_nominal_info: ?struct { import_idx: CIR.Import.Idx, target_node_idx: u16 } = blk: {
+        if (self.scopeLookupTypeBinding(try_ident)) |type_binding_loc| {
+            switch (type_binding_loc.binding.*) {
+                .external_nominal => |ext| {
+                    if (ext.import_idx) |import_idx| {
+                        if (ext.target_node_idx) |target_node_idx| {
+                            break :blk .{ .import_idx = import_idx, .target_node_idx = target_node_idx };
+                        }
+                    }
+                },
+                else => {},
+            }
+        }
+        break :blk null;
+    };
+
+    // Mark the start of scratch match branches
+    const scratch_top = self.env.store.scratchMatchBranchTop();
+
+    // === Branch 1: Ok(#ok) => #ok ===
+    {
+        // Enter a new scope for this branch
+        try self.scopeEnter(self.env.gpa, false);
+        defer self.scopeExit(self.env.gpa) catch {};
+
+        // Create the assign pattern for the Ok value
+        const ok_assign_pattern_idx = try self.env.addPattern(Pattern{
+            .assign = .{ .ident = ok_val_ident },
+        }, region);
+
+        // Introduce the pattern into scope
+        _ = try self.scopeIntroduceInternal(self.env.gpa, .ident, ok_val_ident, ok_assign_pattern_idx, false, true);
+
+        // Create pattern span for Ok tag argument
+        const ok_patterns_start = self.env.store.scratchPatternTop();
+        try self.env.store.addScratchPattern(ok_assign_pattern_idx);
+        const ok_args_span = try self.env.store.patternSpanFrom(ok_patterns_start);
+
+        // Create the Ok tag pattern: Ok(#ok), wrapped in nominal_external if Try type is available
+        const ok_tag_pattern_idx = ok_blk: {
+            const applied_tag_pattern = try self.env.addPattern(Pattern{
+                .applied_tag = .{
+                    .name = ok_tag_ident,
+                    .args = ok_args_span,
+                },
+            }, region);
+
+            if (try_nominal_info) |info| {
+                break :ok_blk try self.env.addPattern(Pattern{
+                    .nominal_external = .{
+                        .module_idx = info.import_idx,
+                        .target_node_idx = info.target_node_idx,
+                        .backing_pattern = applied_tag_pattern,
+                        .backing_type = .tag,
+                    },
+                }, region);
+            }
+            break :ok_blk applied_tag_pattern;
+        };
+
+        // Create branch pattern
+        const branch_pat_scratch_top = self.env.store.scratchMatchBranchPatternTop();
+        const ok_branch_pattern_idx = try self.env.addMatchBranchPattern(Expr.Match.BranchPattern{
+            .pattern = ok_tag_pattern_idx,
+            .degenerate = false,
+        }, region);
+        try self.env.store.addScratchMatchBranchPattern(ok_branch_pattern_idx);
+        const ok_branch_pat_span = try self.env.store.matchBranchPatternSpanFrom(branch_pat_scratch_top);
+
+        // Create the branch body: lookup #ok
+        const ok_lookup_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{
+            .pattern_idx = ok_assign_pattern_idx,
+        } }, region);
+        // Mark the pattern as used
+        try self.used_patterns.put(self.env.gpa, ok_assign_pattern_idx, {});
+
+        // Create the Ok branch
+        const ok_branch_idx = try self.env.addMatchBranch(
+            Expr.Match.Branch{
+                .patterns = ok_branch_pat_span,
+                .value = ok_lookup_idx,
+                .guard = null,
+                .redundant = try self.env.types.fresh(),
+            },
+            region,
+        );
+        try self.env.store.addScratchMatchBranch(ok_branch_idx);
+    }
+
+    // === Branch 2: Err(_) => fallback ===
+    {
+        // Enter a new scope for this branch
+        try self.scopeEnter(self.env.gpa, false);
+        defer self.scopeExit(self.env.gpa) catch {};
+
+        // Create a wildcard pattern for the Err payload (we don't use it)
+        const wildcard_pattern_idx = try self.env.addPattern(Pattern{
+            .underscore = {},
+        }, region);
+
+        // Create pattern span for Err tag argument (the wildcard)
+        const err_patterns_start = self.env.store.scratchPatternTop();
+        try self.env.store.addScratchPattern(wildcard_pattern_idx);
+        const err_args_span = try self.env.store.patternSpanFrom(err_patterns_start);
+
+        // Create the Err tag pattern: Err(_), wrapped in nominal_external if Try type is available
+        const err_tag_pattern_idx = err_blk: {
+            const applied_tag_pattern = try self.env.addPattern(Pattern{
+                .applied_tag = .{
+                    .name = err_tag_ident,
+                    .args = err_args_span,
+                },
+            }, region);
+
+            if (try_nominal_info) |info| {
+                break :err_blk try self.env.addPattern(Pattern{
+                    .nominal_external = .{
+                        .module_idx = info.import_idx,
+                        .target_node_idx = info.target_node_idx,
+                        .backing_pattern = applied_tag_pattern,
+                        .backing_type = .tag,
+                    },
+                }, region);
+            }
+            break :err_blk applied_tag_pattern;
+        };
+
+        // Create branch pattern
+        const branch_pat_scratch_top = self.env.store.scratchMatchBranchPatternTop();
+        const err_branch_pattern_idx = try self.env.addMatchBranchPattern(Expr.Match.BranchPattern{
+            .pattern = err_tag_pattern_idx,
+            .degenerate = false,
+        }, region);
+        try self.env.store.addScratchMatchBranchPattern(err_branch_pattern_idx);
+        const err_branch_pat_span = try self.env.store.matchBranchPatternSpanFrom(branch_pat_scratch_top);
+
+        // Branch value is the fallback expression (already canonicalized as can_rhs)
+        const branch_value_idx = can_rhs.idx;
+
+        // Create the Err branch
+        const err_branch_idx = try self.env.addMatchBranch(
+            Expr.Match.Branch{
+                .patterns = err_branch_pat_span,
+                .value = branch_value_idx,
+                .guard = null,
+                .redundant = try self.env.types.fresh(),
+            },
+            region,
+        );
+        try self.env.store.addScratchMatchBranch(err_branch_idx);
+    }
+
+    // Create span from scratch branches
+    const branches_span = try self.env.store.matchBranchSpanFrom(scratch_top);
+
+    // Create the match expression
+    // Note: is_try_suffix = false since ?? doesn't do early return like ?
+    const match_expr = Expr.Match{
+        .cond = can_lhs.idx,
+        .branches = branches_span,
+        .exhaustive = try self.env.types.fresh(),
+        .is_try_suffix = false,
+    };
+    const expr_idx = try self.env.addExpr(CIR.Expr{ .e_match = match_expr }, region);
+
+    // Combine free vars from both lhs and rhs
+    const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
+    _ = e; // unused, but kept for consistency with other handlers
+
+    return CanonicalizedExpr{ .idx = expr_idx, .free_vars = free_vars_span };
 }
 
 /// Result of canonicalizing a for loop's components
@@ -9071,6 +9425,21 @@ fn canonicalizeTypeAnnoBasicType(
             // Check if this is an auto-imported type from module_envs
             if (self.module_envs) |envs_map| {
                 if (envs_map.get(type_name_ident)) |auto_imported_type| {
+                    // If this is a placeholder module (not yet compiled), create a pending lookup
+                    // that will be resolved after all modules are canonicalized.
+                    if (auto_imported_type.is_placeholder) {
+                        // Get or create import for the placeholder module
+                        const module_name_text = self.env.getIdent(type_name_ident);
+                        const import_idx = try self.getOrCreateAutoImport(module_name_text);
+                        return try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
+                            .name = type_name_ident,
+                            .base = .{ .pending = .{
+                                .module_idx = import_idx,
+                                .type_name = type_name_ident,
+                            } },
+                        } }, region);
+                    }
+
                     // This is an auto-imported type like Bool or Try
                     // We need to create an import for it and return the type annotation
                     const module_name_text = auto_imported_type.env.module_name;
@@ -9234,6 +9603,15 @@ fn canonicalizeTypeAnnoBasicType(
             const auto_imported_type = envs_map.get(module_name) orelse {
                 break :blk 0;
             };
+
+            // If this is a placeholder module (not yet compiled), create a pending lookup
+            // that will be resolved after all modules are canonicalized.
+            if (auto_imported_type.is_placeholder) {
+                return try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{ .name = type_name_ident, .base = .{ .pending = .{
+                    .module_idx = import_idx,
+                    .type_name = type_name_ident,
+                } } } }, region);
+            }
 
             const target_ident = auto_imported_type.env.common.findIdent(type_name_text) orelse {
                 // Type is not exposed by the module
@@ -10253,6 +10631,9 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                     };
 
                     const stmt_idx = try self.env.addStatement(type_decl_stmt, region);
+
+                    // Collect local type decls to add to all_statements later
+                    try self.scratch_local_type_decls.append(self.env.gpa, stmt_idx);
 
                     // Introduce the type into the current scope for local use
                     try self.introduceType(type_header.name, stmt_idx, region);
@@ -12731,9 +13112,15 @@ fn checkMainFunction(self: *Self) std.mem.Allocator.Error!MainFunctionStatus {
     return .not_found;
 }
 
+/// Result from finding a matching type declaration
+const MatchingTypeResult = struct {
+    ident: Ident.Idx,
+    kind: AST.TypeDeclKind,
+};
+
 /// Check if there's a type declaration matching the module name
-/// Find the type declaration matching the module name and return its ident
-fn findMatchingTypeIdent(self: *Self) ?Ident.Idx {
+/// Find the type declaration matching the module name and return its ident and kind
+fn findMatchingTypeIdent(self: *Self) ?MatchingTypeResult {
     const file = self.parse_ir.store.getFile();
     const module_name_text = self.env.module_name;
 
@@ -12748,7 +13135,10 @@ fn findMatchingTypeIdent(self: *Self) ?Ident.Idx {
             const type_name_text = self.env.getIdent(type_name_ident);
 
             if (std.mem.eql(u8, type_name_text, module_name_text)) {
-                return type_name_ident;
+                return .{
+                    .ident = type_name_ident,
+                    .kind = type_decl.kind,
+                };
             }
         }
     }

@@ -329,3 +329,8 @@ jobs:
     needs: [check-once, check-nix-changes]
     if: needs.check-nix-changes.outputs.nix == 'true'
     uses: ./.github/workflows/ci_zig_nix.yml
+
+  # Benchmark interpreter performance (main vs PR)
+  zig-benchmarks:
+    needs: check-once
+    uses: ./.github/workflows/ci_zig_benchmarks.yml

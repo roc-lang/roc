@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Regression test for issue 8738: Using ? operator on a non-Try type should give a clear EXPECTED TRY TYPE error
+description=Regression test for issue 8738: Using ? operator on a non-Try type should give a clear TYPE MISMATCH error
 type=snippet
 ~~~
 # SOURCE
@@ -20,23 +20,21 @@ do_something = || {
 result = do_something()
 ~~~
 # EXPECTED
-EXPECTED TRY TYPE - issue8738_question_on_non_try.md:9:7:9:7
+TYPE MISMATCH - issue8738_question_on_non_try.md:9:7:9:30
 # PROBLEMS
-**EXPECTED TRY TYPE**
-The `?` operator expects a _Try_ type (a tag union containing ONLY _Ok_ and _Err_ tags),
-but I found:
-**issue8738_question_on_non_try.md:9:7:**
+**TYPE MISMATCH**
+The `?` operator expects a `Try` type (a tag union containing ONLY `Ok` and `Err` tags), but I found:
+**issue8738_question_on_non_try.md:9:7:9:30:**
 ```roc
 	_x = ok_or(Err(""), Exit(5))?
 ```
-      ^^^^^^^^^^^^^^^^^^^^^^^
+	     ^^^^^^^^^^^^^^^^^^^^^^^
 
 This expression has type:
 
-_[Exit(a), .._others]
-  where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]_
+    [Exit(a), ..] where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
 
-Tip: Maybe wrap a value using _Ok(value)_ or _Err(value)_.
+__Tip:__ Maybe wrap a value using `Ok(value)` or `Err(value)`.
 
 # TOKENS
 ~~~zig
@@ -196,9 +194,9 @@ NO CHANGE
 	(defs
 		(patt (type "Try(ok, _err), ok -> ok"))
 		(patt (type "({}) -> Try({}, err)"))
-		(patt (type "[Ok({}), .._others]")))
+		(patt (type "[Ok({}), ..]")))
 	(expressions
 		(expr (type "Try(ok, _err), ok -> ok"))
 		(expr (type "({}) -> Try({}, err)"))
-		(expr (type "[Ok({}), .._others]"))))
+		(expr (type "[Ok({}), ..]"))))
 ~~~

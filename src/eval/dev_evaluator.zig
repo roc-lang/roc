@@ -294,6 +294,10 @@ pub const DevEvaluator = struct {
                 self.setCrashMessage("Dev evaluator: external module lookup not yet supported") catch return error.OutOfMemory;
                 return error.Crash;
             },
+            .e_lookup_pending => {
+                // Pending lookups must be resolved before evaluation
+                unreachable;
+            },
             .e_lookup_required => {
                 self.setCrashMessage("Dev evaluator: required value lookup not yet supported") catch return error.OutOfMemory;
                 return error.Crash;
@@ -307,6 +311,7 @@ pub const DevEvaluator = struct {
             .e_empty_list => try self.generateEmptyListCode(result_layout),
             .e_list => |list| try self.generateListCode(module_env, list, result_layout, env),
             .e_tuple => |tuple| try self.generateTupleCode(module_env, tuple, result_layout, env),
+            .e_tuple_access => return error.NotImplemented, // Tuple access not yet supported in dev evaluator
             .e_record => |rec| try self.generateRecordCode(module_env, rec, result_layout, env),
             // Note: e_empty_record is handled in "Not yet supported" section due to
             // a canonicalizer bug that incorrectly tags some expressions as e_empty_record
@@ -1812,7 +1817,7 @@ pub const DevEvaluator = struct {
     fn layoutFromLocalOrExternal(loe: CIR.TypeAnno.LocalOrExternal) LayoutIdx {
         switch (loe) {
             .builtin => |b| return layoutFromBuiltin(b),
-            .local, .external => return .i64,
+            .local, .external, .pending => return .i64,
         }
     }
 

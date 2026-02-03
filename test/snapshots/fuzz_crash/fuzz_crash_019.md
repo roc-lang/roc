@@ -175,7 +175,6 @@ UNDEFINED VARIABLE - fuzz_crash_019.md:100:11:100:14
 UNDEFINED VARIABLE - fuzz_crash_019.md:102:4:102:6
 UNDEFINED VARIABLE - fuzz_crash_019.md:102:8:102:13
 UNDEFINED VARIABLE - fuzz_crash_019.md:105:2:105:3
-NOT IMPLEMENTED - fuzz_crash_019.md:105:2:105:8
 UNDEFINED VARIABLE - fuzz_crash_019.md:105:55:105:59
 UNDEFINED VARIABLE - fuzz_crash_019.md:105:60:105:64
 UNDEFINED VARIABLE - fuzz_crash_019.md:108:4:108:5
@@ -191,13 +190,13 @@ UNDEFINED VARIABLE - fuzz_crash_019.md:120:6:120:9
 EXPOSED BUT NOT DEFINED - fuzz_crash_019.md:2:6:2:11
 TOO FEW ARGS - fuzz_crash_019.md:17:3:18:4
 MISSING METHOD - fuzz_crash_019.md:39:2:39:3
-INCOMPATIBLE MATCH PATTERNS - fuzz_crash_019.md:52:2:52:2
-TOO FEW ARGUMENTS - fuzz_crash_019.md:84:2:86:3
-UNUSED VALUE - fuzz_crash_019.md:86:11:86:11
+TYPE MISMATCH - fuzz_crash_019.md:52:2:52:2
+TOO FEW ARGS - fuzz_crash_019.md:84:2:86:3
+TYPE MISMATCH - fuzz_crash_019.md:86:11:86:17
 TYPE MISMATCH - fuzz_crash_019.md:77:11:77:14
-UNUSED VALUE - fuzz_crash_019.md:98:4:98:4
-UNUSED VALUE - fuzz_crash_019.md:105:2:105:2
-UNUSED VALUE - fuzz_crash_019.md:119:2:119:2
+TYPE MISMATCH - fuzz_crash_019.md:98:4:104:3
+TYPE MISMATCH - fuzz_crash_019.md:105:2:105:54
+TYPE MISMATCH - fuzz_crash_019.md:119:2:119:10
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `match_branch_missing_arrow`
@@ -735,18 +734,6 @@ Is there an `import` or `exposing` missing up-top?
 	^
 
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented: unsupported operator
-
-**fuzz_crash_019.md:105:2:105:8:**
-```roc
-	b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
-```
-	^^^^^^
-
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
-
-
 **UNDEFINED VARIABLE**
 Nothing is named `e_fn` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -910,12 +897,12 @@ This **from_numeral** method is being called on a value whose type doesn't have 
 ```
 	^
 
-The value's type, which does not have a method named **from_numeral**, is:
+The value's type, which does not have a method named**from_numeral**, is:
 
     {}
 
-**INCOMPATIBLE MATCH PATTERNS**
-The pattern in the fourth branch of this `match` differs from previous ones:
+**TYPE MISMATCH**
+The fourth branch of this `match` does not match the previous ones:
 **fuzz_crash_019.md:52:2:**
 ```roc
 	match a {lue  {
@@ -939,18 +926,18 @@ The pattern in the fourth branch of this `match` differs from previous ones:
 ```
      ^^^^^
 
-The fourth pattern has this type:
+This fourth branch is trying to match:
 
     Str
 
-But all the previous patterns have this type: 
+But the expression between the `match` parenthesis has the type:
 
-    [Blue, .._others]
+    [Blue, ..]
 
-All patterns in an `match` must have compatible types.
+These can never match! Either the pattern or expression has a problem.
 
-**TOO FEW ARGUMENTS**
-The function `me` expects 2 arguments, but 1 was provided:
+**TOO FEW ARGS**
+The `me` function expects 2 arguments, but it got 1 instead:
 **fuzz_crash_019.md:84:2:86:3:**
 ```roc
 	me(
@@ -958,23 +945,26 @@ The function `me` expects 2 arguments, but 1 was provided:
 	)crash ke"Unr!" #)
 ```
 
-The function has the signature:
+The `me` function has the type:
 
-    [Blue, .._others], [Tb, .._others2] -> Error
+    [Blue, ..], [Tb, ..] -> Error
 
-**UNUSED VALUE**
+Are there any missing commas?
+
+**TYPE MISMATCH**
 This expression produces a value, but it's not being used:
-**fuzz_crash_019.md:86:11:**
+**fuzz_crash_019.md:86:11:86:17:**
 ```roc
 	)crash ke"Unr!" #)
 ```
-          ^^^^^^
+	         ^^^^^^
 
 It has the type:
 
     Str
 
-Since this expression is used as a statement, it must evaluate to _{}_. If you don't need the value, you can ignore it with `_ =`.
+Since this expression is used as a statement, it must evaluate to `{}`.
+If you don't need the value, you can ignore it with `_ =`.
 
 **TYPE MISMATCH**
 This number is being used where a non-number type is needed:
@@ -984,13 +974,20 @@ This number is being used where a non-number type is needed:
 ```
 	         ^^^
 
+The type was determined to be non-numeric here:
+**fuzz_crash_019.md:93:22:93:24:**
+```roc
+	line!("Ag ${n} to ${er}")
+```
+	                    ^^
+
 Other code expects this to have the type:
 
     Str
 
-**UNUSED VALUE**
+**TYPE MISMATCH**
 This expression produces a value, but it's not being used:
-**fuzz_crash_019.md:98:4:**
+**fuzz_crash_019.md:98:4:104:3:**
 ```roc
 	m (
 		123,
@@ -1003,41 +1000,44 @@ This expression produces a value, but it's not being used:
 
 It has the type:
 
-    (f, Str, Error, [O, .._others], (Error, Error), List(j))
+    (f, Str, Error, [O, ..], (Error, Error), List(j))
       where [
         f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)]),
         j.from_numeral : Numeral -> Try(j, [InvalidNumeral(Str)]),
       ]
 
-Since this expression is used as a statement, it must evaluate to _{}_. If you don't need the value, you can ignore it with `_ =`.
+Since this expression is used as a statement, it must evaluate to `{}`.
+If you don't need the value, you can ignore it with `_ =`.
 
-**UNUSED VALUE**
+**TYPE MISMATCH**
 This expression produces a value, but it's not being used:
-**fuzz_crash_019.md:105:2:**
+**fuzz_crash_019.md:105:2:105:54:**
 ```roc
 	b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
 ```
- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+	^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 It has the type:
 
     Bool
 
-Since this expression is used as a statement, it must evaluate to _{}_. If you don't need the value, you can ignore it with `_ =`.
+Since this expression is used as a statement, it must evaluate to `{}`.
+If you don't need the value, you can ignore it with `_ =`.
 
-**UNUSED VALUE**
+**TYPE MISMATCH**
 This expression produces a value, but it's not being used:
-**fuzz_crash_019.md:119:2:**
+**fuzz_crash_019.md:119:2:119:10:**
 ```roc
 	foo == 1
 ```
- ^^^^^^^^
+	^^^^^^^^
 
 It has the type:
 
     Bool
 
-Since this expression is used as a statement, it must evaluate to _{}_. If you don't need the value, you can ignore it with `_ =`.
+Since this expression is used as a statement, it must evaluate to `{}`.
+If you don't need the value, you can ignore it with `_ =`.
 
 # TOKENS
 ~~~zig
@@ -1178,8 +1178,7 @@ EndOfFile,
 					(ty-var (raw "b"))))
 			(ty-fn
 				(ty (name "Lis"))
-				(ty-tuple
-					(ty-var (raw "ab")))
+				(ty-var (raw "ab"))
 				(ty-apply
 					(ty (name "List"))
 					(ty-var (raw "b")))))
@@ -1189,8 +1188,7 @@ EndOfFile,
 			(ty-fn
 				(ty-apply
 					(ty (name "List")))
-				(ty-tuple
-					(ty-var (raw "ab")))
+				(ty-var (raw "ab"))
 				(ty-apply
 					(ty (name "List"))
 					(ty-var (raw "b")))))
@@ -1924,7 +1922,26 @@ expect {
 					(s-expr
 						(e-binop (op "or")
 							(e-binop (op "gt")
-								(e-runtime-error (tag "not_implemented"))
+								(e-match
+									(match
+										(cond
+											(e-runtime-error (tag "ident_not_in_scope")))
+										(branches
+											(branch
+												(patterns
+													(pattern (degenerate false)
+														(p-nominal-external (builtin)
+															(p-applied-tag))))
+												(value
+													(e-lookup-local
+														(p-assign (ident "#ok")))))
+											(branch
+												(patterns
+													(pattern (degenerate false)
+														(p-nominal-external (builtin)
+															(p-applied-tag))))
+												(value
+													(e-num (value "12")))))))
 								(e-num (value "5")))
 							(e-binop (op "or")
 								(e-binop (op "and")
@@ -2081,14 +2098,16 @@ expect {
 				(ty-rigid-var (name "b"))))
 		(ty-fn (effectful false)
 			(ty-malformed)
-			(ty-malformed)
+			(ty-parens
+				(ty-malformed))
 			(ty-apply (name "List") (builtin)
 				(ty-rigid-var-lookup (ty-rigid-var (name "b"))))))
 	(s-alias-decl
 		(ty-header (name "MapML"))
 		(ty-fn (effectful false)
 			(ty-apply (name "List") (builtin))
-			(ty-malformed)
+			(ty-parens
+				(ty-malformed))
 			(ty-apply (name "List") (builtin)
 				(ty-malformed))))
 	(s-alias-decl
@@ -2149,7 +2168,7 @@ expect {
 		(patt (type "Bool -> f where [f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]"))
 		(patt (type "Error"))
 		(patt (type "Bool -> Error"))
-		(patt (type "[Blue, .._others], [Tb, .._others2] -> Error"))
+		(patt (type "[Blue, ..], [Tb, ..] -> Error"))
 		(patt (type "Error"))
 		(patt (type "_arg -> Error"))
 		(patt (type "{  }"))
@@ -2186,7 +2205,7 @@ expect {
 		(expr (type "Bool -> f where [f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]"))
 		(expr (type "Error"))
 		(expr (type "Bool -> Error"))
-		(expr (type "[Blue, .._others], [Tb, .._others2] -> Error"))
+		(expr (type "[Blue, ..], [Tb, ..] -> Error"))
 		(expr (type "Error"))
 		(expr (type "_arg -> Error"))
 		(expr (type "{  }"))

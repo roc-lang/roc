@@ -56,6 +56,7 @@ pub const Tag = enum {
     // Expressions
     expr_var,
     expr_tuple,
+    expr_tuple_access,
     expr_list,
     expr_empty_list,
     expr_call,
@@ -66,6 +67,7 @@ pub const Tag = enum {
     expr_field_access,
     expr_static_dispatch,
     expr_external_lookup,
+    expr_pending_lookup,
     expr_required_lookup,
     expr_dot_access,
     expr_apply,
@@ -193,6 +195,7 @@ pub const Tag = enum {
     diag_malformed_where_clause,
     diag_where_clause_not_allowed_in_type_decl,
     diag_type_module_missing_matching_type,
+    diag_type_module_has_alias_not_nominal,
     diag_default_app_missing_main,
     diag_default_app_wrong_arity,
     diag_cannot_import_default_app,
@@ -264,8 +267,10 @@ pub const Payload = extern union {
     // === Expression payloads ===
     expr_var: ExprVar,
     expr_external_lookup: ExprExternalLookup,
+    expr_pending_lookup: ExprPendingLookup,
     expr_required_lookup: ExprRequiredLookup,
     expr_tuple: ExprTuple,
+    expr_tuple_access: ExprTupleAccess,
     expr_list: ExprList,
     expr_call: ExprCall,
     expr_record: ExprRecord,
@@ -463,6 +468,13 @@ pub const Payload = extern union {
         ident_idx: u32,
     };
 
+    /// expr_pending_lookup: deferred lookup from another module (not yet resolved)
+    pub const ExprPendingLookup = extern struct {
+        module_idx: u32,
+        ident_idx: u32,
+        _padding: [4]u8 = .{ 0, 0, 0, 0 },
+    };
+
     /// expr_required_lookup: lookup from platform requires clause
     pub const ExprRequiredLookup = extern struct {
         requires_idx: u32,
@@ -480,6 +492,12 @@ pub const Payload = extern union {
     pub const ExprTuple = extern struct {
         elems_start: u32,
         elems_len: u32,
+        _padding: [4]u8 = .{ 0, 0, 0, 0 },
+    };
+
+    pub const ExprTupleAccess = extern struct {
+        tuple: u32, // Index of the tuple expression being accessed
+        elem_index: u32, // The 0-based index of the element to access
         _padding: [4]u8 = .{ 0, 0, 0, 0 },
     };
 
