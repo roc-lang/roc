@@ -804,7 +804,15 @@ pub const ComptimeEvaluator = struct {
         if (is_tag_union) {
             // Handle tag union types
             switch (layout.tag) {
-                .scalar => return try self.createTagUnionScalarExpr(stack_value, region),
+                .scalar => {
+                    // Only integer scalars can be folded for tag unions (tag discriminant)
+                    // Other scalar types like pointers can't be constant-folded
+                    if (layout.data.scalar.tag == .int) {
+                        return try self.createTagUnionScalarExpr(stack_value, region);
+                    } else {
+                        return error.NotImplemented;
+                    }
+                },
                 .tuple => return try self.createTagUnionTupleExpr(stack_value, region),
                 .tag_union => return try self.createTagUnionWithPayloadExpr(stack_value, region),
                 // These can't be constant-folded to expressions

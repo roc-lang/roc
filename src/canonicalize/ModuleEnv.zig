@@ -2487,15 +2487,18 @@ pub fn containsExposedById(self: *const Self, ident_idx: Ident.Idx) bool {
     return self.common.exposed_items.containsById(self.gpa, @bitCast(ident_idx));
 }
 
-/// Assert that nodes and regions are in sync
+/// Assert that nodes and regions are in sync.
+/// Note: After type checking, regions may have more entries than nodes because
+/// regions are also used to track type variables. The invariant is that we should
+/// never have more nodes than regions.
 pub inline fn debugAssertArraysInSync(self: *const Self) void {
     if (builtin.mode == .Debug) {
         const cir_nodes = self.store.nodes.items.len;
         const region_nodes = self.store.regions.len();
 
-        if (!(cir_nodes == region_nodes)) {
+        if (cir_nodes > region_nodes) {
             std.debug.panic(
-                "Arrays out of sync:\n  cir_nodes={}\n  region_nodes={}\n",
+                "Arrays out of sync: more CIR nodes than regions:\n  cir_nodes={}\n  region_nodes={}\n",
                 .{ cir_nodes, region_nodes },
             );
         }
