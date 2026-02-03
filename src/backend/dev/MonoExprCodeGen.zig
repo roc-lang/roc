@@ -9774,24 +9774,21 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             } else {
                 // x86_64 C calling convention
                 if (self.cc.is_windows) {
-                    // Windows x64: i128 is passed by pointer
-                    // fn(out: *RocStr, value_ptr: *i128, roc_ops: *RocOps)
-                    // RCX = out, RDX = value_ptr, R8 = roc_ops
+                    // Windows x64 calling convention:
+                    // - Small values (≤8 bytes): fn(out: *RocStr, value: T, roc_ops: *RocOps)
+                    //   RCX = out, RDX = value, R8 = roc_ops
+                    // - Large values (i128/Dec): fn(out: *RocStr, value_ptr: *i128, roc_ops: *RocOps)
+                    //   RCX = out, RDX = value_ptr, R8 = roc_ops
 
                     // Allocate shadow space
                     const stack_space: i32 = 32;
                     try self.codegen.emit.subRegImm32(.w64, .RSP, stack_space);
 
-                    // For i128 values, ensure value is on stack and pass pointer
                     if (is_small_value) {
-                        // Small value fits in one register - store to stack and pass pointer
+                        // Small value (≤8 bytes) - pass directly in RDX
                         const val_reg = try self.ensureInGeneralReg(val_loc);
-                        const val_slot = self.codegen.allocStackSlot(16);
-                        try self.codegen.emit.movMemReg(.w64, .RBP, val_slot, val_reg);
-                        try self.codegen.emitLoadImm(.R11, 0);
-                        try self.codegen.emit.movMemReg(.w64, .RBP, val_slot + 8, .R11);
+                        try self.codegen.emit.movRegReg(.w64, .RDX, val_reg);
                         self.codegen.freeGeneral(val_reg);
-                        try self.codegen.emit.leaRegMem(.RDX, .RBP, val_slot);
                     } else {
                         // 16-byte value - ensure on stack and pass pointer
                         switch (val_loc) {
