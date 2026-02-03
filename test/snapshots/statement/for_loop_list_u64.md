@@ -7,11 +7,11 @@ type=snippet
 ~~~roc
 sum : U64
 sum = {
-	var total_ = 0
+	var $total = 0
 	for n in [1, 2, 3, 4, 5] {
-		total_ = total_ + n
+		$total = $total + n
 	}
-	total_
+	$total
 }
 
 expect sum == 15
@@ -44,7 +44,7 @@ EndOfFile,
 			(p-ident (raw "sum"))
 			(e-block
 				(statements
-					(s-var (name "total_")
+					(s-var (name "$total")
 						(e-int (raw "0")))
 					(s-for
 						(p-ident (raw "n"))
@@ -57,11 +57,11 @@ EndOfFile,
 						(e-block
 							(statements
 								(s-decl
-									(p-ident (raw "total_"))
+									(p-ident (raw "$total"))
 									(e-binop (op "+")
-										(e-ident (raw "total_"))
+										(e-ident (raw "$total"))
 										(e-ident (raw "n")))))))
-					(e-ident (raw "total_")))))
+					(e-ident (raw "$total")))))
 		(s-expect
 			(e-binop (op "==")
 				(e-ident (raw "sum"))
@@ -78,7 +78,7 @@ NO CHANGE
 		(p-assign (ident "sum"))
 		(e-block
 			(s-var
-				(p-assign (ident "total_"))
+				(p-assign (ident "$total"))
 				(e-num (value "0")))
 			(s-for
 				(p-assign (ident "n"))
@@ -91,15 +91,15 @@ NO CHANGE
 						(e-num (value "5"))))
 				(e-block
 					(s-reassign
-						(p-assign (ident "total_"))
+						(p-assign (ident "$total"))
 						(e-binop (op "add")
 							(e-lookup-local
-								(p-assign (ident "total_")))
+								(p-assign (ident "$total")))
 							(e-lookup-local
 								(p-assign (ident "n")))))
 					(e-empty_record)))
 			(e-lookup-local
-				(p-assign (ident "total_"))))
+				(p-assign (ident "$total"))))
 		(annotation
 			(ty-lookup (name "U64") (builtin))))
 	(s-expect

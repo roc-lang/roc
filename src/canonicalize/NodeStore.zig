@@ -272,7 +272,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 66;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 67;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 44;
 /// Count of the statement nodes in the ModuleEnv
@@ -3507,6 +3507,11 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
             region = r.region;
             node.setPayload(.{ .diag_two_idents = .{ .ident1 = @bitCast(r.name), .ident2 = @bitCast(r.suggested_name) } });
         },
+        .var_without_dollar_prefix => |r| {
+            node.tag = .diag_var_without_dollar_prefix;
+            region = r.region;
+            node.setPayload(.{ .diag_two_idents = .{ .ident1 = @bitCast(r.name), .ident2 = @bitCast(r.suggested_name) } });
+        },
         .underscore_in_type_declaration => |r| {
             node.tag = .diag_underscore_in_type_declaration;
             region = r.region;
@@ -3906,6 +3911,14 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         .diag_type_var_starting_with_dollar => {
             const p = payload.diag_two_idents;
             return CIR.Diagnostic{ .type_var_starting_with_dollar = .{
+                .name = @bitCast(p.ident1),
+                .suggested_name = @bitCast(p.ident2),
+                .region = store.getRegionAt(node_idx),
+            } };
+        },
+        .diag_var_without_dollar_prefix => {
+            const p = payload.diag_two_idents;
+            return CIR.Diagnostic{ .var_without_dollar_prefix = .{
                 .name = @bitCast(p.ident1),
                 .suggested_name = @bitCast(p.ident2),
                 .region = store.getRegionAt(node_idx),

@@ -3079,3 +3079,155 @@ test "issue 8979: nested while - inner break does not save outer loop" {
 // Note: List.repeat test temporarily disabled while investigating
 // why List.repeat triggers the infinite loop check. List.repeat
 // is implemented with recursion in Roc, not while loops.
+
+// Numeric Literal Validation Tests
+// These tests exercise the deferred numeric literal validation
+// that happens during comptime evaluation, triggering error
+// report builders in problem.zig
+
+test "comptime eval - number overflow U8" {
+    // 256 doesn't fit in U8 (max is 255)
+    const src =
+        \\x : U8
+        \\x = 256
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    _ = try result.evaluator.evalAll();
+
+    // Should have 1 problem for number overflow
+    // The literal 256 exceeds U8's maximum value
+    try testing.expect(result.problems.len() >= 1);
+}
+
+test "comptime eval - number overflow U16" {
+    // 65536 doesn't fit in U16 (max is 65535)
+    const src =
+        \\x : U16
+        \\x = 65536
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    _ = try result.evaluator.evalAll();
+
+    // Should have a problem for number overflow
+    try testing.expect(result.problems.len() >= 1);
+}
+
+test "comptime eval - negative to unsigned type" {
+    // Negative numbers can't be assigned to unsigned types
+    const src =
+        \\x : U64
+        \\x = -1
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    _ = try result.evaluator.evalAll();
+
+    // Should have a problem for negative unsigned
+    try testing.expect(result.problems.len() >= 1);
+}
+
+test "comptime eval - negative to U8" {
+    // Negative number to U8 - should fail
+    const src =
+        \\x : U8
+        \\x = -5
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    _ = try result.evaluator.evalAll();
+
+    // Should have a problem for negative unsigned
+    try testing.expect(result.problems.len() >= 1);
+}
+
+test "comptime eval - valid U8 max value" {
+    // 255 should fit in U8
+    const src =
+        \\x : U8
+        \\x = 255
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate successfully with no problems
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+    try testing.expectEqual(@as(usize, 0), result.problems.len());
+}
+
+test "comptime eval - valid I8 negative" {
+    // -128 should fit in I8 (min value)
+    const src =
+        \\x : I8
+        \\x = -128
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate successfully with no problems
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+    try testing.expectEqual(@as(usize, 0), result.problems.len());
+}
+
+test "comptime eval - I8 underflow" {
+    // -129 doesn't fit in I8 (min is -128)
+    const src =
+        \\x : I8
+        \\x = -129
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    _ = try result.evaluator.evalAll();
+
+    // Should have a problem for number underflow
+    try testing.expect(result.problems.len() >= 1);
+}
+
+test "comptime eval - I8 overflow" {
+    // 128 doesn't fit in I8 (max is 127)
+    const src =
+        \\x : I8
+        \\x = 128
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    _ = try result.evaluator.evalAll();
+
+    // Should have a problem for number overflow
+    try testing.expect(result.problems.len() >= 1);
+}
+
+test "comptime eval - valid float literal" {
+    // Float literals should work fine
+    const src =
+        \\x : F64
+        \\x = 3.14159
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate successfully with no problems
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}

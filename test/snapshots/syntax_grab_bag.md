@@ -243,6 +243,7 @@ NOT IMPLEMENTED - syntax_grab_bag.md:133:9:133:14
 UNUSED VARIABLE - syntax_grab_bag.md:82:2:82:3
 UNDEFINED VARIABLE - syntax_grab_bag.md:141:2:141:6
 UNDECLARED TYPE - syntax_grab_bag.md:143:14:143:20
+VAR WITHOUT $ PREFIX - syntax_grab_bag.md:146:2:146:18
 UNDEFINED VARIABLE - syntax_grab_bag.md:147:9:147:13
 UNDEFINED VARIABLE - syntax_grab_bag.md:158:2:158:11
 UNDEFINED VARIABLE - syntax_grab_bag.md:175:3:175:15
@@ -610,6 +611,18 @@ This type is referenced here:
 main! : List(String) -> Try({}, _)
 ```
              ^^^^^^
+
+
+**VAR WITHOUT $ PREFIX**
+This `var` is named `number` but variables declared with `var` should start with `$` to indicate they are mutable.
+
+Suggestion: rename `number` to `$number`.
+
+**syntax_grab_bag.md:146:2:146:18:**
+```roc
+	var number = 123
+```
+	^^^^^^^^^^^^^^^^
 
 
 **UNDEFINED VARIABLE**

@@ -106,7 +106,7 @@ expect # Commeneyword
 main! : List(String) -> Try({}, _)
 main! = |_| { # Yeah Ie
 	world = "World"
-	var number = 123
+	var $number = 123
 	expect blah == 1
 	tag = Blue
 	return # Comd
@@ -123,7 +123,7 @@ main! = |_| { # Yeah Ie
 			42, # Aft expr
 	)
 	crash "Unreachtement
-	tag_with = Ok(number)
+	tag_with = Ok($number)
 	ited = "Hello, ${world}"
 	list = [
 		add_one(
@@ -132,8 +132,8 @@ e[, # afarg
 		),	456, # ee
 	]
 	for n in list {
-	line!("Adding ${n} to ${number}")
-		number = number + n
+	line!("Adding ${n} to ${$number}")
+		$number = $number + n
 	}
 	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
 	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
@@ -149,7 +149,7 @@ e[, # afarg
 	stale = some_fn(arg1)?.statod()?.ned()?.recd?
 	Stdoline!(
 		"How about ${ #
-			Num.toStr(number) # on expr
+			Num.toStr($number) # on expr
 		} as a",
 	)
 } # Commenl decl
@@ -228,8 +228,8 @@ TYPE MISMATCH - fuzz_crash_027.md:50:5:50:8
 TYPE MISMATCH - fuzz_crash_027.md:64:2:64:2
 TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
 TYPE MISMATCH - fuzz_crash_027.md:125:6:125:9
-TYPE MISMATCH - fuzz_crash_027.md:102:15:102:18
-MISSING METHOD - fuzz_crash_027.md:129:12:129:22
+TYPE MISMATCH - fuzz_crash_027.md:102:16:102:19
+MISSING METHOD - fuzz_crash_027.md:129:13:129:24
 + - :0:0:0:0
 TYPE MISMATCH - fuzz_crash_027.md:100:9:148:2
 TYPE MISMATCH - fuzz_crash_027.md:106:3:106:6
@@ -697,7 +697,7 @@ Is there an `import` or `exposing` missing up-top?
 
 **fuzz_crash_027.md:128:2:128:7:**
 ```roc
-	line!("Adding ${n} to ${number}")
+	line!("Adding ${n} to ${$number}")
 ```
 	^^^^^
 
@@ -796,7 +796,7 @@ Is there an `import` or `exposing` missing up-top?
 
 **fuzz_crash_027.md:145:4:145:13:**
 ```roc
-			Num.toStr(number) # on expr
+			Num.toStr($number) # on expr
 ```
 			^^^^^^^^^
 
@@ -808,7 +808,7 @@ If you don't need this variable, prefix it with an underscore like `_tag_with` t
 The unused variable is declared here:
 **fuzz_crash_027.md:119:2:119:10:**
 ```roc
-	tag_with = Ok(number)
+	tag_with = Ok($number)
 ```
 	^^^^^^^^
 
@@ -981,7 +981,7 @@ This number is being used where a non-number type is needed:
 The type was determined to be non-numeric here:
 **fuzz_crash_027.md:128:18:128:19:**
 ```roc
-	line!("Adding ${n} to ${number}")
+	line!("Adding ${n} to ${$number}")
 ```
 	                ^
 
@@ -991,18 +991,18 @@ Other code expects this to have the type:
 
 **TYPE MISMATCH**
 This number is being used where a non-number type is needed:
-**fuzz_crash_027.md:102:15:102:18:**
+**fuzz_crash_027.md:102:16:102:19:**
 ```roc
-	var number = 123
+	var $number = 123
 ```
-	             ^^^
+	              ^^^
 
 The type was determined to be non-numeric here:
-**fuzz_crash_027.md:128:26:128:32:**
+**fuzz_crash_027.md:128:26:128:33:**
 ```roc
-	line!("Adding ${n} to ${number}")
+	line!("Adding ${n} to ${$number}")
 ```
-	                        ^^^^^^
+	                        ^^^^^^^
 
 Other code expects this to have the type:
 
@@ -1010,11 +1010,11 @@ Other code expects this to have the type:
 
 **MISSING METHOD**
 The value before this **+** operator has a type that doesn't have a **plus** method:
-**fuzz_crash_027.md:129:12:129:22:**
+**fuzz_crash_027.md:129:13:129:24:**
 ```roc
-		number = number + n
+		$number = $number + n
 ```
-		         ^^^^^^^^^^
+		          ^^^^^^^^^^^
 
 The value's type, which does not have a method named**plus**, is:
 
@@ -1028,7 +1028,7 @@ This expression is used in an unexpected way:
 ```roc
 main! = |_| { # Yeah Ie
 	world = "World"
-	var number = 123
+	var $number = 123
 	expect blah == 1
 	tag = Blue
 	return # Comd
@@ -1045,7 +1045,7 @@ main! = |_| { # Yeah Ie
 			42, # Aft expr
 	)
 	crash "Unreachtement
-	tag_with = Ok(number)
+	tag_with = Ok($number)
 	ited = "Hello, ${world}"
 	list = [
 		add_one(
@@ -1054,8 +1054,8 @@ e[, # afarg
 		),	456, # ee
 	]
 	for n in list {
-	line!("Adding ${n} to ${number}")
-		number = number + n
+	line!("Adding ${n} to ${$number}")
+		$number = $number + n
 	}
 	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
 	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
@@ -1071,7 +1071,7 @@ e[, # afarg
 	stale = some_fn(arg1)?.statod()?.ned()?.recd?
 	Stdoline!(
 		"How about ${ #
-			Num.toStr(number) # on expr
+			Num.toStr($number) # on expr
 		} as a",
 	)
 } # Commenl decl
@@ -1523,7 +1523,7 @@ EndOfFile,
 							(p-ident (raw "world"))
 							(e-string
 								(e-string-part (raw "World"))))
-						(s-var (name "number")
+						(s-var (name "$number")
 							(e-int (raw "123")))
 						(s-expect
 							(e-binop (op "==")
@@ -1549,7 +1549,7 @@ EndOfFile,
 							(p-ident (raw "tag_with"))
 							(e-apply
 								(e-tag (raw "Ok"))
-								(e-ident (raw "number"))))
+								(e-ident (raw "$number"))))
 						(s-decl
 							(p-ident (raw "ited"))
 							(e-string
@@ -1573,12 +1573,12 @@ EndOfFile,
 											(e-string-part (raw "Adding "))
 											(e-ident (raw "n"))
 											(e-string-part (raw " to "))
-											(e-ident (raw "number"))
+											(e-ident (raw "$number"))
 											(e-string-part (raw ""))))
 									(s-decl
-										(p-ident (raw "number"))
+										(p-ident (raw "$number"))
 										(e-binop (op "+")
-											(e-ident (raw "number"))
+											(e-ident (raw "$number"))
 											(e-ident (raw "n")))))))
 						(s-decl
 							(p-ident (raw "record"))
@@ -1681,7 +1681,7 @@ EndOfFile,
 								(e-string-part (raw "How about "))
 								(e-apply
 									(e-ident (raw "Num.toStr"))
-									(e-ident (raw "number")))
+									(e-ident (raw "$number")))
 								(e-string-part (raw " as a"))))))))
 		(s-type-anno (name "empty")
 			(ty-record))
@@ -1811,7 +1811,7 @@ expect # Commeneyword
 main! : List(String) -> Try({}, _)
 main! = |_| { # Yeah Ie
 	world = "World"
-	var number = 123
+	var $number = 123
 	expect blah == 1
 	tag = Blue
 	return # Comd
@@ -1828,7 +1828,7 @@ main! = |_| { # Yeah Ie
 			42, # Aft expr
 	)
 	crash "Unreachtement"
-	tag_with = Ok(number)
+	tag_with = Ok($number)
 	ited = "Hello, ${world}"
 	list = [
 		, # afarg
@@ -1836,8 +1836,8 @@ main! = |_| { # Yeah Ie
 		456, # ee
 	]
 	for n in list {
-		line!("Adding ${n} to ${number}")
-		number = number + n
+		line!("Adding ${n} to ${$number}")
+		$number = $number + n
 	}
 	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
 	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
@@ -1853,7 +1853,7 @@ main! = |_| { # Yeah Ie
 	stale = some_fn(arg1)?.statod()?.ned()?.recd?
 	Stdoline!(
 		"How about ${ #
-			Num.toStr(number) # on expr
+			Num.toStr($number) # on expr
 		} as a",
 	)
 } # Commenl decl
@@ -2097,7 +2097,7 @@ expect {
 						(e-string
 							(e-literal (string "World"))))
 					(s-var
-						(p-assign (ident "number"))
+						(p-assign (ident "$number"))
 						(e-num (value "123")))
 					(s-expect
 						(e-binop (op "eq")
@@ -2127,7 +2127,7 @@ expect {
 						(e-tag (name "Ok")
 							(args
 								(e-lookup-local
-									(p-assign (ident "number"))))))
+									(p-assign (ident "$number"))))))
 					(s-let
 						(p-assign (ident "ited"))
 						(e-string
@@ -2154,13 +2154,13 @@ expect {
 											(p-assign (ident "n")))
 										(e-literal (string " to "))
 										(e-lookup-local
-											(p-assign (ident "number")))
+											(p-assign (ident "$number")))
 										(e-literal (string "")))))
 							(s-reassign
-								(p-assign (ident "number"))
+								(p-assign (ident "$number"))
 								(e-binop (op "add")
 									(e-lookup-local
-										(p-assign (ident "number")))
+										(p-assign (ident "$number")))
 									(e-lookup-local
 										(p-assign (ident "n")))))
 							(e-empty_record)))
@@ -2393,7 +2393,7 @@ expect {
 								(e-call
 									(e-runtime-error (tag "qualified_ident_does_not_exist"))
 									(e-lookup-local
-										(p-assign (ident "number"))))
+										(p-assign (ident "$number"))))
 								(e-literal (string " as a"))))))))
 		(annotation
 			(ty-fn (effectful false)

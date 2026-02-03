@@ -96,6 +96,13 @@ pub const Diagnostic = union(enum) {
     var_across_function_boundary: struct {
         region: Region,
     },
+    /// A `var` declaration uses an identifier without the `$` prefix.
+    /// Variables declared with `var` should use the `$` prefix to indicate mutability.
+    var_without_dollar_prefix: struct {
+        name: Ident.Idx,
+        suggested_name: Ident.Idx,
+        region: Region,
+    },
     shadowing_warning: struct {
         ident: Ident.Idx,
         region: Region,
@@ -323,6 +330,7 @@ pub const Diagnostic = union(enum) {
             .malformed_where_clause => |d| d.region,
             .where_clause_not_allowed_in_type_decl => |d| d.region,
             .var_across_function_boundary => |d| d.region,
+            .var_without_dollar_prefix => |d| d.region,
             .shadowing_warning => |d| d.region,
             .type_redeclared => |d| d.redeclared_region,
             .tuple_elem_not_canonicalized => |d| d.region,

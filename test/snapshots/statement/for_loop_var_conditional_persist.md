@@ -7,17 +7,17 @@ type=snippet
 ~~~roc
 result : U64
 result = {
-	var lastEven_ = 0
-	var evenCount_ = 0
+	var $lastEven = 0
+	var $evenCount = 0
 	for n in [1, 2, 3, 4, 5, 6, 7, 8] {
 		if n % 2 == 0 {
-			lastEven_ = n
-			evenCount_ = evenCount_ + 1
+			$lastEven = n
+			$evenCount = $evenCount + 1
 		} else {
 			{}
 		}
 	}
-	lastEven_ * evenCount_
+	$lastEven * $evenCount
 }
 
 expect result == 32
@@ -56,9 +56,9 @@ EndOfFile,
 			(p-ident (raw "result"))
 			(e-block
 				(statements
-					(s-var (name "lastEven_")
+					(s-var (name "$lastEven")
 						(e-int (raw "0")))
-					(s-var (name "evenCount_")
+					(s-var (name "$evenCount")
 						(e-int (raw "0")))
 					(s-for
 						(p-ident (raw "n"))
@@ -82,19 +82,19 @@ EndOfFile,
 									(e-block
 										(statements
 											(s-decl
-												(p-ident (raw "lastEven_"))
+												(p-ident (raw "$lastEven"))
 												(e-ident (raw "n")))
 											(s-decl
-												(p-ident (raw "evenCount_"))
+												(p-ident (raw "$evenCount"))
 												(e-binop (op "+")
-													(e-ident (raw "evenCount_"))
+													(e-ident (raw "$evenCount"))
 													(e-int (raw "1"))))))
 									(e-block
 										(statements
 											(e-record)))))))
 					(e-binop (op "*")
-						(e-ident (raw "lastEven_"))
-						(e-ident (raw "evenCount_"))))))
+						(e-ident (raw "$lastEven"))
+						(e-ident (raw "$evenCount"))))))
 		(s-expect
 			(e-binop (op "==")
 				(e-ident (raw "result"))
@@ -111,10 +111,10 @@ NO CHANGE
 		(p-assign (ident "result"))
 		(e-block
 			(s-var
-				(p-assign (ident "lastEven_"))
+				(p-assign (ident "$lastEven"))
 				(e-num (value "0")))
 			(s-var
-				(p-assign (ident "evenCount_"))
+				(p-assign (ident "$evenCount"))
 				(e-num (value "0")))
 			(s-for
 				(p-assign (ident "n"))
@@ -140,14 +140,14 @@ NO CHANGE
 									(e-num (value "0")))
 								(e-block
 									(s-reassign
-										(p-assign (ident "lastEven_"))
+										(p-assign (ident "$lastEven"))
 										(e-lookup-local
 											(p-assign (ident "n"))))
 									(s-reassign
-										(p-assign (ident "evenCount_"))
+										(p-assign (ident "$evenCount"))
 										(e-binop (op "add")
 											(e-lookup-local
-												(p-assign (ident "evenCount_")))
+												(p-assign (ident "$evenCount")))
 											(e-num (value "1"))))
 									(e-empty_record))))
 						(if-else
@@ -155,9 +155,9 @@ NO CHANGE
 								(e-empty_record))))))
 			(e-binop (op "mul")
 				(e-lookup-local
-					(p-assign (ident "lastEven_")))
+					(p-assign (ident "$lastEven")))
 				(e-lookup-local
-					(p-assign (ident "evenCount_")))))
+					(p-assign (ident "$evenCount")))))
 		(annotation
 			(ty-lookup (name "U64") (builtin))))
 	(s-expect

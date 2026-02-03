@@ -7,13 +7,13 @@ type=snippet
 ~~~roc
 product : U64
 product = {
-	var result_ = 0
+	var $result = 0
 	for i in [1, 2, 3] {
 		for j in [10, 20] {
-			result_ = result_ + (i * j)
+			$result = $result + (i * j)
 		}
 	}
-	result_
+	$result
 }
 
 expect product == 180
@@ -48,7 +48,7 @@ EndOfFile,
 			(p-ident (raw "product"))
 			(e-block
 				(statements
-					(s-var (name "result_")
+					(s-var (name "$result")
 						(e-int (raw "0")))
 					(s-for
 						(p-ident (raw "i"))
@@ -66,14 +66,14 @@ EndOfFile,
 									(e-block
 										(statements
 											(s-decl
-												(p-ident (raw "result_"))
+												(p-ident (raw "$result"))
 												(e-binop (op "+")
-													(e-ident (raw "result_"))
+													(e-ident (raw "$result"))
 													(e-tuple
 														(e-binop (op "*")
 															(e-ident (raw "i"))
 															(e-ident (raw "j"))))))))))))
-					(e-ident (raw "result_")))))
+					(e-ident (raw "$result")))))
 		(s-expect
 			(e-binop (op "==")
 				(e-ident (raw "product"))
@@ -90,7 +90,7 @@ NO CHANGE
 		(p-assign (ident "product"))
 		(e-block
 			(s-var
-				(p-assign (ident "result_"))
+				(p-assign (ident "$result"))
 				(e-num (value "0")))
 			(s-for
 				(p-assign (ident "i"))
@@ -108,10 +108,10 @@ NO CHANGE
 								(e-num (value "20"))))
 						(e-block
 							(s-reassign
-								(p-assign (ident "result_"))
+								(p-assign (ident "$result"))
 								(e-binop (op "add")
 									(e-lookup-local
-										(p-assign (ident "result_")))
+										(p-assign (ident "$result")))
 									(e-binop (op "mul")
 										(e-lookup-local
 											(p-assign (ident "i")))
@@ -120,7 +120,7 @@ NO CHANGE
 							(e-empty_record)))
 					(e-empty_record)))
 			(e-lookup-local
-				(p-assign (ident "result_"))))
+				(p-assign (ident "$result"))))
 		(annotation
 			(ty-lookup (name "U64") (builtin))))
 	(s-expect

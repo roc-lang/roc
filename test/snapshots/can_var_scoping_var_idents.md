@@ -8,10 +8,10 @@ type=snippet
 # Function showing var vs regular identifier independence
 testFunc = |input| {
 	sum = input # Regular identifier
-	var sum_ = input * 2 # Var with underscore - should not conflict
+	var $sum = input * 2 # Var with $ prefix - should not conflict
 
-	sum_ = sum_ + sum # Reassign var - should work
-	sum + sum_ # Both should be accessible
+	$sum = $sum + sum # Reassign var - should work
+	sum + $sum # Both should be accessible
 }
 ~~~
 # EXPECTED
@@ -43,18 +43,18 @@ EndOfFile,
 						(s-decl
 							(p-ident (raw "sum"))
 							(e-ident (raw "input")))
-						(s-var (name "sum_")
+						(s-var (name "$sum")
 							(e-binop (op "*")
 								(e-ident (raw "input"))
 								(e-int (raw "2"))))
 						(s-decl
-							(p-ident (raw "sum_"))
+							(p-ident (raw "$sum"))
 							(e-binop (op "+")
-								(e-ident (raw "sum_"))
+								(e-ident (raw "$sum"))
 								(e-ident (raw "sum"))))
 						(e-binop (op "+")
 							(e-ident (raw "sum"))
-							(e-ident (raw "sum_")))))))))
+							(e-ident (raw "$sum")))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -74,23 +74,23 @@ NO CHANGE
 					(e-lookup-local
 						(p-assign (ident "input"))))
 				(s-var
-					(p-assign (ident "sum_"))
+					(p-assign (ident "$sum"))
 					(e-binop (op "mul")
 						(e-lookup-local
 							(p-assign (ident "input")))
 						(e-num (value "2"))))
 				(s-reassign
-					(p-assign (ident "sum_"))
+					(p-assign (ident "$sum"))
 					(e-binop (op "add")
 						(e-lookup-local
-							(p-assign (ident "sum_")))
+							(p-assign (ident "$sum")))
 						(e-lookup-local
 							(p-assign (ident "sum")))))
 				(e-binop (op "add")
 					(e-lookup-local
 						(p-assign (ident "sum")))
 					(e-lookup-local
-						(p-assign (ident "sum_"))))))))
+						(p-assign (ident "$sum"))))))))
 ~~~
 # TYPES
 ~~~clojure

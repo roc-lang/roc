@@ -248,6 +248,7 @@ NOT IMPLEMENTED - fuzz_crash_023.md:133:9:133:14
 UNUSED VARIABLE - fuzz_crash_023.md:82:2:82:3
 UNDEFINED VARIABLE - fuzz_crash_023.md:141:2:141:6
 UNDECLARED TYPE - fuzz_crash_023.md:143:14:143:20
+VAR WITHOUT $ PREFIX - fuzz_crash_023.md:146:2:146:18
 UNDEFINED VARIABLE - fuzz_crash_023.md:147:9:147:13
 UNDEFINED VARIABLE - fuzz_crash_023.md:158:2:158:11
 UNDEFINED VARIABLE - fuzz_crash_023.md:175:3:175:15
@@ -674,6 +675,18 @@ This type is referenced here:
 main! : List(String) -> Try({}, _)
 ```
              ^^^^^^
+
+
+**VAR WITHOUT $ PREFIX**
+This `var` is named `number` but variables declared with `var` should start with `$` to indicate they are mutable.
+
+Suggestion: rename `number` to `$number`.
+
+**fuzz_crash_023.md:146:2:146:18:**
+```roc
+	var number = 123
+```
+	^^^^^^^^^^^^^^^^
 
 
 **UNDEFINED VARIABLE**

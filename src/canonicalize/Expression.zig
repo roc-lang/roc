@@ -1312,7 +1312,7 @@ pub const Expr = union(enum) {
     };
 
     /// The type inside a nominal var
-    pub const NominalBackingType = enum { tag, record, tuple, value };
+    pub const NominalBackingType = enum { tag, record };
 
     pub fn pushToSExprTree(self: *const @This(), ir: *const ModuleEnv, tree: *SExprTree, expr_idx: Self.Idx) std.mem.Allocator.Error!void {
         switch (self.*) {
