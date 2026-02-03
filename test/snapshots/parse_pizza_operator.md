@@ -13,13 +13,7 @@ PIZZA OPERATOR NOT SUPPORTED - parse_pizza_operator.md:1:1:1:20
 **PIZZA OPERATOR NOT SUPPORTED**
 Roc doesn't use the pizza operator (**|>**).
 
-Instead, use the arrow syntax **->** to chain function calls:
-
-`list |> List.map(f) |> List.join`
-
-becomes:
-
-**list->List.map(f)->List.join**
+The correct syntax in Roc is **arg1->func(arg2, arg3)** rather than `arg1 |> func(arg2, arg3)` or `arg1 |> func arg2 arg3` like in some other languages.
 
 **parse_pizza_operator.md:1:1:1:20:**
 ```roc

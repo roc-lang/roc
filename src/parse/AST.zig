@@ -561,18 +561,13 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
             try report.document.addText(").");
             try report.document.addLineBreak();
             try report.document.addLineBreak();
-            try report.document.addText("Instead, use the arrow syntax ");
-            try report.document.addAnnotated("->", .emphasized);
-            try report.document.addText(" to chain function calls:");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
-            try report.document.addAnnotated("list |> List.map(f) |> List.join", .dimmed);
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
-            try report.document.addText("becomes:");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
-            try report.document.addAnnotated("list->List.map(f)->List.join", .emphasized);
+            try report.document.addText("The correct syntax in Roc is ");
+            try report.document.addAnnotated("arg1->func(arg2, arg3)", .emphasized);
+            try report.document.addText(" rather than ");
+            try report.document.addAnnotated("arg1 |> func(arg2, arg3)", .dimmed);
+            try report.document.addText(" or ");
+            try report.document.addAnnotated("arg1 |> func arg2 arg3", .dimmed);
+            try report.document.addText(" like in some other languages.");
         },
         else => {
             const tag_name = @tagName(diagnostic.tag);
