@@ -264,6 +264,7 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
         .where_expected_constraints => "WHERE CLAUSE ERROR",
         .type_alias_cannot_have_associated => "TYPE ALIAS WITH ASSOCIATED ITEMS",
         .nominal_associated_cannot_have_final_expression => "EXPRESSION IN ASSOCIATED ITEMS",
+        .pizza_operator_not_supported => "PIZZA OPERATOR NOT SUPPORTED",
         else => "PARSE ERROR",
     };
 
@@ -554,6 +555,25 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
             try report.document.addLineBreak();
             try report.document.addText("To fix this, remove the expression at the very end.");
         },
+        .pizza_operator_not_supported => {
+            try report.document.addText("Roc doesn't use the pizza operator (");
+            try report.document.addAnnotated("|>", .emphasized);
+            try report.document.addText(").");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addText("Instead, use the arrow syntax ");
+            try report.document.addAnnotated("->", .emphasized);
+            try report.document.addText(" to chain function calls:");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addAnnotated("list |> List.map(f) |> List.join", .dimmed);
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addText("becomes:");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addAnnotated("list->List.map(f)->List.join", .emphasized);
+        },
         else => {
             const tag_name = @tagName(diagnostic.tag);
             const owned_tag = try report.addOwnedString(tag_name);
@@ -684,6 +704,7 @@ pub const Diagnostic = struct {
         incomplete_import,
         nominal_associated_cannot_have_final_expression,
         type_alias_cannot_have_associated,
+        pizza_operator_not_supported,
 
         // Targets section parse errors
         expected_targets_colon,

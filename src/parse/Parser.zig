@@ -1715,6 +1715,10 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
             // If so, this is likely an attempt to write "a -> b -> c" style
             return try self.pushMalformed(AST.Statement.Idx, .multi_arrow_needs_parens, self.pos);
         }
+        // Check for pizza operator: consume the whole expression and emit a helpful diagnostic
+        if (self.peekForPizzaOperator()) {
+            return try self.consumePizzaChainAsStatement();
+        }
         return try self.pushMalformed(AST.Statement.Idx, .statement_unexpected_token, self.pos);
     }
 
@@ -2738,6 +2742,20 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
                 .region = .{ .start = start, .end = self.pos },
             } });
         }
+
+        if (self.peek() == .OpPizza) {
+            const pizza_pos = self.pos;
+            while (self.peek() == .OpPizza) {
+                self.advance(); // consume |>
+                _ = self.parseExprWithBp(0) catch break;
+            }
+            try self.pushDiagnostic(.pizza_operator_not_supported, .{
+                .start = pizza_pos,
+                .end = pizza_pos,
+            });
+            return try self.store.addMalformed(AST.Expr.Idx, .pizza_operator_not_supported, .{ .start = start, .end = self.pos });
+        }
+
         return expression;
     }
     return try self.store.addMalformed(AST.Expr.Idx, .expr_unexpected_token, .{ .start = start, .end = self.pos });
@@ -3632,6 +3650,39 @@ pub fn parseRecord(self: *Parser, start: u32) Error!AST.Expr.Idx {
         .ext = null,
         .region = .{ .start = start, .end = self.pos },
     } });
+}
+
+/// Lookahead to see if there's a pizza operator (`|>`) in the current expression.
+/// Scans forward from the current position, skipping tokens that could be part of
+/// an expression, and returns true if an OpPizza token is found before EndOfFile
+/// or a statement-ending token.
+fn peekForPizzaOperator(self: *Parser) bool {
+    var lookahead: u32 = 0;
+    while (true) {
+        const tok = self.peekN(lookahead);
+        switch (tok) {
+            .OpPizza => return true,
+            .EndOfFile => return false,
+            else => lookahead += 1,
+        }
+    }
+}
+
+/// Consume an entire pizza chain at the statement level, emitting a single
+/// `pizza_operator_not_supported` diagnostic. This handles expressions like
+/// `1 |> add 2 |> mul 3` where the pizza operator is encountered at the
+/// top level before expression parsing is reached.
+fn consumePizzaChainAsStatement(self: *Parser) Error!AST.Statement.Idx {
+    const start = self.pos;
+    // Consume all tokens until EndOfFile
+    while (self.peek() != .EndOfFile) {
+        self.advance();
+    }
+    try self.pushDiagnostic(.pizza_operator_not_supported, .{
+        .start = start,
+        .end = self.pos,
+    });
+    return try self.store.addMalformed(AST.Statement.Idx, .pizza_operator_not_supported, .{ .start = start, .end = self.pos });
 }
 
 /// Binding power of the lhs and rhs of a particular operator.

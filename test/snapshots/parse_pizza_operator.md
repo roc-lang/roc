@@ -8,89 +8,24 @@ type=snippet
 1 |> add 2 |> mul 3
 ~~~
 # EXPECTED
-PARSE ERROR - parse_pizza_operator.md:1:1:1:2
-PARSE ERROR - parse_pizza_operator.md:1:3:1:5
-PARSE ERROR - parse_pizza_operator.md:1:6:1:9
-PARSE ERROR - parse_pizza_operator.md:1:10:1:11
-PARSE ERROR - parse_pizza_operator.md:1:12:1:14
-PARSE ERROR - parse_pizza_operator.md:1:15:1:18
-PARSE ERROR - parse_pizza_operator.md:1:19:1:20
+PIZZA OPERATOR NOT SUPPORTED - parse_pizza_operator.md:1:1:1:20
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+**PIZZA OPERATOR NOT SUPPORTED**
+Roc doesn't use the pizza operator (**|>**).
 
-**parse_pizza_operator.md:1:1:1:2:**
+Instead, use the arrow syntax **->** to chain function calls:
+
+`list |> List.map(f) |> List.join`
+
+becomes:
+
+**list->List.map(f)->List.join**
+
+**parse_pizza_operator.md:1:1:1:20:**
 ```roc
 1 |> add 2 |> mul 3
 ```
-^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**parse_pizza_operator.md:1:3:1:5:**
-```roc
-1 |> add 2 |> mul 3
-```
-  ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**parse_pizza_operator.md:1:6:1:9:**
-```roc
-1 |> add 2 |> mul 3
-```
-     ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**parse_pizza_operator.md:1:10:1:11:**
-```roc
-1 |> add 2 |> mul 3
-```
-         ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**parse_pizza_operator.md:1:12:1:14:**
-```roc
-1 |> add 2 |> mul 3
-```
-           ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**parse_pizza_operator.md:1:15:1:18:**
-```roc
-1 |> add 2 |> mul 3
-```
-              ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**parse_pizza_operator.md:1:19:1:20:**
-```roc
-1 |> add 2 |> mul 3
-```
-                  ^
+^^^^^^^^^^^^^^^^^^^
 
 
 # TOKENS
@@ -103,13 +38,7 @@ EndOfFile,
 (file
 	(type-module)
 	(statements
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))))
+		(s-malformed (tag "pizza_operator_not_supported"))))
 ~~~
 # FORMATTED
 ~~~roc
