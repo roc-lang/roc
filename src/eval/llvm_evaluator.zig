@@ -265,7 +265,8 @@ pub const LlvmEvaluator = struct {
         defer gen_result.deinit();
 
         // Convert bitcode to bytes for the result
-        const bitcode_bytes = std.mem.sliceAsBytes(gen_result.bitcode);
+        const bitcode_ptr: [*]const u8 = @ptrCast(gen_result.bitcode.ptr);
+        const bitcode_bytes = bitcode_ptr[0..gen_result.bitcode.len * @sizeOf(u32)];
         const code_copy = self.allocator.dupe(u8, bitcode_bytes) catch return error.OutOfMemory;
 
         return CodeResult{

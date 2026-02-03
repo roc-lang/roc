@@ -15,19 +15,17 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const base = @import("base");
 const layout = @import("layout");
 const mono = @import("mono");
-const builtins = @import("builtins");
 
 const LlvmBuilder = std.zig.llvm.Builder;
 
 const MonoExprStore = mono.MonoExprStore;
-const MonoExpr = mono.MonoExpr;
 const MonoExprId = mono.MonoExprId;
 const MonoPatternId = mono.MonoPatternId;
 const MonoSymbol = mono.MonoSymbol;
 const MonoProc = mono.MonoProc;
+const CFStmtId = mono.CFStmtId;
 
 const Allocator = std.mem.Allocator;
 
@@ -91,8 +89,14 @@ pub const MonoLlvmCodeGen = struct {
     /// Map from MonoSymbol to lambda expression ID (for callable bindings)
     lambda_bindings: std.AutoHashMap(u48, MonoExprId),
 
-    /// Registry of compiled procedures (symbol -> function)
+    /// Registry of compiled procedures (symbol -> function index)
     proc_registry: std.AutoHashMap(u48, LlvmBuilder.Function.Index),
+
+    /// Join point blocks (join point id -> block index)
+    join_points: std.AutoHashMap(u32, LlvmBuilder.Block.Index),
+
+    /// Join point parameters (join point id -> parameter patterns)
+    join_point_params: std.AutoHashMap(u32, []MonoPatternId),
 
     /// Current LLVM builder (set during code generation)
     builder: ?*LlvmBuilder = null,
@@ -129,6 +133,8 @@ pub const MonoLlvmCodeGen = struct {
             .symbol_values = std.AutoHashMap(u48, LlvmBuilder.Value).init(allocator),
             .lambda_bindings = std.AutoHashMap(u48, MonoExprId).init(allocator),
             .proc_registry = std.AutoHashMap(u48, LlvmBuilder.Function.Index).init(allocator),
+            .join_points = std.AutoHashMap(u32, LlvmBuilder.Block.Index).init(allocator),
+            .join_point_params = std.AutoHashMap(u32, []MonoPatternId).init(allocator),
         };
     }
 
@@ -137,6 +143,13 @@ pub const MonoLlvmCodeGen = struct {
         self.symbol_values.deinit();
         self.lambda_bindings.deinit();
         self.proc_registry.deinit();
+        self.join_points.deinit();
+        // Free allocated param slices
+        var it = self.join_point_params.valueIterator();
+        while (it.next()) |params| {
+            self.allocator.free(params.*);
+        }
+        self.join_point_params.deinit();
     }
 
     /// Reset the code generator for a new expression
@@ -144,6 +157,13 @@ pub const MonoLlvmCodeGen = struct {
         self.symbol_values.clearRetainingCapacity();
         self.lambda_bindings.clearRetainingCapacity();
         self.proc_registry.clearRetainingCapacity();
+        self.join_points.clearRetainingCapacity();
+        // Free allocated param slices before clearing
+        var it = self.join_point_params.valueIterator();
+        while (it.next()) |params| {
+            self.allocator.free(params.*);
+        }
+        self.join_point_params.clearRetainingCapacity();
     }
 
     /// Generate LLVM bitcode for a Mono IR expression
@@ -256,11 +276,68 @@ pub const MonoLlvmCodeGen = struct {
         };
     }
 
-    /// Compile all procedures (for recursive functions)
+    /// Compile all procedures as LLVM functions.
+    /// Mirrors dev backend's compileAllProcs: creates each proc as a callable
+    /// LLVM function and registers it in proc_registry before compiling the body,
+    /// so recursive calls within the body can find the function.
     pub fn compileAllProcs(self: *MonoLlvmCodeGen, procs: []const MonoProc) Error!void {
-        // For now, just stub out procedures - they'll be compiled lazily at call sites
-        _ = self;
-        _ = procs;
+        for (procs) |proc| {
+            try self.compileProc(proc);
+        }
+    }
+
+    fn compileProc(self: *MonoLlvmCodeGen, proc: MonoProc) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+
+        // Build the LLVM function type from arg_layouts and ret_layout
+        const arg_layouts = self.store.getLayoutIdxSpan(proc.arg_layouts);
+        var param_types = std.ArrayList(LlvmBuilder.Type).init(self.allocator);
+        defer param_types.deinit();
+        for (arg_layouts) |arg_layout| {
+            param_types.append(layoutToLlvmType(arg_layout)) catch return error.OutOfMemory;
+        }
+
+        const ret_type = layoutToLlvmType(proc.ret_layout);
+        const fn_type = builder.fnType(ret_type, param_types.items, .normal) catch return error.OutOfMemory;
+
+        // Create a unique function name from the symbol
+        const key: u48 = @bitCast(proc.name);
+        var name_buf: [64]u8 = undefined;
+        const name_str = std.fmt.bufPrint(&name_buf, "roc_proc_{d}", .{key}) catch return error.OutOfMemory;
+        const fn_name = builder.strtabString(name_str) catch return error.OutOfMemory;
+
+        const func = builder.addFunction(fn_type, fn_name, .default) catch return error.OutOfMemory;
+
+        // Register in proc_registry BEFORE compiling body (for recursive calls)
+        self.proc_registry.put(key, func) catch return error.OutOfMemory;
+
+        // Save and restore outer wip state
+        const outer_wip = self.wip;
+        defer self.wip = outer_wip;
+
+        // Create a new WipFunction for this procedure
+        var proc_wip = LlvmBuilder.WipFunction.init(builder, .{
+            .function = func,
+            .strip = false,
+        }) catch return error.OutOfMemory;
+        defer proc_wip.deinit();
+
+        self.wip = &proc_wip;
+
+        const proc_entry = proc_wip.block(0, "entry") catch return error.OutOfMemory;
+        proc_wip.cursor = .{ .block = proc_entry };
+
+        // Bind parameters to argument values
+        const params = self.store.getPatternSpan(proc.args);
+        for (params, 0..) |param_id, i| {
+            const arg_val = proc_wip.arg(@intCast(i));
+            try self.bindPattern(param_id, arg_val);
+        }
+
+        // Generate the body (control flow statements)
+        self.generateStmt(proc.body) catch return error.CompilationFailed;
+
+        proc_wip.finish() catch return error.CompilationFailed;
     }
 
     /// Convert layout to LLVM type
@@ -277,6 +354,131 @@ pub const MonoLlvmCodeGen = struct {
             else => .i64,
         };
     }
+
+    // ---------------------------------------------------------------
+    // Control Flow Statement generation (mirrors dev backend's generateStmt)
+    // ---------------------------------------------------------------
+
+    fn generateStmt(self: *MonoLlvmCodeGen, stmt_id: CFStmtId) Error!void {
+        const stmt = self.store.getCFStmt(stmt_id);
+
+        switch (stmt) {
+            .let_stmt => |let_s| {
+                // Check if the value is a lambda/closure - if so, bind it for later call resolution
+                const value_expr = self.store.getExpr(let_s.value);
+                switch (value_expr) {
+                    .lambda, .closure => {
+                        try self.bindLambdaPattern(let_s.pattern, let_s.value);
+                    },
+                    else => {},
+                }
+                const val = try self.generateExpr(let_s.value);
+                try self.bindPattern(let_s.pattern, val);
+                try self.generateStmt(let_s.next);
+            },
+            .ret => |r| {
+                const wip = self.wip orelse return error.CompilationFailed;
+                const val = try self.generateExpr(r.value);
+                _ = wip.ret(val) catch return error.CompilationFailed;
+            },
+            .join => |j| {
+                const wip = self.wip orelse return error.CompilationFailed;
+
+                // Store join point parameters for rebinding on jumps
+                const jp_key = @intFromEnum(j.id);
+                const params = self.store.getPatternSpan(j.params);
+                const params_copy = self.allocator.dupe(MonoPatternId, params) catch return error.OutOfMemory;
+                self.join_point_params.put(jp_key, params_copy) catch return error.OutOfMemory;
+
+                // Create a block for the join point body
+                // Use incoming=1 as a minimum (will be incremented by branches)
+                const join_block = wip.block(2, "join") catch return error.CompilationFailed;
+                self.join_points.put(jp_key, join_block) catch return error.OutOfMemory;
+
+                // Generate the remainder first (code that jumps TO join point)
+                try self.generateStmt(j.remainder);
+
+                // Now generate the join point body
+                wip.cursor = .{ .block = join_block };
+                try self.generateStmt(j.body);
+            },
+            .jump => |jmp| {
+                const wip = self.wip orelse return error.CompilationFailed;
+                const jp_key = @intFromEnum(jmp.target);
+
+                // Evaluate all arguments and rebind join point parameters
+                const args = self.store.getExprSpan(jmp.args);
+                const params = self.join_point_params.get(jp_key);
+                for (args, 0..) |arg_id, i| {
+                    const val = try self.generateExpr(arg_id);
+                    if (params) |p| {
+                        if (i < p.len) {
+                            try self.bindPattern(p[i], val);
+                        }
+                    }
+                }
+
+                // Branch to the join point block
+                if (self.join_points.get(jp_key)) |join_block| {
+                    _ = wip.br(join_block) catch return error.CompilationFailed;
+                } else {
+                    return error.CompilationFailed;
+                }
+            },
+            .switch_stmt => |sw| {
+                try self.generateSwitchStmt(sw);
+            },
+            .expr_stmt => |e| {
+                _ = try self.generateExpr(e.value);
+                try self.generateStmt(e.next);
+            },
+        }
+    }
+
+    fn generateSwitchStmt(self: *MonoLlvmCodeGen, sw: anytype) Error!void {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
+
+        const cond_val = try self.generateExpr(sw.cond);
+        const branches = self.store.getCFSwitchBranches(sw.branches);
+
+        if (branches.len == 0) {
+            // No branches, just generate the default
+            try self.generateStmt(sw.default_branch);
+            return;
+        }
+
+        // Create blocks for each branch and the default
+        const default_block = wip.block(0, "switch_default") catch return error.CompilationFailed;
+
+        var switch_inst = wip.@"switch"(cond_val, default_block, @intCast(branches.len), .none) catch return error.CompilationFailed;
+
+        var branch_blocks = std.ArrayList(LlvmBuilder.Block.Index).init(self.allocator);
+        defer branch_blocks.deinit();
+
+        for (branches) |branch| {
+            const branch_block = wip.block(0, "switch_case") catch return error.CompilationFailed;
+            branch_blocks.append(branch_block) catch return error.OutOfMemory;
+            const case_val = builder.intConst(cond_val.typeOfWip(wip), branch.value) catch return error.OutOfMemory;
+            switch_inst.addCase(case_val, branch_block, wip) catch return error.CompilationFailed;
+        }
+
+        switch_inst.finish(wip);
+
+        // Generate code for each branch
+        for (branches, branch_blocks.items) |branch, branch_block| {
+            wip.cursor = .{ .block = branch_block };
+            try self.generateStmt(branch.body);
+        }
+
+        // Generate default branch
+        wip.cursor = .{ .block = default_block };
+        try self.generateStmt(sw.default_branch);
+    }
+
+    // ---------------------------------------------------------------
+    // Expression generation
+    // ---------------------------------------------------------------
 
     /// Generate LLVM IR for an expression
     fn generateExpr(self: *MonoLlvmCodeGen, expr_id: MonoExprId) Error!LlvmBuilder.Value {
@@ -501,10 +703,10 @@ pub const MonoLlvmCodeGen = struct {
         // Create basic blocks
         const then_block = wip.block(0, "then") catch return error.CompilationFailed;
         const else_block = wip.block(0, "else") catch return error.CompilationFailed;
-        const merge_block = wip.block(0, "merge") catch return error.CompilationFailed;
+        const merge_block = wip.block(2, "merge") catch return error.CompilationFailed;
 
         // Conditional branch
-        _ = wip.brCond(cond_val, then_block, else_block) catch return error.CompilationFailed;
+        _ = wip.brCond(cond_val, then_block, else_block, .none) catch return error.CompilationFailed;
 
         // Then block
         wip.cursor = .{ .block = then_block };
@@ -521,135 +723,277 @@ pub const MonoLlvmCodeGen = struct {
         // Merge block with phi
         wip.cursor = .{ .block = merge_block };
         const result_type = layoutToLlvmType(ite.result_layout);
-        const phi = wip.phi(result_type, "") catch return error.CompilationFailed;
-        wip.addPhiArg(phi, then_exit_block, then_val);
-        wip.addPhiArg(phi, else_exit_block, else_val);
+        const phi_inst = wip.phi(result_type, "") catch return error.CompilationFailed;
+        phi_inst.finish(
+            &.{ then_val, else_val },
+            &.{ then_exit_block, else_exit_block },
+            wip,
+        );
 
-        return phi;
+        return phi_inst.toValue();
     }
 
-    fn generateBlock(self: *MonoLlvmCodeGen, block: anytype) Error!LlvmBuilder.Value {
+    fn generateBlock(self: *MonoLlvmCodeGen, block_data: anytype) Error!LlvmBuilder.Value {
         // Process all statements (let bindings)
-        const stmts = self.store.getStmts(block.stmts);
+        const stmts = self.store.getStmts(block_data.stmts);
         for (stmts) |stmt| {
+            // Check if the expression is a lambda/closure for binding
+            const stmt_expr = self.store.getExpr(stmt.expr);
+            switch (stmt_expr) {
+                .lambda, .closure => {
+                    try self.bindLambdaPattern(stmt.pattern, stmt.expr);
+                },
+                else => {},
+            }
+
             // Generate the expression
             const val = try self.generateExpr(stmt.expr);
 
             // Bind the pattern
-            const pattern = self.store.getPattern(stmt.pattern);
-            switch (pattern) {
-                .bind => |bind| {
-                    const symbol_key: u48 = @bitCast(bind.symbol);
-                    self.symbol_values.put(symbol_key, val) catch return error.OutOfMemory;
-                },
-                else => {
-                    // For now, only support simple bindings
-                },
-            }
+            try self.bindPattern(stmt.pattern, val);
         }
 
         // Generate and return the final expression
-        return self.generateExpr(block.final_expr);
+        return self.generateExpr(block_data.final_expr);
     }
+
+    // ---------------------------------------------------------------
+    // Call generation (mirrors dev backend's dispatch)
+    // ---------------------------------------------------------------
 
     fn generateCall(self: *MonoLlvmCodeGen, call: anytype) Error!LlvmBuilder.Value {
-        // Check if the function is a lambda or closure we can inline
         const fn_expr = self.store.getExpr(call.fn_expr);
 
-        switch (fn_expr) {
-            .lambda => |lambda| {
-                return self.inlineLambdaCall(lambda, call);
-            },
-            .closure => |closure| {
-                // Get the underlying lambda
-                const lambda_expr = self.store.getExpr(closure.lambda);
-                switch (lambda_expr) {
-                    .lambda => |lambda| {
-                        return self.inlineClosureCall(lambda, closure, call);
-                    },
-                    else => return error.UnsupportedExpression,
-                }
-            },
-            .lookup => |lookup| {
-                // Look up the symbol to find the lambda/closure
-                const symbol_key: u48 = @bitCast(lookup.symbol);
-                if (self.lambda_bindings.get(symbol_key)) |lambda_id| {
-                    const bound_expr = self.store.getExpr(lambda_id);
-                    switch (bound_expr) {
-                        .lambda => |lambda| {
-                            return self.inlineLambdaCall(lambda, call);
-                        },
-                        .closure => |closure| {
-                            const lambda_expr2 = self.store.getExpr(closure.lambda);
-                            switch (lambda_expr2) {
-                                .lambda => |lambda| {
-                                    return self.inlineClosureCall(lambda, closure, call);
-                                },
-                                else => return error.UnsupportedExpression,
-                            }
-                        },
-                        else => return error.UnsupportedExpression,
-                    }
-                }
-                return error.UnsupportedExpression;
-            },
-            else => return error.UnsupportedExpression,
-        }
+        return switch (fn_expr) {
+            .lambda => |lambda| self.generateLambdaCall(lambda, call.args, call.ret_layout),
+            .closure => |closure| self.generateClosureCall(closure, call.args, call.ret_layout),
+            .lookup => |lookup| self.generateLookupCall(lookup, call.args, call.ret_layout),
+            .call => error.UnsupportedExpression,
+            .block => error.UnsupportedExpression,
+            else => error.UnsupportedExpression,
+        };
     }
 
-    fn inlineLambdaCall(self: *MonoLlvmCodeGen, lambda: anytype, call: anytype) Error!LlvmBuilder.Value {
-        // Bind arguments to parameters
+    /// Generate a lambda call by inlining: bind args to params, generate body.
+    fn generateLambdaCall(self: *MonoLlvmCodeGen, lambda: anytype, args_span: anytype, _: layout.Idx) Error!LlvmBuilder.Value {
         const params = self.store.getPatternSpan(lambda.params);
-        const args = self.store.getExprSpan(call.args);
+        const args = self.store.getExprSpan(args_span);
 
         for (params, args) |param_id, arg_id| {
-            const arg_val = try self.generateExpr(arg_id);
-            const pattern = self.store.getPattern(param_id);
-            switch (pattern) {
-                .bind => |bind| {
-                    const symbol_key: u48 = @bitCast(bind.symbol);
-                    self.symbol_values.put(symbol_key, arg_val) catch return error.OutOfMemory;
+            // Check if the argument is a lambda/closure
+            const arg_expr = self.store.getExpr(arg_id);
+            switch (arg_expr) {
+                .lambda, .closure => {
+                    try self.bindLambdaPattern(param_id, arg_id);
                 },
                 else => {},
             }
+            const arg_val = try self.generateExpr(arg_id);
+            try self.bindPattern(param_id, arg_val);
         }
 
-        // Generate the body
         return self.generateExpr(lambda.body);
     }
 
-    fn inlineClosureCall(self: *MonoLlvmCodeGen, lambda: anytype, closure: anytype, call: anytype) Error!LlvmBuilder.Value {
-        // First, bind the captured values
-        const captures = self.store.getCaptures(closure.captures);
-        for (captures) |capture| {
-            // The capture's symbol should already have a value from the enclosing scope
-            const symbol_key: u48 = @bitCast(capture.symbol);
-            if (self.symbol_values.get(symbol_key)) |_| {
-                // Already bound, nothing to do
-            } else {
-                // Try to look it up
-                if (self.store.getSymbolDef(capture.symbol)) |def_id| {
-                    const val = try self.generateExpr(def_id);
-                    self.symbol_values.put(symbol_key, val) catch return error.OutOfMemory;
+    /// Generate a closure call: bind captures based on representation, then call lambda.
+    fn generateClosureCall(self: *MonoLlvmCodeGen, closure: anytype, args_span: anytype, ret_layout: layout.Idx) Error!LlvmBuilder.Value {
+        // Bind captured values based on representation
+        switch (closure.representation) {
+            .direct_call => {
+                // No captures to bind
+            },
+            .unwrapped_capture => {
+                const captures = self.store.getCaptures(closure.captures);
+                if (captures.len > 0) {
+                    const cap = captures[0];
+                    const symbol_key: u48 = @bitCast(cap.symbol);
+                    if (self.symbol_values.get(symbol_key) == null) {
+                        if (self.store.getSymbolDef(cap.symbol)) |def_expr_id| {
+                            const val = try self.generateExpr(def_expr_id);
+                            self.symbol_values.put(symbol_key, val) catch return error.OutOfMemory;
+                        }
+                    }
                 }
-            }
+            },
+            .struct_captures => |repr| {
+                const captures = self.store.getCaptures(repr.captures);
+                for (captures) |cap| {
+                    const symbol_key: u48 = @bitCast(cap.symbol);
+                    if (self.symbol_values.get(symbol_key) == null) {
+                        if (self.store.getSymbolDef(cap.symbol)) |def_expr_id| {
+                            const val = try self.generateExpr(def_expr_id);
+                            self.symbol_values.put(symbol_key, val) catch return error.OutOfMemory;
+                        }
+                    }
+                }
+            },
+            .enum_dispatch, .union_repr => {
+                const captures = self.store.getCaptures(closure.captures);
+                for (captures) |cap| {
+                    const symbol_key: u48 = @bitCast(cap.symbol);
+                    if (self.symbol_values.get(symbol_key) == null) {
+                        if (self.store.getSymbolDef(cap.symbol)) |def_expr_id| {
+                            const val = try self.generateExpr(def_expr_id);
+                            self.symbol_values.put(symbol_key, val) catch return error.OutOfMemory;
+                        }
+                    }
+                }
+            },
         }
 
-        // Then bind arguments and generate body like a lambda
-        return self.inlineLambdaCall(lambda, call);
+        // Get the lambda and call it (inlined)
+        const lambda_expr = self.store.getExpr(closure.lambda);
+        return switch (lambda_expr) {
+            .lambda => |lambda| self.generateLambdaCall(lambda, args_span, ret_layout),
+            else => error.UnsupportedExpression,
+        };
     }
 
-    fn generateLambda(self: *MonoLlvmCodeGen, lambda: anytype) Error!LlvmBuilder.Value {
-        // Standalone lambda - just return 0 as placeholder
-        // Actual evaluation happens at call site
-        _ = lambda;
+    /// Generate a call through a lookup: check proc_registry, lambda_bindings, symbol defs.
+    fn generateLookupCall(self: *MonoLlvmCodeGen, lookup: anytype, args_span: anytype, ret_layout: layout.Idx) Error!LlvmBuilder.Value {
+        const symbol_key: u48 = @bitCast(lookup.symbol);
+
+        // First: check if the function was compiled as a procedure
+        if (self.proc_registry.get(symbol_key)) |func_index| {
+            return self.generateCallToCompiledProc(func_index, args_span, ret_layout);
+        }
+
+        // Check if the symbol is bound to a lambda/closure in local scope
+        if (self.lambda_bindings.get(symbol_key)) |lambda_expr_id| {
+            const lambda_expr = self.store.getExpr(lambda_expr_id);
+            return switch (lambda_expr) {
+                .lambda => |lambda| self.generateLambdaCall(lambda, args_span, ret_layout),
+                .closure => |closure| self.generateClosureCall(closure, args_span, ret_layout),
+                else => error.UnsupportedExpression,
+            };
+        }
+
+        // Look up in top-level definitions
+        if (self.store.getSymbolDef(lookup.symbol)) |def_expr_id| {
+            const def_expr = self.store.getExpr(def_expr_id);
+            return switch (def_expr) {
+                .lambda => |lambda| self.generateLambdaCall(lambda, args_span, ret_layout),
+                .closure => |closure| self.generateClosureCall(closure, args_span, ret_layout),
+                else => error.UnsupportedExpression,
+            };
+        }
+
+        return error.UnsupportedExpression;
+    }
+
+    /// Generate a call to a compiled procedure via LLVM call instruction.
+    fn generateCallToCompiledProc(self: *MonoLlvmCodeGen, func_index: LlvmBuilder.Function.Index, args_span: anytype, _: layout.Idx) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
+
+        const args = self.store.getExprSpan(args_span);
+        var arg_values = std.ArrayList(LlvmBuilder.Value).init(self.allocator);
+        defer arg_values.deinit();
+
+        for (args) |arg_id| {
+            const val = try self.generateExpr(arg_id);
+            arg_values.append(val) catch return error.OutOfMemory;
+        }
+
+        const fn_type = func_index.typeOf(builder);
+        const callee = func_index.toValue(builder);
+
+        return wip.call(.normal, .ccc, .none, fn_type, callee, arg_values.items, "") catch return error.CompilationFailed;
+    }
+
+    // ---------------------------------------------------------------
+    // Standalone lambda/closure (not at call sites)
+    // ---------------------------------------------------------------
+
+    fn generateLambda(self: *MonoLlvmCodeGen, _: anytype) Error!LlvmBuilder.Value {
+        // Standalone lambda - return 0 placeholder.
+        // Actual evaluation happens at call site via inlining.
         return self.emitI64(0);
     }
 
     fn generateClosure(self: *MonoLlvmCodeGen, closure: anytype) Error!LlvmBuilder.Value {
-        // Standalone closure - just return 0 as placeholder
-        // Actual evaluation happens at call site
-        _ = closure;
-        return self.emitI64(0);
+        switch (closure.representation) {
+            .direct_call => {
+                return self.emitI64(0);
+            },
+            .unwrapped_capture => {
+                // Single capture - the closure value IS the captured value
+                const captures = self.store.getCaptures(closure.captures);
+                if (captures.len > 0) {
+                    const cap = captures[0];
+                    const symbol_key: u48 = @bitCast(cap.symbol);
+                    if (self.symbol_values.get(symbol_key)) |loc| {
+                        return loc;
+                    }
+                    if (self.store.getSymbolDef(cap.symbol)) |def_expr_id| {
+                        return self.generateExpr(def_expr_id);
+                    }
+                }
+                return self.emitI64(0);
+            },
+            .struct_captures => |repr| {
+                // Multiple captures - bind all for inline evaluation
+                const captures = self.store.getCaptures(repr.captures);
+                var first_val: ?LlvmBuilder.Value = null;
+                for (captures) |cap| {
+                    const symbol_key: u48 = @bitCast(cap.symbol);
+                    if (self.symbol_values.get(symbol_key)) |val| {
+                        if (first_val == null) first_val = val;
+                    } else if (self.store.getSymbolDef(cap.symbol)) |def_expr_id| {
+                        const val = try self.generateExpr(def_expr_id);
+                        self.symbol_values.put(symbol_key, val) catch return error.OutOfMemory;
+                        if (first_val == null) first_val = val;
+                    }
+                }
+                return first_val orelse self.emitI64(0);
+            },
+            .enum_dispatch => |repr| {
+                // Multiple functions, no captures - return the tag
+                return self.emitI64(@intCast(repr.tag));
+            },
+            .union_repr => |repr| {
+                // Multiple functions with captures - bind captures, return tag
+                const captures = self.store.getCaptures(repr.captures);
+                for (captures) |cap| {
+                    const symbol_key: u48 = @bitCast(cap.symbol);
+                    if (self.symbol_values.get(symbol_key) == null) {
+                        if (self.store.getSymbolDef(cap.symbol)) |def_expr_id| {
+                            const val = try self.generateExpr(def_expr_id);
+                            self.symbol_values.put(symbol_key, val) catch return error.OutOfMemory;
+                        }
+                    }
+                }
+                return self.emitI64(@intCast(repr.tag));
+            },
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Pattern binding helpers
+    // ---------------------------------------------------------------
+
+    /// Bind a pattern to an LLVM value.
+    fn bindPattern(self: *MonoLlvmCodeGen, pattern_id: MonoPatternId, value: LlvmBuilder.Value) Error!void {
+        const pattern = self.store.getPattern(pattern_id);
+        switch (pattern) {
+            .bind => |bind| {
+                const key: u48 = @bitCast(bind.symbol);
+                self.symbol_values.put(key, value) catch return error.OutOfMemory;
+            },
+            .wildcard => {},
+            else => {},
+        }
+    }
+
+    /// Record that a pattern is bound to a lambda/closure expression for later call resolution.
+    fn bindLambdaPattern(self: *MonoLlvmCodeGen, pattern_id: MonoPatternId, expr_id: MonoExprId) Error!void {
+        const pattern = self.store.getPattern(pattern_id);
+        switch (pattern) {
+            .bind => |bind| {
+                const key: u48 = @bitCast(bind.symbol);
+                self.lambda_bindings.put(key, expr_id) catch return error.OutOfMemory;
+            },
+            else => {},
+        }
     }
 };
