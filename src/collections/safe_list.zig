@@ -271,6 +271,13 @@ pub fn SafeList(comptime T: type) type {
                     }
                     zeroPadding(buf);
 
+                    // Track the allocated memory for cleanup by the writer
+                    try writer.allocated_memory.append(allocator, .{
+                        .ptr = @ptrCast(buf.ptr),
+                        .size = items.len * @sizeOf(T),
+                        .alignment = @alignOf(T),
+                    });
+
                     try writer.iovecs.append(allocator, .{
                         .iov_base = @ptrCast(buf.ptr),
                         .iov_len = items.len * @sizeOf(T),
@@ -436,6 +443,14 @@ pub fn SafeList(comptime T: type) type {
                     buf[i] = item;
                 }
                 zeroPadding(buf);
+
+                // Track the allocated memory for cleanup by the writer
+                try writer.allocated_memory.append(allocator, .{
+                    .ptr = @ptrCast(buf.ptr),
+                    .size = items.len * @sizeOf(T),
+                    .alignment = @alignOf(T),
+                });
+
                 break :blk buf;
             } else items;
 
