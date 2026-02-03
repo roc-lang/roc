@@ -25,6 +25,9 @@ const builtins = @import("builtins");
 
 const x86_64 = @import("x86_64/mod.zig");
 const aarch64 = @import("aarch64/mod.zig");
+const CallBuilder = @import("CallBuilder.zig");
+const CallingConvention = CallBuilder.CallingConvention;
+const RocTarget = @import("roc_target").RocTarget;
 
 // Num builtin functions for 128-bit integer operations
 const num_divTruncI128 = builtins.num.divTruncI128;
@@ -672,6 +675,12 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
         allocator: Allocator,
 
+        /// Target platform for code generation (determines calling convention)
+        target: RocTarget,
+
+        /// Calling convention for the target platform
+        cc: CallingConvention,
+
         /// Architecture-specific code generator with register allocation
         codegen: CodeGen,
 
@@ -851,14 +860,29 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         };
 
         /// Initialize the code generator
+        /// If target is null, uses the native host target (for backward compatibility)
         pub fn init(
             allocator: Allocator,
             store: *const MonoExprStore,
             layout_store_opt: ?*const LayoutStore,
             static_interner: ?*StaticDataInterner,
         ) Self {
+            return initWithTarget(allocator, store, layout_store_opt, static_interner, null);
+        }
+
+        /// Initialize the code generator with an explicit target
+        pub fn initWithTarget(
+            allocator: Allocator,
+            store: *const MonoExprStore,
+            layout_store_opt: ?*const LayoutStore,
+            static_interner: ?*StaticDataInterner,
+            target_opt: ?RocTarget,
+        ) Self {
+            const target = target_opt orelse RocTarget.detectNative();
             return .{
                 .allocator = allocator,
+                .target = target,
+                .cc = CallingConvention.forTarget(target),
                 .codegen = CodeGen.init(allocator),
                 .store = store,
                 .layout_store = layout_store_opt,
@@ -1024,28 +1048,37 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 // Clear X0 and X1 from the free register mask
                 // X0 = bit 0, X1 = bit 1
                 self.codegen.free_general &= ~@as(u32, 0b11);
-                // Reserve X19 (result pointer) and X20 (RocOps pointer)
+                // Reserve X19 (result pointer) and X20 (RocOps pointer) - both callee-saved
+                // Must mark as used so they get saved/restored in prologue/epilogue
                 const x19_bit = @as(u32, 1) << @intFromEnum(aarch64.GeneralReg.X19);
                 const x20_bit = @as(u32, 1) << @intFromEnum(aarch64.GeneralReg.X20);
                 self.codegen.callee_saved_available &= ~(x19_bit | x20_bit);
+                self.codegen.callee_saved_used |= @as(u16, 1) << @intFromEnum(aarch64.GeneralReg.X19);
+                self.codegen.callee_saved_used |= @as(u16, 1) << @intFromEnum(aarch64.GeneralReg.X20);
             } else if (comptime builtin.os.tag == .windows) {
                 // Windows x64: Clear RCX and RDX from the free register mask
                 const rcx_bit = @as(u32, 1) << @intFromEnum(x86_64.GeneralReg.RCX);
                 const rdx_bit = @as(u32, 1) << @intFromEnum(x86_64.GeneralReg.RDX);
                 self.codegen.free_general &= ~(rcx_bit | rdx_bit);
-                // Reserve RBX (result pointer) and R12 (RocOps pointer)
+                // Reserve RBX (result pointer) and R12 (RocOps pointer) - both callee-saved
+                // Must mark as used so they get saved/restored in prologue/epilogue
                 const rbx_bit = @as(u32, 1) << @intFromEnum(x86_64.GeneralReg.RBX);
                 const r12_bit = @as(u32, 1) << @intFromEnum(x86_64.GeneralReg.R12);
                 self.codegen.callee_saved_available &= ~(rbx_bit | r12_bit);
+                self.codegen.callee_saved_used |= @as(u16, 1) << @intFromEnum(x86_64.GeneralReg.RBX);
+                self.codegen.callee_saved_used |= @as(u16, 1) << @intFromEnum(x86_64.GeneralReg.R12);
             } else {
                 // System V (Linux, macOS): Clear RDI and RSI from the free register mask
                 const rdi_bit = @as(u32, 1) << @intFromEnum(x86_64.GeneralReg.RDI);
                 const rsi_bit = @as(u32, 1) << @intFromEnum(x86_64.GeneralReg.RSI);
                 self.codegen.free_general &= ~(rdi_bit | rsi_bit);
-                // Reserve RBX (result pointer) and R12 (RocOps pointer)
+                // Reserve RBX (result pointer) and R12 (RocOps pointer) - both callee-saved
+                // Must mark as used so they get saved/restored in prologue/epilogue
                 const rbx_bit = @as(u32, 1) << @intFromEnum(x86_64.GeneralReg.RBX);
                 const r12_bit = @as(u32, 1) << @intFromEnum(x86_64.GeneralReg.R12);
                 self.codegen.callee_saved_available &= ~(rbx_bit | r12_bit);
+                self.codegen.callee_saved_used |= @as(u16, 1) << @intFromEnum(x86_64.GeneralReg.RBX);
+                self.codegen.callee_saved_used |= @as(u16, 1) << @intFromEnum(x86_64.GeneralReg.R12);
             }
         }
 
@@ -1381,14 +1414,14 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         try self.codegen.emit.pushReg(.R11);
 
                         // RDI = output pointer
-                        try self.codegen.emit.leaRegMem(.RDI, .RBP, result_offset);
+                        try self.codegen.emit.leaRegMem(self.cc.getParamReg(0), .RBP, result_offset);
 
                         // RSI = capacity
-                        try self.codegen.emit.movRegReg(.w64, .RSI, cap_reg);
+                        try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(1), cap_reg);
                         self.codegen.freeGeneral(cap_reg);
 
-                        try self.codegen.emitLoadImm(.RDX, @intCast(alignment_bytes));
-                        try self.codegen.emitLoadImm(.RCX, @intCast(elem_size_align.size));
+                        try self.codegen.emitLoadImm(self.cc.getParamReg(2), @intCast(alignment_bytes));
+                        try self.codegen.emitLoadImm(self.cc.getParamReg(3), @intCast(elem_size_align.size));
                         try self.codegen.emitLoadImm(.R8, 0); // elements_refcounted = false
                         try self.codegen.emitLoadImm(.R9, 0); // inc_context = null
 
@@ -1540,12 +1573,12 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                             try self.codegen.emit.pushReg(.R11);
 
                             // RDI = output pointer
-                            try self.codegen.emit.leaRegMem(.RDI, .RBP, result_offset);
+                            try self.codegen.emit.leaRegMem(self.cc.getParamReg(0), .RBP, result_offset);
 
                             // RSI, RDX, RCX = list fields
-                            try self.codegen.emit.movRegMem(.w64, .RSI, .RBP, list_offset);
-                            try self.codegen.emit.movRegMem(.w64, .RDX, .RBP, list_offset + 8);
-                            try self.codegen.emit.movRegMem(.w64, .RCX, .RBP, list_offset + 16);
+                            try self.codegen.emit.movRegMem(.w64, self.cc.getParamReg(1), .RBP, list_offset);
+                            try self.codegen.emit.movRegMem(.w64, self.cc.getParamReg(2), .RBP, list_offset + 8);
+                            try self.codegen.emit.movRegMem(.w64, self.cc.getParamReg(3), .RBP, list_offset + 16);
 
                             // R8 = element pointer
                             try self.codegen.emit.leaRegMem(.R8, .RBP, elem_offset);
@@ -1627,12 +1660,12 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                             try self.codegen.emit.pushReg(.R11); // arg 7: elem_width
 
                             // RDI = output pointer
-                            try self.codegen.emit.leaRegMem(.RDI, .RBP, result_offset);
+                            try self.codegen.emit.leaRegMem(self.cc.getParamReg(0), .RBP, result_offset);
 
                             // RSI, RDX, RCX = list fields
-                            try self.codegen.emit.movRegMem(.w64, .RSI, .RBP, list_offset);
-                            try self.codegen.emit.movRegMem(.w64, .RDX, .RBP, list_offset + 8);
-                            try self.codegen.emit.movRegMem(.w64, .RCX, .RBP, list_offset + 16);
+                            try self.codegen.emit.movRegMem(.w64, self.cc.getParamReg(1), .RBP, list_offset);
+                            try self.codegen.emit.movRegMem(.w64, self.cc.getParamReg(2), .RBP, list_offset + 8);
+                            try self.codegen.emit.movRegMem(.w64, self.cc.getParamReg(3), .RBP, list_offset + 16);
 
                             // R8 = element pointer
                             try self.codegen.emit.leaRegMem(.R8, .RBP, elem_offset);
@@ -1963,10 +1996,10 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         try self.codegen.emit.movRegMem(.w64, .R11, .RBP, list_b_off + 16);
                         try self.codegen.emit.pushReg(.R11);
 
-                        try self.codegen.emit.leaRegMem(.RDI, .RBP, result_offset);
-                        try self.codegen.emit.movRegMem(.w64, .RSI, .RBP, list_a_off);
-                        try self.codegen.emit.movRegMem(.w64, .RDX, .RBP, list_a_off + 8);
-                        try self.codegen.emit.movRegMem(.w64, .RCX, .RBP, list_a_off + 16);
+                        try self.codegen.emit.leaRegMem(self.cc.getParamReg(0), .RBP, result_offset);
+                        try self.codegen.emit.movRegMem(.w64, self.cc.getParamReg(1), .RBP, list_a_off);
+                        try self.codegen.emit.movRegMem(.w64, self.cc.getParamReg(2), .RBP, list_a_off + 8);
+                        try self.codegen.emit.movRegMem(.w64, self.cc.getParamReg(3), .RBP, list_a_off + 16);
                         try self.codegen.emit.movRegMem(.w64, .R8, .RBP, list_b_off);
                         try self.codegen.emit.movRegMem(.w64, .R9, .RBP, list_b_off + 8);
 
@@ -2022,10 +2055,10 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         try self.codegen.emitLoadImm(.R11, @intCast(elem_size_align.size));
                         try self.codegen.emit.pushReg(.R11);
 
-                        try self.codegen.emit.leaRegMem(.RDI, .RBP, result_offset);
-                        try self.codegen.emit.movRegMem(.w64, .RSI, .RBP, list_off);
-                        try self.codegen.emit.movRegMem(.w64, .RDX, .RBP, list_off + 8);
-                        try self.codegen.emit.movRegMem(.w64, .RCX, .RBP, list_off + 16);
+                        try self.codegen.emit.leaRegMem(self.cc.getParamReg(0), .RBP, result_offset);
+                        try self.codegen.emit.movRegMem(.w64, self.cc.getParamReg(1), .RBP, list_off);
+                        try self.codegen.emit.movRegMem(.w64, self.cc.getParamReg(2), .RBP, list_off + 8);
+                        try self.codegen.emit.movRegMem(.w64, self.cc.getParamReg(3), .RBP, list_off + 16);
                         try self.codegen.emitLoadImm(.R8, @intCast(alignment_bytes));
                         try self.codegen.emit.leaRegMem(.R9, .RBP, elem_off);
 
@@ -2118,10 +2151,10 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         try self.codegen.emit.pushReg(roc_ops_reg);
                         try self.codegen.emitLoadImm(.R11, @intCast(rc_none_addr));
                         try self.codegen.emit.pushReg(.R11);
-                        try self.codegen.emit.leaRegMem(.RDI, .RBP, result_offset);
-                        try self.codegen.emit.movRegMem(.w64, .RSI, .RBP, count_slot);
-                        try self.codegen.emitLoadImm(.RDX, @intCast(alignment_bytes));
-                        try self.codegen.emitLoadImm(.RCX, @intCast(elem_size_align.size));
+                        try self.codegen.emit.leaRegMem(self.cc.getParamReg(0), .RBP, result_offset);
+                        try self.codegen.emit.movRegMem(.w64, self.cc.getParamReg(1), .RBP, count_slot);
+                        try self.codegen.emitLoadImm(self.cc.getParamReg(2), @intCast(alignment_bytes));
+                        try self.codegen.emitLoadImm(self.cc.getParamReg(3), @intCast(elem_size_align.size));
                         try self.codegen.emitLoadImm(.R8, 0);
                         try self.codegen.emitLoadImm(.R9, 0);
                         try self.codegen.emitLoadImm(.R11, @intCast(cap_fn_addr));
@@ -2188,10 +2221,10 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     } else {
                         try self.codegen.emitLoadImm(.R11, @intCast(copy_fallback_addr));
                         try self.codegen.emit.pushReg(.R11);
-                        try self.codegen.emit.leaRegMem(.RDI, .RBP, tmp_result);
-                        try self.codegen.emit.movRegMem(.w64, .RSI, .RBP, result_offset);
-                        try self.codegen.emit.movRegMem(.w64, .RDX, .RBP, result_offset + 8);
-                        try self.codegen.emit.movRegMem(.w64, .RCX, .RBP, result_offset + 16);
+                        try self.codegen.emit.leaRegMem(self.cc.getParamReg(0), .RBP, tmp_result);
+                        try self.codegen.emit.movRegMem(.w64, self.cc.getParamReg(1), .RBP, result_offset);
+                        try self.codegen.emit.movRegMem(.w64, self.cc.getParamReg(2), .RBP, result_offset + 8);
+                        try self.codegen.emit.movRegMem(.w64, self.cc.getParamReg(3), .RBP, result_offset + 16);
                         try self.codegen.emit.leaRegMem(.R8, .RBP, elem_off);
                         try self.codegen.emitLoadImm(.R9, @intCast(elem_size_align.size));
                         try self.codegen.emitLoadImm(.R11, @intCast(append_fn_addr));
@@ -2864,8 +2897,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         try self.codegen.emit.movRegReg(.w64, result_reg, .X0);
                     } else {
                         try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
-                        try self.codegen.emit.movRegReg(.w64, .RDI, parts.low);
-                        try self.codegen.emit.movRegReg(.w64, .RSI, parts.high);
+                        try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(0), parts.low);
+                        try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(1), parts.high);
                         try self.codegen.emit.callReg(.R11);
                         try self.codegen.emit.movRegReg(.w64, result_reg, .RAX);
                     }
@@ -2908,8 +2941,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         try self.codegen.emit.blrReg(.X9);
                     } else {
                         try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
-                        try self.codegen.emit.movRegReg(.w64, .RDI, parts.low);
-                        try self.codegen.emit.movRegReg(.w64, .RSI, parts.high);
+                        try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(0), parts.low);
+                        try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(1), parts.high);
                         try self.codegen.emit.callReg(.R11);
                     }
                     self.codegen.freeGeneral(parts.low);
@@ -2943,8 +2976,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         try self.codegen.emit.blrReg(.X9);
                     } else {
                         try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
-                        try self.codegen.emit.movRegReg(.w64, .RDI, parts.low);
-                        try self.codegen.emit.movRegReg(.w64, .RSI, parts.high);
+                        try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(0), parts.low);
+                        try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(1), parts.high);
                         try self.codegen.emit.callReg(.R11);
                     }
                     self.codegen.freeGeneral(parts.low);
@@ -3162,10 +3195,10 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
                         try self.codegen.emit.blrReg(.X9);
                     } else {
-                        try self.codegen.emit.movRegReg(.w64, .RSI, cap_reg);
+                        try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(1), cap_reg);
                         self.codegen.freeGeneral(cap_reg);
-                        try self.codegen.emit.movRegReg(.w64, .RDX, roc_ops_reg);
-                        try self.codegen.emit.leaRegMem(.RDI, .RBP, result_offset);
+                        try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(2), roc_ops_reg);
+                        try self.codegen.emit.leaRegMem(self.cc.getParamReg(0), .RBP, result_offset);
                         try self.codegen.emitLoadImm(.R11, @intCast(fn_addr));
                         try self.codegen.emit.callReg(.R11);
                     }
@@ -3291,10 +3324,10 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         try self.codegen.emit.leaRegMem(.R11, .RBP, elem_off);
                         try self.codegen.emit.pushReg(.R11);
 
-                        try self.codegen.emit.leaRegMem(.RDI, .RBP, result_offset);
-                        try self.codegen.emit.movRegMem(.w64, .RSI, .RBP, list_off);
-                        try self.codegen.emit.movRegMem(.w64, .RDX, .RBP, list_off + 8);
-                        try self.codegen.emit.movRegMem(.w64, .RCX, .RBP, list_off + 16);
+                        try self.codegen.emit.leaRegMem(self.cc.getParamReg(0), .RBP, result_offset);
+                        try self.codegen.emit.movRegMem(.w64, self.cc.getParamReg(1), .RBP, list_off);
+                        try self.codegen.emit.movRegMem(.w64, self.cc.getParamReg(2), .RBP, list_off + 8);
+                        try self.codegen.emit.movRegMem(.w64, self.cc.getParamReg(3), .RBP, list_off + 16);
                         try self.codegen.emitLoadImm(.R8, @intCast(alignment_bytes));
                         try self.codegen.emit.movRegMem(.w64, .R9, .RBP, index_off);
 
@@ -3524,10 +3557,10 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
                 try self.codegen.emit.blrReg(.X9);
             } else {
-                try self.codegen.emit.leaRegMem(.RDI, .RBP, result_offset);
-                try self.codegen.emit.movRegMem(.w64, .RSI, .RBP, str_off);
-                try self.codegen.emit.movRegMem(.w64, .RDX, .RBP, str_off + 8);
-                try self.codegen.emit.movRegMem(.w64, .RCX, .RBP, str_off + 16);
+                try self.codegen.emit.leaRegMem(self.cc.getParamReg(0), .RBP, result_offset);
+                try self.codegen.emit.movRegMem(.w64, self.cc.getParamReg(1), .RBP, str_off);
+                try self.codegen.emit.movRegMem(.w64, self.cc.getParamReg(2), .RBP, str_off + 8);
+                try self.codegen.emit.movRegMem(.w64, self.cc.getParamReg(3), .RBP, str_off + 16);
                 try self.codegen.emit.movRegReg(.w64, .R8, roc_ops_reg);
                 try self.codegen.emitLoadImm(.R11, @intCast(fn_addr));
                 try self.codegen.emit.callReg(.R11);
@@ -3553,9 +3586,9 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 try self.codegen.emit.movRegReg(.w64, result_reg, .X0);
                 return .{ .general_reg = result_reg };
             } else {
-                try self.codegen.emit.movRegMem(.w64, .RDI, .RBP, str_off);
-                try self.codegen.emit.movRegMem(.w64, .RSI, .RBP, str_off + 8);
-                try self.codegen.emit.movRegMem(.w64, .RDX, .RBP, str_off + 16);
+                try self.codegen.emit.movRegMem(.w64, self.cc.getParamReg(0), .RBP, str_off);
+                try self.codegen.emit.movRegMem(.w64, self.cc.getParamReg(1), .RBP, str_off + 8);
+                try self.codegen.emit.movRegMem(.w64, self.cc.getParamReg(2), .RBP, str_off + 16);
                 try self.codegen.emitLoadImm(.R11, @intCast(fn_addr));
                 try self.codegen.emit.callReg(.R11);
                 // Result is in RAX
@@ -3581,10 +3614,10 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 try self.codegen.emit.movRegReg(.w64, result_reg, .X0);
                 return .{ .general_reg = result_reg };
             } else {
-                try self.codegen.emit.movRegMem(.w64, .RDI, .RBP, a_off);
-                try self.codegen.emit.movRegMem(.w64, .RSI, .RBP, a_off + 8);
-                try self.codegen.emit.movRegMem(.w64, .RDX, .RBP, a_off + 16);
-                try self.codegen.emit.movRegMem(.w64, .RCX, .RBP, b_off);
+                try self.codegen.emit.movRegMem(.w64, self.cc.getParamReg(0), .RBP, a_off);
+                try self.codegen.emit.movRegMem(.w64, self.cc.getParamReg(1), .RBP, a_off + 8);
+                try self.codegen.emit.movRegMem(.w64, self.cc.getParamReg(2), .RBP, a_off + 16);
+                try self.codegen.emit.movRegMem(.w64, self.cc.getParamReg(3), .RBP, b_off);
                 try self.codegen.emit.movRegMem(.w64, .R8, .RBP, b_off + 8);
                 try self.codegen.emit.movRegMem(.w64, .R9, .RBP, b_off + 16);
                 try self.codegen.emitLoadImm(.R11, @intCast(fn_addr));
@@ -3624,10 +3657,10 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 try self.codegen.emit.movRegMem(.w64, .R11, .RBP, b_off + 16);
                 try self.codegen.emit.pushReg(.R11);
 
-                try self.codegen.emit.leaRegMem(.RDI, .RBP, result_offset);
-                try self.codegen.emit.movRegMem(.w64, .RSI, .RBP, a_off);
-                try self.codegen.emit.movRegMem(.w64, .RDX, .RBP, a_off + 8);
-                try self.codegen.emit.movRegMem(.w64, .RCX, .RBP, a_off + 16);
+                try self.codegen.emit.leaRegMem(self.cc.getParamReg(0), .RBP, result_offset);
+                try self.codegen.emit.movRegMem(.w64, self.cc.getParamReg(1), .RBP, a_off);
+                try self.codegen.emit.movRegMem(.w64, self.cc.getParamReg(2), .RBP, a_off + 8);
+                try self.codegen.emit.movRegMem(.w64, self.cc.getParamReg(3), .RBP, a_off + 16);
                 try self.codegen.emit.movRegMem(.w64, .R8, .RBP, b_off);
                 try self.codegen.emit.movRegMem(.w64, .R9, .RBP, b_off + 8);
 
@@ -3660,10 +3693,10 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
                 try self.codegen.emit.blrReg(.X9);
             } else {
-                try self.codegen.emit.leaRegMem(.RDI, .RBP, result_offset);
-                try self.codegen.emit.movRegMem(.w64, .RSI, .RBP, str_off);
-                try self.codegen.emit.movRegMem(.w64, .RDX, .RBP, str_off + 8);
-                try self.codegen.emit.movRegMem(.w64, .RCX, .RBP, str_off + 16);
+                try self.codegen.emit.leaRegMem(self.cc.getParamReg(0), .RBP, result_offset);
+                try self.codegen.emit.movRegMem(.w64, self.cc.getParamReg(1), .RBP, str_off);
+                try self.codegen.emit.movRegMem(.w64, self.cc.getParamReg(2), .RBP, str_off + 8);
+                try self.codegen.emit.movRegMem(.w64, self.cc.getParamReg(3), .RBP, str_off + 16);
                 try self.codegen.emit.movRegMem(.w64, .R8, .RBP, u64_off);
                 try self.codegen.emit.movRegReg(.w64, .R9, roc_ops_reg);
                 try self.codegen.emitLoadImm(.R11, @intCast(fn_addr));
@@ -3820,10 +3853,10 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 try self.codegen.emit.movRegMem(.w64, .R11, .RBP, start_slot);
                 try self.codegen.emit.pushReg(.R11);
 
-                try self.codegen.emit.leaRegMem(.RDI, .RBP, result_offset);
-                try self.codegen.emit.movRegMem(.w64, .RSI, .RBP, list_off);
-                try self.codegen.emit.movRegMem(.w64, .RDX, .RBP, list_off + 8);
-                try self.codegen.emit.movRegMem(.w64, .RCX, .RBP, list_off + 16);
+                try self.codegen.emit.leaRegMem(self.cc.getParamReg(0), .RBP, result_offset);
+                try self.codegen.emit.movRegMem(.w64, self.cc.getParamReg(1), .RBP, list_off);
+                try self.codegen.emit.movRegMem(.w64, self.cc.getParamReg(2), .RBP, list_off + 8);
+                try self.codegen.emit.movRegMem(.w64, self.cc.getParamReg(3), .RBP, list_off + 16);
                 try self.codegen.emitLoadImm(.R8, @intCast(alignment_bytes));
                 try self.codegen.emitLoadImm(.R9, @intCast(elem_size_align.size));
 
@@ -4155,10 +4188,10 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 try self.codegen.emit.pushReg(roc_ops_reg);
                 try self.codegen.emitLoadImm(.R11, @intCast(rc_none_addr));
                 try self.codegen.emit.pushReg(.R11);
-                try self.codegen.emit.leaRegMem(.RDI, .RBP, result_offset);
-                try self.codegen.emit.movRegMem(.w64, .RSI, .RBP, list_off + 8);
-                try self.codegen.emitLoadImm(.RDX, @intCast(alignment_bytes));
-                try self.codegen.emitLoadImm(.RCX, @intCast(elem_size_align.size));
+                try self.codegen.emit.leaRegMem(self.cc.getParamReg(0), .RBP, result_offset);
+                try self.codegen.emit.movRegMem(.w64, self.cc.getParamReg(1), .RBP, list_off + 8);
+                try self.codegen.emitLoadImm(self.cc.getParamReg(2), @intCast(alignment_bytes));
+                try self.codegen.emitLoadImm(self.cc.getParamReg(3), @intCast(elem_size_align.size));
                 try self.codegen.emitLoadImm(.R8, 0);
                 try self.codegen.emitLoadImm(.R9, 0);
                 try self.codegen.emitLoadImm(.R11, @intCast(cap_fn_addr));
@@ -4365,10 +4398,10 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 try self.codegen.emitLoadImm(.R11, @intCast(elem_size_align.size));
                 try self.codegen.emit.pushReg(.R11);
 
-                try self.codegen.emit.leaRegMem(.RDI, .RBP, result_offset);
-                try self.codegen.emit.movRegMem(.w64, .RSI, .RBP, list_off);
-                try self.codegen.emit.movRegMem(.w64, .RDX, .RBP, list_off + 8);
-                try self.codegen.emit.movRegMem(.w64, .RCX, .RBP, list_off + 16);
+                try self.codegen.emit.leaRegMem(self.cc.getParamReg(0), .RBP, result_offset);
+                try self.codegen.emit.movRegMem(.w64, self.cc.getParamReg(1), .RBP, list_off);
+                try self.codegen.emit.movRegMem(.w64, self.cc.getParamReg(2), .RBP, list_off + 8);
+                try self.codegen.emit.movRegMem(.w64, self.cc.getParamReg(3), .RBP, list_off + 16);
                 try self.codegen.emitLoadImm(.R8, @intCast(alignment_bytes));
                 try self.codegen.emit.movRegMem(.w64, .R9, .RBP, spare_off);
 
@@ -4415,10 +4448,10 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 // x86_64: 7 args: 6 in regs + 1 on stack
                 try self.codegen.emit.pushReg(roc_ops_reg);
 
-                try self.codegen.emit.leaRegMem(.RDI, .RBP, result_offset);
-                try self.codegen.emit.movRegMem(.w64, .RSI, .RBP, list_off);
-                try self.codegen.emit.movRegMem(.w64, .RDX, .RBP, list_off + 8);
-                try self.codegen.emit.movRegMem(.w64, .RCX, .RBP, list_off + 16);
+                try self.codegen.emit.leaRegMem(self.cc.getParamReg(0), .RBP, result_offset);
+                try self.codegen.emit.movRegMem(.w64, self.cc.getParamReg(1), .RBP, list_off);
+                try self.codegen.emit.movRegMem(.w64, self.cc.getParamReg(2), .RBP, list_off + 8);
+                try self.codegen.emit.movRegMem(.w64, self.cc.getParamReg(3), .RBP, list_off + 16);
                 try self.codegen.emitLoadImm(.R8, @intCast(alignment_bytes));
                 try self.codegen.emitLoadImm(.R9, @intCast(elem_size_align.size));
 
@@ -4890,7 +4923,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 try self.codegen.emit.blrReg(.X9);
             } else {
                 try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
-                try self.codegen.emit.movRegReg(.w64, .RDI, src_reg);
+                try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(0), src_reg);
                 try self.codegen.emit.callReg(.R11);
             }
             self.codegen.freeGeneral(src_reg);
@@ -4916,8 +4949,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 try self.codegen.emit.blrReg(.X9);
             } else {
                 try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
-                try self.codegen.emit.movRegReg(.w64, .RDI, parts.low);
-                try self.codegen.emit.movRegReg(.w64, .RSI, parts.high);
+                try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(0), parts.low);
+                try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(1), parts.high);
                 try self.codegen.emit.callReg(.R11);
             }
             self.codegen.freeGeneral(parts.low);
@@ -5093,10 +5126,10 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     try self.codegen.emitLoadImm(.R11, @intCast(disc_offset));
                     try self.codegen.emit.pushReg(.R11);
 
-                    try self.codegen.emit.leaRegMem(.RDI, .RBP, result_offset);
-                    try self.codegen.emit.movRegReg(.w64, .RSI, parts.low);
-                    try self.codegen.emit.movRegReg(.w64, .RDX, parts.high);
-                    try self.codegen.emitLoadImm(.RCX, @intCast(target_bits));
+                    try self.codegen.emit.leaRegMem(self.cc.getParamReg(0), .RBP, result_offset);
+                    try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(1), parts.low);
+                    try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(2), parts.high);
+                    try self.codegen.emitLoadImm(self.cc.getParamReg(3), @intCast(target_bits));
                     try self.codegen.emitLoadImm(.R8, @intCast(target_is_signed));
                     try self.codegen.emitLoadImm(.R9, @intCast(payload_size));
 
@@ -5167,10 +5200,10 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
                         try self.codegen.emit.blrReg(.X9);
                     } else {
-                        try self.codegen.emit.leaRegMem(.RDI, .RBP, result_offset);
-                        try self.codegen.emit.movRegReg(.w64, .RSI, src_reg);
-                        try self.codegen.emit.movRegImm64(.RDX, @bitCast(min_val));
-                        try self.codegen.emit.movRegImm64(.RCX, @bitCast(max_val));
+                        try self.codegen.emit.leaRegMem(self.cc.getParamReg(0), .RBP, result_offset);
+                        try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(1), src_reg);
+                        try self.codegen.emit.movRegImm64(self.cc.getParamReg(2), @bitCast(min_val));
+                        try self.codegen.emit.movRegImm64(self.cc.getParamReg(3), @bitCast(max_val));
                         try self.codegen.emitLoadImm(.R8, @intCast(payload_size));
                         try self.codegen.emitLoadImm(.R9, @intCast(disc_offset));
                         try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
@@ -5200,10 +5233,10 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
                         try self.codegen.emit.blrReg(.X9);
                     } else {
-                        try self.codegen.emit.leaRegMem(.RDI, .RBP, result_offset);
-                        try self.codegen.emit.movRegReg(.w64, .RSI, src_reg);
-                        try self.codegen.emit.movRegImm64(.RDX, @bitCast(@as(i64, @bitCast(max_val))));
-                        try self.codegen.emitLoadImm(.RCX, @intCast(payload_size));
+                        try self.codegen.emit.leaRegMem(self.cc.getParamReg(0), .RBP, result_offset);
+                        try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(1), src_reg);
+                        try self.codegen.emit.movRegImm64(self.cc.getParamReg(2), @bitCast(@as(i64, @bitCast(max_val))));
+                        try self.codegen.emitLoadImm(self.cc.getParamReg(3), @intCast(payload_size));
                         try self.codegen.emitLoadImm(.R8, @intCast(disc_offset));
                         try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
                         try self.codegen.emit.callReg(.R11);
@@ -5302,10 +5335,10 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                             try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
                             try self.codegen.emit.blrReg(.X9);
                         } else {
-                            try self.codegen.emit.leaRegMem(.RDI, .RBP, result_offset);
-                            try self.codegen.emit.movRegReg(.w64, .RSI, parts.low);
-                            try self.codegen.emit.movRegReg(.w64, .RDX, parts.high);
-                            try self.codegen.emitLoadImm(.RCX, @intCast(target_bits));
+                            try self.codegen.emit.leaRegMem(self.cc.getParamReg(0), .RBP, result_offset);
+                            try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(1), parts.low);
+                            try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(2), parts.high);
+                            try self.codegen.emitLoadImm(self.cc.getParamReg(3), @intCast(target_bits));
                             try self.codegen.emitLoadImm(.R8, @intCast(target_is_signed));
                             try self.codegen.emitLoadImm(.R9, @intCast(val_size));
                             try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
@@ -5333,11 +5366,11 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                             try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
                             try self.codegen.emit.blrReg(.X9);
                         } else {
-                            try self.codegen.emit.leaRegMem(.RDI, .RBP, result_offset);
+                            try self.codegen.emit.leaRegMem(self.cc.getParamReg(0), .RBP, result_offset);
                             if (freg != .XMM0) {
                                 try self.codegen.emit.movsdRegReg(.XMM0, freg);
                             }
-                            try self.codegen.emitLoadImm(.RSI, @intCast(target_bits));
+                            try self.codegen.emitLoadImm(self.cc.getParamReg(1), @intCast(target_bits));
                             try self.codegen.emitLoadImm(.RDX, @intCast(target_is_signed));
                             try self.codegen.emitLoadImm(.RCX, @intCast(val_size));
                             try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
@@ -5363,9 +5396,9 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                             try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
                             try self.codegen.emit.blrReg(.X9);
                         } else {
-                            try self.codegen.emit.leaRegMem(.RDI, .RBP, result_offset);
-                            try self.codegen.emit.movRegReg(.w64, .RSI, parts.low);
-                            try self.codegen.emit.movRegReg(.w64, .RDX, parts.high);
+                            try self.codegen.emit.leaRegMem(self.cc.getParamReg(0), .RBP, result_offset);
+                            try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(1), parts.low);
+                            try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(2), parts.high);
                             try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
                             try self.codegen.emit.callReg(.R11);
                         }
@@ -5387,7 +5420,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                             try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
                             try self.codegen.emit.blrReg(.X9);
                         } else {
-                            try self.codegen.emit.leaRegMem(.RDI, .RBP, result_offset);
+                            try self.codegen.emit.leaRegMem(self.cc.getParamReg(0), .RBP, result_offset);
                             if (freg != .XMM0) {
                                 try self.codegen.emit.movsdRegReg(.XMM0, freg);
                             }
@@ -5415,9 +5448,9 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
                         try self.codegen.emit.blrReg(.X9);
                     } else {
-                        try self.codegen.emit.leaRegMem(.RDI, .RBP, result_offset);
-                        try self.codegen.emit.movRegReg(.w64, .RSI, parts.low);
-                        try self.codegen.emit.movRegReg(.w64, .RDX, parts.high);
+                        try self.codegen.emit.leaRegMem(self.cc.getParamReg(0), .RBP, result_offset);
+                        try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(1), parts.low);
+                        try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(2), parts.high);
                         try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
                         try self.codegen.emit.callReg(.R11);
                     }
@@ -5457,64 +5490,123 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 try self.codegen.emit.movRegReg(.w64, result_high, .X1);
             } else {
                 // x86_64 calling convention for i128:
-                // arg1: RDI (low), RSI (high)
-                // arg2: RDX (low), RCX (high)
-                // return: RAX (low), RDX (high)
+                // System V: arg1: RDI (low), RSI (high), arg2: RDX (low), RCX (high)
+                //           return: RAX (low), RDX (high)
+                // Windows:  i128 values > 8 bytes are passed BY POINTER (not in registers)
+                //           arg1_ptr: RCX, arg2_ptr: RDX
+                //           return: i128 returned via hidden first arg (RCX = return ptr)
 
-                // Load function address into R11 first (before clobbering arg regs)
-                try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
+                if (self.cc.is_windows) {
+                    // Windows x64: i128 values are passed by pointer, not in registers
+                    // We need to:
+                    // 1. Allocate stack space for both i128 args + return value + shadow space
+                    // 2. Store both i128 values on the stack
+                    // 3. Pass pointers to them in RCX and RDX
+                    // 4. Pass pointer to return space as hidden first arg
+                    //
+                    // Stack layout (from RSP after allocation):
+                    //   [RSP+0  to RSP+31] = shadow space (32 bytes)
+                    //   [RSP+32 to RSP+47] = return value space (16 bytes)
+                    //   [RSP+48 to RSP+63] = arg1 (16 bytes)
+                    //   [RSP+64 to RSP+79] = arg2 (16 bytes)
+                    //
+                    // Total: 32 (shadow) + 16 (return) + 16 (arg1) + 16 (arg2) = 80 bytes
+                    // RCX = return ptr, RDX = arg1 ptr, R8 = arg2 ptr
 
-                const arg_regs = [_]GeneralReg{ .RDI, .RSI, .RDX, .RCX };
-                const sources = [_]GeneralReg{ lhs_parts.low, lhs_parts.high, rhs_parts.low, rhs_parts.high };
+                    const total_stack: i32 = 32 + 16 + 16 + 16; // shadow + return + arg1 + arg2 = 80
+                    try self.codegen.emit.subRegImm32(.w64, .RSP, total_stack);
 
-                // Save sources that would be clobbered before use
-                var saved: [4]?GeneralReg = .{ null, null, null, null };
-                var next_temp: GeneralReg = .R9;
+                    // Store arg1 (lhs) at RSP+48 BEFORE loading fn_addr (in case lhs is in R11)
+                    try self.codegen.emit.movMemReg(.w64, .RSP, 48, lhs_parts.low);
+                    try self.codegen.emit.movMemReg(.w64, .RSP, 56, lhs_parts.high);
 
-                for (0..4) |i| {
-                    const src = sources[i];
-                    for (0..i) |j| {
-                        if (src == arg_regs[j]) {
-                            var found: ?GeneralReg = null;
-                            for (0..i) |k| {
-                                if (sources[k] == src and saved[k] != null) {
-                                    found = saved[k];
-                                    break;
+                    // Store arg2 (rhs) at RSP+64 BEFORE loading fn_addr (in case rhs is in R11)
+                    try self.codegen.emit.movMemReg(.w64, .RSP, 64, rhs_parts.low);
+                    try self.codegen.emit.movMemReg(.w64, .RSP, 72, rhs_parts.high);
+
+                    // NOW safe to load function address into R11
+                    try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
+
+                    // Setup args: RCX = return ptr, RDX = arg1 ptr, R8 = arg2 ptr
+                    try self.codegen.emit.leaRegMem(.RCX, .RSP, 32); // return ptr
+                    try self.codegen.emit.leaRegMem(.RDX, .RSP, 48); // arg1 ptr
+                    try self.codegen.emit.leaRegMem(.R8, .RSP, 64); // arg2 ptr
+
+                    // Call through R11
+                    try self.codegen.emit.callReg(.R11);
+
+                    // Get result from return space at RSP+32
+                    try self.codegen.emit.movRegMem(.w64, result_low, .RSP, 32);
+                    try self.codegen.emit.movRegMem(.w64, result_high, .RSP, 40);
+
+                    // Clean up stack
+                    try self.codegen.emit.addRegImm32(.w64, .RSP, total_stack);
+                } else {
+                    // System V: i128 passed in register pairs
+                    // arg1: RDI (low), RSI (high), arg2: RDX (low), RCX (high)
+                    // return: RAX (low), RDX (high)
+
+                    // Get argument registers from calling convention
+                    const arg_regs = [_]GeneralReg{
+                        self.cc.getParamReg(0), // RDI
+                        self.cc.getParamReg(1), // RSI
+                        self.cc.getParamReg(2), // RDX
+                        self.cc.getParamReg(3), // RCX
+                    };
+                    const sources = [_]GeneralReg{ lhs_parts.low, lhs_parts.high, rhs_parts.low, rhs_parts.high };
+
+                    // Save sources that would be clobbered before use
+                    var saved: [4]?GeneralReg = .{ null, null, null, null };
+                    var next_temp: GeneralReg = .R9;
+
+                    for (0..4) |i| {
+                        const src = sources[i];
+                        for (0..i) |j| {
+                            if (src == arg_regs[j]) {
+                                var found: ?GeneralReg = null;
+                                for (0..i) |k| {
+                                    if (sources[k] == src and saved[k] != null) {
+                                        found = saved[k];
+                                        break;
+                                    }
                                 }
+                                if (found) |s| {
+                                    saved[i] = s;
+                                } else {
+                                    try self.codegen.emit.movRegReg(.w64, next_temp, src);
+                                    saved[i] = next_temp;
+                                    next_temp = if (next_temp == .R9) .R10 else .RAX;
+                                }
+                                break;
                             }
-                            if (found) |s| {
-                                saved[i] = s;
-                            } else {
-                                try self.codegen.emit.movRegReg(.w64, next_temp, src);
-                                saved[i] = next_temp;
-                                next_temp = if (next_temp == .R9) .R10 else .RAX;
-                            }
-                            break;
                         }
                     }
-                }
 
-                // Move to argument registers
-                for (0..4) |i| {
-                    const src = saved[i] orelse sources[i];
-                    try self.codegen.emit.movRegReg(.w64, arg_regs[i], src);
-                }
+                    // Move to argument registers
+                    for (0..4) |i| {
+                        const src = saved[i] orelse sources[i];
+                        try self.codegen.emit.movRegReg(.w64, arg_regs[i], src);
+                    }
 
-                // Call through R11
-                try self.codegen.emit.callReg(.R11);
+                    // Load function address into R11 AFTER all register moves (in case source was R11)
+                    try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
 
-                // Get result from RAX, RDX (handle conflicts)
-                if (result_low == .RDX) {
-                    try self.codegen.emit.movRegReg(.w64, .R9, .RDX);
-                    try self.codegen.emit.movRegReg(.w64, result_low, .RAX);
-                    try self.codegen.emit.movRegReg(.w64, result_high, .R9);
-                } else if (result_high == .RAX) {
-                    try self.codegen.emit.movRegReg(.w64, .R9, .RAX);
-                    try self.codegen.emit.movRegReg(.w64, result_high, .RDX);
-                    try self.codegen.emit.movRegReg(.w64, result_low, .R9);
-                } else {
-                    try self.codegen.emit.movRegReg(.w64, result_low, .RAX);
-                    try self.codegen.emit.movRegReg(.w64, result_high, .RDX);
+                    // Call through R11
+                    try self.codegen.emit.callReg(.R11);
+
+                    // Get result from RAX, RDX (handle conflicts)
+                    if (result_low == .RDX) {
+                        try self.codegen.emit.movRegReg(.w64, .R9, .RDX);
+                        try self.codegen.emit.movRegReg(.w64, result_low, .RAX);
+                        try self.codegen.emit.movRegReg(.w64, result_high, .R9);
+                    } else if (result_high == .RAX) {
+                        try self.codegen.emit.movRegReg(.w64, .R9, .RAX);
+                        try self.codegen.emit.movRegReg(.w64, result_high, .RDX);
+                        try self.codegen.emit.movRegReg(.w64, result_low, .R9);
+                    } else {
+                        try self.codegen.emit.movRegReg(.w64, result_low, .RAX);
+                        try self.codegen.emit.movRegReg(.w64, result_high, .RDX);
+                    }
                 }
             }
         }
@@ -5549,66 +5641,114 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 try self.codegen.emit.movRegReg(.w64, result_low, .X0);
                 try self.codegen.emit.movRegReg(.w64, result_high, .X1);
             } else {
-                // x86_64 calling convention for divC(RocDec, RocDec, *RocOps) -> i128:
-                // arg1 (RocDec): RDI (low), RSI (high)
-                // arg2 (RocDec): RDX (low), RCX (high)
-                // arg3 (*RocOps): R8
-                // return: RAX (low), RDX (high)
+                if (self.cc.is_windows) {
+                    // Windows x64 calling convention for divC(RocDec, RocDec, *RocOps) -> i128:
+                    // - RocDec (extern struct, 16 bytes) is passed by pointer
+                    // - i128 return value is returned in XMM0 (NOT via hidden pointer!)
+                    // Arguments: RCX = arg1_ptr, RDX = arg2_ptr, R8 = roc_ops
+                    // Return: XMM0 (128-bit value)
+                    //
+                    // Stack layout (from RSP after allocation):
+                    //   [RSP+0  to RSP+31] = shadow space (32 bytes)
+                    //   [RSP+32 to RSP+47] = arg1 (16 bytes)
+                    //   [RSP+48 to RSP+63] = arg2 (16 bytes)
+                    //   [RSP+64 to RSP+79] = space for XMM0 result (16 bytes)
+                    //
+                    // Total: 32 (shadow) + 16 (arg1) + 16 (arg2) + 16 (result) = 80 bytes
 
-                // Load function address into R11 first (before clobbering arg regs)
-                try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
+                    const total_stack: i32 = 32 + 16 + 16 + 16;
+                    try self.codegen.emit.subRegImm32(.w64, .RSP, total_stack);
 
-                const arg_regs = [_]GeneralReg{ .RDI, .RSI, .RDX, .RCX, .R8 };
-                const sources = [_]GeneralReg{ lhs_parts.low, lhs_parts.high, rhs_parts.low, rhs_parts.high, roc_ops_reg };
+                    // Store arg1 (lhs) at RSP+32 BEFORE loading fn_addr (in case lhs is in R11)
+                    try self.codegen.emit.movMemReg(.w64, .RSP, 32, lhs_parts.low);
+                    try self.codegen.emit.movMemReg(.w64, .RSP, 40, lhs_parts.high);
 
-                // Save sources that would be clobbered before use
-                var saved: [5]?GeneralReg = .{ null, null, null, null, null };
-                var next_temp: GeneralReg = .R9;
+                    // Store arg2 (rhs) at RSP+48 BEFORE loading fn_addr (in case rhs is in R11)
+                    try self.codegen.emit.movMemReg(.w64, .RSP, 48, rhs_parts.low);
+                    try self.codegen.emit.movMemReg(.w64, .RSP, 56, rhs_parts.high);
 
-                for (0..5) |i| {
-                    const src = sources[i];
-                    for (0..i) |j| {
-                        if (src == arg_regs[j]) {
-                            var found: ?GeneralReg = null;
-                            for (0..i) |k| {
-                                if (sources[k] == src and saved[k] != null) {
-                                    found = saved[k];
-                                    break;
+                    // NOW safe to load function address into R11
+                    try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
+
+                    // Setup args: RCX = arg1 ptr, RDX = arg2 ptr, R8 = roc_ops
+                    try self.codegen.emit.leaRegMem(.RCX, .RSP, 32); // arg1 ptr
+                    try self.codegen.emit.leaRegMem(.RDX, .RSP, 48); // arg2 ptr
+                    try self.codegen.emit.movRegReg(.w64, .R8, roc_ops_reg); // roc_ops (already a pointer)
+
+                    // Call through R11
+                    try self.codegen.emit.callReg(.R11);
+
+                    // Result is in XMM0. Store to stack then load to GP registers.
+                    try self.codegen.emit.movdquMemReg(.RSP, 64, .XMM0);
+                    try self.codegen.emit.movRegMem(.w64, result_low, .RSP, 64);
+                    try self.codegen.emit.movRegMem(.w64, result_high, .RSP, 72);
+
+                    // Clean up stack
+                    try self.codegen.emit.addRegImm32(.w64, .RSP, total_stack);
+                } else {
+                    // System V: All 5 args in registers
+                    // arg1 (lhs_low): RDI, arg2 (lhs_high): RSI, arg3 (rhs_low): RDX, arg4 (rhs_high): RCX, arg5 (roc_ops): R8
+                    const arg_regs = [_]GeneralReg{
+                        self.cc.getParamReg(0),
+                        self.cc.getParamReg(1),
+                        self.cc.getParamReg(2),
+                        self.cc.getParamReg(3),
+                        self.cc.getParamReg(4),
+                    };
+                    const sources = [_]GeneralReg{ lhs_parts.low, lhs_parts.high, rhs_parts.low, rhs_parts.high, roc_ops_reg };
+
+                    // Save sources that would be clobbered before use
+                    var saved: [5]?GeneralReg = .{ null, null, null, null, null };
+                    var next_temp: GeneralReg = .R9;
+
+                    for (0..5) |i| {
+                        const src = sources[i];
+                        for (0..i) |j| {
+                            if (src == arg_regs[j]) {
+                                var found: ?GeneralReg = null;
+                                for (0..i) |k| {
+                                    if (sources[k] == src and saved[k] != null) {
+                                        found = saved[k];
+                                        break;
+                                    }
                                 }
+                                if (found) |s| {
+                                    saved[i] = s;
+                                } else {
+                                    try self.codegen.emit.movRegReg(.w64, next_temp, src);
+                                    saved[i] = next_temp;
+                                    next_temp = if (next_temp == .R9) .R10 else .RAX;
+                                }
+                                break;
                             }
-                            if (found) |s| {
-                                saved[i] = s;
-                            } else {
-                                try self.codegen.emit.movRegReg(.w64, next_temp, src);
-                                saved[i] = next_temp;
-                                next_temp = if (next_temp == .R9) .R10 else .RAX;
-                            }
-                            break;
                         }
                     }
-                }
 
-                // Move to argument registers
-                for (0..5) |i| {
-                    const src = saved[i] orelse sources[i];
-                    try self.codegen.emit.movRegReg(.w64, arg_regs[i], src);
-                }
+                    // Move to argument registers
+                    for (0..5) |i| {
+                        const src = saved[i] orelse sources[i];
+                        try self.codegen.emit.movRegReg(.w64, arg_regs[i], src);
+                    }
 
-                // Call through R11
-                try self.codegen.emit.callReg(.R11);
+                    // Load function address into R11 AFTER all register moves (in case source was R11)
+                    try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
 
-                // Get result from RAX, RDX (handle conflicts)
-                if (result_low == .RDX) {
-                    try self.codegen.emit.movRegReg(.w64, .R9, .RDX);
-                    try self.codegen.emit.movRegReg(.w64, result_low, .RAX);
-                    try self.codegen.emit.movRegReg(.w64, result_high, .R9);
-                } else if (result_high == .RAX) {
-                    try self.codegen.emit.movRegReg(.w64, .R9, .RAX);
-                    try self.codegen.emit.movRegReg(.w64, result_high, .RDX);
-                    try self.codegen.emit.movRegReg(.w64, result_low, .R9);
-                } else {
-                    try self.codegen.emit.movRegReg(.w64, result_low, .RAX);
-                    try self.codegen.emit.movRegReg(.w64, result_high, .RDX);
+                    // Call through R11
+                    try self.codegen.emit.callReg(.R11);
+
+                    // Get result from RAX, RDX (handle conflicts)
+                    if (result_low == .RDX) {
+                        try self.codegen.emit.movRegReg(.w64, .R9, .RDX);
+                        try self.codegen.emit.movRegReg(.w64, result_low, .RAX);
+                        try self.codegen.emit.movRegReg(.w64, result_high, .R9);
+                    } else if (result_high == .RAX) {
+                        try self.codegen.emit.movRegReg(.w64, .R9, .RAX);
+                        try self.codegen.emit.movRegReg(.w64, result_high, .RDX);
+                        try self.codegen.emit.movRegReg(.w64, result_low, .R9);
+                    } else {
+                        try self.codegen.emit.movRegReg(.w64, result_low, .RAX);
+                        try self.codegen.emit.movRegReg(.w64, result_high, .RDX);
+                    }
                 }
             }
         }
@@ -5643,66 +5783,114 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 try self.codegen.emit.movRegReg(.w64, result_low, .X0);
                 try self.codegen.emit.movRegReg(.w64, result_high, .X1);
             } else {
-                // x86_64 calling convention for divTruncC(RocDec, RocDec, *RocOps) -> i128:
-                // arg1 (RocDec): RDI (low), RSI (high)
-                // arg2 (RocDec): RDX (low), RCX (high)
-                // arg3 (*RocOps): R8
-                // return: RAX (low), RDX (high)
+                if (self.cc.is_windows) {
+                    // Windows x64 calling convention for divTruncC(RocDec, RocDec, *RocOps) -> i128:
+                    // - RocDec (extern struct, 16 bytes) is passed by pointer
+                    // - i128 return value is returned in XMM0 (NOT via hidden pointer!)
+                    // Arguments: RCX = arg1_ptr, RDX = arg2_ptr, R8 = roc_ops
+                    // Return: XMM0 (128-bit value)
+                    //
+                    // Stack layout (from RSP after allocation):
+                    //   [RSP+0  to RSP+31] = shadow space (32 bytes)
+                    //   [RSP+32 to RSP+47] = arg1 (16 bytes)
+                    //   [RSP+48 to RSP+63] = arg2 (16 bytes)
+                    //   [RSP+64 to RSP+79] = space for XMM0 result (16 bytes)
+                    //
+                    // Total: 32 (shadow) + 16 (arg1) + 16 (arg2) + 16 (result) = 80 bytes
 
-                // Load function address into R11 first (before clobbering arg regs)
-                try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
+                    const total_stack: i32 = 32 + 16 + 16 + 16;
+                    try self.codegen.emit.subRegImm32(.w64, .RSP, total_stack);
 
-                const arg_regs = [_]GeneralReg{ .RDI, .RSI, .RDX, .RCX, .R8 };
-                const sources = [_]GeneralReg{ lhs_parts.low, lhs_parts.high, rhs_parts.low, rhs_parts.high, roc_ops_reg };
+                    // Store arg1 (lhs) at RSP+32 BEFORE loading fn_addr (in case lhs is in R11)
+                    try self.codegen.emit.movMemReg(.w64, .RSP, 32, lhs_parts.low);
+                    try self.codegen.emit.movMemReg(.w64, .RSP, 40, lhs_parts.high);
 
-                // Save sources that would be clobbered before use
-                var saved: [5]?GeneralReg = .{ null, null, null, null, null };
-                var next_temp: GeneralReg = .R9;
+                    // Store arg2 (rhs) at RSP+48 BEFORE loading fn_addr (in case rhs is in R11)
+                    try self.codegen.emit.movMemReg(.w64, .RSP, 48, rhs_parts.low);
+                    try self.codegen.emit.movMemReg(.w64, .RSP, 56, rhs_parts.high);
 
-                for (0..5) |i| {
-                    const src = sources[i];
-                    for (0..i) |j| {
-                        if (src == arg_regs[j]) {
-                            var found: ?GeneralReg = null;
-                            for (0..i) |k| {
-                                if (sources[k] == src and saved[k] != null) {
-                                    found = saved[k];
-                                    break;
+                    // NOW safe to load function address into R11
+                    try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
+
+                    // Setup args: RCX = arg1 ptr, RDX = arg2 ptr, R8 = roc_ops
+                    try self.codegen.emit.leaRegMem(.RCX, .RSP, 32); // arg1 ptr
+                    try self.codegen.emit.leaRegMem(.RDX, .RSP, 48); // arg2 ptr
+                    try self.codegen.emit.movRegReg(.w64, .R8, roc_ops_reg); // roc_ops (already a pointer)
+
+                    // Call through R11
+                    try self.codegen.emit.callReg(.R11);
+
+                    // Result is in XMM0. Store to stack then load to GP registers.
+                    try self.codegen.emit.movdquMemReg(.RSP, 64, .XMM0);
+                    try self.codegen.emit.movRegMem(.w64, result_low, .RSP, 64);
+                    try self.codegen.emit.movRegMem(.w64, result_high, .RSP, 72);
+
+                    // Clean up stack
+                    try self.codegen.emit.addRegImm32(.w64, .RSP, total_stack);
+                } else {
+                    // System V: All 5 args in registers
+                    // arg1 (lhs_low): RDI, arg2 (lhs_high): RSI, arg3 (rhs_low): RDX, arg4 (rhs_high): RCX, arg5 (roc_ops): R8
+                    const arg_regs = [_]GeneralReg{
+                        self.cc.getParamReg(0),
+                        self.cc.getParamReg(1),
+                        self.cc.getParamReg(2),
+                        self.cc.getParamReg(3),
+                        self.cc.getParamReg(4),
+                    };
+                    const sources = [_]GeneralReg{ lhs_parts.low, lhs_parts.high, rhs_parts.low, rhs_parts.high, roc_ops_reg };
+
+                    // Save sources that would be clobbered before use
+                    var saved: [5]?GeneralReg = .{ null, null, null, null, null };
+                    var next_temp: GeneralReg = .R9;
+
+                    for (0..5) |i| {
+                        const src = sources[i];
+                        for (0..i) |j| {
+                            if (src == arg_regs[j]) {
+                                var found: ?GeneralReg = null;
+                                for (0..i) |k| {
+                                    if (sources[k] == src and saved[k] != null) {
+                                        found = saved[k];
+                                        break;
+                                    }
                                 }
+                                if (found) |s| {
+                                    saved[i] = s;
+                                } else {
+                                    try self.codegen.emit.movRegReg(.w64, next_temp, src);
+                                    saved[i] = next_temp;
+                                    next_temp = if (next_temp == .R9) .R10 else .RAX;
+                                }
+                                break;
                             }
-                            if (found) |s| {
-                                saved[i] = s;
-                            } else {
-                                try self.codegen.emit.movRegReg(.w64, next_temp, src);
-                                saved[i] = next_temp;
-                                next_temp = if (next_temp == .R9) .R10 else .RAX;
-                            }
-                            break;
                         }
                     }
-                }
 
-                // Move to argument registers
-                for (0..5) |i| {
-                    const src = saved[i] orelse sources[i];
-                    try self.codegen.emit.movRegReg(.w64, arg_regs[i], src);
-                }
+                    // Move to argument registers
+                    for (0..5) |i| {
+                        const src = saved[i] orelse sources[i];
+                        try self.codegen.emit.movRegReg(.w64, arg_regs[i], src);
+                    }
 
-                // Call through R11
-                try self.codegen.emit.callReg(.R11);
+                    // Load function address into R11 AFTER all register moves (in case source was R11)
+                    try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
 
-                // Get result from RAX, RDX (handle conflicts)
-                if (result_low == .RDX) {
-                    try self.codegen.emit.movRegReg(.w64, .R9, .RDX);
-                    try self.codegen.emit.movRegReg(.w64, result_low, .RAX);
-                    try self.codegen.emit.movRegReg(.w64, result_high, .R9);
-                } else if (result_high == .RAX) {
-                    try self.codegen.emit.movRegReg(.w64, .R9, .RAX);
-                    try self.codegen.emit.movRegReg(.w64, result_high, .RDX);
-                    try self.codegen.emit.movRegReg(.w64, result_low, .R9);
-                } else {
-                    try self.codegen.emit.movRegReg(.w64, result_low, .RAX);
-                    try self.codegen.emit.movRegReg(.w64, result_high, .RDX);
+                    // Call through R11
+                    try self.codegen.emit.callReg(.R11);
+
+                    // Get result from RAX, RDX (handle conflicts)
+                    if (result_low == .RDX) {
+                        try self.codegen.emit.movRegReg(.w64, .R9, .RDX);
+                        try self.codegen.emit.movRegReg(.w64, result_low, .RAX);
+                        try self.codegen.emit.movRegReg(.w64, result_high, .R9);
+                    } else if (result_high == .RAX) {
+                        try self.codegen.emit.movRegReg(.w64, .R9, .RAX);
+                        try self.codegen.emit.movRegReg(.w64, result_high, .RDX);
+                        try self.codegen.emit.movRegReg(.w64, result_low, .R9);
+                    } else {
+                        try self.codegen.emit.movRegReg(.w64, result_low, .RAX);
+                        try self.codegen.emit.movRegReg(.w64, result_high, .RDX);
+                    }
                 }
             }
         }
@@ -5749,76 +5937,123 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 try self.codegen.emit.movRegReg(.w64, result_high, .X1);
             } else {
                 // x86_64 calling convention for (i128, i128, *RocOps) -> i128:
-                // arg1: RDI (low), RSI (high)
-                // arg2: RDX (low), RCX (high)
-                // arg3: R8
-                // return: RAX (low), RDX (high)
+                // System V: i128 passed as register pairs
+                //           args: RDI (lhs_low), RSI (lhs_high), RDX (rhs_low), RCX (rhs_high), R8 (roc_ops)
+                //           return: RAX (low), RDX (high)
+                // Windows:  i128 values are passed BY POINTER (not in registers)
+                //           args: RCX (return_ptr), RDX (arg1_ptr), R8 (arg2_ptr), R9 (roc_ops)
+                //           return: via hidden first arg pointer
                 //
                 // IMPORTANT: Must handle register conflicts when moving to arg registers.
-                // The source registers (from allocGeneralFor) could be any caller-saved
-                // register including the argument registers themselves. If a source is
-                // an arg register that gets written before the source is read, we'd get
-                // wrong values. We save conflicting sources to R9/R10 first.
 
-                // Load function address into R11 (caller-saved, not an arg register)
-                try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
+                if (self.cc.is_windows) {
+                    // Windows x64 calling convention for divTruncI128(i128, i128, *RocOps) -> i128:
+                    // - i128 (16 bytes) is passed by pointer
+                    // - i128 return value is returned in XMM0 (NOT via hidden pointer!)
+                    // Arguments: RCX = arg1_ptr, RDX = arg2_ptr, R8 = roc_ops
+                    // Return: XMM0 (128-bit value)
+                    //
+                    // Stack layout (from RSP after allocation):
+                    //   [RSP+0  to RSP+31] = shadow space (32 bytes)
+                    //   [RSP+32 to RSP+47] = arg1 (16 bytes)
+                    //   [RSP+48 to RSP+63] = arg2 (16 bytes)
+                    //   [RSP+64 to RSP+79] = space for XMM0 result (16 bytes)
+                    //
+                    // Total: 32 (shadow) + 16 (arg1) + 16 (arg2) + 16 (result) = 80 bytes
 
-                const arg_regs = [_]GeneralReg{ .RDI, .RSI, .RDX, .RCX, .R8 };
-                const sources = [_]GeneralReg{ lhs_parts.low, lhs_parts.high, rhs_parts.low, rhs_parts.high, roc_ops_reg };
+                    const total_stack: i32 = 32 + 16 + 16 + 16;
+                    try self.codegen.emit.subRegImm32(.w64, .RSP, total_stack);
 
-                // For each source, check if it would be clobbered before use.
-                // Source i is clobbered if it equals any of arg_regs[0..i].
-                // We save such sources to R9 or R10.
-                var saved: [5]?GeneralReg = .{ null, null, null, null, null };
-                var next_temp: GeneralReg = .R9;
+                    // Store arg1 (lhs) at RSP+32 BEFORE loading fn_addr (in case lhs is in R11)
+                    try self.codegen.emit.movMemReg(.w64, .RSP, 32, lhs_parts.low);
+                    try self.codegen.emit.movMemReg(.w64, .RSP, 40, lhs_parts.high);
 
-                for (0..5) |i| {
-                    const src = sources[i];
-                    for (0..i) |j| {
-                        if (src == arg_regs[j]) {
-                            // Check if we already saved this one
-                            var found_saved: ?GeneralReg = null;
-                            for (0..i) |k| {
-                                if (sources[k] == src and saved[k] != null) {
-                                    found_saved = saved[k];
-                                    break;
+                    // Store arg2 (rhs) at RSP+48 BEFORE loading fn_addr (in case rhs is in R11)
+                    try self.codegen.emit.movMemReg(.w64, .RSP, 48, rhs_parts.low);
+                    try self.codegen.emit.movMemReg(.w64, .RSP, 56, rhs_parts.high);
+
+                    // NOW safe to load function address into R11
+                    try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
+
+                    // Setup args: RCX = arg1 ptr, RDX = arg2 ptr, R8 = roc_ops
+                    try self.codegen.emit.leaRegMem(.RCX, .RSP, 32); // arg1 ptr
+                    try self.codegen.emit.leaRegMem(.RDX, .RSP, 48); // arg2 ptr
+                    try self.codegen.emit.movRegReg(.w64, .R8, roc_ops_reg); // roc_ops (already a pointer)
+
+                    // Call through R11
+                    try self.codegen.emit.callReg(.R11);
+
+                    // Result is in XMM0. Store to stack then load to GP registers.
+                    try self.codegen.emit.movdquMemReg(.RSP, 64, .XMM0);
+                    try self.codegen.emit.movRegMem(.w64, result_low, .RSP, 64);
+                    try self.codegen.emit.movRegMem(.w64, result_high, .RSP, 72);
+
+                    // Clean up stack
+                    try self.codegen.emit.addRegImm32(.w64, .RSP, total_stack);
+                } else {
+                    const sources = [_]GeneralReg{ lhs_parts.low, lhs_parts.high, rhs_parts.low, rhs_parts.high, roc_ops_reg };
+                    // System V: All 5 args in registers
+                    const arg_regs = [_]GeneralReg{
+                        self.cc.getParamReg(0),
+                        self.cc.getParamReg(1),
+                        self.cc.getParamReg(2),
+                        self.cc.getParamReg(3),
+                        self.cc.getParamReg(4),
+                    };
+
+                    // For each source, check if it would be clobbered before use.
+                    var saved: [5]?GeneralReg = .{ null, null, null, null, null };
+                    var next_temp: GeneralReg = .R9;
+
+                    for (0..5) |i| {
+                        const src = sources[i];
+                        for (0..i) |j| {
+                            if (src == arg_regs[j]) {
+                                var found_saved: ?GeneralReg = null;
+                                for (0..i) |k| {
+                                    if (sources[k] == src and saved[k] != null) {
+                                        found_saved = saved[k];
+                                        break;
+                                    }
                                 }
+                                if (found_saved) |s| {
+                                    saved[i] = s;
+                                } else {
+                                    try self.codegen.emit.movRegReg(.w64, next_temp, src);
+                                    saved[i] = next_temp;
+                                    next_temp = if (next_temp == .R9) .R10 else .RAX;
+                                }
+                                break;
                             }
-                            if (found_saved) |s| {
-                                saved[i] = s;
-                            } else {
-                                // Save to temp
-                                try self.codegen.emit.movRegReg(.w64, next_temp, src);
-                                saved[i] = next_temp;
-                                next_temp = if (next_temp == .R9) .R10 else .RAX;
-                            }
-                            break;
                         }
                     }
-                }
 
-                // Now move to argument registers
-                for (0..5) |i| {
-                    const src = saved[i] orelse sources[i];
-                    try self.codegen.emit.movRegReg(.w64, arg_regs[i], src);
-                }
+                    // Now move to argument registers
+                    for (0..5) |i| {
+                        const src = saved[i] orelse sources[i];
+                        try self.codegen.emit.movRegReg(.w64, arg_regs[i], src);
+                    }
 
-                // Call through R11
-                try self.codegen.emit.callReg(.R11);
+                    // Load function address into R11 AFTER all register moves (in case source was R11)
+                    try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
 
-                // Get result from RAX, RDX
-                // Handle conflict: if result_low is RDX, we'd clobber return high
-                if (result_low == .RDX) {
-                    try self.codegen.emit.movRegReg(.w64, .R9, .RDX);
-                    try self.codegen.emit.movRegReg(.w64, result_low, .RAX);
-                    try self.codegen.emit.movRegReg(.w64, result_high, .R9);
-                } else if (result_high == .RAX) {
-                    try self.codegen.emit.movRegReg(.w64, .R9, .RAX);
-                    try self.codegen.emit.movRegReg(.w64, result_high, .RDX);
-                    try self.codegen.emit.movRegReg(.w64, result_low, .R9);
-                } else {
-                    try self.codegen.emit.movRegReg(.w64, result_low, .RAX);
-                    try self.codegen.emit.movRegReg(.w64, result_high, .RDX);
+                    // Call through R11
+                    try self.codegen.emit.callReg(.R11);
+
+                    // Get result from RAX, RDX
+                    // Handle conflict: if result_low is RDX, we'd clobber return high
+                    if (result_low == .RDX) {
+                        try self.codegen.emit.movRegReg(.w64, .R9, .RDX);
+                        try self.codegen.emit.movRegReg(.w64, result_low, .RAX);
+                        try self.codegen.emit.movRegReg(.w64, result_high, .R9);
+                    } else if (result_high == .RAX) {
+                        try self.codegen.emit.movRegReg(.w64, .R9, .RAX);
+                        try self.codegen.emit.movRegReg(.w64, result_high, .RDX);
+                        try self.codegen.emit.movRegReg(.w64, result_low, .R9);
+                    } else {
+                        try self.codegen.emit.movRegReg(.w64, result_low, .RAX);
+                        try self.codegen.emit.movRegReg(.w64, result_high, .RDX);
+                    }
                 }
             }
         }
@@ -7774,14 +8009,24 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 // Load function address into R11 first (caller-saved, not an arg register)
                 try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
 
+                // Allocate shadow space on Windows
+                if (self.cc.is_windows) {
+                    try self.codegen.emit.subRegImm32(.w64, .RSP, self.cc.shadow_space);
+                }
+
                 // Set up arguments
-                try self.codegen.emit.movRegImm64(.RDI, @intCast(total_data_bytes));
-                try self.codegen.emit.movRegImm64(.RSI, @intCast(elem_alignment));
-                try self.codegen.emit.movRegImm64(.RDX, if (elements_refcounted) 1 else 0);
-                try self.codegen.emit.movRegReg(.w64, .RCX, roc_ops_reg);
+                try self.codegen.emit.movRegImm64(self.cc.getParamReg(0), @intCast(total_data_bytes));
+                try self.codegen.emit.movRegImm64(self.cc.getParamReg(1), @intCast(elem_alignment));
+                try self.codegen.emit.movRegImm64(self.cc.getParamReg(2), if (elements_refcounted) 1 else 0);
+                try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(3), roc_ops_reg);
 
                 // Call the function
                 try self.codegen.emit.callReg(.R11);
+
+                // Clean up shadow space on Windows
+                if (self.cc.is_windows) {
+                    try self.codegen.emit.addRegImm32(.w64, .RSP, self.cc.shadow_space);
+                }
 
                 // Save heap pointer from RAX to stack slot
                 try self.codegen.emit.movMemReg(.w64, .RBP, heap_ptr_slot, .RAX);
@@ -8649,10 +8894,10 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
 
                     // Set up arguments
-                    try self.codegen.emit.movRegImm64(.RDI, @intCast(str_bytes.len));
-                    try self.codegen.emit.movRegImm64(.RSI, 1); // byte alignment
-                    try self.codegen.emit.movRegImm64(.RDX, 0); // elements_refcounted = false
-                    try self.codegen.emit.movRegReg(.w64, .RCX, roc_ops_reg);
+                    try self.codegen.emit.movRegImm64(self.cc.getParamReg(0), @intCast(str_bytes.len));
+                    try self.codegen.emit.movRegImm64(self.cc.getParamReg(1), 1); // byte alignment
+                    try self.codegen.emit.movRegImm64(self.cc.getParamReg(2), 0); // elements_refcounted = false
+                    try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(3), roc_ops_reg);
 
                     // Call the function
                     try self.codegen.emit.callReg(.R11);
@@ -9120,10 +9365,10 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 try self.codegen.emit.movMemReg(.w64, .RBP, crashed_slot + 8, tmp);
 
                 // RDI = &RocCrashed struct
-                try self.codegen.emit.leaRegMem(.RDI, .RBP, crashed_slot);
+                try self.codegen.emit.leaRegMem(self.cc.getParamReg(0), .RBP, crashed_slot);
 
-                // RSI = env (from RocOps offset 0)
-                try self.codegen.emit.movRegMem(.w64, .RSI, roc_ops_reg, 0);
+                // arg1 = env (from RocOps offset 0)
+                try self.codegen.emit.movRegMem(.w64, self.cc.getParamReg(1), roc_ops_reg, 0);
 
                 // Load roc_crashed fn ptr from RocOps offset 48
                 try self.codegen.emit.movRegMem(.w64, .R11, roc_ops_reg, 48);
@@ -9278,39 +9523,39 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
                 try self.codegen.emit.blrReg(.X9);
             } else {
-                // x86_64 C calling convention: RDI=out, RSI=value (RSI+RDX for 16-byte), RDX/RCX=roc_ops
+                // x86_64 C calling convention: arg0=out, arg1=value (arg1+arg2 for 16-byte), arg2/arg3=roc_ops
                 if (is_small_value) {
                     const val_reg = try self.ensureInGeneralReg(val_loc);
-                    try self.codegen.emit.movRegReg(.w64, .RSI, val_reg);
+                    try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(1), val_reg);
                     self.codegen.freeGeneral(val_reg);
-                    // RDX = roc_ops
-                    try self.codegen.emit.movRegReg(.w64, .RDX, roc_ops_reg);
+                    // arg2 = roc_ops
+                    try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(2), roc_ops_reg);
                 } else {
-                    // 16-byte value: RSI + RDX, roc_ops goes in RCX
+                    // 16-byte value: arg1 + arg2, roc_ops goes in arg3
                     switch (val_loc) {
                         .stack_i128, .stack => |offset| {
-                            try self.codegen.emitLoadStack(.w64, .RSI, offset);
-                            try self.codegen.emitLoadStack(.w64, .RDX, offset + 8);
+                            try self.codegen.emitLoadStack(.w64, self.cc.getParamReg(1), offset);
+                            try self.codegen.emitLoadStack(.w64, self.cc.getParamReg(2), offset + 8);
                         },
                         .immediate_i128 => |val| {
                             const low: u64 = @truncate(@as(u128, @bitCast(val)));
                             const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
-                            try self.codegen.emitLoadImm(.RSI, @bitCast(low));
-                            try self.codegen.emitLoadImm(.RDX, @bitCast(high));
+                            try self.codegen.emitLoadImm(self.cc.getParamReg(1), @bitCast(low));
+                            try self.codegen.emitLoadImm(self.cc.getParamReg(2), @bitCast(high));
                         },
                         else => {
                             const val_reg = try self.ensureInGeneralReg(val_loc);
-                            try self.codegen.emit.movRegReg(.w64, .RSI, val_reg);
+                            try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(1), val_reg);
                             self.codegen.freeGeneral(val_reg);
-                            try self.codegen.emitLoadImm(.RDX, 0);
+                            try self.codegen.emitLoadImm(self.cc.getParamReg(2), 0);
                         },
                     }
-                    // RCX = roc_ops
-                    try self.codegen.emit.movRegReg(.w64, .RCX, roc_ops_reg);
+                    // arg3 = roc_ops
+                    try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(3), roc_ops_reg);
                 }
 
                 // RDI = output pointer
-                try self.codegen.emit.leaRegMem(.RDI, .RBP, result_offset);
+                try self.codegen.emit.leaRegMem(self.cc.getParamReg(0), .RBP, result_offset);
 
                 // Call
                 try self.codegen.emitLoadImm(.R11, @intCast(fn_addr));
@@ -14167,10 +14412,18 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 try self.codegen.emit.blrReg(.X9);
             } else {
                 try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
-                try self.codegen.emit.movRegReg(.w64, .RDI, ptr_reg);
-                try self.codegen.emit.movRegImm64(.RSI, @intCast(count));
-                try self.codegen.emit.movRegReg(.w64, .RDX, roc_ops_reg);
+                // Allocate shadow space on Windows
+                if (self.cc.is_windows) {
+                    try self.codegen.emit.subRegImm32(.w64, .RSP, self.cc.shadow_space);
+                }
+                try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(0), ptr_reg);
+                try self.codegen.emit.movRegImm64(self.cc.getParamReg(1), @intCast(count));
+                try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(2), roc_ops_reg);
                 try self.codegen.emit.callReg(.R11);
+                // Clean up shadow space on Windows
+                if (self.cc.is_windows) {
+                    try self.codegen.emit.addRegImm32(.w64, .RSP, self.cc.shadow_space);
+                }
             }
         }
 
@@ -14213,11 +14466,19 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 try self.codegen.emit.blrReg(.X9);
             } else {
                 try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
-                try self.codegen.emit.movRegReg(.w64, .RDI, ptr_reg);
-                try self.codegen.emit.movRegImm64(.RSI, 8); // alignment
-                try self.codegen.emit.movRegImm64(.RDX, 0); // elements_refcounted
-                try self.codegen.emit.movRegReg(.w64, .RCX, roc_ops_reg);
+                // Allocate shadow space on Windows
+                if (self.cc.is_windows) {
+                    try self.codegen.emit.subRegImm32(.w64, .RSP, self.cc.shadow_space);
+                }
+                try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(0), ptr_reg);
+                try self.codegen.emit.movRegImm64(self.cc.getParamReg(1), 8); // alignment
+                try self.codegen.emit.movRegImm64(self.cc.getParamReg(2), 0); // elements_refcounted
+                try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(3), roc_ops_reg);
                 try self.codegen.emit.callReg(.R11);
+                // Clean up shadow space on Windows
+                if (self.cc.is_windows) {
+                    try self.codegen.emit.addRegImm32(.w64, .RSP, self.cc.shadow_space);
+                }
             }
         }
 
@@ -14258,11 +14519,19 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 try self.codegen.emit.blrReg(.X9);
             } else {
                 try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
-                try self.codegen.emit.movRegReg(.w64, .RDI, ptr_reg);
-                try self.codegen.emit.movRegImm64(.RSI, 8);
-                try self.codegen.emit.movRegImm64(.RDX, 0);
-                try self.codegen.emit.movRegReg(.w64, .RCX, roc_ops_reg);
+                // Allocate shadow space on Windows
+                if (self.cc.is_windows) {
+                    try self.codegen.emit.subRegImm32(.w64, .RSP, self.cc.shadow_space);
+                }
+                try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(0), ptr_reg);
+                try self.codegen.emit.movRegImm64(self.cc.getParamReg(1), 8);
+                try self.codegen.emit.movRegImm64(self.cc.getParamReg(2), 0);
+                try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(3), roc_ops_reg);
                 try self.codegen.emit.callReg(.R11);
+                // Clean up shadow space on Windows
+                if (self.cc.is_windows) {
+                    try self.codegen.emit.addRegImm32(.w64, .RSP, self.cc.shadow_space);
+                }
             }
         }
 
@@ -14327,10 +14596,18 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 try self.codegen.emit.blrReg(.X9);
             } else {
                 try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
-                try self.codegen.emit.movRegReg(.w64, .RDI, ptr_reg);
-                try self.codegen.emit.movRegImm64(.RSI, @intCast(count));
-                try self.codegen.emit.movRegReg(.w64, .RDX, roc_ops_reg);
+                // Allocate shadow space on Windows
+                if (self.cc.is_windows) {
+                    try self.codegen.emit.subRegImm32(.w64, .RSP, self.cc.shadow_space);
+                }
+                try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(0), ptr_reg);
+                try self.codegen.emit.movRegImm64(self.cc.getParamReg(1), @intCast(count));
+                try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(2), roc_ops_reg);
                 try self.codegen.emit.callReg(.R11);
+                // Clean up shadow space on Windows
+                if (self.cc.is_windows) {
+                    try self.codegen.emit.addRegImm32(.w64, .RSP, self.cc.shadow_space);
+                }
             }
 
             // Patch the skip jump to here
@@ -14393,11 +14670,19 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 try self.codegen.emit.blrReg(.X9);
             } else {
                 try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
-                try self.codegen.emit.movRegReg(.w64, .RDI, ptr_reg);
-                try self.codegen.emit.movRegImm64(.RSI, 1);
-                try self.codegen.emit.movRegImm64(.RDX, 0);
-                try self.codegen.emit.movRegReg(.w64, .RCX, roc_ops_reg);
+                // Allocate shadow space on Windows
+                if (self.cc.is_windows) {
+                    try self.codegen.emit.subRegImm32(.w64, .RSP, self.cc.shadow_space);
+                }
+                try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(0), ptr_reg);
+                try self.codegen.emit.movRegImm64(self.cc.getParamReg(1), 1);
+                try self.codegen.emit.movRegImm64(self.cc.getParamReg(2), 0);
+                try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(3), roc_ops_reg);
                 try self.codegen.emit.callReg(.R11);
+                // Clean up shadow space on Windows
+                if (self.cc.is_windows) {
+                    try self.codegen.emit.addRegImm32(.w64, .RSP, self.cc.shadow_space);
+                }
             }
 
             // Patch the skip jump to here
@@ -14459,11 +14744,19 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 try self.codegen.emit.blrReg(.X9);
             } else {
                 try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
-                try self.codegen.emit.movRegReg(.w64, .RDI, ptr_reg);
-                try self.codegen.emit.movRegImm64(.RSI, 1);
-                try self.codegen.emit.movRegImm64(.RDX, 0);
-                try self.codegen.emit.movRegReg(.w64, .RCX, roc_ops_reg);
+                // Allocate shadow space on Windows
+                if (self.cc.is_windows) {
+                    try self.codegen.emit.subRegImm32(.w64, .RSP, self.cc.shadow_space);
+                }
+                try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(0), ptr_reg);
+                try self.codegen.emit.movRegImm64(self.cc.getParamReg(1), 1);
+                try self.codegen.emit.movRegImm64(self.cc.getParamReg(2), 0);
+                try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(3), roc_ops_reg);
                 try self.codegen.emit.callReg(.R11);
+                // Clean up shadow space on Windows
+                if (self.cc.is_windows) {
+                    try self.codegen.emit.addRegImm32(.w64, .RSP, self.cc.shadow_space);
+                }
             }
 
             // Patch the skip jump to here
@@ -14507,10 +14800,18 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 try self.codegen.emit.blrReg(.X9);
             } else {
                 try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
-                try self.codegen.emit.movRegReg(.w64, .RDI, ptr_reg);
-                try self.codegen.emit.movRegImm64(.RSI, @intCast(count));
-                try self.codegen.emit.movRegReg(.w64, .RDX, roc_ops_reg);
+                // Allocate shadow space on Windows
+                if (self.cc.is_windows) {
+                    try self.codegen.emit.subRegImm32(.w64, .RSP, self.cc.shadow_space);
+                }
+                try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(0), ptr_reg);
+                try self.codegen.emit.movRegImm64(self.cc.getParamReg(1), @intCast(count));
+                try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(2), roc_ops_reg);
                 try self.codegen.emit.callReg(.R11);
+                // Clean up shadow space on Windows
+                if (self.cc.is_windows) {
+                    try self.codegen.emit.addRegImm32(.w64, .RSP, self.cc.shadow_space);
+                }
             }
         }
 
@@ -14552,11 +14853,19 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 try self.codegen.emit.blrReg(.X9);
             } else {
                 try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
-                try self.codegen.emit.movRegReg(.w64, .RDI, ptr_reg);
-                try self.codegen.emit.movRegImm64(.RSI, 8);
-                try self.codegen.emit.movRegImm64(.RDX, 0);
-                try self.codegen.emit.movRegReg(.w64, .RCX, roc_ops_reg);
+                // Allocate shadow space on Windows
+                if (self.cc.is_windows) {
+                    try self.codegen.emit.subRegImm32(.w64, .RSP, self.cc.shadow_space);
+                }
+                try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(0), ptr_reg);
+                try self.codegen.emit.movRegImm64(self.cc.getParamReg(1), 8);
+                try self.codegen.emit.movRegImm64(self.cc.getParamReg(2), 0);
+                try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(3), roc_ops_reg);
                 try self.codegen.emit.callReg(.R11);
+                // Clean up shadow space on Windows
+                if (self.cc.is_windows) {
+                    try self.codegen.emit.addRegImm32(.w64, .RSP, self.cc.shadow_space);
+                }
             }
         }
 
@@ -14597,11 +14906,19 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 try self.codegen.emit.blrReg(.X9);
             } else {
                 try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
-                try self.codegen.emit.movRegReg(.w64, .RDI, ptr_reg);
-                try self.codegen.emit.movRegImm64(.RSI, 8);
-                try self.codegen.emit.movRegImm64(.RDX, 0);
-                try self.codegen.emit.movRegReg(.w64, .RCX, roc_ops_reg);
+                // Allocate shadow space on Windows
+                if (self.cc.is_windows) {
+                    try self.codegen.emit.subRegImm32(.w64, .RSP, self.cc.shadow_space);
+                }
+                try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(0), ptr_reg);
+                try self.codegen.emit.movRegImm64(self.cc.getParamReg(1), 8);
+                try self.codegen.emit.movRegImm64(self.cc.getParamReg(2), 0);
+                try self.codegen.emit.movRegReg(.w64, self.cc.getParamReg(3), roc_ops_reg);
                 try self.codegen.emit.callReg(.R11);
+                // Clean up shadow space on Windows
+                if (self.cc.is_windows) {
+                    try self.codegen.emit.addRegImm32(.w64, .RSP, self.cc.shadow_space);
+                }
             }
         }
 

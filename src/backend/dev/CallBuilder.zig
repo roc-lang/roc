@@ -6,6 +6,7 @@
 //! - aarch64 AAPCS64
 //!
 //! Key features:
+//! - Target-aware calling conventions (supports cross-compilation)
 //! - Automatic shadow space allocation (Windows)
 //! - Return-by-pointer for large returns
 //! - Pass-by-pointer for large structs (Windows)
@@ -13,29 +14,119 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const RocTarget = @import("roc_target").RocTarget;
 
 const x86_64 = @import("x86_64/mod.zig");
 const aarch64 = @import("aarch64/mod.zig");
 
-/// Platform-specific calling convention constants
+/// Calling convention configuration for a specific target
+pub const CallingConvention = struct {
+    /// Argument registers for integer/pointer arguments
+    param_regs: []const x86_64.GeneralReg,
+    /// Number of argument registers available
+    num_param_regs: usize,
+    /// Shadow space required before calls (Windows: 32 bytes)
+    shadow_space: u8,
+    /// Threshold for return-by-pointer (struct return uses hidden first arg)
+    return_by_ptr_threshold: usize,
+    /// Threshold for pass-by-pointer (large structs passed as pointer)
+    pass_by_ptr_threshold: usize,
+    /// Whether this is a Windows target (for additional ABI rules)
+    is_windows: bool,
+
+    /// x86_64 System V argument registers
+    const SYSV_PARAM_REGS = [_]x86_64.GeneralReg{ .RDI, .RSI, .RDX, .RCX, .R8, .R9 };
+    /// x86_64 Windows argument registers
+    const WIN64_PARAM_REGS = [_]x86_64.GeneralReg{ .RCX, .RDX, .R8, .R9 };
+
+    /// Create calling convention for a given target
+    pub fn forTarget(target: RocTarget) CallingConvention {
+        return switch (target.toCpuArch()) {
+            .x86_64 => if (target.isWindows())
+                CallingConvention{
+                    .param_regs = &WIN64_PARAM_REGS,
+                    .num_param_regs = WIN64_PARAM_REGS.len,
+                    .shadow_space = 32,
+                    .return_by_ptr_threshold = 8,
+                    .pass_by_ptr_threshold = 16,
+                    .is_windows = true,
+                }
+            else
+                CallingConvention{
+                    .param_regs = &SYSV_PARAM_REGS,
+                    .num_param_regs = SYSV_PARAM_REGS.len,
+                    .shadow_space = 0,
+                    .return_by_ptr_threshold = 16,
+                    .pass_by_ptr_threshold = std.math.maxInt(usize),
+                    .is_windows = false,
+                },
+            .aarch64, .aarch64_be => CallingConvention{
+                // aarch64 uses X0-X7 for args, but we store as x86_64 regs for now
+                // Real aarch64 support would need separate register type
+                .param_regs = &SYSV_PARAM_REGS, // placeholder
+                .num_param_regs = 8,
+                .shadow_space = 0,
+                .return_by_ptr_threshold = 16,
+                .pass_by_ptr_threshold = std.math.maxInt(usize),
+                .is_windows = false,
+            },
+            else => CallingConvention{
+                .param_regs = &SYSV_PARAM_REGS,
+                .num_param_regs = 6,
+                .shadow_space = 0,
+                .return_by_ptr_threshold = 16,
+                .pass_by_ptr_threshold = std.math.maxInt(usize),
+                .is_windows = false,
+            },
+        };
+    }
+
+    /// Get argument register at index
+    pub fn getParamReg(self: CallingConvention, index: usize) x86_64.GeneralReg {
+        return self.param_regs[index];
+    }
+
+    /// Check if return type needs to use pointer (implicit first arg)
+    pub fn needsReturnByPointer(self: CallingConvention, return_size: usize) bool {
+        return return_size > self.return_by_ptr_threshold;
+    }
+
+    /// Check if argument needs to be passed by pointer
+    pub fn needsPassByPointer(self: CallingConvention, arg_size: usize) bool {
+        return arg_size > self.pass_by_ptr_threshold;
+    }
+
+    /// Returns true if i128 values must be passed by pointer (Windows x64)
+    pub fn passI128ByPointer(self: CallingConvention) bool {
+        return self.is_windows;
+    }
+
+    /// Returns true if i128 return values use hidden pointer arg (Windows x64)
+    pub fn returnI128ByPointer(self: CallingConvention) bool {
+        return self.is_windows;
+    }
+};
+
+/// Comptime-known calling convention for host-native code generation
+/// Use CallingConvention.forTarget() for cross-compilation support
 pub const CC = struct {
     pub const PARAM_REGS = switch (builtin.cpu.arch) {
-        .aarch64 => [_]aarch64.Registers.GeneralReg{
+        .aarch64 => [_]aarch64.GeneralReg{
             .X0, .X1, .X2, .X3, .X4, .X5, .X6, .X7,
         },
         .x86_64 => if (builtin.os.tag == .windows)
-            [_]x86_64.Registers.GeneralReg{ .RCX, .RDX, .R8, .R9 }
+            [_]x86_64.GeneralReg{ .RCX, .RDX, .R8, .R9 }
         else
-            [_]x86_64.Registers.GeneralReg{ .RDI, .RSI, .RDX, .RCX, .R8, .R9 },
+            [_]x86_64.GeneralReg{ .RDI, .RSI, .RDX, .RCX, .R8, .R9 },
         else => @compileError("Unsupported architecture"),
     };
 
     pub const RETURN_REGS = switch (builtin.cpu.arch) {
-        .aarch64 => [_]aarch64.Registers.GeneralReg{ .X0, .X1 },
+        .aarch64 => [_]aarch64.GeneralReg{ .X0, .X1 },
         .x86_64 => if (builtin.os.tag == .windows)
-            [_]x86_64.Registers.GeneralReg{.RAX}
+            [_]x86_64.GeneralReg{.RAX}
         else
-            [_]x86_64.Registers.GeneralReg{ .RAX, .RDX },
+            [_]x86_64.GeneralReg{ .RAX, .RDX },
         else => @compileError("Unsupported architecture"),
     };
 
@@ -59,20 +150,20 @@ pub const CC = struct {
     };
 
     pub const SCRATCH_REG = switch (builtin.cpu.arch) {
-        .aarch64 => aarch64.Registers.GeneralReg.X9,
-        .x86_64 => x86_64.Registers.GeneralReg.R11,
+        .aarch64 => aarch64.GeneralReg.X9,
+        .x86_64 => x86_64.GeneralReg.R11,
         else => @compileError("Unsupported architecture"),
     };
 
     pub const BASE_PTR = switch (builtin.cpu.arch) {
-        .aarch64 => aarch64.Registers.GeneralReg.FP,
-        .x86_64 => x86_64.Registers.GeneralReg.RBP,
+        .aarch64 => aarch64.GeneralReg.FP,
+        .x86_64 => x86_64.GeneralReg.RBP,
         else => @compileError("Unsupported architecture"),
     };
 
     pub const STACK_PTR = switch (builtin.cpu.arch) {
-        .aarch64 => aarch64.Registers.GeneralReg.ZRSP,
-        .x86_64 => x86_64.Registers.GeneralReg.RSP,
+        .aarch64 => aarch64.GeneralReg.ZRSP,
+        .x86_64 => x86_64.GeneralReg.RSP,
         else => @compileError("Unsupported architecture"),
     };
 };
@@ -80,8 +171,8 @@ pub const CC = struct {
 /// Call builder for setting up cross-platform function calls
 pub fn CallBuilder(comptime Emit: type) type {
     const GeneralReg = switch (builtin.cpu.arch) {
-        .aarch64 => aarch64.Registers.GeneralReg,
-        .x86_64 => x86_64.Registers.GeneralReg,
+        .aarch64 => aarch64.GeneralReg,
+        .x86_64 => x86_64.GeneralReg,
         else => @compileError("Unsupported architecture"),
     };
 
@@ -293,6 +384,71 @@ pub fn CallBuilder(comptime Emit: type) type {
 }
 
 // Tests
+test "CallingConvention.forTarget Windows" {
+    const cc = CallingConvention.forTarget(.x64win);
+    try std.testing.expectEqual(@as(usize, 4), cc.num_param_regs);
+    try std.testing.expectEqual(@as(u8, 32), cc.shadow_space);
+    try std.testing.expectEqual(@as(usize, 8), cc.return_by_ptr_threshold);
+    try std.testing.expectEqual(@as(usize, 16), cc.pass_by_ptr_threshold);
+    try std.testing.expect(cc.is_windows);
+
+    // Check register order: RCX, RDX, R8, R9
+    try std.testing.expectEqual(x86_64.GeneralReg.RCX, cc.getParamReg(0));
+    try std.testing.expectEqual(x86_64.GeneralReg.RDX, cc.getParamReg(1));
+    try std.testing.expectEqual(x86_64.GeneralReg.R8, cc.getParamReg(2));
+    try std.testing.expectEqual(x86_64.GeneralReg.R9, cc.getParamReg(3));
+}
+
+test "CallingConvention.forTarget Linux" {
+    const cc = CallingConvention.forTarget(.x64glibc);
+    try std.testing.expectEqual(@as(usize, 6), cc.num_param_regs);
+    try std.testing.expectEqual(@as(u8, 0), cc.shadow_space);
+    try std.testing.expectEqual(@as(usize, 16), cc.return_by_ptr_threshold);
+    try std.testing.expectEqual(std.math.maxInt(usize), cc.pass_by_ptr_threshold);
+    try std.testing.expect(!cc.is_windows);
+
+    // Check register order: RDI, RSI, RDX, RCX, R8, R9
+    try std.testing.expectEqual(x86_64.GeneralReg.RDI, cc.getParamReg(0));
+    try std.testing.expectEqual(x86_64.GeneralReg.RSI, cc.getParamReg(1));
+    try std.testing.expectEqual(x86_64.GeneralReg.RDX, cc.getParamReg(2));
+    try std.testing.expectEqual(x86_64.GeneralReg.RCX, cc.getParamReg(3));
+    try std.testing.expectEqual(x86_64.GeneralReg.R8, cc.getParamReg(4));
+    try std.testing.expectEqual(x86_64.GeneralReg.R9, cc.getParamReg(5));
+}
+
+test "CallingConvention.forTarget macOS" {
+    const cc = CallingConvention.forTarget(.x64mac);
+    // macOS uses System V ABI, same as Linux
+    try std.testing.expectEqual(@as(usize, 6), cc.num_param_regs);
+    try std.testing.expectEqual(@as(u8, 0), cc.shadow_space);
+    try std.testing.expect(!cc.is_windows);
+}
+
+test "CallingConvention.needsReturnByPointer" {
+    const win_cc = CallingConvention.forTarget(.x64win);
+    const sysv_cc = CallingConvention.forTarget(.x64glibc);
+
+    // Windows: threshold is 8 bytes
+    try std.testing.expect(!win_cc.needsReturnByPointer(8));
+    try std.testing.expect(win_cc.needsReturnByPointer(9));
+
+    // System V: threshold is 16 bytes
+    try std.testing.expect(!sysv_cc.needsReturnByPointer(16));
+    try std.testing.expect(sysv_cc.needsReturnByPointer(17));
+}
+
+test "CallingConvention.needsPassByPointer" {
+    const win_cc = CallingConvention.forTarget(.x64win);
+    const sysv_cc = CallingConvention.forTarget(.x64glibc);
+
+    // Windows: threshold is 16 bytes
+    try std.testing.expect(!win_cc.needsPassByPointer(16));
+    try std.testing.expect(win_cc.needsPassByPointer(17));
+
+    // System V: never passes by pointer (uses stack)
+    try std.testing.expect(!sysv_cc.needsPassByPointer(1000));
+}
+
 test "CC constants are consistent" {
     // Basic sanity checks
     try std.testing.expect(CC.PARAM_REGS.len >= 4);
@@ -357,19 +513,19 @@ test "Windows x64 argument registers" {
 
     if (builtin.os.tag == .windows) {
         // Windows uses RCX, RDX, R8, R9
-        try std.testing.expectEqual(x86_64.Registers.GeneralReg.RCX, Builder.getArgReg(0));
-        try std.testing.expectEqual(x86_64.Registers.GeneralReg.RDX, Builder.getArgReg(1));
-        try std.testing.expectEqual(x86_64.Registers.GeneralReg.R8, Builder.getArgReg(2));
-        try std.testing.expectEqual(x86_64.Registers.GeneralReg.R9, Builder.getArgReg(3));
+        try std.testing.expectEqual(x86_64.GeneralReg.RCX, Builder.getArgReg(0));
+        try std.testing.expectEqual(x86_64.GeneralReg.RDX, Builder.getArgReg(1));
+        try std.testing.expectEqual(x86_64.GeneralReg.R8, Builder.getArgReg(2));
+        try std.testing.expectEqual(x86_64.GeneralReg.R9, Builder.getArgReg(3));
         try std.testing.expectEqual(@as(usize, 4), Builder.getNumArgRegs());
     } else {
         // System V uses RDI, RSI, RDX, RCX, R8, R9
-        try std.testing.expectEqual(x86_64.Registers.GeneralReg.RDI, Builder.getArgReg(0));
-        try std.testing.expectEqual(x86_64.Registers.GeneralReg.RSI, Builder.getArgReg(1));
-        try std.testing.expectEqual(x86_64.Registers.GeneralReg.RDX, Builder.getArgReg(2));
-        try std.testing.expectEqual(x86_64.Registers.GeneralReg.RCX, Builder.getArgReg(3));
-        try std.testing.expectEqual(x86_64.Registers.GeneralReg.R8, Builder.getArgReg(4));
-        try std.testing.expectEqual(x86_64.Registers.GeneralReg.R9, Builder.getArgReg(5));
+        try std.testing.expectEqual(x86_64.GeneralReg.RDI, Builder.getArgReg(0));
+        try std.testing.expectEqual(x86_64.GeneralReg.RSI, Builder.getArgReg(1));
+        try std.testing.expectEqual(x86_64.GeneralReg.RDX, Builder.getArgReg(2));
+        try std.testing.expectEqual(x86_64.GeneralReg.RCX, Builder.getArgReg(3));
+        try std.testing.expectEqual(x86_64.GeneralReg.R8, Builder.getArgReg(4));
+        try std.testing.expectEqual(x86_64.GeneralReg.R9, Builder.getArgReg(5));
         try std.testing.expectEqual(@as(usize, 6), Builder.getNumArgRegs());
     }
 }

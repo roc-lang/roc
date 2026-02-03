@@ -737,6 +737,27 @@ pub fn movssMemReg(self: *Emit, base: GeneralReg, disp: i32, src: FloatReg) !voi
     try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(disp)));
 }
 
+/// MOVDQU [base + disp32], xmm (store 128-bit unaligned from XMM to memory)
+/// Used for storing i128 return values from XMM0
+pub fn movdquMemReg(self: *Emit, base: GeneralReg, disp: i32, src: FloatReg) !void {
+    try self.buf.append(self.allocator, 0x66); // Operand size prefix
+    const r: u1 = src.rexB();
+    const b: u1 = base.rexB();
+    if (r == 1 or b == 1) {
+        try self.buf.append(self.allocator, rex(0, r, 0, b));
+    }
+    try self.buf.append(self.allocator, 0x0F);
+    try self.buf.append(self.allocator, 0x7F); // MOVDQU m128, xmm
+    const base_enc = base.enc();
+    if (base_enc == 4) {
+        try self.buf.append(self.allocator, modRM(0b10, src.enc(), 0b100));
+        try self.buf.append(self.allocator, 0x24);
+    } else {
+        try self.buf.append(self.allocator, modRM(0b10, src.enc(), base_enc));
+    }
+    try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(disp)));
+}
+
 /// ADDSD xmm, xmm (add scalar double)
 pub fn addsdRegReg(self: *Emit, dst: FloatReg, src: FloatReg) !void {
     try self.buf.append(self.allocator, 0xF2);
