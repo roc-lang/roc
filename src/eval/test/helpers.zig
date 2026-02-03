@@ -172,6 +172,42 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
                 break :blk std.fmt.allocPrint(allocator, "{s}", .{str_bytes});
             }
         },
+        eval_mod.list_i64_layout => blk: {
+            // List result buffer layout: [0-7] ptr, [8-15] len, [16-23] capacity
+            // With heap allocation, ptr points to heap memory that survives the call
+            const ListResultBuffer = extern struct {
+                ptr: [*]const i64,
+                len: usize,
+                capacity: usize,
+            };
+            var result: ListResultBuffer align(8) = .{
+                .ptr = undefined,
+                .len = 0,
+                .capacity = 0,
+            };
+            jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&dev_eval.roc_ops));
+
+            // Format as "[elem1, elem2, ...]"
+            var output = std.array_list.Managed(u8).initCapacity(allocator, 64) catch
+                return error.OutOfMemory;
+            errdefer output.deinit();
+            output.append('[') catch return error.OutOfMemory;
+
+            if (result.len > 0) {
+                const elements = result.ptr[0..result.len];
+                for (elements, 0..) |elem, i| {
+                    if (i > 0) {
+                        try output.appendSlice(", ");
+                    }
+                    const elem_str = try std.fmt.allocPrint(allocator, "{}", .{elem});
+                    defer allocator.free(elem_str);
+                    try output.appendSlice(elem_str);
+                }
+            }
+
+            try output.append(']');
+            break :blk output.toOwnedSlice();
+        },
         else => error.UnsupportedLayout,
     };
 }

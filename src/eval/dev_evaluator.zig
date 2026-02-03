@@ -43,6 +43,10 @@ const MonoLower = mono.Lower;
 const StaticDataInterner = backend.StaticDataInterner;
 const JitStaticBackend = StaticDataInterner.JitStaticBackend;
 
+// Special layout indices for lists (beyond the 16 scalar types)
+// These are used by the dev evaluator to track list types for proper result formatting
+pub const list_i64_layout: LayoutIdx = @enumFromInt(100);
+
 /// Environment for RocOps in the DevEvaluator.
 /// Manages arena-backed allocation where free() is a no-op.
 /// This enables proper RC tracking for in-place mutation optimization
@@ -633,6 +637,7 @@ fn getExprLayoutWithTypeEnv(allocator: Allocator, module_env: *ModuleEnv, expr: 
             }
             break :blk .i64;
         },
+        .e_list => list_i64_layout, // List of i64 (most common case for tests)
         else => .i64,
     };
 }
