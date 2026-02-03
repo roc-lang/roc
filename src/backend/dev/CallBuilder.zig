@@ -334,14 +334,27 @@ pub fn CallBuilder(comptime Emit: type) type {
         pub fn call(self: *Self, fn_addr: usize) !void {
             // Calculate total stack space needed
             const stack_args_space: u32 = @intCast(self.stack_arg_count * 8);
-            const total_unaligned: u32 = CC.SHADOW_SPACE + stack_args_space;
+            // On Windows x64, add 8 bytes for R12 save slot (past shadow space and stack args)
+            const r12_save_space: u32 = if (comptime builtin.os.tag == .windows and builtin.cpu.arch == .x86_64) 8 else 0;
+            const total_unaligned: u32 = CC.SHADOW_SPACE + stack_args_space + r12_save_space;
             // Round up to 16-byte alignment (Windows x64 ABI requirement)
             const total_space: u32 = (total_unaligned + 15) & ~@as(u32, 15);
+
+            // Calculate R12 save offset - at the end, past shadow space and stack args
+            const r12_save_offset: i32 = @intCast(CC.SHADOW_SPACE + stack_args_space);
 
             if (comptime builtin.cpu.arch == .x86_64) {
                 // Allocate all stack space at once
                 if (total_space > 0) {
                     try self.emit.subRegImm32(.w64, CC.STACK_PTR, @intCast(total_space));
+                }
+
+                // Save R12 to our dedicated slot (past shadow space and stack args)
+                // R12 holds roc_ops and while it's callee-saved, Zig-compiled C functions
+                // don't always preserve it correctly on Windows x64.
+                // We can't use the shadow space because the callee is allowed to use it.
+                if (comptime builtin.os.tag == .windows) {
+                    try self.emit.movMemReg(.w64, CC.STACK_PTR, r12_save_offset, .R12);
                 }
 
                 // Store deferred stack arguments at correct offsets
@@ -387,11 +400,18 @@ pub fn CallBuilder(comptime Emit: type) type {
                 try self.emit.callReg(CC.SCRATCH_REG);
             }
 
-            // Cleanup: restore stack pointer
-            if (total_space > 0) {
-                if (comptime builtin.cpu.arch == .x86_64) {
+            // Cleanup
+            if (comptime builtin.cpu.arch == .x86_64) {
+                // Restore R12 from our dedicated slot before restoring stack pointer
+                if (comptime builtin.os.tag == .windows) {
+                    try self.emit.movRegMem(.w64, .R12, CC.STACK_PTR, r12_save_offset);
+                }
+
+                // Restore stack pointer
+                if (total_space > 0) {
                     try self.emit.addRegImm32(.w64, CC.STACK_PTR, @intCast(total_space));
                 }
+            } else if (comptime builtin.cpu.arch == .aarch64) {
                 // aarch64: stack cleanup would be different (restore SP)
             }
         }
@@ -400,14 +420,27 @@ pub fn CallBuilder(comptime Emit: type) type {
         pub fn callReg(self: *Self, target: GeneralReg) !void {
             // Calculate total stack space needed
             const stack_args_space: u32 = @intCast(self.stack_arg_count * 8);
-            const total_unaligned: u32 = CC.SHADOW_SPACE + stack_args_space;
+            // On Windows x64, add 8 bytes for R12 save slot (past shadow space and stack args)
+            const r12_save_space: u32 = if (comptime builtin.os.tag == .windows and builtin.cpu.arch == .x86_64) 8 else 0;
+            const total_unaligned: u32 = CC.SHADOW_SPACE + stack_args_space + r12_save_space;
             // Round up to 16-byte alignment (Windows x64 ABI requirement)
             const total_space: u32 = (total_unaligned + 15) & ~@as(u32, 15);
+
+            // Calculate R12 save offset - at the end, past shadow space and stack args
+            const r12_save_offset: i32 = @intCast(CC.SHADOW_SPACE + stack_args_space);
 
             if (comptime builtin.cpu.arch == .x86_64) {
                 // Allocate all stack space at once
                 if (total_space > 0) {
                     try self.emit.subRegImm32(.w64, CC.STACK_PTR, @intCast(total_space));
+                }
+
+                // Save R12 to our dedicated slot (past shadow space and stack args)
+                // R12 holds roc_ops and while it's callee-saved, Zig-compiled C functions
+                // don't always preserve it correctly on Windows x64.
+                // We can't use the shadow space because the callee is allowed to use it.
+                if (comptime builtin.os.tag == .windows) {
+                    try self.emit.movMemReg(.w64, CC.STACK_PTR, r12_save_offset, .R12);
                 }
 
                 // Store deferred stack arguments at correct offsets
@@ -444,8 +477,15 @@ pub fn CallBuilder(comptime Emit: type) type {
                 try self.emit.callReg(target);
             }
 
-            if (total_space > 0) {
-                if (comptime builtin.cpu.arch == .x86_64) {
+            // Cleanup
+            if (comptime builtin.cpu.arch == .x86_64) {
+                // Restore R12 from our dedicated slot before restoring stack pointer
+                if (comptime builtin.os.tag == .windows) {
+                    try self.emit.movRegMem(.w64, .R12, CC.STACK_PTR, r12_save_offset);
+                }
+
+                // Restore stack pointer
+                if (total_space > 0) {
                     try self.emit.addRegImm32(.w64, CC.STACK_PTR, @intCast(total_space));
                 }
             }

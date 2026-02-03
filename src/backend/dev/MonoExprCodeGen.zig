@@ -8291,12 +8291,30 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // Allocate stack slot to save the heap pointer (will be clobbered during element generation)
             const heap_ptr_slot: i32 = self.codegen.allocStackSlot(8);
 
+            // WORKAROUND: Save R12 to a RBP-relative slot before C call and restore after.
+            // On Windows x64, R12 should be callee-saved, but Zig-compiled C functions
+            // don't always preserve it correctly. CallBuilder also saves R12 around calls,
+            // but this explicit save/restore BEFORE argument setup is still needed.
+            // The exact cause is unclear, but saving R12 before addRegArg() fixes the issue.
+            const roc_ops_save_slot: i32 = if (comptime builtin.cpu.arch == .x86_64 and builtin.os.tag == .windows)
+                self.codegen.allocStackSlot(8)
+            else
+                0;
+            if (comptime builtin.cpu.arch == .x86_64 and builtin.os.tag == .windows) {
+                try self.codegen.emit.movMemReg(.w64, .RBP, roc_ops_save_slot, .R12);
+            }
+
             var builder = Builder.init(&self.codegen.emit);
             try builder.addImmArg(@intCast(total_data_bytes));
             try builder.addImmArg(@intCast(elem_alignment));
             try builder.addImmArg(if (elements_refcounted) 1 else 0);
             try builder.addRegArg(roc_ops_reg);
             try builder.call(fn_addr);
+
+            // Restore R12 after the call on Windows
+            if (comptime builtin.cpu.arch == .x86_64 and builtin.os.tag == .windows) {
+                try self.codegen.emit.movRegMem(.w64, .R12, .RBP, roc_ops_save_slot);
+            }
 
             // Save heap pointer from return register to stack slot
             if (comptime builtin.cpu.arch == .aarch64) {
@@ -12950,6 +12968,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // parameter bindings that shouldn't pollute the caller's symbol map
             const saved_stack_offset = self.codegen.stack_offset;
             const saved_callee_saved_used = self.codegen.callee_saved_used;
+            const saved_callee_saved_available = self.codegen.callee_saved_available;
+            const saved_roc_ops_reg = self.roc_ops_reg;
             var saved_symbol_locations = self.symbol_locations.clone() catch return Error.OutOfMemory;
             defer saved_symbol_locations.deinit();
             var saved_mutable_var_slots = self.mutable_var_slots.clone() catch return Error.OutOfMemory;
@@ -12959,6 +12979,23 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             self.symbol_locations.clearRetainingCapacity();
             self.mutable_var_slots.clearRetainingCapacity();
             self.codegen.callee_saved_used = 0;
+            // NOTE: Do NOT reset callee_saved_available to the full mask here!
+            // The main procedure has reserved R12 (roc_ops) and RBX (result_ptr) which
+            // must remain protected. The lambda shares the same roc_ops register, so if
+            // we made R12 available, the lambda might allocate it as a scratch register
+            // and overwrite the roc_ops pointer, causing crashes when calling builtins.
+
+            // Mark R12/X20 as used so the prologue will save/restore it.
+            // The lambda receives roc_ops as its last argument and stores it in R12/X20.
+            // Without this, the prologue wouldn't save R12/X20, and if anything inside
+            // the lambda (e.g., a called function) clobbers it, roc_ops would be lost.
+            if (comptime builtin.cpu.arch == .x86_64) {
+                const r12_bit = @as(u16, 1) << @intFromEnum(x86_64.GeneralReg.R12);
+                self.codegen.callee_saved_used |= r12_bit;
+            } else {
+                const x20_bit = @as(u16, 1) << @intFromEnum(aarch64.GeneralReg.X20);
+                self.codegen.callee_saved_used |= x20_bit;
+            }
 
             // Save early return state before generating body
             const saved_early_return_ret_layout = self.early_return_ret_layout;
@@ -12983,6 +13020,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             errdefer {
                 self.codegen.stack_offset = saved_stack_offset;
                 self.codegen.callee_saved_used = saved_callee_saved_used;
+                self.codegen.callee_saved_available = saved_callee_saved_available;
+                self.roc_ops_reg = saved_roc_ops_reg;
                 self.symbol_locations.deinit();
                 self.symbol_locations = saved_symbol_locations.clone() catch unreachable;
                 self.mutable_var_slots.deinit();
@@ -13045,6 +13084,16 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 // Update compiled lambda entry with correct code_start
                 try self.compiled_lambdas.put(key, prologue_start);
 
+                // DEBUG: Dump first 64 bytes of lambda code
+                std.debug.print("[DEBUG] Lambda code at offset {d}:\n", .{prologue_start});
+                const lambda_code = self.codegen.emit.buf.items[prologue_start..@min(prologue_start + 64, self.codegen.emit.buf.items.len)];
+                std.debug.print("  ", .{});
+                for (lambda_code, 0..) |byte, dump_i| {
+                    std.debug.print("{x:0>2} ", .{byte});
+                    if ((dump_i + 1) % 16 == 0) std.debug.print("\n  ", .{});
+                }
+                std.debug.print("\n", .{});
+
                 // Patch early return jumps to point to the epilogue (now at adjusted offset)
                 const final_epilogue_offset = body_epilogue_offset - body_start + prologue_size + prologue_start;
                 for (self.early_return_patches.items[saved_early_return_patches_len..]) |patch| {
@@ -13058,6 +13107,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 // Restore state
                 self.codegen.stack_offset = saved_stack_offset;
                 self.codegen.callee_saved_used = saved_callee_saved_used;
+                self.codegen.callee_saved_available = saved_callee_saved_available;
+                self.roc_ops_reg = saved_roc_ops_reg;
                 self.symbol_locations.deinit();
                 self.symbol_locations = saved_symbol_locations.clone() catch return Error.OutOfMemory;
                 self.mutable_var_slots.deinit();
@@ -13113,6 +13164,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 // Restore state
                 self.codegen.stack_offset = saved_stack_offset;
                 self.codegen.callee_saved_used = saved_callee_saved_used;
+                self.codegen.callee_saved_available = saved_callee_saved_available;
+                self.roc_ops_reg = saved_roc_ops_reg;
                 self.symbol_locations.deinit();
                 self.symbol_locations = saved_symbol_locations.clone() catch return Error.OutOfMemory;
                 self.mutable_var_slots.deinit();
@@ -13386,6 +13439,37 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     },
                 }
             }
+
+            // Receive roc_ops as the final argument (passed by generateCallToLambda)
+            // Store it in R12 (x86_64) or X20 (aarch64) for use by the lambda body
+            const roc_ops_save_reg: GeneralReg = if (comptime builtin.cpu.arch == .aarch64)
+                .X20
+            else
+                .R12;
+
+            if (reg_idx < max_arg_regs) {
+                // roc_ops was passed in a register
+                const arg_reg = self.getArgumentRegister(reg_idx);
+                if (comptime builtin.cpu.arch == .x86_64) {
+                    std.debug.print("[DEBUG] bindLambdaParams: reg_idx={}, roc_ops source={s}, dest=R12\n", .{ reg_idx, @tagName(arg_reg) });
+                }
+                if (arg_reg != roc_ops_save_reg) {
+                    try self.codegen.emit.movRegReg(.w64, roc_ops_save_reg, arg_reg);
+                }
+            } else {
+                // roc_ops was passed on stack - load it
+                if (comptime builtin.cpu.arch == .x86_64) {
+                    std.debug.print("[DEBUG] bindLambdaParams: reg_idx={}, roc_ops from stack offset {}, dest=R12\n", .{ reg_idx, stack_arg_offset });
+                }
+                if (comptime builtin.cpu.arch == .aarch64) {
+                    try self.codegen.emit.ldrRegMemSoff(.w64, roc_ops_save_reg, .FP, stack_arg_offset);
+                } else {
+                    try self.codegen.emit.movRegMem(.w64, roc_ops_save_reg, .RBP, stack_arg_offset);
+                }
+            }
+
+            // Set roc_ops_reg for use by the lambda body when calling builtins
+            self.roc_ops_reg = roc_ops_save_reg;
         }
 
         /// Move a value to the return register (X0 on aarch64, RAX on x86_64)
@@ -13571,6 +13655,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             }
 
             // Calculate stack spill size (for arguments that don't fit in registers)
+            // Include roc_ops as the final argument (1 register)
             var stack_spill_size: i32 = 0;
             {
                 var reg_count: u8 = 0;
@@ -13583,6 +13668,10 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         stack_spill_size += @as(i32, info.num_regs) * 8;
                         reg_count = max_arg_regs;
                     }
+                }
+                // Account for roc_ops (1 register) as the final argument
+                if (reg_count + 1 > max_arg_regs) {
+                    stack_spill_size += 8; // roc_ops spills to stack
                 }
             }
 
@@ -13702,6 +13791,19 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     stack_arg_offset += @as(i32, info.num_regs) * 8;
                     reg_idx = max_arg_regs;
                 }
+            }
+
+            // Pass 3: Add roc_ops as the final argument
+            // Lambdas need roc_ops to call builtins. We pass it explicitly to avoid
+            // relying on callee-saved register semantics across internal calls.
+            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+            if (reg_idx < max_arg_regs) {
+                // roc_ops fits in a register
+                const arg_reg = self.getArgumentRegister(reg_idx);
+                try self.codegen.emit.movRegReg(.w64, arg_reg, roc_ops_reg);
+            } else {
+                // roc_ops must go on stack (Windows with many args or already spilling)
+                try self.spillArgToStack(.{ .general_reg = roc_ops_reg }, stack_arg_offset, 1);
             }
 
             // Emit call to the procedure
