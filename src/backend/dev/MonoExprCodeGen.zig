@@ -7585,8 +7585,9 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         },
                     };
                 }
-                // Return stack_i128 for 128-bit types (Dec, i128, u128)
-                if (result_size == 16) {
+                // Return stack_i128 only for actual 128-bit scalar types (i128, u128, Dec)
+                // NOT for tag unions that happen to be 16 bytes
+                if (ite.result_layout == .i128 or ite.result_layout == .u128 or ite.result_layout == .dec) {
                     return .{ .stack_i128 = slot };
                 }
                 return .{ .stack = slot };
