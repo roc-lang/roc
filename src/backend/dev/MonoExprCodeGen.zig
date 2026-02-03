@@ -670,6 +670,10 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
     return struct {
         const Self = @This();
 
+        /// The first float register (V0 on aarch64, XMM0 on x86_64), used by the C ABI
+        /// for passing and returning floating-point values.
+        const c_abi_float_reg: FloatReg = @field(FloatReg, @typeInfo(FloatReg).@"enum".fields[0].name);
+
         allocator: Allocator,
 
         /// Architecture-specific code generator with register allocation
@@ -1781,8 +1785,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                             const temp_reg = try self.allocTempGeneral();
                             var copied: u32 = 0;
                             while (copied < elem_size) : (copied += 8) {
-                                const chunk_size: u32 = @min(8, elem_size - copied);
-                                _ = chunk_size;
+                                _ = @min(8, elem_size - copied);
                                 if (comptime builtin.cpu.arch == .aarch64) {
                                     try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, addr_reg, @intCast(copied));
                                     try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, result_slot + @as(i32, @intCast(copied)));
@@ -3333,15 +3336,13 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     // list_split_first(list) -> {element, List}
                     // Returns the first element and the rest of the list
                     if (args.len != 1) unreachable;
-                    const list_loc = try self.generateExpr(args[0]);
-                    _ = list_loc;
+                    _ = try self.generateExpr(args[0]);
                     unreachable; // Complex: returns a record/tuple
                 },
                 .list_split_last => {
                     // list_split_last(list) -> {List, element}
                     if (args.len != 1) unreachable;
-                    const list_loc = try self.generateExpr(args[0]);
-                    _ = list_loc;
+                    _ = try self.generateExpr(args[0]);
                     unreachable; // Complex: returns a record/tuple
                 },
 
@@ -3979,22 +3980,9 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
         /// Generate list_contains: linear scan comparing each element
         fn generateListContains(self: *Self, list_loc: ValueLocation, needle_loc: ValueLocation, ll: anytype) Error!ValueLocation {
-            const ls = self.layout_store orelse unreachable;
-
             // Get element size from the list's element layout
             // list_contains args: [list, element], the element layout comes from the list type
-            const args_span = self.store.getExprSpan(ll.args);
-            _ = args_span;
-
-            // We know the list contains elements of the same type as the needle
-            const needle_size: u32 = blk: {
-                const ret_layout = ls.getLayout(ll.ret_layout);
-                _ = ret_layout; // return type is bool, not helpful
-                // We need to figure out element size from the list arg's layout
-                // For now, assume the needle fits in a register (<=8 bytes)
-                break :blk 8;
-            };
-            _ = needle_size;
+            _ = self.store.getExprSpan(ll.args);
 
             const list_base: i32 = switch (list_loc) {
                 .stack => |off| off,
@@ -4288,8 +4276,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 const copy_tmp = try self.allocTempGeneral();
                 var off: u32 = 0;
                 while (off < elem_size_align.size) : (off += 8) {
-                    const chunk = @min(8, elem_size_align.size - off);
-                    _ = chunk;
+                    _ = @min(8, elem_size_align.size - off);
                     if (comptime builtin.cpu.arch == .aarch64) {
                         try self.codegen.emit.ldrRegMemSoff(.w64, copy_tmp, src_addr, @intCast(off));
                         try self.codegen.emit.strRegMemSoff(.w64, copy_tmp, dst_addr, @intCast(off));
@@ -4932,11 +4919,11 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             const freg = self.codegen.allocFloat() orelse return Error.NoRegisterToSpill;
             if (comptime builtin.cpu.arch == .aarch64) {
                 // aarch64: f64 returned in D0
-                try self.codegen.emit.fmovRegReg(.double, freg, @enumFromInt(0));
+                try self.codegen.emit.fmovRegReg(.double, freg, c_abi_float_reg);
             } else {
                 // x86_64: f64 returned in XMM0
-                if (freg != @as(FloatReg, @enumFromInt(0))) {
-                    try self.codegen.emit.movsdRegReg(freg, @enumFromInt(0));
+                if (freg != c_abi_float_reg) {
+                    try self.codegen.emit.movsdRegReg(freg, c_abi_float_reg);
                 }
             }
             return .{ .float_reg = freg };
@@ -4947,15 +4934,15 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         fn callF64ToI128(self: *Self, freg: FloatReg, fn_addr: usize) Error!ValueLocation {
             if (comptime builtin.cpu.arch == .aarch64) {
                 // f64 argument in D0
-                if (freg != @as(FloatReg, @enumFromInt(0))) {
-                    try self.codegen.emit.fmovRegReg(.double, @enumFromInt(0), freg);
+                if (freg != c_abi_float_reg) {
+                    try self.codegen.emit.fmovRegReg(.double, c_abi_float_reg, freg);
                 }
                 try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
                 try self.codegen.emit.blrReg(.X9);
             } else {
                 // f64 argument in XMM0
-                if (freg != @as(FloatReg, @enumFromInt(0))) {
-                    try self.codegen.emit.movsdRegReg(@enumFromInt(0), freg);
+                if (freg != c_abi_float_reg) {
+                    try self.codegen.emit.movsdRegReg(c_abi_float_reg, freg);
                 }
                 try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
                 try self.codegen.emit.callReg(.R11);
@@ -5329,8 +5316,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         if (comptime builtin.cpu.arch == .aarch64) {
                             try self.codegen.emit.movRegImm64(.X0, @bitCast(@as(i64, result_offset)));
                             try self.codegen.emit.addRegRegReg(.w64, .X0, .FP, .X0);
-                            if (freg != @as(FloatReg, @enumFromInt(0))) {
-                                try self.codegen.emit.fmovRegReg(.double, @enumFromInt(0), freg);
+                            if (freg != c_abi_float_reg) {
+                                try self.codegen.emit.fmovRegReg(.double, c_abi_float_reg, freg);
                             }
                             try self.codegen.emitLoadImm(.X1, @intCast(target_bits));
                             try self.codegen.emitLoadImm(.X2, @intCast(target_is_signed));
@@ -5339,8 +5326,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                             try self.codegen.emit.blrReg(.X9);
                         } else {
                             try self.codegen.emit.leaRegMem(.RDI, .RBP, result_offset);
-                            if (freg != @as(FloatReg, @enumFromInt(0))) {
-                                try self.codegen.emit.movsdRegReg(@enumFromInt(0), freg);
+                            if (freg != c_abi_float_reg) {
+                                try self.codegen.emit.movsdRegReg(c_abi_float_reg, freg);
                             }
                             try self.codegen.emitLoadImm(.RSI, @intCast(target_bits));
                             try self.codegen.emitLoadImm(.RDX, @intCast(target_is_signed));
@@ -5386,15 +5373,15 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         if (comptime builtin.cpu.arch == .aarch64) {
                             try self.codegen.emit.movRegImm64(.X0, @bitCast(@as(i64, result_offset)));
                             try self.codegen.emit.addRegRegReg(.w64, .X0, .FP, .X0);
-                            if (freg != @as(FloatReg, @enumFromInt(0))) {
-                                try self.codegen.emit.fmovRegReg(.double, @enumFromInt(0), freg);
+                            if (freg != c_abi_float_reg) {
+                                try self.codegen.emit.fmovRegReg(.double, c_abi_float_reg, freg);
                             }
                             try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
                             try self.codegen.emit.blrReg(.X9);
                         } else {
                             try self.codegen.emit.leaRegMem(.RDI, .RBP, result_offset);
-                            if (freg != @as(FloatReg, @enumFromInt(0))) {
-                                try self.codegen.emit.movsdRegReg(@enumFromInt(0), freg);
+                            if (freg != c_abi_float_reg) {
+                                try self.codegen.emit.movsdRegReg(c_abi_float_reg, freg);
                             }
                             try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
                             try self.codegen.emit.callReg(.R11);
@@ -6530,13 +6517,11 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             const result_reg = try self.allocTempGeneral();
             try self.codegen.emitLoadImm(result_reg, 1); // Start with "all equal"
 
-            const fields_range = record_data.fields;
             var field_i: u32 = 0;
             while (field_i < field_count) : (field_i += 1) {
                 const field_offset = ls.getRecordFieldOffset(record_idx, @intCast(field_i));
                 const field_size = ls.getRecordFieldSize(record_idx, @intCast(field_i));
                 const field_layout_idx = ls.getRecordFieldLayout(record_idx, @intCast(field_i));
-                _ = fields_range;
 
                 const lhs_field_off = lhs_base + @as(i32, @intCast(field_offset));
                 const rhs_field_off = rhs_base + @as(i32, @intCast(field_offset));
@@ -10556,9 +10541,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             self: *Self,
             cv: anytype,
             args_span: anytype,
-            ret_layout: layout.Idx,
+            _: layout.Idx,
         ) Error!ValueLocation {
-            _ = ret_layout;
 
             // Bind captures from the closure's stack data to their symbols
             const captures = self.store.getCaptures(cv.captures);
@@ -10692,9 +10676,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             member: mono.LambdaSetMember,
             captures_offset: i32,
             args_span: anytype,
-            ret_layout: layout.Idx,
+            _: layout.Idx,
         ) Error!ValueLocation {
-            _ = ret_layout;
 
             // Bind captures from the stack to their symbols
             const captures = self.store.getCaptures(member.captures);
@@ -10724,8 +10707,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         }
 
         /// Copy a value location to a stack slot.
-        fn copyToStackSlot(self: *Self, slot: i32, loc: ValueLocation, ret_layout: layout.Idx) Error!void {
-            _ = ret_layout;
+        fn copyToStackSlot(self: *Self, slot: i32, loc: ValueLocation, _: layout.Idx) Error!void {
             switch (loc) {
                 .general_reg => |reg| {
                     try self.codegen.emitStoreStack(.w64, slot, reg);

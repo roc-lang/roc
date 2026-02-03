@@ -33,6 +33,9 @@ const LayoutTest = struct {
         // Create single-element slice for all_module_envs
         result.module_env_ptr[0] = &result.module_env;
         result.layout_store = try Store.init(&result.module_env_ptr, null, gpa, base.target.TargetUsize.native);
+        // Tests create types in a separate type_store, not in module_env.types,
+        // so we must override the types store the layout store uses for resolution.
+        result.layout_store.setOverrideTypesStore(&result.type_store);
         return result;
     }
 
@@ -48,7 +51,10 @@ const LayoutTest = struct {
     }
 
     fn initLayoutStore(self: *LayoutTest) !void {
+        // Refresh the pointer in case the struct moved after initWithIdents returned
+        self.module_env_ptr[0] = &self.module_env;
         self.layout_store = try Store.init(&self.module_env_ptr, null, self.gpa, base.target.TargetUsize.native);
+        self.layout_store.setOverrideTypesStore(&self.type_store);
     }
 
     fn deinit(self: *LayoutTest) void {
@@ -130,6 +136,7 @@ test "fromTypeVar - zero-sized types (ZST)" {
 
     lt.module_env_ptr[0] = &lt.module_env;
     lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa, base.target.TargetUsize.native);
+    lt.layout_store.setOverrideTypesStore(&lt.type_store);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -172,6 +179,7 @@ test "fromTypeVar - record with only zero-sized fields" {
 
     lt.module_env_ptr[0] = &lt.module_env;
     lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa, base.target.TargetUsize.native);
+    lt.layout_store.setOverrideTypesStore(&lt.type_store);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -202,6 +210,7 @@ test "record extension with empty_record succeeds" {
     lt.type_store = try types_store.Store.init(lt.gpa);
     lt.module_env_ptr[0] = &lt.module_env;
     lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa, base.target.TargetUsize.native);
+    lt.layout_store.setOverrideTypesStore(&lt.type_store);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -232,6 +241,7 @@ test "deeply nested containers with inner ZST" {
 
     lt.module_env_ptr[0] = &lt.module_env;
     lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa, base.target.TargetUsize.native);
+    lt.layout_store.setOverrideTypesStore(&lt.type_store);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -287,6 +297,7 @@ test "nested ZST detection - List of record with ZST field" {
 
     lt.module_env_ptr[0] = &lt.module_env;
     lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa, base.target.TargetUsize.native);
+    lt.layout_store.setOverrideTypesStore(&lt.type_store);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -317,6 +328,7 @@ test "nested ZST detection - Box of tuple with ZST elements" {
 
     lt.module_env_ptr[0] = &lt.module_env;
     lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa, base.target.TargetUsize.native);
+    lt.layout_store.setOverrideTypesStore(&lt.type_store);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -352,6 +364,7 @@ test "nested ZST detection - deeply nested" {
 
     lt.module_env_ptr[0] = &lt.module_env;
     lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa, base.target.TargetUsize.native);
+    lt.layout_store.setOverrideTypesStore(&lt.type_store);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -408,6 +421,7 @@ test "fromTypeVar - flex var with method constraint returning open tag union" {
 
     lt.module_env_ptr[0] = &lt.module_env;
     lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa, base.target.TargetUsize.native);
+    lt.layout_store.setOverrideTypesStore(&lt.type_store);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -526,6 +540,7 @@ test "fromTypeVar - type alias inside Try nominal (issue #8708)" {
 
     lt.module_env_ptr[0] = &lt.module_env;
     lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa, base.target.TargetUsize.native);
+    lt.layout_store.setOverrideTypesStore(&lt.type_store);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -614,6 +629,7 @@ test "fromTypeVar - recursive nominal type with nested Box at depth 2+ (issue #8
 
     lt.module_env_ptr[0] = &lt.module_env;
     lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa, base.target.TargetUsize.native);
+    lt.layout_store.setOverrideTypesStore(&lt.type_store);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -709,6 +725,7 @@ test "layoutSizeAlign - recursive nominal type with record containing List (issu
 
     lt.module_env_ptr[0] = &lt.module_env;
     lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa, base.target.TargetUsize.native);
+    lt.layout_store.setOverrideTypesStore(&lt.type_store);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -820,6 +837,7 @@ test "fromTypeVar - recursive nominal with Box has no double-boxing (issue #8916
 
     lt.module_env_ptr[0] = &lt.module_env;
     lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa, base.target.TargetUsize.native);
+    lt.layout_store.setOverrideTypesStore(&lt.type_store);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 

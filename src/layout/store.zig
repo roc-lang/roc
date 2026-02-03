@@ -2367,20 +2367,26 @@ pub const Store = struct {
                         // may produce a different, correct layout.
                         depends_on_unresolved_type_params = true;
 
-                        // Unconstrained flex vars (like the element type of an empty list)
-                        // have no concrete type, so they're zero-sized.
-                        if (flex.constraints.isEmpty()) {
-                            break :blk Layout.zst();
-                        }
-
                         // Flex vars with a from_numeral constraint are numeric literals
                         // that haven't been resolved to a concrete type; default to Dec.
                         if (self.hasFromNumeralConstraint(flex.constraints)) {
                             break :blk Layout.default_num();
                         }
 
-                        // Flex vars with other constraints (method_call, etc.) but no
-                        // from_numeral are not numeric — they're zero-sized.
+                        // For flex vars inside containers (list, box), use opaque_ptr
+                        // since the container needs a concrete element layout.
+                        if (self.work.pending_containers.len > 0) {
+                            const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
+                            if (pending_item.container == .box or pending_item.container == .list) {
+                                if (!flex.constraints.isEmpty()) {
+                                    break :blk Layout.default_num();
+                                }
+                                break :blk Layout.opaquePtr();
+                            }
+                        }
+
+                        // Unconstrained flex vars (like the element type of an empty list)
+                        // have no concrete type, so they're zero-sized.
                         break :blk Layout.zst();
                     },
                     .rigid => |rigid| blk: {

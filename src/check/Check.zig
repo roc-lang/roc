@@ -281,6 +281,7 @@ pub inline fn debugAssertArraysInSync(self: *const Self) void {
 inline fn ensureTypeStoreIsFilled(self: *Self) Allocator.Error!void {
     const region_nodes: usize = @intCast(self.regions.len());
     const type_nodes: usize = @intCast(self.types.len());
+    if (type_nodes >= region_nodes) return;
     try self.types.ensureTotalCapacity(region_nodes);
     for (type_nodes..region_nodes) |_| {
         _ = self.types.appendFromContentAssumeCapacity(.{ .flex = Flex.init() }, undefined);

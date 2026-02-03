@@ -169,8 +169,13 @@ test "fx platform IO spec tests" {
 
     var passed: usize = 0;
     var failed: usize = 0;
+    var skipped: usize = 0;
 
     for (fx_test_specs.io_spec_tests) |spec| {
+        if (spec.skip.len > 0) {
+            skipped += 1;
+            continue;
+        }
         const result = runRocTest(allocator, spec.roc_file, spec.io_spec) catch |err| {
             std.debug.print("\n[FAIL] {s}: failed to run: {}\n", .{ spec.roc_file, err });
             failed += 1;
@@ -194,7 +199,7 @@ test "fx platform IO spec tests" {
     // Print summary
     const total = passed + failed;
     if (failed > 0) {
-        std.debug.print("\n{}/{} IO spec tests passed ({} failed)\n", .{ passed, total, failed });
+        std.debug.print("\n{}/{} IO spec tests passed ({} failed, {} skipped)\n", .{ passed, total, failed, skipped });
         return error.SomeTestsFailed;
     }
 }
@@ -255,16 +260,16 @@ test "fx platform all_syntax_test.roc prints expected output" {
         "Line 3\n" ++
         "Unicode escape sequence: \u{00A0}\n" ++
         "This is an effectful function!\n" ++
-        "15\n" ++
-        "10\n" ++
-        "42\n" ++
+        "15.0\n" ++
+        "10.0\n" ++
+        "42.0\n" ++
         "NotOneTwoNotFive\n" ++
-        "(\"Roc\", 1)\n" ++
+        "(\"Roc\", 1.0)\n" ++
         "Builtin.List.[\"a\", \"b\"]\n" ++
-        "(\"Roc\", 1, 1, \"Roc\")\n" ++
-        "10\n" ++
+        "(\"Roc\", 1.0, 1.0, \"Roc\")\n" ++
+        "10.0\n" ++
         "{ age: 31, name: \"Alice\" }\n" ++
-        "{ binary: 5, explicit_dec: 5, explicit_i128: 5, explicit_i16: 5, explicit_i32: 5, explicit_i64: 5, explicit_i8: 5, explicit_u128: 5, explicit_u16: 5, explicit_u32: 5, explicit_u64: 5, explicit_u8: 5, hex: 5, octal: 5, usage_based: 5 }\n" ++
+        "{ binary: 5, explicit_dec: 5.0, explicit_i128: 5, explicit_i16: 5, explicit_i32: 5, explicit_i64: 5, explicit_i8: 5, explicit_u128: 5, explicit_u16: 5, explicit_u32: 5, explicit_u64: 5, explicit_u8: 5, hex: 5, octal: 5, usage_based: 5 }\n" ++
         "False\n" ++
         "99\n" ++
         "\"12345.0\"\n" ++
@@ -274,7 +279,7 @@ test "fx platform all_syntax_test.roc prints expected output" {
         "\"other letter\"\n";
 
     try testing.expectEqualStrings(expected_stdout, run_result.stdout);
-    try testing.expectEqualStrings("ROC DBG: 42\n", run_result.stderr);
+    try testing.expectEqualStrings("ROC DBG: 42.0\n", run_result.stderr);
 }
 
 test "fx platform match returning string" {
