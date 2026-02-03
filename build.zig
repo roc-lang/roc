@@ -2969,7 +2969,6 @@ pub fn build(b: *std.Build) void {
         // Ensure roc binary is built before running the test (tests invoke roc CLI)
         run_fx_platform_test.step.dependOn(roc_step);
         tests_summary.addRun(&run_fx_platform_test.step);
-
     }
 
     // Create glue-host step for building all musl platform host libraries.
