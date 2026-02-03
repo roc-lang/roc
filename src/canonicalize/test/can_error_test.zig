@@ -258,7 +258,8 @@ test "pipe operator" {
     defer test_env.deinit();
 
     const canonical_expr = try test_env.canonicalizeExpr();
-    try testing.expect(canonical_expr != null);
+    // Pizza operator is not supported, so this should produce a parse diagnostic
+    try testing.expect(canonical_expr == null);
 }
 
 test "function with many arguments" {

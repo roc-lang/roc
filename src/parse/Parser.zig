@@ -31,8 +31,6 @@ scratch_nodes: std.ArrayList(Node.Idx),
 diagnostics: std.ArrayList(AST.Diagnostic),
 cached_malformed_node: ?Node.Idx,
 nesting_counter: u8,
-/// When true, skip emitting diagnostics for unsupported operators.
-suppress_unsupported_operator_diag: bool,
 
 /// init the parser from a buffer of tokens
 pub fn init(tokens: TokenizedBuffer, gpa: std.mem.Allocator) std.mem.Allocator.Error!Parser {
@@ -48,7 +46,6 @@ pub fn init(tokens: TokenizedBuffer, gpa: std.mem.Allocator) std.mem.Allocator.E
         .diagnostics = .{},
         .cached_malformed_node = null,
         .nesting_counter = MAX_NESTING_LEVELS,
-        .suppress_unsupported_operator_diag = false,
     };
 }
 
@@ -2752,12 +2749,10 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
                 self.advance(); // consume the unsupported operator
                 _ = self.parseExprWithBp(0) catch break;
             }
-            if (!self.suppress_unsupported_operator_diag) {
-                try self.pushDiagnostic(tag, .{
-                    .start = op_pos,
-                    .end = op_pos,
-                });
-            }
+            try self.pushDiagnostic(tag, .{
+                .start = op_pos,
+                .end = op_pos,
+            });
             return try self.store.addMalformed(AST.Expr.Idx, tag, .{ .start = start, .end = self.pos });
         }
 
@@ -3684,11 +3679,9 @@ fn peekForUnsupportedOperator(self: *Parser) ?AST.Diagnostic.Tag {
 /// encountered at the top level before expression parsing is reached.
 fn consumeUnsupportedOperatorAsStatement(self: *Parser, tag: AST.Diagnostic.Tag) Error!AST.Statement.Idx {
     const start = self.pos;
-    const previous_state = self.suppress_unsupported_operator_diag;
-    self.suppress_unsupported_operator_diag = true;
-    defer self.suppress_unsupported_operator_diag = previous_state;
-
-    _ = try self.parseExprWithBp(0);
+    while (self.peek() != .EndOfFile) {
+        self.advance();
+    }
     try self.pushDiagnostic(tag, .{
         .start = start,
         .end = self.pos,
