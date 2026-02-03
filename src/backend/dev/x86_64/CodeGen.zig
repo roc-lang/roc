@@ -395,7 +395,6 @@ pub const SystemVCodeGen = struct {
         // Save only the callee-saved registers that were actually used (MOV-based)
         for (CALLEE_SAVED_SLOTS) |slot| {
             if ((self.callee_saved_used & (@as(u16, 1) << @intCast(@intFromEnum(slot.reg)))) != 0) {
-                std.debug.print("[DEBUG] emitPrologue: saving {s} to [RBP{d}]\n", .{ @tagName(slot.reg), slot.offset });
                 try self.emit.movMemReg(.w64, .RBP, slot.offset, slot.reg);
             }
         }

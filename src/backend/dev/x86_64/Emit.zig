@@ -1361,3 +1361,214 @@ test "function prologue sequence" {
     try emit.movRegReg(.w64, .RBP, .RSP);
     try std.testing.expectEqualSlices(u8, &[_]u8{ 0x55, 0x48, 0x89, 0xE5 }, emit.buf.items);
 }
+
+// =============================================================================
+// Phase 1: Emit Primitive Unit Tests
+// These tests verify exact byte encoding for key operations used in code generation.
+// =============================================================================
+
+test "movRegMem - load from [rbp-144]" {
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    // mov rax, [rbp-144]
+    // REX.W (48) + opcode (8B) + ModRM (85 = mod:10 reg:000 rm:101) + disp32 (-144 = 0xFFFFFF70)
+    try emit.movRegMem(.w64, .RAX, .RBP, -144);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x48, 0x8B, 0x85, 0x70, 0xFF, 0xFF, 0xFF }, emit.buf.items);
+}
+
+test "movRegMem - load from [rsp+32] requires SIB byte" {
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    // mov rcx, [rsp+32]
+    // RSP as base requires SIB byte (0x24 = scale:00 index:100 base:100)
+    // REX.W (48) + opcode (8B) + ModRM (8C = mod:10 reg:001 rm:100) + SIB (24) + disp32 (32)
+    try emit.movRegMem(.w64, .RCX, .RSP, 32);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x48, 0x8B, 0x8C, 0x24, 0x20, 0x00, 0x00, 0x00 }, emit.buf.items);
+}
+
+test "movRegMem - load from [r12+offset] requires SIB byte" {
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    // mov rax, [r12+16]
+    // R12 has same encoding as RSP (100), needs SIB byte
+    // REX.WB (49) + opcode (8B) + ModRM (84 = mod:10 reg:000 rm:100) + SIB (24) + disp32 (16)
+    try emit.movRegMem(.w64, .RAX, .R12, 16);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x49, 0x8B, 0x84, 0x24, 0x10, 0x00, 0x00, 0x00 }, emit.buf.items);
+}
+
+test "movMemReg - store to [rbp-8]" {
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    // mov [rbp-8], rax
+    // REX.W (48) + opcode (89) + ModRM (85 = mod:10 reg:000 rm:101) + disp32 (-8)
+    try emit.movMemReg(.w64, .RBP, -8, .RAX);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x48, 0x89, 0x85, 0xF8, 0xFF, 0xFF, 0xFF }, emit.buf.items);
+}
+
+test "movMemReg - store to [rsp+32] requires SIB byte" {
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    // mov [rsp+32], r11
+    // REX.WR (4C) + opcode (89) + ModRM (9C = mod:10 reg:011 rm:100) + SIB (24) + disp32 (32)
+    try emit.movMemReg(.w64, .RSP, 32, .R11);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x4C, 0x89, 0x9C, 0x24, 0x20, 0x00, 0x00, 0x00 }, emit.buf.items);
+}
+
+test "leaRegMem - lea rax, [rbp-32]" {
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    // lea rax, [rbp-32]
+    // REX.W (48) + opcode (8D) + ModRM (85 = mod:10 reg:000 rm:101) + disp32 (-32)
+    try emit.leaRegMem(.RAX, .RBP, -32);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x48, 0x8D, 0x85, 0xE0, 0xFF, 0xFF, 0xFF }, emit.buf.items);
+}
+
+test "leaRegMem - lea rcx, [rsp+64] requires SIB" {
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    // lea rcx, [rsp+64]
+    // REX.W (48) + opcode (8D) + ModRM (8C = mod:10 reg:001 rm:100) + SIB (24) + disp32 (64)
+    try emit.leaRegMem(.RCX, .RSP, 64);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x48, 0x8D, 0x8C, 0x24, 0x40, 0x00, 0x00, 0x00 }, emit.buf.items);
+}
+
+test "subRegImm32 - sub rsp, 80 (stack allocation)" {
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    // sub rsp, 80
+    // REX.W (48) + opcode (81) + ModRM (EC = mod:11 reg:101 rm:100) + imm32 (80)
+    try emit.subRegImm32(.w64, .RSP, 80);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x48, 0x81, 0xEC, 0x50, 0x00, 0x00, 0x00 }, emit.buf.items);
+}
+
+test "addRegImm32 - add rsp, 80 (stack deallocation)" {
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    // add rsp, 80
+    // REX.W (48) + opcode (81) + ModRM (C4 = mod:11 reg:000 rm:100) + imm32 (80)
+    try emit.addRegImm32(.w64, .RSP, 80);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x48, 0x81, 0xC4, 0x50, 0x00, 0x00, 0x00 }, emit.buf.items);
+}
+
+test "callReg - call r11" {
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    // call r11
+    // REX.B (41) + opcode (FF) + ModRM (D3 = mod:11 reg:010 rm:011)
+    try emit.callReg(.R11);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x41, 0xFF, 0xD3 }, emit.buf.items);
+}
+
+test "callReg - call rax (no REX needed)" {
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    // call rax
+    // opcode (FF) + ModRM (D0 = mod:11 reg:010 rm:000)
+    try emit.callReg(.RAX);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0xFF, 0xD0 }, emit.buf.items);
+}
+
+test "pushReg - push r12" {
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    // push r12
+    // REX.B (41) + opcode (54 = 50 + 4)
+    try emit.pushReg(.R12);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x41, 0x54 }, emit.buf.items);
+}
+
+test "popReg - pop r12" {
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    // pop r12
+    // REX.B (41) + opcode (5C = 58 + 4)
+    try emit.popReg(.R12);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x41, 0x5C }, emit.buf.items);
+}
+
+test "movRegImm64 - movabs r11, address" {
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    // movabs r11, 0x00007FFF12345678
+    // REX.WB (49) + opcode (BB = B8 + 3) + imm64
+    try emit.movRegImm64(.R11, 0x00007FFF12345678);
+    try std.testing.expectEqualSlices(u8, &[_]u8{
+        0x49, 0xBB, // REX.WB + MOV r11, imm64
+        0x78, 0x56, 0x34, 0x12, 0xFF, 0x7F, 0x00, 0x00, // Little-endian immediate
+    }, emit.buf.items);
+}
+
+test "Windows x64 call sequence - shadow space + call" {
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    // Typical Windows x64 call setup:
+    // sub rsp, 32      ; allocate shadow space
+    // mov rcx, rdi     ; first arg (example)
+    // call r11
+    // add rsp, 32      ; deallocate shadow space
+
+    try emit.subRegImm32(.w64, .RSP, 32);
+    try emit.movRegReg(.w64, .RCX, .RDI);
+    try emit.callReg(.R11);
+    try emit.addRegImm32(.w64, .RSP, 32);
+
+    // Verify total sequence length
+    // sub rsp, 32: 7 bytes
+    // mov rcx, rdi: 3 bytes
+    // call r11: 3 bytes
+    // add rsp, 32: 7 bytes
+    // Total: 20 bytes
+    try std.testing.expectEqual(@as(usize, 20), emit.buf.items.len);
+}
+
+test "movMemReg 32-bit width" {
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    // mov [rbp-16], eax (32-bit store, no REX.W)
+    try emit.movMemReg(.w32, .RBP, -16, .RAX);
+    // opcode (89) + ModRM (85) + disp32 (-16)
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x89, 0x85, 0xF0, 0xFF, 0xFF, 0xFF }, emit.buf.items);
+}
+
+test "movRegMem 32-bit width" {
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    // mov eax, [rbp-16] (32-bit load, no REX.W)
+    try emit.movRegMem(.w32, .RAX, .RBP, -16);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x8B, 0x85, 0xF0, 0xFF, 0xFF, 0xFF }, emit.buf.items);
+}
+
+test "jmpRel32 encoding" {
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    // jmp +0x12345678
+    try emit.jmpRel32(0x12345678);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0xE9, 0x78, 0x56, 0x34, 0x12 }, emit.buf.items);
+}
+
+test "callRel32 encoding" {
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    // call +0x100
+    try emit.callRel32(0x100);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0xE8, 0x00, 0x01, 0x00, 0x00 }, emit.buf.items);
+}

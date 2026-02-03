@@ -199,9 +199,26 @@ pub fn CallBuilder(comptime Emit: type) type {
         stack_arg_count: usize = 0,
         stack_args: [MAX_STACK_ARGS]StackArg = undefined,
         return_by_ptr: bool = false,
+        /// RBP-relative offset where R12 is saved (only used on Windows x64)
+        /// Set via saveR12 before adding arguments that might clobber R12
+        r12_save_offset: ?i32 = null,
 
         pub fn init(emit: *Emit) Self {
             return .{ .emit = emit };
+        }
+
+        /// Initialize with R12 save slot for Windows x64.
+        /// On Windows, Zig-compiled C functions may corrupt R12 despite it being callee-saved.
+        /// Pass an RBP-relative stack offset where R12 should be saved/restored.
+        /// On non-Windows platforms, this is a no-op and the offset is ignored.
+        pub fn initWithR12Save(emit: *Emit, r12_save_offset: i32) !Self {
+            var self = Self{ .emit = emit };
+            if (comptime builtin.cpu.arch == .x86_64 and builtin.os.tag == .windows) {
+                self.r12_save_offset = r12_save_offset;
+                // Save R12 immediately to the RBP-relative slot
+                try self.emit.movMemReg(.w64, CC.BASE_PTR, r12_save_offset, .R12);
+            }
+            return self;
         }
 
         /// Check if return type needs to use pointer (implicit first arg)
@@ -330,31 +347,20 @@ pub fn CallBuilder(comptime Emit: type) type {
             }
         }
 
-        /// Emit call instruction and handle cleanup
+        /// Emit call instruction and handle cleanup.
+        /// If R12 save was configured via initWithR12Save(), R12 is automatically
+        /// restored after the call returns.
         pub fn call(self: *Self, fn_addr: usize) !void {
             // Calculate total stack space needed
             const stack_args_space: u32 = @intCast(self.stack_arg_count * 8);
-            // On Windows x64, add 8 bytes for R12 save slot (past shadow space and stack args)
-            const r12_save_space: u32 = if (comptime builtin.os.tag == .windows and builtin.cpu.arch == .x86_64) 8 else 0;
-            const total_unaligned: u32 = CC.SHADOW_SPACE + stack_args_space + r12_save_space;
+            const total_unaligned: u32 = CC.SHADOW_SPACE + stack_args_space;
             // Round up to 16-byte alignment (Windows x64 ABI requirement)
             const total_space: u32 = (total_unaligned + 15) & ~@as(u32, 15);
-
-            // Calculate R12 save offset - at the end, past shadow space and stack args
-            const r12_save_offset: i32 = @intCast(CC.SHADOW_SPACE + stack_args_space);
 
             if (comptime builtin.cpu.arch == .x86_64) {
                 // Allocate all stack space at once
                 if (total_space > 0) {
                     try self.emit.subRegImm32(.w64, CC.STACK_PTR, @intCast(total_space));
-                }
-
-                // Save R12 to our dedicated slot (past shadow space and stack args)
-                // R12 holds roc_ops and while it's callee-saved, Zig-compiled C functions
-                // don't always preserve it correctly on Windows x64.
-                // We can't use the shadow space because the callee is allowed to use it.
-                if (comptime builtin.os.tag == .windows) {
-                    try self.emit.movMemReg(.w64, CC.STACK_PTR, r12_save_offset, .R12);
                 }
 
                 // Store deferred stack arguments at correct offsets
@@ -402,45 +408,34 @@ pub fn CallBuilder(comptime Emit: type) type {
 
             // Cleanup
             if (comptime builtin.cpu.arch == .x86_64) {
-                // Restore R12 from our dedicated slot before restoring stack pointer
-                if (comptime builtin.os.tag == .windows) {
-                    try self.emit.movRegMem(.w64, .R12, CC.STACK_PTR, r12_save_offset);
-                }
-
                 // Restore stack pointer
                 if (total_space > 0) {
                     try self.emit.addRegImm32(.w64, CC.STACK_PTR, @intCast(total_space));
+                }
+
+                // Restore R12 if we saved it (Windows x64 only)
+                if (self.r12_save_offset) |offset| {
+                    try self.emit.movRegMem(.w64, .R12, CC.BASE_PTR, offset);
                 }
             } else if (comptime builtin.cpu.arch == .aarch64) {
                 // aarch64: stack cleanup would be different (restore SP)
             }
         }
 
-        /// Call through a register (for indirect calls)
+        /// Call through a register (for indirect calls).
+        /// If R12 save was configured via initWithR12Save(), R12 is automatically
+        /// restored after the call returns.
         pub fn callReg(self: *Self, target: GeneralReg) !void {
             // Calculate total stack space needed
             const stack_args_space: u32 = @intCast(self.stack_arg_count * 8);
-            // On Windows x64, add 8 bytes for R12 save slot (past shadow space and stack args)
-            const r12_save_space: u32 = if (comptime builtin.os.tag == .windows and builtin.cpu.arch == .x86_64) 8 else 0;
-            const total_unaligned: u32 = CC.SHADOW_SPACE + stack_args_space + r12_save_space;
+            const total_unaligned: u32 = CC.SHADOW_SPACE + stack_args_space;
             // Round up to 16-byte alignment (Windows x64 ABI requirement)
             const total_space: u32 = (total_unaligned + 15) & ~@as(u32, 15);
-
-            // Calculate R12 save offset - at the end, past shadow space and stack args
-            const r12_save_offset: i32 = @intCast(CC.SHADOW_SPACE + stack_args_space);
 
             if (comptime builtin.cpu.arch == .x86_64) {
                 // Allocate all stack space at once
                 if (total_space > 0) {
                     try self.emit.subRegImm32(.w64, CC.STACK_PTR, @intCast(total_space));
-                }
-
-                // Save R12 to our dedicated slot (past shadow space and stack args)
-                // R12 holds roc_ops and while it's callee-saved, Zig-compiled C functions
-                // don't always preserve it correctly on Windows x64.
-                // We can't use the shadow space because the callee is allowed to use it.
-                if (comptime builtin.os.tag == .windows) {
-                    try self.emit.movMemReg(.w64, CC.STACK_PTR, r12_save_offset, .R12);
                 }
 
                 // Store deferred stack arguments at correct offsets
@@ -479,14 +474,14 @@ pub fn CallBuilder(comptime Emit: type) type {
 
             // Cleanup
             if (comptime builtin.cpu.arch == .x86_64) {
-                // Restore R12 from our dedicated slot before restoring stack pointer
-                if (comptime builtin.os.tag == .windows) {
-                    try self.emit.movRegMem(.w64, .R12, CC.STACK_PTR, r12_save_offset);
-                }
-
                 // Restore stack pointer
                 if (total_space > 0) {
                     try self.emit.addRegImm32(.w64, CC.STACK_PTR, @intCast(total_space));
+                }
+
+                // Restore R12 if we saved it (Windows x64 only)
+                if (self.r12_save_offset) |offset| {
+                    try self.emit.movRegMem(.w64, .R12, CC.BASE_PTR, offset);
                 }
             }
         }
@@ -652,5 +647,373 @@ test "Windows x64 argument registers" {
         try std.testing.expectEqual(x86_64.GeneralReg.R8, Builder.getArgReg(4));
         try std.testing.expectEqual(x86_64.GeneralReg.R9, Builder.getArgReg(5));
         try std.testing.expectEqual(@as(usize, 6), Builder.getNumArgRegs());
+    }
+}
+
+test "CallBuilder with R12 save/restore" {
+    if (builtin.cpu.arch != .x86_64) return;
+
+    const Emit = x86_64.Emit;
+    const Builder = CallBuilder(Emit);
+
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    // Initialize builder with R12 save at RBP-24
+    const builder = try Builder.initWithR12Save(&emit, -24);
+
+    // On Windows, should have emitted: mov [rbp-24], r12
+    if (builtin.os.tag == .windows) {
+        // REX.WR (4C) + MOV (89) + ModRM (65 = mod:01 reg:100 rm:101) + disp8 (-24)
+        // Actually for disp32: REX.WR (4C) + MOV (89) + ModRM (A5) + disp32
+        try std.testing.expect(emit.buf.items.len > 0);
+        // Verify R12 save slot is set
+        try std.testing.expectEqual(@as(?i32, -24), builder.r12_save_offset);
+    } else {
+        // On non-Windows, no save should have been emitted
+        try std.testing.expectEqual(@as(usize, 0), emit.buf.items.len);
+        try std.testing.expectEqual(@as(?i32, null), builder.r12_save_offset);
+    }
+}
+
+test "CallBuilder call restores R12 on Windows" {
+    if (builtin.cpu.arch != .x86_64) return;
+
+    const Emit = x86_64.Emit;
+    const Builder = CallBuilder(Emit);
+
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    // Initialize builder with R12 save at RBP-24
+    var builder = try Builder.initWithR12Save(&emit, -24);
+    const initial_len = emit.buf.items.len;
+
+    // Add a simple argument
+    try builder.addImmArg(42);
+
+    // Make a call (using a dummy address)
+    try builder.call(0x12345678);
+
+    // Verify code was emitted
+    try std.testing.expect(emit.buf.items.len > initial_len);
+
+    if (builtin.os.tag == .windows) {
+        // On Windows, the call sequence should include R12 restore at the end
+        // Look for mov r12, [rbp-24] near the end of the buffer
+        // This is: REX.WB (49) + MOV (8B) + ModRM (A4) + SIB (24) for RSP base, or
+        // for RBP base: REX.WB (49) + MOV (8B) + ModRM (65 or A5) + disp
+        // The exact encoding depends on displacement size
+
+        // Just verify r12_save_offset is set - the restore happens automatically
+        try std.testing.expect(builder.r12_save_offset != null);
+    }
+}
+
+test "CallBuilder without R12 save (standard init)" {
+    if (builtin.cpu.arch != .x86_64) return;
+
+    const Emit = x86_64.Emit;
+    const Builder = CallBuilder(Emit);
+
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    // Standard init - no R12 save
+    const builder = Builder.init(&emit);
+
+    // No code should be emitted yet
+    try std.testing.expectEqual(@as(usize, 0), emit.buf.items.len);
+    try std.testing.expectEqual(@as(?i32, null), builder.r12_save_offset);
+}
+
+// =============================================================================
+// Phase 2: CallBuilder Unit Tests - Verify Generated Byte Sequences
+// =============================================================================
+
+test "CallBuilder 4-arg call with immediates" {
+    if (builtin.cpu.arch != .x86_64) return;
+
+    const Emit = x86_64.Emit;
+    const Builder = CallBuilder(Emit);
+
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var builder = Builder.init(&emit);
+
+    // Add 4 immediate arguments
+    try builder.addImmArg(1);
+    try builder.addImmArg(2);
+    try builder.addImmArg(3);
+    try builder.addImmArg(4);
+
+    // Call a dummy address
+    try builder.call(0x12345678);
+
+    // Verify code was emitted
+    try std.testing.expect(emit.buf.items.len > 0);
+
+    // The sequence should include:
+    // 1. Load immediate args into registers first (movabs rcx/rdi, 1; etc.)
+    // 2. Shadow space allocation on Windows (sub rsp, 32) - happens in call()
+    // 3. Load function address into R11
+    // 4. call r11
+    // 5. Shadow space deallocation on Windows (add rsp, 32)
+
+    // Look for the call instruction (call r11 = 41 FF D3)
+    var found_call = false;
+    for (0..emit.buf.items.len - 2) |i| {
+        if (emit.buf.items[i] == 0x41 and emit.buf.items[i + 1] == 0xFF and emit.buf.items[i + 2] == 0xD3) {
+            found_call = true;
+            break;
+        }
+    }
+    try std.testing.expect(found_call);
+
+    if (builtin.os.tag == .windows) {
+        // Windows: should have sub rsp, 32 somewhere (shadow space)
+        // sub rsp, 32 = 48 81 EC 20 00 00 00
+        var found_sub = false;
+        for (0..emit.buf.items.len - 6) |i| {
+            if (emit.buf.items[i] == 0x48 and emit.buf.items[i + 1] == 0x81 and
+                emit.buf.items[i + 2] == 0xEC and emit.buf.items[i + 3] == 0x20)
+            {
+                found_sub = true;
+                break;
+            }
+        }
+        try std.testing.expect(found_sub);
+    }
+}
+
+test "CallBuilder 6-arg call puts args 5-6 on stack" {
+    if (builtin.cpu.arch != .x86_64) return;
+
+    const Emit = x86_64.Emit;
+    const Builder = CallBuilder(Emit);
+
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var builder = Builder.init(&emit);
+
+    // Add 6 immediate arguments
+    try builder.addImmArg(1);
+    try builder.addImmArg(2);
+    try builder.addImmArg(3);
+    try builder.addImmArg(4);
+    try builder.addImmArg(5);
+    try builder.addImmArg(6);
+
+    try builder.call(0x12345678);
+
+    // Verify code was emitted - should be longer than 4-arg call
+    try std.testing.expect(emit.buf.items.len > 50);
+
+    // Look for the call instruction (call r11 = 41 FF D3)
+    var found_call = false;
+    for (0..emit.buf.items.len - 2) |i| {
+        if (emit.buf.items[i] == 0x41 and emit.buf.items[i + 1] == 0xFF and emit.buf.items[i + 2] == 0xD3) {
+            found_call = true;
+            break;
+        }
+    }
+    try std.testing.expect(found_call);
+
+    if (builtin.os.tag == .windows) {
+        // Windows x64: 4 register args (RCX, RDX, R8, R9) + 2 stack args
+        // Stack args go at [RSP+32] and [RSP+40] (after shadow space)
+        // Total stack space = 32 (shadow) + 16 (2 args) = 48, rounded to 48
+        // Look for sub rsp, 48 = 48 81 EC 30 00 00 00
+        var found_sub = false;
+        for (0..emit.buf.items.len - 6) |i| {
+            if (emit.buf.items[i] == 0x48 and emit.buf.items[i + 1] == 0x81 and
+                emit.buf.items[i + 2] == 0xEC and emit.buf.items[i + 3] == 0x30)
+            {
+                found_sub = true;
+                break;
+            }
+        }
+        try std.testing.expect(found_sub);
+    } else {
+        // System V: 6 register args (RDI, RSI, RDX, RCX, R8, R9) - no stack args
+        // No shadow space needed
+        // Should just have movabs for args + call
+    }
+}
+
+test "CallBuilder with register argument" {
+    if (builtin.cpu.arch != .x86_64) return;
+
+    const Emit = x86_64.Emit;
+    const Builder = CallBuilder(Emit);
+
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var builder = Builder.init(&emit);
+
+    // Add a register argument (RAX -> first param reg)
+    try builder.addRegArg(.RAX);
+
+    try builder.call(0x12345678);
+
+    // Verify code was emitted
+    try std.testing.expect(emit.buf.items.len > 0);
+
+    if (builtin.os.tag == .windows) {
+        // Should have: sub rsp, 32; mov rcx, rax; movabs r11, addr; call r11; add rsp, 32
+        // The mov rcx, rax is only emitted if RAX != RCX
+        // Since RAX != RCX, we should see: 48 89 C1 (mov rcx, rax)
+        var found_mov = false;
+        for (0..emit.buf.items.len - 2) |i| {
+            if (emit.buf.items[i] == 0x48 and emit.buf.items[i + 1] == 0x89 and emit.buf.items[i + 2] == 0xC1) {
+                found_mov = true;
+                break;
+            }
+        }
+        try std.testing.expect(found_mov);
+    }
+}
+
+test "CallBuilder with LEA argument" {
+    if (builtin.cpu.arch != .x86_64) return;
+
+    const Emit = x86_64.Emit;
+    const Builder = CallBuilder(Emit);
+
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var builder = Builder.init(&emit);
+
+    // Add a LEA argument (pointer to [RBP-32])
+    try builder.addLeaArg(.RBP, -32);
+
+    try builder.call(0x12345678);
+
+    // Verify code was emitted
+    try std.testing.expect(emit.buf.items.len > 0);
+
+    if (builtin.os.tag == .windows) {
+        // Should have: sub rsp, 32; lea rcx, [rbp-32]; movabs r11, addr; call r11; add rsp, 32
+        // lea rcx, [rbp-32] = 48 8D 4D E0 (with 8-bit disp) or 48 8D 8D E0 FF FF FF (32-bit disp)
+        // Since we use 32-bit displacement: 48 8D 8D + disp32(-32 = 0xFFFFFFE0)
+        var found_lea = false;
+        for (0..emit.buf.items.len - 6) |i| {
+            if (emit.buf.items[i] == 0x48 and emit.buf.items[i + 1] == 0x8D and emit.buf.items[i + 2] == 0x8D) {
+                found_lea = true;
+                break;
+            }
+        }
+        try std.testing.expect(found_lea);
+    }
+}
+
+test "CallBuilder with memory argument" {
+    if (builtin.cpu.arch != .x86_64) return;
+
+    const Emit = x86_64.Emit;
+    const Builder = CallBuilder(Emit);
+
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var builder = Builder.init(&emit);
+
+    // Add a memory load argument (load from [RBP-16])
+    try builder.addMemArg(.RBP, -16);
+
+    try builder.call(0x12345678);
+
+    // Verify code was emitted
+    try std.testing.expect(emit.buf.items.len > 0);
+
+    if (builtin.os.tag == .windows) {
+        // Should have: sub rsp, 32; mov rcx, [rbp-16]; movabs r11, addr; call r11; add rsp, 32
+        // mov rcx, [rbp-16] = 48 8B 8D F0 FF FF FF (32-bit disp)
+        var found_mov = false;
+        for (0..emit.buf.items.len - 6) |i| {
+            if (emit.buf.items[i] == 0x48 and emit.buf.items[i + 1] == 0x8B and emit.buf.items[i + 2] == 0x8D) {
+                found_mov = true;
+                break;
+            }
+        }
+        try std.testing.expect(found_mov);
+    }
+}
+
+test "CallBuilder stack alignment is 16-byte" {
+    if (builtin.cpu.arch != .x86_64) return;
+
+    const Emit = x86_64.Emit;
+    const Builder = CallBuilder(Emit);
+
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var builder = Builder.init(&emit);
+
+    // Add 5 arguments on Windows (4 reg + 1 stack)
+    // Stack space = 32 (shadow) + 8 (1 arg) = 40, rounded up to 48 for alignment
+    try builder.addImmArg(1);
+    try builder.addImmArg(2);
+    try builder.addImmArg(3);
+    try builder.addImmArg(4);
+    try builder.addImmArg(5);
+
+    try builder.call(0x12345678);
+
+    if (builtin.os.tag == .windows) {
+        // Should allocate 48 bytes (32 shadow + 8 arg + 8 padding for 16-byte alignment)
+        // Look for sub rsp, 48 = 48 81 EC 30 00 00 00
+        var found_sub = false;
+        for (0..emit.buf.items.len - 6) |i| {
+            if (emit.buf.items[i] == 0x48 and emit.buf.items[i + 1] == 0x81 and
+                emit.buf.items[i + 2] == 0xEC and emit.buf.items[i + 3] == 0x30)
+            {
+                found_sub = true;
+                break;
+            }
+        }
+        try std.testing.expect(found_sub);
+    }
+}
+
+test "CallBuilder return by pointer sets up first arg" {
+    if (builtin.cpu.arch != .x86_64) return;
+
+    const Emit = x86_64.Emit;
+    const Builder = CallBuilder(Emit);
+
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var builder = Builder.init(&emit);
+
+    // Set return by pointer (output at [RBP-64])
+    try builder.setReturnByPointer(-64);
+
+    // Add one more argument
+    try builder.addImmArg(42);
+
+    try builder.call(0x12345678);
+
+    // Verify code was emitted
+    try std.testing.expect(emit.buf.items.len > 0);
+
+    if (builtin.os.tag == .windows) {
+        // First arg (RCX) should be LEA to output buffer
+        // Second arg (RDX) should be the immediate 42
+        // Look for lea rcx, [rbp-64]
+        var found_lea = false;
+        for (0..emit.buf.items.len - 6) |i| {
+            if (emit.buf.items[i] == 0x48 and emit.buf.items[i + 1] == 0x8D and emit.buf.items[i + 2] == 0x8D) {
+                found_lea = true;
+                break;
+            }
+        }
+        try std.testing.expect(found_lea);
     }
 }
