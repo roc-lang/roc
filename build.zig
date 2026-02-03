@@ -2970,82 +2970,116 @@ pub fn build(b: *std.Build) void {
         run_fx_platform_test.step.dependOn(roc_step);
         tests_summary.addRun(&run_fx_platform_test.step);
 
-        // Create glue platform host static library (similar to fx platform)
-        const glue_host_target, const glue_host_target_dir: ?[]const u8 = switch (target.result.os.tag) {
-            .linux => switch (target.result.cpu.arch) {
-                .x86_64 => .{ b.resolveTargetQuery(.{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl }), "x64musl" },
-                .aarch64 => .{ b.resolveTargetQuery(.{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .musl }), "arm64musl" },
-                else => .{ target, native_fx_target_dir },
-            },
-            .windows => switch (target.result.cpu.arch) {
-                .x86_64 => .{ target, "x64win" },
-                .aarch64 => .{ target, "arm64win" },
-                else => .{ target, native_fx_target_dir },
-            },
-            else => .{ target, native_fx_target_dir },
+    }
+
+    // Create glue-host step for building all musl platform host libraries.
+    // This step builds both x64musl and arm64musl targets for pre-committing.
+    // For macOS/Windows, libs are built at runtime (no valgrind issues there).
+    // Run `zig build glue-host` after modifying src/glue/platform/host.zig.
+    {
+        const glue_host_step = b.step("glue-host", "Build the glue platform host libraries (x64musl, arm64musl)");
+
+        const musl_targets = [_]struct { query: std.Target.Query, dir: []const u8 }{
+            .{ .query = .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl }, .dir = "x64musl" },
+            .{ .query = .{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .musl }, .dir = "arm64musl" },
         };
 
-        const glue_platform_host_lib = createTestPlatformHostLib(
-            b,
-            "glue_platform_host",
-            "src/glue/platform/host.zig",
-            glue_host_target,
-            optimize,
-            roc_modules,
-            strip,
-            omit_frame_pointer,
-        );
+        for (musl_targets) |musl_target| {
+            const resolved_target = b.resolveTargetQuery(musl_target.query);
 
-        // Add compiler modules to glue platform host for type extraction
-        // This allows the glue host to compile Roc source and extract types directly
-        glue_platform_host_lib.root_module.addImport("base", roc_modules.base);
-        glue_platform_host_lib.root_module.addImport("can", roc_modules.can);
-        glue_platform_host_lib.root_module.addImport("types", roc_modules.types);
-        glue_platform_host_lib.root_module.addImport("layout", roc_modules.layout);
-        glue_platform_host_lib.root_module.addImport("eval", roc_modules.eval);
-        glue_platform_host_lib.root_module.addImport("collections", roc_modules.collections);
+            const glue_platform_host_lib = createTestPlatformHostLib(
+                b,
+                b.fmt("glue_platform_host_{s}", .{musl_target.dir}),
+                "src/glue/platform/host.zig",
+                resolved_target,
+                optimize,
+                roc_modules,
+                strip,
+                omit_frame_pointer,
+            );
 
-        // Copy the glue platform host library to the source directory
-        const copy_glue_host = b.addUpdateSourceFiles();
-        const glue_host_filename = if (target.result.os.tag == .windows) "host.lib" else "libhost.a";
-        const glue_host_main_path = b.pathJoin(&.{ "src/glue/platform", glue_host_filename });
-        copy_glue_host.addCopyFileToSource(glue_platform_host_lib.getEmittedBin(), glue_host_main_path);
+            // Add compiler modules to glue platform host for type extraction
+            glue_platform_host_lib.root_module.addImport("base", roc_modules.base);
+            glue_platform_host_lib.root_module.addImport("can", roc_modules.can);
+            glue_platform_host_lib.root_module.addImport("types", roc_modules.types);
+            glue_platform_host_lib.root_module.addImport("layout", roc_modules.layout);
+            glue_platform_host_lib.root_module.addImport("eval", roc_modules.eval);
+            glue_platform_host_lib.root_module.addImport("collections", roc_modules.collections);
 
-        // Also copy to the target-specific directory so findHostLibrary finds it
-        const glue_host_target_path = if (glue_host_target_dir) |target_dir|
-            b.pathJoin(&.{ "src/glue/platform/targets", target_dir, glue_host_filename })
-        else
-            null;
-        if (glue_host_target_path) |target_path| {
-            // Ensure the target directory exists before copying
+            // Copy to the target-specific directory
+            const copy_glue_host = b.addUpdateSourceFiles();
+            const target_path = b.pathJoin(&.{ "src/glue/platform/targets", musl_target.dir, "libhost.a" });
+            copy_glue_host.addCopyFileToSource(glue_platform_host_lib.getEmittedBin(), target_path);
+
+            // Apply archive padding fix (Zig bug workaround)
+            const fix_target = FixArchivePaddingStep.create(b, target_path);
+            fix_target.step.dependOn(&copy_glue_host.step);
+
+            glue_host_step.dependOn(&fix_target.step);
+        }
+    }
+
+    // Build glue platform host at runtime for non-musl targets (macOS/Windows).
+    // Musl targets use pre-committed libs to avoid Zig DWARF bugs that break valgrind.
+    if (run_glue_test_step) |glue_test_step| {
+        const is_musl = target.result.abi.isMusl();
+        if (!is_musl and isNativeishOrMusl(target)) {
+            // Determine the target directory for this platform
+            const glue_host_target_dir: ?[]const u8 = switch (target.result.os.tag) {
+                .windows => switch (target.result.cpu.arch) {
+                    .x86_64 => "x64win",
+                    .aarch64 => "arm64win",
+                    else => null,
+                },
+                .macos => switch (target.result.cpu.arch) {
+                    .x86_64 => "x64mac",
+                    .aarch64 => "arm64mac",
+                    else => null,
+                },
+                else => null,
+            };
+
             if (glue_host_target_dir) |target_dir| {
+                const glue_platform_host_lib = createTestPlatformHostLib(
+                    b,
+                    "glue_platform_host_runtime",
+                    "src/glue/platform/host.zig",
+                    target,
+                    optimize,
+                    roc_modules,
+                    strip,
+                    omit_frame_pointer,
+                );
+
+                // Add compiler modules to glue platform host for type extraction
+                glue_platform_host_lib.root_module.addImport("base", roc_modules.base);
+                glue_platform_host_lib.root_module.addImport("can", roc_modules.can);
+                glue_platform_host_lib.root_module.addImport("types", roc_modules.types);
+                glue_platform_host_lib.root_module.addImport("layout", roc_modules.layout);
+                glue_platform_host_lib.root_module.addImport("eval", roc_modules.eval);
+                glue_platform_host_lib.root_module.addImport("collections", roc_modules.collections);
+
+                // Copy to the target-specific directory
+                const copy_glue_host = b.addUpdateSourceFiles();
+                const glue_host_filename = if (target.result.os.tag == .windows) "host.lib" else "libhost.a";
+                const target_path = b.pathJoin(&.{ "src/glue/platform/targets", target_dir, glue_host_filename });
+
+                // Ensure the target directory exists
                 const dir_path = b.pathJoin(&.{ "src/glue/platform/targets", target_dir });
                 std.fs.cwd().makePath(dir_path) catch {};
+
+                copy_glue_host.addCopyFileToSource(glue_platform_host_lib.getEmittedBin(), target_path);
+
+                // Apply archive padding fix for non-Windows targets
+                const final_step: *Step = if (target.result.os.tag != .windows) blk: {
+                    const fix_target = FixArchivePaddingStep.create(b, target_path);
+                    fix_target.step.dependOn(&copy_glue_host.step);
+                    break :blk &fix_target.step;
+                } else &copy_glue_host.step;
+
+                glue_test_step.dependOn(final_step);
             }
-            copy_glue_host.addCopyFileToSource(
-                glue_platform_host_lib.getEmittedBin(),
-                target_path,
-            );
         }
-
-        // Apply archive padding fix for non-Windows targets (Zig bug workaround)
-        const final_glue_host_step: *Step = if (target.result.os.tag != .windows) blk: {
-            const fix_main = FixArchivePaddingStep.create(b, glue_host_main_path);
-            fix_main.step.dependOn(&copy_glue_host.step);
-
-            if (glue_host_target_path) |target_path| {
-                const fix_target = FixArchivePaddingStep.create(b, target_path);
-                fix_target.step.dependOn(&copy_glue_host.step);
-                fix_target.step.dependOn(&fix_main.step);
-                break :blk &fix_target.step;
-            }
-            break :blk &fix_main.step;
-        } else &copy_glue_host.step;
-
-        // Create glue-host step for manually rebuilding the glue platform host library.
-        // Run `zig build glue-host` after modifying src/glue/platform/host.zig.
-        const glue_host_step = b.step("glue-host", "Build the glue platform host library");
-        glue_host_step.dependOn(final_glue_host_step);
     }
 
     var build_afl = false;

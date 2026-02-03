@@ -33,6 +33,9 @@ zig-out
 *.rs.bk
 *.o
 *.a
+# Exception: pre-committed musl libhost.a files for glue platform (avoids Zig DWARF bug)
+!src/glue/platform/targets/x64musl/libhost.a
+!src/glue/platform/targets/arm64musl/libhost.a
 *.s
 *.so
 *.so.*
