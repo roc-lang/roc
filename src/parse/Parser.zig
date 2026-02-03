@@ -1715,6 +1715,10 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
             // If so, this is likely an attempt to write "a -> b -> c" style
             return try self.pushMalformed(AST.Statement.Idx, .multi_arrow_needs_parens, self.pos);
         }
+        // Check for unsupported operators: consume the whole expression and emit a helpful diagnostic
+        if (self.peekForUnsupportedOperator()) |tag| {
+            return try self.consumeUnsupportedOperatorAsStatement(tag);
+        }
         return try self.pushMalformed(AST.Statement.Idx, .statement_unexpected_token, self.pos);
     }
 
@@ -2738,6 +2742,20 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
                 .region = .{ .start = start, .end = self.pos },
             } });
         }
+
+        if (unsupportedOperatorTag(self.peek())) |tag| {
+            const op_pos = self.pos;
+            while (unsupportedOperatorTag(self.peek()) != null) {
+                self.advance(); // consume the unsupported operator
+                _ = self.parseExprWithBp(0) catch break;
+            }
+            try self.pushDiagnostic(tag, .{
+                .start = op_pos,
+                .end = op_pos,
+            });
+            return try self.store.addMalformed(AST.Expr.Idx, tag, .{ .start = start, .end = self.pos });
+        }
+
         return expression;
     }
     return try self.store.addMalformed(AST.Expr.Idx, .expr_unexpected_token, .{ .start = start, .end = self.pos });
@@ -3632,6 +3650,43 @@ pub fn parseRecord(self: *Parser, start: u32) Error!AST.Expr.Idx {
         .ext = null,
         .region = .{ .start = start, .end = self.pos },
     } });
+}
+
+/// Map an unsupported operator token to its diagnostic tag.
+fn unsupportedOperatorTag(tok: Token.Tag) ?AST.Diagnostic.Tag {
+    return switch (tok) {
+        .OpPizza => .pizza_operator_not_supported,
+        .OpCaret => .caret_operator_not_supported,
+        else => null,
+    };
+}
+
+/// Lookahead to see if there's an unsupported operator in the current expression.
+/// Returns the diagnostic tag if found, or null if none found before EndOfFile.
+fn peekForUnsupportedOperator(self: *Parser) ?AST.Diagnostic.Tag {
+    var lookahead: u32 = 0;
+    while (true) {
+        const tok = self.peekN(lookahead);
+        if (unsupportedOperatorTag(tok)) |tag| return tag;
+        if (tok == .EndOfFile) return null;
+        lookahead += 1;
+    }
+}
+
+/// Consume an entire expression containing an unsupported operator at the
+/// statement level, emitting a single diagnostic. This handles expressions like
+/// `1 |> add 2 |> mul 3` or `2 ^ 3 ^ 4` where the unsupported operator is
+/// encountered at the top level before expression parsing is reached.
+fn consumeUnsupportedOperatorAsStatement(self: *Parser, tag: AST.Diagnostic.Tag) Error!AST.Statement.Idx {
+    const start = self.pos;
+    while (self.peek() != .EndOfFile) {
+        self.advance();
+    }
+    try self.pushDiagnostic(tag, .{
+        .start = start,
+        .end = self.pos,
+    });
+    return try self.store.addMalformed(AST.Statement.Idx, tag, .{ .start = start, .end = self.pos });
 }
 
 /// Binding power of the lhs and rhs of a particular operator.

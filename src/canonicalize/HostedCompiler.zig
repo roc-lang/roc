@@ -201,19 +201,3 @@ pub fn collectAndSortHostedFunctions(env: *ModuleEnv) !std.ArrayList(HostedFunct
 
     return hosted_fns;
 }
-
-/// Assign indices to e_hosted_lambda expressions based on sorted order
-pub fn assignHostedIndices(env: *ModuleEnv, sorted_fns: []const HostedFunctionInfo) !void {
-    for (sorted_fns, 0..) |fn_info, index| {
-        // Get the expression node (Expr.Idx and Node.Idx have same underlying representation)
-        const expr_node_idx = @as(@TypeOf(env.store.nodes).Idx, @enumFromInt(@intFromEnum(fn_info.expr_idx)));
-        var expr_node = env.store.nodes.get(expr_node_idx);
-
-        // For e_hosted_lambda nodes, update the index field in the payload
-        var payload = expr_node.getPayload().expr_hosted_lambda;
-        payload.index = @intCast(index);
-        expr_node.setPayload(.{ .expr_hosted_lambda = payload });
-
-        env.store.nodes.set(expr_node_idx, expr_node);
-    }
-}

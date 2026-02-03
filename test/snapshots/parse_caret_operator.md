@@ -1,16 +1,27 @@
 # META
 ~~~ini
 description=Caret operator (^) parsing
-type=expr
+type=snippet
 ~~~
 # SOURCE
 ~~~roc
 2 ^ 3 ^ 4
 ~~~
 # EXPECTED
-NIL
+CARET OPERATOR NOT SUPPORTED - parse_caret_operator.md:1:1:1:10
 # PROBLEMS
-NIL
+**CARET OPERATOR NOT SUPPORTED**
+Roc doesn't have a caret operator (**^**).
+
+For exponentiation, use **Num.pow** or **Num.powInt** instead.
+
+**parse_caret_operator.md:1:1:1:10:**
+```roc
+2 ^ 3 ^ 4
+```
+^^^^^^^^^
+
+
 # TOKENS
 ~~~zig
 Int,OpCaret,Int,OpCaret,Int,
@@ -18,17 +29,21 @@ EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-int (raw "2"))
+(file
+	(type-module)
+	(statements
+		(s-malformed (tag "caret_operator_not_supported"))))
 ~~~
 # FORMATTED
 ~~~roc
-2
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-num (value "2"))
+(can-ir (empty true))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+(inferred-types
+	(defs)
+	(expressions))
 ~~~

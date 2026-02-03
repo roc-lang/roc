@@ -1,24 +1,48 @@
 # META
 ~~~ini
 description=Unary minus and boolean not (should error)
-type=expr
+type=snippet
 ~~~
 # SOURCE
 ~~~roc
 -!h
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - minus_not_h.md:1:1:1:2
+PARSE ERROR - minus_not_h.md:1:1:1:2
+PARSE ERROR - minus_not_h.md:1:2:1:3
+PARSE ERROR - minus_not_h.md:1:3:1:4
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **-** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 **minus_not_h.md:1:1:1:2:**
 ```roc
 -!h
 ```
 ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**minus_not_h.md:1:2:1:3:**
+```roc
+-!h
+```
+ ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**minus_not_h.md:1:3:1:4:**
+```roc
+-!h
+```
+  ^
 
 
 # TOKENS
@@ -28,11 +52,15 @@ EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-malformed (reason "expr_unexpected_token"))
+(file
+	(type-module)
+	(statements
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
-
 ~~~
 # CANONICALIZE
 ~~~clojure

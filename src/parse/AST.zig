@@ -264,6 +264,8 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
         .where_expected_constraints => "WHERE CLAUSE ERROR",
         .type_alias_cannot_have_associated => "TYPE ALIAS WITH ASSOCIATED ITEMS",
         .nominal_associated_cannot_have_final_expression => "EXPRESSION IN ASSOCIATED ITEMS",
+        .pizza_operator_not_supported => "PIZZA OPERATOR NOT SUPPORTED",
+        .caret_operator_not_supported => "CARET OPERATOR NOT SUPPORTED",
         else => "PARSE ERROR",
     };
 
@@ -554,6 +556,32 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
             try report.document.addLineBreak();
             try report.document.addText("To fix this, remove the expression at the very end.");
         },
+        .pizza_operator_not_supported => {
+            try report.document.addText("Roc doesn't use the pizza operator (");
+            try report.document.addAnnotated("|>", .emphasized);
+            try report.document.addText(").");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addText("The correct syntax in Roc is ");
+            try report.document.addAnnotated("arg1->func(arg2, arg3)", .emphasized);
+            try report.document.addText(" rather than ");
+            try report.document.addAnnotated("arg1 |> func(arg2, arg3)", .dimmed);
+            try report.document.addText(" or ");
+            try report.document.addAnnotated("arg1 |> func arg2 arg3", .dimmed);
+            try report.document.addText(" like in some other languages.");
+        },
+        .caret_operator_not_supported => {
+            try report.document.addText("Roc doesn't have a caret operator (");
+            try report.document.addAnnotated("^", .emphasized);
+            try report.document.addText(").");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addText("For exponentiation, use ");
+            try report.document.addAnnotated("Num.pow", .emphasized);
+            try report.document.addText(" or ");
+            try report.document.addAnnotated("Num.powInt", .emphasized);
+            try report.document.addText(" instead.");
+        },
         else => {
             const tag_name = @tagName(diagnostic.tag);
             const owned_tag = try report.addOwnedString(tag_name);
@@ -684,6 +712,8 @@ pub const Diagnostic = struct {
         incomplete_import,
         nominal_associated_cannot_have_final_expression,
         type_alias_cannot_have_associated,
+        pizza_operator_not_supported,
+        caret_operator_not_supported,
 
         // Targets section parse errors
         expected_targets_colon,

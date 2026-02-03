@@ -1051,27 +1051,21 @@ const CheckCliGlobalStdioStep = struct {
 };
 
 /// Build step that parses kcov JSON output and prints coverage summary.
-/// Used by the `coverage` build step to report parser code coverage statistics.
+/// Used by the `coverage` build step to report code coverage statistics.
 const CoverageSummaryStep = struct {
     step: Step,
     coverage_dir: []const u8,
+    module_name: []const u8,
+    source_path_filter: []const u8,
+    min_coverage_percent: f64,
 
-    /// Minimum required coverage percentage. Build fails if coverage drops below this.
-    /// This threshold should be gradually increased as more tests are added.
-    ///
-    /// Coverage is supported on:
-    /// - macOS (ARM64 and x86_64): Uses libdwarf for DWARF parsing
-    /// - Linux ARM64: Uses libdw (elfutils) for DWARF parsing
-    ///
-    /// Coverage does NOT work on Linux x86_64 due to a Zig 0.15.2 compiler bug that
-    /// generates invalid DWARF .debug_line sections. libdw fails with "invalid
-    /// .debug_line section" when parsing user code compilation units, while stdlib
-    /// CUs parse successfully. This causes kcov to find only stdlib files, not user
-    /// source files. ARM64 Zig generates valid DWARF, so coverage works there.
-    /// See: https://github.com/roc-lang/roc/pull/8864 for investigation details.
-    const MIN_COVERAGE_PERCENT: f64 = 28.0;
-
-    fn create(b: *std.Build, coverage_dir: []const u8) *CoverageSummaryStep {
+    fn create(
+        b: *std.Build,
+        coverage_dir: []const u8,
+        module_name: []const u8,
+        source_path_filter: []const u8,
+        min_coverage_percent: f64,
+    ) *CoverageSummaryStep {
         const self = b.allocator.create(CoverageSummaryStep) catch @panic("OOM");
         self.* = .{
             .step = Step.init(.{
@@ -1081,6 +1075,9 @@ const CoverageSummaryStep = struct {
                 .makeFn = make,
             }),
             .coverage_dir = coverage_dir,
+            .module_name = module_name,
+            .source_path_filter = source_path_filter,
+            .min_coverage_percent = min_coverage_percent,
         };
         return self;
     }
@@ -1091,9 +1088,54 @@ const CoverageSummaryStep = struct {
         const self: *CoverageSummaryStep = @fieldParentPtr("step", step);
 
         // Read kcov JSON output
-        // kcov creates a subdirectory named after the executable (e.g., parse_unit_coverage/)
-        // which contains the coverage.json file
-        const json_path = try std.fmt.allocPrint(allocator, "{s}/parse_unit_coverage/coverage.json", .{self.coverage_dir});
+        // kcov creates output in one of two formats:
+        // 1. Merged: {coverage_dir}/kcov-merged/coverage.json (when using kcov --merge)
+        // 2. Single: {coverage_dir}/{executable_name}.{hash}/coverage.json
+        const json_path = blk: {
+            // First try the merged path
+            const merged_path = try std.fmt.allocPrint(allocator, "{s}/kcov-merged/coverage.json", .{self.coverage_dir});
+            if (std.fs.cwd().openFile(merged_path, .{})) |file| {
+                file.close();
+                break :blk merged_path;
+            } else |_| {
+                allocator.free(merged_path);
+            }
+
+            // If merged path doesn't exist, look for the first subdirectory with coverage.json
+            var dir = std.fs.cwd().openDir(self.coverage_dir, .{ .iterate = true }) catch |err| {
+                std.debug.print("\n", .{});
+                std.debug.print("=" ** 60 ++ "\n", .{});
+                std.debug.print("COVERAGE ERROR\n", .{});
+                std.debug.print("=" ** 60 ++ "\n\n", .{});
+                std.debug.print("Could not open coverage directory {s}: {}\n", .{ self.coverage_dir, err });
+                std.debug.print("\nMake sure kcov is installed and tests ran successfully.\n", .{});
+                std.debug.print("=" ** 60 ++ "\n", .{});
+                return;
+            };
+            defer dir.close();
+
+            var iter = dir.iterate();
+            while (iter.next() catch null) |entry| {
+                if (entry.kind == .directory) {
+                    const subdir_path = try std.fmt.allocPrint(allocator, "{s}/{s}/coverage.json", .{ self.coverage_dir, entry.name });
+                    if (std.fs.cwd().openFile(subdir_path, .{})) |file| {
+                        file.close();
+                        break :blk subdir_path;
+                    } else |_| {
+                        allocator.free(subdir_path);
+                    }
+                }
+            }
+
+            std.debug.print("\n", .{});
+            std.debug.print("=" ** 60 ++ "\n", .{});
+            std.debug.print("COVERAGE ERROR\n", .{});
+            std.debug.print("=" ** 60 ++ "\n\n", .{});
+            std.debug.print("Could not find coverage.json in {s}\n", .{self.coverage_dir});
+            std.debug.print("\nMake sure kcov is installed and tests ran successfully.\n", .{});
+            std.debug.print("=" ** 60 ++ "\n", .{});
+            return;
+        };
         defer allocator.free(json_path);
 
         const json_file = std.fs.cwd().openFile(json_path, .{}) catch |err| {
@@ -1114,39 +1156,22 @@ const CoverageSummaryStep = struct {
         defer allocator.free(json_content);
 
         // Parse and summarize coverage
-        const result = try parseCoverageJson(allocator, json_content);
-
-        // Fail if kcov didn't capture any data - this indicates a problem with kcov
-        if (result.total_lines == 0) {
-            std.debug.print("\n", .{});
-            std.debug.print("=" ** 60 ++ "\n", .{});
-            std.debug.print("COVERAGE ERROR: NO DATA CAPTURED\n", .{});
-            std.debug.print("=" ** 60 ++ "\n\n", .{});
-            std.debug.print("kcov reported 0 total lines - coverage data was not captured.\n", .{});
-            std.debug.print("This indicates a problem with kcov or the binary format.\n\n", .{});
-            std.debug.print("=" ** 60 ++ "\n", .{});
-            return step.fail("kcov failed to capture coverage data (0 total lines)", .{});
-        }
+        const coverage_percent = try parseCoverageJson(allocator, json_content, self.source_path_filter, self.module_name, self.coverage_dir);
 
         // Enforce minimum coverage threshold
-        if (result.percent < MIN_COVERAGE_PERCENT) {
+        if (coverage_percent < self.min_coverage_percent) {
             std.debug.print("\n", .{});
             std.debug.print("=" ** 60 ++ "\n", .{});
             std.debug.print("COVERAGE CHECK FAILED\n", .{});
             std.debug.print("=" ** 60 ++ "\n\n", .{});
-            std.debug.print("Parser coverage is {d:.2}%, minimum required is {d:.2}%\n", .{ result.percent, MIN_COVERAGE_PERCENT });
+            std.debug.print("{s} coverage is {d:.2}%, minimum required is {d:.2}%\n", .{ self.module_name, coverage_percent, self.min_coverage_percent });
             std.debug.print("Add more tests to improve coverage before merging.\n\n", .{});
             std.debug.print("=" ** 60 ++ "\n", .{});
-            return step.fail("Parser coverage {d:.2}% is below minimum {d:.2}%", .{ result.percent, MIN_COVERAGE_PERCENT });
+            return step.fail("{s} coverage {d:.2}% is below minimum {d:.2}%", .{ self.module_name, coverage_percent, self.min_coverage_percent });
         }
     }
 
-    const CoverageResult = struct {
-        percent: f64,
-        total_lines: u64,
-    };
-
-    fn parseCoverageJson(allocator: std.mem.Allocator, json_content: []const u8) !CoverageResult {
+    fn parseCoverageJson(allocator: std.mem.Allocator, json_content: []const u8, source_path_filter: []const u8, module_name: []const u8, coverage_dir: []const u8) !f64 {
         const parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_content, .{});
         defer parsed.deinit();
 
@@ -1183,8 +1208,8 @@ const CoverageSummaryStep = struct {
                     if (filename_val != .string) continue;
                     const filename = filename_val.string;
 
-                    // Only include src/parse files
-                    if (std.mem.indexOf(u8, filename, "src/parse") == null) continue;
+                    // Only include files matching the source path filter
+                    if (std.mem.indexOf(u8, filename, source_path_filter) == null) continue;
 
                     // Skip test files
                     if (std.mem.indexOf(u8, filename, "/test/") != null) continue;
@@ -1222,7 +1247,7 @@ const CoverageSummaryStep = struct {
 
         std.debug.print("\n", .{});
         std.debug.print("=" ** 60 ++ "\n", .{});
-        std.debug.print("PARSER CODE COVERAGE SUMMARY\n", .{});
+        std.debug.print("{s} CODE COVERAGE SUMMARY\n", .{module_name});
         std.debug.print("=" ** 60 ++ "\n\n", .{});
 
         std.debug.print("Total lines:     {d}\n", .{total_lines});
@@ -1253,10 +1278,10 @@ const CoverageSummaryStep = struct {
         }
 
         std.debug.print("\n" ++ "=" ** 60 ++ "\n", .{});
-        std.debug.print("Full HTML report: kcov-output/parser/index.html\n", .{});
+        std.debug.print("Full HTML report: {s}/index.html\n", .{coverage_dir});
         std.debug.print("=" ** 60 ++ "\n", .{});
 
-        return .{ .percent = percent, .total_lines = total_lines };
+        return percent;
     }
 
     const UncoveredFile = struct {
@@ -2103,7 +2128,7 @@ pub fn build(b: *std.Build) void {
     const wasm_static_lib_test_step = b.step("test-wasm-static-lib", "Test WASM static library builds with bytebox");
     const test_cli_step = b.step("test-cli", "Test the roc CLI by running test programs");
     const test_platforms_step = b.step("test-platforms", "Build test platform host libraries");
-    const coverage_step = b.step("coverage", "Run parser tests with kcov code coverage");
+    const coverage_step = b.step("coverage", "Run tests with kcov code coverage (parser and canonicalizer)");
     const release_step = b.step("release", "Build optimized release binary for distribution");
 
     // general configuration
@@ -2803,8 +2828,19 @@ pub fn build(b: *std.Build) void {
             run_parse_coverage.step.dependOn(&mkdir_step.step);
             run_parse_coverage.step.dependOn(&install_parse_test.step);
 
+            // Coverage thresholds - minimum required coverage percentage for each module
+            const parser_min_coverage: f64 = 28.0;
+            const canonicalize_min_coverage: f64 = 78.5;
+
+            // kcov exclusion patterns for canonicalize coverage
+            const can_exclude_patterns = .{
+                "--include-pattern=/src/canonicalize/",
+                "--exclude-pattern=ModuleEnv.zig",
+                "--exclude-line=SExpr",
+            };
+
             // Add coverage summary step that parses kcov JSON output
-            const summary_step = CoverageSummaryStep.create(b, "kcov-output/parser");
+            const summary_step = CoverageSummaryStep.create(b, "kcov-output/parser", "Parser", "src/parse", parser_min_coverage);
             summary_step.step.dependOn(&run_parse_coverage.step);
 
             // Cross-compile for Windows to verify comptime branches compile
@@ -2827,13 +2863,97 @@ pub fn build(b: *std.Build) void {
             // Just compile, don't run - verifies Windows comptime branches
             coverage_step.dependOn(&windows_parse_build.step);
 
-            // Add explicit dependencies on install steps to coverage_step itself
-            // to work around Zig 0.15.2 lazy dependency issues
-            coverage_step.dependOn(&install_parse_test.step);
-            coverage_step.dependOn(&install_kcov.step);
-
-            // Hook up coverage_step to the summary step
+            // Hook up coverage_step to the parser summary step
             coverage_step.dependOn(&summary_step.step);
+
+            // Canonicalize Coverage
+
+            // Create canonicalize module unit tests for coverage
+            const can_unit_test = b.addTest(.{
+                .name = "can_unit_coverage",
+                .root_module = b.createModule(.{
+                    .root_source_file = b.path("src/canonicalize/mod.zig"),
+                    .target = target,
+                    .optimize = .Debug, // Debug required for DWARF debug info
+                }),
+            });
+            roc_modules.addModuleDependencies(can_unit_test, .can);
+
+            // Install canonicalize test
+            const install_can_test = b.addInstallArtifact(can_unit_test, .{});
+            build_cov_tests.dependOn(&install_can_test.step);
+
+            // Create output directories for canonicalize coverage
+            const mkdir_can_step = b.addSystemCommand(&.{ "mkdir", "-p", "kcov-output/canonicalize", "kcov-output/can-unit", "kcov-output/can-snapshot" });
+            mkdir_can_step.setCwd(b.path("."));
+            mkdir_can_step.step.dependOn(&summary_step.step); // Run after parser coverage
+
+            // Run kcov on canonicalize unit tests
+            const run_can_unit_coverage = b.addSystemCommand(&.{"zig-out/bin/kcov"});
+            run_can_unit_coverage.addArgs(&can_exclude_patterns);
+            run_can_unit_coverage.addArgs(&.{
+                "kcov-output/can-unit",
+                "zig-out/bin/can_unit_coverage",
+            });
+            run_can_unit_coverage.setCwd(b.path("."));
+            run_can_unit_coverage.step.dependOn(&mkdir_can_step.step);
+            run_can_unit_coverage.step.dependOn(&install_can_test.step);
+
+            // Create snapshot tests for canonicalize coverage
+            // Snapshot tests exercise the full compilation pipeline including canonicalization
+            const can_snapshot_test = b.addTest(.{
+                .name = "can_snapshot_coverage",
+                .root_module = b.createModule(.{
+                    .root_source_file = b.path("src/snapshot_tool/main.zig"),
+                    .target = target,
+                    .optimize = .Debug, // Debug required for DWARF debug info
+                    .link_libc = true,
+                }),
+            });
+            roc_modules.addAll(can_snapshot_test);
+            can_snapshot_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
+            can_snapshot_test.step.dependOn(&write_compiled_builtins.step);
+
+            // Add LLVM support for snapshot tests
+            can_snapshot_test.addLibraryPath(.{ .cwd_relative = llvm_paths.lib });
+            can_snapshot_test.addIncludePath(.{ .cwd_relative = llvm_paths.include });
+            try addStaticLlvmOptionsToModule(can_snapshot_test.root_module);
+            can_snapshot_test.root_module.addAnonymousImport("llvm_compile", .{
+                .root_source_file = b.path("src/llvm_compile/mod.zig"),
+            });
+
+            // Install snapshot test binary
+            const install_can_snapshot_test = b.addInstallArtifact(can_snapshot_test, .{});
+            build_cov_tests.dependOn(&install_can_snapshot_test.step);
+
+            // Run kcov on snapshot tests for canonicalize coverage
+            const run_can_snapshot_coverage = b.addSystemCommand(&.{"zig-out/bin/kcov"});
+            run_can_snapshot_coverage.addArgs(&can_exclude_patterns);
+            run_can_snapshot_coverage.addArgs(&.{
+                "kcov-output/can-snapshot",
+                "zig-out/bin/can_snapshot_coverage",
+            });
+            run_can_snapshot_coverage.setCwd(b.path("."));
+            run_can_snapshot_coverage.step.dependOn(&run_can_unit_coverage.step);
+            run_can_snapshot_coverage.step.dependOn(&install_can_snapshot_test.step);
+
+            // Merge canonicalize coverage from unit tests and snapshot tests
+            const merge_can_coverage = b.addSystemCommand(&.{
+                "zig-out/bin/kcov",
+                "--merge",
+                "kcov-output/canonicalize",
+                "kcov-output/can-unit",
+                "kcov-output/can-snapshot",
+            });
+            merge_can_coverage.setCwd(b.path("."));
+            merge_can_coverage.step.dependOn(&run_can_snapshot_coverage.step);
+
+            // Add coverage summary step for canonicalize (reads merged coverage)
+            const can_summary_step = CoverageSummaryStep.create(b, "kcov-output/canonicalize", "Canonicalize", "src/canonicalize", canonicalize_min_coverage);
+            can_summary_step.step.dependOn(&merge_can_coverage.step);
+
+            // Hook up coverage_step to the canonicalize summary step
+            coverage_step.dependOn(&can_summary_step.step);
         }
     } else if (!is_coverage_supported) {
         // On unsupported platforms, print a message

@@ -530,11 +530,6 @@ pub fn initCIRFields(self: *Self, module_name: []const u8) !void {
     self.evaluation_order = null; // Will be set after canonicalization completes
 }
 
-/// Alias for initCIRFields for backwards compatibility with tests
-pub fn initModuleEnvFields(self: *Self, module_name: []const u8) !void {
-    return self.initCIRFields(module_name);
-}
-
 /// Initialize the module environment with capacity heuristics based on source size.
 pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!Self {
     var common = try CommonEnv.init(gpa, source);
@@ -2265,11 +2260,6 @@ pub fn calcRegionInfo(self: *const Self, region: Region) RegionInfo {
     return self.common.calcRegionInfo(region);
 }
 
-/// Extract a literal from source code between given byte offsets
-pub fn literal_from_source(self: *const Self, start_offset: u32, end_offset: u32) []const u8 {
-    return self.common.source[start_offset..end_offset];
-}
-
 /// Get the source line for a given region
 pub fn getSourceLine(self: *const Self, region: Region) ![]const u8 {
     return self.common.getSourceLine(region);
@@ -2646,47 +2636,6 @@ pub fn addMatchBranchPattern(self: *Self, expr: CIR.Expr.Match.BranchPattern, re
     return expr_idx;
 }
 
-/// Add a new type variable to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addTypeSlot(
-    self: *Self,
-    parent_node: CIR.Node.Idx,
-    region: Region,
-    comptime RetIdx: type,
-) std.mem.Allocator.Error!RetIdx {
-    comptime if (!isCastable(RetIdx)) @compileError("Idx type " ++ @typeName(RetIdx) ++ " is not castable");
-    const node_idx = try self.store.addTypeVarSlot(parent_node, region);
-    self.debugAssertArraysInSync();
-    return @enumFromInt(@intFromEnum(node_idx));
-}
-
-/// Adds an external declaration and returns its index
-pub fn pushExternalDecl(self: *Self, decl: CIR.ExternalDecl) std.mem.Allocator.Error!CIR.ExternalDecl.Idx {
-    const idx = @as(u32, @intCast(self.external_decls.len()));
-    _ = try self.external_decls.append(self.gpa, decl);
-    return @enumFromInt(idx);
-}
-
-/// Retrieves an external declaration by its index
-pub fn getExternalDecl(self: *const Self, idx: CIR.ExternalDecl.Idx) *const CIR.ExternalDecl {
-    return self.external_decls.get(@as(CIR.ExternalDecl.SafeList.Idx, @enumFromInt(@intFromEnum(idx))));
-}
-
-/// Adds multiple external declarations and returns a span
-pub fn pushExternalDecls(self: *Self, decls: []const CIR.ExternalDecl) std.mem.Allocator.Error!CIR.ExternalDecl.Span {
-    const start = @as(u32, @intCast(self.external_decls.len()));
-    for (decls) |decl| {
-        _ = try self.external_decls.append(self.gpa, decl);
-    }
-    return CIR.ExternalDecl.Span{ .span = .{ .start = start, .len = @as(u32, @intCast(decls.len)) } };
-}
-
-/// Gets a slice of external declarations from a span
-pub fn sliceExternalDecls(self: *const Self, span: CIR.ExternalDecl.Span) []const CIR.ExternalDecl {
-    const range = CIR.ExternalDecl.SafeList.Range{ .start = @enumFromInt(span.span.start), .count = span.span.len };
-    return self.external_decls.sliceRange(range);
-}
-
 /// Retrieves the text of an identifier by its index
 pub fn getIdentText(self: *const Self, idx: Ident.Idx) []const u8 {
     return self.getIdent(idx);
@@ -2747,12 +2696,6 @@ pub fn appendRegionInfoToSExprTreeFromRegion(self: *const Self, tree: *SExprTree
         region.end.offset,
         info,
     );
-}
-
-/// Get region information for a node.
-pub fn getNodeRegionInfo(self: *const Self, idx: anytype) RegionInfo {
-    const region = self.store.getNodeRegion(@enumFromInt(@intFromEnum(idx)));
-    return self.getRegionInfo(region);
 }
 
 /// Helper function to convert type information to an SExpr node

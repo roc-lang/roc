@@ -938,7 +938,7 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
 
     // Parse the source code as an expression (following REPL pattern)
     const parse_ast = try allocator.create(parse.AST);
-    parse_ast.* = try parse.parseExpr(&module_env.common, module_env.gpa);
+    parse_ast.* = try parse.parseExprLenient(&module_env.common, module_env.gpa);
 
     // Check for parse errors in test code
     // NOTE: This is TEST-ONLY behavior! In production, the parser continues and collects

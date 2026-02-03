@@ -1,16 +1,27 @@
 # META
 ~~~ini
 description=Pizza operator (|>) parsing
-type=expr
+type=snippet
 ~~~
 # SOURCE
 ~~~roc
 1 |> add 2 |> mul 3
 ~~~
 # EXPECTED
-NIL
+PIZZA OPERATOR NOT SUPPORTED - parse_pizza_operator.md:1:1:1:20
 # PROBLEMS
-NIL
+**PIZZA OPERATOR NOT SUPPORTED**
+Roc doesn't use the pizza operator (**|>**).
+
+The correct syntax in Roc is **arg1->func(arg2, arg3)** rather than `arg1 |> func(arg2, arg3)` or `arg1 |> func arg2 arg3` like in some other languages.
+
+**parse_pizza_operator.md:1:1:1:20:**
+```roc
+1 |> add 2 |> mul 3
+```
+^^^^^^^^^^^^^^^^^^^
+
+
 # TOKENS
 ~~~zig
 Int,OpPizza,LowerIdent,Int,OpPizza,LowerIdent,Int,
@@ -18,17 +29,21 @@ EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-int (raw "1"))
+(file
+	(type-module)
+	(statements
+		(s-malformed (tag "pizza_operator_not_supported"))))
 ~~~
 # FORMATTED
 ~~~roc
-1
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-num (value "1"))
+(can-ir (empty true))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+(inferred-types
+	(defs)
+	(expressions))
 ~~~

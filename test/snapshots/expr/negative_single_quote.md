@@ -1,24 +1,36 @@
 # META
 ~~~ini
 description=Negative single quote char literal
-type=expr
+type=snippet
 ~~~
 # SOURCE
 ~~~roc
 -'i'
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - negative_single_quote.md:1:1:1:2
+PARSE ERROR - negative_single_quote.md:1:1:1:2
+PARSE ERROR - negative_single_quote.md:1:2:1:5
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **-** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 **negative_single_quote.md:1:1:1:2:**
 ```roc
 -'i'
 ```
 ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**negative_single_quote.md:1:2:1:5:**
+```roc
+-'i'
+```
+ ^^^
 
 
 # TOKENS
@@ -28,11 +40,14 @@ EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-malformed (reason "expr_unexpected_token"))
+(file
+	(type-module)
+	(statements
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
-
 ~~~
 # CANONICALIZE
 ~~~clojure

@@ -1562,17 +1562,6 @@ fn processAssociatedItemsSecondPass(
                     });
                 }
             },
-            .import => {
-                // Imports are not valid in associated blocks
-                const region = self.parse_ir.tokenizedRegionToRegion(stmt.import.region);
-                const feature = try self.env.insertString("import statements in associated blocks");
-                try self.env.pushDiagnostic(Diagnostic{
-                    .not_implemented = .{
-                        .feature = feature,
-                        .region = region,
-                    },
-                });
-            },
             else => {
                 // Other statement types (var, expr, crash, dbg, expect, for, return, malformed)
                 // are not valid in associated blocks but are already caught by the parser,
@@ -2468,18 +2457,9 @@ pub fn canonicalizeFile(
                 const region = self.parse_ir.tokenizedRegionToRegion(ta.region);
 
                 // Top-level type annotation - store for connection to next declaration
-                const name_ident = self.parse_ir.tokens.resolveIdentifier(ta.name) orelse {
-                    // Malformed identifier - skip this annotation
-                    const feature = try self.env.insertString("handle malformed identifier for a type annotation");
-                    try self.env.pushDiagnostic(Diagnostic{
-                        .not_implemented = .{
-                            .feature = feature,
-                            .region = region,
-                        },
-                    });
-
-                    continue;
-                };
+                // Note: ta.name is always a LowerIdent or NamedUnderscore token (guaranteed by parser),
+                // so resolveIdentifier always succeeds.
+                const name_ident = self.parse_ir.tokens.resolveIdentifier(ta.name).?;
 
                 // For type-modules, check if this is an anno-only annotation that was already processed in Phase 1.5.5
                 // We need to check if there's a matching decl - if there isn't, this was processed early
@@ -4296,555 +4276,547 @@ pub fn canonicalizeExpr(
         },
         .ident => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
-            if (self.parse_ir.tokens.resolveIdentifier(e.token)) |ident| {
-                // Check if this is a module-qualified identifier
-                const qualifier_tokens = self.parse_ir.store.tokenSlice(e.qualifiers);
-                blk_qualified: {
-                    if (qualifier_tokens.len == 0) break :blk_qualified;
-                    // First, try looking up the full qualified name as a local identifier (for associated items)
-                    const strip_tokens = [_]tokenize.Token.Tag{.NoSpaceDotLowerIdent};
-                    const qualified_name_text = self.parse_ir.resolveQualifiedName(
-                        e.qualifiers,
-                        e.token,
-                        &strip_tokens,
-                    );
-                    const qualified_ident = try self.env.insertIdent(base.Ident.for_text(qualified_name_text));
+            // All ident expressions should have resolvable tokens (LowerIdent, NamedUnderscore, etc.)
+            const ident = self.parse_ir.tokens.resolveIdentifier(e.token) orelse unreachable;
 
-                    // Single-lookup approach: look up the qualified name exactly as written.
-                    // Registration puts progressively qualified names in each scope, so this should find it.
-                    switch (self.scopeLookup(.ident, qualified_ident)) {
-                        .found => |found_pattern_idx| {
-                            // Mark this pattern as used for unused variable checking
-                            try self.used_patterns.put(self.env.gpa, found_pattern_idx, {});
+            // Check if this is a module-qualified identifier
+            const qualifier_tokens = self.parse_ir.store.tokenSlice(e.qualifiers);
+            blk_qualified: {
+                if (qualifier_tokens.len == 0) break :blk_qualified;
+                // First, try looking up the full qualified name as a local identifier (for associated items)
+                const strip_tokens = [_]tokenize.Token.Tag{.NoSpaceDotLowerIdent};
+                const qualified_name_text = self.parse_ir.resolveQualifiedName(
+                    e.qualifiers,
+                    e.token,
+                    &strip_tokens,
+                );
+                const qualified_ident = try self.env.insertIdent(base.Ident.for_text(qualified_name_text));
 
-                            // We found the qualified ident in local scope
-                            const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{
-                                .pattern_idx = found_pattern_idx,
-                            } }, region);
-
-                            const free_vars_start = self.scratch_free_vars.top();
-                            try self.scratch_free_vars.append(found_pattern_idx);
-                            return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.init(free_vars_start, 1) };
-                        },
-                        .not_found => {
-                            // Not found locally - check if first qualifier is a module alias for external lookup
-                        },
-                    }
-
-                    const qualifier_tok = @as(Token.Idx, @intCast(qualifier_tokens[0]));
-                    if (self.parse_ir.tokens.resolveIdentifier(qualifier_tok)) |module_alias| {
-                        // Check if this is a type variable alias first (e.g., Thing.default where Thing : thing)
-                        if (qualifier_tokens.len == 1) {
-                            // Look up in all scopes, not just current scope
-                            for (self.scopes.items) |*scope| {
-                                const lookup_result = scope.lookupTypeVarAlias(module_alias);
-                                switch (lookup_result) {
-                                    .found => |binding| {
-                                        // This is a type var alias dispatch!
-                                        // Get the method name from the ident (e.g., "default")
-                                        const method_name = ident;
-
-                                        // Create e_type_var_dispatch expression
-                                        const dispatch_expr_idx = try self.env.addExpr(CIR.Expr{
-                                            .e_type_var_dispatch = .{
-                                                .type_var_alias_stmt = binding.statement_idx,
-                                                .method_name = method_name,
-                                                .args = .{ .span = .{ .start = 0, .len = 0 } }, // No args for now; filled in by apply
-                                            },
-                                        }, region);
-
-                                        return CanonicalizedExpr{ .idx = dispatch_expr_idx, .free_vars = DataSpan.empty() };
-                                    },
-                                    .not_found => {}, // Continue checking other scopes
-                                }
-                            }
-                        }
-
-                        // Check if this is a module alias, or an auto-imported module
-                        const module_info: ?Scope.ModuleAliasInfo = self.scopeLookupModule(module_alias) orelse blk: {
-                            // Not in scope, check if it's an auto-imported module
-                            if (self.module_envs) |envs_map| {
-                                if (envs_map.contains(module_alias)) {
-                                    // This is an auto-imported module like Bool or Try
-                                    // Use the module_alias directly as the module_name (not package-qualified)
-                                    break :blk Scope.ModuleAliasInfo{
-                                        .module_name = module_alias,
-                                        .is_package_qualified = false,
-                                    };
-                                }
-                            }
-                            break :blk null;
-                        };
-                        const module_name = if (module_info) |info| info.module_name else {
-                            // Not a module alias and not an auto-imported module
-                            // Check if the qualifier is a type - if so, try to lookup associated items
-                            const is_type_in_scope = self.scopeLookupTypeBinding(module_alias) != null;
-                            const is_auto_imported_type = if (self.module_envs) |envs_map|
-                                envs_map.contains(module_alias)
-                            else
-                                false;
-
-                            if (is_type_in_scope or is_auto_imported_type) {
-                                // This is a type with a potential associated item
-                                // Build the fully qualified name and try to look it up
-                                const type_text = self.env.getIdent(module_alias);
-                                const field_text = self.env.getIdent(ident);
-                                const type_qualified_idx = try self.env.insertQualifiedIdent(type_text, field_text);
-
-                                // For auto-imported types (like Str, Bool from Builtin module),
-                                // we need to look up the method in the Builtin module, not current scope
-                                if (is_auto_imported_type and self.module_envs != null) {
-                                    if (self.module_envs.?.get(module_alias)) |auto_imported_type_env| {
-                                        const module_env = auto_imported_type_env.env;
-
-                                        // Build the FULLY qualified method name using qualified_type_ident
-                                        // e.g., for I32.decode: "Builtin.Num.I32" + "decode" -> "Builtin.Num.I32.decode"
-                                        // e.g., for Str.concat: "Builtin.Str" + "concat" -> "Builtin.Str.concat"
-                                        const qualified_type_text = self.env.getIdent(auto_imported_type_env.qualified_type_ident);
-                                        const fully_qualified_idx = try self.env.insertQualifiedIdent(qualified_type_text, field_text);
-                                        const qualified_text = self.env.getIdent(fully_qualified_idx);
-
-                                        // Try to find the method in the Builtin module's exposed items
-                                        if (module_env.common.findIdent(qualified_text)) |qname_ident| {
-                                            if (module_env.getExposedNodeIndexById(qname_ident)) |target_node_idx| {
-                                                // Found it! This is a module-qualified lookup
-                                                // Need to get or create the auto-import for the module
-                                                // For package-qualified imports (pf.Stdout), use the qualified name
-                                                // For builtin nested types (Bool, Str), use the parent module name
-                                                const actual_module_name = if (auto_imported_type_env.is_package_qualified) type_text else module_env.module_name;
-                                                const import_idx = try self.getOrCreateAutoImport(actual_module_name);
-
-                                                // Create e_lookup_external expression
-                                                const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_external = .{
-                                                    .module_idx = import_idx,
-                                                    .target_node_idx = target_node_idx,
-                                                    .ident_idx = type_qualified_idx,
-                                                    .region = region,
-                                                } }, region);
-
-                                                return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
-                                            }
-                                        }
-                                    }
-                                }
-
-                                // For types in current scope, try current scope lookup
-                                switch (self.scopeLookup(.ident, type_qualified_idx)) {
-                                    .found => |found_pattern_idx| {
-                                        // Found the associated item! Mark it as used.
-                                        try self.used_patterns.put(self.env.gpa, found_pattern_idx, {});
-
-                                        // Return a local lookup expression
-                                        const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{
-                                            .pattern_idx = found_pattern_idx,
-                                        } }, region);
-
-                                        const free_vars_start = self.scratch_free_vars.top();
-                                        try self.scratch_free_vars.append(found_pattern_idx);
-                                        return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.init(free_vars_start, 1) };
-                                    },
-                                    .not_found => {
-                                        // Associated item not found - generate error
-                                        if (trace_modules) {
-                                            const parent_text = self.env.getIdent(module_alias);
-                                            const nested_text = self.env.getIdent(ident);
-                                            std.debug.print("[TRACE-MODULES] nested_value_not_found: {s}.{s} (scope lookup failed)\n", .{ parent_text, nested_text });
-                                        }
-                                        const diagnostic = Diagnostic{ .nested_value_not_found = .{
-                                            .parent_name = module_alias,
-                                            .nested_name = ident,
-                                            .region = region,
-                                        } };
-                                        return CanonicalizedExpr{
-                                            .idx = try self.env.pushMalformed(Expr.Idx, diagnostic),
-                                            .free_vars = DataSpan.empty(),
-                                        };
-                                    },
-                                }
-                            }
-
-                            // Not a type either - generate appropriate error
-                            const diagnostic = Diagnostic{ .qualified_ident_does_not_exist = .{
-                                .ident = qualified_ident,
-                                .region = region,
-                            } };
-
-                            return CanonicalizedExpr{
-                                .idx = try self.env.pushMalformed(Expr.Idx, diagnostic),
-                                .free_vars = DataSpan.empty(),
-                            };
-                        };
-
-                        {
-                            // This is a module-qualified lookup
-                            const module_text = self.env.getIdent(module_name);
-
-                            // Look up auto-imported type info once to avoid repeated map lookups
-                            const auto_imported_type_info: ?AutoImportedType = if (self.module_envs) |envs_map|
-                                envs_map.get(module_name)
-                            else
-                                null;
-
-                            // Check if this module is imported in the current scope
-                            // For auto-imported nested types (Bool, Str), use the parent module name (Builtin)
-                            // For package-qualified imports (pf.Stdout), use the qualified name as-is
-                            // For placeholder modules, use the original module text (not the placeholder's env.module_name)
-                            const lookup_module_name = if (auto_imported_type_info) |info|
-                                if (info.is_placeholder) module_text else if (info.is_package_qualified) module_text else info.env.module_name
-                            else
-                                module_text;
-
-                            // If not, create an auto-import
-                            const import_idx = self.scopeLookupImportedModule(lookup_module_name) orelse blk: {
-                                // Check if this is an auto-imported module
-                                if (auto_imported_type_info) |info| {
-                                    // For placeholders, use the original module text
-                                    // For auto-imported nested types (like Bool, Str), import the parent module (Builtin)
-                                    // For package-qualified imports (pf.Stdout), use the qualified name
-                                    const actual_module_name = if (info.is_placeholder) module_text else if (info.is_package_qualified) module_text else info.env.module_name;
-                                    break :blk try self.getOrCreateAutoImport(actual_module_name);
-                                }
-
-                                // Module not imported in current scope
-                                return CanonicalizedExpr{
-                                    .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .module_not_imported = .{
-                                        .module_name = module_name,
-                                        .region = region,
-                                    } }),
-                                    .free_vars = DataSpan.empty(),
-                                };
-                            };
-
-                            // Look up the target node index in the module's exposed_items
-                            // Need to convert identifier from current module to target module
-                            const field_text = self.env.getIdent(ident);
-
-                            // For nested module access like Outer.Inner.inner, build the nested path
-                            // from all qualifiers after the first one, plus the final ident.
-                            // e.g., for Outer.Inner.inner: qualifiers[1..] = [Inner], field = inner
-                            // Result: "Inner.inner"
-                            // For simple access like Outer.outer, this is just "outer" (field_text)
-                            var nested_path_buf: [512]u8 = undefined;
-                            const nested_path: []const u8 = if (qualifier_tokens.len > 1) nested_blk: {
-                                var pos: usize = 0;
-                                for (qualifier_tokens[1..]) |qtok| {
-                                    const qtok_idx = @as(Token.Idx, @intCast(qtok));
-                                    if (self.parse_ir.tokens.resolveIdentifier(qtok_idx)) |q_ident| {
-                                        const q_text = self.env.getIdent(q_ident);
-                                        if (pos + q_text.len + 1 > nested_path_buf.len) break :nested_blk field_text;
-                                        @memcpy(nested_path_buf[pos..][0..q_text.len], q_text);
-                                        pos += q_text.len;
-                                        nested_path_buf[pos] = '.';
-                                        pos += 1;
-                                    }
-                                }
-                                if (pos + field_text.len > nested_path_buf.len) break :nested_blk field_text;
-                                @memcpy(nested_path_buf[pos..][0..field_text.len], field_text);
-                                pos += field_text.len;
-                                break :nested_blk nested_path_buf[0..pos];
-                            } else field_text;
-
-                            const target_node_idx_opt: ?u16 = if (auto_imported_type_info) |info| blk: {
-                                const module_env = info.env;
-
-                                // For auto-imported types with statement_idx (builtin types and platform modules),
-                                // build the full qualified name using qualified_type_ident.
-                                // For regular user module imports (statement_idx is null), build the full path
-                                // using module name + nested path (for nested access like Outer.Inner.inner).
-                                var full_lookup_buf: [512]u8 = undefined;
-                                const lookup_name: []const u8 = if (info.statement_idx) |_| name_blk: {
-                                    // Build the fully qualified member name using the type's qualified ident
-                                    // e.g., for U8.to_i16: "Builtin.Num.U8" + "to_i16" -> "Builtin.Num.U8.to_i16"
-                                    // e.g., for Str.concat: "Builtin.Str" + "concat" -> "Builtin.Str.concat"
-                                    // For nested module access like Outer.Inner.inner, use nested_path
-                                    // e.g., "Outer" + "Inner.inner" -> "Outer.Inner.inner"
-                                    // Note: qualified_type_ident is always stored in the calling module's ident store
-                                    // (self.env), since Ident.Idx values are not transferable between stores.
-                                    const qualified_text = self.env.getIdent(info.qualified_type_ident);
-                                    const fully_qualified_idx = try self.env.insertQualifiedIdent(qualified_text, nested_path);
-                                    break :name_blk self.env.getIdent(fully_qualified_idx);
-                                } else name_blk: {
-                                    // For nested module access (qualifier_tokens.len > 1), exposed items
-                                    // are stored with the full module-qualified path.
-                                    // Build: module_name + "." + nested_path
-                                    // e.g., "Outer.Inner.inner" for Inner.inner in Outer module
-                                    // For simple access (qualifier_tokens.len == 1), just use field_text
-                                    // e.g., for A.main!: just "main!" (not "A.main!")
-                                    if (qualifier_tokens.len == 1) {
-                                        break :name_blk field_text;
-                                    }
-                                    const mod_name = module_env.module_name;
-                                    if (mod_name.len + 1 + nested_path.len > full_lookup_buf.len) {
-                                        break :name_blk nested_path;
-                                    }
-                                    @memcpy(full_lookup_buf[0..mod_name.len], mod_name);
-                                    full_lookup_buf[mod_name.len] = '.';
-                                    @memcpy(full_lookup_buf[mod_name.len + 1 ..][0..nested_path.len], nested_path);
-                                    break :name_blk full_lookup_buf[0 .. mod_name.len + 1 + nested_path.len];
-                                };
-
-                                // Look up the associated item by its name
-                                const qname_ident = module_env.common.findIdent(lookup_name) orelse {
-                                    // Identifier not found - just return null
-                                    // The error will be handled by the code below that checks target_node_idx_opt
-                                    break :blk null;
-                                };
-                                break :blk module_env.getExposedNodeIndexById(qname_ident);
-                            } else null;
-
-                            // If target_node_idx_opt is null, we need to handle the error case
-                            if (target_node_idx_opt == null) {
-                                // Check if the module is in module_envs - if not, the import failed (MODULE NOT FOUND)
-                                // and we shouldn't report a redundant error here
-                                if (auto_imported_type_info == null) {
-                                    // Module import failed, don't generate redundant error
-                                    // Fall through to normal identifier lookup
-                                    break :blk_qualified;
-                                }
-
-                                // If this is a placeholder module (not yet compiled), create a pending lookup
-                                // that will be resolved after all modules are canonicalized.
-                                if (auto_imported_type_info.?.is_placeholder) {
-                                    const info = auto_imported_type_info.?;
-                                    // Build the fully qualified member name like we do for non-placeholder modules.
-                                    // For builtin types with statement_idx, use qualified_type_ident + field_text
-                                    // e.g., for Message.msg: "Message" + "msg" -> "Message.msg"
-                                    // For nested module access (qualifier_tokens.len > 1), use module_name + nested_path
-                                    // e.g., for Outer.Inner.inner: "Outer" + "Inner.inner" -> "Outer.Inner.inner"
-                                    // For simple access (qualifier_tokens.len == 1), just use field_text
-                                    // e.g., for A.main!: just "main!" (not "A.main!")
-                                    const qualified_ident_idx: Ident.Idx = if (info.statement_idx != null) idx_blk: {
-                                        const qualified_text = self.env.getIdent(info.qualified_type_ident);
-                                        break :idx_blk try self.env.insertQualifiedIdent(qualified_text, field_text);
-                                    } else if (qualifier_tokens.len > 1)
-                                        try self.env.insertQualifiedIdent(self.env.getIdent(module_name), nested_path)
-                                    else
-                                        ident;
-
-                                    const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_pending = .{
-                                        .module_idx = import_idx,
-                                        .ident_idx = qualified_ident_idx,
-                                        .region = region,
-                                    } }, region);
-                                    return CanonicalizedExpr{
-                                        .idx = expr_idx,
-                                        .free_vars = DataSpan.empty(),
-                                    };
-                                }
-
-                                // Generate a more helpful error for auto-imported types (List, Bool, Try, etc.)
-                                return CanonicalizedExpr{
-                                    .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .nested_value_not_found = .{
-                                        .parent_name = module_name,
-                                        .nested_name = ident,
-                                        .region = region,
-                                    } }),
-                                    .free_vars = DataSpan.empty(),
-                                };
-                            }
-                            const target_node_idx = target_node_idx_opt.?;
-
-                            // Create the e_lookup_external expression with Import.Idx
-                            const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_external = .{
-                                .module_idx = import_idx,
-                                .target_node_idx = target_node_idx,
-                                .ident_idx = ident,
-                                .region = region,
-                            } }, region);
-                            return CanonicalizedExpr{
-                                .idx = expr_idx,
-                                .free_vars = DataSpan.empty(),
-                            };
-                        }
-                    }
-                } // end blk_qualified
-
-                // Not a module-qualified lookup, or qualifier not found, proceed with normal lookup
-                switch (self.scopeLookup(.ident, ident)) {
+                // Single-lookup approach: look up the qualified name exactly as written.
+                // Registration puts progressively qualified names in each scope, so this should find it.
+                switch (self.scopeLookup(.ident, qualified_ident)) {
                     .found => |found_pattern_idx| {
-                        // Check for self-reference outside of lambda (issues #8831, #9043).
-                        // We detect self-reference in two cases:
-                        // 1. The found pattern IS the main defining pattern (for simple cases like `a = a`)
-                        // 2. The found pattern was newly created by this definition (for tuple cases
-                        //    like `(_, var $n) = f($n)` where $n is referenced before being defined)
-                        // Note: For var reassignments like `(a, $x) = f($x)` where $x already existed,
-                        // the existing pattern has an index < defining_patterns_start, so it's valid.
-                        const is_self_ref = blk: {
-                            // Check if it matches the main defining pattern (handles `a = a`)
-                            if (self.defining_pattern) |def_pat| {
-                                if (found_pattern_idx == def_pat) break :blk true;
-                            }
-                            // Check if it's a newly created pattern (handles tuple cases)
-                            if (self.defining_patterns_start) |def_start| {
-                                if (@intFromEnum(found_pattern_idx) >= def_start) break :blk true;
-                            }
-                            break :blk false;
-                        };
-
-                        if (is_self_ref) {
-                            // Self-reference detected - emit error and return malformed expr.
-                            // Non-function values cannot reference themselves as that would cause
-                            // an infinite loop at runtime.
-                            const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .self_referential_definition = .{
-                                .ident = ident,
-                                .region = region,
-                            } });
-                            return CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
-                        }
-
                         // Mark this pattern as used for unused variable checking
                         try self.used_patterns.put(self.env.gpa, found_pattern_idx, {});
 
-                        // Check if this is a used underscore variable
-                        try self.checkUsedUnderscoreVariable(ident, region);
-
-                        // We found the ident in scope, create a lookup to reference the pattern
-                        // Note: Rank tracking for let-polymorphism is handled by the type checker (Check.zig)
+                        // We found the qualified ident in local scope
                         const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{
                             .pattern_idx = found_pattern_idx,
                         } }, region);
 
                         const free_vars_start = self.scratch_free_vars.top();
                         try self.scratch_free_vars.append(found_pattern_idx);
-                        const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
-                        return CanonicalizedExpr{ .idx = expr_idx, .free_vars = free_vars_span };
+                        return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.init(free_vars_start, 1) };
                     },
                     .not_found => {
-                        // Check if this identifier is an exposed item from an import
-                        if (self.scopeLookupExposedItem(ident)) |exposed_info| {
+                        // Not found locally - check if first qualifier is a module alias for external lookup
+                    },
+                }
 
-                            // Get the Import.Idx for the module this item comes from
-                            const module_text = self.env.getIdent(exposed_info.module_name);
-                            // scopeLookupExposedItem found it, so the import must exist
-                            const import_idx = self.scopeLookupImportedModule(module_text) orelse unreachable;
+                const qualifier_tok = @as(Token.Idx, @intCast(qualifier_tokens[0]));
+                if (self.parse_ir.tokens.resolveIdentifier(qualifier_tok)) |module_alias| {
+                    // Check if this is a type variable alias first (e.g., Thing.default where Thing : thing)
+                    if (qualifier_tokens.len == 1) {
+                        // Look up in all scopes, not just current scope
+                        for (self.scopes.items) |*scope| {
+                            const lookup_result = scope.lookupTypeVarAlias(module_alias);
+                            switch (lookup_result) {
+                                .found => |binding| {
+                                    // This is a type var alias dispatch!
+                                    // Get the method name from the ident (e.g., "default")
+                                    const method_name = ident;
 
-                            // Look up the target node index in the module's exposed_items
-                            // Need to convert identifier from current module to target module
-                            const field_text = self.env.getIdent(exposed_info.original_name);
-                            const target_node_idx_opt: ?u16 = if (self.module_envs) |envs_map| blk: {
-                                if (envs_map.get(exposed_info.module_name)) |auto_imported_type| {
-                                    const module_env = auto_imported_type.env;
-                                    if (module_env.common.findIdent(field_text)) |target_ident| {
-                                        break :blk module_env.getExposedNodeIndexById(target_ident);
-                                    } else {
-                                        break :blk null;
+                                    // Create e_type_var_dispatch expression
+                                    const dispatch_expr_idx = try self.env.addExpr(CIR.Expr{
+                                        .e_type_var_dispatch = .{
+                                            .type_var_alias_stmt = binding.statement_idx,
+                                            .method_name = method_name,
+                                            .args = .{ .span = .{ .start = 0, .len = 0 } }, // No args for now; filled in by apply
+                                        },
+                                    }, region);
+
+                                    return CanonicalizedExpr{ .idx = dispatch_expr_idx, .free_vars = DataSpan.empty() };
+                                },
+                                .not_found => {}, // Continue checking other scopes
+                            }
+                        }
+                    }
+
+                    // Check if this is a module alias, or an auto-imported module
+                    const module_info: ?Scope.ModuleAliasInfo = self.scopeLookupModule(module_alias) orelse blk: {
+                        // Not in scope, check if it's an auto-imported module
+                        if (self.module_envs) |envs_map| {
+                            if (envs_map.contains(module_alias)) {
+                                // This is an auto-imported module like Bool or Try
+                                // Use the module_alias directly as the module_name (not package-qualified)
+                                break :blk Scope.ModuleAliasInfo{
+                                    .module_name = module_alias,
+                                    .is_package_qualified = false,
+                                };
+                            }
+                        }
+                        break :blk null;
+                    };
+                    const module_name = if (module_info) |info| info.module_name else {
+                        // Not a module alias and not an auto-imported module
+                        // Check if the qualifier is a type - if so, try to lookup associated items
+                        const is_type_in_scope = self.scopeLookupTypeBinding(module_alias) != null;
+                        const is_auto_imported_type = if (self.module_envs) |envs_map|
+                            envs_map.contains(module_alias)
+                        else
+                            false;
+
+                        if (is_type_in_scope or is_auto_imported_type) {
+                            // This is a type with a potential associated item
+                            // Build the fully qualified name and try to look it up
+                            const type_text = self.env.getIdent(module_alias);
+                            const field_text = self.env.getIdent(ident);
+                            const type_qualified_idx = try self.env.insertQualifiedIdent(type_text, field_text);
+
+                            // For auto-imported types (like Str, Bool from Builtin module),
+                            // we need to look up the method in the Builtin module, not current scope
+                            if (is_auto_imported_type and self.module_envs != null) {
+                                if (self.module_envs.?.get(module_alias)) |auto_imported_type_env| {
+                                    const module_env = auto_imported_type_env.env;
+
+                                    // Build the FULLY qualified method name using qualified_type_ident
+                                    // e.g., for I32.decode: "Builtin.Num.I32" + "decode" -> "Builtin.Num.I32.decode"
+                                    // e.g., for Str.concat: "Builtin.Str" + "concat" -> "Builtin.Str.concat"
+                                    const qualified_type_text = self.env.getIdent(auto_imported_type_env.qualified_type_ident);
+                                    const fully_qualified_idx = try self.env.insertQualifiedIdent(qualified_type_text, field_text);
+                                    const qualified_text = self.env.getIdent(fully_qualified_idx);
+
+                                    // Try to find the method in the Builtin module's exposed items
+                                    if (module_env.common.findIdent(qualified_text)) |qname_ident| {
+                                        if (module_env.getExposedNodeIndexById(qname_ident)) |target_node_idx| {
+                                            // Found it! This is a module-qualified lookup
+                                            // Need to get or create the auto-import for the module
+                                            // For package-qualified imports (pf.Stdout), use the qualified name
+                                            // For builtin nested types (Bool, Str), use the parent module name
+                                            const actual_module_name = if (auto_imported_type_env.is_package_qualified) type_text else module_env.module_name;
+                                            const import_idx = try self.getOrCreateAutoImport(actual_module_name);
+
+                                            // Create e_lookup_external expression
+                                            const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_external = .{
+                                                .module_idx = import_idx,
+                                                .target_node_idx = target_node_idx,
+                                                .ident_idx = type_qualified_idx,
+                                                .region = region,
+                                            } }, region);
+
+                                            return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
+                                        }
                                     }
+                                }
+                            }
+
+                            // For types in current scope, try current scope lookup
+                            switch (self.scopeLookup(.ident, type_qualified_idx)) {
+                                .found => |found_pattern_idx| {
+                                    // Found the associated item! Mark it as used.
+                                    try self.used_patterns.put(self.env.gpa, found_pattern_idx, {});
+
+                                    // Return a local lookup expression
+                                    const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{
+                                        .pattern_idx = found_pattern_idx,
+                                    } }, region);
+
+                                    const free_vars_start = self.scratch_free_vars.top();
+                                    try self.scratch_free_vars.append(found_pattern_idx);
+                                    return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.init(free_vars_start, 1) };
+                                },
+                                .not_found => {
+                                    // Associated item not found - generate error
+                                    if (trace_modules) {
+                                        const parent_text = self.env.getIdent(module_alias);
+                                        const nested_text = self.env.getIdent(ident);
+                                        std.debug.print("[TRACE-MODULES] nested_value_not_found: {s}.{s} (scope lookup failed)\n", .{ parent_text, nested_text });
+                                    }
+                                    const diagnostic = Diagnostic{ .nested_value_not_found = .{
+                                        .parent_name = module_alias,
+                                        .nested_name = ident,
+                                        .region = region,
+                                    } };
+                                    return CanonicalizedExpr{
+                                        .idx = try self.env.pushMalformed(Expr.Idx, diagnostic),
+                                        .free_vars = DataSpan.empty(),
+                                    };
+                                },
+                            }
+                        }
+
+                        // Not a type either - generate appropriate error
+                        const diagnostic = Diagnostic{ .qualified_ident_does_not_exist = .{
+                            .ident = qualified_ident,
+                            .region = region,
+                        } };
+
+                        return CanonicalizedExpr{
+                            .idx = try self.env.pushMalformed(Expr.Idx, diagnostic),
+                            .free_vars = DataSpan.empty(),
+                        };
+                    };
+
+                    {
+                        // This is a module-qualified lookup
+                        const module_text = self.env.getIdent(module_name);
+
+                        // Look up auto-imported type info once to avoid repeated map lookups
+                        const auto_imported_type_info: ?AutoImportedType = if (self.module_envs) |envs_map|
+                            envs_map.get(module_name)
+                        else
+                            null;
+
+                        // Check if this module is imported in the current scope
+                        // For auto-imported nested types (Bool, Str), use the parent module name (Builtin)
+                        // For package-qualified imports (pf.Stdout), use the qualified name as-is
+                        // For placeholder modules, use the original module text (not the placeholder's env.module_name)
+                        const lookup_module_name = if (auto_imported_type_info) |info|
+                            if (info.is_placeholder) module_text else if (info.is_package_qualified) module_text else info.env.module_name
+                        else
+                            module_text;
+
+                        // If not, create an auto-import
+                        const import_idx = self.scopeLookupImportedModule(lookup_module_name) orelse blk: {
+                            // Check if this is an auto-imported module
+                            if (auto_imported_type_info) |info| {
+                                // For placeholders, use the original module text
+                                // For auto-imported nested types (like Bool, Str), import the parent module (Builtin)
+                                // For package-qualified imports (pf.Stdout), use the qualified name
+                                const actual_module_name = if (info.is_placeholder) module_text else if (info.is_package_qualified) module_text else info.env.module_name;
+                                break :blk try self.getOrCreateAutoImport(actual_module_name);
+                            }
+
+                            // Module not imported in current scope
+                            return CanonicalizedExpr{
+                                .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .module_not_imported = .{
+                                    .module_name = module_name,
+                                    .region = region,
+                                } }),
+                                .free_vars = DataSpan.empty(),
+                            };
+                        };
+
+                        // Look up the target node index in the module's exposed_items
+                        // Need to convert identifier from current module to target module
+                        const field_text = self.env.getIdent(ident);
+
+                        // For nested module access like Outer.Inner.inner, build the nested path
+                        // from all qualifiers after the first one, plus the final ident.
+                        // e.g., for Outer.Inner.inner: qualifiers[1..] = [Inner], field = inner
+                        // Result: "Inner.inner"
+                        // For simple access like Outer.outer, this is just "outer" (field_text)
+                        var nested_path_buf: [512]u8 = undefined;
+                        const nested_path: []const u8 = if (qualifier_tokens.len > 1) nested_blk: {
+                            var pos: usize = 0;
+                            for (qualifier_tokens[1..]) |qtok| {
+                                const qtok_idx = @as(Token.Idx, @intCast(qtok));
+                                if (self.parse_ir.tokens.resolveIdentifier(qtok_idx)) |q_ident| {
+                                    const q_text = self.env.getIdent(q_ident);
+                                    if (pos + q_text.len + 1 > nested_path_buf.len) break :nested_blk field_text;
+                                    @memcpy(nested_path_buf[pos..][0..q_text.len], q_text);
+                                    pos += q_text.len;
+                                    nested_path_buf[pos] = '.';
+                                    pos += 1;
+                                }
+                            }
+                            if (pos + field_text.len > nested_path_buf.len) break :nested_blk field_text;
+                            @memcpy(nested_path_buf[pos..][0..field_text.len], field_text);
+                            pos += field_text.len;
+                            break :nested_blk nested_path_buf[0..pos];
+                        } else field_text;
+
+                        const target_node_idx_opt: ?u16 = if (auto_imported_type_info) |info| blk: {
+                            const module_env = info.env;
+
+                            // For auto-imported types with statement_idx (builtin types and platform modules),
+                            // build the full qualified name using qualified_type_ident.
+                            // For regular user module imports (statement_idx is null), build the full path
+                            // using module name + nested path (for nested access like Outer.Inner.inner).
+                            var full_lookup_buf: [512]u8 = undefined;
+                            const lookup_name: []const u8 = if (info.statement_idx) |_| name_blk: {
+                                // Build the fully qualified member name using the type's qualified ident
+                                // e.g., for U8.to_i16: "Builtin.Num.U8" + "to_i16" -> "Builtin.Num.U8.to_i16"
+                                // e.g., for Str.concat: "Builtin.Str" + "concat" -> "Builtin.Str.concat"
+                                // For nested module access like Outer.Inner.inner, use nested_path
+                                // e.g., "Outer" + "Inner.inner" -> "Outer.Inner.inner"
+                                // Note: qualified_type_ident is always stored in the calling module's ident store
+                                // (self.env), since Ident.Idx values are not transferable between stores.
+                                const qualified_text = self.env.getIdent(info.qualified_type_ident);
+                                const fully_qualified_idx = try self.env.insertQualifiedIdent(qualified_text, nested_path);
+                                break :name_blk self.env.getIdent(fully_qualified_idx);
+                            } else name_blk: {
+                                // For nested module access (qualifier_tokens.len > 1), exposed items
+                                // are stored with the full module-qualified path.
+                                // Build: module_name + "." + nested_path
+                                // e.g., "Outer.Inner.inner" for Inner.inner in Outer module
+                                // For simple access (qualifier_tokens.len == 1), just use field_text
+                                // e.g., for A.main!: just "main!" (not "A.main!")
+                                if (qualifier_tokens.len == 1) {
+                                    break :name_blk field_text;
+                                }
+                                const mod_name = module_env.module_name;
+                                if (mod_name.len + 1 + nested_path.len > full_lookup_buf.len) {
+                                    break :name_blk nested_path;
+                                }
+                                @memcpy(full_lookup_buf[0..mod_name.len], mod_name);
+                                full_lookup_buf[mod_name.len] = '.';
+                                @memcpy(full_lookup_buf[mod_name.len + 1 ..][0..nested_path.len], nested_path);
+                                break :name_blk full_lookup_buf[0 .. mod_name.len + 1 + nested_path.len];
+                            };
+
+                            // Look up the associated item by its name
+                            const qname_ident = module_env.common.findIdent(lookup_name) orelse {
+                                // Identifier not found - just return null
+                                // The error will be handled by the code below that checks target_node_idx_opt
+                                break :blk null;
+                            };
+                            break :blk module_env.getExposedNodeIndexById(qname_ident);
+                        } else null;
+
+                        // If target_node_idx_opt is null, we need to handle the error case
+                        if (target_node_idx_opt == null) {
+                            // Check if the module is in module_envs - if not, the import failed (MODULE NOT FOUND)
+                            // and we shouldn't report a redundant error here
+                            if (auto_imported_type_info == null) {
+                                // Module import failed, don't generate redundant error
+                                // Fall through to normal identifier lookup
+                                break :blk_qualified;
+                            }
+
+                            // If this is a placeholder module (not yet compiled), create a pending lookup
+                            // that will be resolved after all modules are canonicalized.
+                            if (auto_imported_type_info.?.is_placeholder) {
+                                const info = auto_imported_type_info.?;
+                                // Build the fully qualified member name like we do for non-placeholder modules.
+                                // For builtin types with statement_idx, use qualified_type_ident + field_text
+                                // e.g., for Message.msg: "Message" + "msg" -> "Message.msg"
+                                // For nested module access (qualifier_tokens.len > 1), use module_name + nested_path
+                                // e.g., for Outer.Inner.inner: "Outer" + "Inner.inner" -> "Outer.Inner.inner"
+                                // For simple access (qualifier_tokens.len == 1), just use field_text
+                                // e.g., for A.main!: just "main!" (not "A.main!")
+                                const qualified_ident_idx: Ident.Idx = if (info.statement_idx != null) idx_blk: {
+                                    const qualified_text = self.env.getIdent(info.qualified_type_ident);
+                                    break :idx_blk try self.env.insertQualifiedIdent(qualified_text, field_text);
+                                } else if (qualifier_tokens.len > 1)
+                                    try self.env.insertQualifiedIdent(self.env.getIdent(module_name), nested_path)
+                                else
+                                    ident;
+
+                                const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_pending = .{
+                                    .module_idx = import_idx,
+                                    .ident_idx = qualified_ident_idx,
+                                    .region = region,
+                                } }, region);
+                                return CanonicalizedExpr{
+                                    .idx = expr_idx,
+                                    .free_vars = DataSpan.empty(),
+                                };
+                            }
+
+                            // Generate a more helpful error for auto-imported types (List, Bool, Try, etc.)
+                            return CanonicalizedExpr{
+                                .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .nested_value_not_found = .{
+                                    .parent_name = module_name,
+                                    .nested_name = ident,
+                                    .region = region,
+                                } }),
+                                .free_vars = DataSpan.empty(),
+                            };
+                        }
+                        const target_node_idx = target_node_idx_opt.?;
+
+                        // Create the e_lookup_external expression with Import.Idx
+                        const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_external = .{
+                            .module_idx = import_idx,
+                            .target_node_idx = target_node_idx,
+                            .ident_idx = ident,
+                            .region = region,
+                        } }, region);
+                        return CanonicalizedExpr{
+                            .idx = expr_idx,
+                            .free_vars = DataSpan.empty(),
+                        };
+                    }
+                }
+            } // end blk_qualified
+
+            // Not a module-qualified lookup, or qualifier not found, proceed with normal lookup
+            switch (self.scopeLookup(.ident, ident)) {
+                .found => |found_pattern_idx| {
+                    // Check for self-reference outside of lambda (issues #8831, #9043).
+                    // We detect self-reference in two cases:
+                    // 1. The found pattern IS the main defining pattern (for simple cases like `a = a`)
+                    // 2. The found pattern was newly created by this definition (for tuple cases
+                    //    like `(_, var $n) = f($n)` where $n is referenced before being defined)
+                    // Note: For var reassignments like `(a, $x) = f($x)` where $x already existed,
+                    // the existing pattern has an index < defining_patterns_start, so it's valid.
+                    const is_self_ref = blk: {
+                        // Check if it matches the main defining pattern (handles `a = a`)
+                        if (self.defining_pattern) |def_pat| {
+                            if (found_pattern_idx == def_pat) break :blk true;
+                        }
+                        // Check if it's a newly created pattern (handles tuple cases)
+                        if (self.defining_patterns_start) |def_start| {
+                            if (@intFromEnum(found_pattern_idx) >= def_start) break :blk true;
+                        }
+                        break :blk false;
+                    };
+
+                    if (is_self_ref) {
+                        // Self-reference detected - emit error and return malformed expr.
+                        // Non-function values cannot reference themselves as that would cause
+                        // an infinite loop at runtime.
+                        const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .self_referential_definition = .{
+                            .ident = ident,
+                            .region = region,
+                        } });
+                        return CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
+                    }
+
+                    // Mark this pattern as used for unused variable checking
+                    try self.used_patterns.put(self.env.gpa, found_pattern_idx, {});
+
+                    // Check if this is a used underscore variable
+                    try self.checkUsedUnderscoreVariable(ident, region);
+
+                    // We found the ident in scope, create a lookup to reference the pattern
+                    // Note: Rank tracking for let-polymorphism is handled by the type checker (Check.zig)
+                    const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{
+                        .pattern_idx = found_pattern_idx,
+                    } }, region);
+
+                    const free_vars_start = self.scratch_free_vars.top();
+                    try self.scratch_free_vars.append(found_pattern_idx);
+                    const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
+                    return CanonicalizedExpr{ .idx = expr_idx, .free_vars = free_vars_span };
+                },
+                .not_found => {
+                    // Check if this identifier is an exposed item from an import
+                    if (self.scopeLookupExposedItem(ident)) |exposed_info| {
+
+                        // Get the Import.Idx for the module this item comes from
+                        const module_text = self.env.getIdent(exposed_info.module_name);
+                        // scopeLookupExposedItem found it, so the import must exist
+                        const import_idx = self.scopeLookupImportedModule(module_text) orelse unreachable;
+
+                        // Look up the target node index in the module's exposed_items
+                        // Need to convert identifier from current module to target module
+                        const field_text = self.env.getIdent(exposed_info.original_name);
+                        const target_node_idx_opt: ?u16 = if (self.module_envs) |envs_map| blk: {
+                            if (envs_map.get(exposed_info.module_name)) |auto_imported_type| {
+                                const module_env = auto_imported_type.env;
+                                if (module_env.common.findIdent(field_text)) |target_ident| {
+                                    break :blk module_env.getExposedNodeIndexById(target_ident);
                                 } else {
                                     break :blk null;
                                 }
-                            } else null;
-
-                            // If we didn't find a valid node index, check if we should report an error
-                            if (target_node_idx_opt) |target_node_idx| {
-                                // Create the e_lookup_external expression with Import.Idx
-                                const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_external = .{
-                                    .module_idx = import_idx,
-                                    .target_node_idx = target_node_idx,
-                                    .ident_idx = exposed_info.original_name,
-                                    .region = region,
-                                } }, region);
-                                return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
                             } else {
-                                // Check if the module is in module_envs - if not, the import failed
-                                // and we shouldn't report a redundant "does not exist" error
-                                const module_exists = if (self.module_envs) |envs_map|
-                                    envs_map.contains(exposed_info.module_name)
-                                else
-                                    false;
-
-                                if (module_exists) {
-                                    // The exposed item doesn't actually exist in the module
-                                    // This can happen with qualified identifiers like `Try.blah`
-                                    // where `Try` is a valid type module but `blah` doesn't exist
-                                    return CanonicalizedExpr{
-                                        .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .qualified_ident_does_not_exist = .{
-                                            .ident = ident,
-                                            .region = region,
-                                        } }),
-                                        .free_vars = DataSpan.empty(),
-                                    };
-                                }
-                                // Module doesn't exist, fall through to ident_not_in_scope error below
+                                break :blk null;
                             }
-                        }
+                        } else null;
 
-                        // Check if we're in a scope that allows forward references (associated blocks)
-                        // Walk through scopes looking for one with associated_type_name set
-                        const allows_forward_refs = blk: {
-                            for (self.scopes.items) |*scope| {
-                                if (scope.associated_type_name != null) break :blk true;
-                            }
-                            break :blk false;
-                        };
-
-                        if (allows_forward_refs) {
-                            // Create a forward reference pattern and add it to the current scope
-                            const forward_ref_pattern = Pattern{
-                                .assign = .{
-                                    .ident = ident,
-                                },
-                            };
-                            const pattern_idx = try self.env.addPattern(forward_ref_pattern, region);
-
-                            // Add to forward_references in the current scope
-                            const current_scope = &self.scopes.items[self.scopes.items.len - 1];
-
-                            // Create the forward reference with an ArrayList for regions
-                            var reference_regions = std.ArrayList(Region){};
-                            try reference_regions.append(self.env.gpa, region);
-
-                            const forward_ref: Scope.ForwardReference = .{
-                                .pattern_idx = pattern_idx,
-                                .reference_regions = reference_regions,
-                            };
-
-                            try current_scope.forward_references.put(self.env.gpa, ident, forward_ref);
-
-                            // Also add to idents so subsequent lookups will find it
-                            try current_scope.idents.put(self.env.gpa, ident, pattern_idx);
-
-                            // Return a lookup to this forward reference
-                            const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{
-                                .pattern_idx = pattern_idx,
-                            } }, region);
-
-                            const free_vars_start = self.scratch_free_vars.top();
-                            try self.scratch_free_vars.append(pattern_idx);
-                            const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
-                            return CanonicalizedExpr{ .idx = expr_idx, .free_vars = free_vars_span };
-                        }
-
-                        // Check if this is a required identifier from the platform's `requires` clause
-                        const requires_items = self.env.requires_types.items.items;
-                        for (requires_items, 0..) |req, idx| {
-                            if (req.ident == ident) {
-                                // Found a required identifier - create a lookup expression for it
-                                const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_required = .{
-                                    .requires_idx = ModuleEnv.RequiredType.SafeList.Idx.fromU32(@intCast(idx)),
-                                } }, region);
-                                return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
-                            }
-                        }
-
-                        // We did not find the ident in scope or as an exposed item, and forward refs not allowed
-                        return CanonicalizedExpr{
-                            .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .ident_not_in_scope = .{
-                                .ident = ident,
+                        // If we didn't find a valid node index, check if we should report an error
+                        if (target_node_idx_opt) |target_node_idx| {
+                            // Create the e_lookup_external expression with Import.Idx
+                            const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_external = .{
+                                .module_idx = import_idx,
+                                .target_node_idx = target_node_idx,
+                                .ident_idx = exposed_info.original_name,
                                 .region = region,
-                            } }),
-                            .free_vars = DataSpan.empty(),
+                            } }, region);
+                            return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
+                        } else {
+                            // Check if the module is in module_envs - if not, the import failed
+                            // and we shouldn't report a redundant "does not exist" error
+                            const module_exists = if (self.module_envs) |envs_map|
+                                envs_map.contains(exposed_info.module_name)
+                            else
+                                false;
+
+                            if (module_exists) {
+                                // The exposed item doesn't actually exist in the module
+                                // This can happen with qualified identifiers like `Try.blah`
+                                // where `Try` is a valid type module but `blah` doesn't exist
+                                return CanonicalizedExpr{
+                                    .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .qualified_ident_does_not_exist = .{
+                                        .ident = ident,
+                                        .region = region,
+                                    } }),
+                                    .free_vars = DataSpan.empty(),
+                                };
+                            }
+                            // Module doesn't exist, fall through to ident_not_in_scope error below
+                        }
+                    }
+
+                    // Check if we're in a scope that allows forward references (associated blocks)
+                    // Walk through scopes looking for one with associated_type_name set
+                    const allows_forward_refs = blk: {
+                        for (self.scopes.items) |*scope| {
+                            if (scope.associated_type_name != null) break :blk true;
+                        }
+                        break :blk false;
+                    };
+
+                    if (allows_forward_refs) {
+                        // Create a forward reference pattern and add it to the current scope
+                        const forward_ref_pattern = Pattern{
+                            .assign = .{
+                                .ident = ident,
+                            },
                         };
-                    },
-                }
-            } else {
-                const feature = try self.env.insertString("report an error when unable to resolve identifier");
-                return CanonicalizedExpr{
-                    .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
-                        .feature = feature,
-                        .region = region,
-                    } }),
-                    .free_vars = DataSpan.empty(),
-                };
+                        const pattern_idx = try self.env.addPattern(forward_ref_pattern, region);
+
+                        // Add to forward_references in the current scope
+                        const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+
+                        // Create the forward reference with an ArrayList for regions
+                        var reference_regions = std.ArrayList(Region){};
+                        try reference_regions.append(self.env.gpa, region);
+
+                        const forward_ref: Scope.ForwardReference = .{
+                            .pattern_idx = pattern_idx,
+                            .reference_regions = reference_regions,
+                        };
+
+                        try current_scope.forward_references.put(self.env.gpa, ident, forward_ref);
+
+                        // Also add to idents so subsequent lookups will find it
+                        try current_scope.idents.put(self.env.gpa, ident, pattern_idx);
+
+                        // Return a lookup to this forward reference
+                        const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{
+                            .pattern_idx = pattern_idx,
+                        } }, region);
+
+                        const free_vars_start = self.scratch_free_vars.top();
+                        try self.scratch_free_vars.append(pattern_idx);
+                        const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
+                        return CanonicalizedExpr{ .idx = expr_idx, .free_vars = free_vars_span };
+                    }
+
+                    // Check if this is a required identifier from the platform's `requires` clause
+                    const requires_items = self.env.requires_types.items.items;
+                    for (requires_items, 0..) |req, idx| {
+                        if (req.ident == ident) {
+                            // Found a required identifier - create a lookup expression for it
+                            const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_required = .{
+                                .requires_idx = ModuleEnv.RequiredType.SafeList.Idx.fromU32(@intCast(idx)),
+                            } }, region);
+                            return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
+                        }
+                    }
+
+                    // We did not find the ident in scope or as an exposed item, and forward refs not allowed
+                    return CanonicalizedExpr{
+                        .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .ident_not_in_scope = .{
+                            .ident = ident,
+                            .region = region,
+                        } }),
+                        .free_vars = DataSpan.empty(),
+                    };
+                },
             }
         },
         .int => |e| {
@@ -7853,85 +7825,75 @@ pub fn canonicalizePattern(
     switch (self.parse_ir.store.getPattern(ast_pattern_idx)) {
         .ident => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
-            if (self.parse_ir.tokens.resolveIdentifier(e.ident_tok)) |ident_idx| {
-                // Check if a placeholder exists for this identifier in the current scope
-                // Placeholders are tracked in the placeholder_idents hash map
-                const current_scope = &self.scopes.items[self.scopes.items.len - 1];
-                const placeholder_exists = self.isPlaceholder(ident_idx);
 
-                // Create a Pattern node for our identifier
-                const pattern_idx = try self.env.addPattern(Pattern{ .assign = .{
-                    .ident = ident_idx,
-                } }, region);
+            // All ident patterns have resolvable tokens (LowerIdent, NamedUnderscore)
+            const ident_idx = self.parse_ir.tokens.resolveIdentifier(e.ident_tok) orelse unreachable;
 
-                if (placeholder_exists) {
-                    // Replace the placeholder in the current scope
-                    try self.updatePlaceholder(current_scope, ident_idx, pattern_idx);
-                } else {
-                    // Introduce the identifier into scope mapping to this pattern node
-                    // Use is_declaration=false so scopeIntroduceInternal can detect var reassignments
-                    switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, ident_idx, pattern_idx, false, false)) {
-                        .success => {},
-                        .shadowing_warning => |shadowed_pattern_idx| {
-                            const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
-                            try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
-                                .ident = ident_idx,
-                                .region = region,
-                                .original_region = original_region,
-                            } });
-                        },
-                        .top_level_var_error => {
-                            return try self.env.pushMalformed(Pattern.Idx, Diagnostic{
-                                .invalid_top_level_statement = .{
-                                    .stmt = try self.env.insertString("var"),
-                                    .region = region,
-                                },
-                            });
-                        },
-                        .var_across_function_boundary => {
-                            return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .var_across_function_boundary = .{
-                                .region = region,
-                            } });
-                        },
-                        .var_reassignment_ok => |existing_pattern_idx| {
-                            // This is a var reassignment - return the existing pattern
-                            // so the interpreter's upsertBinding will update the existing binding
-                            return existing_pattern_idx;
-                        },
-                    }
-                }
+            // Check if a placeholder exists for this identifier in the current scope
+            // Placeholders are tracked in the placeholder_idents hash map
+            const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+            const placeholder_exists = self.isPlaceholder(ident_idx);
 
-                return pattern_idx;
+            // Create a Pattern node for our identifier
+            const pattern_idx = try self.env.addPattern(Pattern{ .assign = .{
+                .ident = ident_idx,
+            } }, region);
+
+            if (placeholder_exists) {
+                // Replace the placeholder in the current scope
+                try self.updatePlaceholder(current_scope, ident_idx, pattern_idx);
             } else {
-                const feature = try self.env.insertString("report an error when unable to resolve identifier");
-                const malformed_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .not_implemented = .{
-                    .feature = feature,
-                    .region = region,
-                } });
-                return malformed_idx;
+                // Introduce the identifier into scope mapping to this pattern node
+                // Use is_declaration=false so scopeIntroduceInternal can detect var reassignments
+                switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, ident_idx, pattern_idx, false, false)) {
+                    .success => {},
+                    .shadowing_warning => |shadowed_pattern_idx| {
+                        const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
+                        try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
+                            .ident = ident_idx,
+                            .region = region,
+                            .original_region = original_region,
+                        } });
+                    },
+                    .top_level_var_error => {
+                        return try self.env.pushMalformed(Pattern.Idx, Diagnostic{
+                            .invalid_top_level_statement = .{
+                                .stmt = try self.env.insertString("var"),
+                                .region = region,
+                            },
+                        });
+                    },
+                    .var_across_function_boundary => {
+                        return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .var_across_function_boundary = .{
+                            .region = region,
+                        } });
+                    },
+                    .var_reassignment_ok => |existing_pattern_idx| {
+                        // This is a var reassignment - return the existing pattern
+                        // so the interpreter's upsertBinding will update the existing binding
+                        return existing_pattern_idx;
+                    },
+                }
             }
+
+            return pattern_idx;
         },
         .var_ident => |e| {
             // Mutable variable binding in a pattern (e.g., `|var $x, y|`)
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
-            if (self.parse_ir.tokens.resolveIdentifier(e.ident_tok)) |ident_idx| {
-                // Create a Pattern node for our mutable identifier
-                const pattern_idx = try self.env.addPattern(Pattern{ .assign = .{
-                    .ident = ident_idx,
-                } }, region);
 
-                // Introduce the var with function boundary tracking
-                // scopeIntroduceVar will detect if this is a reassignment of an existing var
-                // and return the existing pattern in that case
-                return try self.scopeIntroduceVar(ident_idx, pattern_idx, region, true, Pattern.Idx);
-            } else {
-                const feature = try self.env.insertString("report an error when unable to resolve identifier");
-                const malformed_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .not_implemented = .{
-                    .feature = feature,
-                    .region = region,
-                } });
-                return malformed_idx;
-            }
+            // var_ident patterns always have resolvable tokens (LowerIdent)
+            const ident_idx = self.parse_ir.tokens.resolveIdentifier(e.ident_tok) orelse unreachable;
+
+            // Create a Pattern node for our mutable identifier
+            const pattern_idx = try self.env.addPattern(Pattern{ .assign = .{
+                .ident = ident_idx,
+            } }, region);
+
+            // Introduce the var with function boundary tracking
+            // scopeIntroduceVar will detect if this is a reassignment of an existing var
+            // and return the existing pattern in that case
+            return try self.scopeIntroduceVar(ident_idx, pattern_idx, region, true, Pattern.Idx);
         },
         .underscore => |p| {
             const region = self.parse_ir.tokenizedRegionToRegion(p.region);
@@ -11454,22 +11416,6 @@ pub fn currentScope(self: *Self) *Scope {
 fn currentScopeIdx(self: *Self) usize {
     std.debug.assert(self.scopes.items.len > 0);
     return self.scopes.items.len - 1;
-}
-
-/// This will be used later for builtins like Num.nan, Num.infinity, etc.
-pub fn addNonFiniteFloat(self: *Self, value: f64, region: base.Region) !Expr.Idx {
-    // then in the final slot the actual expr is inserted
-    const expr_idx = try self.env.addExpr(
-        CIR.Expr{
-            .e_frac_f64 = .{
-                .value = value,
-                .has_suffix = false,
-            },
-        },
-        region,
-    );
-
-    return expr_idx;
 }
 
 /// Check if an identifier is in scope

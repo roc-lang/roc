@@ -1,24 +1,60 @@
 # META
 ~~~ini
 description=Unknown operator, should produce an error
-type=expr
+type=snippet
 ~~~
 # SOURCE
 ~~~roc
 1 ++ 2
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - unknown_operator.md:1:4:1:5
+PARSE ERROR - unknown_operator.md:1:1:1:2
+PARSE ERROR - unknown_operator.md:1:3:1:4
+PARSE ERROR - unknown_operator.md:1:4:1:5
+PARSE ERROR - unknown_operator.md:1:6:1:7
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **+** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**unknown_operator.md:1:1:1:2:**
+```roc
+1 ++ 2
+```
+^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**unknown_operator.md:1:3:1:4:**
+```roc
+1 ++ 2
+```
+  ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 **unknown_operator.md:1:4:1:5:**
 ```roc
 1 ++ 2
 ```
    ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**unknown_operator.md:1:6:1:7:**
+```roc
+1 ++ 2
+```
+     ^
 
 
 # TOKENS
@@ -28,13 +64,16 @@ EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-binop (op "+")
-	(e-int (raw "1"))
-	(e-malformed (reason "expr_unexpected_token")))
+(file
+	(type-module)
+	(statements
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
-1 + 
 ~~~
 # CANONICALIZE
 ~~~clojure

@@ -72,15 +72,56 @@ fn parseFileAndReturnIdx(parser: *Parser) Parser.Error!u32 {
     return 0;
 }
 
+/// Error type for expression parsing, which can fail with parser errors or when tokens remain after parsing.
+pub const ParseExprError = Parser.Error || error{UnconsumedTokens};
+
 fn parseExprAndReturnIdx(parser: *Parser) Parser.Error!u32 {
     const id = try parser.parseExpr();
     return @intFromEnum(id);
 }
 
-/// Parses a Roc expression - only for use in snapshots. The returned AST should be deallocated by calling deinit
-/// after its data is used to create the next IR, or at the end of any test.
-pub fn parseExpr(env: *CommonEnv, gpa: std.mem.Allocator) Parser.Error!AST {
+/// Parses a Roc expression without checking for unconsumed tokens.
+/// Used by the REPL and evaluator where partial parsing is expected.
+pub fn parseExprLenient(env: *CommonEnv, gpa: std.mem.Allocator) Parser.Error!AST {
     return try runParse(env, gpa, parseExprAndReturnIdx);
+}
+
+/// Parses a Roc expression and verifies all tokens are consumed.
+/// Returns error.UnconsumedTokens if there are leftover tokens after the expression.
+pub fn parseExpr(env: *CommonEnv, gpa: std.mem.Allocator) ParseExprError!AST {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    var messages: [128]tokenize.Diagnostic = undefined;
+    const msg_slice = messages[0..];
+    var tokenizer = try tokenize.Tokenizer.init(env, gpa, env.source, msg_slice);
+    try tokenizer.tokenize(gpa);
+    var result = tokenizer.finishAndDeinit();
+
+    var parser = try Parser.init(result.tokens, gpa);
+    defer parser.deinit();
+
+    errdefer result.tokens.deinit(gpa);
+    errdefer parser.store.deinit();
+    errdefer parser.diagnostics.deinit(gpa);
+
+    const id = try parser.parseExpr();
+
+    if (parser.peek() != .EndOfFile) {
+        return error.UnconsumedTokens;
+    }
+
+    const tokenize_diagnostics_slice = try gpa.dupe(tokenize.Diagnostic, result.messages);
+    const tokenize_diagnostics = std.ArrayList(tokenize.Diagnostic).fromOwnedSlice(tokenize_diagnostics_slice);
+
+    return .{
+        .env = env,
+        .tokens = result.tokens,
+        .store = parser.store,
+        .root_node_idx = @intFromEnum(id),
+        .tokenize_diagnostics = tokenize_diagnostics,
+        .parse_diagnostics = parser.diagnostics,
+    };
 }
 
 fn parseHeaderAndReturnIdx(parser: *Parser) Parser.Error!u32 {
