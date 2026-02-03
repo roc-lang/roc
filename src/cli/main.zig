@@ -45,9 +45,6 @@ const fmt = @import("fmt");
 const eval = @import("eval");
 const lsp = @import("lsp");
 const cli_repl = @import("repl.zig");
-const compiled_builtins = @import("compiled_builtins");
-const builtin_loading = eval.builtin_loading;
-const BuiltinTypes = eval.BuiltinTypes;
 
 const cli_args = @import("cli_args.zig");
 const roc_target = @import("target.zig");
@@ -3329,7 +3326,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     build_env.build(args.path) catch |err| {
         // Drain and display error reports
         const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
-        defer build_env.gpa.free(drained);
+        defer build_env.freeDrainedReports(drained);
 
         for (drained) |mod| {
             for (mod.reports) |*report| {
@@ -3343,7 +3340,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
 
     // Drain reports and count errors/warnings
     const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
-    defer build_env.gpa.free(drained);
+    defer build_env.freeDrainedReports(drained);
 
     var total_error_count: usize = 0;
     var total_warning_count: usize = 0;
@@ -3725,230 +3722,348 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
     const stdout = ctx.io.stdout();
     const stderr = ctx.io.stderr();
 
-    // Read the Roc file
-    var source = std.fs.cwd().readFileAlloc(ctx.gpa, args.path, std.math.maxInt(usize)) catch |err| {
-        try stderr.print("Failed to read file '{s}': {}\n", .{ args.path, err });
+    // Set up cache configuration based on command line args
+    const cache_config = CacheConfig{
+        .enabled = !args.no_cache,
+        .verbose = args.verbose,
+    };
+
+    // Determine threading mode and thread count
+    const thread_count: usize = if (args.max_threads) |t| t else (std.Thread.getCpuCount() catch 1);
+    const mode: Mode = if (thread_count <= 1) .single_threaded else .multi_threaded;
+
+    // Initialize BuildEnv for compilation
+    var build_env = BuildEnv.init(ctx.gpa, mode, thread_count, roc_target.RocTarget.detectNative()) catch |err| {
+        try stderr.print("Failed to initialize build environment: {}\n", .{err});
         return err;
     };
-    source = base.source_utils.normalizeLineEndingsRealloc(ctx.gpa, source) catch |err| {
-        ctx.gpa.free(source);
+    build_env.compiler_version = build_options.compiler_version;
+    defer build_env.deinit();
+
+    // Set up cache manager if caching is enabled
+    if (cache_config.enabled) {
+        const cache_manager = ctx.gpa.create(CacheManager) catch |err| {
+            try stderr.print("Failed to create cache manager: {}\n", .{err});
+            return err;
+        };
+        cache_manager.* = CacheManager.init(ctx.gpa, cache_config, Filesystem.default());
+        build_env.setCacheManager(cache_manager);
+    }
+
+    // Build the file using the Coordinator (handles all module types)
+    build_env.build(args.path) catch |err| {
+        // On build error, drain and display any reports
+        const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
+        defer build_env.freeDrainedReports(drained);
+        for (drained) |mod| {
+            for (mod.reports) |*report| {
+                const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
+                const config = reporting.ReportingConfig.initColorTerminal();
+                reporting.renderReportToTerminal(report, stderr, palette, config) catch {};
+            }
+        }
+        try stderr.print("Build failed: {}\n", .{err});
         return err;
     };
-    defer ctx.gpa.free(source);
 
-    // Extract module name from the file path (strips .roc extension)
-    const module_name = try base.module_path.getModuleNameAlloc(ctx.arena, args.path);
-
-    // Create ModuleEnv
-    var env = ModuleEnv.init(ctx.gpa, source) catch |err| {
-        try stderr.print("Failed to initialize module environment: {}\n", .{err});
-        return err;
-    };
-    defer env.deinit();
-
-    env.common.source = source;
-    env.module_name = module_name;
-    try env.common.calcLineStarts(ctx.gpa);
-
-    // Load builtin modules required by the type checker and interpreter
-    const builtin_indices = builtin_loading.deserializeBuiltinIndices(ctx.gpa, compiled_builtins.builtin_indices_bin) catch |err| {
-        try stderr.print("Failed to deserialize builtin indices: {}\n", .{err});
-        return err;
-    };
-    const builtin_source = compiled_builtins.builtin_source;
-    var builtin_module = builtin_loading.loadCompiledModule(ctx.gpa, compiled_builtins.builtin_bin, "Builtin", builtin_source) catch |err| {
-        try stderr.print("Failed to load Builtin module: {}\n", .{err});
-        return err;
-    };
-    defer builtin_module.deinit();
-
-    // Populate module_envs with Bool, Try, Dict, Set from builtin module
-    var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(ctx.gpa);
-    defer module_envs.deinit();
-
-    const module_builtin_ctx: Check.BuiltinContext = .{
-        .module_name = try env.insertIdent(base.Ident.for_text(module_name)),
-        .bool_stmt = builtin_indices.bool_type,
-        .try_stmt = builtin_indices.try_type,
-        .str_stmt = builtin_indices.str_type,
-        .builtin_module = builtin_module.env,
-        .builtin_indices = builtin_indices,
+    // Determine package name - could be "app" or "module" depending on header type
+    // After build, the scheduler contains the compiled modules (coordinator's envs are transferred)
+    const pkg_name = if (build_env.schedulers.get("app") != null) "app" else "module";
+    const root_scheduler = build_env.schedulers.get(pkg_name) orelse {
+        try stderr.print("Internal error: Scheduler '{s}' not found after build\n", .{pkg_name});
+        return error.InternalError;
     };
 
-    // Parse the source code as a full module
-    var parse_ast = parse.parse(&env.common, ctx.gpa) catch |err| {
-        try stderr.print("Failed to parse file: {}\n", .{err});
-        return err;
+    // Get root module from the scheduler (where envs live after transfer)
+    const root_mod = root_scheduler.getRootModule() orelse {
+        try stderr.print("Internal error: No root module in scheduler\n", .{});
+        return error.InternalError;
     };
-    defer parse_ast.deinit(ctx.gpa);
+    // Note: In PackageEnv, the env is stored inline (not as a pointer), so we take a pointer to it
+    const root_env: *const ModuleEnv = if (root_mod.env) |*env| env else {
+        try stderr.print("Internal error: Root module has no environment\n", .{});
+        return error.InternalError;
+    };
 
-    // Empty scratch space (required before canonicalization)
-    parse_ast.store.emptyScratch();
+    // Drain any compilation reports first
+    const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
+    defer build_env.freeDrainedReports(drained);
 
-    // Initialize CIR fields in ModuleEnv
-    try env.initCIRFields(module_name);
+    var has_compilation_errors = false;
+    for (drained) |mod| {
+        for (mod.reports) |*report| {
+            const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
+            const config = reporting.ReportingConfig.initColorTerminal();
+            reporting.renderReportToTerminal(report, stderr, palette, config) catch {};
+            if (report.severity == .fatal or report.severity == .runtime_error) {
+                has_compilation_errors = true;
+            }
+        }
+    }
 
-    // Populate module_envs with Bool, Try, Dict, Set using shared function
-    try Can.populateModuleEnvs(
-        &module_envs,
-        &env,
-        builtin_module.env,
+    // Collect all module environments for the interpreter
+    // This includes all modules from all packages (imports from other modules)
+    var other_modules_list = std.array_list.Managed(*const ModuleEnv).init(ctx.gpa);
+    defer other_modules_list.deinit();
+
+    // Add builtin module first
+    try other_modules_list.append(build_env.builtin_modules.builtin_module.env);
+
+    // Iterate through all schedulers and collect module envs
+    var sched_iter = build_env.schedulers.iterator();
+    while (sched_iter.next()) |sched_entry| {
+        const scheduler = sched_entry.value_ptr.*;
+        for (scheduler.modules.items) |*mod| {
+            if (mod.env) |*env| {
+                // Don't add the root module to other_modules (it's handled separately)
+                if (env != root_env) {
+                    try other_modules_list.append(env);
+                }
+            }
+        }
+    }
+
+    const other_modules = other_modules_list.items;
+
+    // Get builtin types from BuildEnv's builtin modules
+    const builtin_types = build_env.builtin_modules.asBuiltinTypes();
+    const builtin_module_env = build_env.builtin_modules.builtin_module.env;
+    const builtin_indices = build_env.builtin_modules.builtin_indices;
+
+    // Create import mapping for the root module
+    // This combines builtin mappings with user import mappings from canonicalization
+    var import_mapping = Check.createImportMapping(
+        ctx.gpa,
+        @constCast(root_env).getIdentStore(),
+        root_env,
+        builtin_module_env,
         builtin_indices,
-    );
-
-    // Create canonicalizer
-    var canonicalizer = Can.init(&env, &parse_ast, &module_envs) catch |err| {
-        try stderr.print("Failed to initialize canonicalizer: {}\n", .{err});
+        null,
+    ) catch |err| {
+        try stderr.print("Failed to create import mapping: {}\n", .{err});
         return err;
     };
-    defer canonicalizer.deinit();
+    defer import_mapping.deinit();
 
-    // Canonicalize the entire module
-    canonicalizer.canonicalizeFile() catch |err| {
-        try stderr.print("Failed to canonicalize file: {}\n", .{err});
+    // Create a problem store for comptime evaluation
+    var problems = check.problem.Store.init(ctx.gpa) catch |err| {
+        try stderr.print("Failed to create problem store: {}\n", .{err});
         return err;
     };
-
-    // Validate for checking mode
-    canonicalizer.validateForChecking() catch |err| {
-        try stderr.print("Failed to validate module: {}\n", .{err});
-        return err;
-    };
-
-    // Build imported_envs array with builtin module
-    const imported_envs: []const *const ModuleEnv = &.{builtin_module.env};
-
-    // Resolve imports - map each import to its index in imported_envs
-    env.imports.resolveImports(&env, imported_envs);
-
-    // Type check the module
-    var checker = Check.init(ctx.gpa, &env.types, &env, imported_envs, &module_envs, &env.store.regions, module_builtin_ctx) catch |err| {
-        try stderr.print("Failed to initialize type checker: {}\n", .{err});
-        return err;
-    };
-    defer checker.deinit();
-
-    checker.checkFile() catch |err| {
-        try stderr.print("Type checking failed: {}\n", .{err});
-        return err;
-    };
+    defer problems.deinit(ctx.gpa);
 
     // Evaluate all top-level declarations at compile time
-    const builtin_types_for_eval = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
-    var comptime_evaluator = eval.ComptimeEvaluator.init(ctx.gpa, &env, imported_envs, &checker.problems, builtin_types_for_eval, builtin_module.env, &checker.import_mapping, roc_target.RocTarget.detectNative()) catch |err| {
+    var comptime_evaluator = eval.ComptimeEvaluator.init(
+        ctx.gpa,
+        @constCast(root_env),
+        other_modules,
+        &problems,
+        builtin_types,
+        builtin_module_env,
+        &import_mapping,
+        roc_target.RocTarget.detectNative(),
+    ) catch |err| {
         try stderr.print("Failed to create compile-time evaluator: {}\n", .{err});
         return err;
     };
-    // Note: comptime_evaluator must be deinitialized AFTER building reports from checker.problems
-    // because the crash messages are owned by the evaluator but referenced by the problems
 
-    _ = comptime_evaluator.evalAll() catch |err| {
-        try stderr.print("Failed to evaluate declarations: {}\n", .{err});
-        return err;
+    // Only run evalAll if evaluation_order is set (not cached modules)
+    // Cached modules have evaluation_order = null since it's not serialized
+    if (root_env.evaluation_order != null) {
+        _ = comptime_evaluator.evalAll() catch |err| {
+            try stderr.print("Failed to evaluate declarations: {}\n", .{err});
+            comptime_evaluator.deinit();
+            return err;
+        };
+    }
+
+    // Track test results across all modules
+    var total_passed: u32 = 0;
+    var total_failed: u32 = 0;
+
+    // Structure to track test results per module for reporting
+    const TestResultItem = struct {
+        passed: bool,
+        region: base.Region,
+        error_msg: ?[]const u8,
+    };
+    const ModuleTestResult = struct {
+        env: *const ModuleEnv,
+        path: []const u8,
+        results: []const TestResultItem,
     };
 
-    // Create test runner infrastructure for test evaluation (reuse builtin_types_for_eval from above)
-    var test_runner = TestRunner.init(ctx.gpa, &env, builtin_types_for_eval, imported_envs, builtin_module.env, &checker.import_mapping) catch |err| {
-        try stderr.print("Failed to create test runner: {}\n", .{err});
-        return err;
-    };
-    defer test_runner.deinit();
+    var module_results = std.array_list.Managed(ModuleTestResult).init(ctx.gpa);
+    defer {
+        for (module_results.items) |mr| {
+            ctx.gpa.free(mr.results);
+        }
+        module_results.deinit();
+    }
 
-    const summary = test_runner.eval_all() catch |err| {
-        try stderr.print("Failed to evaluate tests: {}\n", .{err});
-        return err;
-    };
-    const passed = summary.passed;
-    const failed = summary.failed;
+    // Run tests in the root module
+    {
+        var test_runner = TestRunner.init(
+            ctx.gpa,
+            @constCast(root_env),
+            builtin_types,
+            other_modules,
+            builtin_module_env,
+            &import_mapping,
+        ) catch |err| {
+            try stderr.print("Failed to create test runner for root module: {}\n", .{err});
+            comptime_evaluator.deinit();
+            return err;
+        };
+        defer test_runner.deinit();
+
+        const summary = test_runner.eval_all() catch |err| {
+            try stderr.print("Failed to evaluate tests in root module: {}\n", .{err});
+            comptime_evaluator.deinit();
+            return err;
+        };
+
+        total_passed += summary.passed;
+        total_failed += summary.failed;
+
+        // Copy test results for reporting
+        var results = try ctx.gpa.alloc(TestResultItem, test_runner.test_results.items.len);
+        for (test_runner.test_results.items, 0..) |tr, i| {
+            results[i] = .{
+                .passed = tr.passed,
+                .region = tr.region,
+                .error_msg = if (tr.error_msg) |msg| try ctx.gpa.dupe(u8, msg) else null,
+            };
+        }
+
+        try module_results.append(.{
+            .env = root_env,
+            .path = args.path,
+            .results = results,
+        });
+    }
+
+    // Run tests in all imported modules (recursive test execution)
+    for (other_modules) |mod_env| {
+        // Skip builtin module - no user tests there
+        if (mod_env == builtin_module_env) continue;
+
+        // Create import mapping for this module
+        var mod_import_mapping = Check.createImportMapping(
+            ctx.gpa,
+            @constCast(mod_env).getIdentStore(),
+            mod_env,
+            builtin_module_env,
+            builtin_indices,
+            null,
+        ) catch continue;
+        defer mod_import_mapping.deinit();
+
+        var test_runner = TestRunner.init(
+            ctx.gpa,
+            @constCast(mod_env),
+            builtin_types,
+            other_modules,
+            builtin_module_env,
+            &mod_import_mapping,
+        ) catch continue;
+        defer test_runner.deinit();
+
+        const summary = test_runner.eval_all() catch continue;
+
+        total_passed += summary.passed;
+        total_failed += summary.failed;
+
+        // Copy test results for reporting
+        if (test_runner.test_results.items.len > 0) {
+            var results = ctx.gpa.alloc(TestResultItem, test_runner.test_results.items.len) catch continue;
+            for (test_runner.test_results.items, 0..) |tr, i| {
+                results[i] = .{
+                    .passed = tr.passed,
+                    .region = tr.region,
+                    .error_msg = if (tr.error_msg) |msg| ctx.gpa.dupe(u8, msg) catch null else null,
+                };
+            }
+
+            // Find the module path from schedulers
+            var mod_path: []const u8 = "<unknown>";
+            var sched_iter2 = build_env.schedulers.iterator();
+            outer: while (sched_iter2.next()) |sched_entry| {
+                const scheduler2 = sched_entry.value_ptr.*;
+                for (scheduler2.modules.items) |*m| {
+                    if (m.env) |*env| {
+                        if (env == mod_env) {
+                            mod_path = m.path;
+                            break :outer;
+                        }
+                    }
+                }
+            }
+
+            module_results.append(.{
+                .env = mod_env,
+                .path = mod_path,
+                .results = results,
+            }) catch {
+                ctx.gpa.free(results);
+            };
+        }
+    }
+
+    // Clean up comptime evaluator
+    comptime_evaluator.deinit();
 
     // Calculate elapsed time
     const end_time = std.time.nanoTimestamp();
     const elapsed_ns = @as(u64, @intCast(end_time - start_time));
     const elapsed_ms = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000.0;
 
-    // Report any compile-time crashes
-    const has_comptime_crashes = checker.problems.len() > 0;
-    if (has_comptime_crashes) {
-        const problem = check.problem;
-        var report_builder = try ReportBuilder.init(
-            ctx.gpa,
-            &env,
-            &env,
-            &checker.snapshots,
-            &checker.problems,
-            args.path,
-            &.{},
-            &checker.import_mapping,
-        );
-        defer report_builder.deinit();
-
-        for (0..checker.problems.len()) |i| {
-            const problem_idx: problem.Problem.Idx = @enumFromInt(i);
-            const prob = checker.problems.get(problem_idx);
-            var report = report_builder.build(prob) catch |err| {
-                try stderr.print("Failed to build problem report: {}\n", .{err});
-                continue;
-            };
-            defer report.deinit();
-
-            const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
-            const config = reporting.ReportingConfig.initColorTerminal();
-            try reporting.renderReportToTerminal(&report, stderr, palette, config);
-        }
-    }
-
-    // Clean up comptime evaluator AFTER building reports (crash messages must stay alive until reports are built)
-    comptime_evaluator.deinit();
-
     // Report results
-    if (failed == 0 and !has_comptime_crashes) {
+    if (total_failed == 0 and !has_compilation_errors) {
         // Success case: print summary
-        try stdout.print("All ({}) tests passed in {d:.1} ms.\n", .{ passed, elapsed_ms });
+        try stdout.print("All ({}) tests passed in {d:.1} ms.\n", .{ total_passed, elapsed_ms });
         if (args.verbose) {
             // Generate and render a detailed report if verbose is true
-            for (test_runner.test_results.items) |test_result| {
-                const region_info = env.calcRegionInfo(test_result.region);
-                try stdout.print("\x1b[32mPASS\x1b[0m: {s}:{}\n", .{ args.path, region_info.start_line_idx + 1 });
+            for (module_results.items) |mr| {
+                for (mr.results) |result| {
+                    if (result.passed) {
+                        const region_info = mr.env.calcRegionInfo(result.region);
+                        try stdout.print("\x1b[32mPASS\x1b[0m: {s}:{}\n", .{ mr.path, region_info.start_line_idx + 1 });
+                    }
+                }
             }
         }
         return; // Exit with 0
     } else {
         // Failure case: always print summary with timing
-        const total_tests = passed + failed;
+        const total_tests = total_passed + total_failed;
         if (total_tests > 0) {
-            try stderr.print("Ran {} test(s): {} passed, {} failed in {d:.1}ms\n", .{ total_tests, passed, failed, elapsed_ms });
+            try stderr.print("Ran {} test(s): {} passed, {} failed in {d:.1}ms\n", .{ total_tests, total_passed, total_failed, elapsed_ms });
         }
 
         if (args.verbose) {
-            for (test_runner.test_results.items) |test_result| {
-                const region_info = env.calcRegionInfo(test_result.region);
-                if (test_result.passed) {
-                    try stdout.print("\x1b[32mPASS\x1b[0m: {s}:{}\n", .{ args.path, region_info.start_line_idx + 1 });
-                } else {
-                    // Generate and render a detailed report for this failure
-                    var report = test_runner.createReport(test_result, args.path) catch |err| {
-                        // Fallback to simple message if report generation fails
-                        try stderr.print("\x1b[31mFAIL\x1b[0m: {s}:{}", .{ args.path, region_info.start_line_idx + 1 });
-                        if (test_result.error_msg) |msg| {
+            for (module_results.items) |mr| {
+                for (mr.results) |result| {
+                    const region_info = mr.env.calcRegionInfo(result.region);
+                    if (result.passed) {
+                        try stdout.print("\x1b[32mPASS\x1b[0m: {s}:{}\n", .{ mr.path, region_info.start_line_idx + 1 });
+                    } else {
+                        try stderr.print("\x1b[31mFAIL\x1b[0m: {s}:{}", .{ mr.path, region_info.start_line_idx + 1 });
+                        if (result.error_msg) |msg| {
                             try stderr.print(" - {s}", .{msg});
                         }
-                        try stderr.print(" (report generation failed: {})\n", .{err});
-                        continue;
-                    };
-                    defer report.deinit();
-
-                    // Render the report to terminal
-                    const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
-                    const config = reporting.ReportingConfig.initColorTerminal();
-                    try reporting.renderReportToTerminal(&report, stderr, palette, config);
+                        try stderr.print("\n", .{});
+                    }
                 }
             }
         } else {
             // Non-verbose mode: just show simple FAIL messages with line numbers
-            for (test_runner.test_results.items) |test_result| {
-                if (!test_result.passed) {
-                    const region_info = env.calcRegionInfo(test_result.region);
-                    try stderr.print("\x1b[31mFAIL\x1b[0m: {s}:{}\n", .{ args.path, region_info.start_line_idx + 1 });
+            for (module_results.items) |mr| {
+                for (mr.results) |result| {
+                    if (!result.passed) {
+                        const region_info = mr.env.calcRegionInfo(result.region);
+                        try stderr.print("\x1b[31mFAIL\x1b[0m: {s}:{}\n", .{ mr.path, region_info.start_line_idx + 1 });
+                    }
                 }
             }
         }
@@ -4227,7 +4342,7 @@ fn checkFileWithBuildEnvPreserved(
     build_env.build(filepath) catch |err| {
         // Even on error, try to drain and print any reports that were collected
         const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
-        defer build_env.gpa.free(drained);
+        defer build_env.freeDrainedReports(drained);
 
         // Print any error reports to stderr before failing
         return err;
@@ -4277,9 +4392,9 @@ fn checkFileWithBuildEnvPreserved(
         };
     }
 
-    // Free the original drained reports
-    // Note: abs_path is owned by BuildEnv, reports are moved to our array
-    ctx.gpa.free(drained);
+    // Free the original drained reports (abs_path strings and outer slice only)
+    // Note: reports ownership was transferred above, abs_path was duped
+    build_env.freeDrainedReportsPathsOnly(drained);
 
     // Get timing information from BuildEnv
     const timing = if (builtin.target.cpu.arch == .wasm32)
@@ -4338,7 +4453,7 @@ fn checkFileWithBuildEnv(
     build_env.build(filepath) catch {
         // Even on error, drain reports to show what went wrong
         const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
-        defer build_env.gpa.free(drained);
+        defer build_env.freeDrainedReportsPathsOnly(drained);
 
         // Count errors and warnings
         var error_count: u32 = 0;
@@ -4415,9 +4530,9 @@ fn checkFileWithBuildEnv(
         };
     }
 
-    // Free the original drained reports
-    // Note: abs_path is owned by BuildEnv, reports are moved to our array
-    ctx.gpa.free(drained);
+    // Free the original drained reports (abs_path strings and outer slice only)
+    // Note: reports ownership was transferred above, abs_path was duped
+    build_env.freeDrainedReportsPathsOnly(drained);
 
     // Get timing information from BuildEnv
     const timing = if (builtin.target.cpu.arch == .wasm32)

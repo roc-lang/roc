@@ -919,3 +919,41 @@ test "roc check does not panic on invalid package shorthand import (issue 9084)"
     // 4. Stderr should contain some error information
     try testing.expect(result.stderr.len > 0);
 }
+
+test "roc check succeeds on Parser type module" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "check", "--no-cache" }, "test/package_simple_parser/Parser.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Verify that:
+    // 1. Command succeeded (zero exit code)
+    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+
+    // 2. No errors should be reported
+    const has_error = std.mem.indexOf(u8, result.stderr, "error") != null;
+    try testing.expect(!has_error);
+}
+
+test "roc test runs expects in Parser type module" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "test", "--no-cache" }, "test/package_simple_parser/Parser.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Verify that:
+    // 1. Command succeeded (zero exit code)
+    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+
+    // 2. Output indicates tests passed
+    const has_passed = std.mem.indexOf(u8, result.stdout, "passed") != null;
+    try testing.expect(has_passed);
+
+    // 3. Should have run at least 2 tests
+    const has_tests = std.mem.indexOf(u8, result.stdout, "(2)") != null;
+    try testing.expect(has_tests);
+}
