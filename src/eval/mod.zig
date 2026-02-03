@@ -4,11 +4,17 @@
 
 const std = @import("std");
 
+/// Shared layout resolution for CIR expressions
+pub const layout_resolve = @import("layout_resolve.zig");
+/// Shared RocEnv for managing RocOps callbacks
+pub const roc_env = @import("roc_env.zig");
+/// Shared pre-codegen transforms for preparing modules
+pub const codegen_prepare = @import("codegen_prepare.zig");
 /// Dev backend-based evaluator for native code generation using Mono IR
 const dev_evaluator_mod = @import("dev_evaluator.zig");
 pub const DevEvaluator = dev_evaluator_mod.DevEvaluator;
 /// Special layout index for list of i64 (used in test helpers)
-pub const list_i64_layout = dev_evaluator_mod.list_i64_layout;
+pub const list_i64_layout = layout_resolve.list_i64_layout;
 /// Compile-time value representation for the dev backend
 pub const comptime_value = @import("comptime_value.zig");
 /// Executable memory for running generated code (re-exported from backend module)
@@ -50,6 +56,9 @@ pub const LlvmEvaluator = @import("llvm_evaluator.zig").LlvmEvaluator;
 test "eval tests" {
     std.testing.refAllDecls(@This());
 
+    std.testing.refAllDecls(@import("layout_resolve.zig"));
+    std.testing.refAllDecls(@import("roc_env.zig"));
+    std.testing.refAllDecls(@import("codegen_prepare.zig"));
     std.testing.refAllDecls(@import("dev_evaluator.zig"));
     std.testing.refAllDecls(@import("comptime_value.zig"));
     std.testing.refAllDecls(@import("BuiltinModules.zig"));

@@ -2408,6 +2408,24 @@ pub fn build(b: *std.Build) void {
     roc_exe.root_module.addImport("compiled_builtins", compiled_builtins_module);
     roc_exe.step.dependOn(&write_compiled_builtins.step);
 
+    // Create llvm_codegen module for MonoLlvmCodeGen (used by llvm_compile)
+    const llvm_codegen_module = b.addModule("llvm_codegen", .{
+        .root_source_file = b.path("src/backend/llvm/MonoLlvmCodeGen.zig"),
+    });
+    llvm_codegen_module.addImport("layout", roc_modules.layout);
+    llvm_codegen_module.addImport("mono", roc_modules.mono);
+
+    // Add llvm_compile module to eval for LLVM evaluator support
+    roc_modules.eval.addAnonymousImport("llvm_compile", .{
+        .root_source_file = b.path("src/llvm_compile/mod.zig"),
+        .imports = &.{
+            .{ .name = "layout", .module = roc_modules.layout },
+            .{ .name = "backend", .module = roc_modules.backend },
+            .{ .name = "mono", .module = roc_modules.mono },
+            .{ .name = "llvm_codegen", .module = llvm_codegen_module },
+        },
+    });
+
     // Add snapshot tool
     const snapshot_exe = b.addExecutable(.{
         .name = "snapshot",
@@ -2458,6 +2476,7 @@ pub fn build(b: *std.Build) void {
     const copy_builtins_bc = b.addUpdateSourceFiles();
     copy_builtins_bc.addCopyFileToSource(builtins_bc_file, "src/llvm_compile/builtins.bc");
     snapshot_exe.step.dependOn(&copy_builtins_bc.step);
+    roc_exe.step.dependOn(&copy_builtins_bc.step);
 
     // Add llvm_compile module for LLVM compilation pipeline
     snapshot_exe.root_module.addAnonymousImport("llvm_compile", .{
@@ -2465,6 +2484,8 @@ pub fn build(b: *std.Build) void {
         .imports = &.{
             .{ .name = "layout", .module = roc_modules.layout },
             .{ .name = "backend", .module = roc_modules.backend },
+            .{ .name = "mono", .module = roc_modules.mono },
+            .{ .name = "llvm_codegen", .module = llvm_codegen_module },
         },
     });
 
@@ -2630,8 +2651,8 @@ pub fn build(b: *std.Build) void {
             module_test.test_step.step.dependOn(&write_compiled_builtins.step);
         }
 
-        // Add LLVM support for eval tests to enable LLVM evaluator comparison
-        if (std.mem.eql(u8, module_test.test_step.name, "eval")) {
+        // Add LLVM support for eval and repl tests to enable LLVM evaluator
+        if (std.mem.eql(u8, module_test.test_step.name, "eval") or std.mem.eql(u8, module_test.test_step.name, "repl")) {
             if (llvmPaths(b, target, use_system_llvm, user_llvm_path)) |llvm_paths_eval| {
                 module_test.test_step.addLibraryPath(.{ .cwd_relative = llvm_paths_eval.lib });
                 module_test.test_step.addIncludePath(.{ .cwd_relative = llvm_paths_eval.include });
@@ -2643,6 +2664,8 @@ pub fn build(b: *std.Build) void {
                     .imports = &.{
                         .{ .name = "layout", .module = roc_modules.layout },
                         .{ .name = "backend", .module = roc_modules.backend },
+                        .{ .name = "mono", .module = roc_modules.mono },
+                        .{ .name = "llvm_codegen", .module = llvm_codegen_module },
                     },
                 });
             }
@@ -2697,6 +2720,8 @@ pub fn build(b: *std.Build) void {
             .imports = &.{
                 .{ .name = "layout", .module = roc_modules.layout },
                 .{ .name = "backend", .module = roc_modules.backend },
+                .{ .name = "mono", .module = roc_modules.mono },
+                .{ .name = "llvm_codegen", .module = llvm_codegen_module },
             },
         });
 

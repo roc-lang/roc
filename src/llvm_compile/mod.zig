@@ -19,8 +19,12 @@ pub const LinkELF = bindings.LinkELF;
 pub const LinkCOFF = bindings.LinkCOFF;
 pub const LinkWasm = bindings.LinkWasm;
 
+// Re-export Mono IR to LLVM code generator (provided via "llvm_codegen" module dependency)
+pub const MonoLlvmCodeGen = @import("llvm_codegen").MonoLlvmCodeGen;
+
 // Re-export object compilation function
 pub const compileToObject = compile.compileToObject;
+pub const CompileOptions = compile.CompileOptions;
 pub const Error = compile.Error;
 
 // Re-export i128 ABI helpers

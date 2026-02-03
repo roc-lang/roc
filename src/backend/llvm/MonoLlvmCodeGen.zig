@@ -93,7 +93,7 @@ pub const MonoLlvmCodeGen = struct {
     proc_registry: std.AutoHashMap(u48, LlvmBuilder.Function.Index),
 
     /// Join point blocks (join point id -> block index)
-    join_points: std.AutoHashMap(u32, LlvmBuilder.Block.Index),
+    join_points: std.AutoHashMap(u32, LlvmBuilder.Function.Block.Index),
 
     /// Join point parameters (join point id -> parameter patterns)
     join_point_params: std.AutoHashMap(u32, []MonoPatternId),
@@ -103,6 +103,9 @@ pub const MonoLlvmCodeGen = struct {
 
     /// Current WIP function (set during code generation)
     wip: ?*LlvmBuilder.WipFunction = null,
+
+    /// The roc_ops argument passed to roc_eval (second parameter)
+    roc_ops_arg: ?LlvmBuilder.Value = null,
 
     /// Result of bitcode generation
     pub const BitcodeResult = struct {
@@ -133,7 +136,7 @@ pub const MonoLlvmCodeGen = struct {
             .symbol_values = std.AutoHashMap(u48, LlvmBuilder.Value).init(allocator),
             .lambda_bindings = std.AutoHashMap(u48, MonoExprId).init(allocator),
             .proc_registry = std.AutoHashMap(u48, LlvmBuilder.Function.Index).init(allocator),
-            .join_points = std.AutoHashMap(u32, LlvmBuilder.Block.Index).init(allocator),
+            .join_points = std.AutoHashMap(u32, LlvmBuilder.Function.Block.Index).init(allocator),
             .join_point_params = std.AutoHashMap(u32, []MonoPatternId).init(allocator),
         };
     }
@@ -187,9 +190,9 @@ pub const MonoLlvmCodeGen = struct {
         // Determine the LLVM type for the result
         const value_type = layoutToLlvmType(result_layout);
 
-        // Create the eval function: void roc_eval(<type>* out_ptr)
+        // Create the eval function: void roc_eval(<type>* out_ptr, roc_ops* ops_ptr)
         const ptr_type = builder.ptrType(.default) catch return error.OutOfMemory;
-        const eval_fn_type = builder.fnType(.void, &.{ptr_type}, .normal) catch return error.OutOfMemory;
+        const eval_fn_type = builder.fnType(.void, &.{ ptr_type, ptr_type }, .normal) catch return error.OutOfMemory;
         const eval_name = if (builtin.os.tag == .macos)
             builder.strtabString("\x01_roc_eval") catch return error.OutOfMemory
         else
@@ -219,8 +222,10 @@ pub const MonoLlvmCodeGen = struct {
         const entry_block = wip.block(0, "entry") catch return error.OutOfMemory;
         wip.cursor = .{ .block = entry_block };
 
-        // Get the output pointer
+        // Get the output pointer and roc_ops pointer
         const out_ptr = wip.arg(0);
+        self.roc_ops_arg = wip.arg(1);
+        defer self.roc_ops_arg = null;
 
         // Generate LLVM IR for the expression
         const value = self.generateExpr(expr_id) catch return error.UnsupportedExpression;
@@ -291,10 +296,10 @@ pub const MonoLlvmCodeGen = struct {
 
         // Build the LLVM function type from arg_layouts and ret_layout
         const arg_layouts = self.store.getLayoutIdxSpan(proc.arg_layouts);
-        var param_types = std.ArrayList(LlvmBuilder.Type).init(self.allocator);
-        defer param_types.deinit();
+        var param_types: std.ArrayList(LlvmBuilder.Type) = .{};
+        defer param_types.deinit(self.allocator);
         for (arg_layouts) |arg_layout| {
-            param_types.append(layoutToLlvmType(arg_layout)) catch return error.OutOfMemory;
+            param_types.append(self.allocator, layoutToLlvmType(arg_layout)) catch return error.OutOfMemory;
         }
 
         const ret_type = layoutToLlvmType(proc.ret_layout);
@@ -453,12 +458,12 @@ pub const MonoLlvmCodeGen = struct {
 
         var switch_inst = wip.@"switch"(cond_val, default_block, @intCast(branches.len), .none) catch return error.CompilationFailed;
 
-        var branch_blocks = std.ArrayList(LlvmBuilder.Block.Index).init(self.allocator);
-        defer branch_blocks.deinit();
+        var branch_blocks: std.ArrayList(LlvmBuilder.Function.Block.Index) = .{};
+        defer branch_blocks.deinit(self.allocator);
 
         for (branches) |branch| {
             const branch_block = wip.block(0, "switch_case") catch return error.CompilationFailed;
-            branch_blocks.append(branch_block) catch return error.OutOfMemory;
+            branch_blocks.append(self.allocator, branch_block) catch return error.OutOfMemory;
             const case_val = builder.intConst(cond_val.typeOfWip(wip), branch.value) catch return error.OutOfMemory;
             switch_inst.addCase(case_val, branch_block, wip) catch return error.CompilationFailed;
         }
@@ -523,7 +528,7 @@ pub const MonoLlvmCodeGen = struct {
 
     fn emitI64(self: *MonoLlvmCodeGen, val: i64) Error!LlvmBuilder.Value {
         const builder = self.builder orelse return error.CompilationFailed;
-        return (builder.intConst(.i64, @bitCast(val)) catch return error.OutOfMemory).toValue();
+        return (builder.intConst(.i64, @as(u64, @bitCast(val))) catch return error.OutOfMemory).toValue();
     }
 
     fn emitI128(self: *MonoLlvmCodeGen, val: i128) Error!LlvmBuilder.Value {
@@ -543,7 +548,7 @@ pub const MonoLlvmCodeGen = struct {
 
     fn emitBool(self: *MonoLlvmCodeGen, val: bool) Error!LlvmBuilder.Value {
         const builder = self.builder orelse return error.CompilationFailed;
-        return (builder.intConst(.i1, if (val) 1 else 0) catch return error.OutOfMemory).toValue();
+        return (builder.intConst(.i1, @intFromBool(val)) catch return error.OutOfMemory).toValue();
     }
 
     fn generateLookup(self: *MonoLlvmCodeGen, symbol: MonoSymbol, _: layout.Idx) Error!LlvmBuilder.Value {
@@ -610,38 +615,38 @@ pub const MonoLlvmCodeGen = struct {
                 wip.bin(.urem, lhs, rhs, "") catch return error.CompilationFailed,
 
             .eq => if (is_float)
-                wip.fcmp(.oeq, lhs, rhs, "") catch return error.CompilationFailed
+                wip.fcmp(.normal, .oeq, lhs, rhs, "") catch return error.CompilationFailed
             else
                 wip.icmp(.eq, lhs, rhs, "") catch return error.CompilationFailed,
 
             .neq => if (is_float)
-                wip.fcmp(.one, lhs, rhs, "") catch return error.CompilationFailed
+                wip.fcmp(.normal, .one, lhs, rhs, "") catch return error.CompilationFailed
             else
                 wip.icmp(.ne, lhs, rhs, "") catch return error.CompilationFailed,
 
             .lt => if (is_float)
-                wip.fcmp(.olt, lhs, rhs, "") catch return error.CompilationFailed
+                wip.fcmp(.normal, .olt, lhs, rhs, "") catch return error.CompilationFailed
             else if (isSigned(binop.result_layout))
                 wip.icmp(.slt, lhs, rhs, "") catch return error.CompilationFailed
             else
                 wip.icmp(.ult, lhs, rhs, "") catch return error.CompilationFailed,
 
             .lte => if (is_float)
-                wip.fcmp(.ole, lhs, rhs, "") catch return error.CompilationFailed
+                wip.fcmp(.normal, .ole, lhs, rhs, "") catch return error.CompilationFailed
             else if (isSigned(binop.result_layout))
                 wip.icmp(.sle, lhs, rhs, "") catch return error.CompilationFailed
             else
                 wip.icmp(.ule, lhs, rhs, "") catch return error.CompilationFailed,
 
             .gt => if (is_float)
-                wip.fcmp(.ogt, lhs, rhs, "") catch return error.CompilationFailed
+                wip.fcmp(.normal, .ogt, lhs, rhs, "") catch return error.CompilationFailed
             else if (isSigned(binop.result_layout))
                 wip.icmp(.sgt, lhs, rhs, "") catch return error.CompilationFailed
             else
                 wip.icmp(.ugt, lhs, rhs, "") catch return error.CompilationFailed,
 
             .gte => if (is_float)
-                wip.fcmp(.oge, lhs, rhs, "") catch return error.CompilationFailed
+                wip.fcmp(.normal, .oge, lhs, rhs, "") catch return error.CompilationFailed
             else if (isSigned(binop.result_layout))
                 wip.icmp(.sge, lhs, rhs, "") catch return error.CompilationFailed
             else
@@ -887,12 +892,12 @@ pub const MonoLlvmCodeGen = struct {
         const builder = self.builder orelse return error.CompilationFailed;
 
         const args = self.store.getExprSpan(args_span);
-        var arg_values = std.ArrayList(LlvmBuilder.Value).init(self.allocator);
-        defer arg_values.deinit();
+        var arg_values: std.ArrayList(LlvmBuilder.Value) = .{};
+        defer arg_values.deinit(self.allocator);
 
         for (args) |arg_id| {
             const val = try self.generateExpr(arg_id);
-            arg_values.append(val) catch return error.OutOfMemory;
+            arg_values.append(self.allocator, val) catch return error.OutOfMemory;
         }
 
         const fn_type = func_index.typeOf(builder);

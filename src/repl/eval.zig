@@ -20,6 +20,7 @@ const ModuleEnv = can.ModuleEnv;
 const RocOps = builtins.host_abi.RocOps;
 const LoadedModule = builtin_loading.LoadedModule;
 const DevEvaluator = eval_mod.DevEvaluator;
+const LlvmEvaluator = eval_mod.LlvmEvaluator;
 
 pub const Backend = @import("backend").EvalBackend;
 
@@ -36,6 +37,8 @@ pub const Repl = struct {
     backend: Backend,
     /// DevEvaluator instance (only initialized when backend is .dev)
     dev_evaluator: ?DevEvaluator,
+    /// LlvmEvaluator instance (only initialized when backend is .llvm)
+    llvm_evaluator: ?LlvmEvaluator,
     /// ModuleEnv from last successful evaluation (for snapshot generation)
     last_module_env: ?*ModuleEnv,
     /// Debug flag to store rendered HTML for snapshot generation
@@ -70,6 +73,12 @@ pub const Repl = struct {
             dev_evaluator = DevEvaluator.init(allocator) catch null;
         }
 
+        // Initialize LlvmEvaluator if using llvm backend
+        var llvm_evaluator: ?LlvmEvaluator = null;
+        if (backend == .llvm) {
+            llvm_evaluator = LlvmEvaluator.init(allocator) catch null;
+        }
+
         return Repl{
             .allocator = allocator,
             .definitions = std.StringHashMap([]const u8).init(allocator),
@@ -77,6 +86,7 @@ pub const Repl = struct {
             .crash_ctx = crash_ctx,
             .backend = backend,
             .dev_evaluator = dev_evaluator,
+            .llvm_evaluator = llvm_evaluator,
             .last_module_env = null,
             .debug_store_snapshots = false,
             .debug_can_html = std.array_list.Managed([]const u8).init(allocator),
@@ -188,6 +198,11 @@ pub const Repl = struct {
         // Clean up DevEvaluator if it exists
         if (self.dev_evaluator) |*dev_eval| {
             dev_eval.deinit();
+        }
+
+        // Clean up LlvmEvaluator if it exists
+        if (self.llvm_evaluator) |*llvm_eval| {
+            llvm_eval.deinit();
         }
 
         // Clean up debug HTML storage
@@ -635,6 +650,109 @@ pub const Repl = struct {
                     LayoutIdx.f64, LayoutIdx.f32 => try std.fmt.allocPrint(self.allocator, "{d} : F64", .{jit.callReturnF64()}),
                     LayoutIdx.dec => try std.fmt.allocPrint(self.allocator, "{} : Dec", .{jit.callReturnI64()}), // TODO: proper Dec formatting
                     else => return self.evaluateWithInterpreter(module_env, final_expr_idx, &imported_modules, &checker),
+                };
+                return .{ .expression = output };
+            }
+        }
+
+        // Use LlvmEvaluator if backend is .llvm and we have an LlvmEvaluator instance
+        if (self.backend == .llvm) {
+            if (self.llvm_evaluator) |*llvm_eval| {
+                const all_module_envs = &.{module_env};
+                var code_result = llvm_eval.generateCode(
+                    module_env,
+                    final_expr_idx,
+                    all_module_envs,
+                ) catch {
+                    return self.evaluateWithInterpreter(
+                        module_env,
+                        final_expr_idx,
+                        &imported_modules,
+                        &checker,
+                    );
+                };
+                defer code_result.deinit();
+
+                var jit = eval_mod.JitCode.initWithEntryOffset(
+                    code_result.code,
+                    code_result.entry_offset,
+                ) catch {
+                    return self.evaluateWithInterpreter(
+                        module_env,
+                        final_expr_idx,
+                        &imported_modules,
+                        &checker,
+                    );
+                };
+                defer jit.deinit();
+
+                const LayoutIdx = eval_mod.layout.Idx;
+                const output = switch (code_result.result_layout) {
+                    LayoutIdx.i64, LayoutIdx.i8, LayoutIdx.i16, LayoutIdx.i32 => blk: {
+                        var result: i64 = undefined;
+                        jit.callWithResultPtrAndRocOps(
+                            @ptrCast(&result),
+                            @constCast(&llvm_eval.roc_ops),
+                        );
+                        break :blk try std.fmt.allocPrint(
+                            self.allocator,
+                            "{} : I64",
+                            .{result},
+                        );
+                    },
+                    LayoutIdx.u64, LayoutIdx.u8, LayoutIdx.u16, LayoutIdx.u32 => blk: {
+                        var result: u64 = undefined;
+                        jit.callWithResultPtrAndRocOps(
+                            @ptrCast(&result),
+                            @constCast(&llvm_eval.roc_ops),
+                        );
+                        break :blk try std.fmt.allocPrint(
+                            self.allocator,
+                            "{} : U64",
+                            .{result},
+                        );
+                    },
+                    LayoutIdx.bool => blk: {
+                        var result: u64 = undefined;
+                        jit.callWithResultPtrAndRocOps(
+                            @ptrCast(&result),
+                            @constCast(&llvm_eval.roc_ops),
+                        );
+                        break :blk if (result != 0)
+                            try self.allocator.dupe(u8, "Bool.true : Bool")
+                        else
+                            try self.allocator.dupe(u8, "Bool.false : Bool");
+                    },
+                    LayoutIdx.f64, LayoutIdx.f32 => blk: {
+                        var result: f64 = undefined;
+                        jit.callWithResultPtrAndRocOps(
+                            @ptrCast(&result),
+                            @constCast(&llvm_eval.roc_ops),
+                        );
+                        break :blk try std.fmt.allocPrint(
+                            self.allocator,
+                            "{d} : F64",
+                            .{result},
+                        );
+                    },
+                    LayoutIdx.dec => blk: {
+                        var result: i64 = undefined;
+                        jit.callWithResultPtrAndRocOps(
+                            @ptrCast(&result),
+                            @constCast(&llvm_eval.roc_ops),
+                        );
+                        break :blk try std.fmt.allocPrint(
+                            self.allocator,
+                            "{} : Dec",
+                            .{result},
+                        );
+                    },
+                    else => return self.evaluateWithInterpreter(
+                        module_env,
+                        final_expr_idx,
+                        &imported_modules,
+                        &checker,
+                    ),
                 };
                 return .{ .expression = output };
             }

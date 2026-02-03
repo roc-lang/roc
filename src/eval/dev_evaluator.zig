@@ -20,6 +20,12 @@ const backend = @import("backend");
 const mono = @import("mono");
 const builtin_loading = @import("builtin_loading.zig");
 const builtins = @import("builtins");
+const layout_resolve = @import("layout_resolve.zig");
+const getExprLayoutWithTypeEnv = layout_resolve.getExprLayoutWithTypeEnv;
+const roc_env_mod = @import("roc_env.zig");
+const RocEnv = roc_env_mod.RocEnv;
+const createRocOps = roc_env_mod.createRocOps;
+const codegen_prepare = @import("codegen_prepare.zig");
 
 const Allocator = std.mem.Allocator;
 const ModuleEnv = can.ModuleEnv;
@@ -28,12 +34,6 @@ const LoadedModule = builtin_loading.LoadedModule;
 
 // Host ABI types for RocOps
 const RocOps = builtins.host_abi.RocOps;
-const RocAlloc = builtins.host_abi.RocAlloc;
-const RocDealloc = builtins.host_abi.RocDealloc;
-const RocRealloc = builtins.host_abi.RocRealloc;
-const RocDbg = builtins.host_abi.RocDbg;
-const RocExpectFailed = builtins.host_abi.RocExpectFailed;
-const RocCrashed = builtins.host_abi.RocCrashed;
 
 // Mono IR types
 const MonoExprStore = mono.MonoExprStore;
@@ -43,105 +43,10 @@ const MonoLower = mono.Lower;
 const StaticDataInterner = backend.StaticDataInterner;
 const JitStaticBackend = StaticDataInterner.JitStaticBackend;
 
-// Special layout indices for lists (beyond the 16 scalar types)
-// These are used by the dev evaluator to track list types for proper result formatting
-pub const list_i64_layout: LayoutIdx = @enumFromInt(100);
+// Re-export from shared module
+pub const list_i64_layout = layout_resolve.list_i64_layout;
 
-/// Environment for RocOps in the DevEvaluator.
-/// Manages arena-backed allocation where free() is a no-op.
-/// This enables proper RC tracking for in-place mutation optimization
-/// while arenas handle actual memory deallocation.
-const DevRocEnv = struct {
-    allocator: Allocator,
-
-    fn init(allocator: Allocator) DevRocEnv {
-        return .{ .allocator = allocator };
-    }
-
-    /// Allocation function for RocOps.
-    fn rocAllocFn(roc_alloc: *RocAlloc, env: *anyopaque) callconv(.c) void {
-        const self: *DevRocEnv = @ptrCast(@alignCast(env));
-
-        // Allocate memory with the requested alignment
-        const ptr = switch (roc_alloc.alignment) {
-            1 => self.allocator.alignedAlloc(u8, .@"1", roc_alloc.length),
-            2 => self.allocator.alignedAlloc(u8, .@"2", roc_alloc.length),
-            4 => self.allocator.alignedAlloc(u8, .@"4", roc_alloc.length),
-            8 => self.allocator.alignedAlloc(u8, .@"8", roc_alloc.length),
-            16 => self.allocator.alignedAlloc(u8, .@"16", roc_alloc.length),
-            else => @panic("DevRocEnv: Unsupported alignment"),
-        } catch {
-            @panic("DevRocEnv: Allocation failed");
-        };
-
-        roc_alloc.answer = @ptrCast(ptr.ptr);
-    }
-
-    /// Deallocation function for RocOps.
-    /// This is a NO-OP because arenas manage actual memory deallocation.
-    /// RC operations still work to track uniqueness for in-place mutation.
-    fn rocDeallocFn(_: *RocDealloc, _: *anyopaque) callconv(.c) void {
-        // Intentional no-op: arena manages actual deallocation
-        // This allows RC to track uniqueness while arena handles cleanup
-    }
-
-    /// Reallocation function for RocOps.
-    /// For arena-based allocation, we just allocate new memory.
-    /// Since free is a no-op, we don't need to worry about freeing the old allocation.
-    fn rocReallocFn(roc_realloc: *RocRealloc, env: *anyopaque) callconv(.c) void {
-        const self: *DevRocEnv = @ptrCast(@alignCast(env));
-
-        // Allocate new memory with the requested alignment
-        const new_ptr = switch (roc_realloc.alignment) {
-            1 => self.allocator.alignedAlloc(u8, .@"1", roc_realloc.new_length),
-            2 => self.allocator.alignedAlloc(u8, .@"2", roc_realloc.new_length),
-            4 => self.allocator.alignedAlloc(u8, .@"4", roc_realloc.new_length),
-            8 => self.allocator.alignedAlloc(u8, .@"8", roc_realloc.new_length),
-            16 => self.allocator.alignedAlloc(u8, .@"16", roc_realloc.new_length),
-            else => @panic("DevRocEnv: Unsupported alignment"),
-        } catch {
-            @panic("DevRocEnv: Reallocation failed");
-        };
-
-        // Copy old data from the existing allocation
-        // Note: The old pointer is in roc_realloc.answer
-        // We copy new_length bytes (assuming the old allocation was at least that large)
-        const old_ptr: [*]u8 = @ptrCast(@alignCast(roc_realloc.answer));
-        @memcpy(new_ptr[0..roc_realloc.new_length], old_ptr[0..roc_realloc.new_length]);
-
-        // Return the new pointer
-        roc_realloc.answer = @ptrCast(new_ptr.ptr);
-    }
-
-    /// Debug output function.
-    fn rocDbgFn(roc_dbg: *const RocDbg, _: *anyopaque) callconv(.c) void {
-        // On freestanding (WASM), skip debug output to avoid thread locking
-        if (builtin.os.tag != .freestanding) {
-            const msg = roc_dbg.utf8_bytes[0..roc_dbg.len];
-            std.debug.print("[dbg] {s}\n", .{msg});
-        }
-    }
-
-    /// Expect failed function.
-    fn rocExpectFailedFn(_: *const RocExpectFailed, _: *anyopaque) callconv(.c) void {
-        // On freestanding (WASM), skip debug output to avoid thread locking
-        if (builtin.os.tag != .freestanding) {
-            std.debug.print("[expect failed]\n", .{});
-        }
-    }
-
-    /// Crash function.
-    fn rocCrashedFn(roc_crashed: *const RocCrashed, _: *anyopaque) callconv(.c) noreturn {
-        // On freestanding (WASM), just panic without debug output to avoid thread locking
-        if (builtin.os.tag == .freestanding) {
-            @panic("Roc crashed");
-        } else {
-            const msg = roc_crashed.utf8_bytes[0..roc_crashed.len];
-            std.debug.print("Roc crashed: {s}\n", .{msg});
-            unreachable;
-        }
-    }
-};
+// RocEnv and createRocOps are imported from roc_env.zig
 
 /// Layout index for result types
 pub const LayoutIdx = layout.Idx;
@@ -171,7 +76,7 @@ pub const DevEvaluator = struct {
 
     /// RocOps environment for RC operations.
     /// Heap-allocated to ensure stable pointer for the roc_ops reference.
-    roc_env: *DevRocEnv,
+    roc_env: *RocEnv,
 
     /// RocOps instance for passing to generated code.
     /// Contains function pointers for allocation, deallocation, and error handling.
@@ -215,26 +120,9 @@ pub const DevEvaluator = struct {
         const static_interner = StaticDataInterner.init(allocator, jit_backend.backend());
 
         // Heap-allocate the RocOps environment so the pointer remains stable
-        const roc_env = allocator.create(DevRocEnv) catch return error.OutOfMemory;
-        roc_env.* = DevRocEnv.init(allocator);
-
-        // Create RocOps with function pointers to the DevRocEnv handlers
-        // Use a static dummy array for hosted_fns since count=0 means no hosted functions
-        // This avoids undefined behavior from using `undefined` for the pointer
-        const empty_hosted_fns = struct {
-            fn dummyHostedFn(_: *RocOps, _: *anyopaque, _: *anyopaque) callconv(.c) void {}
-            var empty: [1]builtins.host_abi.HostedFn = .{&dummyHostedFn};
-        };
-        const roc_ops = RocOps{
-            .env = @ptrCast(roc_env),
-            .roc_alloc = &DevRocEnv.rocAllocFn,
-            .roc_dealloc = &DevRocEnv.rocDeallocFn,
-            .roc_realloc = &DevRocEnv.rocReallocFn,
-            .roc_dbg = &DevRocEnv.rocDbgFn,
-            .roc_expect_failed = &DevRocEnv.rocExpectFailedFn,
-            .roc_crashed = &DevRocEnv.rocCrashedFn,
-            .hosted_fns = .{ .count = 0, .fns = &empty_hosted_fns.empty },
-        };
+        const roc_env = allocator.create(RocEnv) catch return error.OutOfMemory;
+        roc_env.* = RocEnv.init(allocator);
+        const roc_ops = createRocOps(roc_env);
 
         return DevEvaluator{
             .allocator = allocator,
@@ -268,45 +156,7 @@ pub const DevEvaluator = struct {
         self: *DevEvaluator,
         modules: []*ModuleEnv,
     ) Error!*can.LambdaSetInference {
-        // 1. Run LambdaLifter on each module (extracts closure bodies)
-        for (modules) |module| {
-            if (!module.is_lambda_lifted) {
-                var top_level_patterns = std.AutoHashMap(can.CIR.Pattern.Idx, void).init(self.allocator);
-                defer top_level_patterns.deinit();
-
-                // Mark top-level patterns from all_statements
-                const stmts = module.store.sliceStatements(module.all_statements);
-                for (stmts) |stmt_idx| {
-                    const stmt = module.store.getStatement(stmt_idx);
-                    switch (stmt) {
-                        .s_decl => |decl| {
-                            top_level_patterns.put(decl.pattern, {}) catch {};
-                        },
-                        else => {},
-                    }
-                }
-
-                var lifter = can.LambdaLifter.init(self.allocator, module, &top_level_patterns);
-                defer lifter.deinit();
-                module.is_lambda_lifted = true;
-            }
-        }
-
-        // 2. Run Lambda Set Inference across ALL modules (assigns global names)
-        const inference = self.allocator.create(can.LambdaSetInference) catch return error.OutOfMemory;
-        inference.* = can.LambdaSetInference.init(self.allocator);
-        inference.inferAll(modules) catch return error.OutOfMemory;
-
-        // 3. Run ClosureTransformer on each module (uses inference results)
-        for (modules) |module| {
-            if (!module.is_defunctionalized) {
-                var transformer = can.ClosureTransformer.initWithInference(self.allocator, module, inference);
-                defer transformer.deinit();
-                module.is_defunctionalized = true;
-            }
-        }
-
-        return inference;
+        return codegen_prepare.prepareModulesForCodegen(self.allocator, modules) catch return error.OutOfMemory;
     }
 
     /// Result of code generation
@@ -526,251 +376,7 @@ pub const DevEvaluator = struct {
     }
 };
 
-/// Get the Layout for a CIR expression
-fn getExprLayoutWithTypeEnv(allocator: Allocator, module_env: *ModuleEnv, expr: CIR.Expr, type_env: *std.AutoHashMap(u32, LayoutIdx)) LayoutIdx {
-    return switch (expr) {
-        .e_num => |num| switch (num.kind) {
-            .i8, .i16, .i32, .i64, .num_unbound, .int_unbound => .i64,
-            .u8, .u16, .u32, .u64 => .u64,
-            .i128 => .i128,
-            .u128 => .u128,
-            .f32 => .f32,
-            .f64 => .f64,
-            .dec => .dec,
-        },
-        .e_frac_f32 => .f32,
-        .e_frac_f64 => .f64,
-        .e_dec, .e_dec_small => .dec,
-        .e_typed_int => |ti| getTypedIntLayout(module_env, ti.type_name),
-        .e_binop => |binop| getBinopLayout(allocator, module_env, binop, type_env),
-        .e_unary_minus => |unary| blk: {
-            const inner_expr = module_env.store.getExpr(unary.expr);
-            break :blk getExprLayoutWithTypeEnv(allocator, module_env, inner_expr, type_env);
-        },
-        .e_nominal => |nom| blk: {
-            const backing_expr = module_env.store.getExpr(nom.backing_expr);
-            break :blk getExprLayoutWithTypeEnv(allocator, module_env, backing_expr, type_env);
-        },
-        .e_nominal_external => |nom| blk: {
-            const backing_expr = module_env.store.getExpr(nom.backing_expr);
-            break :blk getExprLayoutWithTypeEnv(allocator, module_env, backing_expr, type_env);
-        },
-        .e_if => |if_expr| blk: {
-            const else_expr = module_env.store.getExpr(if_expr.final_else);
-            break :blk getExprLayoutWithTypeEnv(allocator, module_env, else_expr, type_env);
-        },
-        .e_block => |block| getBlockLayout(allocator, module_env, block, type_env),
-        .e_lookup_local => |lookup| blk: {
-            const pattern_key = @intFromEnum(lookup.pattern_idx);
-            break :blk type_env.get(pattern_key) orelse .i64;
-        },
-        .e_str, .e_str_segment => .str,
-        .e_call => |call| blk: {
-            const func_expr = module_env.store.getExpr(call.func);
-            switch (func_expr) {
-                .e_lambda => |lambda| {
-                    const body_expr = module_env.store.getExpr(lambda.body);
-                    switch (body_expr) {
-                        .e_lookup_local => {
-                            const args = module_env.store.sliceExpr(call.args);
-                            if (args.len > 0) {
-                                const arg_expr = module_env.store.getExpr(args[0]);
-                                break :blk getExprLayoutWithTypeEnv(allocator, module_env, arg_expr, type_env);
-                            }
-                        },
-                        else => {},
-                    }
-                    break :blk getExprLayoutWithTypeEnv(allocator, module_env, body_expr, type_env);
-                },
-                .e_closure => |closure| {
-                    const lambda_expr = module_env.store.getExpr(closure.lambda_idx);
-                    switch (lambda_expr) {
-                        .e_lambda => |lambda| {
-                            const body_expr = module_env.store.getExpr(lambda.body);
-                            switch (body_expr) {
-                                .e_lookup_local => {
-                                    const args = module_env.store.sliceExpr(call.args);
-                                    if (args.len > 0) {
-                                        const arg_expr = module_env.store.getExpr(args[0]);
-                                        break :blk getExprLayoutWithTypeEnv(allocator, module_env, arg_expr, type_env);
-                                    }
-                                },
-                                else => {},
-                            }
-                            break :blk getExprLayoutWithTypeEnv(allocator, module_env, body_expr, type_env);
-                        },
-                        else => {},
-                    }
-                    break :blk .i64;
-                },
-                .e_lookup_local => {
-                    const args = module_env.store.sliceExpr(call.args);
-                    if (args.len > 0) {
-                        const arg_expr = module_env.store.getExpr(args[0]);
-                        const arg_layout = getExprLayoutWithTypeEnv(allocator, module_env, arg_expr, type_env);
-                        if (arg_layout == .str) {
-                            break :blk .str;
-                        }
-                    }
-                    break :blk .i64;
-                },
-                else => {},
-            }
-            break :blk .i64;
-        },
-        .e_dot_access => |dot| blk: {
-            // Get the receiver expression and check if it's a record
-            const receiver_expr = module_env.store.getExpr(dot.receiver);
-            switch (receiver_expr) {
-                .e_record => |rec| {
-                    // Find the field with the matching name
-                    const fields = module_env.store.sliceRecordFields(rec.fields);
-                    for (fields) |field_idx| {
-                        const field = module_env.store.getRecordField(field_idx);
-                        if (@as(u32, @bitCast(field.name)) == @as(u32, @bitCast(dot.field_name))) {
-                            const field_expr = module_env.store.getExpr(field.value);
-                            break :blk getExprLayoutWithTypeEnv(allocator, module_env, field_expr, type_env);
-                        }
-                    }
-                },
-                else => {},
-            }
-            break :blk .i64;
-        },
-        .e_list => list_i64_layout, // List of i64 (most common case for tests)
-        else => .i64,
-    };
-}
-
-/// Get the result type for a block
-fn getBlockLayout(allocator: Allocator, module_env: *ModuleEnv, block: anytype, type_env: *std.AutoHashMap(u32, LayoutIdx)) LayoutIdx {
-    var type_annos = std.AutoHashMap(base.Ident.Idx, LayoutIdx).init(allocator);
-    defer type_annos.deinit();
-
-    const stmts = module_env.store.sliceStatements(block.stmts);
-
-    // First pass: collect type annotations
-    for (stmts) |stmt_idx| {
-        const stmt = module_env.store.getStatement(stmt_idx);
-        switch (stmt) {
-            .s_type_anno => |ta| {
-                const type_anno = module_env.store.getTypeAnno(ta.anno);
-                switch (type_anno) {
-                    .apply => |apply| {
-                        const result_layout = layoutFromLocalOrExternal(apply.base);
-                        type_annos.put(ta.name, result_layout) catch {};
-                    },
-                    .lookup => |lookup| {
-                        const result_layout = layoutFromLocalOrExternal(lookup.base);
-                        type_annos.put(ta.name, result_layout) catch {};
-                    },
-                    else => {},
-                }
-            },
-            else => {},
-        }
-    }
-
-    // Second pass: process declarations
-    for (stmts) |stmt_idx| {
-        const stmt = module_env.store.getStatement(stmt_idx);
-        switch (stmt) {
-            .s_decl => |decl| {
-                const pattern_key = @intFromEnum(decl.pattern);
-                if (decl.anno) |anno_idx| {
-                    const result_layout = getAnnotationLayout(module_env, anno_idx);
-                    type_env.put(pattern_key, result_layout) catch {};
-                } else {
-                    const pattern = module_env.store.getPattern(decl.pattern);
-                    var found_annotation = false;
-                    switch (pattern) {
-                        .assign => |assign| {
-                            if (type_annos.get(assign.ident)) |anno_layout| {
-                                type_env.put(pattern_key, anno_layout) catch {};
-                                found_annotation = true;
-                            }
-                        },
-                        else => {},
-                    }
-                    if (!found_annotation) {
-                        const decl_expr = module_env.store.getExpr(decl.expr);
-                        const inferred_layout = getExprLayoutWithTypeEnv(allocator, module_env, decl_expr, type_env);
-                        type_env.put(pattern_key, inferred_layout) catch {};
-                    }
-                }
-            },
-            else => {},
-        }
-    }
-
-    const final_expr = module_env.store.getExpr(block.final_expr);
-    return getExprLayoutWithTypeEnv(allocator, module_env, final_expr, type_env);
-}
-
-/// Get the result type from an annotation
-fn getAnnotationLayout(module_env: *ModuleEnv, anno_idx: CIR.Annotation.Idx) LayoutIdx {
-    const anno = module_env.store.getAnnotation(anno_idx);
-    const type_anno = module_env.store.getTypeAnno(anno.anno);
-    switch (type_anno) {
-        .apply => |apply| return layoutFromLocalOrExternal(apply.base),
-        .lookup => |lookup| return layoutFromLocalOrExternal(lookup.base),
-        else => return .i64,
-    }
-}
-
-/// Get the result type for a typed integer
-fn getTypedIntLayout(module_env: *ModuleEnv, type_name: base.Ident.Idx) LayoutIdx {
-    const idents = &module_env.idents;
-    if (type_name == idents.u8_type or
-        type_name == idents.u16_type or
-        type_name == idents.u32_type or
-        type_name == idents.u64_type)
-    {
-        return .u64;
-    } else if (type_name == idents.u128_type) {
-        return .u128;
-    } else if (type_name == idents.i128_type) {
-        return .i128;
-    } else if (type_name == idents.f32_type) {
-        return .f32;
-    } else if (type_name == idents.f64_type) {
-        return .f64;
-    } else if (type_name == idents.dec_type) {
-        return .dec;
-    }
-    return .i64;
-}
-
-/// Get the result type for a binary operation
-fn getBinopLayout(allocator: Allocator, module_env: *ModuleEnv, binop: CIR.Expr.Binop, type_env: *std.AutoHashMap(u32, LayoutIdx)) LayoutIdx {
-    switch (binop.op) {
-        .lt, .gt, .le, .ge, .eq, .ne, .@"and", .@"or" => return .i64,
-        else => {},
-    }
-    const lhs_expr = module_env.store.getExpr(binop.lhs);
-    return getExprLayoutWithTypeEnv(allocator, module_env, lhs_expr, type_env);
-}
-
-/// Convert a LocalOrExternal to LayoutIdx
-fn layoutFromLocalOrExternal(loe: CIR.TypeAnno.LocalOrExternal) LayoutIdx {
-    switch (loe) {
-        .builtin => |b| return layoutFromBuiltin(b),
-        .local, .external => return .i64,
-    }
-}
-
-/// Convert a Builtin type enum to LayoutIdx
-fn layoutFromBuiltin(b: CIR.TypeAnno.Builtin) LayoutIdx {
-    return switch (b) {
-        .u8, .u16, .u32, .u64 => .u64,
-        .u128 => .u128,
-        .i128 => .i128,
-        .f32 => .f32,
-        .f64 => .f64,
-        .dec => .dec,
-        else => .i64,
-    };
-}
+// Layout resolution functions are imported from layout_resolve.zig
 
 // Tests
 

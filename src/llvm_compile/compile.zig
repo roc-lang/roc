@@ -88,6 +88,13 @@ pub const Error = error{
     TempFileError,
 };
 
+/// Options for controlling LLVM compilation behavior.
+pub const CompileOptions = struct {
+    /// Whether to place each function in its own section.
+    /// Set to false for JIT mode (single .text section is simpler).
+    function_sections: bool = true,
+};
+
 /// Compile LLVM bitcode to a native object file.
 ///
 /// This function:
@@ -97,7 +104,7 @@ pub const Error = error{
 ///
 /// Returns the object file bytes, which can be passed to llvm_execute.executeAndFormat()
 /// for execution.
-pub fn compileToObject(allocator: Allocator, bitcode: []const u32) Error![]const u8 {
+pub fn compileToObject(allocator: Allocator, bitcode: []const u32, options: CompileOptions) Error![]const u8 {
     // Convert u32 slice to u8 slice for the bindings
     const bitcode_bytes: []const u8 = @as([*]const u8, @ptrCast(bitcode.ptr))[0 .. bitcode.len * 4];
 
@@ -182,8 +189,8 @@ pub fn compileToObject(allocator: Allocator, bitcode: []const u32) Error![]const
         .Default, // optimization level
         .Default, // reloc mode
         .Default, // code model
-        true, // function_sections
-        true, // data_sections
+        options.function_sections, // function_sections
+        options.function_sections, // data_sections: match function_sections
         .Default, // float_abi
         null, // abi_name
         false, // emulated_tls

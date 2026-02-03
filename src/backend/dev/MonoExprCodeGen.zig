@@ -1983,11 +1983,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
         /// Load 64-bit immediate into register
         fn loadImm64(self: *Self, dst: GeneralReg, value: i64) !void {
-            if (comptime builtin.cpu.arch == .aarch64) {
-                try self.codegen.emit.movRegImm64(dst, value);
-            } else {
-                try self.codegen.emit.movRegImm64(dst, value);
-            }
+            try self.codegen.emit.movRegImm64(dst, @bitCast(value));
         }
 
         /// Generate code for a zero-argument tag (just the discriminant)

@@ -16,12 +16,12 @@ const builtins = @import("builtins");
 pub const EvalBackend = enum {
     dev,
     interpreter,
-    // llvm, // Future: LLVM backend
+    llvm,
 
     pub fn fromString(s: []const u8) ?EvalBackend {
         if (std.mem.eql(u8, s, "dev")) return .dev;
         if (std.mem.eql(u8, s, "interpreter")) return .interpreter;
-        // if (std.mem.eql(u8, s, "llvm")) return .llvm;
+        if (std.mem.eql(u8, s, "llvm")) return .llvm;
         return null;
     }
 };
