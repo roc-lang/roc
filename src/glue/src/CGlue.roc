@@ -38,8 +38,8 @@ parse_type_str = |type_str| {
 
         _ => {
             # If no "=>" found, assume it is a pure function with "->"
-            arrow_parts = Str.split_on(type_str, " -> ")
-            match arrow_parts {
+            thin_arrow_parts = Str.split_on(type_str, " -> ")
+            match thin_arrow_parts {
                 [args_part2, ret_part2] => {
                     args = parse_args(args_part2)
                     { args, ret: ret_part2 }
