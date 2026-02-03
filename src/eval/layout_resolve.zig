@@ -14,9 +14,13 @@ const CIR = can.CIR;
 
 pub const LayoutIdx = layout.Idx;
 
-// Special layout indices for lists (beyond the 16 scalar types)
-// These are used by the evaluator to track list types for proper result formatting
+// Special layout indices for compound types (beyond the 16 scalar sentinels).
+// These are used by the evaluator to track result types for proper formatting.
 pub const list_i64_layout: LayoutIdx = @enumFromInt(100);
+pub const fn_layout: LayoutIdx = @enumFromInt(101);
+pub const tuple_layout: LayoutIdx = @enumFromInt(102);
+pub const record_layout: LayoutIdx = @enumFromInt(103);
+pub const tag_layout: LayoutIdx = @enumFromInt(104);
 
 /// Get the Layout for a CIR expression
 pub fn getExprLayoutWithTypeEnv(allocator: Allocator, module_env: *ModuleEnv, expr: CIR.Expr, type_env: *std.AutoHashMap(u32, LayoutIdx)) LayoutIdx {
@@ -129,8 +133,55 @@ pub fn getExprLayoutWithTypeEnv(allocator: Allocator, module_env: *ModuleEnv, ex
             }
             break :blk .i64;
         },
-        .e_list => list_i64_layout, // List of i64 (most common case for tests)
-        else => .i64,
+        .e_list, .e_empty_list => list_i64_layout,
+        .e_typed_frac => |tf| getTypedIntLayout(module_env, tf.type_name),
+        .e_unary_not => .bool,
+        .e_match => |match| blk: {
+            const branches = module_env.store.sliceMatchBranches(match.branches);
+            if (branches.len > 0) {
+                const first_branch = module_env.store.getMatchBranch(branches[0]);
+                const branch_expr = module_env.store.getExpr(first_branch.value);
+                break :blk getExprLayoutWithTypeEnv(allocator, module_env, branch_expr, type_env);
+            }
+            break :blk .i64;
+        },
+        .e_tuple => tuple_layout,
+        .e_record, .e_empty_record => record_layout,
+        .e_tag => tag_layout,
+        // Zero-argument tags include Bool.true/Bool.false which are represented
+        // as small integers at runtime. Using .i64 keeps boolean tests working
+        // (normalizeBoolStr handles the "0"/"1" to "False"/"True" conversion).
+        .e_zero_argument_tag => .i64,
+        .e_lambda, .e_closure, .e_hosted_lambda, .e_low_level_lambda => fn_layout,
+        .e_dbg => |dbg| blk: {
+            const inner_expr = module_env.store.getExpr(dbg.expr);
+            break :blk getExprLayoutWithTypeEnv(allocator, module_env, inner_expr, type_env);
+        },
+        .e_expect => |expect| blk: {
+            const body_expr = module_env.store.getExpr(expect.body);
+            break :blk getExprLayoutWithTypeEnv(allocator, module_env, body_expr, type_env);
+        },
+        .e_return => |ret| blk: {
+            const ret_expr = module_env.store.getExpr(ret.expr);
+            break :blk getExprLayoutWithTypeEnv(allocator, module_env, ret_expr, type_env);
+        },
+        .e_for => |for_expr| blk: {
+            const body_expr = module_env.store.getExpr(for_expr.body);
+            break :blk getExprLayoutWithTypeEnv(allocator, module_env, body_expr, type_env);
+        },
+        .e_incref => |incref| blk: {
+            break :blk type_env.get(@intFromEnum(incref.pattern_idx)) orelse .i64;
+        },
+        .e_decref => |decref| blk: {
+            break :blk type_env.get(@intFromEnum(decref.pattern_idx)) orelse .i64;
+        },
+        .e_free => |free| blk: {
+            break :blk type_env.get(@intFromEnum(free.pattern_idx)) orelse .i64;
+        },
+        // Cross-module lookups need full module resolution to determine layout
+        .e_lookup_external, .e_lookup_required, .e_type_var_dispatch => .i64,
+        // Error/placeholder expressions have no meaningful result type
+        .e_runtime_error, .e_crash, .e_ellipsis, .e_anno_only => .i64,
     };
 }
 

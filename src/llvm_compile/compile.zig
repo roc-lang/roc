@@ -93,6 +93,8 @@ pub const CompileOptions = struct {
     /// Whether to place each function in its own section.
     /// Set to false for JIT mode (single .text section is simpler).
     function_sections: bool = true,
+    /// Optimization level for code generation.
+    opt_level: bindings.CodeGenOptLevel = .Default,
 };
 
 /// Compile LLVM bitcode to a native object file.
@@ -186,7 +188,7 @@ pub fn compileToObject(allocator: Allocator, bitcode: []const u32, options: Comp
         triple,
         cpu,
         "", // No specific features
-        .Default, // optimization level
+        options.opt_level, // optimization level
         .Default, // reloc mode
         .Default, // code model
         options.function_sections, // function_sections

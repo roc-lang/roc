@@ -13,8 +13,12 @@ pub const codegen_prepare = @import("codegen_prepare.zig");
 /// Dev backend-based evaluator for native code generation using Mono IR
 const dev_evaluator_mod = @import("dev_evaluator.zig");
 pub const DevEvaluator = dev_evaluator_mod.DevEvaluator;
-/// Special layout index for list of i64 (used in test helpers)
+/// Special layout indices for compound types (used in test helpers)
 pub const list_i64_layout = layout_resolve.list_i64_layout;
+pub const fn_layout = layout_resolve.fn_layout;
+pub const tuple_layout = layout_resolve.tuple_layout;
+pub const record_layout = layout_resolve.record_layout;
+pub const tag_layout = layout_resolve.tag_layout;
 /// Compile-time value representation for the dev backend
 pub const comptime_value = @import("comptime_value.zig");
 /// Executable memory for running generated code (re-exported from backend module)

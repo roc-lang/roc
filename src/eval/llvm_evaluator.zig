@@ -73,6 +73,11 @@ pub const LlvmEvaluator = struct {
     /// Contains function pointers for allocation, deallocation, and error handling.
     roc_ops: RocOps,
 
+    /// When true, disables LLVM optimization passes (uses OptLevel.None).
+    /// This is a bool rather than the LLVM type to preserve the lazy import
+    /// pattern — non-LLVM builds don't need the LLVM bindings at struct scope.
+    disable_optimizations: bool = false,
+
     pub const Error = error{
         OutOfMemory,
         UnsupportedType,
@@ -214,7 +219,7 @@ pub const LlvmEvaluator = struct {
         const object_bytes = llvm_compile.compileToObject(
             self.allocator,
             gen_result.bitcode,
-            .{ .function_sections = false },
+            .{ .function_sections = false, .opt_level = if (self.disable_optimizations) .None else .Default },
         ) catch return error.CompilationFailed;
         defer self.allocator.free(object_bytes);
 

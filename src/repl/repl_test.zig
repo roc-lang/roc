@@ -1,6 +1,7 @@
 //! Tests for the REPL
 const std = @import("std");
 const Repl = @import("eval.zig").Repl;
+const Backend = @import("eval.zig").Backend;
 const TestEnv = @import("repl_test_env.zig").TestEnv;
 
 // Tests
@@ -20,6 +21,58 @@ fn expectOrSkipIfUnsupported(result: []const u8, expected: []const u8) !void {
         return error.SkipZigTest;
     }
     try testing.expectEqualStrings(expected, result);
+}
+
+/// Strip the " : Type" suffix that the REPL's dev/LLVM formatters append.
+/// e.g. "42 : I64" → "42", "Bool.true : Bool" → "Bool.true"
+fn stripReplTypeAnnotation(s: []const u8) []const u8 {
+    // Find the last " : " and strip everything from there
+    if (s.len < 3) return s;
+    var i: usize = s.len;
+    while (i > 0) {
+        i -= 1;
+        if (s[i] == ' ' and i + 2 < s.len and s[i + 1] == ':' and s[i + 2] == ' ') {
+            return s[0..i];
+        }
+    }
+    return s;
+}
+
+/// Normalize REPL boolean representations for comparison.
+/// "Bool.true" → "True", "Bool.false" → "False", and identity for everything else.
+fn normalizeReplBool(s: []const u8) []const u8 {
+    if (std.mem.eql(u8, s, "Bool.true")) return "True";
+    if (std.mem.eql(u8, s, "Bool.false")) return "False";
+    if (std.mem.eql(u8, s, "True")) return "True";
+    if (std.mem.eql(u8, s, "False")) return "False";
+    return s;
+}
+
+/// Run a REPL expression with the LLVM backend and compare against the interpreter result.
+/// The interpreter result is the reference. If the LLVM backend can't init or eval,
+/// the comparison is skipped (SkipZigTest). Mismatches are real test failures.
+///
+/// Note: The dev backend is NOT tested here because its REPL JIT path crashes with
+/// bus errors (signals that can't be caught). The dev backend is already compared
+/// through the eval test helpers via compareWithDevEvaluator.
+fn compareReplBackends(expr: []const u8, interpreter_result: []const u8) !void {
+    var te = TestEnv.init(interpreter_allocator);
+    defer te.deinit();
+    var repl = Repl.initWithBackend(interpreter_allocator, te.get_ops(), null, .llvm) catch return error.SkipZigTest;
+    defer repl.deinit();
+    const result = repl.step(expr) catch return error.SkipZigTest;
+    defer interpreter_allocator.free(result);
+
+    // The LLVM REPL path formats results with type annotations (e.g. "42 : I64"),
+    // while the interpreter path returns just the value (e.g. "42").
+    // Strip the annotation and normalize booleans before comparing.
+    const llvm_value = normalizeReplBool(stripReplTypeAnnotation(result));
+    const interp_value = normalizeReplBool(interpreter_result);
+
+    if (!std.mem.eql(u8, interp_value, llvm_value)) {
+        std.debug.print("\nREPL mismatch! Interpreter: {s}, LLVM: {s} (raw: {s})\n", .{ interpreter_result, llvm_value, result });
+        return error.EvaluatorMismatch;
+    }
 }
 
 test "Repl - initialization and cleanup" {
@@ -62,6 +115,7 @@ test "Repl - simple expressions" {
     const result = try repl.step("42");
     defer interpreter_allocator.free(result);
     try expectOrSkipIfUnsupported(result, "42");
+    try compareReplBackends("42", result);
 }
 
 test "Repl - string expressions" {
@@ -74,6 +128,7 @@ test "Repl - string expressions" {
     const result = try repl.step("\"Hello, World!\"");
     defer interpreter_allocator.free(result);
     try expectOrSkipIfUnsupported(result, "\"Hello, World!\"");
+    try compareReplBackends("\"Hello, World!\"", result);
 }
 
 test "Repl - silent assignments" {
@@ -92,6 +147,7 @@ test "Repl - silent assignments" {
     const result2 = try repl.step("x");
     defer interpreter_allocator.free(result2);
     try expectOrSkipIfUnsupported(result2, "5");
+    try compareReplBackends("5", result2);
 }
 
 test "Repl - variable redefinition" {
@@ -213,10 +269,12 @@ test "Repl - Str.is_empty works for empty and non-empty strings" {
     const empty_result = try repl.step("Str.is_empty(\"\")");
     defer interpreter_allocator.free(empty_result);
     try expectOrSkipIfUnsupported(empty_result, "True");
+    try compareReplBackends("Str.is_empty(\"\")", empty_result);
 
     const non_empty_result = try repl.step("Str.is_empty(\"a\")");
     defer interpreter_allocator.free(non_empty_result);
     try expectOrSkipIfUnsupported(non_empty_result, "False");
+    try compareReplBackends("Str.is_empty(\"a\")", non_empty_result);
 }
 
 test "Repl - List.len(Str.to_utf8(\"hello\")) should not leak" {
@@ -230,6 +288,7 @@ test "Repl - List.len(Str.to_utf8(\"hello\")) should not leak" {
     const result = try repl.step("List.len(Str.to_utf8(\"hello\"))");
     defer interpreter_allocator.free(result);
     try expectOrSkipIfUnsupported(result, "5");
+    try compareReplBackends("List.len(Str.to_utf8(\"hello\"))", result);
 }
 
 test "Repl - Str.to_utf8 returns list that should not leak" {
@@ -243,6 +302,7 @@ test "Repl - Str.to_utf8 returns list that should not leak" {
     const result = try repl.step("Str.to_utf8(\"hello\")");
     defer interpreter_allocator.free(result);
     try expectOrSkipIfUnsupported(result, "[104, 101, 108, 108, 111]");
+    try compareReplBackends("Str.to_utf8(\"hello\")", result);
 }
 
 test "Repl - multiple Str.to_utf8 calls should not leak" {
@@ -282,11 +342,13 @@ test "Repl - list literals should not leak" {
         const result = try repl.step("List.len([1, 2, 3])");
         defer interpreter_allocator.free(result);
         try expectOrSkipIfUnsupported(result, "3");
+        try compareReplBackends("List.len([1, 2, 3])", result);
     }
     {
         const result = try repl.step("[1, 2, 3]");
         defer interpreter_allocator.free(result);
         try expectOrSkipIfUnsupported(result, "[1, 2, 3]");
+        try compareReplBackends("[1, 2, 3]", result);
     }
 }
 
@@ -301,6 +363,7 @@ test "Repl - list of strings should not leak" {
     const result = try repl.step("List.len([\"hello\", \"world\", \"test\"])");
     defer interpreter_allocator.free(result);
     try expectOrSkipIfUnsupported(result, "3");
+    try compareReplBackends("List.len([\"hello\", \"world\", \"test\"])", result);
 }
 
 test "Repl - from_utf8_lossy should not leak" {
@@ -314,6 +377,7 @@ test "Repl - from_utf8_lossy should not leak" {
         const result = try repl.step("Str.from_utf8_lossy(Str.to_utf8(\"hello\"))");
         defer interpreter_allocator.free(result);
         try expectOrSkipIfUnsupported(result, "\"hello\"");
+        try compareReplBackends("Str.from_utf8_lossy(Str.to_utf8(\"hello\"))", result);
     }
 }
 
@@ -329,6 +393,7 @@ test "Repl - for loop over list should not leak" {
         const result = try repl.step("[\"hello\", \"world\", \"test\"]");
         defer interpreter_allocator.free(result);
         try expectOrSkipIfUnsupported(result, "[\"hello\", \"world\", \"test\"]");
+        try compareReplBackends("[\"hello\", \"world\", \"test\"]", result);
     }
 
     // For loop assignment - matches snapshot pattern
@@ -351,11 +416,13 @@ test "Repl - list_sort_with should not leak" {
         const result = try repl.step("List.len(List.sort_with([3, 1, 2], |a, b| if a < b LT else if a > b GT else EQ))");
         defer interpreter_allocator.free(result);
         try expectOrSkipIfUnsupported(result, "3");
+        try compareReplBackends("List.len(List.sort_with([3, 1, 2], |a, b| if a < b LT else if a > b GT else EQ))", result);
     }
     {
         const result = try repl.step("List.len(List.sort_with([5, 2, 8, 1, 9], |a, b| if a < b LT else if a > b GT else EQ))");
         defer interpreter_allocator.free(result);
         try expectOrSkipIfUnsupported(result, "5");
+        try compareReplBackends("List.len(List.sort_with([5, 2, 8, 1, 9], |a, b| if a < b LT else if a > b GT else EQ))", result);
     }
 }
 
@@ -370,6 +437,7 @@ test "Repl - list fold with concat should not leak" {
     const result = try repl.step("List.len(List.fold([1, 2, 3], [], |acc, x| List.concat(acc, [x])))");
     defer interpreter_allocator.free(result);
     try expectOrSkipIfUnsupported(result, "3");
+    try compareReplBackends("List.len(List.fold([1, 2, 3], [], |acc, x| List.concat(acc, [x])))", result);
 }
 
 test "Repl - all list operations should not leak" {
@@ -384,46 +452,55 @@ test "Repl - all list operations should not leak" {
         const result = try repl.step("List.len(List.concat([1, 2], [3, 4]))");
         defer interpreter_allocator.free(result);
         try expectOrSkipIfUnsupported(result, "4");
+        try compareReplBackends("List.len(List.concat([1, 2], [3, 4]))", result);
     }
     {
         const result = try repl.step("List.len(List.concat([], [1, 2, 3]))");
         defer interpreter_allocator.free(result);
         try expectOrSkipIfUnsupported(result, "3");
+        try compareReplBackends("List.len(List.concat([], [1, 2, 3]))", result);
     }
     {
         const result = try repl.step("List.len(List.concat([1, 2, 3], []))");
         defer interpreter_allocator.free(result);
         try expectOrSkipIfUnsupported(result, "3");
+        try compareReplBackends("List.len(List.concat([1, 2, 3], []))", result);
     }
     {
         const result = try repl.step("List.contains([1, 2, 3, 4, 5], 3)");
         defer interpreter_allocator.free(result);
         try expectOrSkipIfUnsupported(result, "True");
+        try compareReplBackends("List.contains([1, 2, 3, 4, 5], 3)", result);
     }
     {
         const result = try repl.step("List.drop_if([1, 2, 3, 4, 5], |x| x > 2)");
         defer interpreter_allocator.free(result);
         try expectOrSkipIfUnsupported(result, "[1, 2]");
+        try compareReplBackends("List.drop_if([1, 2, 3, 4, 5], |x| x > 2)", result);
     }
     {
         const result = try repl.step("List.keep_if([1, 2, 3, 4, 5], |x| x > 2)");
         defer interpreter_allocator.free(result);
         try expectOrSkipIfUnsupported(result, "[3, 4, 5]");
+        try compareReplBackends("List.keep_if([1, 2, 3, 4, 5], |x| x > 2)", result);
     }
     {
         const result = try repl.step("List.keep_if([1, 2, 3], |_| Bool.False)");
         defer interpreter_allocator.free(result);
         try expectOrSkipIfUnsupported(result, "[]");
+        try compareReplBackends("List.keep_if([1, 2, 3], |_| Bool.False)", result);
     }
     {
         const result = try repl.step("List.fold_rev([1, 2, 3], 0, |x, acc| acc * 10 + x)");
         defer interpreter_allocator.free(result);
         try expectOrSkipIfUnsupported(result, "321");
+        try compareReplBackends("List.fold_rev([1, 2, 3], 0, |x, acc| acc * 10 + x)", result);
     }
     {
         const result = try repl.step("List.fold_rev([], 42, |x, acc| x + acc)");
         defer interpreter_allocator.free(result);
         try expectOrSkipIfUnsupported(result, "42");
+        try compareReplBackends("List.fold_rev([], 42, |x, acc| x + acc)", result);
     }
 }
 
@@ -580,6 +657,7 @@ test "Repl - lambda function renders as <function>" {
     const result = try repl.step("|x| x + 1");
     defer interpreter_allocator.free(result);
     try expectOrSkipIfUnsupported(result, "<function>");
+    try compareReplBackends("|x| x + 1", result);
 }
 
 test "Repl - multi-arg lambda function renders as <function>" {
@@ -592,4 +670,5 @@ test "Repl - multi-arg lambda function renders as <function>" {
     const result = try repl.step("|x, y| x + y");
     defer interpreter_allocator.free(result);
     try expectOrSkipIfUnsupported(result, "<function>");
+    try compareReplBackends("|x, y| x + y", result);
 }

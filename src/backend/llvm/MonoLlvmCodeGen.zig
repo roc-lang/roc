@@ -706,8 +706,10 @@ pub const MonoLlvmCodeGen = struct {
         const cond_val = try self.generateExpr(first_branch.cond);
 
         // Create basic blocks
-        const then_block = wip.block(0, "then") catch return error.CompilationFailed;
-        const else_block = wip.block(0, "else") catch return error.CompilationFailed;
+        // Each of then/else has 1 incoming edge (from the conditional branch),
+        // merge has 2 incoming edges (one from then, one from else).
+        const then_block = wip.block(1, "then") catch return error.CompilationFailed;
+        const else_block = wip.block(1, "else") catch return error.CompilationFailed;
         const merge_block = wip.block(2, "merge") catch return error.CompilationFailed;
 
         // Conditional branch

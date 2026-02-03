@@ -207,15 +207,22 @@ fn evalToInt(allocator: std.mem.Allocator, source: []const u8) !i128 {
     defer interpreter.bindings.items.len = 0;
 
     // Check if this is an integer or Dec
-    if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int) {
-        return result.asI128();
-    } else if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .frac) {
+    const result_int: i128 = if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int)
+        result.asI128()
+    else if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .frac) blk: {
         // Unsuffixed numeric literals default to Dec
         const dec_value = result.asDec(ops);
         const RocDec = builtins.dec.RocDec;
-        return @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
-    }
-    return error.NotAnInteger;
+        break :blk @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
+    } else return error.NotAnInteger;
+
+    // Backend comparison
+    const int_str = try std.fmt.allocPrint(allocator, "{}", .{result_int});
+    defer allocator.free(int_str);
+    try helpers.compareWithDevEvaluator(allocator, int_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    try helpers.compareWithLlvmEvaluator(allocator, int_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+
+    return result_int;
 }
 
 /// Helper to evaluate an expression and get its boolean result
@@ -238,15 +245,21 @@ fn evalToBool(allocator: std.mem.Allocator, source: []const u8) !bool {
     defer interpreter.bindings.items.len = 0;
 
     // Boolean represented as integer (discriminant)
-    if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int) {
+    const result_bool: bool = if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int) blk: {
         const int_val = result.asI128();
-        return int_val != 0;
-    } else if (result.ptr != null) {
+        break :blk int_val != 0;
+    } else if (result.ptr != null) blk: {
         // Try reading as raw byte (for boolean tag values)
         const bool_ptr: *const u8 = @ptrCast(@alignCast(result.ptr.?));
-        return bool_ptr.* != 0;
-    }
-    return error.NotABool;
+        break :blk bool_ptr.* != 0;
+    } else return error.NotABool;
+
+    // Backend comparison
+    const bool_str: []const u8 = if (result_bool) "True" else "False";
+    try helpers.compareWithDevEvaluator(allocator, bool_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    try helpers.compareWithLlvmEvaluator(allocator, bool_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+
+    return result_bool;
 }
 
 test "roundtrip: integer literal produces same result" {
