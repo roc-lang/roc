@@ -30,6 +30,12 @@ const TagUnionVariant = layout_mod.TagUnionVariant;
 const TagUnionData = layout_mod.TagUnionData;
 const TagUnionIdx = layout_mod.TagUnionIdx;
 const SizeAlign = layout_mod.SizeAlign;
+const ListInfo = layout_mod.ListInfo;
+const BoxInfo = layout_mod.BoxInfo;
+const RecordInfo = layout_mod.RecordInfo;
+const TupleInfo = layout_mod.TupleInfo;
+const TagUnionInfo = layout_mod.TagUnionInfo;
+const ScalarInfo = layout_mod.ScalarInfo;
 const Work = work.Work;
 
 /// Errors that can occur during layout computation
@@ -106,6 +112,10 @@ pub const Store = struct {
     // Identifier for unqualified "Bool" in the Builtin module
     bool_plain_ident: ?Ident.Idx,
 
+    // The target's usize type (32-bit or 64-bit) - used for layout calculations
+    // This is critical for cross-compilation (e.g., compiling for wasm32 on a 64-bit host)
+    target_usize: target.TargetUsize,
+
     // Number of primitive types that are pre-populated in the layout store
     // Must be kept in sync with the sentinel values in layout.zig Idx enum
     const num_scalars = 16;
@@ -149,6 +159,7 @@ pub const Store = struct {
         env: *ModuleEnv,
         type_store: *const types_store.Store,
         builtin_str_ident: ?Ident.Idx,
+        target_usize: target.TargetUsize,
     ) std.mem.Allocator.Error!Self {
         // Get the number of variables from the type store's slots
         const capacity = type_store.slots.backing.len();
@@ -211,6 +222,7 @@ pub const Store = struct {
             .dec_ident = env.idents.dec_type,
             .bool_ident = env.idents.bool_type,
             .bool_plain_ident = env.idents.bool,
+            .target_usize = target_usize,
         };
     }
 
@@ -439,6 +451,85 @@ pub const Store = struct {
         return self.tag_union_variants.sliceRange(data.getVariants());
     }
 
+    /// Get bundled information about a list layout's element
+    pub fn getListInfo(self: *const Self, layout: Layout) ListInfo {
+        std.debug.assert(layout.tag == .list or layout.tag == .list_of_zst);
+        const elem_layout_idx = layout.data.list;
+        const elem_layout = self.getLayout(elem_layout_idx);
+        return ListInfo{
+            .elem_layout_idx = elem_layout_idx,
+            .elem_layout = elem_layout,
+            .elem_size = self.layoutSize(elem_layout),
+            .elem_alignment = @intCast(elem_layout.alignment(self.targetUsize()).toByteUnits()),
+            .contains_refcounted = self.layoutContainsRefcounted(elem_layout),
+        };
+    }
+
+    /// Get bundled information about a box layout's element
+    pub fn getBoxInfo(self: *const Self, layout: Layout) BoxInfo {
+        std.debug.assert(layout.tag == .box or layout.tag == .box_of_zst);
+        const elem_layout_idx = layout.data.box;
+        const elem_layout = self.getLayout(elem_layout_idx);
+        return BoxInfo{
+            .elem_layout_idx = elem_layout_idx,
+            .elem_layout = elem_layout,
+            .elem_size = self.layoutSize(elem_layout),
+            .elem_alignment = @intCast(elem_layout.alignment(self.targetUsize()).toByteUnits()),
+            .contains_refcounted = self.layoutContainsRefcounted(elem_layout),
+        };
+    }
+
+    /// Get bundled information about a record layout
+    pub fn getRecordInfo(self: *const Self, layout: Layout) RecordInfo {
+        std.debug.assert(layout.tag == .record);
+        const record_data = self.getRecordData(layout.data.record.idx);
+        return RecordInfo{
+            .data = record_data,
+            .alignment = layout.data.record.alignment,
+            .fields = self.record_fields.sliceRange(record_data.getFields()),
+            .contains_refcounted = self.layoutContainsRefcounted(layout),
+        };
+    }
+
+    /// Get bundled information about a tuple layout
+    pub fn getTupleInfo(self: *const Self, layout: Layout) TupleInfo {
+        std.debug.assert(layout.tag == .tuple);
+        const tuple_data = self.getTupleData(layout.data.tuple.idx);
+        return TupleInfo{
+            .data = tuple_data,
+            .alignment = layout.data.tuple.alignment,
+            .fields = self.tuple_fields.sliceRange(tuple_data.getFields()),
+            .contains_refcounted = self.layoutContainsRefcounted(layout),
+        };
+    }
+
+    /// Get bundled information about a tag union layout
+    pub fn getTagUnionInfo(self: *const Self, layout: Layout) TagUnionInfo {
+        std.debug.assert(layout.tag == .tag_union);
+        const tu_data = self.getTagUnionData(layout.data.tag_union.idx);
+        return TagUnionInfo{
+            .idx = layout.data.tag_union.idx,
+            .data = tu_data,
+            .alignment = layout.data.tag_union.alignment,
+            .variants = self.tag_union_variants.sliceRange(tu_data.getVariants()),
+            .contains_refcounted = self.layoutContainsRefcounted(layout),
+        };
+    }
+
+    /// Get bundled information about a scalar layout
+    pub fn getScalarInfo(self: *const Self, layout: Layout) ScalarInfo {
+        std.debug.assert(layout.tag == .scalar);
+        const scalar = layout.data.scalar;
+        const size_align = self.layoutSizeAlign(layout);
+        return ScalarInfo{
+            .tag = scalar.tag,
+            .size = size_align.size,
+            .alignment = @as(u32, 1) << @intFromEnum(size_align.alignment),
+            .int_precision = if (scalar.tag == .int) scalar.data.int else null,
+            .frac_precision = if (scalar.tag == .frac) scalar.data.frac else null,
+        };
+    }
+
     /// Dynamically compute the discriminant offset for a tag union.
     /// This computes the offset based on current variant payload sizes,
     /// which is necessary for recursive types where placeholder layouts
@@ -649,8 +740,8 @@ pub const Store = struct {
         return @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(requested_element_size_align.alignment.toByteUnits()))));
     }
 
-    pub fn targetUsize(_: *const Self) target.TargetUsize {
-        return target.TargetUsize.native;
+    pub fn targetUsize(self: *const Self) target.TargetUsize {
+        return self.target_usize;
     }
 
     /// Get or create an empty record layout (for closures with no captures)

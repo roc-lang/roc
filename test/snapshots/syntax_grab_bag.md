@@ -150,7 +150,7 @@ expect # Comment after expect keyword
 main! : List(String) -> Try({}, _)
 main! = |_| { # Yeah I can leave a comment here
 	world = "World"
-	var $number = 123
+	var number = 123
 	expect blah == 1
 	tag = Blue
 	return # Comment after return keyword
@@ -168,19 +168,19 @@ main! = |_| { # Yeah I can leave a comment here
 	)
 	crash # Comment after crash keyword
 		"Unreachable!" # Comment after crash statement
-	tag_with_payload = Ok($number)
+	tag_with_payload = Ok(number)
 	interpolated = "Hello, ${world}"
 	list = [
 		add_one(
 			dbg # After dbg in list
-				$number, # after dbg expr as arg
+				number, # after dbg expr as arg
 		), # Comment one
 		456, # Comment two
 		789, # Comment three
 	]
 	for n in list {
-		Stdout.line!("Adding ${n} to ${$number}")
-		$number = $number + n
+		Stdout.line!("Adding ${n} to ${number}")
+		number = number + n
 	}
 	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
 	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
@@ -197,7 +197,7 @@ main! = |_| { # Yeah I can leave a comment here
 	Stdout.line!(interpolated)?
 	Stdout.line!(
 		"How about ${ # Comment after string interpolation open
-			Num.toStr($number) # Comment after string interpolation expr
+			Num.toStr(number) # Comment after string interpolation expr
 		} as a string?",
 	)
 } # Comment after top-level decl
@@ -252,7 +252,6 @@ INVALID ASSIGNMENT TO ITSELF - syntax_grab_bag.md:179:50:179:55
 UNDEFINED VARIABLE - syntax_grab_bag.md:183:3:183:7
 UNDEFINED VARIABLE - syntax_grab_bag.md:185:4:185:10
 UNDEFINED VARIABLE - syntax_grab_bag.md:188:22:188:25
-NOT IMPLEMENTED - syntax_grab_bag.md:188:18:188:32
 UNDEFINED VARIABLE - syntax_grab_bag.md:189:26:189:33
 UNDEFINED VARIABLE - syntax_grab_bag.md:189:34:189:38
 UNDEFINED VARIABLE - syntax_grab_bag.md:190:2:190:14
@@ -264,10 +263,13 @@ UNUSED VARIABLE - syntax_grab_bag.md:180:2:180:17
 UNUSED VARIABLE - syntax_grab_bag.md:188:2:188:15
 UNUSED VARIABLE - syntax_grab_bag.md:189:2:189:23
 UNDECLARED TYPE - syntax_grab_bag.md:201:9:201:14
-INVALID IF CONDITION - syntax_grab_bag.md:70:5:70:5
-INCOMPATIBLE MATCH PATTERNS - syntax_grab_bag.md:84:2:84:2
-TOO FEW ARGUMENTS - syntax_grab_bag.md:155:2:157:3
-TYPE MISMATCH - syntax_grab_bag.md:168:4:169:12
+TYPE MISMATCH - syntax_grab_bag.md:70:5:70:8
+TYPE MISMATCH - syntax_grab_bag.md:84:2:84:2
+TOO FEW ARGS - syntax_grab_bag.md:155:2:157:3
+TYPE MISMATCH - syntax_grab_bag.md:167:3:167:3
+TYPE MISMATCH - syntax_grab_bag.md:146:15:146:18
+MISSING METHOD - syntax_grab_bag.md:176:12:176:22
++ - :0:0:0:0
 TYPE MISMATCH - syntax_grab_bag.md:144:9:196:2
 TYPE MISMATCH - syntax_grab_bag.md:150:3:150:6
 # PROBLEMS
@@ -638,7 +640,7 @@ Is there an `import` or `exposing` missing up-top?
 
 **syntax_grab_bag.md:175:3:175:15:**
 ```roc
-		Stdout.line!("Adding ${n} to ${$number}")
+		Stdout.line!("Adding ${n} to ${number}")
 ```
 		^^^^^^^^^^^^
 
@@ -710,18 +712,6 @@ Is there an `import` or `exposing` missing up-top?
 	                    ^^^
 
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented: unsupported operator
-
-**syntax_grab_bag.md:188:18:188:32:**
-```roc
-	bin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
-```
-	                ^^^^^^^^^^^^^^
-
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
-
-
 **UNDEFINED VARIABLE**
 Nothing is named `some_fn` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -771,7 +761,7 @@ Is there an `import` or `exposing` missing up-top?
 
 **syntax_grab_bag.md:193:4:193:13:**
 ```roc
-			Num.toStr($number) # Comment after string interpolation expr
+			Num.toStr(number) # Comment after string interpolation expr
 ```
 			^^^^^^^^^
 
@@ -783,7 +773,7 @@ If you don't need this variable, prefix it with an underscore like `_tag_with_pa
 The unused variable is declared here:
 **syntax_grab_bag.md:164:2:164:18:**
 ```roc
-	tag_with_payload = Ok($number)
+	tag_with_payload = Ok(number)
 ```
 	^^^^^^^^^^^^^^^^
 
@@ -847,22 +837,22 @@ tuple : Value((a, b, c))
         ^^^^^
 
 
-**INVALID IF CONDITION**
-This `if` condition needs to be a _Bool_:
-**syntax_grab_bag.md:70:5:**
+**TYPE MISMATCH**
+This `if` condition must evaluate to a `Bool`–either `True` or `False`:
+**syntax_grab_bag.md:70:5:70:8:**
 ```roc
 	if num {
 ```
-    ^^^
+	   ^^^
 
-Right now, it has the type:
+It is:
 
     U64
 
-Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
+But I need this to be a `Bool` value.
 
-**INCOMPATIBLE MATCH PATTERNS**
-The pattern in the fourth branch of this `match` differs from previous ones:
+**TYPE MISMATCH**
+The fourth branch of this `match` does not match the previous ones:
 **syntax_grab_bag.md:84:2:**
 ```roc
 	match a {
@@ -923,18 +913,18 @@ The pattern in the fourth branch of this `match` differs from previous ones:
 ```
   ^^^^^
 
-The fourth pattern has this type:
+This fourth branch is trying to match:
 
     Str
 
-But all the previous patterns have this type: 
+But the expression between the `match` parenthesis has the type:
 
-    [Red, ..[Blue, Green, .._others]]
+    [Red, ..[Blue, Green, ..]]
 
-All patterns in an `match` must have compatible types.
+These can never match! Either the pattern or expression has a problem.
 
-**TOO FEW ARGUMENTS**
-The function `match_time` expects 2 arguments, but 1 was provided:
+**TOO FEW ARGS**
+The `match_time` function expects 2 arguments, but it got 1 instead:
 **syntax_grab_bag.md:155:2:157:3:**
 ```roc
 	match_time(
@@ -942,16 +932,20 @@ The function `match_time` expects 2 arguments, but 1 was provided:
 	)
 ```
 
-The function has the signature:
+The `match_time` function has the type:
 
-    [Red, ..[Blue, Green, .._others]], _arg -> Error
+    [Red, ..[Blue, Green, ..]], _arg -> Error
+
+Are there any missing commas?
 
 **TYPE MISMATCH**
 The first argument being passed to this function has the wrong type:
-**syntax_grab_bag.md:168:4:169:12:**
+**syntax_grab_bag.md:167:3:**
 ```roc
+		add_one(
 			dbg # After dbg in list
-				$number, # after dbg expr as arg
+				number, # after dbg expr as arg
+		), # Comment one
 ```
 
 This argument has the type:
@@ -963,12 +957,45 @@ But `add_one` needs the first argument to be:
     U64
 
 **TYPE MISMATCH**
+This number is being used where a non-number type is needed:
+**syntax_grab_bag.md:146:15:146:18:**
+```roc
+	var number = 123
+```
+	             ^^^
+
+The type was determined to be non-numeric here:
+**syntax_grab_bag.md:175:34:175:40:**
+```roc
+		Stdout.line!("Adding ${n} to ${number}")
+```
+		                               ^^^^^^
+
+Other code expects this to have the type:
+
+    Str
+
+**MISSING METHOD**
+The value before this **+** operator has a type that doesn't have a **plus** method:
+**syntax_grab_bag.md:176:12:176:22:**
+```roc
+		number = number + n
+```
+		         ^^^^^^^^^^
+
+The value's type, which does not have a method named**plus**, is:
+
+    Str
+
+**Hint:** The **+** operator calls a method named **plus** on the value preceding it, passing the value after the operator as the one argument.
+
+**TYPE MISMATCH**
 This expression is used in an unexpected way:
 **syntax_grab_bag.md:144:9:196:2:**
 ```roc
 main! = |_| { # Yeah I can leave a comment here
 	world = "World"
-	var $number = 123
+	var number = 123
 	expect blah == 1
 	tag = Blue
 	return # Comment after return keyword
@@ -986,19 +1013,19 @@ main! = |_| { # Yeah I can leave a comment here
 	)
 	crash # Comment after crash keyword
 		"Unreachable!" # Comment after crash statement
-	tag_with_payload = Ok($number)
+	tag_with_payload = Ok(number)
 	interpolated = "Hello, ${world}"
 	list = [
 		add_one(
 			dbg # After dbg in list
-				$number, # after dbg expr as arg
+				number, # after dbg expr as arg
 		), # Comment one
 		456, # Comment two
 		789, # Comment three
 	]
 	for n in list {
-		Stdout.line!("Adding ${n} to ${$number}")
-		$number = $number + n
+		Stdout.line!("Adding ${n} to ${number}")
+		number = number + n
 	}
 	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
 	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
@@ -1015,7 +1042,7 @@ main! = |_| { # Yeah I can leave a comment here
 	Stdout.line!(interpolated)?
 	Stdout.line!(
 		"How about ${ # Comment after string interpolation open
-			Num.toStr($number) # Comment after string interpolation expr
+			Num.toStr(number) # Comment after string interpolation expr
 		} as a string?",
 	)
 } # Comment after top-level decl
@@ -1025,9 +1052,11 @@ It has the type:
 
     List(Error) => Try({  }, _d)
 
-But the type annotation says it should have the type:
+But the annotation say it should be:
 
     List(Error) -> Try({  }, _d)
+
+**Hint:** This function is effectful, but a pure function is expected.
 
 **TYPE MISMATCH**
 This `return` does not match the function's return type:
@@ -1039,7 +1068,7 @@ This `return` does not match the function's return type:
 
 It has the type:
 
-    [Blue, .._others]
+    [Blue, ..]
 
 But the function's return type is:
 
@@ -1252,7 +1281,8 @@ EndOfFile,
 					(text "line!"))
 				(exposed-lower-ident
 					(text "write!"))))
-		(s-import (raw "pf.StdoutMultiline")
+		(s-import (raw "pf # Comment after qualifier
+		.StdoutMultiline")
 			(exposing
 				(exposed-lower-ident
 					(text "line!"))
@@ -1576,7 +1606,7 @@ EndOfFile,
 							(p-ident (raw "world"))
 							(e-string
 								(e-string-part (raw "World"))))
-						(s-var (name "$number")
+						(s-var (name "number")
 							(e-int (raw "123")))
 						(s-expect
 							(e-binop (op "==")
@@ -1602,7 +1632,7 @@ EndOfFile,
 							(p-ident (raw "tag_with_payload"))
 							(e-apply
 								(e-tag (raw "Ok"))
-								(e-ident (raw "$number"))))
+								(e-ident (raw "number"))))
 						(s-decl
 							(p-ident (raw "interpolated"))
 							(e-string
@@ -1615,7 +1645,7 @@ EndOfFile,
 								(e-apply
 									(e-ident (raw "add_one"))
 									(e-dbg
-										(e-ident (raw "$number"))))
+										(e-ident (raw "number"))))
 								(e-int (raw "456"))
 								(e-int (raw "789"))))
 						(s-for
@@ -1629,12 +1659,12 @@ EndOfFile,
 											(e-string-part (raw "Adding "))
 											(e-ident (raw "n"))
 											(e-string-part (raw " to "))
-											(e-ident (raw "$number"))
+											(e-ident (raw "number"))
 											(e-string-part (raw ""))))
 									(s-decl
-										(p-ident (raw "$number"))
+										(p-ident (raw "number"))
 										(e-binop (op "+")
-											(e-ident (raw "$number"))
+											(e-ident (raw "number"))
 											(e-ident (raw "n")))))))
 						(s-decl
 							(p-ident (raw "record"))
@@ -1741,7 +1771,7 @@ EndOfFile,
 								(e-string-part (raw "How about "))
 								(e-apply
 									(e-ident (raw "Num.toStr"))
-									(e-ident (raw "$number")))
+									(e-ident (raw "number")))
 								(e-string-part (raw " as a string?"))))))))
 		(s-type-anno (name "empty")
 			(ty-record))
@@ -1770,7 +1800,212 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+# This is a module comment!
+app [main!] { pf: platform "../basic-cli/platform.roc" }
+
+import pf.Stdout exposing [line!, write!]
+
+import # Comment after import keyword
+	pf.StdoutMultiline # Comment after ident
+		exposing [ # Comment after exposing open
+			line!, # Comment after exposed item
+			write!, # Another after exposed item
+		] # Comment after exposing close
+
+import pkg.Something exposing [func as function, Type as ValueCategory, Custom.*]
+
+import BadName as GoodName
+import
+	BadNameMultiline
+		as
+		GoodNameMultiline
+
+Map(a, b) : List(a), (a -> b) -> List(b)
+MapML( # Comment here
+	a, # And here
+	b,
+) # And after the last arg
+	: # And after the colon
+		List( # Inside Tag args
+			a, # After tag arg
+		),
+		(a -> b) -> # After arrow
+			List( # Inside tag args
+				b,
+			) # And after the type decl
+
+Foo : (Bar, Baz)
+
+FooMultiline : ( # Comment after pattern tuple open
+	Bar, # Comment after pattern tuple item
+	Baz, # Another after pattern tuple item
+) # Comment after pattern tuple close
+
+Some(a) : { foo : Ok(a), bar : Something }
+SomeMl(a) : { # After record open
+	foo : Ok(a), # After field
+	bar : Something, # After last field
+}
+
+SomeMultiline(a) : { # Comment after pattern record open
+	foo # After field name
+		: # Before field anno
+			Ok(a), # Comment after pattern record field
+	bar : Something, # Another after pattern record field
+} # Comment after pattern record close
+
+Maybe(a) : [Some(a), None]
+
+MaybeMultiline(a) : [ # Comment after tag union open
+	Some(a), # Comment after tag union member
+	None, # Another after tag union member
+] # Comment after tag union close
+
+SomeFunc(a) : Maybe(a), a -> Maybe(a)
+
+add_one_oneline = |num| if num 2 else 5
+
+add_one : U64 -> U64
+add_one = |num| {
+	other = 1
+	if num {
+		dbg # After debug
+			some_func() # After debug expr
+		0
+	} else {
+		dbg 123
+		other
+	}
+}
+
+match_time = |
+	a, # After arg
+	b,
+| # After args
+	match a {
+		Blue | Green | Red => {
+			x = 12
+			x
+		}
+		Blue # After pattern in alt
+		| # Before pattern in alt
+			Green
+		| Red # After alt pattern
+			=> {
+				x = 12
+				x
+			}
+		lower # After pattern comment
+			=> 1
+		"foo" => # After arrow comment
+			100
+		"foo" | "bar" => 200
+		[1, 2, 3, .. as rest] # After pattern comment
+			=> # After arrow comment
+				123 # After branch comment
+
+		# Just a random comment
+
+		[1, 2 | 5, 3, .. as rest] => 123
+		[
+			1,
+			2 | 5,
+			3,
+			.. # After DoubleDot
+				as # Before alias
+					rest, # After last pattern in list
+		] => 123
+		3.14 => 314
+		3.14 | 6.28 => 314
+		(1, 2, 3) => 123
+		(1, 2 | 5, 3) => 123
+		{ foo: 1, bar: 2, ..rest } => 12->add(34)
+		{ # After pattern record open
+			foo # After pattern record field name
+				: # Before pattern record field value
+					1, # After pattern record field
+			bar: 2,
+			.. # After spread operator
+				rest, # After last field
+		} => 12
+		{ foo: 1, bar: 2 | 7 } => 12
+		{
+			foo: 1,
+			bar: 2 | 7, # After last record field
+		} => 12
+		Ok(123) => 123
+		Ok(Some(dude)) => dude
+		TwoArgs("hello", Some("world")) => 1000
+	}
+
+expect # Comment after expect keyword
+	blah == 1 # Comment after expect statement
+
+main! : List(String) -> Try({}, _)
+main! = |_| { # Yeah I can leave a comment here
+	world = "World"
+	var number = 123
+	expect blah == 1
+	tag = Blue
+	return # Comment after return keyword
+		tag # Comment after return statement
+
+	# Just a random comment!
+
+	...
+	match_time(
+		..., # Single args with comment
+	)
+	some_func(
+		dbg # After debug
+			42, # After debug expr
+	)
+	crash # Comment after crash keyword
+		"Unreachable!" # Comment after crash statement
+	tag_with_payload = Ok(number)
+	interpolated = "Hello, ${world}"
+	list = [
+		add_one(
+			dbg # After dbg in list
+				number, # after dbg expr as arg
+		), # Comment one
+		456, # Comment two
+		789, # Comment three
+	]
+	for n in list {
+		Stdout.line!("Adding ${n} to ${number}")
+		number = number + n
+	}
+	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
+	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
+	multiline_tuple = (
+		123,
+		"World",
+		tag1,
+		Ok(world), # This one has a comment
+		(nested, tuple),
+		[1, 2, 3],
+	)
+	bin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
+	static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
+	Stdout.line!(interpolated)?
+	Stdout.line!(
+		"How about ${ # Comment after string interpolation open
+			Num.toStr(number) # Comment after string interpolation expr
+		} as a string?",
+	)
+} # Comment after top-level decl
+
+empty : {}
+empty = {}
+
+tuple : Value((a, b, c))
+
+expect {
+	foo = 1 # This should work too
+	blah = 1
+	blah == foo
+}
 ~~~
 # CANONICALIZE
 ~~~clojure
@@ -2048,7 +2283,7 @@ NO CHANGE
 						(e-string
 							(e-literal (string "World"))))
 					(s-var
-						(p-assign (ident "$number"))
+						(p-assign (ident "number"))
 						(e-num (value "123")))
 					(s-expect
 						(e-binop (op "eq")
@@ -2078,7 +2313,7 @@ NO CHANGE
 						(e-tag (name "Ok")
 							(args
 								(e-lookup-local
-									(p-assign (ident "$number"))))))
+									(p-assign (ident "number"))))))
 					(s-let
 						(p-assign (ident "interpolated"))
 						(e-string
@@ -2095,7 +2330,7 @@ NO CHANGE
 										(p-assign (ident "add_one")))
 									(e-dbg
 										(e-lookup-local
-											(p-assign (ident "$number")))))
+											(p-assign (ident "number")))))
 								(e-num (value "456"))
 								(e-num (value "789")))))
 					(s-for
@@ -2112,13 +2347,13 @@ NO CHANGE
 											(p-assign (ident "n")))
 										(e-literal (string " to "))
 										(e-lookup-local
-											(p-assign (ident "$number")))
+											(p-assign (ident "number")))
 										(e-literal (string "")))))
 							(s-reassign
-								(p-assign (ident "$number"))
+								(p-assign (ident "number"))
 								(e-binop (op "add")
 									(e-lookup-local
-										(p-assign (ident "$number")))
+										(p-assign (ident "number")))
 									(e-lookup-local
 										(p-assign (ident "n")))))
 							(e-empty_record)))
@@ -2189,7 +2424,28 @@ NO CHANGE
 						(p-assign (ident "bin_op_result"))
 						(e-binop (op "or")
 							(e-binop (op "gt")
-								(e-runtime-error (tag "not_implemented"))
+								(e-match
+									(match
+										(cond
+											(e-tag (name "Err")
+												(args
+													(e-runtime-error (tag "ident_not_in_scope")))))
+										(branches
+											(branch
+												(patterns
+													(pattern (degenerate false)
+														(p-nominal-external (builtin)
+															(p-applied-tag))))
+												(value
+													(e-lookup-local
+														(p-assign (ident "#ok")))))
+											(branch
+												(patterns
+													(pattern (degenerate false)
+														(p-nominal-external (builtin)
+															(p-applied-tag))))
+												(value
+													(e-num (value "12")))))))
 								(e-binop (op "mul")
 									(e-num (value "5"))
 									(e-num (value "5"))))
@@ -2360,7 +2616,7 @@ NO CHANGE
 							(e-call
 								(e-runtime-error (tag "qualified_ident_does_not_exist"))
 								(e-lookup-local
-									(p-assign (ident "$number"))))
+									(p-assign (ident "number"))))
 							(e-literal (string " as a string?")))))))
 		(annotation
 			(ty-fn (effectful false)
@@ -2509,9 +2765,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Error)])]"))
+		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "Error -> U64"))
-		(patt (type "[Red, ..[Blue, Green, .._others]], _arg -> Error"))
+		(patt (type "[Red, ..[Blue, Green, ..]], _arg -> Error"))
 		(patt (type "List(Error) -> Try({  }, _d)"))
 		(patt (type "{}"))
 		(patt (type "Error")))
@@ -2555,9 +2811,9 @@ NO CHANGE
 				(ty-args
 					(ty-rigid-var (name "a"))))))
 	(expressions
-		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Error)])]"))
+		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "Error -> U64"))
-		(expr (type "[Red, ..[Blue, Green, .._others]], _arg -> Error"))
+		(expr (type "[Red, ..[Blue, Green, ..]], _arg -> Error"))
 		(expr (type "List(Error) -> Try({  }, _d)"))
 		(expr (type "{}"))
 		(expr (type "Error"))))

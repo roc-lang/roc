@@ -213,7 +213,6 @@ INVALID ASSIGNMENT TO ITSELF - fuzz_crash_027.md:132:50:132:55
 UNDEFINED VARIABLE - fuzz_crash_027.md:136:3:136:7
 UNDEFINED VARIABLE - fuzz_crash_027.md:138:4:138:10
 UNDEFINED VARIABLE - fuzz_crash_027.md:141:14:141:17
-NOT IMPLEMENTED - fuzz_crash_027.md:141:10:141:24
 UNDEFINED VARIABLE - fuzz_crash_027.md:142:10:142:17
 UNDEFINED VARIABLE - fuzz_crash_027.md:142:18:142:22
 DOES NOT EXIST - fuzz_crash_027.md:145:4:145:13
@@ -225,9 +224,13 @@ UNUSED VARIABLE - fuzz_crash_027.md:141:2:141:7
 UNUSED VARIABLE - fuzz_crash_027.md:142:2:142:7
 UNDECLARED TYPE - fuzz_crash_027.md:153:9:153:14
 TOO FEW ARGS - fuzz_crash_027.md:21:3:22:4
-INVALID IF CONDITION - fuzz_crash_027.md:50:5:50:5
-INCOMPATIBLE MATCH PATTERNS - fuzz_crash_027.md:64:2:64:2
-TOO FEW ARGUMENTS - fuzz_crash_027.md:111:2:113:3
+TYPE MISMATCH - fuzz_crash_027.md:50:5:50:8
+TYPE MISMATCH - fuzz_crash_027.md:64:2:64:2
+TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
+TYPE MISMATCH - fuzz_crash_027.md:125:6:125:9
+TYPE MISMATCH - fuzz_crash_027.md:102:15:102:18
+MISSING METHOD - fuzz_crash_027.md:129:12:129:22
++ - :0:0:0:0
 TYPE MISMATCH - fuzz_crash_027.md:100:9:148:2
 TYPE MISMATCH - fuzz_crash_027.md:106:3:106:6
 # PROBLEMS
@@ -766,18 +769,6 @@ Is there an `import` or `exposing` missing up-top?
 	            ^^^
 
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented: unsupported operator
-
-**fuzz_crash_027.md:141:10:141:24:**
-```roc
-	bsult = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
-```
-	        ^^^^^^^^^^^^^^
-
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
-
-
 **UNDEFINED VARIABLE**
 Nothing is named `some_fn` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -902,22 +893,22 @@ The type _List_ expects 1 argument, but got 0 instead.
 ```
 
 
-**INVALID IF CONDITION**
-This `if` condition needs to be a _Bool_:
-**fuzz_crash_027.md:50:5:**
+**TYPE MISMATCH**
+This `if` condition must evaluate to a `Bool`–either `True` or `False`:
+**fuzz_crash_027.md:50:5:50:8:**
 ```roc
 	if num {
 ```
-    ^^^
+	   ^^^
 
-Right now, it has the type:
+It is:
 
     U64
 
-Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
+But I need this to be a `Bool` value.
 
-**INCOMPATIBLE MATCH PATTERNS**
-The pattern in the third branch of this `match` differs from previous ones:
+**TYPE MISMATCH**
+The third branch of this `match` does not match the previous ones:
 **fuzz_crash_027.md:64:2:**
 ```roc
 	match a {lue | Red => {
@@ -954,18 +945,18 @@ ist
 ```
   ^^^^^
 
-The third pattern has this type:
+This third branch is trying to match:
 
     Str
 
-But all the previous patterns have this type: 
+But the expression between the `match` parenthesis has the type:
 
-    [Red, Blue, .._others]
+    [Red, Blue, ..]
 
-All patterns in an `match` must have compatible types.
+These can never match! Either the pattern or expression has a problem.
 
-**TOO FEW ARGUMENTS**
-The function `match_time` expects 2 arguments, but 1 was provided:
+**TOO FEW ARGS**
+The `match_time` function expects 2 arguments, but it got 1 instead:
 **fuzz_crash_027.md:111:2:113:3:**
 ```roc
 	match_time(
@@ -973,9 +964,63 @@ The function `match_time` expects 2 arguments, but 1 was provided:
 	)
 ```
 
-The function has the signature:
+The `match_time` function has the type:
 
-    [Blue, Red, .._others], _arg -> Error
+    [Blue, Red, ..], _arg -> Error
+
+Are there any missing commas?
+
+**TYPE MISMATCH**
+This number is being used where a non-number type is needed:
+**fuzz_crash_027.md:125:6:125:9:**
+```roc
+		),	456, # ee
+```
+		  	^^^
+
+The type was determined to be non-numeric here:
+**fuzz_crash_027.md:128:18:128:19:**
+```roc
+	line!("Adding ${n} to ${number}")
+```
+	                ^
+
+Other code expects this to have the type:
+
+    Str
+
+**TYPE MISMATCH**
+This number is being used where a non-number type is needed:
+**fuzz_crash_027.md:102:15:102:18:**
+```roc
+	var number = 123
+```
+	             ^^^
+
+The type was determined to be non-numeric here:
+**fuzz_crash_027.md:128:26:128:32:**
+```roc
+	line!("Adding ${n} to ${number}")
+```
+	                        ^^^^^^
+
+Other code expects this to have the type:
+
+    Str
+
+**MISSING METHOD**
+The value before this **+** operator has a type that doesn't have a **plus** method:
+**fuzz_crash_027.md:129:12:129:22:**
+```roc
+		number = number + n
+```
+		         ^^^^^^^^^^
+
+The value's type, which does not have a method named**plus**, is:
+
+    Str
+
+**Hint:** The **+** operator calls a method named **plus** on the value preceding it, passing the value after the operator as the one argument.
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -1036,9 +1081,11 @@ It has the type:
 
     List(Error) => Try({  }, _d)
 
-But the type annotation says it should have the type:
+But the annotation say it should be:
 
     List(Error) -> Try({  }, _d)
+
+**Hint:** This function is effectful, but a pure function is expected.
 
 **TYPE MISMATCH**
 This `return` does not match the function's return type:
@@ -1050,7 +1097,7 @@ This `return` does not match the function's return type:
 
 It has the type:
 
-    [Blue, .._others]
+    [Blue, ..]
 
 But the function's return type is:
 
@@ -2184,7 +2231,28 @@ expect {
 						(p-assign (ident "bsult"))
 						(e-binop (op "or")
 							(e-binop (op "gt")
-								(e-runtime-error (tag "not_implemented"))
+								(e-match
+									(match
+										(cond
+											(e-tag (name "Err")
+												(args
+													(e-runtime-error (tag "ident_not_in_scope")))))
+										(branches
+											(branch
+												(patterns
+													(pattern (degenerate false)
+														(p-nominal-external (builtin)
+															(p-applied-tag))))
+												(value
+													(e-lookup-local
+														(p-assign (ident "#ok")))))
+											(branch
+												(patterns
+													(pattern (degenerate false)
+														(p-nominal-external (builtin)
+															(p-applied-tag))))
+												(value
+													(e-num (value "12")))))))
 								(e-binop (op "mul")
 									(e-num (value "5"))
 									(e-num (value "5"))))
@@ -2444,9 +2512,9 @@ expect {
 (inferred-types
 	(defs
 		(patt (type "(Error, Error)"))
-		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Error)])]"))
+		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "U64 -> U64"))
-		(patt (type "[Red, Blue, .._others], _arg -> Error"))
+		(patt (type "[Red, Blue, ..], _arg -> Error"))
 		(patt (type "List(Error) -> Try({  }, _d)"))
 		(patt (type "{}"))
 		(patt (type "Error")))
@@ -2481,9 +2549,9 @@ expect {
 					(ty-rigid-var (name "a"))))))
 	(expressions
 		(expr (type "(Error, Error)"))
-		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Error)])]"))
+		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "U64 -> U64"))
-		(expr (type "[Red, Blue, .._others], _arg -> Error"))
+		(expr (type "[Red, Blue, ..], _arg -> Error"))
 		(expr (type "List(Error) -> Try({  }, _d)"))
 		(expr (type "{}"))
 		(expr (type "Error"))))

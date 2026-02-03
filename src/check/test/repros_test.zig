@@ -122,6 +122,119 @@ test "check - repro - issue 8919" {
     try test_env.assertNoErrors();
 }
 
+test "check - repro - issue 9129" {
+    // Type variable becomes 'rigid' and won't unify with concrete types when
+    // captured in a closure created inside a function body
+    const src =
+        \\BugRepro(a) := { run : {} -> a }.{
+        \\    wrap : a -> BugRepro(a)
+        \\    wrap = |value| { run: |{}| value }
+        \\
+        \\    unwrap : BugRepro(a) -> a
+        \\    unwrap = |b| (b.run)({})
+        \\}
+        \\
+        \\expect BugRepro.unwrap(BugRepro.wrap("hi")) == "hi"
+    ;
+
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
+
+test "check - repro - issue 9129 simpler" {
+    // Simplified version: just wrap a value without closure
+    const src =
+        \\BugRepro(a) := { value : a }.{
+        \\    wrap : a -> BugRepro(a)
+        \\    wrap = |v| { value: v }
+        \\}
+        \\
+        \\expect (BugRepro.wrap("hi")).value == "hi"
+    ;
+
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
+
+test "check - repro - issue 9129 closure capture" {
+    // The issue is specifically about closures capturing type variables
+    // This test uses a record with a closure field without nominal types
+    const src =
+        \\main! = |_| {}
+        \\
+        \\# Simple version that tests just the closure capture
+        \\wrap : a -> ({} -> a)
+        \\wrap = |value| |{}| value
+        \\
+        \\# Call the wrapped closure
+        \\result = wrap("hi")({})
+        \\
+        \\expect result == "hi"
+    ;
+
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
+
+test "check - repro - issue 9129 - minimal closure capture" {
+    // Minimal test case: a polymorphic function that returns a closure capturing the type variable
+    const src =
+        \\main! = |_| {}
+        \\
+        \\wrap : a -> ({} -> a)
+        \\wrap = |value| |{}| value
+        \\
+        \\expect wrap("hi")({}) == "hi"
+    ;
+
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
+
+test "check - repro - issue 9129 - control no closure" {
+    // Control test: polymorphic function WITHOUT a closure - this should pass
+    const src =
+        \\main! = |_| {}
+        \\
+        \\identity : a -> a
+        \\identity = |value| value
+        \\
+        \\expect identity("hi") == "hi"
+    ;
+
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
+
+test "check - repro - issue 9129 - with explicit block" {
+    // Test with explicit block - still fails
+    const src =
+        \\main! = |_| {}
+        \\
+        \\wrap : a -> ({} -> a)
+        \\wrap = |value| {
+        \\    |{}| value
+        \\}
+        \\
+        \\expect wrap("hi")({}) == "hi"
+    ;
+
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
+
 test "check - repro - issue 8848" {
     // Pattern matching on recursive opaque type element retrieved from List
     const src =

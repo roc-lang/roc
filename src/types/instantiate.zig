@@ -25,7 +25,6 @@ const Tag = types_mod.Tag;
 const NominalType = types_mod.NominalType;
 const Tuple = types_mod.Tuple;
 const Rank = types_mod.Rank;
-const Mark = types_mod.Mark;
 const Ident = base.Ident;
 
 /// Type to manage instantiation.
@@ -148,7 +147,6 @@ pub const Instantiator = struct {
                     .{
                         .content = fresh_content,
                         .rank = self.current_rank,
-                        .mark = Mark.none,
                     },
                 );
 
@@ -170,7 +168,6 @@ pub const Instantiator = struct {
                     .{
                         .content = fresh_content,
                         .rank = self.current_rank,
-                        .mark = Mark.none,
                     },
                 );
 
@@ -441,10 +438,8 @@ pub const Instantiator = struct {
     }
 
     fn instantiateStaticDispatchConstraint(self: *Self, constraint: StaticDispatchConstraint) std.mem.Allocator.Error!StaticDispatchConstraint {
-        return StaticDispatchConstraint{
-            .fn_name = constraint.fn_name,
-            .fn_var = try self.instantiateVar(constraint.fn_var),
-            .origin = constraint.origin,
-        };
+        var result = constraint;
+        result.fn_var = try self.instantiateVar(constraint.fn_var);
+        return result;
     }
 };

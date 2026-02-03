@@ -22,6 +22,7 @@ const tracy = @import("tracy");
 
 const Repl = repl.Repl;
 const CrashContext = eval_mod.CrashContext;
+const roc_target = @import("roc_target");
 const CommonEnv = base.CommonEnv;
 const Check = check.Check;
 const CIR = can.CIR;
@@ -41,7 +42,6 @@ const LineColMode = base.SExprTree.LineColMode;
 const CacheModule = compile.CacheModule;
 const AST = parse.AST;
 const Report = reporting.Report;
-const types_problem_mod = check.problem;
 const parallel = base.parallel;
 
 var verbose_log: bool = false;
@@ -399,7 +399,7 @@ fn generateAllReports(
     // Generate type checking reports
     for (solver.problems.problems.items) |problem| {
         const empty_modules: []const *ModuleEnv = &.{};
-        var report_builder = types_problem_mod.ReportBuilder.init(
+        var report_builder = check.ReportBuilder.init(
             allocator,
             module_env,
             can_ir,
@@ -408,7 +408,7 @@ fn generateAllReports(
             snapshot_path,
             empty_modules,
             &solver.import_mapping,
-        );
+        ) catch continue;
         defer report_builder.deinit();
 
         const report = report_builder.build(problem) catch |err| {
@@ -1334,7 +1334,7 @@ fn processSnapshotContent(
             const ComptimeEvaluator = eval_mod.ComptimeEvaluator;
             const builtin_types = BuiltinTypes.init(config.builtin_indices, builtin_env, builtin_env, builtin_env);
             const imported_envs: []const *const ModuleEnv = builtin_modules.items;
-            var comptime_evaluator = try ComptimeEvaluator.init(allocator, can_ir, imported_envs, &solver.problems, builtin_types, builtin_env, &solver.import_mapping);
+            var comptime_evaluator = try ComptimeEvaluator.init(allocator, can_ir, imported_envs, &solver.problems, builtin_types, builtin_env, &solver.import_mapping, roc_target.RocTarget.detectNative());
             defer comptime_evaluator.deinit();
 
             // First evaluate any top-level defs
@@ -3318,41 +3318,60 @@ fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, config:
 
     // If flag --fuzz-corpus is passed, write the SOURCE to our corpus
     if (config.maybe_fuzz_corpus_path) |path| {
-        const rand_file_name = [_][]const u8{
-            path,
-            &[_]u8{
-                rand.intRangeAtMost(u8, 'a', 'z'),
-                rand.intRangeAtMost(u8, 'a', 'z'),
-                rand.intRangeAtMost(u8, 'a', 'z'),
-                rand.intRangeAtMost(u8, 'a', 'z'),
-                rand.intRangeAtMost(u8, 'a', 'z'),
-                rand.intRangeAtMost(u8, 'a', 'z'),
-                rand.intRangeAtMost(u8, 'a', 'z'),
-                rand.intRangeAtMost(u8, 'a', 'z'),
-                '.',
-                'r',
-                'o',
-                'c',
-            },
-        };
+        // For REPL snapshots, write each expression (without ») as a separate corpus file
+        if (content.meta.node_type == .repl) {
+            var parts = std.mem.splitSequence(u8, content.source, "»");
+            // Skip the first part (before the first »)
+            _ = parts.next();
 
-        const corpus_file_path = try std.fs.path.join(gpa, &rand_file_name);
-        defer gpa.free(corpus_file_path);
-
-        var corpus_file = std.fs.cwd().createFile(corpus_file_path, .{}) catch |err| {
-            std.log.err("failed to create file in '{s}': {s}", .{ config.maybe_fuzz_corpus_path.?, @errorName(err) });
-            return false;
-        };
-        defer corpus_file.close();
-
-        var write_buffer: [4096]u8 = undefined;
-        var corpus_writer = corpus_file.writer(&write_buffer);
-        const writer = &corpus_writer.interface;
-        try writer.writeAll(content.source);
-        try writer.flush();
+            while (parts.next()) |part| {
+                const trimmed = std.mem.trim(u8, part, " \t\r\n");
+                if (trimmed.len > 0) {
+                    try writeCorpusFile(gpa, path, trimmed, rand);
+                }
+            }
+        } else {
+            try writeCorpusFile(gpa, path, content.source, rand);
+        }
     }
 
     return success;
+}
+
+/// Write a single source to the fuzz corpus with a random filename
+fn writeCorpusFile(gpa: Allocator, path: []const u8, source: []const u8, rng: std.Random) !void {
+    const rand_file_name = [_][]const u8{
+        path,
+        &[_]u8{
+            rng.intRangeAtMost(u8, 'a', 'z'),
+            rng.intRangeAtMost(u8, 'a', 'z'),
+            rng.intRangeAtMost(u8, 'a', 'z'),
+            rng.intRangeAtMost(u8, 'a', 'z'),
+            rng.intRangeAtMost(u8, 'a', 'z'),
+            rng.intRangeAtMost(u8, 'a', 'z'),
+            rng.intRangeAtMost(u8, 'a', 'z'),
+            rng.intRangeAtMost(u8, 'a', 'z'),
+            '.',
+            'r',
+            'o',
+            'c',
+        },
+    };
+
+    const corpus_file_path = try std.fs.path.join(gpa, &rand_file_name);
+    defer gpa.free(corpus_file_path);
+
+    var corpus_file = std.fs.cwd().createFile(corpus_file_path, .{}) catch |err| {
+        std.log.err("failed to create file in '{s}': {s}", .{ path, @errorName(err) });
+        return;
+    };
+    defer corpus_file.close();
+
+    var write_buffer: [4096]u8 = undefined;
+    var corpus_writer = corpus_file.writer(&write_buffer);
+    const writer = &corpus_writer.interface;
+    try writer.writeAll(source);
+    try writer.flush();
 }
 
 fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, config: *const Config) !bool {

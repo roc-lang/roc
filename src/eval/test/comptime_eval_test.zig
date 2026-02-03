@@ -10,6 +10,7 @@ const compiled_builtins = @import("compiled_builtins");
 const ComptimeEvaluator = @import("../comptime_evaluator.zig").ComptimeEvaluator;
 const BuiltinTypes = @import("../builtins.zig").BuiltinTypes;
 const builtin_loading = @import("../builtin_loading.zig");
+const roc_target = @import("roc_target");
 
 const Can = can.Can;
 const Check = check.Check;
@@ -90,7 +91,7 @@ fn parseCheckAndEvalModuleWithName(src: []const u8, module_name: []const u8) !Ev
 
     // Create and run comptime evaluator with real builtins
     const builtin_types = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
-    const evaluator = try ComptimeEvaluator.init(gpa, module_env, &.{}, problems, builtin_types, builtin_module.env, &checker.import_mapping);
+    const evaluator = try ComptimeEvaluator.init(gpa, module_env, &.{}, problems, builtin_types, builtin_module.env, &checker.import_mapping, roc_target.RocTarget.detectNative());
 
     return .{
         .module_env = module_env,
@@ -194,7 +195,7 @@ fn parseCheckAndEvalModuleWithImport(src: []const u8, import_name: []const u8, i
 
     // Create and run comptime evaluator with real builtins
     const builtin_types = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
-    const evaluator = try ComptimeEvaluator.init(gpa, module_env, other_envs_slice, problems, builtin_types, builtin_module.env, &checker.import_mapping);
+    const evaluator = try ComptimeEvaluator.init(gpa, module_env, other_envs_slice, problems, builtin_types, builtin_module.env, &checker.import_mapping, roc_target.RocTarget.detectNative());
 
     return .{
         .module_env = module_env,

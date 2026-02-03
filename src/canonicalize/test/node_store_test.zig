@@ -259,6 +259,13 @@ test "NodeStore round trip - Expressions" {
         },
     });
     try expressions.append(gpa, CIR.Expr{
+        .e_lookup_pending = .{
+            .module_idx = rand_idx_u16(CIR.Import.Idx),
+            .ident_idx = rand_ident_idx(),
+            .region = rand_region(),
+        },
+    });
+    try expressions.append(gpa, CIR.Expr{
         .e_lookup_required = .{
             .requires_idx = ModuleEnv.RequiredType.SafeList.Idx.fromU32(rand.random().int(u32)),
         },
@@ -271,6 +278,12 @@ test "NodeStore round trip - Expressions" {
     try expressions.append(gpa, CIR.Expr{
         .e_tuple = .{
             .elems = CIR.Expr.Span{ .span = rand_span() },
+        },
+    });
+    try expressions.append(gpa, CIR.Expr{
+        .e_tuple_access = .{
+            .tuple = rand_idx(CIR.Expr.Idx),
+            .elem_index = rand.random().int(u32) % 10,
         },
     });
     try expressions.append(gpa, CIR.Expr{
@@ -640,6 +653,13 @@ test "NodeStore round trip - Diagnostics" {
 
     try diagnostics.append(gpa, CIR.Diagnostic{
         .type_module_missing_matching_type = .{
+            .module_name = rand_ident_idx(),
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
+        .type_module_has_alias_not_nominal = .{
             .module_name = rand_ident_idx(),
             .region = rand_region(),
         },

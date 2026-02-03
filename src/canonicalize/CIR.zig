@@ -780,6 +780,13 @@ pub const Import = struct {
             self.resolved_modules.deinit(allocator);
         }
 
+        /// Deinit only the hash map, not the SafeLists.
+        /// Used for cached modules where the SafeLists point into the cache buffer
+        /// but the map was heap-allocated during deserialization.
+        pub fn deinitMapOnly(self: *Store, allocator: std.mem.Allocator) void {
+            self.map.deinit(allocator);
+        }
+
         /// Get or create an Import.Idx for the given module name.
         /// The module name is first checked against existing imports by comparing strings.
         /// New imports are initially unresolved (UNRESOLVED_MODULE).
@@ -951,17 +958,15 @@ pub const Import = struct {
                 // Note: The map is not serialized as it's only used for deduplication during insertion
             }
 
-            /// Deserialize this Serialized struct into a Store
+            /// Deserialize into a Store value (no in-place modification of cache buffer).
             /// The base parameter is the base address of the serialized buffer in memory.
-            pub fn deserialize(self: *Serialized, base_addr: usize, allocator: std.mem.Allocator) std.mem.Allocator.Error!*Store {
-                // Overwrite ourself with the deserialized version, and return our pointer after casting it to Store.
-                const store = @as(*Store, @ptrFromInt(@intFromPtr(self)));
-
-                store.* = .{
+            /// Note: The map is freshly allocated and populated from the deserialized imports.
+            pub fn deserializeInto(self: *const Serialized, base_addr: usize, allocator: std.mem.Allocator) std.mem.Allocator.Error!Store {
+                var store = Store{
                     .map = .{}, // Will be repopulated below
-                    .imports = self.imports.deserialize(base_addr).*,
-                    .import_idents = self.import_idents.deserialize(base_addr).*,
-                    .resolved_modules = self.resolved_modules.deserialize(base_addr).*,
+                    .imports = self.imports.deserializeInto(base_addr),
+                    .import_idents = self.import_idents.deserializeInto(base_addr),
+                    .resolved_modules = self.resolved_modules.deserializeInto(base_addr),
                 };
 
                 // Pre-allocate the exact capacity needed for the map

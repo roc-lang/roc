@@ -1334,25 +1334,27 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                 var nested_import = false;
 
                 // Parse all uppercase segments: first.Second.Third...
-                var prev_upper_tok: ?TokenIdx = null;
-                var module_name_tok = self.pos;
+                // We track the first token (module_name_tok) and last token (last_upper_tok).
+                var last_upper_tok: TokenIdx = self.pos;
+                const module_name_tok = self.pos;
                 self.advance(); // Advance past first UpperIdent
 
                 // Keep consuming additional .UpperIdent segments
                 while (self.peek() == .NoSpaceDotUpperIdent or self.peek() == .DotUpperIdent) {
-                    prev_upper_tok = module_name_tok;
-                    module_name_tok = self.pos;
+                    last_upper_tok = self.pos;
                     self.advance();
                 }
 
                 // If we have multiple uppercase segments and no explicit 'as' or 'exposing',
                 // auto-expose the final segment
                 const has_explicit_clause = self.peek() == .KwAs or self.peek() == .KwExposing;
-                if (prev_upper_tok != null and !has_explicit_clause) {
+                const has_multiple_segments = last_upper_tok != module_name_tok;
+                if (has_multiple_segments and !has_explicit_clause) {
                     // Auto-expose pattern: import json.Parser.Config
                     // Module is everything before the last segment, last segment is auto-exposed
-                    const final_segment_tok = module_name_tok;
-                    module_name_tok = prev_upper_tok.?;
+                    // module_name_tok stays as the first uppercase token; the formatter will
+                    // iterate through consecutive uppercase tokens and stop before the exposed token.
+                    const final_segment_tok = last_upper_tok;
                     nested_import = true;
 
                     // Create exposed item for the final segment
@@ -1365,7 +1367,9 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                     try self.store.addScratchExposedItem(exposed_item);
                     exposes = try self.store.exposedItemSpanFrom(scratch_top);
                 } else {
-                    // Normal import: handle 'as' and 'exposing' clauses
+                    // Normal import with explicit 'as' or 'exposing' clause
+                    // module_name_tok stays as the first uppercase token; the formatter will
+                    // iterate through consecutive uppercase tokens to output the full path.
 
                     // Handle 'as' clause if present
                     if (self.peek() == .KwAs) {
@@ -2635,10 +2639,17 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
     if (expr) |e| {
         var expression = try self.parseExprSuffix(start, e);
 
-        while (self.peek() == .NoSpaceDotInt or self.peek() == .NoSpaceDotLowerIdent or self.peek() == .DotLowerIdent or self.peek() == .OpArrow) {
+        while (self.peek() == .NoSpaceDotInt or self.peek() == .DotInt or self.peek() == .NoSpaceDotLowerIdent or self.peek() == .DotLowerIdent or self.peek() == .OpArrow) {
             const tok = self.peek();
-            if (tok == .NoSpaceDotInt) {
-                return try self.pushMalformed(AST.Expr.Idx, .expr_no_space_dot_int, self.pos);
+            if (tok == .NoSpaceDotInt or tok == .DotInt) {
+                // Tuple element access: tuple.0, tuple.1, etc.
+                const elem_token = self.pos;
+                self.advance();
+                expression = try self.store.addExpr(.{ .tuple_access = .{
+                    .expr = expression,
+                    .elem_token = elem_token,
+                    .region = .{ .start = start, .end = self.pos },
+                } });
             } else if (self.peek() == .OpArrow) {
                 const s = self.pos;
                 self.advance();
@@ -3150,12 +3161,14 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAn
             self.advance(); // Advance past OpenRound
             const after_round = self.pos;
             const scratch_top = self.store.scratchTypeAnnoTop();
+            var saw_comma = false;
             while (self.peek() != .CloseRound and self.peek() != .OpArrow and self.peek() != .OpFatArrow and self.peek() != .EndOfFile) {
                 // Looking for args here so that we don't capture an un-parenthesized fn's args
                 try self.store.addScratchTypeAnno(try self.parseTypeAnno(.looking_for_args));
                 if (self.peek() != .Comma) {
                     break;
                 }
+                saw_comma = true;
                 self.advance(); // Advance past Comma
             }
             if (self.peek() == .OpArrow or self.peek() == .OpFatArrow) {
@@ -3204,10 +3217,19 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAn
                 }
                 self.advance(); // Advance past CloseRound
                 const annos = try self.store.typeAnnoSpanFrom(scratch_top);
-                anno = try self.store.addTypeAnno(.{ .tuple = .{
-                    .region = .{ .start = start, .end = self.pos },
-                    .annos = annos,
-                } });
+                // Single element without comma is parenthesized type, not tuple
+                // e.g., (Str) is parens, (Str,) is 1-element tuple
+                if (annos.span.len == 1 and !saw_comma) {
+                    anno = try self.store.addTypeAnno(.{ .parens = .{
+                        .anno = self.store.typeAnnoSlice(annos)[0],
+                        .region = .{ .start = start, .end = self.pos },
+                    } });
+                } else {
+                    anno = try self.store.addTypeAnno(.{ .tuple = .{
+                        .region = .{ .start = start, .end = self.pos },
+                        .annos = annos,
+                    } });
+                }
             }
         },
         .OpenCurly => {

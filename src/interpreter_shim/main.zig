@@ -16,6 +16,7 @@ const collections = @import("collections");
 const import_mapping_mod = types.import_mapping;
 const eval = @import("eval");
 const tracy = @import("tracy");
+const roc_target = @import("roc_target");
 
 // Module tracing flag - enabled via `zig build -Dtrace-modules`
 const trace_modules = if (@hasDecl(build_options, "trace_modules")) build_options.trace_modules else false;
@@ -760,7 +761,7 @@ fn setupModuleEnvFromSerialized(roc_ops: *RocOps, base_ptr: [*]align(1) u8, allo
 
         // Deserialize the ModuleEnv
         // The base parameter is the buffer base address - serialized offsets are relative to buffer start
-        env_ptrs[i] = env_serialized.deserialize(
+        env_ptrs[i] = env_serialized.deserializeInto(
             @intFromPtr(base_ptr), // buffer base address
             allocator,
             source,
@@ -817,7 +818,7 @@ fn createInterpreter(env_ptr: *ModuleEnv, app_env: ?*ModuleEnv, builtin_modules:
     traceDbg(roc_ops, "=== Creating Interpreter ===", .{});
     traceDbg(roc_ops, "imported_envs.len={d}, primary=\"{s}\"", .{ imported_envs.len, env_ptr.module_name });
 
-    var interpreter = eval.Interpreter.init(allocator, env_ptr, builtin_types, builtin_module_env, imported_envs, getShimImportMapping(), app_env, global_constant_strings_arena) catch {
+    var interpreter = eval.Interpreter.init(allocator, env_ptr, builtin_types, builtin_module_env, imported_envs, getShimImportMapping(), app_env, global_constant_strings_arena, roc_target.RocTarget.detectNative()) catch {
         roc_ops.crash("INTERPRETER SHIM: Interpreter initialization failed");
         return error.InterpreterSetupFailed;
     };

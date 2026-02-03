@@ -173,6 +173,10 @@ fn collectExprDependencies(
             }
         },
 
+        .e_tuple_access => |tuple_access| {
+            try collectExprDependencies(cir, tuple_access.tuple, dependencies, allocator);
+        },
+
         .e_tuple => |tuple| {
             for (cir.store.sliceExpr(tuple.elems)) |elem_idx| {
                 try collectExprDependencies(cir, elem_idx, dependencies, allocator);
@@ -251,6 +255,9 @@ fn collectExprDependencies(
 
         // External lookups reference other modules - skip for now
         .e_lookup_external => {},
+
+        // Pending lookups are deferred external lookups - skip for dependency analysis
+        .e_lookup_pending => {},
 
         // Required lookups reference app-provided values - skip for dependency analysis
         .e_lookup_required => {},

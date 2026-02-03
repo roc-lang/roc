@@ -370,6 +370,9 @@ fn collectContainingRegionsFromExpr(
                 try collectContainingRegionsFromExpr(allocator, ast, item, target_offset, regions);
             }
         },
+        .tuple_access => |ta| {
+            try collectContainingRegionsFromExpr(allocator, ast, ta.expr, target_offset, regions);
+        },
         .record => |r| {
             const fields = ast.store.recordFieldSlice(r.fields);
             for (fields) |field_idx| {
