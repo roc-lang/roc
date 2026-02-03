@@ -1105,7 +1105,7 @@ fn processSnapshotContent(
             // This way it stays alive until the defer at line 1249
             module_envs_for_file = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
 
-            const checker = try compile.PackageEnv.canonicalizeAndTypeCheckModule(
+            var checker = try compile.PackageEnv.canonicalizeAndTypeCheckModule(
                 allocator,
                 can_ir,
                 &parse_ast,
@@ -1114,6 +1114,11 @@ fn processSnapshotContent(
                 imported_envs_for_file,
                 &module_envs_for_file.?,
             );
+            // For app modules, numeric defaults were deferred by canonicalizeAndTypeCheckModule.
+            // Since snapshot tests don't have platform requirements, finalize them here.
+            if (can_ir.defer_numeric_defaults) {
+                try checker.finalizeNumericDefaults();
+            }
             break :blk checker;
         },
         .snippet, .statement, .header, .expr, .mono => blk: {
@@ -1134,7 +1139,15 @@ fn processSnapshotContent(
                 &can_ir.store.regions,
                 builtin_ctx,
             );
-            try checker.checkFile();
+            // For app modules, defer numeric defaults (they'll be finalized below).
+            // This matches the behavior in compile_package.zig.
+            if (can_ir.defer_numeric_defaults) {
+                try checker.checkFileSkipNumericDefaults();
+                // Finalize numeric defaults now since there's no platform requirements check
+                try checker.finalizeNumericDefaults();
+            } else {
+                try checker.checkFile();
+            }
             module_envs_for_snippet = module_envs; // Keep alive
             break :blk checker;
         },
@@ -2948,10 +2961,24 @@ fn validateMonoOutput(allocator: Allocator, mono_source: []const u8, source_path
     };
     defer checker.deinit();
 
-    checker.checkFile() catch |err| {
-        std.log.err("MONO VALIDATION ERROR in {s}: Type checking failed: {}", .{ source_path, err });
-        return false;
-    };
+    // For app modules, defer numeric defaults (they'll be finalized below).
+    // This matches the behavior in compile_package.zig.
+    if (validation_env.defer_numeric_defaults) {
+        checker.checkFileSkipNumericDefaults() catch |err| {
+            std.log.err("MONO VALIDATION ERROR in {s}: Type checking failed: {}", .{ source_path, err });
+            return false;
+        };
+        // Finalize numeric defaults now since there's no platform requirements check
+        checker.finalizeNumericDefaults() catch |err| {
+            std.log.err("MONO VALIDATION ERROR in {s}: Numeric defaults finalization failed: {}", .{ source_path, err });
+            return false;
+        };
+    } else {
+        checker.checkFile() catch |err| {
+            std.log.err("MONO VALIDATION ERROR in {s}: Type checking failed: {}", .{ source_path, err });
+            return false;
+        };
+    }
 
     // Check for type-checking problems
     const type_problems = checker.problems.problems.items;

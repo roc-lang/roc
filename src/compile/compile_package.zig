@@ -1107,7 +1107,14 @@ pub const PackageEnv = struct {
         );
         errdefer checker.deinit();
 
-        try checker.checkFile();
+        // For app modules with platform requirements, defer finalizing numeric defaults
+        // until after platform requirements are checked, so numeric literals can be
+        // constrained by platform types (e.g., I64) before defaulting to Dec.
+        if (env.defer_numeric_defaults) {
+            try checker.checkFileSkipNumericDefaults();
+        } else {
+            try checker.checkFile();
+        }
 
         return checker;
     }
@@ -1297,7 +1304,14 @@ pub const PackageEnv = struct {
         );
         errdefer checker.deinit();
 
-        try checker.checkFile();
+        // For app modules with platform requirements, defer finalizing numeric defaults
+        // until after platform requirements are checked, so numeric literals can be
+        // constrained by platform types (e.g., I64) before defaulting to Dec.
+        if (env.defer_numeric_defaults) {
+            try checker.checkFileSkipNumericDefaults();
+        } else {
+            try checker.checkFile();
+        }
 
         // After type checking, evaluate top-level declarations at compile time
         const builtin_types_for_eval = BuiltinTypes.init(builtin_indices, builtin_module_env, builtin_module_env, builtin_module_env);

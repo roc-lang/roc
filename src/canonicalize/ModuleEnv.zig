@@ -459,6 +459,11 @@ is_lambda_lifted: bool = false,
 /// Whether closures have been defunctionalized in this module
 is_defunctionalized: bool = false,
 
+/// Whether to defer finalizing numeric defaults until after platform requirements are checked.
+/// Set to true for app modules that have platform imports, so that numeric literals can be
+/// constrained by platform types (e.g., I64) before defaulting to Dec.
+defer_numeric_defaults: bool = false,
+
 /// Deferred numeric literal for compile-time validation
 pub const DeferredNumericLiteral = struct {
     expr_idx: CIR.Expr.Idx,

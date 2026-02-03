@@ -2225,6 +2225,11 @@ fn checkPlatformRequirementsFromCoordinator(
     // Check platform requirements against app exports
     try checker.checkPlatformRequirements(pf_root_env, &platform_to_app_idents);
 
+    // Now finalize numeric defaults for the app module. This must happen AFTER
+    // checkPlatformRequirements so that numeric literals can be constrained by
+    // platform types (e.g., I64) before defaulting to Dec.
+    try checker.finalizeNumericDefaults();
+
     // If there are type problems, convert them to reports and add to app module
     if (checker.problems.problems.items.len > 0) {
         const app_module = &app_pkg.modules.items[app_root_id];

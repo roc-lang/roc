@@ -9849,6 +9849,20 @@ pub const Interpreter = struct {
 
                     const content: types.Content = .{ .flex = rt_flex };
                     const fresh_flex = try self.runtime_types.freshFromContent(content);
+
+                    // If the original flex var had a from_numeral constraint, we need to
+                    // track it in the runtime types store's from_numeral_flex_count.
+                    // This ensures the count is balanced when unification later decrements it.
+                    if (flex.constraints.len() > 0) {
+                        const ct_constraints = module.types.sliceStaticDispatchConstraints(flex.constraints);
+                        for (ct_constraints) |ct_constraint| {
+                            if (ct_constraint.origin == .from_numeral) {
+                                self.runtime_types.from_numeral_flex_count += 1;
+                                break;
+                            }
+                        }
+                    }
+
                     break :blk fresh_flex;
                 },
                 .rigid => |rigid| {
@@ -12614,7 +12628,18 @@ pub const Interpreter = struct {
                 // that have type annotations but no implementation bodies
                 if (func_expr_check == .e_lookup_external) {
                     const lookup = func_expr_check.e_lookup_external;
-                    const other_env: ?*const can.ModuleEnv = self.import_envs.get(lookup.module_idx) orelse blk: {
+                    // Resolve the module for this external lookup.
+                    // IMPORTANT: import_envs only contains mappings from the primary module and app_env.
+                    // When self.env is an imported module (like Helper calling Core), we must use
+                    // resolved_module_envs directly since import_envs won't have the right mappings.
+                    const other_env: ?*const can.ModuleEnv = blk: {
+                        // Only use import_envs if self.env is the primary module or app_env
+                        if (self.env == self.root_env or (self.app_env != null and self.env == @constCast(self.app_env.?))) {
+                            if (self.import_envs.get(lookup.module_idx)) |env| {
+                                break :blk env;
+                            }
+                        }
+                        // Fall back to resolved_module_envs for all cases
                         const resolved_idx = self.env.imports.getResolvedModule(lookup.module_idx) orelse break :blk null;
                         std.debug.assert(resolved_idx < self.resolved_module_envs.len);
                         break :blk self.resolved_module_envs[resolved_idx];
@@ -14318,15 +14343,20 @@ pub const Interpreter = struct {
         // backwards compatibility with unit tests that don't call resolveImports.
         //
         const other_env = blk: {
-            // Try import_envs first (direct module pointer mapping)
-            if (self.import_envs.get(lookup.module_idx)) |env| {
-                traceDbg(roc_ops, "evalLookupExternal: \"{s}\" import[{d}] -> \"{s}\"", .{ self.env.module_name, @intFromEnum(lookup.module_idx), env.module_name });
-                break :blk env;
+            // Only use import_envs if self.env is the primary module or app_env,
+            // since import_envs only contains mappings from those modules.
+            if (self.env == self.root_env or (self.app_env != null and self.env == @constCast(self.app_env.?))) {
+                if (self.import_envs.get(lookup.module_idx)) |env| {
+                    traceDbg(roc_ops, "evalLookupExternal: \"{s}\" import[{d}] -> \"{s}\"", .{ self.env.module_name, @intFromEnum(lookup.module_idx), env.module_name });
+                    break :blk env;
+                }
             }
-            // Fall back to resolved module indices + all_module_envs
+            // Fall back to resolved module indices + resolved_module_envs
+            // Note: resolved_idx is an index into the other_envs array passed to resolveImports,
+            // which is stored in resolved_module_envs (NOT all_module_envs which has env at [0])
             if (self.env.imports.getResolvedModule(lookup.module_idx)) |resolved_idx| {
-                std.debug.assert(resolved_idx < self.all_module_envs.len);
-                break :blk self.all_module_envs[resolved_idx];
+                std.debug.assert(resolved_idx < self.resolved_module_envs.len);
+                break :blk self.resolved_module_envs[resolved_idx];
             }
             traceDbg(roc_ops, "evalLookupExternal: UNRESOLVED import[{d}] in \"{s}\"", .{ @intFromEnum(lookup.module_idx), self.env.module_name });
             self.triggerCrash("e_lookup_external: unresolved import", false, roc_ops);

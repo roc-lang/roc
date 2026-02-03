@@ -1085,8 +1085,22 @@ fn copyBuiltinTypes(self: *Self) !void {
     // Try type is accessed via external references, no need to copy it here
 }
 
-/// Check the types for all defs in a file
+/// Check the types for all defs in a file.
+/// Set `skip_numeric_defaults` to true for app modules that have platform requirements -
+/// in that case, `finalizeNumericDefaults()` should be called AFTER `checkPlatformRequirements()`
+/// so that numeric literals can be constrained by platform types first.
 pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
+    return self.checkFileInternal(false);
+}
+
+/// Check the types for all defs in a file, optionally skipping numeric defaults finalization.
+/// Use this for app modules with platform requirements, then call `finalizeNumericDefaults()`
+/// after `checkPlatformRequirements()`.
+pub fn checkFileSkipNumericDefaults(self: *Self) std.mem.Allocator.Error!void {
+    return self.checkFileInternal(true);
+}
+
+fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -1200,7 +1214,13 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
     // Check any accumulated constraints
     try self.checkAllConstraints(&env);
     try self.resolveNumericLiteralsFromContext(&env);
-    try self.finalizeNumericDefaults(&env);
+
+    // Finalize numeric defaults unless skipped (for app modules with platform requirements,
+    // this should be called after checkPlatformRequirements() so platform types can
+    // constrain numeric literals first)
+    if (!skip_numeric_defaults) {
+        try self.finalizeNumericDefaultsInternal(&env);
+    }
 
     // After solving all deferred constraints, check for infinite types
     for (defs_slice) |def_idx| {
@@ -1602,7 +1622,7 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
     // Check any accumulated constraints
     try self.checkAllConstraints(&env);
     try self.resolveNumericLiteralsFromContext(&env);
-    try self.finalizeNumericDefaults(&env);
+    try self.finalizeNumericDefaultsInternal(&env);
 
     // Check if the expression's type has incompatible constraints (e.g., !3)
     const expr_var = ModuleEnv.varFrom(expr_idx);
@@ -1664,7 +1684,7 @@ pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Alloca
     // Check any accumulated constraints
     try self.checkAllConstraints(&env);
     try self.resolveNumericLiteralsFromContext(&env);
-    try self.finalizeNumericDefaults(&env);
+    try self.finalizeNumericDefaultsInternal(&env);
 
     // After finalizing numeric defaults, resolve any remaining deferred
     // static dispatch constraints. finalizeNumericDefaults unifies from_numeral
@@ -5634,7 +5654,17 @@ fn resolveNumericLiteralsFromContext(self: *Self, env: *Env) std.mem.Allocator.E
 /// unified from_numeral vars that had concrete peers in their binop
 /// constraints (e.g., U64 from List.len). The only vars still flex here
 /// are those with genuinely no numeric context, so Dec is correct.
-fn finalizeNumericDefaults(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+///
+/// For app modules with platform requirements, this should be called AFTER
+/// `checkPlatformRequirements()` so that platform types can constrain
+/// numeric literals first. Use `checkFileSkipNumericDefaults()` in that case.
+pub fn finalizeNumericDefaults(self: *Self) std.mem.Allocator.Error!void {
+    var env = try self.env_pool.acquire();
+    defer self.env_pool.release(env);
+    try self.finalizeNumericDefaultsInternal(&env);
+}
+
+fn finalizeNumericDefaultsInternal(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     if (self.types.from_numeral_flex_count == 0) return;
 
     const num_vars: u32 = @intCast(self.types.len());

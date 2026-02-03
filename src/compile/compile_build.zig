@@ -767,6 +767,11 @@ pub const BuildEnv = struct {
         // Check platform requirements against app exports
         try checker.checkPlatformRequirements(platform_root_env, &platform_to_app_idents);
 
+        // Now finalize numeric defaults for the app module. This must happen AFTER
+        // checkPlatformRequirements so that numeric literals can be constrained by
+        // platform types (e.g., I64) before defaulting to Dec.
+        try checker.finalizeNumericDefaults();
+
         // If there are type problems, convert them to reports and emit via sink
         if (checker.problems.problems.items.len > 0) {
             const app_root_module = app_sched.getRootModule() orelse return;
