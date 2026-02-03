@@ -642,6 +642,25 @@ read_str! = |path| # ...
 
 ### Type variables
 
+Type variables allow you to write functions that work with any type. They are written as lowercase identifiers (like `a`, `b`, `elem`, etc.) in type annotations:
+
+```ruby
+# This function works for a list of any type
+type_var : List(a) -> List(a)
+type_var = |lst| lst
+```
+
+The type variable `a` indicates that the function accepts a `List` containing elements of any type, and returns a `List` containing elements of that same type.
+
+You can also constrain type variables to types that have specific methods using `where`:
+
+```ruby
+stringify : a -> Str where [a.to_str : a -> Str]
+stringify = |value| value.to_str()
+```
+
+This function works for any type `a` that has a `to_str` method which takes an `a` and returns a `Str`.
+
 ### Structural types
 
 #### Tag union types
@@ -659,6 +678,17 @@ Bool := [True, False]
 ```
 
 This is a _nominal_ type definition.
+
+## Old vs New Roc
+
+| Old | New |
+|-----|-----|
+| `List U8` | `List(U8)` |
+| `if/then/else` | `if/else` |
+| `Bool.true`/`Bool.false` | `Bool.True`/`Bool.False` |
+| `Result` | `Try` |
+| `Inspect.to_str` | `Str.inspect` |
+| `Num.to_str(123)` | `123.to_str()` |
 
 ## Dependencies
 
