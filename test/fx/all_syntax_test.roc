@@ -208,7 +208,7 @@ record_update_2 = |person| {
 }
 
 number_literals : {
-	usage_based: I64,
+	usage_based: _,
 	explicit_u8: U8,
 	explicit_i8: I8,
 	explicit_u16: U16,
@@ -227,7 +227,7 @@ number_literals : {
 	binary: I64,
 }
 number_literals = {
-	usage_based: 5,
+	usage_based: 5, # defaults to Dec
 	explicit_u8: 5,
 	explicit_i8: 5,
 	explicit_u16: 5,
