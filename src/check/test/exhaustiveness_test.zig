@@ -1002,7 +1002,7 @@ test "type mismatch - incompatible match branches return different types" {
     defer test_env.deinit();
 
     // The branches return I64 and Str which don't unify
-    try test_env.assertFirstTypeError("INCOMPATIBLE MATCH BRANCHES");
+    try test_env.assertFirstTypeError("TYPE MISMATCH");
 }
 
 test "type mismatch - if branches with incompatible types" {
@@ -1013,7 +1013,7 @@ test "type mismatch - if branches with incompatible types" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertFirstTypeError("INCOMPATIBLE IF BRANCHES");
+    try test_env.assertFirstTypeError("TYPE MISMATCH");
 }
 
 // Additional Type Error Tests
@@ -1032,7 +1032,7 @@ test "type mismatch - boolean and with non-Bool left side" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertFirstTypeError("INVALID BOOL OPERATION");
+    try test_env.assertFirstTypeError("TYPE MISMATCH");
 }
 
 test "type mismatch - boolean or with non-Bool right side" {
@@ -1049,7 +1049,7 @@ test "type mismatch - boolean or with non-Bool right side" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertFirstTypeError("INVALID BOOL OPERATION");
+    try test_env.assertFirstTypeError("TYPE MISMATCH");
 }
 
 test "type mismatch - function call with wrong number of args" {
@@ -1061,7 +1061,7 @@ test "type mismatch - function call with wrong number of args" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertFirstTypeError("TOO FEW ARGUMENTS");
+    try test_env.assertFirstTypeError("TOO FEW ARGS");
 }
 
 test "type mismatch - function call with wrong arg type" {

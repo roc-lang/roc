@@ -157,6 +157,7 @@ UNDEFINED VARIABLE - fuzz_crash_020.md:59:3:59:7
 UNUSED VARIABLE - fuzz_crash_020.md:60:12:60:15
 UNDEFINED VARIABLE - fuzz_crash_020.md:72:2:72:4
 UNDECLARED TYPE - fuzz_crash_020.md:74:9:74:15
+VAR WITHOUT $ PREFIX - fuzz_crash_020.md:77:2:77:14
 UNDEFINED VARIABLE - fuzz_crash_020.md:78:9:78:14
 UNDEFINED VARIABLE - fuzz_crash_020.md:80:3:80:6
 CRASH EXPECTS STRING - fuzz_crash_020.md:86:3:86:11
@@ -527,6 +528,18 @@ This type is referenced here:
 main! : Listlt({}, _)
 ```
         ^^^^^^
+
+
+**VAR WITHOUT $ PREFIX**
+This `var` is named `er` but variables declared with `var` should start with `$` to indicate they are mutable.
+
+Suggestion: rename `er` to `$er`.
+
+**fuzz_crash_020.md:77:2:77:14:**
+```roc
+	var er = 123
+```
+	^^^^^^^^^^^^
 
 
 **UNDEFINED VARIABLE**

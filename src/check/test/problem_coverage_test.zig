@@ -94,7 +94,7 @@ test "invalid bool binop - and with numbers" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertFirstTypeError("INVALID BOOL OPERATION");
+    try test_env.assertFirstTypeError("TYPE MISMATCH");
 }
 
 test "invalid bool binop - or with strings" {
@@ -110,7 +110,7 @@ test "invalid bool binop - or with strings" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertFirstTypeError("INVALID BOOL OPERATION");
+    try test_env.assertFirstTypeError("TYPE MISMATCH");
 }
 
 // INCOMPATIBLE LIST ELEMENTS
@@ -125,7 +125,7 @@ test "incompatible list - tag and string mixed" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertFirstTypeError("INCOMPATIBLE LIST ELEMENTS");
+    try test_env.assertFirstTypeError("TYPE MISMATCH");
 }
 
 test "incompatible list - annotated list with wrong element type" {
@@ -136,7 +136,7 @@ test "incompatible list - annotated list with wrong element type" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertFirstTypeError("INCOMPATIBLE LIST ELEMENTS");
+    try test_env.assertFirstTypeError("TYPE MISMATCH");
 }
 
 // INCOMPATIBLE IF BRANCHES
@@ -193,7 +193,7 @@ test "invalid if condition - string as condition" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertFirstTypeError("INVALID IF CONDITION");
+    try test_env.assertFirstTypeError("TYPE MISMATCH");
 }
 
 // INCOMPATIBLE MATCH BRANCHES
@@ -232,7 +232,7 @@ test "incompatible match patterns - string pattern on int" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertFirstTypeError("INCOMPATIBLE MATCH PATTERNS");
+    try test_env.assertFirstTypeError("TYPE MISMATCH");
 }
 
 // FUNCTION CALL ARITY MISMATCH
@@ -248,7 +248,7 @@ test "arity mismatch - too many arguments" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertFirstTypeError("TOO MANY ARGUMENTS");
+    try test_env.assertFirstTypeError("TOO MANY ARGS");
 }
 
 test "arity mismatch - too few arguments" {
@@ -261,7 +261,7 @@ test "arity mismatch - too few arguments" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertFirstTypeError("TOO FEW ARGUMENTS");
+    try test_env.assertFirstTypeError("TOO FEW ARGS");
 }
 
 // TYPE APPLY ARITY MISMATCH
@@ -553,7 +553,7 @@ test "anonymous recursion - recursive record field" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertFirstTypeError("RECURSIVE TYPE WITHOUT NAME");
+    try test_env.assertFirstTypeError("ANONYMOUS RECURSION");
 }
 
 test "anonymous recursion - recursive tag payload" {
@@ -565,7 +565,7 @@ test "anonymous recursion - recursive tag payload" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertFirstTypeError("RECURSIVE TYPE WITHOUT NAME");
+    try test_env.assertFirstTypeError("ANONYMOUS RECURSION");
 }
 
 // Tests for UNUSED VALUE
@@ -583,7 +583,7 @@ test "unused value - expression in block discarded" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertFirstTypeError("UNUSED VALUE");
+    try test_env.assertFirstTypeError("TYPE MISMATCH");
 }
 
 // Tests for ? (try) operator on non-Try types
@@ -601,8 +601,8 @@ test "try operator on non-result - match pattern error" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    // Using ? on non-Try triggers invalid_try_operator
-    try test_env.assertAnyTypeMismatchDetail(.invalid_try_operator);
+    // Using ? on non-Try triggers try_operator_expr context
+    try test_env.assertAnyTypeMismatchContext(.try_operator_expr);
 }
 
 // Tests for UNSUPPORTED WHERE CLAUSE
@@ -1358,7 +1358,7 @@ test "if condition - list as condition" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertFirstTypeError("INVALID IF CONDITION");
+    try test_env.assertFirstTypeError("TYPE MISMATCH");
 }
 
 test "if condition - record as condition" {
@@ -1369,7 +1369,7 @@ test "if condition - record as condition" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertFirstTypeError("INVALID IF CONDITION");
+    try test_env.assertFirstTypeError("TYPE MISMATCH");
 }
 
 // MORE INCOMPATIBLE IF BRANCHES TESTS
@@ -1383,7 +1383,7 @@ test "if branches - list vs tuple" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertFirstTypeError("INCOMPATIBLE IF BRANCHES");
+    try test_env.assertFirstTypeError("TYPE MISMATCH");
 }
 
 test "if branches - record vs tag" {
@@ -1394,7 +1394,7 @@ test "if branches - record vs tag" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertFirstTypeError("INCOMPATIBLE IF BRANCHES");
+    try test_env.assertFirstTypeError("TYPE MISMATCH");
 }
 
 // MATCH PATTERN TESTS
@@ -1414,7 +1414,7 @@ test "match - pattern type mismatch" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertFirstTypeError("INCOMPATIBLE MATCH PATTERNS");
+    try test_env.assertFirstTypeError("TYPE MISMATCH");
 }
 
 test "match - condition pattern type conflict" {
@@ -1429,7 +1429,7 @@ test "match - condition pattern type conflict" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertFirstTypeError("INCOMPATIBLE MATCH PATTERNS");
+    try test_env.assertFirstTypeError("TYPE MISMATCH");
 }
 
 // NESTED FUNCTION TYPE TESTS

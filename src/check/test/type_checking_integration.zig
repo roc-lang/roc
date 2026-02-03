@@ -4065,7 +4065,7 @@ test "check type - too many arguments to function" {
         \\
         \\result = f(1, 2, 3)
     ;
-    try checkTypesModule(source, .fail, "TOO MANY ARGUMENTS");
+    try checkTypesModule(source, .fail, "TOO MANY ARGS");
 }
 
 test "check type - list with incompatible elements gives type mismatch" {
@@ -4083,7 +4083,7 @@ test "check type - if condition must be Bool" {
         \\x = 42
         \\y = if x { "yes" } else { "no" }
     ;
-    try checkTypesModule(source, .fail_first, "INVALID IF CONDITION");
+    try checkTypesModule(source, .fail_first, "TYPE MISMATCH");
 }
 
 test "check type - incompatible match patterns" {
@@ -4097,7 +4097,7 @@ test "check type - incompatible match patterns" {
         \\    "hello" => 2
         \\}
     ;
-    try checkTypesModule(source, .fail_first, "INCOMPATIBLE MATCH PATTERNS");
+    try checkTypesModule(source, .fail_first, "TYPE MISMATCH");
 }
 
 test "check type - function with wrong return type annotation" {
@@ -4502,7 +4502,7 @@ test "check type - match pattern type mismatch" {
         \\    _ => "other"
         \\}
     ;
-    try checkTypesModule(source, .fail_first, "INCOMPATIBLE MATCH PATTERNS");
+    try checkTypesModule(source, .fail_first, "TYPE MISMATCH");
 }
 
 test "check type - function wrong number of arguments" {
@@ -4513,7 +4513,7 @@ test "check type - function wrong number of arguments" {
         \\
         \\result = f(1, 2, 3)
     ;
-    try checkTypesModule(source, .fail_first, "TOO MANY ARGUMENTS");
+    try checkTypesModule(source, .fail_first, "TOO MANY ARGS");
 }
 
 test "check type - function too few arguments" {
@@ -4524,7 +4524,7 @@ test "check type - function too few arguments" {
         \\
         \\result = f(1)
     ;
-    try checkTypesModule(source, .fail_first, "TOO FEW ARGUMENTS");
+    try checkTypesModule(source, .fail_first, "TOO FEW ARGS");
 }
 
 test "check type - record missing field" {

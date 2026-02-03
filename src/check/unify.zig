@@ -2404,7 +2404,6 @@ pub const Scratch = struct {
     // Constraint function vars currently being unified (separate from visited_vars to match legacy mark behavior)
     constraint_visited_vars: VarSafeList,
 
-
     /// Init scratch
     pub fn init(gpa: std.mem.Allocator) std.mem.Allocator.Error!Self {
         // Initial capacities are conservative estimates. Lists grow dynamically as needed.

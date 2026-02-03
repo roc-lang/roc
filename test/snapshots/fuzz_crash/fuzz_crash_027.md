@@ -228,8 +228,8 @@ TYPE MISMATCH - fuzz_crash_027.md:50:5:50:8
 TYPE MISMATCH - fuzz_crash_027.md:64:2:64:2
 TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
 TYPE MISMATCH - fuzz_crash_027.md:125:6:125:9
-TYPE MISMATCH - fuzz_crash_027.md:102:15:102:18
-MISSING METHOD - fuzz_crash_027.md:129:12:129:22
+TYPE MISMATCH - fuzz_crash_027.md:102:16:102:19
+MISSING METHOD - fuzz_crash_027.md:129:13:129:24
 + - :0:0:0:0
 TYPE MISMATCH - fuzz_crash_027.md:100:9:148:2
 TYPE MISMATCH - fuzz_crash_027.md:106:3:106:6
@@ -981,7 +981,7 @@ This number is being used where a non-number type is needed:
 The type was determined to be non-numeric here:
 **fuzz_crash_027.md:128:18:128:19:**
 ```roc
-	line!("Adding ${n} to ${number}")
+	line!("Adding ${n} to ${$number}")
 ```
 	                ^
 
@@ -991,18 +991,18 @@ Other code expects this to have the type:
 
 **TYPE MISMATCH**
 This number is being used where a non-number type is needed:
-**fuzz_crash_027.md:102:15:102:18:**
+**fuzz_crash_027.md:102:16:102:19:**
 ```roc
-	var number = 123
+	var $number = 123
 ```
-	             ^^^
+	              ^^^
 
 The type was determined to be non-numeric here:
-**fuzz_crash_027.md:128:26:128:32:**
+**fuzz_crash_027.md:128:26:128:33:**
 ```roc
-	line!("Adding ${n} to ${number}")
+	line!("Adding ${n} to ${$number}")
 ```
-	                        ^^^^^^
+	                        ^^^^^^^
 
 Other code expects this to have the type:
 
@@ -1010,11 +1010,11 @@ Other code expects this to have the type:
 
 **MISSING METHOD**
 The value before this **+** operator has a type that doesn't have a **plus** method:
-**fuzz_crash_027.md:129:12:129:22:**
+**fuzz_crash_027.md:129:13:129:24:**
 ```roc
-		number = number + n
+		$number = $number + n
 ```
-		         ^^^^^^^^^^
+		          ^^^^^^^^^^^
 
 The value's type, which does not have a method named**plus**, is:
 
