@@ -3042,7 +3042,12 @@ pub fn build(b: *std.Build) void {
             break :blk &fix_main.step;
         } else &copy_glue_host.step;
 
-        b.getInstallStep().dependOn(final_glue_host_step);
+        // Create glue-host step for building glue platform host library on demand.
+        // This is separate from the main install step to avoid triggering a Zig DWARF
+        // generation bug when building the glue platform (which imports many compiler
+        // modules) in the same invocation as the roc binary with ReleaseFast.
+        const glue_host_step = b.step("glue-host", "Build the glue platform host library");
+        glue_host_step.dependOn(final_glue_host_step);
 
         // Make glue_test depend on the glue host library being built
         if (run_glue_test_step) |step| {
