@@ -338,7 +338,9 @@ pub const BuildEnv = struct {
         defer header_info.deinit(self.gpa);
 
         const is_executable = header_info.kind == .app or header_info.kind == .default_app;
-        if (!is_executable and header_info.kind != .module and header_info.kind != .type_module) {
+        // Allow all module types: app, module, type_module, package, platform
+        // Package and platform modules can also be tested
+        if (!is_executable and header_info.kind != .module and header_info.kind != .type_module and header_info.kind != .package and header_info.kind != .platform) {
             return error.UnsupportedHeader;
         }
 
@@ -355,8 +357,8 @@ pub const BuildEnv = struct {
             .root_dir = pkg_root_dir,
         });
 
-        // Populate package graph (for apps)
-        if (header_info.kind == .app) {
+        // Populate package graph (for apps and packages with dependencies)
+        if (header_info.kind == .app or header_info.kind == .package) {
             try self.populatePackageShorthands(pkg_name, &header_info);
         }
 
@@ -1767,6 +1769,34 @@ pub const BuildEnv = struct {
             };
         }
         return out;
+    }
+
+    /// Free memory allocated by drainReports.
+    /// This frees the abs_path strings, deinits each report, frees the reports slices, and frees the outer slice.
+    /// Safe to call with empty slices from catch handlers.
+    pub fn freeDrainedReports(self: *BuildEnv, drained: []const DrainedModuleReports) void {
+        // Skip if this is an empty slice (could be compile-time constant from catch handler)
+        if (drained.len == 0) return;
+        for (drained) |mod| {
+            self.gpa.free(mod.abs_path);
+            // Deinit each report and free the reports slice
+            for (mod.reports) |*report| {
+                @constCast(report).deinit();
+            }
+            self.gpa.free(mod.reports);
+        }
+        // Cast to non-const for freeing (safe since we allocated this ourselves)
+        self.gpa.free(@constCast(drained));
+    }
+
+    /// Free memory from drainReports when reports ownership is transferred elsewhere.
+    /// Only frees abs_path strings and outer slice, NOT the reports (caller now owns them).
+    pub fn freeDrainedReportsPathsOnly(self: *BuildEnv, drained: []const DrainedModuleReports) void {
+        if (drained.len == 0) return;
+        for (drained) |mod| {
+            self.gpa.free(mod.abs_path);
+        }
+        self.gpa.free(@constCast(drained));
     }
 
     /// Get accumulated timing information from all ModuleBuild instances

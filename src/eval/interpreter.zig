@@ -13968,11 +13968,12 @@ pub const Interpreter = struct {
 
         for (caps, 0..) |cap_idx, i| {
             const cap = self.env.store.getCapture(cap_idx);
-            const name_text = self.env.getIdent(cap.name);
-            field_names[i] = try self.runtime_layout_store.getMutableEnv().?.insertIdent(base_pkg.Ident.for_text(name_text));
+            // Use cap.name directly - it's already valid in self.env
+            field_names[i] = cap.name;
 
             const cap_val = self.resolveCapture(cap, roc_ops) orelse {
                 // Include capture name, module, expr_idx, and pattern_idx in error for debugging
+                const name_text = self.env.getIdent(cap.name);
                 var buf: [512]u8 = undefined;
                 const module_name = self.env.module_name;
                 const msg = std.fmt.bufPrint(&buf, "e_closure(expr={d}): failed to resolve capture '{s}' (pattern_idx={d}) in module '{s}', bindings.len={d}", .{ @intFromEnum(expr_idx), name_text, @intFromEnum(cap.pattern_idx), module_name, self.bindings.items.len }) catch "e_closure: failed to resolve capture value";
@@ -13983,7 +13984,8 @@ pub const Interpreter = struct {
             field_layouts[i] = cap_val.layout;
         }
 
-        const captures_layout_idx = try self.runtime_layout_store.putRecord(self.runtime_layout_store.getMutableEnv().?, field_layouts, field_names);
+        // Use self.env for putRecord since field_names are valid in self.env's interner
+        const captures_layout_idx = try self.runtime_layout_store.putRecord(self.env, field_layouts, field_names);
         const captures_layout = self.runtime_layout_store.getLayout(captures_layout_idx);
         const closure_layout = Layout.closure(captures_layout_idx);
         // Get rt_var for the closure

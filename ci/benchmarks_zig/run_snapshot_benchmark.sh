@@ -71,8 +71,8 @@ echo "PR median: ${pr_median}s"
 pct_change=$(awk "BEGIN {printf \"%.2f\", (($pr_median - $main_median) / $main_median) * 100}")
 echo "Change: ${pct_change}%"
 
-# Check for >5% slower execution
-is_slower=$(awk "BEGIN {print ($pct_change > 5) ? 1 : 0}")
+# Check for >4% slower execution
+is_slower=$(awk "BEGIN {print ($pct_change > 4) ? 1 : 0}")
 if [ "$is_slower" = "1" ]; then
     echo ""
     echo "SLOWER EXECUTION detected (${pct_change}% slower)"
@@ -106,7 +106,7 @@ if [ "$is_slower" = "1" ]; then
 
             if [ -n "$file_main" ] && [ -n "$file_pr" ] && [ "$file_main" != "null" ] && [ "$file_pr" != "null" ]; then
                 file_pct=$(awk "BEGIN {printf \"%.2f\", (($file_pr - $file_main) / $file_main) * 100}")
-                file_is_slower=$(awk "BEGIN {print ($file_pct > 5) ? 1 : 0}")
+                file_is_slower=$(awk "BEGIN {print ($file_pct > 4) ? 1 : 0}")
                 if [ "$file_is_slower" = "1" ]; then
                     echo "  $filename: ${file_pct}% slower"
                     SLOWEST_FILES="$SLOWEST_FILES $filename"
@@ -126,7 +126,7 @@ if [ "$is_slower" = "1" ]; then
 
     echo ""
     if [ -n "$SLOWEST_FILES" ]; then
-        echo "Snapshots with >5% slower execution:"
+        echo "Snapshots with >4% slower execution:"
         for f in $SLOWEST_FILES; do
             # Check if this file is in the CHANGED_FILES list
             if echo "$CHANGED_FILES" | grep -qw "$f"; then
@@ -136,7 +136,7 @@ if [ "$is_slower" = "1" ]; then
             fi
         done
     else
-        echo "No individual snapshots showed >5% slowdown (may be distributed across many files)"
+        echo "No individual snapshots showed >4% slowdown (may be distributed across many files)"
     fi
 
     echo ""
@@ -144,5 +144,5 @@ if [ "$is_slower" = "1" ]; then
     exit 1
 else
     echo ""
-    echo "No significant slowdown detected (threshold: >5%)"
+    echo "No significant slowdown detected (threshold: >4%)"
 fi
