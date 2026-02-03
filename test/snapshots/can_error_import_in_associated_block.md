@@ -61,14 +61,14 @@ This is an unexpected parsing error. Please check your syntax.
 
 
 **TYPE MODULE MISSING MATCHING TYPE**
-Type modules must have a type declaration matching the module name.
+Type modules must have a nominal type declaration matching the module name.
 
-This file is named `can_error_import_in_associated_block`.roc, but no top-level type declaration named `can_error_import_in_associated_block` was found.
+This file is named `can_error_import_in_associated_block`.roc, but no top-level nominal type named `can_error_import_in_associated_block` was found.
 
-Add either:
-`can_error_import_in_associated_block := ...` (nominal type)
+Add a nominal type like:
+`can_error_import_in_associated_block := ...`
 or:
-`can_error_import_in_associated_block : ...` (type alias)
+`can_error_import_in_associated_block :: ...` (opaque nominal type)
 **can_error_import_in_associated_block.md:1:1:3:2:**
 ```roc
 Foo := U64.{

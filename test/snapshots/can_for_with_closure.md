@@ -34,7 +34,7 @@ It has the type:
         b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
       ]
 
-But I expected it to be:
+But you are trying to use it as:
 
     {}
 
