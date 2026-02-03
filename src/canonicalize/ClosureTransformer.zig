@@ -1325,7 +1325,7 @@ pub fn generateClosureTagName(self: *Self, hint: ?base.Ident.Idx) !base.Ident.Id
 
 /// Generate the lowercase function name from a closure tag name.
 /// E.g., "#1_foo" -> "c1_foo" (replaces # with lowercase c)
-fn generateLiftedFunctionName(self: *Self, tag_name: base.Ident.Idx) !base.Ident.Idx {
+pub fn generateLiftedFunctionName(self: *Self, tag_name: base.Ident.Idx) !base.Ident.Idx {
     const tag_str = self.module_env.getIdent(tag_name);
 
     // Allocate a copy with # replaced by lowercase 'c'
@@ -1344,7 +1344,7 @@ fn generateLiftedFunctionName(self: *Self, tag_name: base.Ident.Idx) !base.Ident
 /// Create patterns for calling a lifted function in dispatch.
 /// Returns the pattern for the lifted function name and the captures pattern.
 /// The actual lifted function body is created by LambdaLifter.
-fn createLiftedFunctionPatterns(
+pub fn createLiftedFunctionPatterns(
     self: *Self,
     tag_name: base.Ident.Idx,
     has_captures: bool,
@@ -1449,11 +1449,7 @@ fn generateDispatchMatch(
                 .called_via = .apply,
             },
         }, base.Region.zero());
-    } else blk: {
-        // Fallback: no lifted function pattern (shouldn't happen)
-        // Transform the lambda body to handle nested closures (old behavior)
-        break :blk try self.transformExpr(closure_info.lambda_body);
-    };
+    } else unreachable; // lifted_fn_pattern must always be set
 
     // Step 4: Create the match branch
     const branch_pattern_start = self.module_env.store.scratchMatchBranchPatternTop();
@@ -1587,10 +1583,7 @@ fn generateLambdaSetDispatchMatch(
                     .called_via = .apply,
                 },
             }, base.Region.zero());
-        } else blk: {
-            // Fallback: no lifted function pattern (shouldn't happen)
-            break :blk try self.transformExpr(closure_info.lambda_body);
-        };
+        } else unreachable; // lifted_fn_pattern must always be set
 
         // Step 4: Create match branch pattern
         const branch_pattern_start = self.module_env.store.scratchMatchBranchPatternTop();

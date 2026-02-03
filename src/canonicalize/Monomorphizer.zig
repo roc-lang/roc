@@ -496,15 +496,17 @@ pub fn resolveUnspecializedClosuresWithSubstitutions(
 ///
 /// Note: For static dispatch implementations that are simple functions (not closures with
 /// captures), this creates a "pure lambda" closure info with no captures.
+///
+/// INVARIANT: This function requires closure_transformer to be set. All call sites
+/// are guarded by `if (self.closure_transformer) |transformer|`, so this is always true.
 pub fn addResolvedToLambdaSet(
     self: *Self,
     lambda_set: *ClosureTransformer.LambdaSet,
     resolved: ResolvedClosure,
 ) !void {
-    // Create a ClosureInfo for the resolved static dispatch implementation.
-    // Static dispatch implementations are typically top-level functions without captures,
-    // so we create a simple closure with the method ident as the tag name.
-    //
+    // closure_transformer must be set - callers are guarded by if (self.closure_transformer)
+    const transformer = self.closure_transformer orelse unreachable;
+
     // Get the actual method's expression instead of the e_type_var_dispatch expression.
     // If we have a node_idx, use it to get the method definition's expression.
     // Otherwise, fall back to the member_expr from the unspecialized closure.
@@ -514,17 +516,52 @@ pub fn addResolvedToLambdaSet(
         break :blk def.expr;
     } else resolved.unspecialized.member_expr;
 
+    // Check if the implementation has captures
+    const has_captures = self.checkExpressionHasCaptures(lambda_body);
+
+    // Create lifted function patterns - always required for dispatch generation
+    const lifted_patterns = try transformer.createLiftedFunctionPatterns(
+        resolved.impl_lookup.method_ident,
+        has_captures,
+    );
+
+    // Extract lambda args if available
+    const lambda_args = blk: {
+        const expr = self.module_env.store.getExpr(lambda_body);
+        switch (expr) {
+            .e_lambda => |lambda| break :blk lambda.args,
+            .e_closure => |closure| {
+                const lambda_expr = self.module_env.store.getExpr(closure.lambda_idx);
+                switch (lambda_expr) {
+                    .e_lambda => |lambda| break :blk lambda.args,
+                    else => break :blk CIR.Pattern.Span{ .span = base.DataSpan.empty() },
+                }
+            },
+            else => break :blk CIR.Pattern.Span{ .span = base.DataSpan.empty() },
+        }
+    };
+
     const closure_info = ClosureTransformer.ClosureInfo{
         .tag_name = resolved.impl_lookup.method_ident,
         .source_module = self.module_env.module_name_idx,
         .lambda_body = lambda_body,
-        .lambda_args = CIR.Pattern.Span{ .span = base.DataSpan.empty() },
+        .lambda_args = lambda_args,
         .capture_names = std.ArrayList(base.Ident.Idx).empty,
-        .lifted_fn_pattern = null, // Will be set during further processing if needed
-        .lifted_captures_pattern = null, // No captures for top-level static dispatch impls
+        .lifted_fn_pattern = lifted_patterns.fn_pattern,
+        .lifted_captures_pattern = lifted_patterns.captures_pattern,
     };
 
     try lambda_set.addClosure(self.allocator, closure_info);
+}
+
+/// Check if an expression has captures (is a closure with non-empty captures span).
+/// Static dispatch implementations are typically pure lambdas without captures.
+fn checkExpressionHasCaptures(self: *const Self, expr_idx: Expr.Idx) bool {
+    const expr = self.module_env.store.getExpr(expr_idx);
+    return switch (expr) {
+        .e_closure => |closure| closure.captures.span.len > 0,
+        else => false,
+    };
 }
 
 /// Process all resolved closures and add them to the lambda set.
