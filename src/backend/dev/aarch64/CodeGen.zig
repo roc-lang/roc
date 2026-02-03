@@ -28,7 +28,7 @@ pub const AArch64CodeGen = struct {
 
     /// Bitmask of callee-saved general registers available for allocation
     /// X19-X28 (not FP/X29 or LR/X30 - they're special)
-    const CALLEE_SAVED_GENERAL_MASK: u32 =
+    pub const CALLEE_SAVED_GENERAL_MASK: u32 =
         (1 << @intFromEnum(GeneralReg.X19)) |
         (1 << @intFromEnum(GeneralReg.X20)) |
         (1 << @intFromEnum(GeneralReg.X21)) |

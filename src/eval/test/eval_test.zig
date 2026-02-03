@@ -2518,6 +2518,198 @@ test "proc with tag match returning non-tag type" {
     , "was err", .no_trace);
 }
 
+test "lambda with list param calling List.len (no allocation)" {
+    // Simple lambda that takes a list and returns its length
+    // This doesn't require allocation, so it tests basic roc_ops passing
+    try runExpectI64(
+        \\{
+        \\    get_len = |l| List.len(l)
+        \\    get_len([1i64, 2i64, 3i64])
+        \\}
+    , 3, .no_trace);
+}
+
+test "lambda with list param calling List.append (requires allocation)" {
+    // Lambda that takes a list and appends to it
+    // This requires allocation, so it tests roc_ops passing for builtins
+    try runExpectI64(
+        \\{
+        \\    add_one = |l| List.len(List.append(l, 99i64))
+        \\    add_one([1i64, 2i64, 3i64])
+        \\}
+    , 4, .no_trace);
+}
+
+test "lambda with list param and var declaration" {
+    // Lambda with a mutable variable inside
+    try runExpectI64(
+        \\{
+        \\    test_fn = |l| {
+        \\        var $acc = [0i64]
+        \\        List.len($acc)
+        \\    }
+        \\    test_fn([1i64, 2i64])
+        \\}
+    , 1, .no_trace);
+}
+
+test "lambda with list param and list literal creation" {
+    // Lambda that creates a list literal inside (requires allocation)
+    try runExpectI64(
+        \\{
+        \\    test_fn = |l| {
+        \\        var $acc = [0i64]
+        \\        List.len($acc)
+        \\    }
+        \\    test_fn([10i64, 20i64])
+        \\}
+    , 1, .no_trace);
+}
+
+test "lambda with list param, var, and for loop" {
+    // Lambda with for loop that mutates a variable
+    try runExpectI64(
+        \\{
+        \\    test_fn = |l| {
+        \\        var $total = 0i64
+        \\        for e in l {
+        \\            $total = $total + e
+        \\        }
+        \\        $total
+        \\    }
+        \\    test_fn([10i64, 20i64, 30i64])
+        \\}
+    , 60, .no_trace);
+}
+
+test "lambda with list param, var, and List.append (no for loop)" {
+    // Lambda with var and List.append but NO for loop
+    try runExpectI64(
+        \\{
+        \\    test_fn = |l| {
+        \\        var $acc = [0i64]
+        \\        $acc = List.append($acc, 42i64)
+        \\        List.len($acc)
+        \\    }
+        \\    test_fn([10i64, 20i64])
+        \\}
+    , 2, .no_trace);
+}
+
+test "minimal lambda with list param and for loop (no allocation)" {
+    // Absolute minimal test: list param + for loop, no allocations inside
+    try runExpectI64(
+        \\{
+        \\    test_fn = |l| {
+        \\        var $total = 0i64
+        \\        for e in l {
+        \\            $total = $total + e
+        \\        }
+        \\        $total
+        \\    }
+        \\    test_fn([1i64, 2i64])
+        \\}
+    , 3, .no_trace);
+}
+
+test "lambda with list param, for loop, and allocation inside loop (list literal)" {
+    // List param + for loop + allocation inside loop body (not List.append)
+    try runExpectI64(
+        \\{
+        \\    test_fn = |l| {
+        \\        var $total = 0i64
+        \\        for e in l {
+        \\            var $temp = [e]
+        \\            $total = $total + e
+        \\        }
+        \\        $total
+        \\    }
+        \\    test_fn([1i64, 2i64])
+        \\}
+    , 3, .no_trace);
+}
+
+test "lambda with for loop over internal list, not param (scalar param)" {
+    // Lambda with for loop over an internal list, scalar parameter
+    try runExpectI64(
+        \\{
+        \\    test_fn = |x| {
+        \\        var $total = 0i64
+        \\        for e in [1i64, 2i64, 3i64] {
+        \\            $total = $total + e
+        \\        }
+        \\        $total
+        \\    }
+        \\    test_fn(42i64)
+        \\}
+    , 6, .no_trace);
+}
+
+test "lambda with list param, for loop over internal list, allocation inside" {
+    // Lambda with list param, but for loop over internal list, allocation inside
+    try runExpectI64(
+        \\{
+        \\    test_fn = |l| {
+        \\        var $total = 0i64
+        \\        for e in [1i64, 2i64] {
+        \\            var $temp = [e]
+        \\            $total = $total + e
+        \\        }
+        \\        $total
+        \\    }
+        \\    test_fn([10i64, 20i64])
+        \\}
+    , 3, .no_trace);
+}
+
+test "lambda with list param, for loop, but empty iteration" {
+    // Lambda with for loop that runs 0 times
+    try runExpectI64(
+        \\{
+        \\    test_fn = |l| {
+        \\        var $acc = [0i64]
+        \\        for e in l {
+        \\            $acc = List.append($acc, e)
+        \\        }
+        \\        List.len($acc)
+        \\    }
+        \\    test_fn([])
+        \\}
+    , 1, .no_trace);
+}
+
+test "lambda with list param, for loop, and List.append in loop with single iteration" {
+    // Lambda with for loop that calls List.append but with single element
+    try runExpectI64(
+        \\{
+        \\    test_fn = |l| {
+        \\        var $acc = [0i64]
+        \\        for e in l {
+        \\            $acc = List.append($acc, e)
+        \\        }
+        \\        List.len($acc)
+        \\    }
+        \\    test_fn([10i64])
+        \\}
+    , 2, .no_trace);
+}
+
+test "lambda with list param, var, for loop, and List.append" {
+    // Lambda with for loop that calls List.append
+    try runExpectI64(
+        \\{
+        \\    test_fn = |l| {
+        \\        var $acc = [0i64]
+        \\        for e in l {
+        \\            $acc = List.append($acc, e)
+        \\        }
+        \\        List.len($acc)
+        \\    }
+        \\    test_fn([10i64, 20i64, 30i64])
+        \\}
+    , 4, .no_trace);
+}
+
 test "issue 8899: closure decref index out of bounds in for loop" {
     // Regression test for GitHub issue #8899: panic "index out of bounds: index 131, len 73"
     // when running roc test on code with closures and for loops.

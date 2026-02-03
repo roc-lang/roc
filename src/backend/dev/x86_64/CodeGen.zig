@@ -32,7 +32,7 @@ pub const SystemVCodeGen = struct {
     /// Bitmask of callee-saved general registers available for allocation
     /// System V: RBX, R12, R13, R14, R15 (not RBP - it's the frame pointer)
     /// Windows: RBX, RSI, RDI, R12, R13, R14, R15 (not RBP - it's the frame pointer)
-    const CALLEE_SAVED_GENERAL_MASK: u32 = if (builtin.os.tag == .windows)
+    pub const CALLEE_SAVED_GENERAL_MASK: u32 = if (builtin.os.tag == .windows)
         (1 << @intFromEnum(GeneralReg.RBX)) |
             (1 << @intFromEnum(GeneralReg.RSI)) |
             (1 << @intFromEnum(GeneralReg.RDI)) |
@@ -395,6 +395,7 @@ pub const SystemVCodeGen = struct {
         // Save only the callee-saved registers that were actually used (MOV-based)
         for (CALLEE_SAVED_SLOTS) |slot| {
             if ((self.callee_saved_used & (@as(u16, 1) << @intCast(@intFromEnum(slot.reg)))) != 0) {
+                std.debug.print("[DEBUG] emitPrologue: saving {s} to [RBP{d}]\n", .{ @tagName(slot.reg), slot.offset });
                 try self.emit.movMemReg(.w64, .RBP, slot.offset, slot.reg);
             }
         }
@@ -423,6 +424,32 @@ pub const SystemVCodeGen = struct {
         if (size > 0) {
             // sub rsp, size
             try self.emit.subRegImm32(.w64, .RSP, @intCast(size));
+        }
+    }
+
+    /// On Windows, save R12 to stack before a C function call.
+    /// R12 holds roc_ops in generated code, and while R12 is callee-saved
+    /// in the Windows x64 ABI, something in the Zig-compiled C function
+    /// call chain appears to corrupt it. This saves R12 and returns the
+    /// offset where it was saved, for use with restoreR12AfterCall.
+    pub fn saveR12BeforeCall(self: *Self) !i32 {
+        if (comptime builtin.os.tag == .windows) {
+            // Allocate 8 bytes on stack for R12
+            try self.emit.subRegImm32(.w64, .RSP, 8);
+            // Save R12 at [RSP]
+            try self.emit.movMemReg(.w64, .RSP, 0, .R12);
+            return 0; // R12 is at [RSP+0]
+        }
+        return 0;
+    }
+
+    /// On Windows, restore R12 from stack after a C function call.
+    pub fn restoreR12AfterCall(self: *Self) !void {
+        if (comptime builtin.os.tag == .windows) {
+            // Restore R12 from [RSP]
+            try self.emit.movRegMem(.w64, .R12, .RSP, 0);
+            // Deallocate the 8 bytes
+            try self.emit.addRegImm32(.w64, .RSP, 8);
         }
     }
 
