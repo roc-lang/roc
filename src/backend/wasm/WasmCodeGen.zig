@@ -440,13 +440,33 @@ fn generateExpr(self: *Self, expr_id: MonoExprId) Error!void {
         },
         .nominal => |nom| {
             // Nominal is transparent at runtime — just generate the backing expression.
-            // No type conversion needed; nominal types have the same runtime representation.
             try self.generateExpr(nom.backing_expr);
         },
         .empty_record => {
             // Zero-sized type — push a dummy i32 0
             self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
             WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+        },
+        .empty_list => {
+            // Empty list: 12 bytes of zeros (ptr=0, len=0, cap=0)
+            const base_offset = try self.allocStackMemory(12, 4);
+            const base_local = self.fp_local;
+            // Zero out the 12 bytes
+            for (0..3) |i| {
+                self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                WasmModule.leb128WriteU32(self.allocator, &self.body, base_local) catch return error.OutOfMemory;
+                self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+                try self.emitStoreOp(.i32, base_offset + @as(u32, @intCast(i)) * 4);
+            }
+            // Push pointer
+            self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+            WasmModule.leb128WriteU32(self.allocator, &self.body, base_local) catch return error.OutOfMemory;
+            if (base_offset > 0) {
+                self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(base_offset)) catch return error.OutOfMemory;
+                self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+            }
         },
         .runtime_error => {
             self.body.append(self.allocator, Op.@"unreachable") catch return error.OutOfMemory;
@@ -511,6 +531,9 @@ fn generateExpr(self: *Self, expr_id: MonoExprId) Error!void {
             try self.generateExpr(e.cond);
             self.body.append(self.allocator, Op.drop) catch return error.OutOfMemory;
             try self.generateExpr(e.body);
+        },
+        .low_level => |ll| {
+            try self.generateLowLevel(ll);
         },
         .incref, .decref, .free => {
             // RC ops are no-ops for now (Phase 7 will implement)
@@ -771,6 +794,7 @@ fn exprLayoutIdx(self: *Self, expr_id: MonoExprId) ?layout.Idx {
         .zero_arg_tag => |z| z.union_layout,
         .tag => |t| t.union_layout,
         .closure => |c| c.closure_layout,
+        .low_level => |ll| ll.ret_layout,
         .dbg => |d| d.result_layout,
         .expect => |e| e.result_layout,
         .incref => |inc| self.exprLayoutIdx(inc.value),
@@ -805,6 +829,7 @@ fn exprValType(self: *Self, expr_id: MonoExprId) ValType {
         .when => |w| self.resolveValType(w.result_layout),
         .nominal => |nom| self.exprValType(nom.backing_expr),
         .empty_record => .i32,
+        .empty_list => .i32, // pointer to 12-byte RocList
         .call => |c| self.resolveValType(c.ret_layout),
         .lambda => .i32, // function reference (index)
         .closure => .i32, // closure value (function reference)
@@ -814,6 +839,7 @@ fn exprValType(self: *Self, expr_id: MonoExprId) ValType {
         .tuple_access => |ta| self.resolveValType(ta.elem_layout),
         .zero_arg_tag => .i32, // discriminant or pointer
         .tag => .i32, // pointer to stack memory
+        .low_level => |ll| self.resolveValType(ll.ret_layout),
         .dbg => |d| self.resolveValType(d.result_layout),
         .expect => |e| self.resolveValType(e.result_layout),
         .incref => |inc| self.exprValType(inc.value),
@@ -1853,6 +1879,295 @@ fn generateTag(self: *Self, t: anytype) Error!void {
     // Push base pointer
     self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
     WasmModule.leb128WriteU32(self.allocator, &self.body, base_local) catch return error.OutOfMemory;
+}
+
+/// Generate a low-level operation.
+fn generateLowLevel(self: *Self, ll: anytype) Error!void {
+    const args = self.store.getExprSpan(ll.args);
+
+    switch (ll.op) {
+        // Numeric arithmetic (same as binop equivalents)
+        .num_add, .num_sub, .num_mul, .num_div, .num_neg, .num_abs => {
+            return self.generateNumericLowLevel(ll.op, args, ll.ret_layout);
+        },
+
+        // Safe integer widenings (no-op or single instruction)
+        .u8_to_i16, .u8_to_i32, .u8_to_u16, .u8_to_u32 => {
+            // u8 is already i32 in wasm, and widening to larger types is a no-op
+            if (args.len > 0) {
+                try self.generateExpr(args[0]);
+                // If arg produces i64 (e.g. from i64_literal), wrap to i32
+                if (self.exprValType(args[0]) == .i64) {
+                    self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
+                }
+            }
+        },
+        .i8_to_i16, .i8_to_i32 => {
+            // i8 is i32 in wasm, sign-extend from 8 bits
+            if (args.len > 0) {
+                try self.generateExpr(args[0]);
+                if (self.exprValType(args[0]) == .i64) {
+                    self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
+                }
+            }
+            self.body.append(self.allocator, Op.i32_extend8_s) catch return error.OutOfMemory;
+        },
+        .u16_to_i32, .u16_to_u32 => {
+            if (args.len > 0) {
+                try self.generateExpr(args[0]);
+                if (self.exprValType(args[0]) == .i64) {
+                    self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
+                }
+            }
+        },
+        .i16_to_i32 => {
+            if (args.len > 0) {
+                try self.generateExpr(args[0]);
+                if (self.exprValType(args[0]) == .i64) {
+                    self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
+                }
+            }
+            self.body.append(self.allocator, Op.i32_extend16_s) catch return error.OutOfMemory;
+        },
+
+        // i32/u32 → i64/u64
+        .u8_to_i64, .u8_to_u64, .u16_to_i64, .u16_to_u64,
+        .u32_to_i64, .u32_to_u64,
+        => {
+            if (args.len > 0) {
+                try self.generateExpr(args[0]);
+                const arg_vt = self.exprValType(args[0]);
+                if (arg_vt == .i64) {
+                    // Already i64 — no extension needed
+                    return;
+                }
+            }
+            self.body.append(self.allocator, Op.i64_extend_i32_u) catch return error.OutOfMemory;
+        },
+        .i8_to_i64, .i16_to_i64, .i32_to_i64 => {
+            if (args.len > 0) {
+                try self.generateExpr(args[0]);
+                const arg_vt = self.exprValType(args[0]);
+                if (arg_vt == .i64) {
+                    // Already i64 — no extension needed
+                    return;
+                }
+            }
+            self.body.append(self.allocator, Op.i64_extend_i32_s) catch return error.OutOfMemory;
+        },
+
+        // Narrowing/wrapping conversions
+        .i64_to_i32_wrap, .u64_to_u32_wrap, .u64_to_i32_wrap => {
+            if (args.len > 0) try self.generateExpr(args[0]);
+            self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
+        },
+        .i32_to_i8_wrap, .u32_to_u8_wrap, .i32_to_u8_wrap,
+        .i64_to_u8_wrap, .u64_to_u8_wrap,
+        => {
+            if (args.len > 0) try self.generateExpr(args[0]);
+            // May need to wrap i64 to i32 first
+            const arg_vt = if (args.len > 0) self.exprValType(args[0]) else ValType.i32;
+            if (arg_vt == .i64) {
+                self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
+            }
+            // Mask to 8 bits
+            self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI32(self.allocator, &self.body, 0xFF) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
+        },
+        .i32_to_i16_wrap, .u32_to_u16_wrap, .i32_to_u16_wrap,
+        .i64_to_u16_wrap, .u64_to_u16_wrap,
+        => {
+            if (args.len > 0) try self.generateExpr(args[0]);
+            const arg_vt = if (args.len > 0) self.exprValType(args[0]) else ValType.i32;
+            if (arg_vt == .i64) {
+                self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
+            }
+            // Mask to 16 bits
+            self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI32(self.allocator, &self.body, 0xFFFF) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
+        },
+        .i32_to_u32_wrap, .u32_to_i32_wrap => {
+            // Same representation in wasm (both i32), no-op
+            if (args.len > 0) try self.generateExpr(args[0]);
+        },
+        .i64_to_u64_wrap, .u64_to_i64_wrap => {
+            // Same representation in wasm (both i64), no-op
+            if (args.len > 0) try self.generateExpr(args[0]);
+        },
+
+        // Float conversions
+        .f32_to_f64 => {
+            if (args.len > 0) try self.generateExpr(args[0]);
+            self.body.append(self.allocator, Op.f64_promote_f32) catch return error.OutOfMemory;
+        },
+        .f64_to_f32_wrap => {
+            if (args.len > 0) try self.generateExpr(args[0]);
+            self.body.append(self.allocator, Op.f32_demote_f64) catch return error.OutOfMemory;
+        },
+
+        // Int to float
+        .i32_to_f32, .i8_to_f32, .i16_to_f32 => {
+            if (args.len > 0) {
+                try self.generateExpr(args[0]);
+                if (self.exprValType(args[0]) == .i64) {
+                    self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
+                }
+            }
+            self.body.append(self.allocator, Op.f32_convert_i32_s) catch return error.OutOfMemory;
+        },
+        .u32_to_f32, .u8_to_f32, .u16_to_f32 => {
+            if (args.len > 0) {
+                try self.generateExpr(args[0]);
+                if (self.exprValType(args[0]) == .i64) {
+                    self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
+                }
+            }
+            self.body.append(self.allocator, Op.f32_convert_i32_u) catch return error.OutOfMemory;
+        },
+        .i32_to_f64, .i8_to_f64, .i16_to_f64 => {
+            if (args.len > 0) {
+                try self.generateExpr(args[0]);
+                if (self.exprValType(args[0]) == .i64) {
+                    self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
+                }
+            }
+            self.body.append(self.allocator, Op.f64_convert_i32_s) catch return error.OutOfMemory;
+        },
+        .u32_to_f64, .u8_to_f64, .u16_to_f64 => {
+            if (args.len > 0) {
+                try self.generateExpr(args[0]);
+                if (self.exprValType(args[0]) == .i64) {
+                    self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
+                }
+            }
+            self.body.append(self.allocator, Op.f64_convert_i32_u) catch return error.OutOfMemory;
+        },
+        .i64_to_f32 => {
+            if (args.len > 0) try self.generateExpr(args[0]);
+            self.body.append(self.allocator, Op.f32_convert_i64_s) catch return error.OutOfMemory;
+        },
+        .u64_to_f32 => {
+            if (args.len > 0) try self.generateExpr(args[0]);
+            self.body.append(self.allocator, Op.f32_convert_i64_u) catch return error.OutOfMemory;
+        },
+        .i64_to_f64 => {
+            if (args.len > 0) try self.generateExpr(args[0]);
+            self.body.append(self.allocator, Op.f64_convert_i64_s) catch return error.OutOfMemory;
+        },
+        .u64_to_f64 => {
+            if (args.len > 0) try self.generateExpr(args[0]);
+            self.body.append(self.allocator, Op.f64_convert_i64_u) catch return error.OutOfMemory;
+        },
+
+        // Float to int (truncating)
+        .f32_to_i32_trunc, .f32_to_i8_trunc, .f32_to_i16_trunc => {
+            if (args.len > 0) try self.generateExpr(args[0]);
+            self.body.append(self.allocator, Op.i32_trunc_f32_s) catch return error.OutOfMemory;
+        },
+        .f32_to_u32_trunc, .f32_to_u8_trunc, .f32_to_u16_trunc => {
+            if (args.len > 0) try self.generateExpr(args[0]);
+            self.body.append(self.allocator, Op.i32_trunc_f32_u) catch return error.OutOfMemory;
+        },
+        .f64_to_i32_trunc, .f64_to_i8_trunc, .f64_to_i16_trunc => {
+            if (args.len > 0) try self.generateExpr(args[0]);
+            self.body.append(self.allocator, Op.i32_trunc_f64_s) catch return error.OutOfMemory;
+        },
+        .f64_to_u32_trunc, .f64_to_u8_trunc, .f64_to_u16_trunc => {
+            if (args.len > 0) try self.generateExpr(args[0]);
+            self.body.append(self.allocator, Op.i32_trunc_f64_u) catch return error.OutOfMemory;
+        },
+        .f32_to_i64_trunc => {
+            if (args.len > 0) try self.generateExpr(args[0]);
+            self.body.append(self.allocator, Op.i64_trunc_f32_s) catch return error.OutOfMemory;
+        },
+        .f32_to_u64_trunc => {
+            if (args.len > 0) try self.generateExpr(args[0]);
+            self.body.append(self.allocator, Op.i64_trunc_f32_u) catch return error.OutOfMemory;
+        },
+        .f64_to_i64_trunc => {
+            if (args.len > 0) try self.generateExpr(args[0]);
+            self.body.append(self.allocator, Op.i64_trunc_f64_s) catch return error.OutOfMemory;
+        },
+        .f64_to_u64_trunc => {
+            if (args.len > 0) try self.generateExpr(args[0]);
+            self.body.append(self.allocator, Op.i64_trunc_f64_u) catch return error.OutOfMemory;
+        },
+
+        else => return error.UnsupportedExpr,
+    }
+}
+
+/// Generate numeric low-level operations (num_add, num_sub, etc.)
+fn generateNumericLowLevel(self: *Self, op: anytype, args: []const MonoExprId, ret_layout: layout.Idx) Error!void {
+    const vt = self.resolveValType(ret_layout);
+
+    switch (op) {
+        .num_add => {
+            if (args.len >= 2) { try self.generateExpr(args[0]); try self.generateExpr(args[1]); }
+            const wasm_op: u8 = switch (vt) { .i32 => Op.i32_add, .i64 => Op.i64_add, .f32 => Op.f32_add, .f64 => Op.f64_add };
+            self.body.append(self.allocator, wasm_op) catch return error.OutOfMemory;
+        },
+        .num_sub => {
+            if (args.len >= 2) { try self.generateExpr(args[0]); try self.generateExpr(args[1]); }
+            const wasm_op: u8 = switch (vt) { .i32 => Op.i32_sub, .i64 => Op.i64_sub, .f32 => Op.f32_sub, .f64 => Op.f64_sub };
+            self.body.append(self.allocator, wasm_op) catch return error.OutOfMemory;
+        },
+        .num_mul => {
+            if (args.len >= 2) { try self.generateExpr(args[0]); try self.generateExpr(args[1]); }
+            const wasm_op: u8 = switch (vt) { .i32 => Op.i32_mul, .i64 => Op.i64_mul, .f32 => Op.f32_mul, .f64 => Op.f64_mul };
+            self.body.append(self.allocator, wasm_op) catch return error.OutOfMemory;
+        },
+        .num_div => {
+            if (args.len >= 2) { try self.generateExpr(args[0]); try self.generateExpr(args[1]); }
+            const wasm_op: u8 = switch (vt) { .i32 => Op.i32_div_s, .i64 => Op.i64_div_s, .f32 => Op.f32_div, .f64 => Op.f64_div };
+            self.body.append(self.allocator, wasm_op) catch return error.OutOfMemory;
+        },
+        .num_neg => {
+            switch (vt) {
+                .i32 => {
+                    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+                    if (args.len > 0) try self.generateExpr(args[0]);
+                    self.body.append(self.allocator, Op.i32_sub) catch return error.OutOfMemory;
+                },
+                .i64 => {
+                    self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteI64(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+                    if (args.len > 0) try self.generateExpr(args[0]);
+                    self.body.append(self.allocator, Op.i64_sub) catch return error.OutOfMemory;
+                },
+                .f32 => {
+                    if (args.len > 0) try self.generateExpr(args[0]);
+                    self.body.append(self.allocator, Op.f32_neg) catch return error.OutOfMemory;
+                },
+                .f64 => {
+                    if (args.len > 0) try self.generateExpr(args[0]);
+                    self.body.append(self.allocator, Op.f64_neg) catch return error.OutOfMemory;
+                },
+            }
+        },
+        .num_abs => {
+            switch (vt) {
+                .f32 => {
+                    if (args.len > 0) try self.generateExpr(args[0]);
+                    self.body.append(self.allocator, Op.f32_abs) catch return error.OutOfMemory;
+                },
+                .f64 => {
+                    if (args.len > 0) try self.generateExpr(args[0]);
+                    self.body.append(self.allocator, Op.f64_abs) catch return error.OutOfMemory;
+                },
+                else => {
+                    // For integers: if value < 0, negate
+                    if (args.len > 0) try self.generateExpr(args[0]);
+                    // TODO: implement integer abs via select
+                    return error.UnsupportedExpr;
+                },
+            }
+        },
+        else => return error.UnsupportedExpr,
+    }
 }
 
 /// Generate a RocStr for a string literal.

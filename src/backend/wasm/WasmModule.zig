@@ -180,8 +180,34 @@ pub const Op = struct {
 
     // Conversions
     pub const i32_wrap_i64: u8 = 0xA7;
+    pub const i32_trunc_f32_s: u8 = 0xA8;
+    pub const i32_trunc_f32_u: u8 = 0xA9;
+    pub const i32_trunc_f64_s: u8 = 0xAA;
+    pub const i32_trunc_f64_u: u8 = 0xAB;
     pub const i64_extend_i32_s: u8 = 0xAC;
     pub const i64_extend_i32_u: u8 = 0xAD;
+    pub const i64_trunc_f32_s: u8 = 0xAE;
+    pub const i64_trunc_f32_u: u8 = 0xAF;
+    pub const i64_trunc_f64_s: u8 = 0xB0;
+    pub const i64_trunc_f64_u: u8 = 0xB1;
+    pub const f32_convert_i32_s: u8 = 0xB2;
+    pub const f32_convert_i32_u: u8 = 0xB3;
+    pub const f32_convert_i64_s: u8 = 0xB4;
+    pub const f32_convert_i64_u: u8 = 0xB5;
+    pub const f32_demote_f64: u8 = 0xB6;
+    pub const f64_convert_i32_s: u8 = 0xB7;
+    pub const f64_convert_i32_u: u8 = 0xB8;
+    pub const f64_convert_i64_s: u8 = 0xB9;
+    pub const f64_convert_i64_u: u8 = 0xBA;
+    pub const f64_promote_f32: u8 = 0xBB;
+    pub const i32_reinterpret_f32: u8 = 0xBC;
+    pub const i64_reinterpret_f64: u8 = 0xBD;
+    pub const f32_reinterpret_i32: u8 = 0xBE;
+    pub const f64_reinterpret_i64: u8 = 0xBF;
+
+    // i32 sign extension
+    pub const i32_extend8_s: u8 = 0xC0;
+    pub const i32_extend16_s: u8 = 0xC1;
 };
 
 /// Block type for structured control flow
