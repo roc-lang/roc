@@ -456,7 +456,52 @@ fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_i
                 break :blk allocator.dupe(u8, str_data);
             }
         },
-        else => error.UnsupportedLayout,
+        else => blk: {
+            // Non-sentinel layout — use layout store to determine type
+            const ls = wasm_eval.global_layout_store orelse break :blk error.UnsupportedLayout;
+            const l = ls.getLayout(wasm_result.result_layout);
+            const mem_slice = module_instance.memoryAll();
+
+            switch (l.tag) {
+                .tag_union => {
+                    // Small tag union that fits in i32 — return discriminant as integer
+                    const tu_size = ls.layoutSize(l);
+                    if (tu_size <= 4) {
+                        const val = returns[0].I32;
+                        break :blk std.fmt.allocPrint(allocator, "{}", .{val});
+                    }
+                    // Larger tag union — discriminant from memory
+                    const ptr: u32 = @bitCast(returns[0].I32);
+                    if (ptr + tu_size > mem_slice.len) break :blk error.WasmExecFailed;
+                    const tu_data = ls.getTagUnionData(l.data.tag_union.idx);
+                    const disc_offset = tu_data.discriminant_offset;
+                    const disc: u32 = switch (tu_data.discriminant_size) {
+                        1 => mem_slice[ptr + disc_offset],
+                        2 => @as(u32, @as(u16, @bitCast(mem_slice[ptr + disc_offset ..][0..2].*))),
+                        4 => @bitCast(mem_slice[ptr + disc_offset ..][0..4].*),
+                        else => break :blk error.UnsupportedLayout,
+                    };
+                    break :blk std.fmt.allocPrint(allocator, "{}", .{disc});
+                },
+                .scalar => {
+                    // Non-sentinel scalar — determine from scalar data
+                    const sa = ls.layoutSizeAlign(l);
+                    if (sa.size <= 4) {
+                        const val = returns[0].I32;
+                        break :blk std.fmt.allocPrint(allocator, "{}", .{val});
+                    } else if (sa.size <= 8) {
+                        const val = returns[0].I64;
+                        break :blk std.fmt.allocPrint(allocator, "{}", .{val});
+                    }
+                    break :blk error.UnsupportedLayout;
+                },
+                .zst => {
+                    // Zero-sized type — return 0
+                    break :blk std.fmt.allocPrint(allocator, "0", .{});
+                },
+                else => break :blk error.UnsupportedLayout,
+            }
+        },
     };
 }
 
