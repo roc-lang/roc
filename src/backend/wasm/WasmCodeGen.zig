@@ -157,10 +157,12 @@ pub fn generateModule(self: *Self, expr_id: MonoExprId, result_layout: layout.Id
         self.compileAllProcs(procs);
     }
 
-    // Note: top-level symbol definitions (lambdas/closures) are NOT pre-compiled
-    // here because some compile successfully but produce incorrect code when they
-    // contain partially-supported expressions (e.g., early_return, tag unions).
-    // Instead, they remain as UnsupportedExpr at call sites and silently skip.
+    // NOTE: compileSymbolDefs() is intentionally disabled.
+    // The symbolDefIterator() can return simplified lambda definitions that
+    // differ from the full versions used by the interpreter (e.g., a lambda
+    // with body=tag instead of body=block-with-early_return). Compiling these
+    // produces functions that give wrong results. Functions are instead compiled
+    // when encountered as block binds (tryBindFunction), inline calls, or procs.
 
     // Determine return type from the expression's actual wasm type.
     // We use exprValType because nominal layout indices can collide
@@ -560,41 +562,8 @@ fn generateExpr(self: *Self, expr_id: MonoExprId) Error!void {
                         // Check if the bound expression is a lambda — if so, compile
                         // as a wasm function and record symbol→func_idx mapping.
                         const stmt_expr = self.store.getExpr(stmt.expr);
-                        switch (stmt_expr) {
-                            .lambda => |lambda| {
-                                const func_idx = try self.compileLambda(stmt.expr, lambda);
-                                const key: u48 = @bitCast(bind.symbol);
-                                self.symbol_funcs.put(key, func_idx) catch return error.OutOfMemory;
-                                continue;
-                            },
-                            .closure => |closure| {
-                                const func_idx = try self.compileClosure(stmt.expr, closure);
-                                const key: u48 = @bitCast(bind.symbol);
-                                self.symbol_funcs.put(key, func_idx) catch return error.OutOfMemory;
-                                // Copy capture info from expr key to symbol key
-                                const expr_key: u32 = @intFromEnum(stmt.expr);
-                                if (self.closure_captures.get(@intCast(expr_key))) |cap_info| {
-                                    self.closure_captures.put(key, cap_info) catch return error.OutOfMemory;
-                                }
-                                continue;
-                            },
-                            .lookup => |lookup_expr| {
-                                // Function alias: g = f — propagate func_idx
-                                const src_key: u48 = @bitCast(lookup_expr.symbol);
-                                if (self.symbol_funcs.get(src_key)) |fid| {
-                                    const key: u48 = @bitCast(bind.symbol);
-                                    self.symbol_funcs.put(key, fid) catch return error.OutOfMemory;
-                                    // Also propagate capture info
-                                    if (self.closure_captures.get(src_key)) |cap_info| {
-                                        self.closure_captures.put(key, cap_info) catch return error.OutOfMemory;
-                                    }
-                                    continue;
-                                }
-                                // Not a function alias — fall through to normal binding
-                            },
-                            else => {},
-                        }
-                        // Non-lambda, non-closure, non-function-alias expressions
+                        if (try self.tryBindFunction(stmt.expr, stmt_expr, bind.symbol)) continue;
+                        // Non-lambda, non-closure, non-function-alias — fall through to value binding
                         {
                                 // Check for type representation mismatch: composite expr bound
                                 // to scalar local (e.g., dec_literal bound to U64 local).
@@ -3474,42 +3443,62 @@ pub fn compileAllProcs(self: *Self, procs: []const MonoProc) void {
     }
 }
 
-/// Pre-compile all top-level symbol definitions that are lambdas or closures.
-/// This populates symbol_funcs so that call sites can find them.
-fn compileSymbolDefs(self: *Self) void {
-    var it = self.store.symbolDefIterator();
-    while (it.next()) |entry| {
-        const sym_key = entry.key_ptr.*;
-        // Skip if already compiled
-        if (self.symbol_funcs.contains(sym_key)) continue;
-
-        const def_expr_id = entry.value_ptr.*;
-        const def_expr = self.store.getExpr(def_expr_id);
-        switch (def_expr) {
-            .lambda => |lambda| {
-                const fid = self.compileLambda(def_expr_id, lambda) catch continue;
-                self.symbol_funcs.put(sym_key, fid) catch continue;
-            },
-            .closure => |closure| {
-                const fid = self.compileClosure(def_expr_id, closure) catch continue;
-                self.symbol_funcs.put(sym_key, fid) catch continue;
-            },
-            .nominal => |nom| {
-                const inner = self.store.getExpr(nom.backing_expr);
-                switch (inner) {
-                    .lambda => |lambda| {
-                        const fid = self.compileLambda(nom.backing_expr, lambda) catch continue;
-                        self.symbol_funcs.put(sym_key, fid) catch continue;
-                    },
-                    .closure => |closure| {
-                        const fid = self.compileClosure(nom.backing_expr, closure) catch continue;
-                        self.symbol_funcs.put(sym_key, fid) catch continue;
-                    },
-                    else => {},
+/// Try to bind a function expression (lambda, closure, nominal wrapping one, or
+/// function alias) to a symbol in `symbol_funcs`. Returns true if the expression
+/// was handled as a function binding and the caller should `continue` the loop.
+fn tryBindFunction(self: *Self, expr_id: MonoExprId, expr: MonoExpr, symbol: MonoSymbol) Error!bool {
+    const key: u48 = @bitCast(symbol);
+    switch (expr) {
+        .lambda => |lambda| {
+            const func_idx = try self.compileLambda(expr_id, lambda);
+            self.symbol_funcs.put(key, func_idx) catch return error.OutOfMemory;
+            return true;
+        },
+        .closure => |closure| {
+            const func_idx = try self.compileClosure(expr_id, closure);
+            self.symbol_funcs.put(key, func_idx) catch return error.OutOfMemory;
+            // Copy capture info from expr key to symbol key
+            const expr_key: u32 = @intFromEnum(expr_id);
+            if (self.closure_captures.get(@intCast(expr_key))) |cap_info| {
+                self.closure_captures.put(key, cap_info) catch return error.OutOfMemory;
+            }
+            return true;
+        },
+        .nominal => |nom| {
+            // Transparent wrapper — check if it wraps a lambda or closure
+            const inner = self.store.getExpr(nom.backing_expr);
+            switch (inner) {
+                .lambda => |lambda| {
+                    const func_idx = try self.compileLambda(nom.backing_expr, lambda);
+                    self.symbol_funcs.put(key, func_idx) catch return error.OutOfMemory;
+                    return true;
+                },
+                .closure => |closure| {
+                    const func_idx = try self.compileClosure(nom.backing_expr, closure);
+                    self.symbol_funcs.put(key, func_idx) catch return error.OutOfMemory;
+                    const inner_key: u32 = @intFromEnum(nom.backing_expr);
+                    if (self.closure_captures.get(@intCast(inner_key))) |cap_info| {
+                        self.closure_captures.put(key, cap_info) catch return error.OutOfMemory;
+                    }
+                    return true;
+                },
+                else => return false,
+            }
+        },
+        .lookup => |lookup_expr| {
+            // Function alias: g = f — propagate func_idx
+            const src_key: u48 = @bitCast(lookup_expr.symbol);
+            if (self.symbol_funcs.get(src_key)) |fid| {
+                self.symbol_funcs.put(key, fid) catch return error.OutOfMemory;
+                // Also propagate capture info
+                if (self.closure_captures.get(src_key)) |cap_info| {
+                    self.closure_captures.put(key, cap_info) catch return error.OutOfMemory;
                 }
-            },
-            else => {},
-        }
+                return true;
+            }
+            return false;
+        },
+        else => return false,
     }
 }
 
