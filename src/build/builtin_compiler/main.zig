@@ -1628,7 +1628,7 @@ fn compileModule(
     }
 
     // When compiling Builtin itself, pass null for module_envs so setupAutoImportedBuiltinTypes doesn't run
-    can_result.* = try Can.init(module_env, parse_ast, null);
+    can_result.* = try Can.init(&allocators, module_env, parse_ast, null);
 
     try can_result.canonicalizeFile();
     try can_result.validateForChecking();

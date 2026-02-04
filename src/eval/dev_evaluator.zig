@@ -1639,7 +1639,7 @@ pub const DevEvaluator = struct {
             self.builtin_indices,
         ) catch return error.OutOfMemory;
 
-        var czer = Can.init(&module_env, parse_ast, &module_envs_map) catch {
+        var czer = Can.init(&allocators, &module_env, parse_ast, &module_envs_map) catch {
             return error.CanonicalizeError;
         };
         defer czer.deinit();

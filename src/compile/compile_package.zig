@@ -855,8 +855,11 @@ pub const PackageEnv = struct {
         // Use the MODULE's directory (not package root) for sibling lookup - this is
         // important for platform modules where siblings are in the same subdir.
         const module_dir = std.fs.path.dirname(st.path) orelse self.root_dir;
+        var allocators: base.Allocators = undefined;
+        allocators.initInPlace(self.gpa);
+        defer allocators.deinit();
         try canonicalizeModuleWithSiblings(
-            self.gpa,
+            &allocators,
             env,
             parse_ast,
             self.builtin_modules.builtin_module.env,
@@ -1061,6 +1064,7 @@ pub const PackageEnv = struct {
     /// IMPORTANT: The returned checker holds a pointer to module_envs_out, so caller must keep
     /// module_envs_out alive until they're done using the checker (e.g., for type printing)
     pub fn canonicalizeAndTypeCheckModule(
+        allocators: *base.Allocators,
         gpa: Allocator,
         env: *ModuleEnv,
         parse_ast: *AST,
@@ -1078,7 +1082,7 @@ pub const PackageEnv = struct {
         );
 
         // Canonicalize
-        var czer = try Can.init(env, parse_ast, module_envs_out);
+        var czer = try Can.init(allocators, env, parse_ast, module_envs_out);
         try czer.canonicalizeFile();
         try czer.validateForChecking();
         czer.deinit();
@@ -1113,7 +1117,7 @@ pub const PackageEnv = struct {
     /// and includes additional known modules (e.g., from platform exposes).
     /// This prevents premature MODULE NOT FOUND errors for modules that exist but haven't been loaded yet.
     pub fn canonicalizeModuleWithSiblings(
-        gpa: Allocator,
+        allocators: *base.Allocators,
         env: *ModuleEnv,
         parse_ast: *AST,
         builtin_module_env: *const ModuleEnv,
@@ -1123,6 +1127,8 @@ pub const PackageEnv = struct {
         resolver: ?ImportResolver,
         additional_known_modules: []const KnownModule,
     ) !void {
+        const gpa = allocators.gpa;
+
         // Create module_envs map for auto-importing builtin types
         var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
         defer module_envs_map.deinit();
@@ -1244,7 +1250,7 @@ pub const PackageEnv = struct {
             }
         }
 
-        var czer = try Can.init(env, parse_ast, &module_envs_map);
+        var czer = try Can.init(allocators, env, parse_ast, &module_envs_map);
         try czer.canonicalizeFile();
         try czer.validateForChecking();
         czer.deinit();

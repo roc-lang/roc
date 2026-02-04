@@ -206,7 +206,7 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
     // Canonicalize
     try module_env.initCIRFields(module_name);
 
-    can.* = try Can.init(module_env, parse_ast, &module_envs);
+    can.* = try Can.init(&allocators, module_env, parse_ast, &module_envs);
     errdefer can.deinit();
 
     try can.canonicalizeFile();
@@ -328,7 +328,7 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
     // Canonicalize
     try module_env.initCIRFields(module_name);
 
-    can.* = try Can.init(module_env, parse_ast, &module_envs);
+    can.* = try Can.init(&allocators, module_env, parse_ast, &module_envs);
     errdefer can.deinit();
 
     try can.canonicalizeFile();
