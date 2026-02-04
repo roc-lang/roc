@@ -1071,7 +1071,9 @@ pub const PackageEnv = struct {
         builtin_indices: can.CIR.BuiltinIndices,
         imported_envs: []const *ModuleEnv,
         module_envs_out: *std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType),
-    ) !Check {
+    ) !*Check {
+        const gpa = allocators.gpa;
+
         // Populate module_envs with Bool, Try, Dict, Set using shared function
         try Can.populateModuleEnvs(
             module_envs_out,
@@ -1096,7 +1098,10 @@ pub const PackageEnv = struct {
             .builtin_indices = builtin_indices,
         };
 
-        var checker = try Check.init(
+        const checker = try gpa.create(Check);
+        errdefer gpa.destroy(checker);
+
+        checker.* = try Check.init(
             allocators,
             &env.types,
             env,

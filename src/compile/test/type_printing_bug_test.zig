@@ -54,7 +54,7 @@ test "canonicalizeAndTypeCheckModule preserves Try types in type printing" {
     defer module_envs.deinit();
 
     const imported_envs: []const *ModuleEnv = &[_]*ModuleEnv{builtin_env};
-    var result = try compile_package.PackageEnv.canonicalizeAndTypeCheckModule(
+    const result = try compile_package.PackageEnv.canonicalizeAndTypeCheckModule(
         &allocators,
         &env,
         parse_ast,
@@ -63,7 +63,10 @@ test "canonicalizeAndTypeCheckModule preserves Try types in type printing" {
         imported_envs,
         &module_envs,
     );
-    defer result.deinit();
+    defer {
+        result.deinit();
+        gpa.destroy(result);
+    }
 
     // Now get the type of map_result and convert it to a string
     // Find the map_result definition and get its type var from the expression

@@ -64,6 +64,49 @@ pub fn checkModule(
     try checker.checkFile();
 }
 
+/// Type check a full module file and return the checker.
+///
+/// Like `checkModule`, but returns a heap-allocated `*Check` for callers
+/// that need access to the checker after type checking (e.g., for solver
+/// state, import mappings, or further analysis).
+///
+/// Memory ownership:
+/// - allocators: Caller provides and manages
+/// - module_env: Caller provides; type information stored here
+/// - imported_modules: Caller provides slice of imported module environments
+/// - auto_imported_types: Optional map of auto-imported type environments
+/// - builtin_ctx: Builtin type context for resolution
+/// - Returned *Check: Heap-allocated; caller must call `checker.deinit()` and
+///   `allocators.gpa.destroy(checker)` when done
+pub fn checkModuleWithChecker(
+    allocators: *Allocators,
+    module_env: *ModuleEnv,
+    imported_modules: []const *const ModuleEnv,
+    auto_imported_types: ?*const std.AutoHashMap(Ident.Idx, can.Can.AutoImportedType),
+    builtin_ctx: Check.BuiltinContext,
+) std.mem.Allocator.Error!*Check {
+    const gpa = allocators.gpa;
+
+    const checker = try gpa.create(Check);
+    errdefer gpa.destroy(checker);
+
+    checker.* = try Check.init(
+        allocators,
+        &module_env.types,
+        module_env,
+        imported_modules,
+        auto_imported_types,
+        &module_env.store.regions,
+        builtin_ctx,
+    );
+    errdefer checker.deinit();
+
+    checker.fixupTypeWriter();
+    try checker.checkFile();
+
+    return checker;
+}
+
 /// Type check a single expression (for REPL).
 ///
 /// Returns the type check result for the expression.
