@@ -52,7 +52,7 @@ fn monoExprResultLayout(store: *const MonoExprStore, expr_id: mono.MonoIR.MonoEx
         .field_access => |fa| fa.field_layout,
         .tuple_access => |ta| ta.elem_layout,
         .closure => |c| c.closure_layout,
-        .nominal => |n| n.nominal_layout,
+        .nominal => |n| monoExprResultLayout(store, n.backing_expr) orelse n.nominal_layout,
         .i64_literal => .i64,
         .f64_literal => .f64,
         .f32_literal => .f32,
@@ -194,7 +194,7 @@ pub const WasmEvaluator = struct {
             1;
 
         // Generate wasm module
-        var codegen = WasmCodeGen.init(self.allocator, &mono_store);
+        var codegen = WasmCodeGen.init(self.allocator, &mono_store, layout_store_ptr);
         defer codegen.deinit();
 
         const gen_result = codegen.generateModule(mono_expr_id, result_layout) catch {

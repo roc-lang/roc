@@ -366,15 +366,29 @@ fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_i
     };
 
     // Format the result based on layout
+    // Note: wasm has only i32, i64, f32, f64 value types. Sub-32-bit integers
+    // (u8, i8, u16, i16) are represented as i32 in wasm.
     const layout_mod = @import("layout");
     return switch (wasm_result.result_layout) {
-        layout_mod.Idx.i64, layout_mod.Idx.i8, layout_mod.Idx.i16, layout_mod.Idx.i32 => blk: {
+        layout_mod.Idx.i64 => blk: {
             const val = returns[0].I64;
             break :blk std.fmt.allocPrint(allocator, "{}", .{val});
         },
-        layout_mod.Idx.u64, layout_mod.Idx.u8, layout_mod.Idx.u16, layout_mod.Idx.u32 => blk: {
+        layout_mod.Idx.i8, layout_mod.Idx.i16, layout_mod.Idx.i32 => blk: {
+            // These are i32 in wasm — sign-extend to i64 for display
+            const val: i32 = returns[0].I32;
+            const val64: i64 = val;
+            break :blk std.fmt.allocPrint(allocator, "{}", .{val64});
+        },
+        layout_mod.Idx.u64 => blk: {
             const val: u64 = @bitCast(returns[0].I64);
             break :blk std.fmt.allocPrint(allocator, "{}", .{val});
+        },
+        layout_mod.Idx.u8, layout_mod.Idx.u16, layout_mod.Idx.u32 => blk: {
+            // These are i32 in wasm — zero-extend to u64 for display
+            const val: u32 = @bitCast(returns[0].I32);
+            const val64: u64 = val;
+            break :blk std.fmt.allocPrint(allocator, "{}", .{val64});
         },
         layout_mod.Idx.bool => blk: {
             const val = returns[0].I32;
@@ -388,9 +402,36 @@ fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_i
             const val: f32 = @bitCast(returns[0].I32);
             break :blk std.fmt.allocPrint(allocator, "{d}", .{val});
         },
-        layout_mod.Idx.dec, layout_mod.Idx.i128, layout_mod.Idx.u128 => {
-            // TODO: Phase 7 - Dec/i128/u128 need linear memory (16 bytes)
-            return error.UnsupportedLayout;
+        layout_mod.Idx.dec => blk: {
+            // Dec is i128 stored in linear memory. The function returned an i32 pointer.
+            const ptr: u32 = @bitCast(returns[0].I32);
+            const mem_slice = module_instance.memoryAll();
+            if (ptr + 16 > mem_slice.len) return error.WasmExecFailed;
+            const low: i64 = @bitCast(mem_slice[ptr..][0..8].*);
+            const high: i64 = @bitCast(mem_slice[ptr + 8 ..][0..8].*);
+            const val: i128 = @as(i128, high) << 64 | @as(i128, @as(u64, @bitCast(low)));
+            const dec = builtins.dec.RocDec{ .num = val };
+            var buf: [builtins.dec.RocDec.max_str_length]u8 = undefined;
+            const slice = dec.format_to_buf(&buf);
+            break :blk allocator.dupe(u8, slice);
+        },
+        layout_mod.Idx.i128 => blk: {
+            const ptr: u32 = @bitCast(returns[0].I32);
+            const mem_slice = module_instance.memoryAll();
+            if (ptr + 16 > mem_slice.len) return error.WasmExecFailed;
+            const low: i64 = @bitCast(mem_slice[ptr..][0..8].*);
+            const high: i64 = @bitCast(mem_slice[ptr + 8 ..][0..8].*);
+            const val: i128 = @as(i128, high) << 64 | @as(i128, @as(u64, @bitCast(low)));
+            break :blk std.fmt.allocPrint(allocator, "{}", .{val});
+        },
+        layout_mod.Idx.u128 => blk: {
+            const ptr: u32 = @bitCast(returns[0].I32);
+            const mem_slice = module_instance.memoryAll();
+            if (ptr + 16 > mem_slice.len) return error.WasmExecFailed;
+            const low: u64 = @bitCast(mem_slice[ptr..][0..8].*);
+            const high: u64 = @bitCast(mem_slice[ptr + 8 ..][0..8].*);
+            const val: u128 = @as(u128, high) << 64 | @as(u128, low);
+            break :blk std.fmt.allocPrint(allocator, "{}", .{val});
         },
         else => error.UnsupportedLayout,
     };
