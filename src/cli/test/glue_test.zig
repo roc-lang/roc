@@ -211,3 +211,26 @@ test "glue command generated C header compiles with zig cc" {
         try std.testing.expect(false);
     }
 }
+
+test "CGlue.roc expect tests pass" {
+    const allocator = std.testing.allocator;
+
+    // Run: roc test src/glue/src/CGlue.roc
+    const result = try util.runRocCommand(allocator, &.{
+        "test",
+        "src/glue/src/CGlue.roc",
+    });
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    // Should not panic
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "PANIC") == null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "unreachable") == null);
+
+    // Should complete successfully
+    if (result.term != .Exited or result.term.Exited != 0) {
+        std.debug.print("\nroc test CGlue.roc failed!\nstderr:\n{s}\nstdout:\n{s}\n", .{ result.stderr, result.stdout });
+        std.debug.print("Exit term: {}\n", .{result.term});
+        try std.testing.expect(false);
+    }
+}
