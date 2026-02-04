@@ -7,6 +7,9 @@ const protocol = @import("../protocol.zig");
 const fmt = @import("fmt");
 const parse = @import("parse");
 const can = @import("can");
+const base = @import("base");
+
+const Allocators = base.Allocators;
 
 /// Handler for `textDocument/formatting` requests.
 pub fn handler(comptime ServerType: type) type {
@@ -113,13 +116,17 @@ const Position = struct {
 
 /// Format source code and return the formatted result.
 fn formatSource(allocator: std.mem.Allocator, source: []const u8) ![]u8 {
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(allocator);
+    defer allocators.deinit();
+
     // Create ModuleEnv for parsing
     var module_env = try can.ModuleEnv.init(allocator, source);
     defer module_env.deinit();
 
     // Parse the source
-    var ast = try parse.parse(&module_env.common, allocator);
-    defer ast.deinit(allocator);
+    const ast = try parse.parse(&allocators, &module_env.common);
+    defer ast.deinit();
 
     // Check for parse errors - if there are errors, return the original source
     if (ast.parse_diagnostics.items.len > 0) {
@@ -131,7 +138,7 @@ fn formatSource(allocator: std.mem.Allocator, source: []const u8) ![]u8 {
     defer result.deinit();
 
     // Format the AST
-    try fmt.formatAst(ast, &result.writer);
+    try fmt.formatAst(ast.*, &result.writer);
 
     return try result.toOwnedSlice();
 }

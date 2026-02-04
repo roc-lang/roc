@@ -8,6 +8,7 @@ const CIR = @import("can").CIR;
 const Can = @import("can").Can;
 const ModuleEnv = @import("can").ModuleEnv;
 const collections = @import("collections");
+const Allocators = base.Allocators;
 
 const Check = @import("../Check.zig");
 const report_mod = @import("../report.zig");
@@ -128,14 +129,15 @@ const TestEnv = @This();
 pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_name: []const u8, other_test_env: *const TestEnv) !TestEnv {
     const gpa = std.testing.allocator;
 
-    // Allocate our ModuleEnv, AST, and Can on the heap
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(gpa);
+    defer allocators.deinit();
+
+    // Allocate our ModuleEnv and Can on the heap
     // so we can keep them around for testing purposes...
     // this is an unusual setup, but helps us with testing
     const module_env: *ModuleEnv = try gpa.create(ModuleEnv);
     errdefer gpa.destroy(module_env);
-
-    const parse_ast = try gpa.create(parse.AST);
-    errdefer gpa.destroy(parse_ast);
 
     const can = try gpa.create(Can);
     errdefer gpa.destroy(can);
@@ -197,8 +199,8 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
     );
 
     // Parse the AST
-    parse_ast.* = try parse.parse(&module_env.common, gpa);
-    errdefer parse_ast.deinit(gpa);
+    const parse_ast = try parse.parse(&allocators, &module_env.common);
+    errdefer parse_ast.deinit();
     parse_ast.store.emptyScratch();
 
     // Canonicalize
@@ -280,14 +282,15 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
 pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
     const gpa = std.testing.allocator;
 
-    // Allocate our ModuleEnv, AST, and Can on the heap
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(gpa);
+    defer allocators.deinit();
+
+    // Allocate our ModuleEnv and Can on the heap
     // so we can keep them around for testing purposes...
     // this is an unusual setup, but helps us with testing
     const module_env: *ModuleEnv = try gpa.create(ModuleEnv);
     errdefer gpa.destroy(module_env);
-
-    const parse_ast = try gpa.create(parse.AST);
-    errdefer gpa.destroy(parse_ast);
 
     const can = try gpa.create(Can);
     errdefer gpa.destroy(can);
@@ -318,8 +321,8 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
     );
 
     // Parse the AST
-    parse_ast.* = try parse.parse(&module_env.common, gpa);
-    errdefer parse_ast.deinit(gpa);
+    const parse_ast = try parse.parse(&allocators, &module_env.common);
+    errdefer parse_ast.deinit();
     parse_ast.store.emptyScratch();
 
     // Canonicalize
@@ -411,8 +414,7 @@ pub fn initExpr(module_name: []const u8, comptime source_expr: []const u8) !Test
 pub fn deinit(self: *TestEnv) void {
     self.can.deinit();
     self.gpa.destroy(self.can);
-    self.parse_ast.deinit(self.gpa);
-    self.gpa.destroy(self.parse_ast);
+    self.parse_ast.deinit();
 
     self.checker.deinit();
     self.type_writer.deinit();

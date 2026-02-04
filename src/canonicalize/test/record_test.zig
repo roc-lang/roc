@@ -6,6 +6,7 @@ const base = @import("base");
 const ModuleEnv = @import("../ModuleEnv.zig");
 const Can = @import("../Can.zig");
 
+const Allocators = base.Allocators;
 const Ident = base.Ident;
 
 test "record literal uses record_unbound" {
@@ -20,10 +21,14 @@ test "record literal uses record_unbound" {
 
         try env.initCIRFields("test");
 
-        var ast = try parse.parseExpr(&env.common, gpa);
-        defer ast.deinit(gpa);
+        var allocators: Allocators = undefined;
+        allocators.initInPlace(gpa);
+        defer allocators.deinit();
 
-        var can = try Can.init(&env, &ast, null);
+        const ast = try parse.parseExpr(&allocators, &env.common);
+        defer ast.deinit();
+
+        var can = try Can.init(&env, ast, null);
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -51,10 +56,14 @@ test "record literal uses record_unbound" {
 
         try env.initCIRFields("test");
 
-        var ast = try parse.parseExpr(&env.common, gpa);
-        defer ast.deinit(gpa);
+        var allocators: Allocators = undefined;
+        allocators.initInPlace(gpa);
+        defer allocators.deinit();
 
-        var can = try Can.init(&env, &ast, null);
+        const ast = try parse.parseExpr(&allocators, &env.common);
+        defer ast.deinit();
+
+        var can = try Can.init(&env, ast, null);
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -82,10 +91,14 @@ test "record literal uses record_unbound" {
 
         try env.initCIRFields("test");
 
-        var ast = try parse.parseExpr(&env.common, gpa);
-        defer ast.deinit(gpa);
+        var allocators: Allocators = undefined;
+        allocators.initInPlace(gpa);
+        defer allocators.deinit();
 
-        var can = try Can.init(&env, &ast, null);
+        const ast = try parse.parseExpr(&allocators, &env.common);
+        defer ast.deinit();
+
+        var can = try Can.init(&env, ast, null);
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -123,10 +136,14 @@ test "record_unbound basic functionality" {
 
     try env.initCIRFields("test");
 
-    var ast = try parse.parseExpr(&env.common, gpa);
-    defer ast.deinit(gpa);
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(gpa);
+    defer allocators.deinit();
 
-    var can = try Can.init(&env, &ast, null);
+    const ast = try parse.parseExpr(&allocators, &env.common);
+    defer ast.deinit();
+
+    var can = try Can.init(&env, ast, null);
     defer can.deinit();
 
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -165,10 +182,14 @@ test "record_unbound with multiple fields" {
     try env.initCIRFields("test");
 
     // Create record_unbound with multiple fields
-    var ast = try parse.parseExpr(&env.common, gpa);
-    defer ast.deinit(gpa);
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(gpa);
+    defer allocators.deinit();
 
-    var can = try Can.init(&env, &ast, null);
+    const ast = try parse.parseExpr(&allocators, &env.common);
+    defer ast.deinit();
+
+    var can = try Can.init(&env, ast, null);
     defer can.deinit();
 
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -209,10 +230,14 @@ test "record pattern destructuring" {
 
     try env.initCIRFields("test");
 
-    var ast = try parse.parseStatement(&env.common, gpa);
-    defer ast.deinit(gpa);
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(gpa);
+    defer allocators.deinit();
 
-    var can = try Can.init(&env, &ast, null);
+    const ast = try parse.parseStatement(&allocators, &env.common);
+    defer ast.deinit();
+
+    var can = try Can.init(&env, ast, null);
     defer can.deinit();
 
     // Enter a function scope so we can have local bindings
@@ -282,10 +307,14 @@ test "record pattern with sub-patterns" {
 
     try env.initCIRFields("test");
 
-    var ast = try parse.parseStatement(&env.common, gpa);
-    defer ast.deinit(gpa);
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(gpa);
+    defer allocators.deinit();
 
-    var can = try Can.init(&env, &ast, null);
+    const ast = try parse.parseStatement(&allocators, &env.common);
+    defer ast.deinit();
+
+    var can = try Can.init(&env, ast, null);
     defer can.deinit();
 
     // Enter a function scope so we can have local bindings

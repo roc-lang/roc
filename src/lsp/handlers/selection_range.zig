@@ -7,7 +7,9 @@ const std = @import("std");
 const protocol = @import("../protocol.zig");
 const parse = @import("parse");
 const can = @import("can");
+const base = @import("base");
 
+const Allocators = base.Allocators;
 const AST = parse.AST;
 const TokenizedRegion = AST.TokenizedRegion;
 
@@ -151,15 +153,19 @@ fn computeSelectionRange(allocator: std.mem.Allocator, source: []const u8, line:
     const target_offset = positionToOffset(line, character, &line_offsets) orelse return error.InvalidPosition;
 
     // Parse to get AST
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(allocator);
+    defer allocators.deinit();
+
     var module_env = can.ModuleEnv.init(allocator, source) catch {
         return error.ParseFailed;
     };
     defer module_env.deinit();
 
-    var ast = parse.parse(&module_env.common, allocator) catch {
+    const ast = parse.parse(&allocators, &module_env.common) catch {
         return error.ParseFailed;
     };
-    defer ast.deinit(allocator);
+    defer ast.deinit();
 
     // Collect all containing regions
     var containing_regions = std.ArrayList(ByteRange){};
@@ -184,7 +190,7 @@ fn computeSelectionRange(allocator: std.mem.Allocator, source: []const u8, line:
     // Walk all top-level statements
     const stmt_indices = ast.store.statementSlice(file.statements);
     for (stmt_indices) |stmt_idx| {
-        try collectContainingRegionsFromStatement(allocator, &ast, stmt_idx, target_offset, &containing_regions);
+        try collectContainingRegionsFromStatement(allocator, ast, stmt_idx, target_offset, &containing_regions);
     }
 
     // 3. Add file region as outermost

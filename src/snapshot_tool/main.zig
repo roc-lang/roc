@@ -23,6 +23,7 @@ const tracy = @import("tracy");
 const Repl = repl.Repl;
 const CrashContext = eval_mod.CrashContext;
 const roc_target = @import("roc_target");
+const Allocators = base.Allocators;
 const CommonEnv = base.CommonEnv;
 const Check = check.Check;
 const CIR = can.CIR;
@@ -40,6 +41,7 @@ const Allocator = std.mem.Allocator;
 const SExprTree = base.SExprTree;
 const LineColMode = base.SExprTree.LineColMode;
 const CacheModule = compile.CacheModule;
+const single_module = compile.single_module;
 const AST = parse.AST;
 const Report = reporting.Report;
 const parallel = base.parallel;
@@ -903,29 +905,6 @@ fn processSnapshotContent(
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
 
-    var module_env = try ModuleEnv.init(allocator, content.source);
-    defer module_env.deinit();
-
-    // Calculate line starts for source location tracking
-    try module_env.common.calcLineStarts(allocator);
-
-    // Parse the source code based on node type
-    var parse_ast: AST = switch (content.meta.node_type) {
-        .file => try parse.parse(&module_env.common, allocator),
-        .mono => try parse.parse(&module_env.common, allocator), // mono tests are headerless type modules
-        .header => try parse.parseHeader(&module_env.common, allocator),
-        .expr => try parse.parseExpr(&module_env.common, allocator),
-        .statement => try parse.parseStatement(&module_env.common, allocator),
-        .package => try parse.parse(&module_env.common, allocator),
-        .platform => try parse.parse(&module_env.common, allocator),
-        .app => try parse.parse(&module_env.common, allocator),
-        .repl => unreachable, // Handled above
-        .snippet => try parse.parse(&module_env.common, allocator),
-    };
-    defer parse_ast.deinit(allocator);
-
-    parse_ast.store.emptyScratch();
-
     // Extract module name from custom filename if provided, otherwise from output path
     const module_name = if (content.meta.filename) |custom_filename|
         // Strip .roc extension if present
@@ -940,8 +919,34 @@ fn processSnapshotContent(
         else
             basename;
     };
-    var can_ir = &module_env; // ModuleEnv contains the canonical IR
-    try can_ir.initCIRFields(module_name);
+
+    // Map snapshot node type to parse mode
+    const parse_mode: single_module.ParseMode = switch (content.meta.node_type) {
+        .file, .mono, .package, .platform, .app, .snippet => .file,
+        .expr => .expr,
+        .statement => .statement,
+        .header => .header,
+        .repl => unreachable, // Handled above
+    };
+
+    // Create ModuleEnv (caller manages memory)
+    var module_env = try single_module.ModuleEnv.init(allocator, content.source);
+    defer module_env.deinit();
+    var can_ir = &module_env;
+
+    // Create allocators for parsing
+    var allocators: single_module.Allocators = undefined;
+    allocators.initInPlace(allocator);
+    defer allocators.deinit();
+
+    // Parse using the unified compile_module interface
+    const parse_ast = try single_module.parseSingleModule(
+        &allocators,
+        can_ir,
+        parse_mode,
+        .{ .module_name = module_name },
+    );
+    defer parse_ast.deinit();
 
     const builtin_ctx: Check.BuiltinContext = .{
         .module_name = try can_ir.insertIdent(base.Ident.for_text(module_name)),
@@ -967,7 +972,7 @@ fn processSnapshotContent(
                 try Can.populateModuleEnvs(&module_envs, can_ir, builtin_env, config.builtin_indices);
             }
 
-            var czer = try Can.init(can_ir, &parse_ast, &module_envs);
+            var czer = try Can.init(can_ir, parse_ast, &module_envs);
             defer czer.deinit();
             try czer.canonicalizeFile();
         },
@@ -984,7 +989,7 @@ fn processSnapshotContent(
                 try Can.populateModuleEnvs(&module_envs, can_ir, builtin_env, config.builtin_indices);
             }
 
-            var czer = try Can.init(can_ir, &parse_ast, &module_envs);
+            var czer = try Can.init(can_ir, parse_ast, &module_envs);
             defer czer.deinit();
 
             switch (content.meta.node_type) {
@@ -1107,7 +1112,7 @@ fn processSnapshotContent(
             const checker = try compile.PackageEnv.canonicalizeAndTypeCheckModule(
                 allocator,
                 can_ir,
-                &parse_ast,
+                parse_ast,
                 builtin_env,
                 config.builtin_indices,
                 imported_envs_for_file,
@@ -1160,7 +1165,7 @@ fn processSnapshotContent(
         defer cache_arena.deinit();
 
         // Create and serialize MmapCache
-        const cache_data = try CacheModule.create(allocator, cache_arena.allocator(), &module_env, can_ir, 0, 0);
+        const cache_data = try CacheModule.create(allocator, cache_arena.allocator(), can_ir, can_ir, 0, 0);
         defer allocator.free(cache_data);
 
         // Deserialize back
@@ -1364,7 +1369,7 @@ fn processSnapshotContent(
     try generateHtmlWrapper(&output, &content);
 
     // Generate reports once and use for both EXPECTED and PROBLEMS sections
-    var generated_reports = try generateAllReports(allocator, &parse_ast, can_ir, &solver, output_path, &module_env);
+    var generated_reports = try generateAllReports(allocator, parse_ast, can_ir, &solver, output_path, can_ir);
     defer {
         for (generated_reports.items) |*report| {
             report.deinit();
@@ -1382,20 +1387,20 @@ fn processSnapshotContent(
         // Mono tests: MONO and FORMATTED come right after SOURCE
         const lifted_funcs = if (lifter) |l| l.getLiftedFunctions() else &[_]LambdaLifter.LiftedFunction{};
         try generateMonoSection(&output, can_ir, Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx), output_path, config, lifted_funcs);
-        try generateFormattedSection(&output, &content, &parse_ast);
+        try generateFormattedSection(&output, &content, parse_ast);
         success = try generateExpectedSection(&output, output_path, &content, &generated_reports, config) and success;
         try generateProblemsSection(&output, &generated_reports);
-        try generateTokensSection(&output, &parse_ast, &content, &module_env, config.linecol_mode);
-        try generateParseSection(&output, &content, &parse_ast, &module_env.common, config.linecol_mode);
+        try generateTokensSection(&output, parse_ast, &content, can_ir, config.linecol_mode);
+        try generateParseSection(&output, &content, parse_ast, &can_ir.common, config.linecol_mode);
         try generateCanonicalizeSection(&output, can_ir, Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx), config.linecol_mode);
         try generateTypesSection(&output, can_ir, Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx), config.linecol_mode);
     } else {
         // Other tests: standard order
         success = try generateExpectedSection(&output, output_path, &content, &generated_reports, config) and success;
         try generateProblemsSection(&output, &generated_reports);
-        try generateTokensSection(&output, &parse_ast, &content, &module_env, config.linecol_mode);
-        try generateParseSection(&output, &content, &parse_ast, &module_env.common, config.linecol_mode);
-        try generateFormattedSection(&output, &content, &parse_ast);
+        try generateTokensSection(&output, parse_ast, &content, can_ir, config.linecol_mode);
+        try generateParseSection(&output, &content, parse_ast, &can_ir.common, config.linecol_mode);
+        try generateFormattedSection(&output, &content, parse_ast);
         try generateCanonicalizeSection(&output, can_ir, Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx), config.linecol_mode);
         try generateTypesSection(&output, can_ir, Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx), config.linecol_mode);
     }
@@ -2834,11 +2839,15 @@ fn validateMonoOutput(allocator: Allocator, mono_source: []const u8, source_path
     };
 
     // Parse the MONO output as a headerless type module
-    var validation_ast = parse.parse(&validation_env.common, allocator) catch |err| {
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(allocator);
+    defer allocators.deinit();
+
+    const validation_ast = parse.parse(&allocators, &validation_env.common) catch |err| {
         std.log.err("MONO VALIDATION ERROR in {s}: Parse failed: {}", .{ source_path, err });
         return false;
     };
-    defer validation_ast.deinit(allocator);
+    defer validation_ast.deinit();
 
     // Check for parse errors
     if (validation_ast.hasErrors()) {
@@ -2875,7 +2884,7 @@ fn validateMonoOutput(allocator: Allocator, mono_source: []const u8, source_path
     }
 
     // Canonicalize the parsed MONO output
-    var czer = Can.init(&validation_env, &validation_ast, &module_envs) catch |err| {
+    var czer = Can.init(&validation_env, validation_ast, &module_envs) catch |err| {
         std.log.err("MONO VALIDATION ERROR in {s}: Failed to initialize canonicalizer: {}", .{ source_path, err });
         return false;
     };
@@ -2999,8 +3008,12 @@ fn parseAndFormat(gpa: std.mem.Allocator, input: []const u8) ![]const u8 {
     var module_env = try ModuleEnv.init(gpa, input);
     defer module_env.deinit();
 
-    var parse_ast = try parse.parse(&module_env.common, gpa);
-    defer parse_ast.deinit(gpa);
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(gpa);
+    defer allocators.deinit();
+
+    const parse_ast = try parse.parse(&allocators, &module_env.common);
+    defer parse_ast.deinit();
 
     // Check for parse errors - if there are any, we can't format
     if (parse_ast.hasErrors()) {
@@ -3009,7 +3022,7 @@ fn parseAndFormat(gpa: std.mem.Allocator, input: []const u8) ![]const u8 {
 
     var result: std.Io.Writer.Allocating = .init(gpa);
     errdefer result.deinit();
-    try fmt.formatAst(parse_ast, &result.writer);
+    try fmt.formatAst(parse_ast.*, &result.writer);
 
     return try result.toOwnedSlice();
 }
