@@ -4516,9 +4516,13 @@ fn parsePlatformHeader(ctx: *CliContext, platform_path: []const u8) !PlatformHea
     env.module_name = module_name;
     env.common.calcLineStarts(ctx.gpa) catch return error.OutOfMemory;
 
+    var allocators: base.Allocators = undefined;
+    allocators.initInPlace(ctx.gpa);
+    defer allocators.deinit();
+
     // Parse the source code
-    var parse_ast = parse.parse(&env.common, ctx.gpa) catch return error.ParseFailed;
-    defer parse_ast.deinit(ctx.gpa);
+    var parse_ast = parse.parse(&allocators, &env.common) catch return error.ParseFailed;
+    defer parse_ast.deinit();
 
     // Get the file header
     const file_node = parse_ast.store.getFile();
@@ -4565,13 +4569,13 @@ fn parsePlatformHeader(ctx: *CliContext, platform_path: []const u8) !PlatformHea
                     var type_buf = std.ArrayList(u8).empty;
                     defer type_buf.deinit(ctx.gpa);
 
-                    printTypeAnnoToBuf(ctx.gpa, &env, &parse_ast, entry.type_anno, &type_buf);
+                    printTypeAnnoToBuf(ctx.gpa, &env, parse_ast, entry.type_anno, &type_buf);
 
                     // Generate stub expression from type annotation
                     var stub_buf = std.ArrayList(u8).empty;
                     defer stub_buf.deinit(ctx.gpa);
 
-                    generateStubExprFromTypeAnno(ctx.gpa, &env, &parse_ast, entry.type_anno, &stub_buf);
+                    generateStubExprFromTypeAnno(ctx.gpa, &env, parse_ast, entry.type_anno, &stub_buf);
 
                     try requires_entries.append(ctx.gpa, .{
                         .name = try ctx.gpa.dupe(u8, name),
