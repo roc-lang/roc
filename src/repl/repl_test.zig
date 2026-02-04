@@ -9,6 +9,7 @@ const types = @import("types");
 const collections = @import("collections");
 const compiled_builtins = @import("compiled_builtins");
 const ModuleEnv = can_mod.ModuleEnv;
+const Allocators = base.Allocators;
 const Canon = can_mod.Can;
 const Check = check_mod.Check;
 const CIR = can_mod.CIR;
@@ -303,8 +304,12 @@ test "Repl - minimal interpreter integration" {
     defer module_env.deinit();
 
     // Step 2: Parse as expression
-    var parse_ast = try parse.parseExpr(&module_env.common, gpa);
-    defer parse_ast.deinit(gpa);
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(gpa);
+    defer allocators.deinit();
+
+    const parse_ast = try parse.parseExpr(&allocators, &module_env.common);
+    defer parse_ast.deinit();
 
     // Empty scratch space (required before canonicalization)
     parse_ast.store.emptyScratch();
@@ -328,7 +333,7 @@ test "Repl - minimal interpreter integration" {
     };
 
     // Step 4: Canonicalize
-    var can = try Canon.init(cir, &parse_ast, null);
+    var can = try Canon.init(&allocators, cir, parse_ast, null);
     defer can.deinit();
 
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);

@@ -6,7 +6,9 @@ const std = @import("std");
 const protocol = @import("../protocol.zig");
 const parse = @import("parse");
 const can = @import("can");
+const base = @import("base");
 
+const Allocators = base.Allocators;
 const Token = parse.tokenize.Token;
 
 /// Handler for `textDocument/foldingRange` requests.
@@ -90,15 +92,19 @@ fn extractFoldingRanges(allocator: std.mem.Allocator, source: []const u8) ![]Fol
     defer bracket_stack.deinit(allocator);
 
     // Parse to get tokens
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(allocator);
+    defer allocators.deinit();
+
     var module_env = can.ModuleEnv.init(allocator, source) catch {
         return &[_]FoldingRange{};
     };
     defer module_env.deinit();
 
-    var ast = parse.parse(&module_env.common, allocator) catch {
+    const ast = parse.parse(&allocators, &module_env.common) catch {
         return &[_]FoldingRange{};
     };
-    defer ast.deinit(allocator);
+    defer ast.deinit();
 
     const tags = ast.tokens.tokens.items(.tag);
     const regions = ast.tokens.tokens.items(.region);

@@ -9,6 +9,7 @@ const tracy = @import("tracy");
 
 pub const tokenize = @import("tokenize.zig");
 
+const Allocators = base.Allocators;
 const CommonEnv = base.CommonEnv;
 const Diagnostic = AST.Diagnostic;
 
@@ -24,14 +25,15 @@ pub const NodeStore = @import("NodeStore.zig");
 /// Represents the intermediate representation or Abstract Syntax Tree (AST) of a parsed Roc file.
 pub const AST = @import("AST.zig");
 
-fn runParse(env: *CommonEnv, gpa: std.mem.Allocator, parserCall: *const fn (*Parser) Parser.Error!u32) Parser.Error!AST {
+/// Internal parsing implementation.
+/// TODO: Future enhancement - consider using allocators.scratch for temporary allocations
+/// during parsing (tokenizer scratch, intermediate buffers). Currently only
+/// gpa is used.
+fn runParse(allocators: *Allocators, env: *CommonEnv, parserCall: *const fn (*Parser) Parser.Error!u32) Parser.Error!*AST {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    // TODO why is this here?
-    //
-    // Calculate and store line starts for diagnostic position calculation
-    // try env.calcLineStarts();
+    const gpa = allocators.gpa;
 
     var messages: [128]tokenize.Diagnostic = undefined;
     const msg_slice = messages[0..];
@@ -51,7 +53,10 @@ fn runParse(env: *CommonEnv, gpa: std.mem.Allocator, parserCall: *const fn (*Par
     const tokenize_diagnostics_slice = try gpa.dupe(tokenize.Diagnostic, result.messages);
     const tokenize_diagnostics = std.ArrayList(tokenize.Diagnostic).fromOwnedSlice(tokenize_diagnostics_slice);
 
-    return .{
+    // Heap-allocate AST for unified ownership model
+    const ast = try gpa.create(AST);
+    ast.* = .{
+        .gpa = gpa,
         .env = env,
         .tokens = result.tokens,
         .store = parser.store,
@@ -59,12 +64,16 @@ fn runParse(env: *CommonEnv, gpa: std.mem.Allocator, parserCall: *const fn (*Par
         .tokenize_diagnostics = tokenize_diagnostics,
         .parse_diagnostics = parser.diagnostics,
     };
+
+    return ast;
 }
 
-/// Parses a single Roc file.  The returned AST should be deallocated by calling deinit
-/// after its data is used to create the next IR, or at the end of any test.
-pub fn parse(env: *CommonEnv, gpa: std.mem.Allocator) Parser.Error!AST {
-    return try runParse(env, gpa, parseFileAndReturnIdx);
+/// Parses a single Roc file.
+///
+/// The caller must call `ast.deinit()` when done, which frees all internal
+/// allocations AND the AST struct itself.
+pub fn parse(allocators: *Allocators, env: *CommonEnv) Parser.Error!*AST {
+    return try runParse(allocators, env, parseFileAndReturnIdx);
 }
 
 fn parseFileAndReturnIdx(parser: *Parser) Parser.Error!u32 {
@@ -77,10 +86,12 @@ fn parseExprAndReturnIdx(parser: *Parser) Parser.Error!u32 {
     return @intFromEnum(id);
 }
 
-/// Parses a Roc expression - only for use in snapshots. The returned AST should be deallocated by calling deinit
-/// after its data is used to create the next IR, or at the end of any test.
-pub fn parseExpr(env: *CommonEnv, gpa: std.mem.Allocator) Parser.Error!AST {
-    return try runParse(env, gpa, parseExprAndReturnIdx);
+/// Parses a Roc expression - for use in REPL and snapshots.
+///
+/// The caller must call `ast.deinit()` when done, which frees all internal
+/// allocations AND the AST struct itself.
+pub fn parseExpr(allocators: *Allocators, env: *CommonEnv) Parser.Error!*AST {
+    return try runParse(allocators, env, parseExprAndReturnIdx);
 }
 
 fn parseHeaderAndReturnIdx(parser: *Parser) Parser.Error!u32 {
@@ -88,10 +99,12 @@ fn parseHeaderAndReturnIdx(parser: *Parser) Parser.Error!u32 {
     return @intFromEnum(id);
 }
 
-/// Parses a Roc Header - only for use in snapshots. The returned AST should be deallocated by calling deinit
-/// after its data is used to create the next IR, or at the end of any test.
-pub fn parseHeader(env: *CommonEnv, gpa: std.mem.Allocator) Parser.Error!AST {
-    return try runParse(env, gpa, parseHeaderAndReturnIdx);
+/// Parses a Roc header - for use in snapshots.
+///
+/// The caller must call `ast.deinit()` when done, which frees all internal
+/// allocations AND the AST struct itself.
+pub fn parseHeader(allocators: *Allocators, env: *CommonEnv) Parser.Error!*AST {
+    return try runParse(allocators, env, parseHeaderAndReturnIdx);
 }
 
 fn parseStatementAndReturnIdx(parser: *Parser) Parser.Error!u32 {
@@ -99,10 +112,12 @@ fn parseStatementAndReturnIdx(parser: *Parser) Parser.Error!u32 {
     return @intFromEnum(idx);
 }
 
-/// Parses a single Roc statement for use in snapshots. The returned AST should be deallocated by calling deinit
-/// after its data is used to create the next IR, or at the end of any test.
-pub fn parseStatement(env: *CommonEnv, gpa: std.mem.Allocator) Parser.Error!AST {
-    return try runParse(env, gpa, parseStatementAndReturnIdx);
+/// Parses a single Roc statement - for use in REPL and snapshots.
+///
+/// The caller must call `ast.deinit()` when done, which frees all internal
+/// allocations AND the AST struct itself.
+pub fn parseStatement(allocators: *Allocators, env: *CommonEnv) Parser.Error!*AST {
+    return try runParse(allocators, env, parseStatementAndReturnIdx);
 }
 
 test "parser tests" {
@@ -129,10 +144,14 @@ test "parse error triggers errdefer cleanup" {
     const close_parens = ")" ** 150;
     const source = open_parens ++ "1" ++ close_parens;
 
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(gpa);
+    defer allocators.deinit();
+
     var env = try CommonEnv.init(gpa, source);
     defer env.deinit(gpa);
 
     // This should fail with TooNested error
-    const result = parseExpr(&env, gpa);
+    const result = parseExpr(&allocators, &env);
     try std.testing.expectError(error.TooNested, result);
 }

@@ -13,6 +13,7 @@ const Can = @import("../Can.zig");
 const ModuleEnv = @import("../ModuleEnv.zig");
 const CIR = @import("../CIR.zig");
 
+const Allocators = base.Allocators;
 const testing = std.testing;
 const expectEqual = testing.expectEqual;
 
@@ -26,19 +27,22 @@ fn parseAndCanonicalizeSource(
     ast: *parse.AST,
     can: *Can,
 } {
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(allocator);
+    defer allocators.deinit();
+
     const parse_env = try allocator.create(ModuleEnv);
     // Note: We pass allocator for both gpa and arena since the ModuleEnv
     // will be cleaned up by the caller
     parse_env.* = try ModuleEnv.init(allocator, source);
 
-    const ast = try allocator.create(parse.AST);
-    ast.* = try parse.parse(&parse_env.common, allocator);
+    const ast = try parse.parse(&allocators, &parse_env.common);
 
     // Initialize CIR fields
     try parse_env.initCIRFields("Test");
 
     const can = try allocator.create(Can);
-    can.* = try Can.init(parse_env, ast, module_envs);
+    can.* = try Can.init(&allocators, parse_env, ast, module_envs);
 
     return .{
         .parse_env = parse_env,
@@ -104,14 +108,18 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
         \\main = "test"
     ;
     // Parse the source
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(allocator);
+    defer allocators.deinit();
+
     const parse_env = try allocator.create(ModuleEnv);
     parse_env.* = try ModuleEnv.init(allocator, source);
     defer {
         parse_env.deinit();
         allocator.destroy(parse_env);
     }
-    var ast = try parse.parse(&parse_env.common, allocator);
-    defer ast.deinit(allocator);
+    const ast = try parse.parse(&allocators, &parse_env.common);
+    defer ast.deinit();
     // Initialize CIR fields
     try parse_env.initCIRFields("Test");
 
@@ -126,7 +134,7 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
     try module_envs.put(utils_module_ident, .{ .env = utils_env, .qualified_type_ident = utils_qualified_ident });
 
     // Canonicalize with module validation
-    var can = try Can.init(parse_env, &ast, &module_envs);
+    var can = try Can.init(&allocators, parse_env, ast, &module_envs);
     defer can.deinit();
     _ = try can.canonicalizeFile();
     // Collect all diagnostics
@@ -189,19 +197,22 @@ test "import validation - no module_envs provided" {
         \\main = "test"
     ;
     // Let's do it manually instead of using the helper to isolate the issue
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(allocator);
+    defer allocators.deinit();
+
     const parse_env = try allocator.create(ModuleEnv);
     parse_env.* = try ModuleEnv.init(allocator, source);
     defer {
         parse_env.deinit();
         allocator.destroy(parse_env);
     }
-    var ast = try parse.parse(&parse_env.common, allocator);
-    defer ast.deinit(allocator);
+    const ast = try parse.parse(&allocators, &parse_env.common);
+    defer ast.deinit();
     // Initialize CIR fields
     try parse_env.initCIRFields("Test");
-    // Create czer
-    //  with null module_envs
-    var can = try Can.init(parse_env, &ast, null);
+    // Create czer with null module_envs
+    var can = try Can.init(&allocators, parse_env, ast, null);
     defer can.deinit();
     _ = try can.canonicalizeFile();
     const diagnostics = try parse_env.getDiagnostics();
@@ -244,8 +255,7 @@ test "import interner - Import.Idx functionality" {
     defer {
         result.can.deinit();
         allocator.destroy(result.can);
-        result.ast.deinit(allocator);
-        allocator.destroy(result.ast);
+        result.ast.deinit();
         result.parse_env.deinit();
         allocator.destroy(result.parse_env);
     }
@@ -305,8 +315,7 @@ test "import interner - comprehensive usage example" {
     defer {
         result.can.deinit();
         allocator.destroy(result.can);
-        result.ast.deinit(allocator);
-        allocator.destroy(result.ast);
+        result.ast.deinit();
         result.parse_env.deinit();
         allocator.destroy(result.parse_env);
     }
@@ -356,8 +365,7 @@ test "module scopes - imports work in module scope" {
     defer {
         result.can.deinit();
         allocator.destroy(result.can);
-        result.ast.deinit(allocator);
-        allocator.destroy(result.ast);
+        result.ast.deinit();
         result.parse_env.deinit();
         allocator.destroy(result.parse_env);
     }
@@ -397,8 +405,7 @@ test "module-qualified lookups with e_lookup_external" {
     defer {
         result.can.deinit();
         allocator.destroy(result.can);
-        result.ast.deinit(allocator);
-        allocator.destroy(result.ast);
+        result.ast.deinit();
         result.parse_env.deinit();
         allocator.destroy(result.parse_env);
     }
@@ -466,8 +473,7 @@ test "exposed_items - tracking CIR node indices for exposed items" {
     defer {
         result.can.deinit();
         allocator.destroy(result.can);
-        result.ast.deinit(allocator);
-        allocator.destroy(result.ast);
+        result.ast.deinit();
         result.parse_env.deinit();
         allocator.destroy(result.parse_env);
     }
