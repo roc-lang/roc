@@ -144,6 +144,14 @@ fn decToStrC(out: *RocStr, value: i128, roc_ops: *RocOps) callconv(.c) void {
     out.* = RocStr.init(&buf, slice.len, roc_ops);
 }
 
+/// Wrapper: decToStrC(i128, *RocOps) -> RocStr
+/// Decomposed: (out, value_low, value_high, roc_ops) -> void
+/// This avoids platform-specific i128 passing conventions (Windows ARM64 vs Unix aarch64).
+fn wrapDecToStr(out: *RocStr, value_low: u64, value_high: u64, roc_ops: *RocOps) callconv(.c) void {
+    const value: i128 = @bitCast((@as(u128, value_high) << 64) | @as(u128, value_low));
+    decToStrC(out, value, roc_ops);
+}
+
 // ── C wrapper functions for string/list builtins ──
 // These decompose 24-byte RocStr/RocList structs into individual 8-byte fields
 // so all args fit in registers and we avoid platform-specific struct-passing ABI issues.
@@ -616,13 +624,25 @@ fn wrapU128ToDecTryUnsafe(out: [*]u8, val_low: u64, val_high: u64) callconv(.c) 
 }
 
 /// Convert signed i64 to Dec (i128). Multiplies by one_point_zero (10^18).
-fn wrapI64ToDec(val: i64) callconv(.c) i128 {
+/// Uses output pointer to avoid platform-specific i128 return value ABI issues.
+fn wrapI64ToDecOut(out_low: *u64, out_high: *u64, val: i64) callconv(.c) void {
     const RocDec = builtins.dec.RocDec;
-    if (RocDec.fromWholeInt(@as(i128, val))) |dec| {
-        return dec.num;
-    }
-    // Overflow: saturate to max/min Dec value
-    return if (val < 0) std.math.minInt(i128) else std.math.maxInt(i128);
+    const result: i128 = if (RocDec.fromWholeInt(@as(i128, val))) |dec|
+        dec.num
+    else if (val < 0)
+        std.math.minInt(i128)
+    else
+        std.math.maxInt(i128);
+    out_low.* = @truncate(@as(u128, @bitCast(result)));
+    out_high.* = @truncate(@as(u128, @bitCast(result)) >> 64);
+}
+
+/// Convert unsigned u64 to Dec (i128). Wrapper for builtins.dec.fromU64C.
+/// Uses output pointer to avoid platform-specific i128 return value ABI issues.
+fn wrapU64ToDecOut(out_low: *u64, out_high: *u64, val: u64) callconv(.c) void {
+    const result: i128 = builtins.dec.fromU64C(val);
+    out_low.* = @truncate(@as(u128, @bitCast(result)));
+    out_high.* = @truncate(@as(u128, @bitCast(result)) >> 64);
 }
 
 /// Convert Dec (i128) to i64 by truncating division by one_point_zero (10^18).
@@ -645,22 +665,32 @@ fn wrapU128ToF64(low: u64, high: u64) callconv(.c) f64 {
 }
 
 /// Convert f64 to i128 (saturating).
-fn wrapF64ToI128Trunc(val: f64) callconv(.c) i128 {
-    if (std.math.isNan(val)) return 0;
-    const min_val: f64 = @floatFromInt(@as(i128, std.math.minInt(i128)));
-    const max_val: f64 = @floatFromInt(@as(i128, std.math.maxInt(i128)));
-    if (val <= min_val) return std.math.minInt(i128);
-    if (val >= max_val) return std.math.maxInt(i128);
-    return @intFromFloat(val);
+/// Uses output pointer to avoid platform-specific i128 return value ABI issues.
+fn wrapF64ToI128TruncOut(out_low: *u64, out_high: *u64, val: f64) callconv(.c) void {
+    const result: i128 = blk: {
+        if (std.math.isNan(val)) break :blk 0;
+        const min_val: f64 = @floatFromInt(@as(i128, std.math.minInt(i128)));
+        const max_val: f64 = @floatFromInt(@as(i128, std.math.maxInt(i128)));
+        if (val <= min_val) break :blk std.math.minInt(i128);
+        if (val >= max_val) break :blk std.math.maxInt(i128);
+        break :blk @intFromFloat(val);
+    };
+    out_low.* = @truncate(@as(u128, @bitCast(result)));
+    out_high.* = @truncate(@as(u128, @bitCast(result)) >> 64);
 }
 
 /// Convert f64 to u128 (saturating).
-fn wrapF64ToU128Trunc(val: f64) callconv(.c) u128 {
-    if (std.math.isNan(val)) return 0;
-    if (val <= 0) return 0;
-    const max_val: f64 = @floatFromInt(@as(u128, std.math.maxInt(u128)));
-    if (val >= max_val) return std.math.maxInt(u128);
-    return @intFromFloat(val);
+/// Uses output pointer to avoid platform-specific u128 return value ABI issues.
+fn wrapF64ToU128TruncOut(out_low: *u64, out_high: *u64, val: f64) callconv(.c) void {
+    const result: u128 = blk: {
+        if (std.math.isNan(val)) break :blk 0;
+        if (val <= 0) break :blk 0;
+        const max_val: f64 = @floatFromInt(@as(u128, std.math.maxInt(u128)));
+        if (val >= max_val) break :blk std.math.maxInt(u128);
+        break :blk @intFromFloat(val);
+    };
+    out_low.* = @truncate(result);
+    out_high.* = @truncate(result >> 64);
 }
 
 const MonoProc = mono.MonoProc;
@@ -2837,8 +2867,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         }
                     }
 
-                    // Call fromU64C(u64) -> i128
-                    return try self.callScalarToI128(src_reg, @intFromPtr(&builtins.dec.fromU64C));
+                    // Call wrapU64ToDecOut(out_low, out_high, u64) -> void
+                    return try self.callScalarToI128(src_reg, @intFromPtr(&wrapU64ToDecOut));
                 },
 
                 .i8_to_dec,
@@ -2869,8 +2899,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         }
                     }
 
-                    // Call wrapI64ToDec(i64) -> i128
-                    return try self.callScalarToI128(src_reg, @intFromPtr(&wrapI64ToDec));
+                    // Call wrapI64ToDecOut(out_low, out_high, i64) -> void
+                    return try self.callScalarToI128(src_reg, @intFromPtr(&wrapI64ToDecOut));
                 },
 
                 // ── Dec to integer truncating conversions ──
@@ -3042,7 +3072,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     if (args.len < 1) unreachable;
                     const src_loc = try self.generateExpr(args[0]);
                     const freg = try self.ensureInFloatReg(src_loc);
-                    return try self.callF64ToI128(freg, @intFromPtr(&wrapF64ToI128Trunc));
+                    return try self.callF64ToI128(freg, @intFromPtr(&wrapF64ToI128TruncOut));
                 },
                 .f32_to_u128_trunc,
                 .f64_to_u128_trunc,
@@ -3050,8 +3080,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     if (args.len < 1) unreachable;
                     const src_loc = try self.generateExpr(args[0]);
                     const freg = try self.ensureInFloatReg(src_loc);
-                    // wrapF64ToU128Trunc returns u128, but we store as stack_i128 (same layout)
-                    return try self.callF64ToI128(freg, @intFromPtr(&wrapF64ToU128Trunc));
+                    // wrapF64ToU128TruncOut outputs u128, but we store as stack_i128 (same layout)
+                    return try self.callF64ToI128(freg, @intFromPtr(&wrapF64ToU128TruncOut));
                 },
 
                 // ── String low-level operations ──
@@ -4882,29 +4912,62 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             return .{ .stack_i128 = stack_offset };
         }
 
-        /// Call a C function: fn(u64_or_i64) -> i128.
-        /// Takes a scalar value in a general register, returns i128 on stack.
+        /// Call a C function: fn(out_low: *u64, out_high: *u64, val: T) -> void.
+        /// Takes a scalar value in a general register, returns i128 on stack via output pointers.
+        /// This avoids platform-specific i128 return value ABI issues.
         fn callScalarToI128(self: *Self, src_reg: GeneralReg, fn_addr: usize) Error!ValueLocation {
+            // Allocate stack space for the output i128
+            const stack_offset = self.codegen.allocStackSlot(16);
+
             if (comptime builtin.cpu.arch == .aarch64) {
-                try self.codegen.emit.movRegReg(.w64, .X0, src_reg);
+                // aarch64: fn(out_low: *u64, out_high: *u64, val: T)
+                // X0 = out_low, X1 = out_high, X2 = val
+
+                // X2 = val
+                try self.codegen.emit.movRegReg(.w64, .X2, src_reg);
+                self.codegen.freeGeneral(src_reg);
+
+                // X0 = &out_low (FP + stack_offset)
+                try self.codegen.emit.movRegImm64(.X0, @bitCast(@as(i64, stack_offset)));
+                try self.codegen.emit.addRegRegReg(.w64, .X0, .FP, .X0);
+
+                // X1 = &out_high (FP + stack_offset + 8)
+                try self.codegen.emit.movRegImm64(.X1, @bitCast(@as(i64, stack_offset + 8)));
+                try self.codegen.emit.addRegRegReg(.w64, .X1, .FP, .X1);
+
+                // Call
                 try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
                 try self.codegen.emit.blrReg(.X9);
             } else {
-                // Use CallBuilder for consistent handling
-                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                try builder.addRegArg(src_reg);
-                try builder.call(fn_addr);
-            }
-            self.codegen.freeGeneral(src_reg);
+                // x86_64
+                if (self.cc.is_windows) {
+                    // Windows x64: fn(out_low: *u64, out_high: *u64, val: T)
+                    // RCX = out_low, RDX = out_high, R8 = val
+                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    try builder.addLeaArg(.RBP, stack_offset); // out_low
+                    try builder.addLeaArg(.RBP, stack_offset + 8); // out_high
+                    try builder.addRegArg(src_reg); // val
+                    try builder.call(fn_addr);
+                } else {
+                    // System V: fn(out_low: *u64, out_high: *u64, val: T)
+                    // RDI = out_low, RSI = out_high, RDX = val
 
-            const stack_offset = self.codegen.allocStackSlot(16);
-            if (comptime builtin.cpu.arch == .aarch64) {
-                try self.codegen.emitStoreStack(.w64, stack_offset, .X0);
-                try self.codegen.emitStoreStack(.w64, stack_offset + 8, .X1);
-            } else {
-                try self.codegen.emitStoreStack(.w64, stack_offset, .RAX);
-                try self.codegen.emitStoreStack(.w64, stack_offset + 8, .RDX);
+                    // RDX = val
+                    try self.codegen.emit.movRegReg(.w64, .RDX, src_reg);
+
+                    // RDI = &out_low (RBP + stack_offset)
+                    try self.codegen.emit.leaRegMem(.RDI, .RBP, stack_offset);
+
+                    // RSI = &out_high (RBP + stack_offset + 8)
+                    try self.codegen.emit.leaRegMem(.RSI, .RBP, stack_offset + 8);
+
+                    // Call
+                    try self.codegen.emitLoadImm(.R11, @intCast(fn_addr));
+                    try self.codegen.emit.callReg(.R11);
+                }
+                self.codegen.freeGeneral(src_reg);
             }
+
             return .{ .stack_i128 = stack_offset };
         }
 
@@ -4940,36 +5003,74 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             return .{ .float_reg = freg };
         }
 
-        /// Call a C function: fn(f64) -> i128/u128.
-        /// Takes f64 in float register, returns 128-bit value on stack.
+        /// Call a C function: fn(out_low: *u64, out_high: *u64, val: f64) -> void.
+        /// Takes f64 in float register, returns 128-bit value on stack via output pointers.
+        /// This avoids platform-specific i128 return value ABI issues.
         fn callF64ToI128(self: *Self, freg: FloatReg, fn_addr: usize) Error!ValueLocation {
+            // Allocate stack space for the output i128
+            const stack_offset = self.codegen.allocStackSlot(16);
+
             if (comptime builtin.cpu.arch == .aarch64) {
-                // f64 argument in D0
+                // aarch64: fn(out_low: *u64, out_high: *u64, val: f64)
+                // X0 = out_low, X1 = out_high, D0 = val
+
+                // D0 = val (float register)
                 if (freg != .V0) {
                     try self.codegen.emit.fmovRegReg(.double, .V0, freg);
                 }
+                self.codegen.freeFloat(freg);
+
+                // X0 = &out_low (FP + stack_offset)
+                try self.codegen.emit.movRegImm64(.X0, @bitCast(@as(i64, stack_offset)));
+                try self.codegen.emit.addRegRegReg(.w64, .X0, .FP, .X0);
+
+                // X1 = &out_high (FP + stack_offset + 8)
+                try self.codegen.emit.movRegImm64(.X1, @bitCast(@as(i64, stack_offset + 8)));
+                try self.codegen.emit.addRegRegReg(.w64, .X1, .FP, .X1);
+
+                // Call
                 try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
                 try self.codegen.emit.blrReg(.X9);
             } else {
-                // f64 argument in XMM0 (set up manually - CallBuilder handles integers)
-                if (freg != .XMM0) {
-                    try self.codegen.emit.movsdRegReg(.XMM0, freg);
-                }
-                // Use CallBuilder for shadow space and call mechanics
-                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                try builder.call(fn_addr);
-            }
-            self.codegen.freeFloat(freg);
+                // x86_64
+                if (self.cc.is_windows) {
+                    // Windows x64: fn(out_low: *u64, out_high: *u64, val: f64)
+                    // RCX = out_low, RDX = out_high, XMM2 = val (float args in XMM0-3 parallel to int args)
+                    // Actually on Windows, floats go in XMM0-3 at the SAME positions as int args
+                    // So with 2 int args first, the float goes in the 3rd position = XMM2
+                    if (freg != .XMM2) {
+                        try self.codegen.emit.movsdRegReg(.XMM2, freg);
+                    }
+                    self.codegen.freeFloat(freg);
 
-            // i128 returned in X0:X1 (aarch64) or RAX:RDX (x86_64)
-            const stack_offset = self.codegen.allocStackSlot(16);
-            if (comptime builtin.cpu.arch == .aarch64) {
-                try self.codegen.emitStoreStack(.w64, stack_offset, .X0);
-                try self.codegen.emitStoreStack(.w64, stack_offset + 8, .X1);
-            } else {
-                try self.codegen.emitStoreStack(.w64, stack_offset, .RAX);
-                try self.codegen.emitStoreStack(.w64, stack_offset + 8, .RDX);
+                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    try builder.addLeaArg(.RBP, stack_offset); // out_low -> RCX
+                    try builder.addLeaArg(.RBP, stack_offset + 8); // out_high -> RDX
+                    // Float arg is already in XMM2 (position 2, 0-indexed)
+                    try builder.call(fn_addr);
+                } else {
+                    // System V: fn(out_low: *u64, out_high: *u64, val: f64)
+                    // RDI = out_low, RSI = out_high, XMM0 = val
+                    // Note: System V uses separate pools for int/float args
+
+                    // XMM0 = val (float register)
+                    if (freg != .XMM0) {
+                        try self.codegen.emit.movsdRegReg(.XMM0, freg);
+                    }
+                    self.codegen.freeFloat(freg);
+
+                    // RDI = &out_low (RBP + stack_offset)
+                    try self.codegen.emit.leaRegMem(.RDI, .RBP, stack_offset);
+
+                    // RSI = &out_high (RBP + stack_offset + 8)
+                    try self.codegen.emit.leaRegMem(.RSI, .RBP, stack_offset + 8);
+
+                    // Call
+                    try self.codegen.emitLoadImm(.R11, @intCast(fn_addr));
+                    try self.codegen.emit.callReg(.R11);
+                }
             }
+
             return .{ .stack_i128 = stack_offset };
         }
 
@@ -9340,20 +9441,23 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         /// Generate code for float_to_str by calling the appropriate C wrapper
         fn generateFloatToStr(self: *Self, fts: anytype) Error!ValueLocation {
             const val_loc = try self.generateExpr(fts.value);
+            // Dec uses a dedicated helper with explicit u64 decomposition to avoid
+            // platform-specific i128 calling convention issues
+            if (fts.float_precision == .dec) {
+                return try self.callDecToStrWrapped(val_loc);
+            }
             const fn_addr: usize = switch (fts.float_precision) {
                 .f32 => @intFromPtr(floatToStrC(f32)),
                 .f64 => @intFromPtr(floatToStrC(f64)),
-                .dec => @intFromPtr(&decToStrC),
+                .dec => unreachable, // handled above
             };
-            // Dec is 16 bytes (i128), f32/f64 are 8 bytes or less
-            const is_small = fts.float_precision != .dec;
-            return try self.callToStrC(fn_addr, val_loc, is_small);
+            return try self.callToStrC(fn_addr, val_loc, true);
         }
 
-        /// Generate code for dec_to_str by calling the C wrapper
+        /// Generate code for dec_to_str by calling the wrapper with decomposed i128
         fn generateDecToStr(self: *Self, expr_id: anytype) Error!ValueLocation {
             const val_loc = try self.generateExpr(expr_id);
-            return try self.callToStrC(@intFromPtr(&decToStrC), val_loc, false);
+            return try self.callDecToStrWrapped(val_loc);
         }
 
         /// Common helper: call a C wrapper fn(out: *RocStr, value: T, roc_ops: *RocOps)
@@ -9501,6 +9605,167 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
                     // Call
                     try self.codegen.emitLoadImm(.R11, @intCast(fn_addr));
+                    try self.codegen.emit.callReg(.R11);
+                }
+            }
+
+            return .{ .stack_str = result_offset };
+        }
+
+        /// Decomposed i128 value for passing to wrapDecToStr.
+        /// Uses explicit low/high u64 values to avoid platform-specific i128 ABI issues.
+        const DecomposedI128 = union(enum) {
+            /// Both halves are on stack at consecutive offsets
+            on_stack: i32, // low at offset, high at offset+8
+            /// Both halves are compile-time immediates
+            immediate: struct { low: u64, high: u64 },
+        };
+
+        /// Extract low and high u64 halves from a Dec/i128 ValueLocation.
+        /// Returns a DecomposedI128 that can be used to pass to wrapDecToStr.
+        fn decomposeI128Value(self: *Self, val_loc: ValueLocation) Error!DecomposedI128 {
+            return switch (val_loc) {
+                // 128-bit value already on stack - most common case for Dec
+                .stack_i128 => |offset| .{ .on_stack = offset },
+
+                // Generic stack location with 16 bytes
+                .stack => |offset| .{ .on_stack = offset },
+
+                // Compile-time known i128 value
+                .immediate_i128 => |val| .{
+                    .immediate = .{
+                        .low = @truncate(@as(u128, @bitCast(val))),
+                        .high = @truncate(@as(u128, @bitCast(val)) >> 64),
+                    },
+                },
+
+                // 64-bit immediate - sign-extend to i128
+                .immediate_i64 => |val| .{
+                    .immediate = .{
+                        .low = @bitCast(val),
+                        .high = if (val < 0) @as(u64, @bitCast(@as(i64, -1))) else 0,
+                    },
+                },
+
+                // Value in a general register - store to stack first, high is 0
+                .general_reg => |reg| {
+                    const val_slot = self.codegen.allocStackSlot(16);
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.strRegMemSoff(.w64, reg, .FP, val_slot);
+                        // Zero out high half
+                        try self.codegen.emitLoadImm(.X9, 0);
+                        try self.codegen.emit.strRegMemSoff(.w64, .X9, .FP, val_slot + 8);
+                    } else {
+                        try self.codegen.emit.movMemReg(.w64, .RBP, val_slot, reg);
+                        // Zero out high half
+                        try self.codegen.emitLoadImm(.R11, 0);
+                        try self.codegen.emit.movMemReg(.w64, .RBP, val_slot + 8, .R11);
+                    }
+                    self.codegen.freeGeneral(reg);
+                    return .{ .on_stack = val_slot };
+                },
+
+                // These types should never appear for Dec values
+                .float_reg => unreachable, // Dec is not a float register type
+                .stack_str => unreachable, // Dec is not a string
+                .list_stack => unreachable, // Dec is not a list
+                .lambda_code => unreachable, // Dec is not a lambda
+                .closure_value => unreachable, // Dec is not a closure
+                .immediate_f64 => unreachable, // Dec is not a float
+            };
+        }
+
+        /// Call wrapDecToStr with explicitly decomposed i128 arguments.
+        /// This avoids platform-specific i128 calling conventions by passing
+        /// (out: *RocStr, low: u64, high: u64, roc_ops: *RocOps) uniformly.
+        fn callDecToStrWrapped(self: *Self, val_loc: ValueLocation) Error!ValueLocation {
+            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+
+            // Allocate stack space for result (RocStr = 24 bytes)
+            const result_offset = self.codegen.allocStackSlot(24);
+
+            // Decompose the i128 value into low and high halves
+            const decomposed = try self.decomposeI128Value(val_loc);
+
+            if (comptime builtin.cpu.arch == .aarch64) {
+                // aarch64: wrapDecToStr(out, low, high, roc_ops)
+                // X0 = out, X1 = low, X2 = high, X3 = roc_ops
+
+                switch (decomposed) {
+                    .on_stack => |offset| {
+                        try self.codegen.emitLoadStack(.w64, .X1, offset);
+                        try self.codegen.emitLoadStack(.w64, .X2, offset + 8);
+                    },
+                    .immediate => |imm| {
+                        try self.codegen.emitLoadImm(.X1, @bitCast(imm.low));
+                        try self.codegen.emitLoadImm(.X2, @bitCast(imm.high));
+                    },
+                }
+
+                // X3 = roc_ops
+                try self.codegen.emit.movRegReg(.w64, .X3, roc_ops_reg);
+
+                // X0 = output pointer (FP + result_offset)
+                try self.codegen.emit.movRegImm64(.X0, @bitCast(@as(i64, result_offset)));
+                try self.codegen.emit.addRegRegReg(.w64, .X0, .FP, .X0);
+
+                // Call wrapDecToStr
+                try self.codegen.emitLoadImm(.X9, @intCast(@intFromPtr(&wrapDecToStr)));
+                try self.codegen.emit.blrReg(.X9);
+            } else {
+                // x86_64
+                if (self.cc.is_windows) {
+                    // Windows x64: wrapDecToStr(out, low, high, roc_ops)
+                    // RCX = out, RDX = low, R8 = high, R9 = roc_ops
+                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+
+                    // Arg 0 (RCX): output pointer
+                    try builder.addLeaArg(.RBP, result_offset);
+
+                    // Arg 1 (RDX): low, Arg 2 (R8): high
+                    switch (decomposed) {
+                        .on_stack => |offset| {
+                            try self.codegen.emitLoadStack(.w64, .R11, offset);
+                            try builder.addRegArg(.R11);
+                            try self.codegen.emitLoadStack(.w64, .R11, offset + 8);
+                            try builder.addRegArg(.R11);
+                        },
+                        .immediate => |imm| {
+                            try self.codegen.emitLoadImm(.R11, @bitCast(imm.low));
+                            try builder.addRegArg(.R11);
+                            try self.codegen.emitLoadImm(.R11, @bitCast(imm.high));
+                            try builder.addRegArg(.R11);
+                        },
+                    }
+
+                    // Arg 3 (R9): roc_ops
+                    try builder.addRegArg(roc_ops_reg);
+
+                    // Call
+                    try builder.call(@intFromPtr(&wrapDecToStr));
+                } else {
+                    // System V x86_64: wrapDecToStr(out, low, high, roc_ops)
+                    // RDI = out, RSI = low, RDX = high, RCX = roc_ops
+
+                    switch (decomposed) {
+                        .on_stack => |offset| {
+                            try self.codegen.emitLoadStack(.w64, .RSI, offset);
+                            try self.codegen.emitLoadStack(.w64, .RDX, offset + 8);
+                        },
+                        .immediate => |imm| {
+                            try self.codegen.emitLoadImm(.RSI, @bitCast(imm.low));
+                            try self.codegen.emitLoadImm(.RDX, @bitCast(imm.high));
+                        },
+                    }
+
+                    // RCX = roc_ops
+                    try self.codegen.emit.movRegReg(.w64, .RCX, roc_ops_reg);
+
+                    // RDI = output pointer
+                    try self.codegen.emit.leaRegMem(.RDI, .RBP, result_offset);
+
+                    // Call wrapDecToStr
+                    try self.codegen.emitLoadImm(.R11, @intCast(@intFromPtr(&wrapDecToStr)));
                     try self.codegen.emit.callReg(.R11);
                 }
             }
