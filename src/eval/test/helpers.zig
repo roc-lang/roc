@@ -62,15 +62,51 @@ const TraceWriter = struct {
     }
 };
 
+/// Dump bytes as hex with address and ASCII view
+fn dumpHex(data: []const u8) void {
+    var offset: usize = 0;
+    while (offset < data.len) {
+        // Print address
+        std.debug.print("{X:0>4}: ", .{offset});
+
+        // Print hex bytes (16 per line)
+        var i: usize = 0;
+        while (i < 16) : (i += 1) {
+            if (offset + i < data.len) {
+                std.debug.print("{X:0>2} ", .{data[offset + i]});
+            } else {
+                std.debug.print("   ", .{});
+            }
+            if (i == 7) std.debug.print(" ", .{});
+        }
+
+        // Print ASCII
+        std.debug.print(" |", .{});
+        i = 0;
+        while (i < 16 and offset + i < data.len) : (i += 1) {
+            const c = data[offset + i];
+            if (c >= 0x20 and c < 0x7F) {
+                std.debug.print("{c}", .{c});
+            } else {
+                std.debug.print(".", .{});
+            }
+        }
+        std.debug.print("|\n", .{});
+
+        offset += 16;
+    }
+}
+
 /// Errors that can occur during DevEvaluator string generation
 const DevEvalError = error{
     DevEvaluatorInitFailed,
     GenerateCodeFailed,
     ExecInitFailed,
     RocCrashed,
+    Segfault, // Windows SEH-caught segfault (access violation)
     UnsupportedLayout,
     OutOfMemory,
-    ChildSegfaulted,
+    ChildSegfaulted, // Unix fork-based segfault detection
     ChildExecFailed,
     ForkFailed,
     PipeCreationFailed,
@@ -93,6 +129,17 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
         return error.GenerateCodeFailed;
     };
     defer code_result.deinit();
+
+    // Debug hex dump of generated machine code.
+    // Set to true to see the raw bytes for disassembly analysis.
+    // Useful for debugging calling convention issues, register allocation, etc.
+    // See src/backend/README.md for instructions on running filtered tests with hex dump.
+    const dump_generated_code_hex = false;
+    if (dump_generated_code_hex and code_result.code.len > 0) {
+        std.debug.print("\n=== Generated Code ({} bytes, entry_offset={}) ===\n", .{ code_result.code.len, code_result.entry_offset });
+        dumpHex(code_result.code);
+        std.debug.print("=== End Generated Code ===\n\n", .{});
+    }
 
     // Execute the compiled code (with entry_offset for compiled procedures)
     var executable = backend.ExecutableMemory.initWithEntryOffset(code_result.code, code_result.entry_offset) catch {

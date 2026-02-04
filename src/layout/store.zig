@@ -136,7 +136,7 @@ pub const Store = struct {
 
     // Number of primitive types that are pre-populated in the layout store
     // Must be kept in sync with the sentinel values in layout.zig Idx enum
-    const num_scalars = 16;
+    const num_primitives = 17;
 
     /// Get the sentinel Idx for a given scalar type using pure arithmetic - no branches!
     /// This relies on the careful ordering of ScalarTag and Idx enum values.
@@ -202,8 +202,9 @@ pub const Store = struct {
         _ = try layouts.append(allocator, Layout.frac(.f32));
         _ = try layouts.append(allocator, Layout.frac(.f64));
         _ = try layouts.append(allocator, Layout.frac(.dec));
+        _ = try layouts.append(allocator, Layout.zst());
 
-        std.debug.assert(layouts.len() == num_scalars);
+        std.debug.assert(layouts.len() == num_primitives);
 
         return .{
             .all_module_envs = all_module_envs,

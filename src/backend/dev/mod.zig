@@ -196,6 +196,7 @@ pub fn Storage(
                 switch (entry.value) {
                     .general_reg => |reg| try self.general_free.append(self.allocator, reg),
                     .float_reg => |reg| try self.float_free.append(self.allocator, reg),
+                    // Stack slots are reclaimed on function return; no_data has nothing to free
                     .stack, .no_data => {},
                 }
             }
@@ -265,6 +266,7 @@ pub fn resolveBuiltinFunction(name: []const u8) ?usize {
 
 test "backend module imports" {
     std.testing.refAllDecls(@This());
+    std.testing.refAllDecls(@import("CallBuilder.zig"));
 }
 
 test "resolve builtin functions" {
