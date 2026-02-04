@@ -127,7 +127,7 @@ const Diagnostic = struct {
 /// Compiler stage data
 const CompilerStageData = struct {
     module_env: *ModuleEnv,
-    parse_ast: ?parse.AST = null,
+    parse_ast: ?*parse.AST = null,
     solver: ?Check = null,
     bool_stmt: ?can.CIR.Statement.Idx = null,
     builtin_types: ?eval.BuiltinTypes = null,
@@ -199,8 +199,8 @@ const CompilerStageData = struct {
         self.type_reports.deinit();
 
         // Deinit the AST, which depends on the ModuleEnv's allocator and source
-        if (self.parse_ast) |*ast| {
-            ast.deinit(allocator);
+        if (self.parse_ast) |ast| {
+            ast.deinit();
         }
 
         // Finally, deinit the ModuleEnv and free its memory
@@ -885,7 +885,11 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
 
     // Stage 1: Parse (includes tokenization)
     logDebug("compileSource: Starting parse stage\n", .{});
-    var parse_ast = try parse.parse(&module_env.common, module_env.gpa);
+    var allocators: base.Allocators = undefined;
+    allocators.initInPlace(allocator);
+    // NOTE: allocators is not freed here - cleanup happens in CompilerStageData.deinit
+
+    const parse_ast = try parse.parse(&allocators, &module_env.common);
     result.parse_ast = parse_ast;
     logDebug("compileSource: Parse complete\n", .{});
 
@@ -898,7 +902,7 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
     // Generate Tokens HTML
     logDebug("compileSource: Generating tokens HTML\n", .{});
     var tokens_writer: std.Io.Writer.Allocating = .init(temp_alloc);
-    AST.tokensToHtml(&parse_ast, &module_env.common, &tokens_writer.writer) catch |err| {
+    AST.tokensToHtml(parse_ast, &module_env.common, &tokens_writer.writer) catch |err| {
         logDebug("compileSource: tokensToHtml failed: {}\n", .{err});
     };
     logDebug("compileSource: Tokens HTML generated, duping to main allocator\n", .{});
@@ -916,7 +920,7 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
     var tree = SExprTree.init(temp_alloc);
 
     logDebug("compileSource: Call pushToSExprTree\n", .{});
-    try file.pushToSExprTree(module_env.gpa, &module_env.common, &parse_ast, &tree);
+    try file.pushToSExprTree(module_env.gpa, &module_env.common, parse_ast, &tree);
 
     logDebug("compileSource: Call toHtml\n", .{});
     try tree.toHtml(&ast_writer.writer, .include_linecol);
@@ -932,7 +936,7 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
     logDebug("compileSource: Generating formatted code\n", .{});
     var formatted_code_buffer: std.Io.Writer.Allocating = .init(temp_alloc);
     defer formatted_code_buffer.deinit();
-    fmt.formatAst(parse_ast, &formatted_code_buffer.writer) catch |err| {
+    fmt.formatAst(parse_ast.*, &formatted_code_buffer.writer) catch |err| {
         logDebug("compileSource: formatAst failed: {}\n", .{err});
         return err;
     };
@@ -1090,7 +1094,7 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
     try Can.populateModuleEnvs(&module_envs_map, module_env, builtin_module.env, builtin_indices);
 
     logDebug("compileSource: Starting canonicalization\n", .{});
-    var czer = try Can.init(env, &result.parse_ast.?, &module_envs_map);
+    var czer = try Can.init(env, result.parse_ast.?, &module_envs_map);
     defer czer.deinit();
 
     czer.canonicalizeFile() catch |err| {

@@ -14,6 +14,7 @@ const can = @import("can");
 const base = @import("base");
 const line_info = @import("line_info.zig");
 
+const Allocators = base.Allocators;
 const Token = tokenize.Token;
 const Tokenizer = tokenize.Tokenizer;
 const CommonEnv = base.CommonEnv;
@@ -277,6 +278,10 @@ pub fn extractSemanticTokensWithImports(
     imported_envs: ?[]*ModuleEnv,
 ) ![]SemanticToken {
     // Create ModuleEnv with source
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(allocator);
+    defer allocators.deinit();
+
     var module_env = ModuleEnv.init(allocator, source) catch {
         // Fall back to token-only extraction on error
         return extractSemanticTokens(allocator, source, info);
@@ -284,11 +289,11 @@ pub fn extractSemanticTokensWithImports(
     defer module_env.deinit();
 
     // Parse the source
-    var parse_ast = parse.parse(&module_env.common, allocator) catch {
+    const parse_ast = parse.parse(&allocators, &module_env.common) catch {
         // Fall back to token-only extraction on parse error
         return extractSemanticTokens(allocator, source, info);
     };
-    defer parse_ast.deinit(allocator);
+    defer parse_ast.deinit();
 
     // Initialize CIR fields
     module_env.initCIRFields("semantic-tokens") catch {
@@ -296,7 +301,7 @@ pub fn extractSemanticTokensWithImports(
     };
 
     // Create canonicalizer and run
-    var canonicalizer = can.Can.init(&module_env, &parse_ast, null) catch {
+    var canonicalizer = can.Can.init(&module_env, parse_ast, null) catch {
         return extractSemanticTokens(allocator, source, info);
     };
     defer canonicalizer.deinit();
@@ -336,7 +341,7 @@ pub fn extractSemanticTokensWithImports(
 
     // Also extract tokens from the tokenizer that weren't covered by CIR
     // (keywords, operators, and identifiers as fallback)
-    try collector.addTokensFromTokenizer(&parse_ast);
+    try collector.addTokensFromTokenizer(parse_ast);
 
     // Sort tokens by position (line, then character)
     std.mem.sort(SemanticToken, collector.tokens.items, {}, SemanticToken.lessThan);

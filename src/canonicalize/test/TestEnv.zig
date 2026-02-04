@@ -6,6 +6,7 @@ const parse = @import("parse");
 const CIR = @import("../CIR.zig");
 const Can = @import("../Can.zig");
 const ModuleEnv = @import("../ModuleEnv.zig");
+const Allocators = base.Allocators;
 
 gpa: std.mem.Allocator,
 module_env: *ModuleEnv,
@@ -18,14 +19,15 @@ pub const TestEnv = @This();
 pub fn init(source: []const u8) !TestEnv {
     const gpa = std.testing.allocator;
 
-    // Allocate our ModuleEnv, AST, and Can on the heap
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(gpa);
+    defer allocators.deinit();
+
+    // Allocate our ModuleEnv and Can on the heap
     // so we can keep them around for testing purposes...
     // this is an unusual setup, but helps us with testing
     const module_env: *ModuleEnv = try gpa.create(ModuleEnv);
     errdefer gpa.destroy(module_env);
-
-    const parse_ast = try gpa.create(parse.AST);
-    errdefer gpa.destroy(parse_ast);
 
     const can = try gpa.create(Can);
     errdefer gpa.destroy(can);
@@ -34,8 +36,8 @@ pub fn init(source: []const u8) !TestEnv {
     module_env.* = try ModuleEnv.init(gpa, source);
     errdefer module_env.deinit();
 
-    parse_ast.* = try parse.parseExpr(&module_env.common, gpa);
-    errdefer parse_ast.deinit(gpa);
+    const parse_ast = try parse.parseExpr(&allocators, &module_env.common);
+    errdefer parse_ast.deinit();
 
     // Phase 4: AST Structure Validation
     if (parse_ast.root_node_idx >= 0) {
@@ -60,8 +62,7 @@ pub fn init(source: []const u8) !TestEnv {
 pub fn deinit(self: *TestEnv) void {
     self.can.deinit();
     self.gpa.destroy(self.can);
-    self.parse_ast.deinit(self.gpa);
-    self.gpa.destroy(self.parse_ast);
+    self.parse_ast.deinit();
 
     // ModuleEnv.deinit calls self.common.deinit() to clean up CommonEnv's internals
     // Since common is now a value field, we don't need to free it separately

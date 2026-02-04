@@ -19,6 +19,7 @@ const BuiltinTypes = @import("../builtins.zig").BuiltinTypes;
 const Can = can.Can;
 const Check = check.Check;
 const ModuleEnv = can.ModuleEnv;
+const Allocators = base.Allocators;
 const CompactWriter = collections.CompactWriter;
 const testing = std.testing;
 const test_allocator = testing.allocator;
@@ -715,8 +716,12 @@ test "ModuleEnv serialization and interpreter evaluation" {
     try original_env.common.calcLineStarts(original_env.gpa);
 
     // Parse the source code
-    var parse_ast = try parse.parseExpr(&original_env.common, original_env.gpa);
-    defer parse_ast.deinit(gpa);
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(gpa);
+    defer allocators.deinit();
+
+    const parse_ast = try parse.parseExpr(&allocators, &original_env.common);
+    defer parse_ast.deinit();
 
     // Empty scratch space (required before canonicalization)
     parse_ast.store.emptyScratch();
@@ -746,7 +751,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
     try module_envs_map.put(builtin_ident, .{ .env = builtin_module.env, .qualified_type_ident = builtin_qualified_ident });
 
     // Create canonicalizer with module_envs_map for qualified name resolution
-    var czer = try Can.init(&original_env, &parse_ast, &module_envs_map);
+    var czer = try Can.init(&original_env, parse_ast, &module_envs_map);
     defer czer.deinit();
 
     // Canonicalize the expression

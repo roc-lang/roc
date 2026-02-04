@@ -8,6 +8,7 @@ const eval = @import("eval");
 const compile_package = @import("../compile_package.zig");
 const BuiltinModules = eval.BuiltinModules;
 
+const Allocators = base.Allocators;
 const ModuleEnv = can.ModuleEnv;
 
 test "canonicalizeAndTypeCheckModule preserves Try types in type printing" {
@@ -30,12 +31,16 @@ test "canonicalizeAndTypeCheckModule preserves Try types in type printing" {
     ;
 
     // Create ModuleEnv
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(gpa);
+    defer allocators.deinit();
+
     var env = try ModuleEnv.init(gpa, source);
     defer env.deinit();
 
     // Parse
-    var parse_ast = try parse.parse(&env.common, gpa);
-    defer parse_ast.deinit(gpa);
+    const parse_ast = try parse.parse(&allocators, &env.common);
+    defer parse_ast.deinit();
 
     // Load builtin modules
     var builtin_modules = try BuiltinModules.init(gpa);
@@ -52,7 +57,7 @@ test "canonicalizeAndTypeCheckModule preserves Try types in type printing" {
     var result = try compile_package.PackageEnv.canonicalizeAndTypeCheckModule(
         gpa,
         &env,
-        &parse_ast,
+        parse_ast,
         builtin_env,
         builtin_modules.builtin_indices,
         imported_envs,

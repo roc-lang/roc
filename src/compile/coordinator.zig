@@ -215,8 +215,7 @@ pub const ModuleState = struct {
             if (comptime trace_build) {
                 std.debug.print("[MOD DEINIT] {s}: freeing ast\n", .{self.name});
             }
-            ast.deinit(gpa);
-            gpa.destroy(ast);
+            ast.deinit();
         }
 
         // Free module env if present (only if we own module data)
@@ -1966,7 +1965,10 @@ pub const Coordinator = struct {
         const worker_alloc = self.getWorkerAllocator();
         // Pre-allocate reports to reduce allocation contention in multi-threaded mode
         var reports = std.ArrayList(Report).initCapacity(worker_alloc, 8) catch std.ArrayList(Report).empty;
-        var parse_ast = parse.parse(&env.common, worker_alloc) catch {
+        var allocators: base.Allocators = undefined;
+        allocators.initInPlace(worker_alloc);
+        // NOTE: allocators not freed here - cleanup happens in executeCanonicalize
+        const parse_ast = parse.parse(&allocators, &env.common) catch {
             // Parse failed but we still have partial env
             const end_time = if (threads_available) std.time.nanoTimestamp() else 0;
             return .{
@@ -1984,29 +1986,15 @@ pub const Coordinator = struct {
         };
         parse_ast.store.emptyScratch();
 
-        // Cache AST - use worker allocator for thread safety
-        const ast_ptr = worker_alloc.create(AST) catch {
-            parse_ast.deinit(worker_alloc);
-            return .{
-                .parse_failed = .{
-                    .package_name = task.package_name,
-                    .module_id = task.module_id,
-                    .module_name = task.module_name,
-                    .path = task.path,
-                    .reports = reports,
-                    .partial_env = env,
-                },
-            };
-        };
-        ast_ptr.* = parse_ast;
+        // parse_ast is already heap-allocated by parse.parse
 
         // Collect parse diagnostics
-        for (ast_ptr.tokenize_diagnostics.items) |diagnostic| {
-            const rep = ast_ptr.tokenizeDiagnosticToReport(diagnostic, worker_alloc, task.path) catch continue;
+        for (parse_ast.tokenize_diagnostics.items) |diagnostic| {
+            const rep = parse_ast.tokenizeDiagnosticToReport(diagnostic, worker_alloc, task.path) catch continue;
             reports.append(worker_alloc, rep) catch {};
         }
-        for (ast_ptr.parse_diagnostics.items) |diagnostic| {
-            const rep = ast_ptr.parseDiagnosticToReport(&env.common, diagnostic, worker_alloc, task.path) catch continue;
+        for (parse_ast.parse_diagnostics.items) |diagnostic| {
+            const rep = parse_ast.parseDiagnosticToReport(&env.common, diagnostic, worker_alloc, task.path) catch continue;
             reports.append(worker_alloc, rep) catch {};
         }
 
@@ -2019,7 +2007,7 @@ pub const Coordinator = struct {
                 .module_name = task.module_name,
                 .path = task.path,
                 .module_env = env,
-                .cached_ast = ast_ptr,
+                .cached_ast = parse_ast,
                 .reports = reports,
                 .parse_ns = if (threads_available) @intCast(end_time - start_time) else 0,
             },
@@ -2133,9 +2121,8 @@ pub const Coordinator = struct {
             }
         }
 
-        // Free AST - use worker allocator (matches allocation in executeParse)
-        ast.deinit(worker_alloc);
-        worker_alloc.destroy(ast);
+        // Free AST - deinit now handles both internal cleanup and self-destruction
+        ast.deinit();
 
         return .{
             .canonicalized = .{
