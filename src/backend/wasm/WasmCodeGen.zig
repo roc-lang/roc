@@ -221,8 +221,8 @@ fn generateExpr(self: *Self, expr_id: MonoExprId) Error!void {
             self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
             WasmModule.leb128WriteI32(self.allocator, &self.body, if (val) 1 else 0) catch return error.OutOfMemory;
         },
-        .dec_literal => return error.UnsupportedExpr, // needs full i128 arithmetic support
-        .i128_literal => return error.UnsupportedExpr, // needs full i128 arithmetic support
+        .dec_literal => return error.UnsupportedExpr,
+        .i128_literal => return error.UnsupportedExpr,
         .binop => |b| {
             // Check for structural equality on composite types
             if ((b.op == .eq or b.op == .neq) and self.isCompositeExpr(b.lhs)) {
@@ -465,6 +465,16 @@ fn generateExpr(self: *Self, expr_id: MonoExprId) Error!void {
         },
         .tag => |t| {
             try self.generateTag(t);
+        },
+        .dbg => |d| {
+            // Debug: evaluate expression and return its value (print is a no-op in wasm)
+            try self.generateExpr(d.expr);
+        },
+        .expect => |e| {
+            // Expect: evaluate condition (drop result), then evaluate body
+            try self.generateExpr(e.cond);
+            self.body.append(self.allocator, Op.drop) catch return error.OutOfMemory;
+            try self.generateExpr(e.body);
         },
         .incref, .decref, .free => {
             // RC ops are no-ops for now (Phase 7 will implement)
@@ -724,6 +734,8 @@ fn exprLayoutIdx(self: *Self, expr_id: MonoExprId) ?layout.Idx {
         .tuple_access => |ta| ta.elem_layout,
         .zero_arg_tag => |z| z.union_layout,
         .tag => |t| t.union_layout,
+        .dbg => |d| d.result_layout,
+        .expect => |e| e.result_layout,
         .incref => |inc| self.exprLayoutIdx(inc.value),
         .decref => |dec| self.exprLayoutIdx(dec.value),
         .free => |f| self.exprLayoutIdx(f.value),
@@ -763,6 +775,8 @@ fn exprValType(self: *Self, expr_id: MonoExprId) ValType {
         .tuple_access => |ta| self.resolveValType(ta.elem_layout),
         .zero_arg_tag => .i32, // discriminant or pointer
         .tag => .i32, // pointer to stack memory
+        .dbg => |d| self.resolveValType(d.result_layout),
+        .expect => |e| self.resolveValType(e.result_layout),
         .incref => |inc| self.exprValType(inc.value),
         .decref => |dec| self.exprValType(dec.value),
         .free => |f| self.exprValType(f.value),
