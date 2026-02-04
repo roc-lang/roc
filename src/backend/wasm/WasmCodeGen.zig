@@ -3948,6 +3948,15 @@ fn generateCall(self: *Self, c: anytype) Error!void {
             const key: u48 = @bitCast(lookup.symbol);
             break :blk self.symbol_funcs.get(key);
         },
+        .nominal => |nom| blk: {
+            // Nominal wrapping a lambda or closure
+            const inner = self.store.getExpr(nom.backing_expr);
+            switch (inner) {
+                .lambda => |lambda| break :blk try self.compileLambda(nom.backing_expr, lambda),
+                .closure => |closure| break :blk try self.compileClosure(nom.backing_expr, closure),
+                else => break :blk null,
+            }
+        },
         else => null,
     };
 
