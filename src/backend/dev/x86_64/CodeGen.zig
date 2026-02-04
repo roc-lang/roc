@@ -6,14 +6,15 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
+const RocTarget = @import("roc_target").RocTarget;
 
-const Emit = @import("Emit.zig");
+const EmitMod = @import("Emit.zig");
+const Emit = EmitMod.Emit(RocTarget.detectNative());
 const Registers = @import("Registers.zig");
 const SystemV = @import("SystemV.zig");
 const WindowsFastcall = @import("WindowsFastcall.zig");
 const Relocation = @import("../Relocation.zig").Relocation;
 const GenericCodeGen = @import("../CodeGen.zig");
-const CallBuilder = @import("../CallBuilder.zig");
 
 const GeneralReg = Registers.GeneralReg;
 const FloatReg = Registers.FloatReg;
@@ -350,7 +351,7 @@ pub const SystemVCodeGen = struct {
 
     pub fn getStackSize(self: *Self) u32 {
         const size: u32 = @intCast(-self.stack_offset);
-        return CallBuilder.CC.alignStackSize(size);
+        return Emit.CC.alignStackSize(size);
     }
 
     // Function prologue/epilogue
@@ -399,8 +400,8 @@ pub const SystemVCodeGen = struct {
 
         // CRITICAL: Allocate stack space BEFORE saving callee-saved registers!
         // On Windows x64, there's no red zone, so we must not write below RSP.
-        // Use CallBuilder.CC.alignStackSize for proper platform alignment.
-        const aligned_size = CallBuilder.CC.alignStackSize(stack_size);
+        // Use Emit.CC.alignStackSize for proper platform alignment.
+        const aligned_size = Emit.CC.alignStackSize(stack_size);
         if (aligned_size > 0) {
             try self.emit.subRegImm32(.w64, .RSP, @intCast(aligned_size));
         }

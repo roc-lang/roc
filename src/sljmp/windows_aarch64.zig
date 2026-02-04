@@ -15,7 +15,7 @@ pub const JmpBuf = [21]u64;
 fn setjmpImpl() callconv(.naked) void {
     // Windows ARM64: first arg in X0, return in X0
     asm volatile (
-        // Save general-purpose callee-saved registers X19-X28
+    // Save general-purpose callee-saved registers X19-X28
         \\stp x19, x20, [x0, #0]
         \\stp x21, x22, [x0, #16]
         \\stp x23, x24, [x0, #32]
@@ -42,8 +42,8 @@ fn setjmpImpl() callconv(.naked) void {
 fn longjmpImpl() callconv(.naked) void {
     // Windows ARM64: first arg (jmp_buf) in X0, second arg (val) in W1 (32-bit)
     asm volatile (
-        // Set return value (if val == 0, return 1)
-        // Use 32-bit registers (w) since c_int is 32 bits
+    // Set return value (if val == 0, return 1)
+    // Use 32-bit registers (w) since c_int is 32 bits
         \\cmp w1, #0
         \\csinc w1, w1, wzr, ne
         // Restore SIMD callee-saved registers D8-D15
