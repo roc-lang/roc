@@ -333,8 +333,12 @@ pub fn CallBuilder(comptime Emit: type) type {
             if (self.int_arg_index < CC.PARAM_REGS.len) {
                 const dst = CC.PARAM_REGS[self.int_arg_index];
                 if (comptime builtin.cpu.arch == .aarch64) {
-                    // aarch64: ADD dst, base, #offset
-                    try self.emit.addRegRegImm12(.w64, dst, base_reg, @intCast(offset));
+                    // aarch64: ADD dst, base, #offset (or SUB for negative offsets)
+                    if (offset >= 0) {
+                        try self.emit.addRegRegImm12(.w64, dst, base_reg, @intCast(offset));
+                    } else {
+                        try self.emit.subRegRegImm12(.w64, dst, base_reg, @intCast(-offset));
+                    }
                 } else {
                     try self.emit.leaRegMem(dst, base_reg, offset);
                 }
@@ -356,7 +360,7 @@ pub fn CallBuilder(comptime Emit: type) type {
             if (self.int_arg_index < CC.PARAM_REGS.len) {
                 const dst = CC.PARAM_REGS[self.int_arg_index];
                 if (comptime builtin.cpu.arch == .aarch64) {
-                    try self.emit.ldrRegRegImm(.w64, dst, base_reg, offset);
+                    try self.emit.ldrRegMemSoff(.w64, dst, base_reg, offset);
                 } else {
                     try self.emit.movRegMem(.w64, dst, base_reg, offset);
                 }
@@ -868,7 +872,7 @@ pub fn CalleeBuilder(comptime Emit: type) type {
             // STP-saved registers are at FP-16, FP-8, etc.
             // Odd register (if any) is stored at FP - stp_bytes - 8.
             const odd_bytes: i32 = if (self.push_count % 2 == 1) 8 else 0;
-            return -@as(i32, stp_bytes) - odd_bytes;
+            return -@as(i32, @intCast(stp_bytes)) - odd_bytes;
         }
 
         /// Emit function epilogue. Mirrors the prologue automatically.

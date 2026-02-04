@@ -1059,8 +1059,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 const x19_bit = @as(u32, 1) << @intFromEnum(aarch64.GeneralReg.X19);
                 const x20_bit = @as(u32, 1) << @intFromEnum(aarch64.GeneralReg.X20);
                 self.codegen.callee_saved_available &= ~(x19_bit | x20_bit);
-                self.codegen.callee_saved_used |= @as(u16, 1) << @intFromEnum(aarch64.GeneralReg.X19);
-                self.codegen.callee_saved_used |= @as(u16, 1) << @intFromEnum(aarch64.GeneralReg.X20);
+                self.codegen.callee_saved_used |= @as(u32, 1) << @intFromEnum(aarch64.GeneralReg.X19);
+                self.codegen.callee_saved_used |= @as(u32, 1) << @intFromEnum(aarch64.GeneralReg.X20);
             } else if (comptime builtin.os.tag == .windows) {
                 // Windows x64: Clear RCX and RDX from the free register mask
                 const rcx_bit = @as(u32, 1) << @intFromEnum(x86_64.GeneralReg.RCX);
@@ -12617,7 +12617,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 const r12_bit = @as(u16, 1) << @intFromEnum(x86_64.GeneralReg.R12);
                 self.codegen.callee_saved_used |= r12_bit;
             } else {
-                const x20_bit = @as(u16, 1) << @intFromEnum(aarch64.GeneralReg.X20);
+                const x20_bit = @as(u32, 1) << @intFromEnum(aarch64.GeneralReg.X20);
                 self.codegen.callee_saved_used |= x20_bit;
             }
 
