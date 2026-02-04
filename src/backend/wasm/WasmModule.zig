@@ -269,12 +269,20 @@ const DataSegment = struct {
     data: []const u8, // bytes to place
 };
 
+/// An imported function
+const Import = struct {
+    module_name: []const u8,
+    field_name: []const u8,
+    type_idx: u32,
+};
+
 /// Module state
 allocator: Allocator,
 func_types: std.ArrayList(FuncType),
 func_type_indices: std.ArrayList(u32), // func_idx -> type_idx
 func_bodies: std.ArrayList(FuncBody),
 exports: std.ArrayList(Export),
+imports: std.ArrayList(Import),
 data_segments: std.ArrayList(DataSegment),
 /// Next available offset for data placement in linear memory (grows up from 0).
 data_offset: u32,
@@ -289,6 +297,7 @@ pub fn init(allocator: Allocator) Self {
         .func_type_indices = .empty,
         .func_bodies = .empty,
         .exports = .empty,
+        .imports = .empty,
         .data_segments = .empty,
         .data_offset = 1024, // reserve first 1KB for future use
         .has_memory = false,
@@ -311,10 +320,28 @@ pub fn deinit(self: *Self) void {
     }
     self.func_bodies.deinit(self.allocator);
     self.exports.deinit(self.allocator);
+    self.imports.deinit(self.allocator);
     for (self.data_segments.items) |ds| {
         self.allocator.free(ds.data);
     }
     self.data_segments.deinit(self.allocator);
+}
+
+/// Add an imported function. Returns the function index (imports come before regular functions).
+/// Important: all imports must be added BEFORE any regular functions via addFunction().
+pub fn addImport(self: *Self, module_name: []const u8, field_name: []const u8, type_idx: u32) !u32 {
+    const func_idx: u32 = @intCast(self.imports.items.len);
+    try self.imports.append(self.allocator, .{
+        .module_name = module_name,
+        .field_name = field_name,
+        .type_idx = type_idx,
+    });
+    return func_idx;
+}
+
+/// Get the number of imported functions. Regular function indices are offset by this.
+pub fn importCount(self: *const Self) u32 {
+    return @intCast(self.imports.items.len);
 }
 
 /// Add a function type (signature) and return its index.
@@ -403,6 +430,11 @@ pub fn encode(self: *Self, allocator: Allocator) ![]u8 {
         try self.encodeTypeSection(allocator, &output);
     }
 
+    // Import section (must be between type and function sections)
+    if (self.imports.items.len > 0) {
+        try self.encodeImportSection(allocator, &output);
+    }
+
     // Function section
     if (self.func_type_indices.items.len > 0) {
         try self.encodeFunctionSection(allocator, &output);
@@ -455,6 +487,29 @@ fn encodeTypeSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) !v
     }
 
     try output.append(gpa, @intFromEnum(SectionId.type_section));
+    try leb128WriteU32(gpa, output, @intCast(section_data.items.len));
+    try output.appendSlice(gpa, section_data.items);
+}
+
+fn encodeImportSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) !void {
+    var section_data: std.ArrayList(u8) = .empty;
+    defer section_data.deinit(gpa);
+
+    try leb128WriteU32(gpa, &section_data, @intCast(self.imports.items.len));
+    for (self.imports.items) |imp| {
+        // Module name
+        try leb128WriteU32(gpa, &section_data, @intCast(imp.module_name.len));
+        try section_data.appendSlice(gpa, imp.module_name);
+        // Field name
+        try leb128WriteU32(gpa, &section_data, @intCast(imp.field_name.len));
+        try section_data.appendSlice(gpa, imp.field_name);
+        // Import kind: 0x00 = function
+        try section_data.append(gpa, 0x00);
+        // Type index
+        try leb128WriteU32(gpa, &section_data, imp.type_idx);
+    }
+
+    try output.append(gpa, @intFromEnum(SectionId.import_section));
     try leb128WriteU32(gpa, output, @intCast(section_data.items.len));
     try output.appendSlice(gpa, section_data.items);
 }
