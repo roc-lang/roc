@@ -72,19 +72,46 @@ const CoffRelocation = extern struct {
 };
 
 /// COFF Symbol Table Entry (18 bytes)
-const CoffSymbol = extern struct {
-    name: extern union {
-        short_name: [8]u8,
-        long_name: extern struct {
-            zeroes: u32,
-            offset: u32,
-        },
-    },
+/// Note: We cannot use this struct directly with asBytes due to padding.
+/// Use writeSymbol() to write exactly 18 bytes.
+const CoffSymbol = struct {
+    name_bytes: [8]u8, // Either short name or (zeroes:u32, offset:u32)
     value: u32,
     section_number: i16,
     type: u16,
     storage_class: u8,
     number_of_aux_symbols: u8,
+
+    const SIZE = 18; // Exact size in COFF format
+
+    fn setShortName(self: *CoffSymbol, name: []const u8) void {
+        @memset(&self.name_bytes, 0);
+        @memcpy(self.name_bytes[0..name.len], name);
+    }
+
+    fn setLongName(self: *CoffSymbol, str_offset: u32) void {
+        // First 4 bytes are zeroes (indicates long name)
+        std.mem.writeInt(u32, self.name_bytes[0..4], 0, .little);
+        // Next 4 bytes are offset into string table
+        std.mem.writeInt(u32, self.name_bytes[4..8], str_offset, .little);
+    }
+
+    fn writeToBuffer(self: *const CoffSymbol, buffer: *std.ArrayList(u8), allocator: std.mem.Allocator) !void {
+        // Write exactly 18 bytes
+        try buffer.appendSlice(allocator, &self.name_bytes); // 8 bytes
+        var value_bytes: [4]u8 = undefined;
+        std.mem.writeInt(u32, &value_bytes, self.value, .little);
+        try buffer.appendSlice(allocator, &value_bytes); // 4 bytes
+        var section_bytes: [2]u8 = undefined;
+        std.mem.writeInt(i16, &section_bytes, self.section_number, .little);
+        try buffer.appendSlice(allocator, &section_bytes); // 2 bytes
+        var type_bytes: [2]u8 = undefined;
+        std.mem.writeInt(u16, &type_bytes, self.type, .little);
+        try buffer.appendSlice(allocator, &type_bytes); // 2 bytes
+        try buffer.append(allocator, self.storage_class); // 1 byte
+        try buffer.append(allocator, self.number_of_aux_symbols); // 1 byte
+        // Total: 18 bytes
+    }
 };
 
 /// Target architecture for COFF generation
@@ -252,7 +279,7 @@ pub const CoffWriter = struct {
 
         for (self.symbols.items) |sym| {
             var coff_sym = CoffSymbol{
-                .name = undefined,
+                .name_bytes = undefined,
                 .value = sym.offset,
                 .section_number = switch (sym.section) {
                     .text => SECT_TEXT,
@@ -268,20 +295,18 @@ pub const CoffWriter = struct {
 
             // Handle symbol name (short names <= 8 bytes go directly, longer ones go to string table)
             if (sym.name.len <= 8) {
-                @memset(&coff_sym.name.short_name, 0);
-                @memcpy(coff_sym.name.short_name[0..sym.name.len], sym.name);
+                coff_sym.setShortName(sym.name);
             } else {
                 const str_offset = try self.addString(sym.name);
-                coff_sym.name.long_name.zeroes = 0;
-                coff_sym.name.long_name.offset = str_offset;
+                coff_sym.setLongName(str_offset);
             }
 
-            try symtab.appendSlice(self.allocator, std.mem.asBytes(&coff_sym));
+            try coff_sym.writeToBuffer(&symtab, self.allocator);
         }
 
-        // Update string table size (first 4 bytes)
+        // Update string table size (first 4 bytes) - write as little-endian u32
         const strtab_size: u32 = @intCast(self.strtab.items.len);
-        @memcpy(self.strtab.items[0..4], std.mem.asBytes(&strtab_size));
+        std.mem.writeInt(u32, self.strtab.items[0..4], strtab_size, .little);
 
         // Write COFF header
         const header = CoffHeader{
