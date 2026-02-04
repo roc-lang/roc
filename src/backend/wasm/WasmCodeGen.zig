@@ -354,7 +354,50 @@ fn generateExpr(self: *Self, expr_id: MonoExprId) Error!void {
                     .mod => switch (vt) {
                         .i32 => if (is_unsigned) Op.i32_rem_u else Op.i32_rem_s,
                         .i64 => if (is_unsigned) Op.i64_rem_u else Op.i64_rem_s,
-                        else => return error.UnsupportedExpr,
+                        .f32, .f64 => {
+                            // Float mod: a % b = a - trunc(a / b) * b
+                            // lhs and rhs are already on the stack
+                            if (vt == .f32) {
+                                const a = self.storage.allocAnonymousLocal(.f32) catch return error.OutOfMemory;
+                                const bv = self.storage.allocAnonymousLocal(.f32) catch return error.OutOfMemory;
+                                self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
+                                WasmModule.leb128WriteU32(self.allocator, &self.body, bv) catch return error.OutOfMemory;
+                                self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
+                                WasmModule.leb128WriteU32(self.allocator, &self.body, a) catch return error.OutOfMemory;
+                                self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                                WasmModule.leb128WriteU32(self.allocator, &self.body, a) catch return error.OutOfMemory;
+                                self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                                WasmModule.leb128WriteU32(self.allocator, &self.body, a) catch return error.OutOfMemory;
+                                self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                                WasmModule.leb128WriteU32(self.allocator, &self.body, bv) catch return error.OutOfMemory;
+                                self.body.append(self.allocator, Op.f32_div) catch return error.OutOfMemory;
+                                self.body.append(self.allocator, Op.f32_trunc) catch return error.OutOfMemory;
+                                self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                                WasmModule.leb128WriteU32(self.allocator, &self.body, bv) catch return error.OutOfMemory;
+                                self.body.append(self.allocator, Op.f32_mul) catch return error.OutOfMemory;
+                                self.body.append(self.allocator, Op.f32_sub) catch return error.OutOfMemory;
+                            } else {
+                                const a = self.storage.allocAnonymousLocal(.f64) catch return error.OutOfMemory;
+                                const bv = self.storage.allocAnonymousLocal(.f64) catch return error.OutOfMemory;
+                                self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
+                                WasmModule.leb128WriteU32(self.allocator, &self.body, bv) catch return error.OutOfMemory;
+                                self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
+                                WasmModule.leb128WriteU32(self.allocator, &self.body, a) catch return error.OutOfMemory;
+                                self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                                WasmModule.leb128WriteU32(self.allocator, &self.body, a) catch return error.OutOfMemory;
+                                self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                                WasmModule.leb128WriteU32(self.allocator, &self.body, a) catch return error.OutOfMemory;
+                                self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                                WasmModule.leb128WriteU32(self.allocator, &self.body, bv) catch return error.OutOfMemory;
+                                self.body.append(self.allocator, Op.f64_div) catch return error.OutOfMemory;
+                                self.body.append(self.allocator, Op.f64_trunc) catch return error.OutOfMemory;
+                                self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                                WasmModule.leb128WriteU32(self.allocator, &self.body, bv) catch return error.OutOfMemory;
+                                self.body.append(self.allocator, Op.f64_mul) catch return error.OutOfMemory;
+                                self.body.append(self.allocator, Op.f64_sub) catch return error.OutOfMemory;
+                            }
+                            return; // multi-instruction, skip the single-op emit below
+                        },
                     },
                     .eq => switch (vt) {
                         .i32 => Op.i32_eq,
@@ -486,6 +529,46 @@ fn generateExpr(self: *Self, expr_id: MonoExprId) Error!void {
                         // Evaluate expression for side effects, drop result
                         try self.generateExpr(stmt.expr);
                         self.body.append(self.allocator, Op.drop) catch return error.OutOfMemory;
+                    },
+                    .record => |rec| {
+                        // Record destructuring: generate expr → pointer, then bind each field
+                        try self.generateExpr(stmt.expr);
+                        const ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+                        self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
+                        WasmModule.leb128WriteU32(self.allocator, &self.body, ptr) catch return error.OutOfMemory;
+                        try self.bindRecordPattern(ptr, rec);
+                    },
+                    .tuple => |tup| {
+                        // Tuple destructuring: generate expr → pointer, then bind each element
+                        try self.generateExpr(stmt.expr);
+                        const ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+                        self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
+                        WasmModule.leb128WriteU32(self.allocator, &self.body, ptr) catch return error.OutOfMemory;
+                        try self.bindTuplePattern(ptr, tup);
+                    },
+                    .as_pattern => |as_pat| {
+                        // As-pattern: bind the whole value AND match inner pattern
+                        try self.generateExpr(stmt.expr);
+                        const vt = self.resolveValType(as_pat.layout_idx);
+                        const local_idx = self.storage.allocLocal(as_pat.symbol, vt) catch return error.OutOfMemory;
+                        self.body.append(self.allocator, Op.local_tee) catch return error.OutOfMemory;
+                        WasmModule.leb128WriteU32(self.allocator, &self.body, local_idx) catch return error.OutOfMemory;
+                        // Now bind inner pattern with the same value on the stack
+                        const inner = self.store.getPattern(as_pat.inner);
+                        switch (inner) {
+                            .bind => |inner_bind| {
+                                const inner_vt = self.resolveValType(inner_bind.layout_idx);
+                                const inner_local = self.storage.allocLocal(inner_bind.symbol, inner_vt) catch return error.OutOfMemory;
+                                self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
+                                WasmModule.leb128WriteU32(self.allocator, &self.body, inner_local) catch return error.OutOfMemory;
+                            },
+                            .wildcard => {
+                                self.body.append(self.allocator, Op.drop) catch return error.OutOfMemory;
+                            },
+                            else => {
+                                self.body.append(self.allocator, Op.drop) catch return error.OutOfMemory;
+                            },
+                        }
                     },
                     else => return error.UnsupportedExpr,
                 }
@@ -3166,6 +3249,125 @@ fn generateRecord(self: *Self, r: anytype) Error!void {
 
 /// Generate a field access expression.
 /// Loads a field value from a record pointer.
+/// Bind a record destructuring pattern: load each field from a record pointer
+/// and bind sub-patterns (recursively for nested destructuring).
+fn bindRecordPattern(self: *Self, ptr_local: u32, rec: anytype) Error!void {
+    const ls = try self.getLayoutStore();
+    const record_layout = ls.getLayout(rec.record_layout);
+    if (record_layout.tag != .record) return error.UnsupportedExpr;
+
+    const field_patterns = self.store.getPatternSpan(rec.fields);
+    for (field_patterns, 0..) |pat_id, i| {
+        const pat = self.store.getPattern(pat_id);
+        const field_idx: u16 = @intCast(i);
+        const field_offset = ls.getRecordFieldOffset(record_layout.data.record.idx, field_idx);
+        const field_byte_size = ls.getRecordFieldSize(record_layout.data.record.idx, field_idx);
+        const field_layout_idx = ls.getRecordFieldLayout(record_layout.data.record.idx, field_idx);
+
+        switch (pat) {
+            .bind => |bind| {
+                const is_composite = self.isCompositeLayout(field_layout_idx);
+                if (is_composite and field_byte_size > 0) {
+                    // Composite field: compute pointer = ptr + offset
+                    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteU32(self.allocator, &self.body, ptr_local) catch return error.OutOfMemory;
+                    if (field_offset > 0) {
+                        self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                        WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(field_offset)) catch return error.OutOfMemory;
+                        self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+                    }
+                    const local_idx = self.storage.allocLocal(bind.symbol, .i32) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteU32(self.allocator, &self.body, local_idx) catch return error.OutOfMemory;
+                } else {
+                    // Scalar field: load from memory
+                    const field_vt = WasmLayout.resultValTypeWithStore(field_layout_idx, ls);
+                    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteU32(self.allocator, &self.body, ptr_local) catch return error.OutOfMemory;
+                    try self.emitLoadOpSized(field_vt, field_byte_size, field_offset);
+                    const local_idx = self.storage.allocLocal(bind.symbol, field_vt) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteU32(self.allocator, &self.body, local_idx) catch return error.OutOfMemory;
+                }
+            },
+            .wildcard => {},
+            .record => |inner_rec| {
+                // Nested record destructuring: compute pointer to field
+                self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                WasmModule.leb128WriteU32(self.allocator, &self.body, ptr_local) catch return error.OutOfMemory;
+                if (field_offset > 0) {
+                    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(field_offset)) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+                }
+                const field_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+                self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
+                WasmModule.leb128WriteU32(self.allocator, &self.body, field_ptr) catch return error.OutOfMemory;
+                try self.bindRecordPattern(field_ptr, inner_rec);
+            },
+            .tuple => |inner_tup| {
+                self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                WasmModule.leb128WriteU32(self.allocator, &self.body, ptr_local) catch return error.OutOfMemory;
+                if (field_offset > 0) {
+                    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(field_offset)) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+                }
+                const field_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+                self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
+                WasmModule.leb128WriteU32(self.allocator, &self.body, field_ptr) catch return error.OutOfMemory;
+                try self.bindTuplePattern(field_ptr, inner_tup);
+            },
+            else => return error.UnsupportedExpr,
+        }
+    }
+}
+
+/// Bind a tuple destructuring pattern: load each element from a tuple pointer
+/// and bind sub-patterns.
+fn bindTuplePattern(self: *Self, ptr_local: u32, tup: anytype) Error!void {
+    const ls = try self.getLayoutStore();
+    const tuple_layout = ls.getLayout(tup.tuple_layout);
+    if (tuple_layout.tag != .tuple) return error.UnsupportedExpr;
+
+    const elem_patterns = self.store.getPatternSpan(tup.elems);
+    for (elem_patterns, 0..) |pat_id, i| {
+        const pat = self.store.getPattern(pat_id);
+        const elem_idx: u16 = @intCast(i);
+        const elem_offset = ls.getTupleElementOffsetByOriginalIndex(tuple_layout.data.tuple.idx, elem_idx);
+        const elem_byte_size = ls.getTupleElementSizeByOriginalIndex(tuple_layout.data.tuple.idx, elem_idx);
+        const elem_layout_idx = ls.getTupleElementLayoutByOriginalIndex(tuple_layout.data.tuple.idx, elem_idx);
+
+        switch (pat) {
+            .bind => |bind| {
+                const is_composite = self.isCompositeLayout(elem_layout_idx);
+                if (is_composite and elem_byte_size > 0) {
+                    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteU32(self.allocator, &self.body, ptr_local) catch return error.OutOfMemory;
+                    if (elem_offset > 0) {
+                        self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                        WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(elem_offset)) catch return error.OutOfMemory;
+                        self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+                    }
+                    const local_idx = self.storage.allocLocal(bind.symbol, .i32) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteU32(self.allocator, &self.body, local_idx) catch return error.OutOfMemory;
+                } else {
+                    const elem_vt = WasmLayout.resultValTypeWithStore(elem_layout_idx, ls);
+                    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteU32(self.allocator, &self.body, ptr_local) catch return error.OutOfMemory;
+                    try self.emitLoadOpSized(elem_vt, elem_byte_size, elem_offset);
+                    const local_idx = self.storage.allocLocal(bind.symbol, elem_vt) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteU32(self.allocator, &self.body, local_idx) catch return error.OutOfMemory;
+                }
+            },
+            .wildcard => {},
+            else => return error.UnsupportedExpr,
+        }
+    }
+}
+
 fn generateFieldAccess(self: *Self, fa: anytype) Error!void {
     const ls = try self.getLayoutStore();
 
