@@ -15059,9 +15059,9 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
 /// Select the appropriate code generator based on target architecture
 pub const MonoExprCodeGen = if (builtin.cpu.arch == .aarch64)
-    MonoExprCodeGenFor(aarch64.CodeGen.AArch64CodeGen, aarch64.GeneralReg, aarch64.FloatReg, aarch64.Emit.Condition)
+    MonoExprCodeGenFor(aarch64.CodeGen.AArch64CodeGen, aarch64.GeneralReg, aarch64.FloatReg, aarch64.NativeEmit.Condition)
 else if (builtin.cpu.arch == .x86_64)
-    MonoExprCodeGenFor(x86_64.CodeGen.SystemVCodeGen, x86_64.GeneralReg, x86_64.FloatReg, x86_64.Emit.Condition)
+    MonoExprCodeGenFor(x86_64.CodeGen.SystemVCodeGen, x86_64.GeneralReg, x86_64.FloatReg, x86_64.NativeEmit.Condition)
 else
     UnsupportedArchCodeGen;
 

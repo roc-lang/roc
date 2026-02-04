@@ -4,9 +4,16 @@
 //! function prologues/epilogues and instruction selection.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
+const RocTarget = @import("roc_target").RocTarget;
 
-const Emit = @import("Emit.zig");
+const EmitMod = @import("Emit.zig");
+// Use native target if building on aarch64, otherwise use arm64linux as fallback for cross-compilation
+const Emit = if (builtin.cpu.arch == .aarch64 or builtin.cpu.arch == .aarch64_be)
+    EmitMod.Emit(RocTarget.detectNative())
+else
+    EmitMod.Emit(.arm64linux);
 const Registers = @import("Registers.zig");
 const Call = @import("Call.zig");
 const Relocation = @import("../Relocation.zig").Relocation;

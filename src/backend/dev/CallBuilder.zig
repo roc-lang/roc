@@ -11,6 +11,10 @@
 //! - Return-by-pointer for large returns
 //! - Pass-by-pointer for large structs (Windows)
 //! - Correct argument register ordering per platform
+//!
+//! The CallBuilder and CalleeBuilder are parameterized by an Emit type which provides:
+//! - GeneralReg, FloatReg: Register types
+//! - CC: Calling convention constants
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -118,123 +122,19 @@ pub const CallingConvention = struct {
     }
 };
 
-/// Comptime-known calling convention for host-native code generation
-/// Use CallingConvention.forTarget() for cross-compilation support
-pub const CC = struct {
-    pub const PARAM_REGS = switch (builtin.cpu.arch) {
-        .aarch64 => [_]aarch64.GeneralReg{
-            .X0, .X1, .X2, .X3, .X4, .X5, .X6, .X7,
-        },
-        .x86_64 => if (builtin.os.tag == .windows)
-            [_]x86_64.GeneralReg{ .RCX, .RDX, .R8, .R9 }
-        else
-            [_]x86_64.GeneralReg{ .RDI, .RSI, .RDX, .RCX, .R8, .R9 },
-        else => @compileError("Unsupported architecture"),
-    };
-
-    /// Float parameter registers for function calls
-    /// Windows x64: Position-based (XMM0-3 mirror arg positions 0-3)
-    /// System V: Separate pool (XMM0-7 used independently of integer regs)
-    pub const FLOAT_PARAM_REGS = switch (builtin.cpu.arch) {
-        .aarch64 => [_]aarch64.FloatReg{
-            .D0, .D1, .D2, .D3, .D4, .D5, .D6, .D7,
-        },
-        .x86_64 => if (builtin.os.tag == .windows)
-            [_]x86_64.FloatReg{ .XMM0, .XMM1, .XMM2, .XMM3 }
-        else
-            [_]x86_64.FloatReg{ .XMM0, .XMM1, .XMM2, .XMM3, .XMM4, .XMM5, .XMM6, .XMM7 },
-        else => @compileError("Unsupported architecture"),
-    };
-
-    pub const RETURN_REGS = switch (builtin.cpu.arch) {
-        .aarch64 => [_]aarch64.GeneralReg{ .X0, .X1 },
-        .x86_64 => if (builtin.os.tag == .windows)
-            [_]x86_64.GeneralReg{.RAX}
-        else
-            [_]x86_64.GeneralReg{ .RAX, .RDX },
-        else => @compileError("Unsupported architecture"),
-    };
-
-    pub const SHADOW_SPACE: u8 = switch (builtin.cpu.arch) {
-        .aarch64 => 0,
-        .x86_64 => if (builtin.os.tag == .windows) 32 else 0,
-        else => 0,
-    };
-
-    /// Threshold for "return via pointer" (first arg is output ptr)
-    /// Windows x64: > 8 bytes returned via pointer
-    /// Unix / aarch64: > 16 bytes returned via pointer
-    pub const RETURN_BY_PTR_THRESHOLD: usize = switch (builtin.cpu.arch) {
-        .aarch64 => 16,
-        .x86_64 => if (builtin.os.tag == .windows) 8 else 16,
-        else => 16,
-    };
-
-    /// Threshold for "pass by pointer" (large struct arg becomes pointer)
-    /// Windows x64: structs > 8 bytes are passed by pointer
-    /// Note: Only power-of-2 sizes (1, 2, 4, 8) can be passed by value on Windows x64.
-    /// Use canPassStructByValue() for the complete check.
-    /// aarch64: Uses AAPCS64 regardless of OS - no pass-by-pointer for structs.
-    pub const PASS_BY_PTR_THRESHOLD: usize = switch (builtin.cpu.arch) {
-        .x86_64 => if (builtin.os.tag == .windows) 8 else std.math.maxInt(usize),
-        else => std.math.maxInt(usize),
-    };
-
-    /// Check if a struct of the given size can be passed by value in a register.
-    /// Windows x64 ABI: Only structs of size 1, 2, 4, or 8 bytes can be passed by value.
-    /// All other sizes (including 3, 5, 6, 7, and >8) must be passed by pointer.
-    /// aarch64: Uses AAPCS64 - structs up to 16 bytes passed in registers.
-    pub fn canPassStructByValue(size: usize) bool {
-        if (builtin.cpu.arch == .x86_64 and builtin.os.tag == .windows) {
-            return size == 1 or size == 2 or size == 4 or size == 8;
-        }
-        // System V / AAPCS64: structs up to 16 bytes can be passed in registers (2x 8-byte)
-        return size <= 16;
-    }
-
-    pub const SCRATCH_REG = switch (builtin.cpu.arch) {
-        .aarch64 => aarch64.GeneralReg.X9,
-        .x86_64 => x86_64.GeneralReg.R11,
-        else => @compileError("Unsupported architecture"),
-    };
-
-    pub const BASE_PTR = switch (builtin.cpu.arch) {
-        .aarch64 => aarch64.GeneralReg.FP,
-        .x86_64 => x86_64.GeneralReg.RBP,
-        else => @compileError("Unsupported architecture"),
-    };
-
-    pub const STACK_PTR = switch (builtin.cpu.arch) {
-        .aarch64 => aarch64.GeneralReg.ZRSP,
-        .x86_64 => x86_64.GeneralReg.RSP,
-        else => @compileError("Unsupported architecture"),
-    };
-
-    /// Stack alignment requirement for function prologues.
-    /// On x86_64, the stack must be 16-byte aligned before CALL instructions.
-    /// On aarch64, the stack must be 16-byte aligned at all times.
-    pub const STACK_ALIGNMENT: u32 = 16;
-
-    /// Align a stack size to the platform's required alignment.
-    /// This should be used when allocating stack frames in function prologues.
-    pub fn alignStackSize(size: u32) u32 {
-        return (size + STACK_ALIGNMENT - 1) & ~(STACK_ALIGNMENT - 1);
-    }
-};
-
 /// Call builder for setting up cross-platform function calls
-pub fn CallBuilder(comptime Emit: type) type {
-    const GeneralReg = switch (builtin.cpu.arch) {
-        .aarch64 => aarch64.GeneralReg,
-        .x86_64 => x86_64.GeneralReg,
-        else => @compileError("Unsupported architecture"),
-    };
-
-    const FloatReg = switch (builtin.cpu.arch) {
-        .aarch64 => aarch64.FloatReg,
-        .x86_64 => x86_64.FloatReg,
-        else => @compileError("Unsupported architecture"),
-    };
+/// The Emit type must provide:
+/// - CC: Calling convention struct with PARAM_REGS, FLOAT_PARAM_REGS, etc.
+/// - GeneralReg and FloatReg types (re-exported from the Emit struct)
+pub fn CallBuilder(comptime EmitType: type) type {
+    // Get calling convention and register types from the Emit type
+    const CC_EMIT = EmitType.CC;
+    const GeneralReg = EmitType.GeneralReg;
+    const FloatReg = EmitType.FloatReg;
+    const roc_target = EmitType.roc_target;
+    const is_x86_64 = roc_target.toCpuArch() == .x86_64;
+    const is_aarch64 = roc_target.toCpuArch() == .aarch64 or roc_target.toCpuArch() == .aarch64_be;
+    const is_windows = roc_target.isWindows();
 
     // Represents a deferred stack argument to be stored after stack allocation
     const StackArg = union(enum) {
@@ -254,7 +154,7 @@ pub fn CallBuilder(comptime Emit: type) type {
     return struct {
         const Self = @This();
 
-        emit: *Emit,
+        emit: *EmitType,
         int_arg_index: usize = 0,
         /// Float argument index (separate from int_arg_index on System V, same on Windows)
         float_arg_index: usize = 0,
@@ -273,23 +173,23 @@ pub fn CallBuilder(comptime Emit: type) type {
         ///
         /// The stack_offset pointer should point to the CodeGen's stack_offset field.
         /// This method will allocate space by decrementing the stack offset on Windows.
-        pub fn init(emit: *Emit, stack_offset: *i32) !Self {
+        pub fn init(emit: *EmitType, stack_offset: *i32) !Self {
             var self = Self{ .emit = emit };
-            if (comptime builtin.cpu.arch == .x86_64 and builtin.os.tag == .windows) {
+            if (comptime is_x86_64 and is_windows) {
                 // Allocate 16-byte slot for R12 save to maintain 16-byte alignment
                 // for subsequent allocations (important for i128/RocDec which need
                 // 16-byte aligned addresses when passed by pointer)
                 stack_offset.* -= 16;
                 self.r12_save_offset = stack_offset.*;
                 // Save R12 immediately to the RBP-relative slot
-                try self.emit.movMemReg(.w64, CC.BASE_PTR, self.r12_save_offset.?, .R12);
+                try self.emit.movMemReg(.w64, CC_EMIT.BASE_PTR, self.r12_save_offset.?, .R12);
             }
             return self;
         }
 
         /// Check if return type needs to use pointer (implicit first arg)
         pub fn needsReturnByPointer(return_size: usize) bool {
-            return return_size > CC.RETURN_BY_PTR_THRESHOLD;
+            return return_size > CC_EMIT.RETURN_BY_PTR_THRESHOLD;
         }
 
         /// Check if a struct argument needs to be passed by pointer.
@@ -298,11 +198,7 @@ pub fn CallBuilder(comptime Emit: type) type {
         /// aarch64 (all OSes): Zig uses AAPCS64 for callconv(.c), no pass-by-pointer.
         /// System V: Never uses pass-by-pointer (large structs are copied to stack).
         pub fn needsPassByPointer(arg_size: usize) bool {
-            if (comptime builtin.cpu.arch == .x86_64 and builtin.os.tag == .windows) {
-                // Windows x64: only power-of-2 sizes up to 8 can pass by value
-                return !(arg_size == 1 or arg_size == 2 or arg_size == 4 or arg_size == 8);
-            }
-            return arg_size > CC.PASS_BY_PTR_THRESHOLD;
+            return CC_EMIT.needsPassByPointer(arg_size);
         }
 
         /// Set up return by pointer (for large return types)
@@ -310,15 +206,15 @@ pub fn CallBuilder(comptime Emit: type) type {
         pub fn setReturnByPointer(self: *Self, offset: i32) !void {
             std.debug.assert(self.int_arg_index == 0);
             self.return_by_ptr = true;
-            try self.addLeaArg(CC.BASE_PTR, offset);
+            try self.addLeaArg(CC_EMIT.BASE_PTR, offset);
         }
 
         /// Add argument from a general register
         pub fn addRegArg(self: *Self, src_reg: GeneralReg) !void {
-            if (self.int_arg_index < CC.PARAM_REGS.len) {
-                const dst = CC.PARAM_REGS[self.int_arg_index];
+            if (self.int_arg_index < CC_EMIT.PARAM_REGS.len) {
+                const dst = CC_EMIT.PARAM_REGS[self.int_arg_index];
                 if (dst != src_reg) {
-                    if (comptime builtin.cpu.arch == .aarch64) {
+                    if (comptime is_aarch64) {
                         try self.emit.movRegReg(.w64, dst, src_reg);
                     } else {
                         try self.emit.movRegReg(.w64, dst, src_reg);
@@ -326,7 +222,7 @@ pub fn CallBuilder(comptime Emit: type) type {
                 }
                 self.int_arg_index += 1;
             } else {
-                if (comptime builtin.cpu.arch == .aarch64) {
+                if (comptime is_aarch64) {
                     // aarch64: push to stack (str with pre-decrement or stp)
                     @panic("Stack args not yet implemented for aarch64 CallBuilder");
                 } else {
@@ -340,9 +236,9 @@ pub fn CallBuilder(comptime Emit: type) type {
 
         /// Add argument by loading a pointer (LEA) to a stack location
         pub fn addLeaArg(self: *Self, base_reg: GeneralReg, offset: i32) !void {
-            if (self.int_arg_index < CC.PARAM_REGS.len) {
-                const dst = CC.PARAM_REGS[self.int_arg_index];
-                if (comptime builtin.cpu.arch == .aarch64) {
+            if (self.int_arg_index < CC_EMIT.PARAM_REGS.len) {
+                const dst = CC_EMIT.PARAM_REGS[self.int_arg_index];
+                if (comptime is_aarch64) {
                     // aarch64: ADD dst, base, #offset (or SUB for negative offsets)
                     if (offset >= 0) {
                         try self.emit.addRegRegImm12(.w64, dst, base_reg, @intCast(offset));
@@ -354,7 +250,7 @@ pub fn CallBuilder(comptime Emit: type) type {
                 }
                 self.int_arg_index += 1;
             } else {
-                if (comptime builtin.cpu.arch == .aarch64) {
+                if (comptime is_aarch64) {
                     @panic("Stack args not yet implemented for aarch64 CallBuilder");
                 } else {
                     // Defer stack arg - will be stored after stack allocation in call()
@@ -367,16 +263,16 @@ pub fn CallBuilder(comptime Emit: type) type {
 
         /// Add argument by loading from stack memory
         pub fn addMemArg(self: *Self, base_reg: GeneralReg, offset: i32) !void {
-            if (self.int_arg_index < CC.PARAM_REGS.len) {
-                const dst = CC.PARAM_REGS[self.int_arg_index];
-                if (comptime builtin.cpu.arch == .aarch64) {
+            if (self.int_arg_index < CC_EMIT.PARAM_REGS.len) {
+                const dst = CC_EMIT.PARAM_REGS[self.int_arg_index];
+                if (comptime is_aarch64) {
                     try self.emit.ldrRegMemSoff(.w64, dst, base_reg, offset);
                 } else {
                     try self.emit.movRegMem(.w64, dst, base_reg, offset);
                 }
                 self.int_arg_index += 1;
             } else {
-                if (comptime builtin.cpu.arch == .aarch64) {
+                if (comptime is_aarch64) {
                     @panic("Stack args not yet implemented for aarch64 CallBuilder");
                 } else {
                     // Defer stack arg - will be stored after stack allocation in call()
@@ -389,16 +285,16 @@ pub fn CallBuilder(comptime Emit: type) type {
 
         /// Add immediate value argument
         pub fn addImmArg(self: *Self, value: i64) !void {
-            if (self.int_arg_index < CC.PARAM_REGS.len) {
-                const dst = CC.PARAM_REGS[self.int_arg_index];
-                if (comptime builtin.cpu.arch == .aarch64) {
+            if (self.int_arg_index < CC_EMIT.PARAM_REGS.len) {
+                const dst = CC_EMIT.PARAM_REGS[self.int_arg_index];
+                if (comptime is_aarch64) {
                     try self.emit.movRegImm64(dst, @bitCast(value));
                 } else {
                     try self.emit.movRegImm64(dst, value);
                 }
                 self.int_arg_index += 1;
             } else {
-                if (comptime builtin.cpu.arch == .aarch64) {
+                if (comptime is_aarch64) {
                     @panic("Stack args not yet implemented for aarch64 CallBuilder");
                 } else {
                     // Defer stack arg - will be stored after stack allocation in call()
@@ -413,18 +309,18 @@ pub fn CallBuilder(comptime Emit: type) type {
         /// Windows x64: Only 1, 2, 4, 8 byte structs pass by value; all others by pointer.
         /// System V: Structs up to 16 bytes can be passed in registers.
         pub fn addStructArg(self: *Self, offset: i32, size: usize) !void {
-            if (CC.canPassStructByValue(size)) {
+            if (CC_EMIT.canPassStructByValue(size)) {
                 // Struct can be passed by value in register(s)
                 if (size <= 8) {
-                    try self.addMemArg(CC.BASE_PTR, offset);
+                    try self.addMemArg(CC_EMIT.BASE_PTR, offset);
                 } else {
                     // System V only: 9-16 byte structs use two registers
-                    try self.addMemArg(CC.BASE_PTR, offset);
-                    try self.addMemArg(CC.BASE_PTR, offset + 8);
+                    try self.addMemArg(CC_EMIT.BASE_PTR, offset);
+                    try self.addMemArg(CC_EMIT.BASE_PTR, offset + 8);
                 }
             } else {
                 // Pass by pointer (Windows for non-power-of-2 or >8 bytes, System V for >16 bytes)
-                try self.addLeaArg(CC.BASE_PTR, offset);
+                try self.addLeaArg(CC_EMIT.BASE_PTR, offset);
             }
         }
 
@@ -433,11 +329,11 @@ pub fn CallBuilder(comptime Emit: type) type {
         ///              A float arg at position 1 goes in XMM1, consuming both int and float slots.
         /// System V: Uses separate float register pool (XMM0-7 independent of integer regs).
         pub fn addFloatRegArg(self: *Self, src_reg: FloatReg, is_f64: bool) !void {
-            if (comptime builtin.os.tag == .windows) {
+            if (comptime is_windows) {
                 // Windows: float args use same position as int args
                 // XMM0 for arg 0, XMM1 for arg 1, etc.
-                if (self.int_arg_index < CC.FLOAT_PARAM_REGS.len) {
-                    const dst = CC.FLOAT_PARAM_REGS[self.int_arg_index];
+                if (self.int_arg_index < CC_EMIT.FLOAT_PARAM_REGS.len) {
+                    const dst = CC_EMIT.FLOAT_PARAM_REGS[self.int_arg_index];
                     if (dst != src_reg) {
                         if (is_f64) {
                             try self.emit.movsdRegReg(dst, src_reg);
@@ -452,8 +348,8 @@ pub fn CallBuilder(comptime Emit: type) type {
                 }
             } else {
                 // System V: separate float register pool
-                if (self.float_arg_index < CC.FLOAT_PARAM_REGS.len) {
-                    const dst = CC.FLOAT_PARAM_REGS[self.float_arg_index];
+                if (self.float_arg_index < CC_EMIT.FLOAT_PARAM_REGS.len) {
+                    const dst = CC_EMIT.FLOAT_PARAM_REGS[self.float_arg_index];
                     if (dst != src_reg) {
                         if (is_f64) {
                             try self.emit.movsdRegReg(dst, src_reg);
@@ -483,10 +379,10 @@ pub fn CallBuilder(comptime Emit: type) type {
         /// Windows x64: Uses position-based registers (XMM0-3 mirror arg positions 0-3).
         /// System V: Uses separate float register pool (XMM0-7).
         pub fn addFloatMemArg(self: *Self, base_reg: GeneralReg, offset: i32, is_f64: bool) !void {
-            if (comptime builtin.os.tag == .windows) {
+            if (comptime is_windows) {
                 // Windows: float args use same position as int args
-                if (self.int_arg_index < CC.FLOAT_PARAM_REGS.len) {
-                    const dst = CC.FLOAT_PARAM_REGS[self.int_arg_index];
+                if (self.int_arg_index < CC_EMIT.FLOAT_PARAM_REGS.len) {
+                    const dst = CC_EMIT.FLOAT_PARAM_REGS[self.int_arg_index];
                     if (is_f64) {
                         try self.emit.movsdRegMem(dst, base_reg, offset);
                     } else {
@@ -498,8 +394,8 @@ pub fn CallBuilder(comptime Emit: type) type {
                 }
             } else {
                 // System V: separate float register pool
-                if (self.float_arg_index < CC.FLOAT_PARAM_REGS.len) {
-                    const dst = CC.FLOAT_PARAM_REGS[self.float_arg_index];
+                if (self.float_arg_index < CC_EMIT.FLOAT_PARAM_REGS.len) {
+                    const dst = CC_EMIT.FLOAT_PARAM_REGS[self.float_arg_index];
                     if (is_f64) {
                         try self.emit.movsdRegMem(dst, base_reg, offset);
                     } else {
@@ -524,17 +420,17 @@ pub fn CallBuilder(comptime Emit: type) type {
 
         /// Get the number of float argument registers available
         pub fn getNumFloatArgRegs() usize {
-            return CC.FLOAT_PARAM_REGS.len;
+            return CC_EMIT.FLOAT_PARAM_REGS.len;
         }
 
         /// Get float argument register at index
         pub fn getFloatArgReg(index: usize) FloatReg {
-            return CC.FLOAT_PARAM_REGS[index];
+            return CC_EMIT.FLOAT_PARAM_REGS[index];
         }
 
         /// Get the float return register (XMM0 on x86_64)
         pub fn getFloatReturnReg() FloatReg {
-            return CC.FLOAT_PARAM_REGS[0];
+            return CC_EMIT.FLOAT_PARAM_REGS[0];
         }
 
         /// Emit call instruction and handle cleanup.
@@ -543,46 +439,46 @@ pub fn CallBuilder(comptime Emit: type) type {
         pub fn call(self: *Self, fn_addr: usize) !void {
             // Calculate total stack space needed
             const stack_args_space: u32 = @intCast(self.stack_arg_count * 8);
-            const total_unaligned: u32 = CC.SHADOW_SPACE + stack_args_space;
+            const total_unaligned: u32 = CC_EMIT.SHADOW_SPACE + stack_args_space;
             // Round up to 16-byte alignment (Windows x64 ABI requirement)
             const total_space: u32 = (total_unaligned + 15) & ~@as(u32, 15);
 
             // Assert stack is 16-byte aligned
             std.debug.assert(total_space % 16 == 0);
             // Assert shadow space is included when we have stack args
-            std.debug.assert(self.stack_arg_count == 0 or total_space >= CC.SHADOW_SPACE + 8);
+            std.debug.assert(self.stack_arg_count == 0 or total_space >= CC_EMIT.SHADOW_SPACE + 8);
 
-            if (comptime builtin.cpu.arch == .x86_64) {
+            if (comptime is_x86_64) {
                 // Allocate all stack space at once
                 if (total_space > 0) {
-                    try self.emit.subRegImm32(.w64, CC.STACK_PTR, @intCast(total_space));
+                    try self.emit.subRegImm32(.w64, CC_EMIT.STACK_PTR, @intCast(total_space));
                 }
 
                 // Store deferred stack arguments at correct offsets
                 // Stack args go after shadow space: [RSP+32], [RSP+40], etc.
                 for (self.stack_args[0..self.stack_arg_count], 0..) |arg, i| {
-                    const stack_offset: i32 = @intCast(CC.SHADOW_SPACE + i * 8);
+                    const stack_offset: i32 = @intCast(CC_EMIT.SHADOW_SPACE + i * 8);
                     // Assert stack args are placed after shadow space
-                    std.debug.assert(stack_offset >= CC.SHADOW_SPACE);
+                    std.debug.assert(stack_offset >= CC_EMIT.SHADOW_SPACE);
                     switch (arg) {
                         .from_reg => |reg| {
-                            try self.emit.movMemReg(.w64, CC.STACK_PTR, stack_offset, reg);
+                            try self.emit.movMemReg(.w64, CC_EMIT.STACK_PTR, stack_offset, reg);
                         },
                         .from_imm => |value| {
-                            try self.emit.movRegImm64(CC.SCRATCH_REG, value);
-                            try self.emit.movMemReg(.w64, CC.STACK_PTR, stack_offset, CC.SCRATCH_REG);
+                            try self.emit.movRegImm64(CC_EMIT.SCRATCH_REG, value);
+                            try self.emit.movMemReg(.w64, CC_EMIT.STACK_PTR, stack_offset, CC_EMIT.SCRATCH_REG);
                         },
                         .from_lea => |lea| {
-                            try self.emit.leaRegMem(CC.SCRATCH_REG, lea.base, lea.offset);
-                            try self.emit.movMemReg(.w64, CC.STACK_PTR, stack_offset, CC.SCRATCH_REG);
+                            try self.emit.leaRegMem(CC_EMIT.SCRATCH_REG, lea.base, lea.offset);
+                            try self.emit.movMemReg(.w64, CC_EMIT.STACK_PTR, stack_offset, CC_EMIT.SCRATCH_REG);
                         },
                         .from_mem => |mem| {
-                            try self.emit.movRegMem(.w64, CC.SCRATCH_REG, mem.base, mem.offset);
-                            try self.emit.movMemReg(.w64, CC.STACK_PTR, stack_offset, CC.SCRATCH_REG);
+                            try self.emit.movRegMem(.w64, CC_EMIT.SCRATCH_REG, mem.base, mem.offset);
+                            try self.emit.movMemReg(.w64, CC_EMIT.STACK_PTR, stack_offset, CC_EMIT.SCRATCH_REG);
                         },
                     }
                 }
-            } else if (comptime builtin.cpu.arch == .aarch64) {
+            } else if (comptime is_aarch64) {
                 // aarch64 doesn't need shadow space, but may need stack args
                 if (self.stack_arg_count > 0) {
                     @panic("Stack args not yet implemented for aarch64 CallBuilder");
@@ -590,31 +486,31 @@ pub fn CallBuilder(comptime Emit: type) type {
             }
 
             // Load function address into scratch register
-            if (comptime builtin.cpu.arch == .aarch64) {
-                try self.emit.movRegImm64(CC.SCRATCH_REG, fn_addr);
+            if (comptime is_aarch64) {
+                try self.emit.movRegImm64(CC_EMIT.SCRATCH_REG, fn_addr);
             } else {
-                try self.emit.movRegImm64(CC.SCRATCH_REG, @bitCast(@as(i64, @intCast(fn_addr))));
+                try self.emit.movRegImm64(CC_EMIT.SCRATCH_REG, @bitCast(@as(i64, @intCast(fn_addr))));
             }
 
             // Call through scratch register
-            if (comptime builtin.cpu.arch == .aarch64) {
-                try self.emit.blrReg(CC.SCRATCH_REG);
+            if (comptime is_aarch64) {
+                try self.emit.blrReg(CC_EMIT.SCRATCH_REG);
             } else {
-                try self.emit.callReg(CC.SCRATCH_REG);
+                try self.emit.callReg(CC_EMIT.SCRATCH_REG);
             }
 
             // Cleanup
-            if (comptime builtin.cpu.arch == .x86_64) {
+            if (comptime is_x86_64) {
                 // Restore stack pointer
                 if (total_space > 0) {
-                    try self.emit.addRegImm32(.w64, CC.STACK_PTR, @intCast(total_space));
+                    try self.emit.addRegImm32(.w64, CC_EMIT.STACK_PTR, @intCast(total_space));
                 }
 
                 // Restore R12 if we saved it (Windows x64 only)
                 if (self.r12_save_offset) |offset| {
-                    try self.emit.movRegMem(.w64, .R12, CC.BASE_PTR, offset);
+                    try self.emit.movRegMem(.w64, .R12, CC_EMIT.BASE_PTR, offset);
                 }
-            } else if (comptime builtin.cpu.arch == .aarch64) {
+            } else if (comptime is_aarch64) {
                 // aarch64: stack cleanup would be different (restore SP)
             }
         }
@@ -625,84 +521,84 @@ pub fn CallBuilder(comptime Emit: type) type {
         pub fn callReg(self: *Self, target: GeneralReg) !void {
             // Calculate total stack space needed
             const stack_args_space: u32 = @intCast(self.stack_arg_count * 8);
-            const total_unaligned: u32 = CC.SHADOW_SPACE + stack_args_space;
+            const total_unaligned: u32 = CC_EMIT.SHADOW_SPACE + stack_args_space;
             // Round up to 16-byte alignment (Windows x64 ABI requirement)
             const total_space: u32 = (total_unaligned + 15) & ~@as(u32, 15);
 
             // Assert stack is 16-byte aligned
             std.debug.assert(total_space % 16 == 0);
             // Assert shadow space is included when we have stack args
-            std.debug.assert(self.stack_arg_count == 0 or total_space >= CC.SHADOW_SPACE + 8);
+            std.debug.assert(self.stack_arg_count == 0 or total_space >= CC_EMIT.SHADOW_SPACE + 8);
 
-            if (comptime builtin.cpu.arch == .x86_64) {
+            if (comptime is_x86_64) {
                 // Allocate all stack space at once
                 if (total_space > 0) {
-                    try self.emit.subRegImm32(.w64, CC.STACK_PTR, @intCast(total_space));
+                    try self.emit.subRegImm32(.w64, CC_EMIT.STACK_PTR, @intCast(total_space));
                 }
 
                 // Store deferred stack arguments at correct offsets
                 // Stack args go after shadow space: [RSP+32], [RSP+40], etc.
                 for (self.stack_args[0..self.stack_arg_count], 0..) |arg, i| {
-                    const stack_offset: i32 = @intCast(CC.SHADOW_SPACE + i * 8);
+                    const stack_offset: i32 = @intCast(CC_EMIT.SHADOW_SPACE + i * 8);
                     // Assert stack args are placed after shadow space
-                    std.debug.assert(stack_offset >= CC.SHADOW_SPACE);
+                    std.debug.assert(stack_offset >= CC_EMIT.SHADOW_SPACE);
                     switch (arg) {
                         .from_reg => |reg| {
-                            try self.emit.movMemReg(.w64, CC.STACK_PTR, stack_offset, reg);
+                            try self.emit.movMemReg(.w64, CC_EMIT.STACK_PTR, stack_offset, reg);
                         },
                         .from_imm => |value| {
-                            try self.emit.movRegImm64(CC.SCRATCH_REG, value);
-                            try self.emit.movMemReg(.w64, CC.STACK_PTR, stack_offset, CC.SCRATCH_REG);
+                            try self.emit.movRegImm64(CC_EMIT.SCRATCH_REG, value);
+                            try self.emit.movMemReg(.w64, CC_EMIT.STACK_PTR, stack_offset, CC_EMIT.SCRATCH_REG);
                         },
                         .from_lea => |lea| {
-                            try self.emit.leaRegMem(CC.SCRATCH_REG, lea.base, lea.offset);
-                            try self.emit.movMemReg(.w64, CC.STACK_PTR, stack_offset, CC.SCRATCH_REG);
+                            try self.emit.leaRegMem(CC_EMIT.SCRATCH_REG, lea.base, lea.offset);
+                            try self.emit.movMemReg(.w64, CC_EMIT.STACK_PTR, stack_offset, CC_EMIT.SCRATCH_REG);
                         },
                         .from_mem => |mem| {
-                            try self.emit.movRegMem(.w64, CC.SCRATCH_REG, mem.base, mem.offset);
-                            try self.emit.movMemReg(.w64, CC.STACK_PTR, stack_offset, CC.SCRATCH_REG);
+                            try self.emit.movRegMem(.w64, CC_EMIT.SCRATCH_REG, mem.base, mem.offset);
+                            try self.emit.movMemReg(.w64, CC_EMIT.STACK_PTR, stack_offset, CC_EMIT.SCRATCH_REG);
                         },
                     }
                 }
-            } else if (comptime builtin.cpu.arch == .aarch64) {
+            } else if (comptime is_aarch64) {
                 if (self.stack_arg_count > 0) {
                     @panic("Stack args not yet implemented for aarch64 CallBuilder");
                 }
             }
 
-            if (comptime builtin.cpu.arch == .aarch64) {
+            if (comptime is_aarch64) {
                 try self.emit.blrReg(target);
             } else {
                 try self.emit.callReg(target);
             }
 
             // Cleanup
-            if (comptime builtin.cpu.arch == .x86_64) {
+            if (comptime is_x86_64) {
                 // Restore stack pointer
                 if (total_space > 0) {
-                    try self.emit.addRegImm32(.w64, CC.STACK_PTR, @intCast(total_space));
+                    try self.emit.addRegImm32(.w64, CC_EMIT.STACK_PTR, @intCast(total_space));
                 }
 
                 // Restore R12 if we saved it (Windows x64 only)
                 if (self.r12_save_offset) |offset| {
-                    try self.emit.movRegMem(.w64, .R12, CC.BASE_PTR, offset);
+                    try self.emit.movRegMem(.w64, .R12, CC_EMIT.BASE_PTR, offset);
                 }
             }
         }
 
         /// Get the return register for the result
         pub fn getReturnReg() GeneralReg {
-            return CC.RETURN_REGS[0];
+            return CC_EMIT.RETURN_REGS[0];
         }
 
         /// Get the number of argument registers available
         pub fn getNumArgRegs() usize {
-            return CC.PARAM_REGS.len;
+            return CC_EMIT.PARAM_REGS.len;
         }
 
         /// Get argument register at index (for manual setup)
         pub fn getArgReg(index: usize) GeneralReg {
-            return CC.PARAM_REGS[index];
+            return CC_EMIT.PARAM_REGS[index];
         }
     };
 }
@@ -724,17 +620,16 @@ pub fn CallBuilder(comptime Emit: type) type {
 /// // ... generate function body ...
 /// try frame.emitEpilogue();
 /// ```
-pub fn CalleeBuilder(comptime Emit: type) type {
-    const GeneralReg = switch (builtin.cpu.arch) {
-        .aarch64 => aarch64.GeneralReg,
-        .x86_64 => x86_64.GeneralReg,
-        else => @compileError("Unsupported architecture"),
-    };
+pub fn CalleeBuilder(comptime EmitType: type) type {
+    const CC_EMIT = EmitType.CC;
+    const GeneralReg = EmitType.GeneralReg;
+    const roc_target = EmitType.roc_target;
+    const is_aarch64 = roc_target.toCpuArch() == .aarch64 or roc_target.toCpuArch() == .aarch64_be;
 
     return struct {
         const Self = @This();
 
-        emit: *Emit,
+        emit: *EmitType,
 
         // Configuration (set before emitPrologue)
         stack_size: u32 = 0,
@@ -747,7 +642,7 @@ pub fn CalleeBuilder(comptime Emit: type) type {
         actual_stack_alloc: u32 = 0,
 
         /// Initialize a new callee frame builder
-        pub fn init(emit: *Emit) Self {
+        pub fn init(emit: *EmitType) Self {
             return Self{ .emit = emit };
         }
 
@@ -793,7 +688,7 @@ pub fn CalleeBuilder(comptime Emit: type) type {
         ///
         /// On Windows x64, step 3 MUST happen before step 4 (no red zone).
         pub fn emitPrologue(self: *Self) !i32 {
-            if (comptime builtin.cpu.arch == .aarch64) {
+            if (comptime is_aarch64) {
                 return self.emitPrologueAarch64();
             } else {
                 return self.emitPrologueX86_64();
@@ -819,10 +714,10 @@ pub fn CalleeBuilder(comptime Emit: type) type {
             // Total frame must be 16-byte aligned. After pushes, RSP = RBP - push_bytes.
             // We need (push_bytes + stack_alloc) to be 16-byte aligned.
             const total_needed = self.stack_size + @as(u32, self.mov_save_count) * 8;
-            self.actual_stack_alloc = CC.alignStackSize(total_needed);
+            self.actual_stack_alloc = CC_EMIT.alignStackSize(total_needed);
 
             if (self.actual_stack_alloc > 0) {
-                try self.emit.subRegImm32(.w64, CC.STACK_PTR, @intCast(self.actual_stack_alloc));
+                try self.emit.subRegImm32(.w64, CC_EMIT.STACK_PTR, @intCast(self.actual_stack_alloc));
             }
 
             // 4. Save MOV-based callee-saved registers (now safe - we've allocated stack)
@@ -861,7 +756,7 @@ pub fn CalleeBuilder(comptime Emit: type) type {
             // Allocate remaining stack space (includes odd register + locals)
             const odd_reg_space: u32 = if (self.push_count % 2 == 1) 16 else 0; // 16 for alignment
             const total_needed = self.stack_size + @as(u32, self.mov_save_count) * 8 + odd_reg_space;
-            self.actual_stack_alloc = CC.alignStackSize(total_needed);
+            self.actual_stack_alloc = CC_EMIT.alignStackSize(total_needed);
 
             if (self.actual_stack_alloc > 0) {
                 try self.emit.subRegRegImm12(.w64, .ZRSP, .ZRSP, @intCast(self.actual_stack_alloc));
@@ -893,7 +788,7 @@ pub fn CalleeBuilder(comptime Emit: type) type {
         /// 3. pop <regs> (restore PUSH-saved registers, reverse order)
         /// 4. pop rbp; ret
         pub fn emitEpilogue(self: *Self) !void {
-            if (comptime builtin.cpu.arch == .aarch64) {
+            if (comptime is_aarch64) {
                 return self.emitEpilogueAarch64();
             } else {
                 return self.emitEpilogueX86_64();
@@ -916,7 +811,7 @@ pub fn CalleeBuilder(comptime Emit: type) type {
 
             // 2. Deallocate stack space
             if (self.actual_stack_alloc > 0) {
-                try self.emit.addRegImm32(.w64, CC.STACK_PTR, @intCast(self.actual_stack_alloc));
+                try self.emit.addRegImm32(.w64, CC_EMIT.STACK_PTR, @intCast(self.actual_stack_alloc));
             }
 
             // 3. Pop callee-saved registers (reverse order)
@@ -969,13 +864,13 @@ pub fn CalleeBuilder(comptime Emit: type) type {
         /// This is useful when you need to create separate CalleeBuilder instances
         /// for prologue and epilogue (e.g., when storing frame state is impractical).
         pub fn computeActualStackAlloc(self: *Self) u32 {
-            if (comptime builtin.cpu.arch == .aarch64) {
+            if (comptime is_aarch64) {
                 const odd_reg_space: u32 = if (self.push_count % 2 == 1) 16 else 0;
                 const total_needed = self.stack_size + @as(u32, self.mov_save_count) * 8 + odd_reg_space;
-                return CC.alignStackSize(total_needed);
+                return CC_EMIT.alignStackSize(total_needed);
             } else {
                 const total_needed = self.stack_size + @as(u32, self.mov_save_count) * 8;
-                return CC.alignStackSize(total_needed);
+                return CC_EMIT.alignStackSize(total_needed);
             }
         }
 
@@ -1062,123 +957,142 @@ test "CallingConvention.needsPassByPointer" {
     try std.testing.expect(!sysv_cc.needsPassByPointer(1000));
 }
 
-test "CC.canPassStructByValue" {
-    if (builtin.cpu.arch == .x86_64 and builtin.os.tag == .windows) {
-        // Windows: only power-of-2 sizes 1, 2, 4, 8 can pass by value
-        try std.testing.expect(CC.canPassStructByValue(1));
-        try std.testing.expect(CC.canPassStructByValue(2));
-        try std.testing.expect(CC.canPassStructByValue(4));
-        try std.testing.expect(CC.canPassStructByValue(8));
-        // Non-power-of-2 sizes must use pointer
-        try std.testing.expect(!CC.canPassStructByValue(3));
-        try std.testing.expect(!CC.canPassStructByValue(5));
-        try std.testing.expect(!CC.canPassStructByValue(6));
-        try std.testing.expect(!CC.canPassStructByValue(7));
-        // >8 bytes must use pointer
-        try std.testing.expect(!CC.canPassStructByValue(9));
-        try std.testing.expect(!CC.canPassStructByValue(16));
-    } else if (builtin.cpu.arch == .x86_64) {
-        // System V: up to 16 bytes can pass by value
-        try std.testing.expect(CC.canPassStructByValue(16));
-        try std.testing.expect(!CC.canPassStructByValue(17));
-    }
+test "CC.canPassStructByValue for Windows x64" {
+    const WinEmit = x86_64.Emit(.x64win);
+    // Windows: only power-of-2 sizes 1, 2, 4, 8 can pass by value
+    try std.testing.expect(WinEmit.CC.canPassStructByValue(1));
+    try std.testing.expect(WinEmit.CC.canPassStructByValue(2));
+    try std.testing.expect(WinEmit.CC.canPassStructByValue(4));
+    try std.testing.expect(WinEmit.CC.canPassStructByValue(8));
+    // Non-power-of-2 sizes must use pointer
+    try std.testing.expect(!WinEmit.CC.canPassStructByValue(3));
+    try std.testing.expect(!WinEmit.CC.canPassStructByValue(5));
+    try std.testing.expect(!WinEmit.CC.canPassStructByValue(6));
+    try std.testing.expect(!WinEmit.CC.canPassStructByValue(7));
+    // >8 bytes must use pointer
+    try std.testing.expect(!WinEmit.CC.canPassStructByValue(9));
+    try std.testing.expect(!WinEmit.CC.canPassStructByValue(16));
 }
 
-test "CC constants are consistent" {
-    // Basic sanity checks
-    try std.testing.expect(CC.PARAM_REGS.len >= 4);
-    try std.testing.expect(CC.RETURN_REGS.len >= 1);
-
-    // Windows x64 has specific thresholds
-    if (builtin.cpu.arch == .x86_64 and builtin.os.tag == .windows) {
-        try std.testing.expectEqual(@as(u8, 32), CC.SHADOW_SPACE);
-        try std.testing.expectEqual(@as(usize, 8), CC.RETURN_BY_PTR_THRESHOLD);
-        try std.testing.expectEqual(@as(usize, 8), CC.PASS_BY_PTR_THRESHOLD);
-    } else if (builtin.cpu.arch == .x86_64 or builtin.cpu.arch == .aarch64) {
-        // Unix x86_64, Unix aarch64, and Windows aarch64 (using AAPCS64)
-        try std.testing.expectEqual(@as(u8, 0), CC.SHADOW_SPACE);
-        try std.testing.expectEqual(@as(usize, 16), CC.RETURN_BY_PTR_THRESHOLD);
-        try std.testing.expectEqual(std.math.maxInt(usize), CC.PASS_BY_PTR_THRESHOLD);
-    }
+test "CC.canPassStructByValue for Linux x64" {
+    const LinuxEmit = x86_64.Emit(.x64glibc);
+    // System V: up to 16 bytes can pass by value
+    try std.testing.expect(LinuxEmit.CC.canPassStructByValue(16));
+    try std.testing.expect(!LinuxEmit.CC.canPassStructByValue(17));
 }
 
-test "needsReturnByPointer" {
-    const Emit = x86_64.Emit;
-    const Builder = CallBuilder(Emit);
+test "CC constants for Windows x64" {
+    const WinEmit = x86_64.Emit(.x64win);
+    try std.testing.expect(WinEmit.CC.PARAM_REGS.len >= 4);
+    try std.testing.expect(WinEmit.CC.RETURN_REGS.len >= 1);
+    try std.testing.expectEqual(@as(u8, 32), WinEmit.CC.SHADOW_SPACE);
+    try std.testing.expectEqual(@as(usize, 8), WinEmit.CC.RETURN_BY_PTR_THRESHOLD);
+    try std.testing.expectEqual(@as(usize, 8), WinEmit.CC.PASS_BY_PTR_THRESHOLD);
+}
+
+test "CC constants for Linux x64" {
+    const LinuxEmit = x86_64.Emit(.x64glibc);
+    try std.testing.expect(LinuxEmit.CC.PARAM_REGS.len >= 4);
+    try std.testing.expect(LinuxEmit.CC.RETURN_REGS.len >= 1);
+    try std.testing.expectEqual(@as(u8, 0), LinuxEmit.CC.SHADOW_SPACE);
+    try std.testing.expectEqual(@as(usize, 16), LinuxEmit.CC.RETURN_BY_PTR_THRESHOLD);
+    try std.testing.expectEqual(std.math.maxInt(usize), LinuxEmit.CC.PASS_BY_PTR_THRESHOLD);
+}
+
+test "CC constants for aarch64" {
+    const Arm64Emit = aarch64.Emit(.arm64linux);
+    try std.testing.expect(Arm64Emit.CC.PARAM_REGS.len >= 4);
+    try std.testing.expect(Arm64Emit.CC.RETURN_REGS.len >= 1);
+    try std.testing.expectEqual(@as(u8, 0), Arm64Emit.CC.SHADOW_SPACE);
+    try std.testing.expectEqual(@as(usize, 16), Arm64Emit.CC.RETURN_BY_PTR_THRESHOLD);
+    try std.testing.expectEqual(std.math.maxInt(usize), Arm64Emit.CC.PASS_BY_PTR_THRESHOLD);
+}
+
+test "needsReturnByPointer for Windows x64" {
+    const WinEmit = x86_64.Emit(.x64win);
+    const Builder = CallBuilder(WinEmit);
 
     // Small values don't need pointer
     try std.testing.expect(!Builder.needsReturnByPointer(1));
     try std.testing.expect(!Builder.needsReturnByPointer(8));
-
-    // Large values need pointer (threshold is 8 on Windows x64, 16 on Unix/aarch64)
-    if (builtin.cpu.arch == .x86_64 and builtin.os.tag == .windows) {
-        try std.testing.expect(Builder.needsReturnByPointer(9));
-        try std.testing.expect(Builder.needsReturnByPointer(16));
-    } else {
-        try std.testing.expect(!Builder.needsReturnByPointer(16));
-        try std.testing.expect(Builder.needsReturnByPointer(17));
-    }
+    // Windows: threshold is 8 bytes
+    try std.testing.expect(Builder.needsReturnByPointer(9));
+    try std.testing.expect(Builder.needsReturnByPointer(16));
 }
 
-test "needsPassByPointer" {
-    const Emit = x86_64.Emit;
-    const Builder = CallBuilder(Emit);
+test "needsReturnByPointer for Linux x64" {
+    const LinuxEmit = x86_64.Emit(.x64glibc);
+    const Builder = CallBuilder(LinuxEmit);
 
-    if (builtin.cpu.arch == .x86_64 and builtin.os.tag == .windows) {
-        // Windows x64: only 1, 2, 4, 8 byte structs pass by value
-        try std.testing.expect(!Builder.needsPassByPointer(1));
-        try std.testing.expect(!Builder.needsPassByPointer(2));
-        try std.testing.expect(!Builder.needsPassByPointer(4));
-        try std.testing.expect(!Builder.needsPassByPointer(8));
-        // Non-power-of-2 sizes need pointer
-        try std.testing.expect(Builder.needsPassByPointer(3));
-        try std.testing.expect(Builder.needsPassByPointer(5));
-        try std.testing.expect(Builder.needsPassByPointer(6));
-        try std.testing.expect(Builder.needsPassByPointer(7));
-        // >8 bytes need pointer
-        try std.testing.expect(Builder.needsPassByPointer(9));
-        try std.testing.expect(Builder.needsPassByPointer(16));
-        try std.testing.expect(Builder.needsPassByPointer(24));
-    } else {
-        // System V / AAPCS64 (all aarch64 including Windows): never uses pointer
-        try std.testing.expect(!Builder.needsPassByPointer(16));
-        try std.testing.expect(!Builder.needsPassByPointer(17));
-        try std.testing.expect(!Builder.needsPassByPointer(1000));
-    }
+    // Small values don't need pointer
+    try std.testing.expect(!Builder.needsReturnByPointer(1));
+    try std.testing.expect(!Builder.needsReturnByPointer(8));
+    // System V: threshold is 16 bytes
+    try std.testing.expect(!Builder.needsReturnByPointer(16));
+    try std.testing.expect(Builder.needsReturnByPointer(17));
+}
+
+test "needsPassByPointer for Windows x64" {
+    const WinEmit = x86_64.Emit(.x64win);
+    const Builder = CallBuilder(WinEmit);
+
+    // Windows x64: only 1, 2, 4, 8 byte structs pass by value
+    try std.testing.expect(!Builder.needsPassByPointer(1));
+    try std.testing.expect(!Builder.needsPassByPointer(2));
+    try std.testing.expect(!Builder.needsPassByPointer(4));
+    try std.testing.expect(!Builder.needsPassByPointer(8));
+    // Non-power-of-2 sizes need pointer
+    try std.testing.expect(Builder.needsPassByPointer(3));
+    try std.testing.expect(Builder.needsPassByPointer(5));
+    try std.testing.expect(Builder.needsPassByPointer(6));
+    try std.testing.expect(Builder.needsPassByPointer(7));
+    // >8 bytes need pointer
+    try std.testing.expect(Builder.needsPassByPointer(9));
+    try std.testing.expect(Builder.needsPassByPointer(16));
+    try std.testing.expect(Builder.needsPassByPointer(24));
+}
+
+test "needsPassByPointer for Linux x64" {
+    const LinuxEmit = x86_64.Emit(.x64glibc);
+    const Builder = CallBuilder(LinuxEmit);
+
+    // System V: never uses pointer
+    try std.testing.expect(!Builder.needsPassByPointer(16));
+    try std.testing.expect(!Builder.needsPassByPointer(17));
+    try std.testing.expect(!Builder.needsPassByPointer(1000));
 }
 
 test "Windows x64 argument registers" {
-    if (builtin.cpu.arch != .x86_64) return;
+    const WinEmit = x86_64.Emit(.x64win);
+    const Builder = CallBuilder(WinEmit);
 
-    const Emit = x86_64.Emit;
-    const Builder = CallBuilder(Emit);
-
-    if (builtin.os.tag == .windows) {
-        // Windows uses RCX, RDX, R8, R9
-        try std.testing.expectEqual(x86_64.GeneralReg.RCX, Builder.getArgReg(0));
-        try std.testing.expectEqual(x86_64.GeneralReg.RDX, Builder.getArgReg(1));
-        try std.testing.expectEqual(x86_64.GeneralReg.R8, Builder.getArgReg(2));
-        try std.testing.expectEqual(x86_64.GeneralReg.R9, Builder.getArgReg(3));
-        try std.testing.expectEqual(@as(usize, 4), Builder.getNumArgRegs());
-    } else {
-        // System V uses RDI, RSI, RDX, RCX, R8, R9
-        try std.testing.expectEqual(x86_64.GeneralReg.RDI, Builder.getArgReg(0));
-        try std.testing.expectEqual(x86_64.GeneralReg.RSI, Builder.getArgReg(1));
-        try std.testing.expectEqual(x86_64.GeneralReg.RDX, Builder.getArgReg(2));
-        try std.testing.expectEqual(x86_64.GeneralReg.RCX, Builder.getArgReg(3));
-        try std.testing.expectEqual(x86_64.GeneralReg.R8, Builder.getArgReg(4));
-        try std.testing.expectEqual(x86_64.GeneralReg.R9, Builder.getArgReg(5));
-        try std.testing.expectEqual(@as(usize, 6), Builder.getNumArgRegs());
-    }
+    // Windows uses RCX, RDX, R8, R9
+    try std.testing.expectEqual(x86_64.GeneralReg.RCX, Builder.getArgReg(0));
+    try std.testing.expectEqual(x86_64.GeneralReg.RDX, Builder.getArgReg(1));
+    try std.testing.expectEqual(x86_64.GeneralReg.R8, Builder.getArgReg(2));
+    try std.testing.expectEqual(x86_64.GeneralReg.R9, Builder.getArgReg(3));
+    try std.testing.expectEqual(@as(usize, 4), Builder.getNumArgRegs());
 }
 
-test "CallBuilder with automatic R12 save/restore" {
-    if (builtin.cpu.arch != .x86_64) return;
+test "Linux x64 argument registers" {
+    const LinuxEmit = x86_64.Emit(.x64glibc);
+    const Builder = CallBuilder(LinuxEmit);
 
-    const Emit = x86_64.Emit;
-    const Builder = CallBuilder(Emit);
+    // System V uses RDI, RSI, RDX, RCX, R8, R9
+    try std.testing.expectEqual(x86_64.GeneralReg.RDI, Builder.getArgReg(0));
+    try std.testing.expectEqual(x86_64.GeneralReg.RSI, Builder.getArgReg(1));
+    try std.testing.expectEqual(x86_64.GeneralReg.RDX, Builder.getArgReg(2));
+    try std.testing.expectEqual(x86_64.GeneralReg.RCX, Builder.getArgReg(3));
+    try std.testing.expectEqual(x86_64.GeneralReg.R8, Builder.getArgReg(4));
+    try std.testing.expectEqual(x86_64.GeneralReg.R9, Builder.getArgReg(5));
+    try std.testing.expectEqual(@as(usize, 6), Builder.getNumArgRegs());
+}
 
-    var emit = Emit.init(std.testing.allocator);
+test "CallBuilder with automatic R12 save/restore on Windows x64" {
+    const WinEmit = x86_64.Emit(.x64win);
+    const Builder = CallBuilder(WinEmit);
+
+    var emit = WinEmit.init(std.testing.allocator);
     defer emit.deinit();
 
     // Simulate a stack offset like CodeGen would have
@@ -1189,25 +1103,35 @@ test "CallBuilder with automatic R12 save/restore" {
 
     // On Windows, should have emitted: mov [rbp-32], r12 and allocated 16 bytes
     // (16 bytes to maintain 16-byte alignment for i128/RocDec arguments)
-    if (builtin.os.tag == .windows) {
-        try std.testing.expect(emit.buf.items.len > 0);
-        try std.testing.expectEqual(@as(i32, -32), stack_offset); // 16 bytes allocated
-        try std.testing.expectEqual(@as(?i32, -32), builder.r12_save_offset);
-    } else {
-        // On non-Windows, no save should have been emitted
-        try std.testing.expectEqual(@as(usize, 0), emit.buf.items.len);
-        try std.testing.expectEqual(@as(i32, -16), stack_offset); // unchanged
-        try std.testing.expectEqual(@as(?i32, null), builder.r12_save_offset);
-    }
+    try std.testing.expect(emit.buf.items.len > 0);
+    try std.testing.expectEqual(@as(i32, -32), stack_offset); // 16 bytes allocated
+    try std.testing.expectEqual(@as(?i32, -32), builder.r12_save_offset);
 }
 
-test "CallBuilder call restores R12 on Windows" {
-    if (builtin.cpu.arch != .x86_64) return;
+test "CallBuilder with automatic R12 save/restore on Linux x64" {
+    const LinuxEmit = x86_64.Emit(.x64glibc);
+    const Builder = CallBuilder(LinuxEmit);
 
-    const Emit = x86_64.Emit;
-    const Builder = CallBuilder(Emit);
+    var emit = LinuxEmit.init(std.testing.allocator);
+    defer emit.deinit();
 
-    var emit = Emit.init(std.testing.allocator);
+    // Simulate a stack offset like CodeGen would have
+    var stack_offset: i32 = -16;
+
+    // Initialize builder - on Linux, no R12 save needed
+    const builder = try Builder.init(&emit, &stack_offset);
+
+    // On non-Windows, no save should have been emitted
+    try std.testing.expectEqual(@as(usize, 0), emit.buf.items.len);
+    try std.testing.expectEqual(@as(i32, -16), stack_offset); // unchanged
+    try std.testing.expectEqual(@as(?i32, null), builder.r12_save_offset);
+}
+
+test "CallBuilder call restores R12 on Windows x64" {
+    const WinEmit = x86_64.Emit(.x64win);
+    const Builder = CallBuilder(WinEmit);
+
+    var emit = WinEmit.init(std.testing.allocator);
     defer emit.deinit();
 
     var stack_offset: i32 = -16;
@@ -1225,21 +1149,16 @@ test "CallBuilder call restores R12 on Windows" {
     // Verify code was emitted
     try std.testing.expect(emit.buf.items.len > initial_len);
 
-    if (builtin.os.tag == .windows) {
-        // On Windows, the call sequence should include R12 restore at the end
-        // Just verify r12_save_offset is set - the restore happens automatically
-        try std.testing.expect(builder.r12_save_offset != null);
-    }
+    // On Windows, the call sequence should include R12 restore at the end
+    // Just verify r12_save_offset is set - the restore happens automatically
+    try std.testing.expect(builder.r12_save_offset != null);
 }
 
-test "CallBuilder on non-Windows doesn't allocate R12 slot" {
-    if (builtin.cpu.arch != .x86_64) return;
-    if (builtin.os.tag == .windows) return; // Skip on Windows
+test "CallBuilder on Linux x64 doesn't allocate R12 slot" {
+    const LinuxEmit = x86_64.Emit(.x64glibc);
+    const Builder = CallBuilder(LinuxEmit);
 
-    const Emit = x86_64.Emit;
-    const Builder = CallBuilder(Emit);
-
-    var emit = Emit.init(std.testing.allocator);
+    var emit = LinuxEmit.init(std.testing.allocator);
     defer emit.deinit();
 
     var stack_offset: i32 = -16;
@@ -1254,13 +1173,11 @@ test "CallBuilder on non-Windows doesn't allocate R12 slot" {
     try std.testing.expectEqual(@as(?i32, null), builder.r12_save_offset);
 }
 
-test "CallBuilder 4-arg call with immediates" {
-    if (builtin.cpu.arch != .x86_64) return;
+test "CallBuilder 4-arg call with immediates on Linux x64" {
+    const LinuxEmit = x86_64.Emit(.x64glibc);
+    const Builder = CallBuilder(LinuxEmit);
 
-    const Emit = x86_64.Emit;
-    const Builder = CallBuilder(Emit);
-
-    var emit = Emit.init(std.testing.allocator);
+    var emit = LinuxEmit.init(std.testing.allocator);
     defer emit.deinit();
 
     var stack_offset: i32 = 0;
@@ -1278,12 +1195,38 @@ test "CallBuilder 4-arg call with immediates" {
     // Verify code was emitted
     try std.testing.expect(emit.buf.items.len > 0);
 
-    // The sequence should include:
-    // 1. Load immediate args into registers first (movabs rcx/rdi, 1; etc.)
-    // 2. Shadow space allocation on Windows (sub rsp, 32) - happens in call()
-    // 3. Load function address into R11
-    // 4. call r11
-    // 5. Shadow space deallocation on Windows (add rsp, 32)
+    // Look for the call instruction (call r11 = 41 FF D3)
+    var found_call = false;
+    for (0..emit.buf.items.len - 2) |i| {
+        if (emit.buf.items[i] == 0x41 and emit.buf.items[i + 1] == 0xFF and emit.buf.items[i + 2] == 0xD3) {
+            found_call = true;
+            break;
+        }
+    }
+    try std.testing.expect(found_call);
+}
+
+test "CallBuilder 4-arg call with immediates on Windows x64" {
+    const WinEmit = x86_64.Emit(.x64win);
+    const Builder = CallBuilder(WinEmit);
+
+    var emit = WinEmit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var stack_offset: i32 = 0;
+    var builder = try Builder.init(&emit, &stack_offset);
+
+    // Add 4 immediate arguments
+    try builder.addImmArg(1);
+    try builder.addImmArg(2);
+    try builder.addImmArg(3);
+    try builder.addImmArg(4);
+
+    // Call a dummy address
+    try builder.call(0x12345678);
+
+    // Verify code was emitted
+    try std.testing.expect(emit.buf.items.len > 0);
 
     // Look for the call instruction (call r11 = 41 FF D3)
     var found_call = false;
@@ -1295,26 +1238,24 @@ test "CallBuilder 4-arg call with immediates" {
     }
     try std.testing.expect(found_call);
 
-    if (builtin.os.tag == .windows) {
-        // Windows: should have sub rsp, 32 somewhere (shadow space)
-        // sub rsp, 32 = 48 81 EC 20 00 00 00
-        var found_sub = false;
-        for (0..emit.buf.items.len - 6) |i| {
-            if (emit.buf.items[i] == 0x48 and emit.buf.items[i + 1] == 0x81 and
-                emit.buf.items[i + 2] == 0xEC and emit.buf.items[i + 3] == 0x20)
-            {
-                found_sub = true;
-                break;
-            }
+    // Windows: should have sub rsp, 32 somewhere (shadow space)
+    // sub rsp, 32 = 48 81 EC 20 00 00 00
+    var found_sub = false;
+    for (0..emit.buf.items.len - 6) |i| {
+        if (emit.buf.items[i] == 0x48 and emit.buf.items[i + 1] == 0x81 and
+            emit.buf.items[i + 2] == 0xEC and emit.buf.items[i + 3] == 0x20)
+        {
+            found_sub = true;
+            break;
         }
-        try std.testing.expect(found_sub);
     }
+    try std.testing.expect(found_sub);
 }
 
 test "CallBuilder 6-arg call puts args 5-6 on stack" {
     if (builtin.cpu.arch != .x86_64) return;
 
-    const Emit = x86_64.Emit;
+    const Emit = x86_64.NativeEmit;
     const Builder = CallBuilder(Emit);
 
     var emit = Emit.init(std.testing.allocator);
@@ -1371,7 +1312,7 @@ test "CallBuilder 6-arg call puts args 5-6 on stack" {
 test "CallBuilder with register argument" {
     if (builtin.cpu.arch != .x86_64) return;
 
-    const Emit = x86_64.Emit;
+    const Emit = x86_64.NativeEmit;
     const Builder = CallBuilder(Emit);
 
     var emit = Emit.init(std.testing.allocator);
@@ -1406,7 +1347,7 @@ test "CallBuilder with register argument" {
 test "CallBuilder with LEA argument" {
     if (builtin.cpu.arch != .x86_64) return;
 
-    const Emit = x86_64.Emit;
+    const Emit = x86_64.NativeEmit;
     const Builder = CallBuilder(Emit);
 
     var emit = Emit.init(std.testing.allocator);
@@ -1441,7 +1382,7 @@ test "CallBuilder with LEA argument" {
 test "CallBuilder with memory argument" {
     if (builtin.cpu.arch != .x86_64) return;
 
-    const Emit = x86_64.Emit;
+    const Emit = x86_64.NativeEmit;
     const Builder = CallBuilder(Emit);
 
     var emit = Emit.init(std.testing.allocator);
@@ -1475,7 +1416,7 @@ test "CallBuilder with memory argument" {
 test "CallBuilder stack alignment is 16-byte" {
     if (builtin.cpu.arch != .x86_64) return;
 
-    const Emit = x86_64.Emit;
+    const Emit = x86_64.NativeEmit;
     const Builder = CallBuilder(Emit);
 
     var emit = Emit.init(std.testing.allocator);
@@ -1513,7 +1454,7 @@ test "CallBuilder stack alignment is 16-byte" {
 test "CallBuilder return by pointer sets up first arg" {
     if (builtin.cpu.arch != .x86_64) return;
 
-    const Emit = x86_64.Emit;
+    const Emit = x86_64.NativeEmit;
     const Builder = CallBuilder(Emit);
 
     var emit = Emit.init(std.testing.allocator);
@@ -1551,7 +1492,7 @@ test "CallBuilder return by pointer sets up first arg" {
 test "CallBuilder addF64RegArg uses correct XMM register" {
     if (builtin.cpu.arch != .x86_64) return;
 
-    const Emit = x86_64.Emit;
+    const Emit = x86_64.NativeEmit;
     const Builder = CallBuilder(Emit);
 
     var emit = Emit.init(std.testing.allocator);
@@ -1584,7 +1525,7 @@ test "CallBuilder addF64RegArg uses correct XMM register" {
 test "CallBuilder addF64MemArg loads from memory to XMM" {
     if (builtin.cpu.arch != .x86_64) return;
 
-    const Emit = x86_64.Emit;
+    const Emit = x86_64.NativeEmit;
     const Builder = CallBuilder(Emit);
 
     var emit = Emit.init(std.testing.allocator);
@@ -1618,7 +1559,7 @@ test "CallBuilder Windows position-based float regs" {
     if (builtin.cpu.arch != .x86_64) return;
     if (builtin.os.tag != .windows) return;
 
-    const Emit = x86_64.Emit;
+    const Emit = x86_64.NativeEmit;
     const Builder = CallBuilder(Emit);
 
     var emit = Emit.init(std.testing.allocator);
@@ -1652,7 +1593,7 @@ test "CallBuilder Windows position-based float regs" {
 test "CallBuilder mixed int and float args" {
     if (builtin.cpu.arch != .x86_64) return;
 
-    const Emit = x86_64.Emit;
+    const Emit = x86_64.NativeEmit;
     const Builder = CallBuilder(Emit);
 
     var emit = Emit.init(std.testing.allocator);
@@ -1675,7 +1616,7 @@ test "CallBuilder mixed int and float args" {
 test "CallBuilder callReg allocates shadow space on Windows" {
     if (builtin.cpu.arch != .x86_64) return;
 
-    const Emit = x86_64.Emit;
+    const Emit = x86_64.NativeEmit;
     const Builder = CallBuilder(Emit);
 
     var emit = Emit.init(std.testing.allocator);
@@ -1723,7 +1664,7 @@ test "CallBuilder R12 save emits correct MOV instruction on Windows" {
     if (builtin.cpu.arch != .x86_64) return;
     if (builtin.os.tag != .windows) return;
 
-    const Emit = x86_64.Emit;
+    const Emit = x86_64.NativeEmit;
     const Builder = CallBuilder(Emit);
 
     var emit = Emit.init(std.testing.allocator);
@@ -1755,7 +1696,7 @@ test "CallBuilder R12 restore emits correct MOV instruction on Windows" {
     if (builtin.cpu.arch != .x86_64) return;
     if (builtin.os.tag != .windows) return;
 
-    const Emit = x86_64.Emit;
+    const Emit = x86_64.NativeEmit;
     const Builder = CallBuilder(Emit);
 
     var emit = Emit.init(std.testing.allocator);
@@ -1784,7 +1725,7 @@ test "CallBuilder stack args at correct offsets" {
     if (builtin.cpu.arch != .x86_64) return;
     if (builtin.os.tag != .windows) return;
 
-    const Emit = x86_64.Emit;
+    const Emit = x86_64.NativeEmit;
     const Builder = CallBuilder(Emit);
 
     var emit = Emit.init(std.testing.allocator);
@@ -1816,7 +1757,7 @@ test "CallBuilder stack args at correct offsets" {
 test "CalleeBuilder basic prologue/epilogue x86_64" {
     if (builtin.cpu.arch != .x86_64) return;
 
-    const Emit = x86_64.Emit;
+    const Emit = x86_64.NativeEmit;
     const Callee = CalleeBuilder(Emit);
 
     var emit = Emit.init(std.testing.allocator);
@@ -1841,7 +1782,7 @@ test "CalleeBuilder basic prologue/epilogue x86_64" {
 test "CalleeBuilder with pushed registers x86_64" {
     if (builtin.cpu.arch != .x86_64) return;
 
-    const Emit = x86_64.Emit;
+    const Emit = x86_64.NativeEmit;
     const Callee = CalleeBuilder(Emit);
 
     var emit = Emit.init(std.testing.allocator);
@@ -1865,7 +1806,7 @@ test "CalleeBuilder with pushed registers x86_64" {
 test "CalleeBuilder with MOV-saved registers x86_64" {
     if (builtin.cpu.arch != .x86_64) return;
 
-    const Emit = x86_64.Emit;
+    const Emit = x86_64.NativeEmit;
     const Callee = CalleeBuilder(Emit);
 
     var emit = Emit.init(std.testing.allocator);
@@ -1886,7 +1827,7 @@ test "CalleeBuilder with MOV-saved registers x86_64" {
 test "CalleeBuilder stack alignment" {
     if (builtin.cpu.arch != .x86_64) return;
 
-    const Emit = x86_64.Emit;
+    const Emit = x86_64.NativeEmit;
     const Callee = CalleeBuilder(Emit);
 
     var emit = Emit.init(std.testing.allocator);
@@ -1905,7 +1846,7 @@ test "CalleeBuilder stack alignment" {
 test "CalleeBuilder mixed push and MOV saves x86_64" {
     if (builtin.cpu.arch != .x86_64) return;
 
-    const Emit = x86_64.Emit;
+    const Emit = x86_64.NativeEmit;
     const Callee = CalleeBuilder(Emit);
 
     var emit = Emit.init(std.testing.allocator);
