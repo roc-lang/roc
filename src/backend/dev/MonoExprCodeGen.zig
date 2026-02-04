@@ -676,6 +676,9 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         /// CallBuilder type alias for this architecture's emit type
         const Builder = CallBuilder.CallBuilder(@TypeOf(@as(CodeGen, undefined).emit));
 
+        /// CalleeBuilder type alias for this architecture's emit type
+        const FrameBuilder = CallBuilder.CalleeBuilder(@TypeOf(@as(CodeGen, undefined).emit));
+
         allocator: Allocator,
 
         /// Target platform for code generation (determines calling convention)
@@ -13571,82 +13574,53 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         }
 
         /// Emit prologue for main expression code.
-        /// Sets up frame pointer and saves callee-saved registers.
+        /// Sets up frame pointer and saves callee-saved registers using CalleeBuilder.
         /// The frame pointer is REQUIRED because emitStoreStack/emitLoadStack use FP-relative addressing.
         fn emitMainPrologue(self: *Self) Error!void {
+            // Stack size for local variables. Needs to be large enough for inlined builtins
+            // like List.map which can use 400+ bytes.
+            const MAIN_STACK_SIZE: u32 = 1024;
+
+            var frame = FrameBuilder.init(&self.codegen.emit);
+
             if (comptime builtin.cpu.arch == .aarch64) {
-                // First, save FP and LR and establish frame pointer.
-                // This is REQUIRED because stack slot accesses use FP-relative addressing.
-                // stp x29, x30, [sp, #-16]!  (push FP and LR)
-                try self.codegen.emit.stpPreIndex(.w64, .FP, .LR, .ZRSP, -2);
-                // mov x29, sp  (establish frame pointer)
-                try self.codegen.emit.movRegReg(.w64, .FP, .ZRSP);
-
-                // Now save X19 and X20 (callee-saved) which we use for result ptr and RocOps ptr.
-                // stp x19, x20, [sp, #-16]!
-                try self.codegen.emit.stpPreIndex(.w64, .X19, .X20, .ZRSP, -2);
-
-                // CRITICAL: Allocate stack space for local variables BEFORE they're used.
-                // Without this, stack slots would be below SP and could get corrupted
-                // when we call builtin functions. After X19/X20 save, SP = FP - 16.
-                // We need enough space for inlined builtins like List.map which can use 400+ bytes.
-                const MAIN_STACK_SIZE: u12 = 1024;
-                try self.codegen.emit.subRegRegImm12(.w64, .ZRSP, .ZRSP, MAIN_STACK_SIZE);
-
-                // Initialize stack_offset to account for saved X19/X20 at [FP-16].
-                // allocStackSlot decrements stack_offset and returns the new value.
-                // With stack_offset = -16, first allocation of 16 bytes returns -32,
-                // which is below the saved registers and won't corrupt them.
-                self.codegen.stack_offset = -16;
+                // Save X19 and X20 (callee-saved) which we use for result ptr and RocOps ptr
+                frame.saveViaPush(.X19);
+                frame.saveViaPush(.X20);
             } else {
-                // First, set up frame pointer.
-                // This is REQUIRED because stack slot accesses use RBP-relative addressing.
-                try self.codegen.emit.push(.RBP);
-                try self.codegen.emit.movRegReg(.w64, .RBP, .RSP);
-
                 // Save RBX and R12 (callee-saved) which we use for result ptr and RocOps ptr
-                try self.codegen.emit.push(.RBX);
-                try self.codegen.emit.push(.R12);
-
-                // CRITICAL: Allocate stack space for local variables BEFORE they're used.
-                // Without this, stack slots would be in the red zone and get corrupted
-                // when we call builtin functions. After the pushes, RSP = RBP - 16.
-                // Subtracting MAIN_STACK_SIZE gives RSP = RBP - 16 - MAIN_STACK_SIZE.
-                // We need enough space for inlined builtins like List.map which can use 400+ bytes.
-                const MAIN_STACK_SIZE: i32 = 1024;
-                try self.codegen.emit.subRegImm32(.w64, .RSP, MAIN_STACK_SIZE);
-
-                // Initialize stack_offset to account for saved RBX at [RBP-8]
-                // and R12 at [RBP-16]. With stack_offset = -16, first allocation returns -32.
-                self.codegen.stack_offset = -16;
+                frame.saveViaPush(.RBX);
+                frame.saveViaPush(.R12);
             }
+
+            frame.setStackSize(MAIN_STACK_SIZE);
+
+            // emitPrologue returns the initial stack_offset for allocStackSlot
+            // With 2 pushed registers, this will be -16 (first allocation at -32)
+            const initial_offset = try frame.emitPrologue();
+            self.codegen.stack_offset = initial_offset;
         }
 
         /// Emit epilogue for main expression code.
-        /// Restores callee-saved registers and frame pointer, then returns.
+        /// Restores callee-saved registers and frame pointer using CalleeBuilder, then returns.
         fn emitMainEpilogue(self: *Self) Error!void {
+            // Must match configuration from emitMainPrologue
+            const MAIN_STACK_SIZE: u32 = 1024;
+
+            var frame = FrameBuilder.init(&self.codegen.emit);
+
             if (comptime builtin.cpu.arch == .aarch64) {
-                // Deallocate local variable stack space (must match MAIN_STACK_SIZE in prologue)
-                const MAIN_STACK_SIZE: u12 = 1024;
-                try self.codegen.emit.addRegRegImm12(.w64, .ZRSP, .ZRSP, MAIN_STACK_SIZE);
-                // Restore X19 and X20
-                // ldp x19, x20, [sp], #16
-                try self.codegen.emit.ldpPostIndex(.w64, .X19, .X20, .ZRSP, 2);
-                // Restore FP and LR
-                // ldp x29, x30, [sp], #16
-                try self.codegen.emit.ldpPostIndex(.w64, .FP, .LR, .ZRSP, 2);
-                try self.codegen.emit.ret();
+                frame.saveViaPush(.X19);
+                frame.saveViaPush(.X20);
             } else {
-                // Deallocate local variable stack space (must match MAIN_STACK_SIZE in prologue)
-                const MAIN_STACK_SIZE: i32 = 1024;
-                try self.codegen.emit.addRegImm32(.w64, .RSP, MAIN_STACK_SIZE);
-                // Restore R12 and RBX (in reverse order of push)
-                try self.codegen.emit.pop(.R12);
-                try self.codegen.emit.pop(.RBX);
-                // Restore frame pointer
-                try self.codegen.emit.pop(.RBP);
-                try self.codegen.emit.ret();
+                frame.saveViaPush(.RBX);
+                frame.saveViaPush(.R12);
             }
+
+            frame.setStackSize(MAIN_STACK_SIZE);
+
+            // emitEpilogue will compute actual_stack_alloc from the configuration
+            try frame.emitEpilogue();
         }
 
         /// Bind procedure parameters to argument registers.

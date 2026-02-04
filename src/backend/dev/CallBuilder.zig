@@ -862,9 +862,13 @@ pub fn CalleeBuilder(comptime Emit: type) type {
                 }
             }
 
-            // Return initial stack_offset: accounts for FP/LR (16) + STP-saved regs
-            const push_bytes: i32 = @as(i32, 16) + @as(i32, stp_bytes);
-            return -push_bytes;
+            // Return initial stack_offset: accounts for STP-saved register pairs + odd register.
+            // FP/LR are at positive offsets from FP (FP+0, FP+8), so they don't
+            // affect the negative stack_offset used for local variable allocation.
+            // STP-saved registers are at FP-16, FP-8, etc.
+            // Odd register (if any) is stored at FP - stp_bytes - 8.
+            const odd_bytes: i32 = if (self.push_count % 2 == 1) 8 else 0;
+            return -@as(i32, stp_bytes) - odd_bytes;
         }
 
         /// Emit function epilogue. Mirrors the prologue automatically.
@@ -883,6 +887,11 @@ pub fn CalleeBuilder(comptime Emit: type) type {
         }
 
         fn emitEpilogueX86_64(self: *Self) !void {
+            // Compute actual_stack_alloc if not already set (allows separate prologue/epilogue instances)
+            if (self.actual_stack_alloc == 0 and self.stack_size > 0) {
+                self.actual_stack_alloc = self.computeActualStackAlloc();
+            }
+
             // 1. Restore MOV-saved registers
             for (0..self.mov_save_count) |i| {
                 if (self.mov_save_regs[i]) |reg| {
@@ -910,6 +919,11 @@ pub fn CalleeBuilder(comptime Emit: type) type {
         }
 
         fn emitEpilogueAarch64(self: *Self) !void {
+            // Compute actual_stack_alloc if not already set (allows separate prologue/epilogue instances)
+            if (self.actual_stack_alloc == 0 and (self.stack_size > 0 or self.push_count % 2 == 1)) {
+                self.actual_stack_alloc = self.computeActualStackAlloc();
+            }
+
             // Restore odd register first (stored at [SP + actual_stack_alloc - 8])
             if (self.push_count % 2 == 1) {
                 if (self.push_regs[self.push_count - 1]) |reg| {
@@ -935,6 +949,20 @@ pub fn CalleeBuilder(comptime Emit: type) type {
             // Restore FP and LR, and return
             try self.emit.ldpPostIndex(.w64, .FP, .LR, .ZRSP, 2);
             try self.emit.ret();
+        }
+
+        /// Compute the actual stack allocation size based on configuration.
+        /// This is useful when you need to create separate CalleeBuilder instances
+        /// for prologue and epilogue (e.g., when storing frame state is impractical).
+        pub fn computeActualStackAlloc(self: *Self) u32 {
+            if (comptime builtin.cpu.arch == .aarch64) {
+                const odd_reg_space: u32 = if (self.push_count % 2 == 1) 16 else 0;
+                const total_needed = self.stack_size + @as(u32, self.mov_save_count) * 8 + odd_reg_space;
+                return CC.alignStackSize(total_needed);
+            } else {
+                const total_needed = self.stack_size + @as(u32, self.mov_save_count) * 8;
+                return CC.alignStackSize(total_needed);
+            }
         }
 
         /// Get the size of the callee-saved area (for MOV-saved registers)
