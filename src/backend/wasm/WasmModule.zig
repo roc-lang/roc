@@ -289,6 +289,9 @@ data_offset: u32,
 has_memory: bool,
 memory_min_pages: u32,
 has_stack_pointer: bool,
+has_heap_pointer: bool,
+/// Initial heap pointer value (start of heap region)
+heap_start: u32,
 
 pub fn init(allocator: Allocator) Self {
     return .{
@@ -303,6 +306,8 @@ pub fn init(allocator: Allocator) Self {
         .has_memory = false,
         .memory_min_pages = 1,
         .has_stack_pointer = false,
+        .has_heap_pointer = false,
+        .heap_start = 0,
     };
 }
 
@@ -410,10 +415,17 @@ pub fn addDataSegment(self: *Self, data: []const u8, align_bytes: u32) !u32 {
     return offset;
 }
 
-/// Enable the __stack_pointer global.
+/// Enable the __stack_pointer global (global index 0).
 pub fn enableStackPointer(self: *Self, initial_value: u32) void {
     _ = initial_value;
     self.has_stack_pointer = true;
+}
+
+/// Enable the __heap_ptr global (global index 1).
+/// `start` is the initial value — typically after data segments.
+pub fn enableHeapPointer(self: *Self, start: u32) void {
+    self.has_heap_pointer = true;
+    self.heap_start = start;
 }
 
 /// Encode the module to a valid wasm binary.
@@ -446,7 +458,7 @@ pub fn encode(self: *Self, allocator: Allocator) ![]u8 {
     }
 
     // Global section
-    if (self.has_stack_pointer) {
+    if (self.has_stack_pointer or self.has_heap_pointer) {
         try self.encodeGlobalSection(allocator, &output);
     }
 
@@ -541,17 +553,33 @@ fn encodeMemorySection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) 
     try output.appendSlice(gpa, section_data.items);
 }
 
-fn encodeGlobalSection(_: *Self, gpa: Allocator, output: *std.ArrayList(u8)) !void {
+fn encodeGlobalSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) !void {
     var section_data: std.ArrayList(u8) = .empty;
     defer section_data.deinit(gpa);
 
-    try leb128WriteU32(gpa, &section_data, 1); // 1 global
-    try section_data.append(gpa, @intFromEnum(ValType.i32));
-    try section_data.append(gpa, 0x01); // mutable
-    // Init expr: i32.const 65536; end
-    try section_data.append(gpa, Op.i32_const);
-    try leb128WriteI32(gpa, &section_data, 65536);
-    try section_data.append(gpa, Op.end);
+    var global_count: u32 = 0;
+    if (self.has_stack_pointer) global_count += 1;
+    if (self.has_heap_pointer) global_count += 1;
+
+    try leb128WriteU32(gpa, &section_data, global_count);
+
+    // Global 0: __stack_pointer (i32, mutable, init = 65536)
+    if (self.has_stack_pointer) {
+        try section_data.append(gpa, @intFromEnum(ValType.i32));
+        try section_data.append(gpa, 0x01); // mutable
+        try section_data.append(gpa, Op.i32_const);
+        try leb128WriteI32(gpa, &section_data, 65536);
+        try section_data.append(gpa, Op.end);
+    }
+
+    // Global 1: __heap_ptr (i32, mutable, init = heap_start)
+    if (self.has_heap_pointer) {
+        try section_data.append(gpa, @intFromEnum(ValType.i32));
+        try section_data.append(gpa, 0x01); // mutable
+        try section_data.append(gpa, Op.i32_const);
+        try leb128WriteI32(gpa, &section_data, @intCast(self.heap_start));
+        try section_data.append(gpa, Op.end);
+    }
 
     try output.append(gpa, @intFromEnum(SectionId.global_section));
     try leb128WriteU32(gpa, output, @intCast(section_data.items.len));
