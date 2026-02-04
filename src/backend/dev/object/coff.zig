@@ -82,8 +82,6 @@ const CoffSymbol = struct {
     storage_class: u8,
     number_of_aux_symbols: u8,
 
-    const SIZE = 18; // Exact size in COFF format
-
     fn setShortName(self: *CoffSymbol, name: []const u8) void {
         @memset(&self.name_bytes, 0);
         @memcpy(self.name_bytes[0..name.len], name);

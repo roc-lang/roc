@@ -4119,7 +4119,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             // HostedFunctions.fns is at offset 8 within HostedFunctions (after count u32 + padding)
             // So hosted_fns.fns is at roc_ops + 56 + 8 = roc_ops + 64
 
-            if (comptime builtin.cpu.arch == .aarch64) {
+            if (arch == .aarch64 or arch == .aarch64_be) {
                 // Load hosted_fns.fns pointer: [roc_ops + 64]
                 const fns_ptr_reg = try self.allocTempGeneral();
                 try self.codegen.emit.ldrRegMemSoff(.w64, fns_ptr_reg, roc_ops_reg, 64);
@@ -4148,7 +4148,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 // Call the hosted function
                 try self.codegen.emit.blrReg(fn_ptr_reg);
                 self.codegen.freeGeneral(fn_ptr_reg);
-            } else if (comptime builtin.cpu.arch == .x86_64) {
+            } else if (arch == .x86_64) {
                 // Load hosted_fns.fns pointer: [roc_ops + 64]
                 const fns_ptr_reg = try self.allocTempGeneral();
                 try self.codegen.emit.movRegMem(.w64, fns_ptr_reg, roc_ops_reg, 64);
@@ -4159,21 +4159,48 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 try self.codegen.emit.movRegMem(.w64, fn_ptr_reg, fns_ptr_reg, fn_offset);
                 self.codegen.freeGeneral(fns_ptr_reg);
 
-                // Set up arguments for the hosted function call (System V ABI):
-                // RDI = roc_ops pointer
-                // RSI = return pointer (RBP + ret_slot)
-                // RDX = args pointer (RBP + args_slot)
+                // Set up arguments for the hosted function call
+                // Windows x64 ABI: RCX, RDX, R8, R9
+                // System V ABI (Linux/macOS): RDI, RSI, RDX, RCX
+                if (target.isWindows()) {
+                    // Windows x64 ABI:
+                    // RCX = roc_ops pointer
+                    // RDX = return pointer (RBP + ret_slot)
+                    // R8 = args pointer (RBP + args_slot)
 
-                try self.emitMovRegReg(.RDI, roc_ops_reg);
+                    try self.emitMovRegReg(.RCX, roc_ops_reg);
 
-                // RSI = ret_ptr
-                try self.codegen.emit.leaRegMem(.RSI, .RBP, ret_slot);
+                    // RDX = ret_ptr
+                    try self.codegen.emit.leaRegMem(.RDX, .RBP, ret_slot);
 
-                // RDX = args_ptr
-                try self.codegen.emit.leaRegMem(.RDX, .RBP, args_slot);
+                    // R8 = args_ptr
+                    try self.codegen.emit.leaRegMem(.R8, .RBP, args_slot);
 
-                // Call the hosted function
-                try self.codegen.emit.callReg(fn_ptr_reg);
+                    // Windows x64 ABI requires 32 bytes of shadow space for the callee
+                    try self.codegen.emit.subRegImm32(.w64, .RSP, 32);
+
+                    // Call the hosted function
+                    try self.codegen.emit.callReg(fn_ptr_reg);
+
+                    // Clean up shadow space
+                    try self.codegen.emit.addRegImm32(.w64, .RSP, 32);
+                } else {
+                    // System V ABI (Linux/macOS):
+                    // RDI = roc_ops pointer
+                    // RSI = return pointer (RBP + ret_slot)
+                    // RDX = args pointer (RBP + args_slot)
+
+                    try self.emitMovRegReg(.RDI, roc_ops_reg);
+
+                    // RSI = ret_ptr
+                    try self.codegen.emit.leaRegMem(.RSI, .RBP, ret_slot);
+
+                    // RDX = args_ptr
+                    try self.codegen.emit.leaRegMem(.RDX, .RBP, args_slot);
+
+                    // Call the hosted function
+                    try self.codegen.emit.callReg(fn_ptr_reg);
+                }
                 self.codegen.freeGeneral(fn_ptr_reg);
             }
 
@@ -4200,7 +4227,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 .immediate_i64 => |val| {
                     const temp = try self.allocTempGeneral();
                     try self.codegen.emitLoadImm(temp, val);
-                    if (comptime builtin.cpu.arch == .aarch64) {
+                    if (arch == .aarch64 or arch == .aarch64_be) {
                         try self.codegen.emit.strRegMemSoff(.w64, temp, .FP, dest_offset);
                     } else {
                         try self.codegen.emit.movMemReg(.w64, .RBP, dest_offset, temp);
@@ -4208,7 +4235,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     self.codegen.freeGeneral(temp);
                 },
                 .general_reg => |reg| {
-                    if (comptime builtin.cpu.arch == .aarch64) {
+                    if (arch == .aarch64 or arch == .aarch64_be) {
                         try self.codegen.emit.strRegMemSoff(.w64, reg, .FP, dest_offset);
                     } else {
                         try self.codegen.emit.movMemReg(.w64, .RBP, dest_offset, reg);
@@ -4244,7 +4271,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             while (copied + 8 <= size) : (copied += 8) {
                 const src_off: i32 = src_offset + @as(i32, @intCast(copied));
                 const dest_off: i32 = dest_offset + @as(i32, @intCast(copied));
-                if (comptime builtin.cpu.arch == .aarch64) {
+                if (arch == .aarch64 or arch == .aarch64_be) {
                     try self.codegen.emit.ldrRegMemSoff(.w64, temp, .FP, src_off);
                     try self.codegen.emit.strRegMemSoff(.w64, temp, .FP, dest_off);
                 } else {
@@ -4260,7 +4287,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 const dest_off: i32 = dest_offset + @as(i32, @intCast(copied));
 
                 if (remaining >= 4) {
-                    if (comptime builtin.cpu.arch == .aarch64) {
+                    if (arch == .aarch64 or arch == .aarch64_be) {
                         try self.codegen.emit.ldrRegMemSoff(.w32, temp, .FP, src_off);
                         try self.codegen.emit.strRegMemSoff(.w32, temp, .FP, dest_off);
                     } else {
@@ -4275,7 +4302,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 if (copied < size) {
                     const final_src: i32 = src_offset + @as(i32, @intCast(copied));
                     const final_dest: i32 = dest_offset + @as(i32, @intCast(copied));
-                    if (comptime builtin.cpu.arch == .aarch64) {
+                    if (arch == .aarch64 or arch == .aarch64_be) {
                         // Copy remaining 1-3 bytes as a single 32-bit operation
                         // Extra bytes will be overwritten or are beyond the allocation
                         try self.codegen.emit.ldrRegMemSoff(.w32, temp, .FP, final_src);
@@ -15372,7 +15399,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             // x86_64 System V: RDI=roc_ops, RSI=ret_ptr, RDX=args_ptr
             // aarch64 AAPCS64: X0=roc_ops, X1=ret_ptr, X2=args_ptr
 
-            if (comptime builtin.cpu.arch == .aarch64) {
+            if (arch == .aarch64 or arch == .aarch64_be) {
                 // Reserve space for callee-saved registers and locals
                 // FP and LR are saved by STP instruction
                 const frame_size: i32 = 64; // Space for saved regs + locals
@@ -15446,12 +15473,26 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 const local_space: i32 = 64;
                 try self.codegen.emit.subRegImm32(.w64, .RSP, @intCast(local_space));
 
-                // Save RocOps pointer (RDI) to R12
-                try self.codegen.emit.movRegReg(.w64, .R12, .RDI);
-                // Save ret_ptr (RSI) to RBX
-                try self.codegen.emit.movRegReg(.w64, .RBX, .RSI);
-                // Save args_ptr (RDX) to R13
-                try self.codegen.emit.movRegReg(.w64, .R13, .RDX);
+                // On entry, arguments are in different registers depending on ABI:
+                // Windows x64 ABI: RCX=roc_ops, RDX=ret_ptr, R8=args_ptr
+                // System V ABI (Linux/macOS): RDI=roc_ops, RSI=ret_ptr, RDX=args_ptr
+                if (target.isWindows()) {
+                    // Windows x64 ABI
+                    // Save RocOps pointer (RCX) to R12
+                    try self.codegen.emit.movRegReg(.w64, .R12, .RCX);
+                    // Save ret_ptr (RDX) to RBX
+                    try self.codegen.emit.movRegReg(.w64, .RBX, .RDX);
+                    // Save args_ptr (R8) to R13
+                    try self.codegen.emit.movRegReg(.w64, .R13, .R8);
+                } else {
+                    // System V ABI (Linux/macOS)
+                    // Save RocOps pointer (RDI) to R12
+                    try self.codegen.emit.movRegReg(.w64, .R12, .RDI);
+                    // Save ret_ptr (RSI) to RBX
+                    try self.codegen.emit.movRegReg(.w64, .RBX, .RSI);
+                    // Save args_ptr (RDX) to R13
+                    try self.codegen.emit.movRegReg(.w64, .R13, .RDX);
+                }
 
                 self.roc_ops_reg = .R12;
 
