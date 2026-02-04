@@ -56,7 +56,8 @@ pub const DeferredNumericLiteral = struct {
 
 const Self = @This();
 
-gpa: std.mem.Allocator,
+/// Allocators for future arena support (currently uses allocators.gpa)
+allocators: *base.Allocators,
 // This module's types store
 types: *types_mod.Store,
 /// This module's env
@@ -170,7 +171,7 @@ pub const BuiltinContext = struct {
 /// Init type solver
 /// Does *not* own types_store or cir, but *does* own other fields
 pub fn init(
-    gpa: std.mem.Allocator,
+    allocators: *base.Allocators,
     types: *types_mod.Store,
     cir: *const ModuleEnv,
     imported_modules: []const *const ModuleEnv,
@@ -178,6 +179,7 @@ pub fn init(
     regions: *Region.List,
     builtin_ctx: BuiltinContext,
 ) std.mem.Allocator.Error!Self {
+    const gpa = allocators.gpa;
     const mutable_cir = @constCast(cir);
     var import_mapping = try createImportMapping(
         gpa,
@@ -190,7 +192,7 @@ pub fn init(
     errdefer import_mapping.deinit();
 
     return .{
-        .gpa = gpa,
+        .allocators = allocators,
         .types = types,
         .cir = mutable_cir,
         .imported_modules = imported_modules,
@@ -234,25 +236,26 @@ pub fn fixupTypeWriter(self: *Self) void {
 
 /// Deinit owned fields
 pub fn deinit(self: *Self) void {
-    self.problems.deinit(self.gpa);
+    const gpa = self.allocators.gpa;
+    self.problems.deinit(gpa);
     self.snapshots.deinit();
     self.import_mapping.deinit();
     self.unify_scratch.deinit();
     self.occurs_scratch.deinit();
     self.seen_annos.deinit();
     self.env_pool.deinit();
-    self.generalizer.deinit(self.gpa);
+    self.generalizer.deinit(gpa);
     self.var_map.deinit();
-    self.constraints.deinit(self.gpa);
+    self.constraints.deinit(gpa);
     self.var_set.deinit();
-    self.rigid_var_substitutions.deinit(self.gpa);
+    self.rigid_var_substitutions.deinit(gpa);
     self.scratch_vars.deinit();
     self.scratch_tags.deinit();
     self.scratch_record_fields.deinit();
     self.scratch_static_dispatch_constraints.deinit();
     self.scratch_deferred_static_dispatch_constraints.deinit();
-    self.constraint_check_stack.deinit(self.gpa);
-    self.import_cache.deinit(self.gpa);
+    self.constraint_check_stack.deinit(gpa);
+    self.import_cache.deinit(gpa);
     self.ident_to_var_map.deinit();
     self.top_level_ptrns.deinit();
     self.type_writer.deinit();
@@ -415,7 +418,7 @@ fn unifyInContext(self: *Self, a: Var, b: Var, env: *Env, ctx: problem.Context) 
 
     // Copy any constraints created during unification into our own array
     for (self.unify_scratch.deferred_constraints.items.items) |deferred_constraint| {
-        _ = try env.deferred_static_dispatch_constraints.append(self.gpa, deferred_constraint);
+        _ = try env.deferred_static_dispatch_constraints.append(self.allocators.gpa, deferred_constraint);
     }
 
     // Ensure arrays are in sync
@@ -448,7 +451,7 @@ fn checkForInfiniteType(self: *Self, comptime Idx: anytype, idx: Idx) std.mem.Al
 
             // Anonymous recursion (recursive type not through a nominal type)
             const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, err_var);
-            _ = try self.problems.appendProblem(self.gpa, .{ .anonymous_recursion = .{
+            _ = try self.problems.appendProblem(self.allocators.gpa, .{ .anonymous_recursion = .{
                 .var_ = var_,
                 .snapshot = snapshot,
                 .def_name = if (comptime Idx == CIR.Def.Idx) blk: {
@@ -468,7 +471,7 @@ fn checkForInfiniteType(self: *Self, comptime Idx: anytype, idx: Idx) std.mem.Al
 
             // Infinite type (like `a = List(a)`)
             const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, err_var);
-            _ = try self.problems.appendProblem(self.gpa, .{ .infinite_recursion = .{
+            _ = try self.problems.appendProblem(self.allocators.gpa, .{ .infinite_recursion = .{
                 .var_ = var_,
                 .snapshot = snapshot,
                 .def_name = if (comptime Idx == CIR.Def.Idx) blk: {
@@ -741,8 +744,8 @@ fn mkNumberTypeContent(self: *Self, type_name: []const u8, env: *Env) Allocator.
 
     // Use fully-qualified type name "Builtin.Num.U8" etc.
     // This allows method lookup to work correctly (getMethodIdent builds "Builtin.Num.U8.method_name")
-    const qualified_type_name = try std.fmt.allocPrint(self.gpa, "Builtin.Num.{s}", .{type_name});
-    defer self.gpa.free(qualified_type_name);
+    const qualified_type_name = try std.fmt.allocPrint(self.allocators.gpa, "Builtin.Num.{s}", .{type_name});
+    defer self.allocators.gpa.free(qualified_type_name);
     const type_name_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text(qualified_type_name));
     const type_ident = types_mod.TypeIdent{
         .ident_idx = type_name_ident,
@@ -1362,7 +1365,7 @@ pub fn checkPlatformRequirements(
                     const expected_alias_ident = try self.cir.insertIdent(
                         Ident.for_text(platform_env.getIdentText(alias.alias_name)),
                     );
-                    _ = try self.problems.appendProblem(self.gpa, .{ .platform_alias_not_found = .{
+                    _ = try self.problems.appendProblem(self.allocators.gpa, .{ .platform_alias_not_found = .{
                         .expected_alias_ident = expected_alias_ident,
                         .ctx = .not_found,
                     } });
@@ -1400,7 +1403,7 @@ pub fn checkPlatformRequirements(
                     const expected_alias_ident = try self.cir.insertIdent(
                         Ident.for_text(platform_env.getIdentText(alias.alias_name)),
                     );
-                    _ = try self.problems.appendProblem(self.gpa, .{ .platform_alias_not_found = .{
+                    _ = try self.problems.appendProblem(self.allocators.gpa, .{ .platform_alias_not_found = .{
                         .expected_alias_ident = expected_alias_ident,
                         .ctx = .found_but_not_alias,
                     } });
@@ -1431,7 +1434,7 @@ pub fn checkPlatformRequirements(
             const expected_def_ident = try self.cir.insertIdent(
                 Ident.for_text(platform_env.getIdentText(required_type.ident)),
             );
-            _ = try self.problems.appendProblem(self.gpa, .{
+            _ = try self.problems.appendProblem(self.allocators.gpa, .{
                 .platform_def_not_found = .{
                     .expected_def_ident = expected_def_ident,
                     .ctx = blk: {
@@ -1968,7 +1971,7 @@ fn generateStaticDispatchConstraintFromWhere(self: *Self, where_idx: CIR.WhereCl
         .w_alias => |alias| {
             // Alias syntax in where clauses (e.g., `where [a.Decode]`) was used for abilities,
             // which have been removed from Roc. Emit an error.
-            _ = try self.problems.appendProblem(self.gpa, .{ .unsupported_alias_where_clause = .{
+            _ = try self.problems.appendProblem(self.allocators.gpa, .{ .unsupported_alias_where_clause = .{
                 .alias_name = alias.alias_name,
                 .region = where_region,
             } });
@@ -2057,7 +2060,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                                 // If it is a recursive ref, check that there are
                                 // no arguments (since this is a lookup, not an apply)
                                 if (this_decl.num_args != 0) {
-                                    _ = try self.problems.appendProblem(self.gpa, .{ .type_apply_mismatch_arities = .{
+                                    _ = try self.problems.appendProblem(self.allocators.gpa, .{ .type_apply_mismatch_arities = .{
                                         .type_name = this_decl.name,
                                         .region = anno_region,
                                         .num_expected_args = this_decl.num_args,
@@ -2072,7 +2075,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                                 switch (this_decl.type_) {
                                     .alias => {
                                         // Recursion is not allowed in aliases - emit error
-                                        _ = try self.problems.appendProblem(self.gpa, .{ .recursive_alias = .{
+                                        _ = try self.problems.appendProblem(self.allocators.gpa, .{ .recursive_alias = .{
                                             .type_name = this_decl.name,
                                             .region = anno_region,
                                         } });
@@ -2156,7 +2159,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                                 // If it is a recursive ref, check that the args being
                                 // applied here match the number of args of the decl
                                 if (anno_arg_vars.len != this_decl.num_args) {
-                                    _ = try self.problems.appendProblem(self.gpa, .{ .type_apply_mismatch_arities = .{
+                                    _ = try self.problems.appendProblem(self.allocators.gpa, .{ .type_apply_mismatch_arities = .{
                                         .type_name = this_decl.name,
                                         .region = anno_region,
                                         .num_expected_args = this_decl.num_args,
@@ -2171,7 +2174,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                                 switch (this_decl.type_) {
                                     .alias => {
                                         // Recursion is not allowed in aliases - emit error
-                                        _ = try self.problems.appendProblem(self.gpa, .{ .recursive_alias = .{
+                                        _ = try self.problems.appendProblem(self.allocators.gpa, .{ .recursive_alias = .{
                                             .type_name = this_decl.name,
                                             .region = anno_region,
                                         } });
@@ -2225,7 +2228,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
 
                     // Check for an arity mismatch
                     if (decl_arg_vars.len != anno_arg_vars.len) {
-                        _ = try self.problems.appendProblem(self.gpa, .{ .type_apply_mismatch_arities = .{
+                        _ = try self.problems.appendProblem(self.allocators.gpa, .{ .type_apply_mismatch_arities = .{
                             .type_name = decl_name,
                             .region = anno_region,
                             .num_expected_args = @intCast(decl_arg_vars.len),
@@ -2243,7 +2246,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                         std.debug.assert(decl_arg_resolved == .rigid);
                         const decl_arg_rigid = decl_arg_resolved.rigid;
 
-                        try self.rigid_var_substitutions.put(self.gpa, decl_arg_rigid.name, anno_arg_var);
+                        try self.rigid_var_substitutions.put(self.allocators.gpa, decl_arg_rigid.name, anno_arg_var);
                     }
 
                     // Then instantiate the variable, substituting the rigid
@@ -2297,7 +2300,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
 
                         // Check for an arity mismatch
                         if (ext_arg_vars.len != anno_arg_vars.len) {
-                            _ = try self.problems.appendProblem(self.gpa, .{ .type_apply_mismatch_arities = .{
+                            _ = try self.problems.appendProblem(self.allocators.gpa, .{ .type_apply_mismatch_arities = .{
                                 .type_name = ext_name,
                                 .region = anno_region,
                                 .num_expected_args = @intCast(ext_arg_vars.len),
@@ -2315,7 +2318,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                             std.debug.assert(decl_arg_resolved == .rigid);
                             const decl_arg_rigid = decl_arg_resolved.rigid;
 
-                            try self.rigid_var_substitutions.put(self.gpa, decl_arg_rigid.name, anno_arg_var);
+                            try self.rigid_var_substitutions.put(self.allocators.gpa, decl_arg_rigid.name, anno_arg_var);
                         }
 
                         // Then instantiate the variable, substituting the rigid
@@ -2507,7 +2510,7 @@ fn setBuiltinTypeContent(
         .list => {
             // Then check arity
             if (anno_args.len != 1) {
-                _ = try self.problems.appendProblem(self.gpa, .{ .type_apply_mismatch_arities = .{
+                _ = try self.problems.appendProblem(self.allocators.gpa, .{ .type_apply_mismatch_arities = .{
                     .type_name = anno_builtin_name,
                     .region = anno_region,
                     .num_expected_args = 1,
@@ -2526,7 +2529,7 @@ fn setBuiltinTypeContent(
         .box => {
             // Then check arity
             if (anno_args.len != 1) {
-                _ = try self.problems.appendProblem(self.gpa, .{ .type_apply_mismatch_arities = .{
+                _ = try self.problems.appendProblem(self.allocators.gpa, .{ .type_apply_mismatch_arities = .{
                     .type_name = anno_builtin_name,
                     .region = anno_region,
                     .num_expected_args = 1,
@@ -3202,7 +3205,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             _ = try self.unify(expr_var, flex_var, env);
 
             // Record for deferred validation during comptime eval
-            _ = try self.cir.deferred_numeric_literals.append(self.gpa, .{
+            _ = try self.cir.deferred_numeric_literals.append(self.allocators.gpa, .{
                 .expr_idx = expr_idx,
                 .type_var = flex_var,
                 .constraint = constraint,
@@ -3237,7 +3240,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             _ = try self.unify(expr_var, flex_var, env);
 
             // Record for deferred validation during comptime eval
-            _ = try self.cir.deferred_numeric_literals.append(self.gpa, .{
+            _ = try self.cir.deferred_numeric_literals.append(self.allocators.gpa, .{
                 .expr_idx = expr_idx,
                 .type_var = flex_var,
                 .constraint = constraint,
@@ -3571,7 +3574,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         try self.unifyWith(expr_var, .{ .flex = Flex.init() }, env);
 
                         // Write down this constraint for later validation
-                        _ = try self.constraints.append(self.gpa, Constraint{ .eql = .{
+                        _ = try self.constraints.append(self.allocators.gpa, Constraint{ .eql = .{
                             .expected = pat_var,
                             .actual = expr_var,
                             .ctx = .{ .recursive_def = .{ .def_name = processing_def.def_name } },
@@ -4175,7 +4178,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             // We assert the lambda's type and the return type are equiv
             const lambda_expr = self.cir.store.getExpr(ret.lambda);
             std.debug.assert(lambda_expr == .e_lambda);
-            _ = try self.constraints.append(self.gpa, Constraint{ .eql = .{
+            _ = try self.constraints.append(self.allocators.gpa, Constraint{ .eql = .{
                 .expected = ModuleEnv.varFrom(lambda_expr.e_lambda.body),
                 .actual = ret_var,
                 .ctx = switch (ret.context) {
@@ -4310,7 +4313,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
     // If this type of expr should be generalized, generalize it!
     if (should_generalize) {
-        try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
+        try self.generalizer.generalize(self.allocators.gpa, &env.var_pool, env.rank());
     }
 
     return does_fx;
@@ -4540,7 +4543,7 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                 // We assert the lambda's type and the return type are equiv
                 const lambda_expr = self.cir.store.getExpr(ret.lambda);
                 std.debug.assert(lambda_expr == .e_lambda);
-                _ = try self.constraints.append(self.gpa, Constraint{ .eql = .{
+                _ = try self.constraints.append(self.allocators.gpa, Constraint{ .eql = .{
                     .expected = ModuleEnv.varFrom(lambda_expr.e_lambda.body),
                     .actual = ret_var,
                     .ctx = .early_return,
@@ -4877,7 +4880,7 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
                 .count = self.problems.missing_patterns_backing.items.len - missing_patterns_start,
             };
 
-            _ = try self.problems.appendProblem(self.gpa, .{ .non_exhaustive_match = .{
+            _ = try self.problems.appendProblem(self.allocators.gpa, .{ .non_exhaustive_match = .{
                 .match_expr = expr_idx,
                 .condition_snapshot = condition_snapshot,
                 .missing_patterns = missing_patterns_range,
@@ -4886,7 +4889,7 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
 
         // Report redundant patterns
         for (result.redundant_indices) |idx| {
-            _ = try self.problems.appendProblem(self.gpa, .{ .redundant_pattern = .{
+            _ = try self.problems.appendProblem(self.allocators.gpa, .{ .redundant_pattern = .{
                 .match_expr = expr_idx,
                 .num_branches = @intCast(match.branches.span.len),
                 .problem_branch_index = idx,
@@ -4895,7 +4898,7 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
 
         // Report unmatchable patterns (patterns on uninhabited types)
         for (result.unmatchable_indices) |idx| {
-            _ = try self.problems.appendProblem(self.gpa, .{ .unmatchable_pattern = .{
+            _ = try self.problems.appendProblem(self.allocators.gpa, .{ .unmatchable_pattern = .{
                 .match_expr = expr_idx,
                 .num_branches = @intCast(match.branches.span.len),
                 .problem_branch_index = idx,
@@ -5272,7 +5275,7 @@ fn resolveVarFromExternal(
             std.debug.assert(@intFromEnum(imported_var) < other_module_env.types.len());
 
             const new_copy = try self.copyVar(imported_var, other_module_env, null);
-            try self.import_cache.put(self.gpa, cache_key, new_copy);
+            try self.import_cache.put(self.allocators.gpa, cache_key, new_copy);
             break :blk new_copy;
         };
 
@@ -5303,7 +5306,7 @@ fn copyVar(self: *Self, other_module_var: Var, other_module_env: *const ModuleEn
         &self.var_map,
         other_module_env.getIdentStoreConst(),
         self.cir.getIdentStore(),
-        self.gpa,
+        self.allocators.gpa,
     );
 
     const region = if (mb_region) |region| region else base.Region.zero();
@@ -5486,7 +5489,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Erro
             std.debug.assert(stack_var != dispatcher_resolved.var_);
         }
 
-        try self.constraint_check_stack.append(self.gpa, dispatcher_resolved.var_);
+        try self.constraint_check_stack.append(self.allocators.gpa, dispatcher_resolved.var_);
         defer _ = self.constraint_check_stack.pop();
 
         if (dispatcher_content == .err) {
@@ -5783,7 +5786,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Erro
 
     // Copy any flex constraints to try again later
     try env.deferred_static_dispatch_constraints.items.appendSlice(
-        self.gpa,
+        self.allocators.gpa,
         self.scratch_deferred_static_dispatch_constraints.sliceFromStart(scratch_deferred_top),
     );
 }

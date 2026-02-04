@@ -631,7 +631,7 @@ pub const Repl = struct {
         };
 
         var checker = Check.init(
-            self.allocator,
+            &allocators,
             &module_env.types,
             cir,
             &imported_modules,

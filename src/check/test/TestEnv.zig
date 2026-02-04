@@ -250,7 +250,7 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
 
     // Type Check - Pass all imported modules
     var checker = try Check.init(
-        gpa,
+        &allocators,
         &module_env.types,
         module_env,
         imported_envs.items,
@@ -362,7 +362,7 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
 
     // Type Check - Pass the imported modules in other_modules parameter
     var checker = try Check.init(
-        gpa,
+        &allocators,
         &module_env.types,
         module_env,
         imported_envs.items,

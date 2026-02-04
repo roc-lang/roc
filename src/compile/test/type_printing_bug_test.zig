@@ -56,7 +56,6 @@ test "canonicalizeAndTypeCheckModule preserves Try types in type printing" {
     const imported_envs: []const *ModuleEnv = &[_]*ModuleEnv{builtin_env};
     var result = try compile_package.PackageEnv.canonicalizeAndTypeCheckModule(
         &allocators,
-        gpa,
         &env,
         parse_ast,
         builtin_env,

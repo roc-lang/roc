@@ -1731,8 +1731,9 @@ fn compileModule(
     var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
     defer module_envs.deinit();
 
+    // Reuse allocators from earlier in the function
     var checker = try Check.init(
-        gpa,
+        &allocators,
         &module_env.types,
         module_env,
         imported_envs.items,

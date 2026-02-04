@@ -1082,7 +1082,7 @@ fn processSnapshotContent(
         }
 
         var checker = try Check.init(
-            allocator,
+            &allocators,
             &can_ir.types,
             can_ir,
             builtin_modules.items,
@@ -1111,7 +1111,6 @@ fn processSnapshotContent(
 
             const checker = try compile.PackageEnv.canonicalizeAndTypeCheckModule(
                 &allocators,
-                allocator,
                 can_ir,
                 parse_ast,
                 builtin_env,
@@ -1131,7 +1130,7 @@ fn processSnapshotContent(
             }
 
             var checker = try Check.init(
-                allocator,
+                &allocators,
                 &can_ir.types,
                 can_ir,
                 builtin_modules.items,
@@ -2944,7 +2943,7 @@ fn validateMonoOutput(allocator: Allocator, mono_source: []const u8, source_path
     };
 
     var checker = Check.init(
-        allocator,
+        &allocators,
         &validation_env.types,
         &validation_env,
         &.{}, // No imported modules

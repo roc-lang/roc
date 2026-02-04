@@ -919,6 +919,7 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     parse_ast: *parse.AST,
     can: *Can,
     checker: *Check,
+    allocators: *Allocators,
     expr_idx: CIR.Expr.Idx,
     bool_stmt: CIR.Statement.Idx,
     builtin_module: LoadedModule,
@@ -938,10 +939,11 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     try module_env.common.calcLineStarts(module_env.gpa);
 
     // Parse the source code as an expression (following REPL pattern)
-    var allocators: Allocators = undefined;
+    const allocators = try allocator.create(Allocators);
+    errdefer allocator.destroy(allocators);
     allocators.initInPlace(allocator);
-    // NOTE: allocators is not freed here - caller handles cleanup via cleanupTestResources
-    const parse_ast = try parse.parseExpr(&allocators, &module_env.common);
+    // NOTE: allocators is not freed here - caller handles cleanup via cleanupParseAndCanonical
+    const parse_ast = try parse.parseExpr(allocators, &module_env.common);
 
     // Check for parse errors in test code
     // NOTE: This is TEST-ONLY behavior! In production, the parser continues and collects
@@ -990,7 +992,7 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
 
     // Create czer with module_envs_map for qualified name resolution (following REPL pattern)
     const czer = try allocator.create(Can);
-    czer.* = try Can.init(&allocators, module_env, parse_ast, &module_envs_map);
+    czer.* = try Can.init(allocators, module_env, parse_ast, &module_envs_map);
 
     // Canonicalize the expression (following REPL pattern)
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
@@ -1005,13 +1007,14 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
         const imported_envs = [_]*const ModuleEnv{builtin_module.env};
         // Resolve imports - map each import to its index in imported_envs
         module_env.imports.resolveImports(module_env, &imported_envs);
-        checker.* = try Check.init(allocator, &module_env.types, module_env, &imported_envs, &module_envs_map, &module_env.store.regions, builtin_ctx);
+        checker.* = try Check.init(allocators, &module_env.types, module_env, &imported_envs, &module_envs_map, &module_env.store.regions, builtin_ctx);
         const builtin_types = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
         return .{
             .module_env = module_env,
             .parse_ast = parse_ast,
             .can = czer,
             .checker = checker,
+            .allocators = allocators,
             .expr_idx = try module_env.store.addExpr(.{ .e_runtime_error = .{
                 .diagnostic = diagnostic_idx,
             } }, base.Region.zero()),
@@ -1035,7 +1038,7 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     module_env.imports.resolveImports(module_env, &imported_envs);
 
     const checker = try allocator.create(Check);
-    checker.* = try Check.init(allocator, &module_env.types, module_env, &imported_envs, &module_envs_map, &module_env.store.regions, builtin_ctx);
+    checker.* = try Check.init(allocators, &module_env.types, module_env, &imported_envs, &module_envs_map, &module_env.store.regions, builtin_ctx);
 
     // Type check the expression (including any defs from local type declarations)
     _ = try checker.checkExprReplWithDefs(canonical_expr_idx);
@@ -1049,6 +1052,7 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
         .parse_ast = parse_ast,
         .can = czer,
         .checker = checker,
+        .allocators = allocators,
         .expr_idx = canonical_expr_idx,
         .bool_stmt = bool_stmt_in_bool_module,
         .builtin_module = builtin_module,
@@ -1067,6 +1071,8 @@ pub fn cleanupParseAndCanonical(allocator: std.mem.Allocator, resources: anytype
     resources.parse_ast.deinit();
     // module_env.source is not owned by module_env - don't free it
     resources.module_env.deinit();
+    resources.allocators.deinit();
+    allocator.destroy(resources.allocators);
     allocator.destroy(resources.checker);
     allocator.destroy(resources.can);
     allocator.destroy(resources.module_env);

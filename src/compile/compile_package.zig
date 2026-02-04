@@ -1065,7 +1065,6 @@ pub const PackageEnv = struct {
     /// module_envs_out alive until they're done using the checker (e.g., for type printing)
     pub fn canonicalizeAndTypeCheckModule(
         allocators: *base.Allocators,
-        gpa: Allocator,
         env: *ModuleEnv,
         parse_ast: *AST,
         builtin_module_env: *const ModuleEnv,
@@ -1098,7 +1097,7 @@ pub const PackageEnv = struct {
         };
 
         var checker = try Check.init(
-            gpa,
+            allocators,
             &env.types,
             env,
             imported_envs,
@@ -1259,12 +1258,14 @@ pub const PackageEnv = struct {
     /// Standalone type checking function that can be called from other tools (e.g., snapshot tool)
     /// This ensures all tools use the exact same type checking logic as production builds
     pub fn typeCheckModule(
-        gpa: Allocator,
+        allocators: *base.Allocators,
         env: *ModuleEnv,
         builtin_module_env: *const ModuleEnv,
         imported_envs: []const *ModuleEnv,
         target: roc_target.RocTarget,
     ) !Check {
+        const gpa = allocators.gpa;
+
         // Load builtin indices from the binary data generated at build time
         const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
 
@@ -1290,7 +1291,7 @@ pub const PackageEnv = struct {
         );
 
         var checker = try Check.init(
-            gpa,
+            allocators,
             &env.types,
             env,
             imported_envs,
@@ -1370,7 +1371,10 @@ pub const PackageEnv = struct {
         resolvePendingLookups(env, imported_envs.items);
 
         const check_start = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
-        var checker = try typeCheckModule(self.gpa, env, self.builtin_modules.builtin_module.env, imported_envs.items, self.target);
+        var allocators: base.Allocators = undefined;
+        allocators.initInPlace(self.gpa);
+        defer allocators.deinit();
+        var checker = try typeCheckModule(&allocators, env, self.builtin_modules.builtin_module.env, imported_envs.items, self.target);
         defer checker.deinit();
         const check_end = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
         if (@import("builtin").target.cpu.arch != .wasm32) {
