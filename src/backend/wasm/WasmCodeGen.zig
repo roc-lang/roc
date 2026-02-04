@@ -843,6 +843,93 @@ fn generateWhenBranches(self: *Self, branches: []const mono.MonoIR.MonoWhenBranc
             try self.generateWhenBranches(remaining, value_local, value_vt, bt);
             self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
         },
+        .record => |rec_pat| {
+            // Record destructuring: bind each field to a local
+            const ls = try self.getLayoutStore();
+            const l = ls.getLayout(rec_pat.record_layout);
+            if (l.tag != .record) return error.UnsupportedExpr;
+            const field_patterns = self.store.getPatternSpan(rec_pat.fields);
+
+            for (field_patterns, 0..) |field_pat_id, i| {
+                const field_pat = self.store.getPattern(field_pat_id);
+                switch (field_pat) {
+                    .bind => |bind| {
+                        const bind_vt = self.resolveValType(bind.layout_idx);
+                        const bind_byte_size = self.layoutByteSize(bind.layout_idx);
+                        const local_idx = self.storage.allocLocal(bind.symbol, bind_vt) catch return error.OutOfMemory;
+                        const field_offset = ls.getRecordFieldOffset(l.data.record.idx, @intCast(i));
+                        self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                        WasmModule.leb128WriteU32(self.allocator, &self.body, value_local) catch return error.OutOfMemory;
+                        if (self.isCompositeLayout(bind.layout_idx)) {
+                            if (field_offset > 0) {
+                                self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                                WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(field_offset)) catch return error.OutOfMemory;
+                                self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+                            }
+                        } else {
+                            try self.emitLoadOpSized(bind_vt, bind_byte_size, field_offset);
+                        }
+                        self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
+                        WasmModule.leb128WriteU32(self.allocator, &self.body, local_idx) catch return error.OutOfMemory;
+                    },
+                    .wildcard => {},
+                    else => return error.UnsupportedExpr,
+                }
+            }
+            try self.generateExpr(branch.body);
+        },
+        .as_pattern => |as_pat| {
+            const bind_vt = self.resolveValType(as_pat.layout_idx);
+            const local_idx = self.storage.allocLocal(as_pat.symbol, bind_vt) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+            WasmModule.leb128WriteU32(self.allocator, &self.body, value_local) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
+            WasmModule.leb128WriteU32(self.allocator, &self.body, local_idx) catch return error.OutOfMemory;
+
+            const inner_pat = self.store.getPattern(as_pat.inner);
+            switch (inner_pat) {
+                .wildcard => {
+                    try self.generateExpr(branch.body);
+                },
+                .bind => |bind| {
+                    const inner_vt = self.resolveValType(bind.layout_idx);
+                    const inner_local = self.storage.allocLocal(bind.symbol, inner_vt) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteU32(self.allocator, &self.body, value_local) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteU32(self.allocator, &self.body, inner_local) catch return error.OutOfMemory;
+                    try self.generateExpr(branch.body);
+                },
+                else => return error.UnsupportedExpr,
+            }
+        },
+        .float_literal => |float_pat| {
+            self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+            WasmModule.leb128WriteU32(self.allocator, &self.body, value_local) catch return error.OutOfMemory;
+
+            switch (value_vt) {
+                .f64 => {
+                    self.body.append(self.allocator, Op.f64_const) catch return error.OutOfMemory;
+                    const bytes: [8]u8 = @bitCast(float_pat.value);
+                    self.body.appendSlice(self.allocator, &bytes) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.f64_eq) catch return error.OutOfMemory;
+                },
+                .f32 => {
+                    self.body.append(self.allocator, Op.f32_const) catch return error.OutOfMemory;
+                    const bytes: [4]u8 = @bitCast(@as(f32, @floatCast(float_pat.value)));
+                    self.body.appendSlice(self.allocator, &bytes) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.f32_eq) catch return error.OutOfMemory;
+                },
+                else => return error.UnsupportedExpr,
+            }
+
+            self.body.append(self.allocator, Op.@"if") catch return error.OutOfMemory;
+            self.body.append(self.allocator, @intFromEnum(bt)) catch return error.OutOfMemory;
+            try self.generateExpr(branch.body);
+            self.body.append(self.allocator, Op.@"else") catch return error.OutOfMemory;
+            try self.generateWhenBranches(remaining, value_local, value_vt, bt);
+            self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
+        },
         else => return error.UnsupportedExpr,
     }
 }
@@ -3139,7 +3226,17 @@ fn generateLowLevel(self: *Self, ll: anytype) Error!void {
             }
             self.body.append(self.allocator, Op.i64_extend_i32_s) catch return error.OutOfMemory;
         },
-        .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try => return error.UnsupportedExpr,
+        .i32_to_u128_wrap => {
+            // Signed i32→u128 wrap: sign-extend to i64, then to i128
+            if (args.len > 0) try self.generateExpr(args[0]);
+            if (args.len > 0 and self.exprValType(args[0]) == .i64) {
+                // Already i64
+            } else {
+                self.body.append(self.allocator, Op.i64_extend_i32_s) catch return error.OutOfMemory;
+            }
+            try self.emitIntToI128(true);
+        },
+        .i32_to_u64_try, .i32_to_u128_try => return error.UnsupportedExpr,
 
         // Float conversions
         .f32_to_f64 => {
