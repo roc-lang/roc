@@ -156,12 +156,20 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
 
 /// Execute compiled code and format the result as a string.
 /// This is the core execution + formatting logic extracted from devEvaluatorStr.
-fn executeAndFormat(
+/// Marked noinline to prevent optimizer from inlining across fork() boundary,
+/// which can cause register state issues in the child process.
+noinline fn executeAndFormat(
     alloc: std.mem.Allocator,
     dev_eval: *DevEvaluator,
     executable: *backend.ExecutableMemory,
     code_result: *DevEvaluator.CodeResult,
 ) DevEvalError![]const u8 {
+    // Compiler barrier: std.debug.print with empty string acts as a full
+    // memory barrier, ensuring all struct fields are properly materialized
+    // from memory rather than potentially kept in registers across fork().
+    // This is necessary for fork-based test isolation in ReleaseFast builds.
+    std.debug.print("", .{});
+
     // Check if this is a tuple
     if (code_result.tuple_len > 1) {
         // Allocate buffer for tuple elements
