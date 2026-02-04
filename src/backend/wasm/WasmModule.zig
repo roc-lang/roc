@@ -165,18 +165,34 @@ pub const Op = struct {
     // f32 arithmetic
     pub const f32_abs: u8 = 0x8B;
     pub const f32_neg: u8 = 0x8C;
+    pub const f32_ceil: u8 = 0x8D;
+    pub const f32_floor: u8 = 0x8E;
+    pub const f32_trunc: u8 = 0x8F;
+    pub const f32_nearest: u8 = 0x90;
+    pub const f32_sqrt: u8 = 0x91;
     pub const f32_add: u8 = 0x92;
     pub const f32_sub: u8 = 0x93;
     pub const f32_mul: u8 = 0x94;
     pub const f32_div: u8 = 0x95;
+    pub const f32_min: u8 = 0x96;
+    pub const f32_max: u8 = 0x97;
+    pub const f32_copysign: u8 = 0x98;
 
     // f64 arithmetic
     pub const f64_abs: u8 = 0x99;
     pub const f64_neg: u8 = 0x9A;
+    pub const f64_ceil: u8 = 0x9B;
+    pub const f64_floor: u8 = 0x9C;
+    pub const f64_trunc: u8 = 0x9D;
+    pub const f64_nearest: u8 = 0x9E;
+    pub const f64_sqrt: u8 = 0x9F;
     pub const f64_add: u8 = 0xA0;
     pub const f64_sub: u8 = 0xA1;
     pub const f64_mul: u8 = 0xA2;
     pub const f64_div: u8 = 0xA3;
+    pub const f64_min: u8 = 0xA4;
+    pub const f64_max: u8 = 0xA5;
+    pub const f64_copysign: u8 = 0xA6;
 
     // Conversions
     pub const i32_wrap_i64: u8 = 0xA7;

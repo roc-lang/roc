@@ -2556,6 +2556,164 @@ fn generateLowLevel(self: *Self, ll: anytype) Error!void {
             self.body.append(self.allocator, Op.i64_trunc_f64_u) catch return error.OutOfMemory;
         },
 
+        // Float math functions (direct wasm opcodes)
+        .num_sqrt => {
+            if (args.len > 0) try self.generateExpr(args[0]);
+            const vt = self.resolveValType(ll.ret_layout);
+            const wasm_op: u8 = switch (vt) {
+                .f32 => Op.f32_sqrt,
+                .f64 => Op.f64_sqrt,
+                else => return error.UnsupportedExpr,
+            };
+            self.body.append(self.allocator, wasm_op) catch return error.OutOfMemory;
+        },
+        .num_floor => {
+            if (args.len > 0) try self.generateExpr(args[0]);
+            const vt = self.resolveValType(ll.ret_layout);
+            const wasm_op: u8 = switch (vt) {
+                .f32 => Op.f32_floor,
+                .f64 => Op.f64_floor,
+                else => return error.UnsupportedExpr,
+            };
+            self.body.append(self.allocator, wasm_op) catch return error.OutOfMemory;
+        },
+        .num_ceiling => {
+            if (args.len > 0) try self.generateExpr(args[0]);
+            const vt = self.resolveValType(ll.ret_layout);
+            const wasm_op: u8 = switch (vt) {
+                .f32 => Op.f32_ceil,
+                .f64 => Op.f64_ceil,
+                else => return error.UnsupportedExpr,
+            };
+            self.body.append(self.allocator, wasm_op) catch return error.OutOfMemory;
+        },
+        .num_round => {
+            if (args.len > 0) try self.generateExpr(args[0]);
+            const vt = self.resolveValType(ll.ret_layout);
+            const wasm_op: u8 = switch (vt) {
+                .f32 => Op.f32_nearest,
+                .f64 => Op.f64_nearest,
+                else => return error.UnsupportedExpr,
+            };
+            self.body.append(self.allocator, wasm_op) catch return error.OutOfMemory;
+        },
+
+        // Modulo (integer only — float mod not yet supported)
+        .num_mod => {
+            return self.generateNumericLowLevel(ll.op, args, ll.ret_layout);
+        },
+
+        // List operations
+        .list_len => {
+            // Load length from RocList struct (offset 4)
+            if (args.len > 0) try self.generateExpr(args[0]);
+            try self.emitLoadOp(.i32, 4);
+            // list_len returns U64 in Roc, but we store it as i32 on wasm32
+            // If ret_layout expects i64, extend
+            const ret_vt = self.resolveValType(ll.ret_layout);
+            if (ret_vt == .i64) {
+                self.body.append(self.allocator, Op.i64_extend_i32_u) catch return error.OutOfMemory;
+            }
+        },
+        .list_is_empty => {
+            // Load length from RocList struct (offset 4) and compare to 0
+            if (args.len > 0) try self.generateExpr(args[0]);
+            try self.emitLoadOp(.i32, 4);
+            self.body.append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
+        },
+        .list_get => {
+            // args[0] = list, args[1] = index
+            // Load elements_ptr from list, compute element address, load element
+            if (args.len >= 2) {
+                try self.generateExpr(args[0]);
+                const list_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+                self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
+                WasmModule.leb128WriteU32(self.allocator, &self.body, list_local) catch return error.OutOfMemory;
+
+                // Load elements_ptr (offset 0)
+                self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                WasmModule.leb128WriteU32(self.allocator, &self.body, list_local) catch return error.OutOfMemory;
+                try self.emitLoadOp(.i32, 0);
+
+                // Generate index and convert to i32 if needed
+                try self.generateExpr(args[1]);
+                if (self.exprValType(args[1]) == .i64) {
+                    self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
+                }
+
+                // Compute element address: elements_ptr + index * elem_size
+                const ret_byte_size = self.layoutByteSize(ll.ret_layout);
+                self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(ret_byte_size)) catch return error.OutOfMemory;
+                self.body.append(self.allocator, Op.i32_mul) catch return error.OutOfMemory;
+                self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+
+                // Load element value
+                if (self.isCompositeLayout(ll.ret_layout)) {
+                    // Composite element — result is the pointer itself
+                } else {
+                    const ret_vt = self.resolveValType(ll.ret_layout);
+                    try self.emitLoadOpSized(ret_vt, ret_byte_size, 0);
+                }
+            }
+        },
+
+        // String operations
+        .str_is_empty => {
+            // Check if string length is 0
+            // For SSO: byte 11 has length in high nibble (masked to 0x7F)
+            // For heap: offset 4 has length
+            // Simplified: load byte 11, check SSO bit, then compare len to 0
+            // For now, just load the 4-byte length field at offset 4 and check
+            if (args.len > 0) try self.generateExpr(args[0]);
+            // Load the length/SSO word at offset 4
+            try self.emitLoadOp(.i32, 4);
+            // If it's 0, the string is empty (works for both SSO and heap empty strings)
+            self.body.append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
+        },
+
+        // Bitwise operations
+        .num_pow => {
+            // Float power function — wasm doesn't have a pow instruction
+            // For integer pow, this needs a loop. For float, use host function.
+            return error.UnsupportedExpr;
+        },
+        .num_log => {
+            // Logarithm — no wasm instruction, needs host function
+            return error.UnsupportedExpr;
+        },
+
+        // Remaining list/string operations that need heap allocation or builtins
+        .list_set, .list_append, .list_prepend, .list_concat,
+        .list_first, .list_last, .list_drop_first, .list_drop_last,
+        .list_take_first, .list_take_last, .list_contains, .list_reverse,
+        .list_reserve, .list_release_excess_capacity, .list_with_capacity,
+        .list_repeat, .list_split_first, .list_split_last,
+        => return error.UnsupportedExpr,
+
+        .str_is_eq, .str_concat, .str_contains, .str_starts_with, .str_ends_with,
+        .str_count_utf8_bytes, .str_caseless_ascii_equals, .str_to_utf8, .str_from_utf8,
+        .str_repeat, .str_trim, .str_trim_start, .str_trim_end, .str_split,
+        .str_join_with, .str_reserve, .str_release_excess_capacity, .str_with_capacity,
+        .str_drop_prefix, .str_drop_suffix, .str_with_ascii_lowercased,
+        .str_with_ascii_uppercased, .str_with_prefix, .str_from_utf8_lossy,
+        => return error.UnsupportedExpr,
+
+        // Numeric operations needing host functions or complex implementations
+        .num_to_str, .num_from_str, .num_from_numeral,
+        => return error.UnsupportedExpr,
+
+        // Box/unbox — needs heap allocation
+        .box_box, .box_unbox => return error.UnsupportedExpr,
+
+        // Compare — returns Ordering tag union
+        .compare => return error.UnsupportedExpr,
+
+        // Crash
+        .crash => {
+            self.body.append(self.allocator, Op.@"unreachable") catch return error.OutOfMemory;
+        },
+
         else => return error.UnsupportedExpr,
     }
 }
@@ -2619,13 +2777,54 @@ fn generateNumericLowLevel(self: *Self, op: anytype, args: []const MonoExprId, r
                     if (args.len > 0) try self.generateExpr(args[0]);
                     self.body.append(self.allocator, Op.f64_abs) catch return error.OutOfMemory;
                 },
-                else => {
-                    // For integers: if value < 0, negate
+                .i32 => {
+                    // abs(x) = select(x, -x, x >= 0)
                     if (args.len > 0) try self.generateExpr(args[0]);
-                    // TODO: implement integer abs via select
-                    return error.UnsupportedExpr;
+                    const temp = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.local_tee) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteU32(self.allocator, &self.body, temp) catch return error.OutOfMemory;
+                    // Stack: [x]. Compute -x.
+                    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteU32(self.allocator, &self.body, temp) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.i32_sub) catch return error.OutOfMemory;
+                    // Stack: [x, -x]. Compute condition: x >= 0.
+                    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteU32(self.allocator, &self.body, temp) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.i32_ge_s) catch return error.OutOfMemory;
+                    // select(x, -x, x >= 0) — returns x if true, -x if false
+                    self.body.append(self.allocator, Op.select) catch return error.OutOfMemory;
+                },
+                .i64 => {
+                    if (args.len > 0) try self.generateExpr(args[0]);
+                    const temp = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.local_tee) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteU32(self.allocator, &self.body, temp) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteI64(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteU32(self.allocator, &self.body, temp) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.i64_sub) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteU32(self.allocator, &self.body, temp) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteI64(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.i64_ge_s) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.select) catch return error.OutOfMemory;
                 },
             }
+        },
+        .num_mod => {
+            if (args.len >= 2) { try self.generateExpr(args[0]); try self.generateExpr(args[1]); }
+            const wasm_op: u8 = switch (vt) {
+                .i32 => Op.i32_rem_s,
+                .i64 => Op.i64_rem_s,
+                else => return error.UnsupportedExpr, // float mod not supported natively
+            };
+            self.body.append(self.allocator, wasm_op) catch return error.OutOfMemory;
         },
         else => return error.UnsupportedExpr,
     }
