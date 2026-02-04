@@ -1,23 +1,26 @@
 //! Cross-platform setjmp/longjmp for crash protection.
 //!
 //! On Unix, uses the C library's _setjmp/_longjmp.
-//! On Windows x86_64, provides a custom implementation using naked functions
+//! On Windows, provides a custom implementation using naked functions
 //! since the C library setjmp is a compiler intrinsic that can't be linked.
-//! On unsupported platforms (wasm, freestanding, Windows ARM64), provides stub types that error at runtime.
+//! On unsupported platforms (wasm, freestanding), provides stub types that error at runtime.
 
 const std = @import("std");
 const builtin = @import("builtin");
 
 /// Whether we have a platform-specific implementation.
 const has_windows_x64_impl = builtin.os.tag == .windows and builtin.cpu.arch == .x86_64;
+const has_windows_aarch64_impl = builtin.os.tag == .windows and builtin.cpu.arch == .aarch64;
 const has_unix_impl = builtin.os.tag == .macos or builtin.os.tag == .linux;
 
 /// Whether this platform supports setjmp/longjmp.
-pub const supported = has_windows_x64_impl or has_unix_impl;
+pub const supported = has_windows_x64_impl or has_windows_aarch64_impl or has_unix_impl;
 
 /// Buffer type for storing execution context (registers, stack pointer, etc.).
 pub const JmpBuf = if (has_windows_x64_impl)
     @import("windows.zig").JmpBuf
+else if (has_windows_aarch64_impl)
+    @import("windows_aarch64.zig").JmpBuf
 else if (has_unix_impl)
     @import("unix.zig").JmpBuf
 else
@@ -27,6 +30,8 @@ else
 /// or the value passed to longjmp when returning via a jump.
 pub const setjmp = if (has_windows_x64_impl)
     @import("windows.zig").setjmp
+else if (has_windows_aarch64_impl)
+    @import("windows_aarch64.zig").setjmp
 else if (has_unix_impl)
     @import("unix.zig").setjmp
 else
@@ -35,6 +40,8 @@ else
 /// Restores execution context from the buffer, causing setjmp to return with the given value.
 pub const longjmp = if (has_windows_x64_impl)
     @import("windows.zig").longjmp
+else if (has_windows_aarch64_impl)
+    @import("windows_aarch64.zig").longjmp
 else if (has_unix_impl)
     @import("unix.zig").longjmp
 else
@@ -52,6 +59,8 @@ test {
     std.testing.refAllDecls(@This());
     if (has_windows_x64_impl) {
         std.testing.refAllDecls(@import("windows.zig"));
+    } else if (has_windows_aarch64_impl) {
+        std.testing.refAllDecls(@import("windows_aarch64.zig"));
     } else if (has_unix_impl) {
         std.testing.refAllDecls(@import("unix.zig"));
     }
