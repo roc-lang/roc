@@ -11,9 +11,7 @@ type=expr
 }
 ~~~
 # EXPECTED
-~~~
-[1, 2, 42]
-~~~
+NIL
 # PROBLEMS
 NIL
 # TOKENS

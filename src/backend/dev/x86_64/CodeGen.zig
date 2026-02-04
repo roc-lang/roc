@@ -1085,10 +1085,6 @@ test "CALLEE_SAVED_AREA_SIZE constant" {
     try std.testing.expectEqual(expected, SystemVCodeGen.CALLEE_SAVED_AREA_SIZE);
 }
 
-// =============================================================================
-// Windows ABI Compliance Tests
-// =============================================================================
-
 test "prologue: SUB RSP comes BEFORE callee-saved MOV saves" {
     // Windows x64 ABI requires: allocate stack FIRST, then save callee-saved regs
     // This is critical because before SUB RSP, [RSP-N] is in the red zone (invalid on Windows)
@@ -1167,7 +1163,7 @@ test "prologue: no writes to red zone (below RSP before allocation)" {
     for (0..code.len -| 3) |i| {
         if (code[i] == 0x48 and
             ((code[i + 1] == 0x81 and code[i + 2] == 0xEC) or
-            (code[i + 1] == 0x83 and code[i + 2] == 0xEC)))
+                (code[i + 1] == 0x83 and code[i + 2] == 0xEC)))
         {
             sub_rsp_pos = i;
             break;

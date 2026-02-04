@@ -39,7 +39,7 @@ fn setjmpImpl() callconv(.naked) void {
 fn longjmpImpl() callconv(.naked) void {
     // Windows x64: first arg in RCX, second in EDX
     asm volatile (
-        // Set return value (if val == 0, return 1)
+    // Set return value (if val == 0, return 1)
         \\mov %%edx, %%eax
         \\test %%eax, %%eax
         \\jnz 1f

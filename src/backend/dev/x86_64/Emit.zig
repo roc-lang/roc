@@ -1363,11 +1363,6 @@ test "function prologue sequence" {
     try std.testing.expectEqualSlices(u8, &[_]u8{ 0x55, 0x48, 0x89, 0xE5 }, emit.buf.items);
 }
 
-// =============================================================================
-// Phase 1: Emit Primitive Unit Tests
-// These tests verify exact byte encoding for key operations used in code generation.
-// =============================================================================
-
 test "movRegMem - load from [rbp-144]" {
     var emit = Emit.init(std.testing.allocator);
     defer emit.deinit();
