@@ -124,7 +124,8 @@ jobs:
       - name: build roc + repro executables
         uses: ./.github/actions/flaky-retry
         with:
-          command: "zig build -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast ${{ matrix.cpu_flag }} ${{ matrix.target_flag }}"
+          # -Dstrip=false preserves debug info for valgrind suppressions to match function names
+          command: "zig build -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast -Dstrip=false ${{ matrix.cpu_flag }} ${{ matrix.target_flag }}"
           error_string_contains: "build.zig.zon"
           retry_count: 3
 
