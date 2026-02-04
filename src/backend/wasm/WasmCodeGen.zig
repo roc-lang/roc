@@ -35,6 +35,10 @@ pub const Error = error{
     UnsupportedExpr,
 };
 
+fn unsupported(_: std.builtin.SourceLocation) Error {
+    return error.UnsupportedExpr;
+}
+
 allocator: Allocator,
 store: *const MonoExprStore,
 layout_store: ?*const LayoutStore,
@@ -563,43 +567,78 @@ fn generateExpr(self: *Self, expr_id: MonoExprId) Error!void {
                                 const target_is_composite = self.isCompositeLayout(bind.layout_idx);
                                 if (expr_is_composite and !target_is_composite) {
                                     // Composite expr bound to scalar local:
-                                    // Only safe when sizes match (representation difference, not truncation)
                                     const target_size = self.layoutByteSize(bind.layout_idx);
                                     const expr_size = self.exprByteSize(stmt.expr);
-                                    if (target_size != expr_size) {
-                                        return error.UnsupportedExpr;
+                                    if (target_size == expr_size or target_size < expr_size) {
+                                        // Same size: representation difference (not truncation)
+                                        // Smaller target: truncation (e.g., i128_literal → u64 — take lower bytes)
+                                        try self.generateExpr(stmt.expr);
+                                        const vt2 = self.resolveValType(bind.layout_idx);
+                                        // Load the scalar from the pointer (lower bytes on little-endian)
+                                        try self.emitLoadOpSized(vt2, target_size, 0);
+                                        const local_idx = self.storage.getLocal(bind.symbol) orelse
+                                            (self.storage.allocLocal(bind.symbol, vt2) catch return error.OutOfMemory);
+                                        self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
+                                        WasmModule.leb128WriteU32(self.allocator, &self.body, local_idx) catch return error.OutOfMemory;
+                                        continue;
                                     }
-                                    // Generate the composite expr → i32 pointer, then load scalar
-                                    try self.generateExpr(stmt.expr);
-                                    const vt2 = self.resolveValType(bind.layout_idx);
-                                    // Load the scalar from the pointer
-                                    try self.emitLoadOpSized(vt2, target_size, 0);
-                                    const local_idx = self.storage.getLocal(bind.symbol) orelse
-                                        (self.storage.allocLocal(bind.symbol, vt2) catch return error.OutOfMemory);
-                                    self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
-                                    WasmModule.leb128WriteU32(self.allocator, &self.body, local_idx) catch return error.OutOfMemory;
-                                    continue;
+                                    return unsupported(@src());
                                 } else if (!expr_is_composite and target_is_composite) {
-                                    // Scalar expr bound to composite local:
-                                    // Only safe when sizes match
+                                    // Scalar expr bound to composite local
                                     const target_size = self.layoutByteSize(bind.layout_idx);
                                     const expr_size = self.exprByteSize(stmt.expr);
-                                    if (target_size != expr_size) {
-                                        return error.UnsupportedExpr;
+
+                                    // Allocate stack memory for the composite target
+                                    const alignment: u32 = if (target_size >= 8) 8 else if (target_size >= 4) 4 else if (target_size >= 2) 2 else 1;
+                                    const stack_offset = try self.allocStackMemory(target_size, alignment);
+
+                                    if (target_size > expr_size) {
+                                        // Widening: e.g., i64_literal → i128/u128 (8 → 16)
+                                        // Zero-init the target memory first
+                                        const base_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+                                        try self.emitFpOffset(stack_offset);
+                                        self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
+                                        WasmModule.leb128WriteU32(self.allocator, &self.body, base_local) catch return error.OutOfMemory;
+                                        try self.emitZeroInit(base_local, target_size);
+
+                                        // Generate the scalar and store at offset 0 (lower bytes)
+                                        try self.generateExpr(stmt.expr);
+                                        const scalar_vt = self.exprValType(stmt.expr);
+                                        try self.emitStoreToMem(base_local, 0, scalar_vt);
+
+                                        // For signed types, sign-extend the upper bytes
+                                        const expr_data = self.store.getExpr(stmt.expr);
+                                        if (expr_data == .i64_literal and expr_data.i64_literal < 0 and
+                                            (bind.layout_idx == .i128 or bind.layout_idx == .dec))
+                                        {
+                                            // Store -1 (all ones) in upper 8 bytes for sign extension
+                                            self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                                            WasmModule.leb128WriteU32(self.allocator, &self.body, base_local) catch return error.OutOfMemory;
+                                            self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
+                                            WasmModule.leb128WriteI64(self.allocator, &self.body, -1) catch return error.OutOfMemory;
+                                            try self.emitStoreOp(.i64, 8);
+                                        }
+
+                                        // Bind pointer to the symbol's local
+                                        self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                                        WasmModule.leb128WriteU32(self.allocator, &self.body, base_local) catch return error.OutOfMemory;
+                                        const local_idx = self.storage.getLocal(bind.symbol) orelse
+                                            (self.storage.allocLocal(bind.symbol, .i32) catch return error.OutOfMemory);
+                                        self.emitLocalSet(local_idx);
+                                        continue;
                                     }
-                                    // Generate the scalar, store into stack memory, bind pointer
+
+                                    if (target_size != expr_size) {
+                                        return unsupported(@src());
+                                    }
+
+                                    // Same size: store scalar into stack memory, bind pointer
                                     try self.generateExpr(stmt.expr);
                                     const scalar_vt = self.exprValType(stmt.expr);
                                     const tmp_local = self.storage.allocAnonymousLocal(scalar_vt) catch return error.OutOfMemory;
                                     self.emitLocalSet(tmp_local);
 
-                                    // Allocate stack memory for the composite target
-                                    const byte_size = self.layoutByteSize(bind.layout_idx);
-                                    const alignment: u32 = if (byte_size >= 8) 8 else if (byte_size >= 4) 4 else if (byte_size >= 2) 2 else 1;
-                                    const stack_offset = try self.allocStackMemory(byte_size, alignment);
-
                                     // Store scalar at offset 0 of the allocated memory
-                                    // Stack needs: [addr, value] for store
                                     self.emitLocalGet(self.fp_local);
                                     self.emitLocalGet(tmp_local);
                                     try self.emitStoreOp(scalar_vt, stack_offset);
@@ -682,7 +721,7 @@ fn generateExpr(self: *Self, expr_id: MonoExprId) Error!void {
             try self.generateExpr(b.final_expr);
         },
         .lookup => |l| {
-            const local_idx = self.storage.getLocal(l.symbol) orelse return error.UnsupportedExpr;
+            const local_idx = self.storage.getLocal(l.symbol) orelse return unsupported(@src());
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, local_idx) catch return error.OutOfMemory;
         },
@@ -702,7 +741,7 @@ fn generateExpr(self: *Self, expr_id: MonoExprId) Error!void {
             const backing_composite = self.isCompositeExpr(nom.backing_expr);
             const nominal_composite = self.isCompositeLayout(nom.nominal_layout);
             if (backing_composite != nominal_composite) {
-                return error.UnsupportedExpr;
+                return unsupported(@src());
             }
             try self.generateExpr(nom.backing_expr);
         },
@@ -972,7 +1011,7 @@ fn generateWhenBranches(self: *Self, branches: []const mono.MonoIR.MonoWhenBranc
                 // Load discriminant from memory at discriminant_offset
                 const ls = try self.getLayoutStore();
                 const l = ls.getLayout(tag_pat.union_layout);
-                if (l.tag != .tag_union) return error.UnsupportedExpr;
+                if (l.tag != .tag_union) return unsupported(@src());
                 const tu_data = ls.getTagUnionData(l.data.tag_union.idx);
                 const disc_offset = tu_data.discriminant_offset;
                 const disc_size: u32 = tu_data.discriminant_size;
@@ -1046,7 +1085,7 @@ fn generateWhenBranches(self: *Self, branches: []const mono.MonoIR.MonoWhenBranc
             // Record destructuring: bind each field to a local
             const ls = try self.getLayoutStore();
             const l = ls.getLayout(rec_pat.record_layout);
-            if (l.tag != .record) return error.UnsupportedExpr;
+            if (l.tag != .record) return unsupported(@src());
             const field_patterns = self.store.getPatternSpan(rec_pat.fields);
 
             for (field_patterns, 0..) |field_pat_id, i| {
@@ -1184,6 +1223,11 @@ fn exprLayoutIdx(self: *Self, expr_id: MonoExprId) ?layout.Idx {
         .i128_literal => layout.Idx.i128,
         .dec_literal => layout.Idx.dec,
         .str_literal => layout.Idx.str,
+        .str_concat => layout.Idx.str,
+        .int_to_str => layout.Idx.str,
+        .float_to_str => layout.Idx.str,
+        .dec_to_str => layout.Idx.str,
+        .str_escape_and_quote => layout.Idx.str,
         else => null,
     };
 }
@@ -1223,6 +1267,12 @@ fn exprValType(self: *Self, expr_id: MonoExprId) ValType {
         .decref => |dec| self.exprValType(dec.value),
         .free => |f| self.exprValType(f.value),
         .str_literal => .i32,
+        .list => .i32, // pointer to 12-byte RocList
+        .str_concat => .i32, // pointer to 12-byte RocStr
+        .int_to_str => .i32, // pointer to 12-byte RocStr
+        .float_to_str => .i32, // pointer to 12-byte RocStr
+        .dec_to_str => .i32, // pointer to 12-byte RocStr
+        .str_escape_and_quote => .i32, // pointer to 12-byte RocStr
         else => .i64, // conservative default
     };
 }
@@ -1231,6 +1281,13 @@ fn exprValType(self: *Self, expr_id: MonoExprId) ValType {
 fn exprByteSize(self: *Self, expr_id: MonoExprId) u32 {
     if (self.exprLayoutIdx(expr_id)) |lay_idx| {
         return self.layoutByteSize(lay_idx);
+    }
+    // Check for known composite types without layout indices
+    const expr = self.store.getExpr(expr_id);
+    switch (expr) {
+        .list, .empty_list => return 12, // RocList = ptr + len + cap
+        .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote => return 12, // RocStr
+        else => {},
     }
     // Fallback based on ValType
     return switch (self.exprValType(expr_id)) {
@@ -1245,7 +1302,13 @@ fn isCompositeExpr(self: *const Self, expr_id: MonoExprId) bool {
     return switch (expr) {
         .dec_literal, .i128_literal => true, // 16 bytes in stack memory
         .str_literal => true, // 12-byte RocStr in stack memory
+        .list => true, // 12-byte RocList in stack memory
         .empty_list => true, // 12-byte RocList in stack memory
+        .str_concat => true, // produces 12-byte RocStr
+        .int_to_str => true, // produces 12-byte RocStr
+        .float_to_str => true, // produces 12-byte RocStr
+        .dec_to_str => true, // produces 12-byte RocStr
+        .str_escape_and_quote => true, // produces 12-byte RocStr
         .record => |r| self.isCompositeLayout(r.record_layout),
         .tuple => |t| self.isCompositeLayout(t.tuple_layout),
         .tag => |t| self.isCompositeLayout(t.union_layout),
@@ -1287,6 +1350,22 @@ fn isCompositeLayout(self: *const Self, layout_idx: layout.Idx) bool {
 /// Compares the underlying memory byte-by-byte using i32 loads.
 /// Leaves an i32 (bool) on the stack: 1 for equal, 0 for not equal.
 fn generateStructuralEq(self: *Self, lhs: MonoExprId, rhs: MonoExprId, negate: bool) Error!void {
+    // Deep equality for heap types (List, Str) requires element-by-element comparison
+    // which isn't implemented yet. Return unsupported to skip rather than produce wrong results.
+    const lhs_expr = self.store.getExpr(lhs);
+    switch (lhs_expr) {
+        .list, .empty_list, .str_literal, .str_concat, .int_to_str, .float_to_str, .dec_to_str, .str_escape_and_quote => return unsupported(@src()),
+        else => {},
+    }
+    // Also check via layout: if either operand has a list/str layout, skip
+    if (self.exprLayoutIdx(lhs)) |lay_idx| {
+        if (lay_idx == .str) return unsupported(@src());
+        if (self.layout_store) |ls| {
+            const l = ls.getLayout(lay_idx);
+            if (l.tag == .list) return unsupported(@src());
+        }
+    }
+
     // Get the byte size of the values
     const byte_size = self.exprByteSize(lhs);
 
@@ -1416,7 +1495,7 @@ fn generateCompositeI128BinOp(self: *Self, lhs: MonoExprId, rhs: MonoExprId, op:
             // Dec multiply requires (a * b) / 10^18 with 256-bit intermediate —
             // not a raw i128 multiply. Not yet implemented for wasm.
             // Pure i128 multiply (non-Dec) is also rare. Skip for now.
-            return error.UnsupportedExpr;
+            return unsupported(@src());
         },
         .lt => try self.emitI128Compare(lhs_local, rhs_local, .lt),
         .lte => try self.emitI128Compare(lhs_local, rhs_local, .lte),
@@ -3179,7 +3258,7 @@ fn compileProc(self: *Self, proc: MonoProc) Error!void {
                 self.cf_depth = saved_cf_depth;
                 // Remove the registration since we can't compile this proc
                 _ = self.symbol_funcs.remove(key);
-                return error.UnsupportedExpr;
+                return unsupported(@src());
             },
         }
     }
@@ -3194,7 +3273,7 @@ fn compileProc(self: *Self, proc: MonoProc) Error!void {
         self.restoreState(saved_body, saved_body_cap, saved_locals, saved_next_local, saved_local_types, saved_local_types_cap, saved_stack_frame_size, saved_uses_stack_memory, saved_fp_local);
         self.cf_depth = saved_cf_depth;
         _ = self.symbol_funcs.remove(key);
-        return error.UnsupportedExpr;
+        return unsupported(@src());
     };
 
     // End of ret block
@@ -3408,7 +3487,7 @@ fn generateCFStmt(self: *Self, stmt_id: CFStmtId) Error!void {
                     },
                     else => {
                         self.allocator.free(param_locals);
-                        return error.UnsupportedExpr;
+                        return unsupported(@src());
                     },
                 }
             }
@@ -3436,7 +3515,7 @@ fn generateCFStmt(self: *Self, stmt_id: CFStmtId) Error!void {
             const args = self.store.getExprSpan(jmp.args);
 
             // Get param locals for this join point
-            const param_locals = self.join_point_param_locals.get(jp_key) orelse return error.UnsupportedExpr;
+            const param_locals = self.join_point_param_locals.get(jp_key) orelse return unsupported(@src());
 
             // Evaluate all arguments first (to temp locals), to avoid
             // overwriting params that are referenced by later args
@@ -3553,7 +3632,7 @@ fn generateCall(self: *Self, c: anytype) Error!void {
                 // Inline closure call — push captures directly from current scope
                 const captures = self.store.getCaptures(closure.captures);
                 for (captures) |cap| {
-                    const local_idx = self.storage.getLocal(cap.symbol) orelse return error.UnsupportedExpr;
+                    const local_idx = self.storage.getLocal(cap.symbol) orelse return unsupported(@src());
                     self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
                     WasmModule.leb128WriteU32(self.allocator, &self.body, local_idx) catch return error.OutOfMemory;
                 }
@@ -3563,7 +3642,7 @@ fn generateCall(self: *Self, c: anytype) Error!void {
                 const key: u48 = @bitCast(lookup.symbol);
                 if (self.closure_captures.get(key)) |cap_info| {
                     for (cap_info.symbols) |cap_sym| {
-                        const local_idx = self.storage.getLocal(cap_sym) orelse return error.UnsupportedExpr;
+                        const local_idx = self.storage.getLocal(cap_sym) orelse return unsupported(@src());
                         self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
                         WasmModule.leb128WriteU32(self.allocator, &self.body, local_idx) catch return error.OutOfMemory;
                     }
@@ -3580,7 +3659,7 @@ fn generateCall(self: *Self, c: anytype) Error!void {
         self.body.append(self.allocator, Op.call) catch return error.OutOfMemory;
         WasmModule.leb128WriteU32(self.allocator, &self.body, idx) catch return error.OutOfMemory;
     } else {
-        return error.UnsupportedExpr;
+        return unsupported(@src());
     }
 }
 
@@ -3777,7 +3856,7 @@ fn emitZeroInit(self: *Self, base_local: u32, byte_count: u32) Error!void {
 fn generateRecord(self: *Self, r: anytype) Error!void {
     const ls = try self.getLayoutStore();
     const l = ls.getLayout(r.record_layout);
-    if (l.tag != .record) return error.UnsupportedExpr;
+    if (l.tag != .record) return unsupported(@src());
 
     const size = ls.layoutSize(l);
     if (size == 0) {
@@ -3864,7 +3943,7 @@ fn generateRecord(self: *Self, r: anytype) Error!void {
 fn bindRecordPattern(self: *Self, ptr_local: u32, rec: anytype) Error!void {
     const ls = try self.getLayoutStore();
     const record_layout = ls.getLayout(rec.record_layout);
-    if (record_layout.tag != .record) return error.UnsupportedExpr;
+    if (record_layout.tag != .record) return unsupported(@src());
 
     const field_patterns = self.store.getPatternSpan(rec.fields);
     for (field_patterns, 0..) |pat_id, i| {
@@ -3938,7 +4017,7 @@ fn bindRecordPattern(self: *Self, ptr_local: u32, rec: anytype) Error!void {
 fn bindTuplePattern(self: *Self, ptr_local: u32, tup: anytype) Error!void {
     const ls = try self.getLayoutStore();
     const tuple_layout = ls.getLayout(tup.tuple_layout);
-    if (tuple_layout.tag != .tuple) return error.UnsupportedExpr;
+    if (tuple_layout.tag != .tuple) return unsupported(@src());
 
     const elem_patterns = self.store.getPatternSpan(tup.elems);
     for (elem_patterns, 0..) |pat_id, i| {
@@ -3986,7 +4065,7 @@ fn generateFieldAccess(self: *Self, fa: anytype) Error!void {
 
     // Get the field offset
     const record_layout = ls.getLayout(fa.record_layout);
-    if (record_layout.tag != .record) return error.UnsupportedExpr;
+    if (record_layout.tag != .record) return unsupported(@src());
 
     const field_offset = ls.getRecordFieldOffset(record_layout.data.record.idx, fa.field_idx);
     const field_byte_size = ls.getRecordFieldSize(record_layout.data.record.idx, fa.field_idx);
@@ -4012,7 +4091,7 @@ fn generateFieldAccess(self: *Self, fa: anytype) Error!void {
 fn generateTuple(self: *Self, t: anytype) Error!void {
     const ls = try self.getLayoutStore();
     const l = ls.getLayout(t.tuple_layout);
-    if (l.tag != .tuple) return error.UnsupportedExpr;
+    if (l.tag != .tuple) return unsupported(@src());
 
     const size = ls.layoutSize(l);
     if (size == 0) {
@@ -4071,7 +4150,7 @@ fn generateTupleAccess(self: *Self, ta: anytype) Error!void {
     try self.generateExpr(ta.tuple_expr);
 
     const tuple_layout = ls.getLayout(ta.tuple_layout);
-    if (tuple_layout.tag != .tuple) return error.UnsupportedExpr;
+    if (tuple_layout.tag != .tuple) return unsupported(@src());
 
     const elem_offset = ls.getTupleElementOffset(tuple_layout.data.tuple.idx, ta.elem_idx);
     const elem_byte_size = ls.getTupleElementSize(tuple_layout.data.tuple.idx, ta.elem_idx);
@@ -4135,7 +4214,7 @@ fn generateTag(self: *Self, t: anytype) Error!void {
     const ls = try self.getLayoutStore();
     const l = ls.getLayout(t.union_layout);
 
-    if (l.tag != .tag_union) return error.UnsupportedExpr;
+    if (l.tag != .tag_union) return unsupported(@src());
 
     const tu_size = ls.layoutSize(l);
     const tu_data = ls.getTagUnionData(l.data.tag_union.idx);
@@ -4948,11 +5027,11 @@ fn generateLowLevel(self: *Self, ll: anytype) Error!void {
         .num_pow => {
             // Float power function — wasm doesn't have a pow instruction
             // For integer pow, this needs a loop. For float, use host function.
-            return error.UnsupportedExpr;
+            return unsupported(@src());
         },
         .num_log => {
             // Logarithm — no wasm instruction, needs host function
-            return error.UnsupportedExpr;
+            return unsupported(@src());
         },
 
         // List element access operations (no heap allocation needed)
@@ -7447,7 +7526,7 @@ fn generateIntToStr(self: *Self, its: anytype) Error!void {
     const precision = its.int_precision;
 
     // i128/u128 not supported (no native 128-bit division in wasm)
-    if (precision == .i128 or precision == .u128) return error.UnsupportedExpr;
+    if (precision == .i128 or precision == .u128) return unsupported(@src());
 
     const is_signed = switch (precision) {
         .i8, .i16, .i32, .i64 => true,
@@ -7642,7 +7721,7 @@ fn generateFloatToStr(self: *Self, fts: anytype) Error!void {
     const precision = fts.float_precision;
 
     // Dec is handled by generateDecToStr
-    if (precision == .dec) return error.UnsupportedExpr;
+    if (precision == .dec) return unsupported(@src());
 
     const is_f64 = precision == .f64;
     const val_type: ValType = if (is_f64) .f64 else .f32;
@@ -7981,7 +8060,7 @@ fn generateFloatToStr(self: *Self, fts: anytype) Error!void {
 fn generateDecToStr(self: *Self, dec_expr: anytype) Error!void {
     _ = self;
     _ = dec_expr;
-    return error.UnsupportedExpr;
+    return unsupported(@src());
 }
 
 /// Generate str_escape_and_quote: surround string with quotes and escape special chars.
