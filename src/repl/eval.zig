@@ -587,7 +587,7 @@ pub const Repl = struct {
             self.builtin_indices,
         );
 
-        var czer = Can.init(cir, parse_ast, &module_envs_map) catch |err| {
+        var czer = Can.init(&allocators, cir, parse_ast, &module_envs_map) catch |err| {
             return .{ .canonicalize_error = try std.fmt.allocPrint(self.allocator, "Canonicalize init error: {}", .{err}) };
         };
         defer czer.deinit();

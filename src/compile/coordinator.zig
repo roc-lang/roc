@@ -2043,8 +2043,11 @@ pub const Coordinator = struct {
         // Canonicalize using the PackageEnv shared function with sibling awareness
         // This sets up placeholders for external imports that will be resolved during type-checking
         // Use worker allocator for thread safety in multi-threaded mode
+        var allocators: base.Allocators = undefined;
+        allocators.initInPlace(canon_alloc);
+        defer allocators.deinit();
         compile_package.PackageEnv.canonicalizeModuleWithSiblings(
-            canon_alloc,
+            &allocators,
             env,
             ast,
             self.builtin_modules.builtin_module.env,

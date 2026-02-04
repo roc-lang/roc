@@ -34,7 +34,7 @@ test "exposed but not implemented - values" {
     const ast = try parse.parse(&allocators, &env.common);
     defer ast.deinit();
 
-    var czer = try Can.init(&env, ast, null);
+    var czer = try Can.init(&allocators, &env, ast, null);
     defer czer.deinit();
 
     try czer.canonicalizeFile();
@@ -77,7 +77,7 @@ test "exposed but not implemented - types" {
     const ast = try parse.parse(&allocators, &env.common);
     defer ast.deinit();
 
-    var czer = try Can.init(&env, ast, null);
+    var czer = try Can.init(&allocators, &env, ast, null);
     defer czer.deinit();
 
     try czer.canonicalizeFile();
@@ -119,7 +119,7 @@ test "redundant exposed entries" {
     const ast = try parse.parse(&allocators, &env.common);
     defer ast.deinit();
 
-    var czer = try Can.init(&env, ast, null);
+    var czer = try Can.init(&allocators, &env, ast, null);
     defer czer.deinit();
     try czer
         .canonicalizeFile();
@@ -166,7 +166,7 @@ test "shadowing with exposed items" {
     const ast = try parse.parse(&allocators, &env.common);
     defer ast.deinit();
 
-    var czer = try Can.init(&env, ast, null);
+    var czer = try Can.init(&allocators, &env, ast, null);
     defer czer.deinit();
     try czer
         .canonicalizeFile();
@@ -203,7 +203,7 @@ test "shadowing non-exposed items" {
     const ast = try parse.parse(&allocators, &env.common);
     defer ast.deinit();
 
-    var czer = try Can.init(&env, ast, null);
+    var czer = try Can.init(&allocators, &env, ast, null);
     defer czer.deinit();
     try czer
         .canonicalizeFile();
@@ -247,7 +247,7 @@ test "exposed items correctly tracked across shadowing" {
     const ast = try parse.parse(&allocators, &env.common);
     defer ast.deinit();
 
-    var czer = try Can.init(&env, ast, null);
+    var czer = try Can.init(&allocators, &env, ast, null);
     defer czer.deinit();
     try czer
         .canonicalizeFile();
@@ -307,7 +307,7 @@ test "complex case with redundant, shadowing, and not implemented" {
     const ast = try parse.parse(&allocators, &env.common);
     defer ast.deinit();
 
-    var czer = try Can.init(&env, ast, null);
+    var czer = try Can.init(&allocators, &env, ast, null);
     defer czer.deinit();
     try czer
         .canonicalizeFile();
@@ -363,7 +363,7 @@ test "exposed_items is populated correctly" {
     const ast = try parse.parse(&allocators, &env.common);
     defer ast.deinit();
 
-    var czer = try Can.init(&env, ast, null);
+    var czer = try Can.init(&allocators, &env, ast, null);
     defer czer.deinit();
     try czer
         .canonicalizeFile();
@@ -399,7 +399,7 @@ test "exposed_items persists after canonicalization" {
     const ast = try parse.parse(&allocators, &env.common);
     defer ast.deinit();
 
-    var czer = try Can.init(&env, ast, null);
+    var czer = try Can.init(&allocators, &env, ast, null);
     defer czer.deinit();
     try czer
         .canonicalizeFile();
@@ -433,7 +433,7 @@ test "exposed_items never has entries removed" {
     const ast = try parse.parse(&allocators, &env.common);
     defer ast.deinit();
 
-    var czer = try Can.init(&env, ast, null);
+    var czer = try Can.init(&allocators, &env, ast, null);
     defer czer.deinit();
     try czer
         .canonicalizeFile();
@@ -470,7 +470,7 @@ test "exposed_items handles identifiers with different attributes" {
     const ast = try parse.parse(&allocators, &env.common);
     defer ast.deinit();
 
-    var czer = try Can.init(&env, ast, null);
+    var czer = try Can.init(&allocators, &env, ast, null);
     defer czer.deinit();
     try czer
         .canonicalizeFile();

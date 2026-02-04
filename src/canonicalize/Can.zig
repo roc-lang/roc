@@ -49,6 +49,7 @@ const PlaceholderInfo = struct {
     item_name_idx: Ident.Idx, // The unqualified item name (e.g., "baz")
 };
 
+allocators: *base.Allocators,
 env: *ModuleEnv,
 parse_ir: *AST,
 /// Track whether we're in statement position (true) or expression position (false)
@@ -206,6 +207,7 @@ const TypeBindingLocation = struct {
 pub fn deinit(
     self: *Self,
 ) void {
+    // Use self.env.gpa for consistency with internal methods that populate these structures
     const gpa = self.env.gpa;
 
     self.type_vars_scope.deinit();
@@ -240,16 +242,23 @@ pub fn deinit(
     self.scratch_local_type_decls.deinit(gpa);
 }
 
-/// Options for initializing the canonicalizer.
+/// Initialize the canonicalizer.
+/// NOTE: The allocators parameter is stored for future arena support but not currently used.
+/// All allocations use env.gpa for consistency with internal methods that use self.env.gpa.
+/// TODO: Future optimization - use allocators.arena for temporary allocations
+/// (scratch buffers, intermediate data) during canonicalization.
 pub fn init(
+    allocators: *base.Allocators,
     env: *ModuleEnv,
     parse_ir: *AST,
     module_envs: ?*const std.AutoHashMap(Ident.Idx, AutoImportedType),
 ) std.mem.Allocator.Error!Self {
+    // Use env.gpa for all allocations since internal methods use self.env.gpa
     const gpa = env.gpa;
 
     // Create the canonicalizer with scopes
     var result = Self{
+        .allocators = allocators,
         .env = env,
         .parse_ir = parse_ir,
         .scopes = .{},

@@ -973,7 +973,7 @@ fn processSnapshotContent(
                 try Can.populateModuleEnvs(&module_envs, can_ir, builtin_env, config.builtin_indices);
             }
 
-            var czer = try Can.init(can_ir, parse_ast, &module_envs);
+            var czer = try Can.init(&allocators, can_ir, parse_ast, &module_envs);
             defer czer.deinit();
             try czer.canonicalizeFile();
         },
@@ -990,7 +990,7 @@ fn processSnapshotContent(
                 try Can.populateModuleEnvs(&module_envs, can_ir, builtin_env, config.builtin_indices);
             }
 
-            var czer = try Can.init(can_ir, parse_ast, &module_envs);
+            var czer = try Can.init(&allocators, can_ir, parse_ast, &module_envs);
             defer czer.deinit();
 
             switch (content.meta.node_type) {
@@ -1111,6 +1111,7 @@ fn processSnapshotContent(
             module_envs_for_file = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
 
             var checker = try compile.PackageEnv.canonicalizeAndTypeCheckModule(
+                &allocators,
                 allocator,
                 can_ir,
                 parse_ast,
@@ -2898,7 +2899,7 @@ fn validateMonoOutput(allocator: Allocator, mono_source: []const u8, source_path
     }
 
     // Canonicalize the parsed MONO output
-    var czer = Can.init(&validation_env, validation_ast, &module_envs) catch |err| {
+    var czer = Can.init(&allocators, &validation_env, validation_ast, &module_envs) catch |err| {
         std.log.err("MONO VALIDATION ERROR in {s}: Failed to initialize canonicalizer: {}", .{ source_path, err });
         return false;
     };
