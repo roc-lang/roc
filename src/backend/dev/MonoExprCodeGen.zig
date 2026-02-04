@@ -1182,6 +1182,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 .bool_literal => .bool,
                 .i128_literal => .i128,
                 .dec_literal => .dec,
+                .str_literal => .str,
                 // For other expressions, no layout available
                 else => null,
             };
