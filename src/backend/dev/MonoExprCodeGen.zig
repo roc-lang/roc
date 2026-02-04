@@ -7492,7 +7492,9 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                                         }
                                     },
                                     .wildcard => {},
-                                    else => {},
+                                    // Other patterns (nested tags, records, tuples, lists, literals)
+                                    // should have been simplified during lowering
+                                    else => unreachable,
                                 }
                             }
                         }
@@ -8910,7 +8912,9 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                             break :blk bind.layout_idx;
                         }
                     },
-                    else => {},
+                    .wildcard => {}, // Fall through to use for_loop.elem_layout
+                    // Other patterns not valid for for loop element
+                    else => unreachable,
                 }
                 break :blk for_loop.elem_layout;
             };
@@ -10336,6 +10340,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                             .closure_value => |cv| {
                                 return try self.generateClosureDispatch(cv, call.args, call.ret_layout);
                             },
+                            // Other locations (registers, stack, immediates) fall through
+                            // to generateLookupCall for function pointer handling
                             else => {},
                         }
                     }
@@ -10801,6 +10807,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         if (self.symbol_locations.get(sk)) |loc| {
                             switch (loc) {
                                 .lambda_code, .closure_value => return true,
+                                // Other locations don't indicate a callable
                                 else => {},
                             }
                         }
@@ -10809,10 +10816,12 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                             const def = self.store.getExpr(def_id);
                             switch (def) {
                                 .lambda, .closure => return true,
+                                // Other expressions don't indicate a callable
                                 else => {},
                             }
                         }
                     },
+                    // Other expressions (not lambda, closure, or lookup) can't be callable
                     else => {},
                 }
             }
@@ -11192,6 +11201,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     .closure_value => |cv| {
                         return try self.generateClosureDispatch(cv, args_span, ret_layout);
                     },
+                    // Other location types can't be called directly - fall through to error
                     else => {},
                 }
             }
@@ -13137,6 +13147,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         }
                         return;
                     },
+                    // Other locations (immediates, etc.) fall through to regular handling
                     else => {},
                 }
             }
@@ -14380,6 +14391,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 .box, .box_of_zst => {
                     try self.emitBoxFree(value_loc);
                 },
+                // Other layout types (scalars, tuples, records, etc.) are not heap-allocated
+                // and don't need freeing
                 else => {},
             }
 

@@ -158,7 +158,9 @@ fn freeMemory(memory: []align(std.heap.page_size_min) u8) void {
                 _ = result catch {};
             }
         },
-        else => {},
+        // allocateMemory returns error.UnsupportedPlatform for other OSes,
+        // so freeMemory should never be called on them
+        else => unreachable,
     }
 }
 

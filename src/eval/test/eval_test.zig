@@ -97,6 +97,21 @@ test "arithmetic binops" {
     try runExpectI64("7 % 3", 1, .no_trace);
 }
 
+test "simple Dec division - larger numbers" {
+    // Single division with numbers similar to failing tests
+    try runExpectI64("100 // 20", 5, .no_trace);
+}
+
+test "simple Dec modulo - larger numbers" {
+    // Single modulo - does this work?
+    try runExpectI64("100 % 30", 10, .no_trace);
+}
+
+test "Dec division result used in arithmetic" {
+    // Division result used in subsequent arithmetic (addition, not another division)
+    try runExpectI64("(100 // 20) + 1", 6, .no_trace);
+}
+
 test "comparison binops" {
     try runExpectI64("if 1 < 2 100 else 200", 100, .no_trace);
     try runExpectI64("if 2 < 1 100 else 200", 200, .no_trace);

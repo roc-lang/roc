@@ -739,8 +739,9 @@ pub fn movssMemReg(self: *Emit, base: GeneralReg, disp: i32, src: FloatReg) !voi
 
 /// MOVDQU [base + disp32], xmm (store 128-bit unaligned from XMM to memory)
 /// Used for storing i128 return values from XMM0
+/// IMPORTANT: Uses F3 prefix (MOVDQU) not 66 prefix (MOVDQA) to avoid alignment faults
 pub fn movdquMemReg(self: *Emit, base: GeneralReg, disp: i32, src: FloatReg) !void {
-    try self.buf.append(self.allocator, 0x66); // Operand size prefix
+    try self.buf.append(self.allocator, 0xF3); // F3 prefix for MOVDQU (unaligned)
     const r: u1 = src.rexB();
     const b: u1 = base.rexB();
     if (r == 1 or b == 1) {

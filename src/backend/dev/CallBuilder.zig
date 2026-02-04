@@ -272,8 +272,10 @@ pub fn CallBuilder(comptime Emit: type) type {
         pub fn init(emit: *Emit, stack_offset: *i32) !Self {
             var self = Self{ .emit = emit };
             if (comptime builtin.cpu.arch == .x86_64 and builtin.os.tag == .windows) {
-                // Allocate 8-byte slot for R12 save
-                stack_offset.* -= 8;
+                // Allocate 16-byte slot for R12 save to maintain 16-byte alignment
+                // for subsequent allocations (important for i128/RocDec which need
+                // 16-byte aligned addresses when passed by pointer)
+                stack_offset.* -= 16;
                 self.r12_save_offset = stack_offset.*;
                 // Save R12 immediately to the RBP-relative slot
                 try self.emit.movMemReg(.w64, CC.BASE_PTR, self.r12_save_offset.?, .R12);
@@ -691,6 +693,257 @@ pub fn CallBuilder(comptime Emit: type) type {
     };
 }
 
+/// Callee-side function frame builder for cross-platform prologue/epilogue generation.
+///
+/// Handles differences between:
+/// - x86_64 System V (Linux, macOS, BSD): red zone available, RBX/R12-R15 callee-saved
+/// - x86_64 Windows Fastcall: NO red zone, RBX/RSI/RDI/R12-R15 callee-saved
+/// - aarch64 AAPCS64: X19-X28 callee-saved, FP/LR saved via STP
+///
+/// Usage:
+/// ```
+/// var frame = CalleeBuilder(Emit).init(&emit);
+/// frame.saveViaMove(.RBX);      // Save RBX using MOV [RBP-offset], reg
+/// frame.saveViaPush(.R12);      // Save R12 using PUSH (before stack alloc)
+/// frame.setStackSize(1024);     // Request 1024 bytes of stack space
+/// const initial_offset = try frame.emitPrologue();
+/// // ... generate function body ...
+/// try frame.emitEpilogue();
+/// ```
+pub fn CalleeBuilder(comptime Emit: type) type {
+    const GeneralReg = switch (builtin.cpu.arch) {
+        .aarch64 => aarch64.GeneralReg,
+        .x86_64 => x86_64.GeneralReg,
+        else => @compileError("Unsupported architecture"),
+    };
+
+    return struct {
+        const Self = @This();
+
+        emit: *Emit,
+
+        // Configuration (set before emitPrologue)
+        stack_size: u32 = 0,
+        push_regs: [8]?GeneralReg = .{ null, null, null, null, null, null, null, null },
+        push_count: u8 = 0,
+        mov_save_regs: [8]?GeneralReg = .{ null, null, null, null, null, null, null, null },
+        mov_save_count: u8 = 0,
+
+        // State set by emitPrologue for use by emitEpilogue
+        actual_stack_alloc: u32 = 0,
+
+        /// Initialize a new callee frame builder
+        pub fn init(emit: *Emit) Self {
+            return Self{ .emit = emit };
+        }
+
+        /// Set the stack size needed for local variables.
+        /// The actual allocation will be aligned to 16 bytes.
+        pub fn setStackSize(self: *Self, size: u32) void {
+            self.stack_size = size;
+        }
+
+        /// Mark a register to be saved via PUSH before stack allocation.
+        /// Use this for registers that need to be saved at fixed offsets relative to RBP.
+        /// Registers are pushed in the order they're added.
+        pub fn saveViaPush(self: *Self, reg: GeneralReg) void {
+            if (self.push_count < self.push_regs.len) {
+                self.push_regs[self.push_count] = reg;
+                self.push_count += 1;
+            }
+        }
+
+        /// Mark a register to be saved via MOV after stack allocation.
+        /// Use this for callee-saved registers in the deferred prologue pattern.
+        /// Saved at fixed RBP-relative offsets.
+        pub fn saveViaMove(self: *Self, reg: GeneralReg) void {
+            if (self.mov_save_count < self.mov_save_regs.len) {
+                self.mov_save_regs[self.mov_save_count] = reg;
+                self.mov_save_count += 1;
+            }
+        }
+
+        /// Get the RBP-relative offset for a MOV-saved register.
+        /// Offsets start at -8 and go down: -8, -16, -24, etc.
+        fn getMovSaveOffset(index: u8) i32 {
+            return -@as(i32, @intCast((index + 1) * 8));
+        }
+
+        /// Emit function prologue. Returns the initial stack_offset for allocStackSlot.
+        ///
+        /// Sequence (x86_64):
+        /// 1. push rbp; mov rbp, rsp (establish frame pointer)
+        /// 2. push <regs> (callee-saved via push, in order added)
+        /// 3. sub rsp, <aligned_size> (allocate stack space)
+        /// 4. mov [rbp-N], <regs> (callee-saved via mov, after allocation)
+        ///
+        /// On Windows x64, step 3 MUST happen before step 4 (no red zone).
+        pub fn emitPrologue(self: *Self) !i32 {
+            if (comptime builtin.cpu.arch == .aarch64) {
+                return self.emitPrologueAarch64();
+            } else {
+                return self.emitPrologueX86_64();
+            }
+        }
+
+        fn emitPrologueX86_64(self: *Self) !i32 {
+            // 1. Establish frame pointer
+            try self.emit.pushReg(.RBP);
+            try self.emit.movRegReg(.w64, .RBP, .RSP);
+
+            // 2. Push callee-saved registers (in order added)
+            for (self.push_regs[0..self.push_count]) |maybe_reg| {
+                if (maybe_reg) |reg| {
+                    try self.emit.pushReg(reg);
+                }
+            }
+
+            // Calculate stack offset after pushes (negative offset from RBP)
+            const push_bytes: i32 = @as(i32, self.push_count) * 8;
+
+            // 3. Allocate stack space (aligned to 16 bytes)
+            // Total frame must be 16-byte aligned. After pushes, RSP = RBP - push_bytes.
+            // We need (push_bytes + stack_alloc) to be 16-byte aligned.
+            const total_needed = self.stack_size + @as(u32, self.mov_save_count) * 8;
+            self.actual_stack_alloc = CC.alignStackSize(total_needed);
+
+            if (self.actual_stack_alloc > 0) {
+                try self.emit.subRegImm32(.w64, CC.STACK_PTR, @intCast(self.actual_stack_alloc));
+            }
+
+            // 4. Save MOV-based callee-saved registers (now safe - we've allocated stack)
+            for (0..self.mov_save_count) |i| {
+                if (self.mov_save_regs[i]) |reg| {
+                    const offset = getMovSaveOffset(@intCast(i));
+                    try self.emit.movMemReg(.w64, .RBP, offset, reg);
+                }
+            }
+
+            // Return initial stack_offset: accounts for push-saved registers
+            // First allocation should be below the pushed registers
+            return -push_bytes;
+        }
+
+        fn emitPrologueAarch64(self: *Self) !i32 {
+            // aarch64: Use STP for FP/LR and additional register pairs
+            // stp x29, x30, [sp, #-16]!  (push FP and LR, pre-decrement)
+            try self.emit.stpPreIndex(.w64, .FP, .LR, .ZRSP, -2);
+            // mov x29, sp (establish frame pointer)
+            try self.emit.movRegReg(.w64, .FP, .ZRSP);
+
+            // Save additional registers via STP (pairs only - aarch64 prefers paired ops)
+            // If odd count, the last register is handled via stack allocation + STR offset
+            const pair_count = self.push_count / 2;
+            var i: u8 = 0;
+            while (i < pair_count * 2) : (i += 2) {
+                const reg1 = self.push_regs[i] orelse break;
+                const reg2 = self.push_regs[i + 1] orelse break;
+                try self.emit.stpPreIndex(.w64, reg1, reg2, .ZRSP, -2);
+            }
+
+            // Calculate bytes used by STP operations
+            const stp_bytes: u32 = @as(u32, pair_count) * 16;
+
+            // Allocate remaining stack space (includes odd register + locals)
+            const odd_reg_space: u32 = if (self.push_count % 2 == 1) 16 else 0; // 16 for alignment
+            const total_needed = self.stack_size + @as(u32, self.mov_save_count) * 8 + odd_reg_space;
+            self.actual_stack_alloc = CC.alignStackSize(total_needed);
+
+            if (self.actual_stack_alloc > 0) {
+                try self.emit.subRegRegImm12(.w64, .ZRSP, .ZRSP, @intCast(self.actual_stack_alloc));
+            }
+
+            // Handle odd register: store at [SP + actual_stack_alloc - 8]
+            if (self.push_count % 2 == 1) {
+                if (self.push_regs[self.push_count - 1]) |reg| {
+                    // STR to a fixed offset within allocated space
+                    const odd_offset: u12 = @intCast(self.actual_stack_alloc - 8);
+                    try self.emit.strRegMemUoff(.w64, reg, .ZRSP, odd_offset);
+                }
+            }
+
+            // Return initial stack_offset: accounts for FP/LR (16) + STP-saved regs
+            const push_bytes: i32 = @as(i32, 16) + @as(i32, stp_bytes);
+            return -push_bytes;
+        }
+
+        /// Emit function epilogue. Mirrors the prologue automatically.
+        ///
+        /// Sequence (x86_64):
+        /// 1. mov <regs>, [rbp-N] (restore MOV-saved registers)
+        /// 2. add rsp, <aligned_size> OR mov rsp, rbp (deallocate stack)
+        /// 3. pop <regs> (restore PUSH-saved registers, reverse order)
+        /// 4. pop rbp; ret
+        pub fn emitEpilogue(self: *Self) !void {
+            if (comptime builtin.cpu.arch == .aarch64) {
+                return self.emitEpilogueAarch64();
+            } else {
+                return self.emitEpilogueX86_64();
+            }
+        }
+
+        fn emitEpilogueX86_64(self: *Self) !void {
+            // 1. Restore MOV-saved registers
+            for (0..self.mov_save_count) |i| {
+                if (self.mov_save_regs[i]) |reg| {
+                    const offset = getMovSaveOffset(@intCast(i));
+                    try self.emit.movRegMem(.w64, reg, .RBP, offset);
+                }
+            }
+
+            // 2. Deallocate stack space
+            if (self.actual_stack_alloc > 0) {
+                try self.emit.addRegImm32(.w64, CC.STACK_PTR, @intCast(self.actual_stack_alloc));
+            }
+
+            // 3. Pop callee-saved registers (reverse order)
+            var i: i32 = @as(i32, self.push_count) - 1;
+            while (i >= 0) : (i -= 1) {
+                if (self.push_regs[@intCast(i)]) |reg| {
+                    try self.emit.popReg(reg);
+                }
+            }
+
+            // 4. Restore frame pointer and return
+            try self.emit.popReg(.RBP);
+            try self.emit.ret();
+        }
+
+        fn emitEpilogueAarch64(self: *Self) !void {
+            // Restore odd register first (stored at [SP + actual_stack_alloc - 8])
+            if (self.push_count % 2 == 1) {
+                if (self.push_regs[self.push_count - 1]) |reg| {
+                    const odd_offset: u12 = @intCast(self.actual_stack_alloc - 8);
+                    try self.emit.ldrRegMemUoff(.w64, reg, .ZRSP, odd_offset);
+                }
+            }
+
+            // Deallocate stack space
+            if (self.actual_stack_alloc > 0) {
+                try self.emit.addRegRegImm12(.w64, .ZRSP, .ZRSP, @intCast(self.actual_stack_alloc));
+            }
+
+            // Restore STP-saved register pairs (reverse order)
+            const pair_count = self.push_count / 2;
+            var i: i32 = @as(i32, pair_count) * 2 - 2;
+            while (i >= 0) : (i -= 2) {
+                const reg1 = self.push_regs[@intCast(i)] orelse break;
+                const reg2 = self.push_regs[@intCast(i + 1)] orelse break;
+                try self.emit.ldpPostIndex(.w64, reg1, reg2, .ZRSP, 2);
+            }
+
+            // Restore FP and LR, and return
+            try self.emit.ldpPostIndex(.w64, .FP, .LR, .ZRSP, 2);
+            try self.emit.ret();
+        }
+
+        /// Get the size of the callee-saved area (for MOV-saved registers)
+        pub fn getCalleeSavedSize(self: *const Self) u32 {
+            return @as(u32, self.mov_save_count) * 8;
+        }
+    };
+}
+
 // Tests
 test "CallingConvention.forTarget Windows" {
     const cc = CallingConvention.forTarget(.x64win);
@@ -893,11 +1146,12 @@ test "CallBuilder with automatic R12 save/restore" {
     // Initialize builder - on Windows, this will allocate R12 save slot
     const builder = try Builder.init(&emit, &stack_offset);
 
-    // On Windows, should have emitted: mov [rbp-24], r12 and allocated 8 bytes
+    // On Windows, should have emitted: mov [rbp-32], r12 and allocated 16 bytes
+    // (16 bytes to maintain 16-byte alignment for i128/RocDec arguments)
     if (builtin.os.tag == .windows) {
         try std.testing.expect(emit.buf.items.len > 0);
-        try std.testing.expectEqual(@as(i32, -24), stack_offset); // 8 bytes allocated
-        try std.testing.expectEqual(@as(?i32, -24), builder.r12_save_offset);
+        try std.testing.expectEqual(@as(i32, -32), stack_offset); // 16 bytes allocated
+        try std.testing.expectEqual(@as(?i32, -32), builder.r12_save_offset);
     } else {
         // On non-Windows, no save should have been emitted
         try std.testing.expectEqual(@as(usize, 0), emit.buf.items.len);
@@ -1536,4 +1790,127 @@ test "CallBuilder stack args at correct offsets" {
     // Just verify reasonable code length indicating stack arg handling
     // (4 reg args + 1 stack arg + shadow space handling)
     try std.testing.expect(emit.buf.items.len > 50);
+}
+
+// =============================================================================
+// CalleeBuilder Tests
+// =============================================================================
+
+test "CalleeBuilder basic prologue/epilogue x86_64" {
+    if (builtin.cpu.arch != .x86_64) return;
+
+    const Emit = x86_64.Emit;
+    const Callee = CalleeBuilder(Emit);
+
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var frame = Callee.init(&emit);
+    frame.setStackSize(64);
+
+    const initial_offset = try frame.emitPrologue();
+    // With no pushed registers, initial offset should be 0
+    try std.testing.expectEqual(@as(i32, 0), initial_offset);
+
+    try frame.emitEpilogue();
+
+    // Should have generated: push rbp, mov rbp rsp, sub rsp N, ..., add rsp N, pop rbp, ret
+    try std.testing.expect(emit.buf.items.len > 10);
+
+    // Check for push rbp (0x55)
+    try std.testing.expectEqual(@as(u8, 0x55), emit.buf.items[0]);
+}
+
+test "CalleeBuilder with pushed registers x86_64" {
+    if (builtin.cpu.arch != .x86_64) return;
+
+    const Emit = x86_64.Emit;
+    const Callee = CalleeBuilder(Emit);
+
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var frame = Callee.init(&emit);
+    frame.saveViaPush(.RBX);
+    frame.saveViaPush(.R12);
+    frame.setStackSize(128);
+
+    const initial_offset = try frame.emitPrologue();
+    // With 2 pushed registers (16 bytes), initial offset should be -16
+    try std.testing.expectEqual(@as(i32, -16), initial_offset);
+
+    try frame.emitEpilogue();
+
+    // Should be longer due to push/pop of RBX and R12
+    try std.testing.expect(emit.buf.items.len > 20);
+}
+
+test "CalleeBuilder with MOV-saved registers x86_64" {
+    if (builtin.cpu.arch != .x86_64) return;
+
+    const Emit = x86_64.Emit;
+    const Callee = CalleeBuilder(Emit);
+
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var frame = Callee.init(&emit);
+    frame.saveViaMove(.R13);
+    frame.saveViaMove(.R14);
+    frame.setStackSize(256);
+
+    _ = try frame.emitPrologue();
+    try frame.emitEpilogue();
+
+    // Should include MOV [rbp-8], r13 and MOV [rbp-16], r14 patterns
+    try std.testing.expect(emit.buf.items.len > 30);
+}
+
+test "CalleeBuilder stack alignment" {
+    if (builtin.cpu.arch != .x86_64) return;
+
+    const Emit = x86_64.Emit;
+    const Callee = CalleeBuilder(Emit);
+
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var frame = Callee.init(&emit);
+    frame.setStackSize(50); // Not 16-byte aligned
+
+    _ = try frame.emitPrologue();
+
+    // The actual_stack_alloc should be rounded up to 16-byte alignment
+    try std.testing.expect(frame.actual_stack_alloc >= 50);
+    try std.testing.expectEqual(@as(u32, 0), frame.actual_stack_alloc % 16);
+}
+
+test "CalleeBuilder mixed push and MOV saves x86_64" {
+    if (builtin.cpu.arch != .x86_64) return;
+
+    const Emit = x86_64.Emit;
+    const Callee = CalleeBuilder(Emit);
+
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var frame = Callee.init(&emit);
+    // Push RBX and R12 (like main expression does)
+    frame.saveViaPush(.RBX);
+    frame.saveViaPush(.R12);
+    // Also save R13 via MOV (like deferred prologue pattern)
+    frame.saveViaMove(.R13);
+    frame.setStackSize(1024);
+
+    const initial_offset = try frame.emitPrologue();
+    // 2 pushed registers = -16
+    try std.testing.expectEqual(@as(i32, -16), initial_offset);
+
+    try frame.emitEpilogue();
+
+    // Verify code was generated
+    // Prologue: push rbp(1) + mov rbp,rsp(3) + push RBX(1) + push R12(2) + sub rsp,N(7) + mov [rbp-8],R13(4) = 18
+    // Epilogue: mov R13,[rbp-8](4) + add rsp,N(7) + pop R12(2) + pop RBX(1) + pop rbp(1) + ret(1) = 16
+    // Total: ~34 bytes
+    try std.testing.expect(emit.buf.items.len > 30);
 }
