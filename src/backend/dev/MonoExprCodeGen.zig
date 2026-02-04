@@ -12967,13 +12967,15 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                             reg_idx = max_arg_regs; // Mark all registers as consumed
                         }
                     },
-                    .wildcard => {
-                        // Skip this argument - but need to determine its size
-                        // For simplicity, assume 1 register for wildcards
-                        if (reg_idx < max_arg_regs) {
-                            reg_idx += 1;
+                    .wildcard => |wc| {
+                        // Skip this argument - use the layout to determine how many
+                        // registers it occupies (important for correct roc_ops placement)
+                        const num_regs = self.calcParamRegCount(wc.layout_idx);
+                        if (reg_idx + num_regs <= max_arg_regs) {
+                            reg_idx += num_regs;
                         } else {
-                            stack_arg_offset += 8;
+                            stack_arg_offset += @as(i32, num_regs) * 8;
+                            reg_idx = max_arg_regs;
                         }
                     },
                     .record => |rec| {
@@ -13084,7 +13086,6 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             self.roc_ops_reg = roc_ops_save_reg;
         }
 
-        /// Move a value to the return register (X0 on aarch64, RAX on x86_64)
         /// Move a value to the return register(s), using layout information for proper sizing.
         fn moveToReturnRegisterWithLayout(self: *Self, loc: ValueLocation, ret_layout: layout.Idx) Error!void {
             // First check if the layout tells us this is a multi-register type > 8 bytes
@@ -13410,6 +13411,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // Lambdas need roc_ops to call builtins. We pass it explicitly to avoid
             // relying on callee-saved register semantics across internal calls.
             const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+
             if (reg_idx < max_arg_regs) {
                 // roc_ops fits in a register
                 const arg_reg = self.getArgumentRegister(reg_idx);

@@ -103,8 +103,11 @@ pub const Idx = enum(@Type(.{
     f64 = 14,
     dec = 15,
 
+    // zero-sized type
+    zst = 16,
+
     // Regular indices start from here.
-    // num_scalars in store.zig must refer to how many variants we had up to this point.
+    // num_primitives in store.zig must refer to how many variants we had up to this point.
     _,
 
     /// Sentinel value representing "not present" / "no layout".

@@ -1024,8 +1024,14 @@ pub const MonoPattern = union(enum) {
         layout_idx: layout.Idx,
     },
 
-    /// Underscore/wildcard (always matches, doesn't bind)
-    wildcard: void,
+    /// Underscore/wildcard (always matches, doesn't bind).
+    /// Layout is required for calling convention correctness: when a lambda has
+    /// a wildcard parameter like `|_| ...`, the code generator must know how
+    /// many registers/bytes that parameter occupies to correctly locate subsequent
+    /// parameters (e.g., roc_ops pointer passed as the final argument).
+    wildcard: struct {
+        layout_idx: layout.Idx,
+    },
 
     /// Match a specific integer value
     int_literal: struct {

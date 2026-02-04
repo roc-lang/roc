@@ -129,9 +129,12 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
     };
     defer code_result.deinit();
 
-    // DEBUG: Dump generated code hex (enable by setting to true)
-    const dump_hex = true;
-    if (dump_hex and code_result.code.len > 0) {
+    // Debug hex dump of generated machine code.
+    // Set to true to see the raw bytes for disassembly analysis.
+    // Useful for debugging calling convention issues, register allocation, etc.
+    // See src/backend/README.md for instructions on running filtered tests with hex dump.
+    const dump_generated_code_hex = false;
+    if (dump_generated_code_hex and code_result.code.len > 0) {
         std.debug.print("\n=== Generated Code ({} bytes, entry_offset={}) ===\n", .{ code_result.code.len, code_result.entry_offset });
         dumpHex(code_result.code);
         std.debug.print("=== End Generated Code ===\n\n", .{});
