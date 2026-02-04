@@ -236,12 +236,68 @@ fn generateExpr(self: *Self, expr_id: MonoExprId) Error!void {
             self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
             WasmModule.leb128WriteI32(self.allocator, &self.body, if (val) 1 else 0) catch return error.OutOfMemory;
         },
-        .dec_literal => return error.UnsupportedExpr,
-        .i128_literal => return error.UnsupportedExpr,
+        .dec_literal => |val| {
+            // Dec is i128 stored in 16 bytes of linear memory
+            const base_offset = try self.allocStackMemory(16, 8);
+            const base_local = self.fp_local;
+
+            const unsigned: u128 = @bitCast(val);
+            const low: i64 = @bitCast(@as(u64, @truncate(unsigned)));
+            const high: i64 = @bitCast(@as(u64, @truncate(unsigned >> 64)));
+
+            // Store low 8 bytes
+            self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+            WasmModule.leb128WriteU32(self.allocator, &self.body, base_local) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI64(self.allocator, &self.body, low) catch return error.OutOfMemory;
+            try self.emitI64Store(base_offset);
+
+            // Store high 8 bytes
+            self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+            WasmModule.leb128WriteU32(self.allocator, &self.body, base_local) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI64(self.allocator, &self.body, high) catch return error.OutOfMemory;
+            try self.emitI64Store(base_offset + 8);
+
+            // Push pointer to the 16-byte value
+            try self.emitFpOffset(base_offset);
+        },
+        .i128_literal => |val| {
+            // i128 stored in 16 bytes of linear memory
+            const base_offset = try self.allocStackMemory(16, 8);
+            const base_local = self.fp_local;
+
+            const unsigned: u128 = @bitCast(val);
+            const low: i64 = @bitCast(@as(u64, @truncate(unsigned)));
+            const high: i64 = @bitCast(@as(u64, @truncate(unsigned >> 64)));
+
+            // Store low 8 bytes
+            self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+            WasmModule.leb128WriteU32(self.allocator, &self.body, base_local) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI64(self.allocator, &self.body, low) catch return error.OutOfMemory;
+            try self.emitI64Store(base_offset);
+
+            // Store high 8 bytes
+            self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+            WasmModule.leb128WriteU32(self.allocator, &self.body, base_local) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI64(self.allocator, &self.body, high) catch return error.OutOfMemory;
+            try self.emitI64Store(base_offset + 8);
+
+            // Push pointer to the 16-byte value
+            try self.emitFpOffset(base_offset);
+        },
         .binop => |b| {
-            // Check for structural equality on composite types
-            if ((b.op == .eq or b.op == .neq) and self.isCompositeExpr(b.lhs)) {
-                try self.generateStructuralEq(b.lhs, b.rhs, b.op == .neq);
+            // Check for composite types (Dec, i128, records, etc.)
+            if (self.isCompositeExpr(b.lhs)) {
+                if (b.op == .eq or b.op == .neq) {
+                    try self.generateStructuralEq(b.lhs, b.rhs, b.op == .neq);
+                } else {
+                    // Arithmetic and ordered comparisons on composite types
+                    // (e.g., Dec add/sub/mul/div, Dec lt/gt) not yet supported
+                    return error.UnsupportedExpr;
+                }
             } else {
                 try self.generateExpr(b.lhs);
                 try self.generateExpr(b.rhs);
@@ -345,6 +401,8 @@ fn generateExpr(self: *Self, expr_id: MonoExprId) Error!void {
             }
         },
         .unary_minus => |u| {
+            // Composite types (Dec, i128) can't be negated with scalar ops
+            if (self.isCompositeLayout(u.result_layout)) return error.UnsupportedExpr;
             const vt = self.resolveValType(u.result_layout);
             switch (vt) {
                 .i32 => {
@@ -400,6 +458,14 @@ fn generateExpr(self: *Self, expr_id: MonoExprId) Error!void {
                                 }
                             },
                             else => {
+                                // Check for type representation mismatch: composite expr bound
+                                // to scalar local (e.g., dec_literal bound to U64 local).
+                                // Conversion between these representations isn't supported yet.
+                                const expr_is_composite = self.isCompositeExpr(stmt.expr);
+                                const target_is_composite = self.isCompositeLayout(bind.layout_idx);
+                                if (expr_is_composite != target_is_composite) {
+                                    return error.UnsupportedExpr;
+                                }
                                 // Determine the target wasm type using layout store
                                 const vt = self.resolveValType(bind.layout_idx);
                                 // Generate the expression value
@@ -440,6 +506,14 @@ fn generateExpr(self: *Self, expr_id: MonoExprId) Error!void {
         },
         .nominal => |nom| {
             // Nominal is transparent at runtime — just generate the backing expression.
+            // But check for type representation mismatch: if the backing expression
+            // produces a composite value (i32 pointer) but the nominal layout expects
+            // a scalar, or vice versa, the conversion is not yet supported.
+            const backing_composite = self.isCompositeExpr(nom.backing_expr);
+            const nominal_composite = self.isCompositeLayout(nom.nominal_layout);
+            if (backing_composite != nominal_composite) {
+                return error.UnsupportedExpr;
+            }
             try self.generateExpr(nom.backing_expr);
         },
         .empty_record => {
@@ -866,6 +940,9 @@ fn exprByteSize(self: *Self, expr_id: MonoExprId) u32 {
 fn isCompositeExpr(self: *const Self, expr_id: MonoExprId) bool {
     const expr = self.store.getExpr(expr_id);
     return switch (expr) {
+        .dec_literal, .i128_literal => true, // 16 bytes in stack memory
+        .str_literal => true, // 12-byte RocStr in stack memory
+        .empty_list => true, // 12-byte RocList in stack memory
         .record => |r| self.isCompositeLayout(r.record_layout),
         .tuple => |t| self.isCompositeLayout(t.tuple_layout),
         .tag => |t| self.isCompositeLayout(t.union_layout),
@@ -878,6 +955,9 @@ fn isCompositeExpr(self: *const Self, expr_id: MonoExprId) bool {
         .call => |c| self.isCompositeLayout(c.ret_layout),
         .field_access => |fa| self.isCompositeLayout(fa.field_layout),
         .tuple_access => |ta| self.isCompositeLayout(ta.elem_layout),
+        .low_level => |ll| self.isCompositeLayout(ll.ret_layout),
+        .dbg => |d| self.isCompositeLayout(d.result_layout),
+        .expect => |e| self.isCompositeLayout(e.result_layout),
         .incref => |inc| self.isCompositeExpr(inc.value),
         .decref => |dec| self.isCompositeExpr(dec.value),
         .free => |f| self.isCompositeExpr(f.value),
@@ -1627,6 +1707,30 @@ fn emitMemCopy(self: *Self, dst_local: u32, dst_offset: u32, src_local: u32, byt
     }
 }
 
+/// Zero-initialize a region of memory.
+/// Emits i32.store 0 for each 4-byte chunk, plus i32.store8 0 for remaining bytes.
+fn emitZeroInit(self: *Self, base_local: u32, byte_count: u32) Error!void {
+    var offset: u32 = 0;
+    while (offset + 4 <= byte_count) : (offset += 4) {
+        self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+        WasmModule.leb128WriteU32(self.allocator, &self.body, base_local) catch return error.OutOfMemory;
+        self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+        WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+        self.body.append(self.allocator, Op.i32_store) catch return error.OutOfMemory;
+        WasmModule.leb128WriteU32(self.allocator, &self.body, 0) catch return error.OutOfMemory; // align
+        WasmModule.leb128WriteU32(self.allocator, &self.body, offset) catch return error.OutOfMemory;
+    }
+    while (offset < byte_count) : (offset += 1) {
+        self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+        WasmModule.leb128WriteU32(self.allocator, &self.body, base_local) catch return error.OutOfMemory;
+        self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+        WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+        self.body.append(self.allocator, Op.i32_store8) catch return error.OutOfMemory;
+        WasmModule.leb128WriteU32(self.allocator, &self.body, 0) catch return error.OutOfMemory; // align
+        WasmModule.leb128WriteU32(self.allocator, &self.body, offset) catch return error.OutOfMemory;
+    }
+}
+
 /// Generate a record construction expression.
 /// Allocates stack memory, stores each field, returns pointer.
 fn generateRecord(self: *Self, r: anytype) Error!void {
@@ -1651,6 +1755,9 @@ fn generateRecord(self: *Self, r: anytype) Error!void {
     try self.emitFpOffset(frame_offset);
     self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
     WasmModule.leb128WriteU32(self.allocator, &self.body, base_local) catch return error.OutOfMemory;
+
+    // Zero-initialize record memory for consistent padding in structural equality
+    try self.emitZeroInit(base_local, size);
 
     // Store each field
     const fields = self.store.getExprSpan(r.fields);
@@ -1739,13 +1846,19 @@ fn generateTuple(self: *Self, t: anytype) Error!void {
     self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
     WasmModule.leb128WriteU32(self.allocator, &self.body, base_local) catch return error.OutOfMemory;
 
+    // Zero-initialize the tuple memory to ensure consistent padding bytes
+    // (important for byte-by-byte structural equality comparisons)
+    try self.emitZeroInit(base_local, size);
+
     // Store each element
+    // Use ByOriginalIndex because elem_exprs is in source order,
+    // but the layout store has elements sorted by alignment
     const elems = self.store.getExprSpan(t.elems);
     for (elems, 0..) |elem_expr_id, i| {
-        const elem_offset = ls.getTupleElementOffset(l.data.tuple.idx, @intCast(i));
-        const elem_layout_idx = ls.getTupleElementLayout(l.data.tuple.idx, @intCast(i));
+        const elem_offset = ls.getTupleElementOffsetByOriginalIndex(l.data.tuple.idx, @intCast(i));
+        const elem_layout_idx = ls.getTupleElementLayoutByOriginalIndex(l.data.tuple.idx, @intCast(i));
         const elem_vt = WasmLayout.resultValTypeWithStore(elem_layout_idx, ls);
-        const elem_byte_size = ls.getTupleElementSize(l.data.tuple.idx, @intCast(i));
+        const elem_byte_size = ls.getTupleElementSizeByOriginalIndex(l.data.tuple.idx, @intCast(i));
 
         try self.generateExpr(elem_expr_id);
 

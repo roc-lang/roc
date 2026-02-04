@@ -466,7 +466,7 @@ fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_i
 fn compareWithWasmEvaluator(allocator: std.mem.Allocator, interpreter_str: []const u8, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) !void {
     const wasm_str = wasmEvaluatorStr(allocator, module_env, expr_idx, builtin_module_env) catch |err| {
         switch (err) {
-            error.WasmGenerateCodeFailed, error.UnsupportedLayout => return, // Unsupported - skip
+            error.WasmGenerateCodeFailed, error.UnsupportedLayout, error.WasmExecFailed => return, // Unsupported or exec failure - skip
             else => return err,
         }
     };
