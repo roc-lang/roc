@@ -18,6 +18,7 @@ const ModuleEnv = can.ModuleEnv;
 const Can = can.Can;
 const Check = check.Check;
 const Allocator = std.mem.Allocator;
+const Allocators = base.Allocators;
 const CIR = can.CIR;
 
 const max_builtin_bytes = 1024 * 1024;
@@ -1575,13 +1576,12 @@ fn compileModule(
     };
 
     // 3. Parse
-    var parse_ast = try gpa.create(parse.AST);
-    defer {
-        parse_ast.deinit(gpa);
-        gpa.destroy(parse_ast);
-    }
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(gpa);
+    defer allocators.deinit();
 
-    parse_ast.* = try parse.parse(&module_env.common, gpa);
+    const parse_ast = try parse.parse(&allocators, &module_env.common);
+    defer parse_ast.deinit();
     parse_ast.store.emptyScratch();
 
     // Check for parse errors

@@ -149,8 +149,7 @@ const ModuleState = struct {
         }
         // Free cached AST if present
         if (self.cached_ast) |ast| {
-            ast.deinit(gpa);
-            gpa.destroy(ast);
+            ast.deinit();
         }
         if (comptime trace_build) {
             std.debug.print("[MOD DEINIT DETAIL] {s}: getting source ptr (was_from_cache={})\n", .{ self.name, self.was_from_cache });
@@ -791,7 +790,10 @@ pub const PackageEnv = struct {
         // Parse AST and cache for reuse in doCanonicalize (avoids double parsing)
         // IMPORTANT: Use st.env.?.common (not local env.common) so the AST's pointer
         // to CommonEnv remains valid after this function returns.
-        var parse_ast = parse.parse(&st.env.?.common, self.gpa) catch {
+        var allocators: base.Allocators = undefined;
+        allocators.initInPlace(self.gpa);
+        // NOTE: allocators is not freed here - cleanup happens in doCanonicalize
+        const parse_ast = parse.parse(&allocators, &st.env.?.common) catch {
             // If parsing fails, proceed to canonicalization to report errors
             if (comptime trace_build) {
                 std.debug.print("[TRACE-CACHE] PHASE: {s} Parse->Canonicalize (parse error)\n", .{st.name});
@@ -802,10 +804,8 @@ pub const PackageEnv = struct {
         };
         parse_ast.store.emptyScratch();
 
-        // Cache AST on heap for reuse in doCanonicalize
-        const ast_ptr = try self.gpa.create(parse.AST);
-        ast_ptr.* = parse_ast;
-        st.cached_ast = ast_ptr;
+        // parse_ast is already heap-allocated by parse.parse
+        st.cached_ast = parse_ast;
 
         // Go directly to Canonicalize - sibling discovery happens after canonicalization
         // based on ModuleEnv.imports
@@ -834,10 +834,7 @@ pub const PackageEnv = struct {
         const parse_ast: *parse.AST = st.cached_ast orelse
             std.debug.panic("Internal compiler error: cached AST missing for module '{s}'. Please report this bug.", .{st.name});
         st.cached_ast = null; // Take ownership
-        defer {
-            parse_ast.deinit(self.gpa);
-            self.gpa.destroy(parse_ast);
-        }
+        defer parse_ast.deinit();
 
         // Convert parse diagnostics to reports
         for (parse_ast.tokenize_diagnostics.items) |diagnostic| {

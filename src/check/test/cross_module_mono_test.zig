@@ -11,6 +11,7 @@ const types = @import("types");
 const parse = @import("parse");
 const can = @import("can");
 
+const Allocators = base.Allocators;
 const Can = can.Can;
 const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
@@ -108,11 +109,12 @@ const MonoTestEnv = struct {
     pub fn init(module_name: []const u8, source: []const u8) !Self {
         const gpa = testing.allocator;
 
+        var allocators: Allocators = undefined;
+        allocators.initInPlace(gpa);
+        defer allocators.deinit();
+
         const module_env = try gpa.create(ModuleEnv);
         errdefer gpa.destroy(module_env);
-
-        const parse_ast = try gpa.create(parse.AST);
-        errdefer gpa.destroy(parse_ast);
 
         const can_instance = try gpa.create(Can);
         errdefer gpa.destroy(can_instance);
@@ -133,8 +135,8 @@ const MonoTestEnv = struct {
 
         try Can.populateModuleEnvs(&module_envs, module_env, builtin_module.env, builtin_indices);
 
-        parse_ast.* = try parse.parse(&module_env.common, gpa);
-        errdefer parse_ast.deinit(gpa);
+        const parse_ast = try parse.parse(&allocators, &module_env.common);
+        errdefer parse_ast.deinit();
         parse_ast.store.emptyScratch();
 
         try module_env.initCIRFields(module_name);
@@ -189,11 +191,12 @@ const MonoTestEnv = struct {
     pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_name: []const u8, other_env: *const Self) !Self {
         const gpa = testing.allocator;
 
+        var allocators: Allocators = undefined;
+        allocators.initInPlace(gpa);
+        defer allocators.deinit();
+
         const module_env = try gpa.create(ModuleEnv);
         errdefer gpa.destroy(module_env);
-
-        const parse_ast = try gpa.create(parse.AST);
-        errdefer gpa.destroy(parse_ast);
 
         const can_instance = try gpa.create(Can);
         errdefer gpa.destroy(can_instance);
@@ -234,8 +237,8 @@ const MonoTestEnv = struct {
 
         try Can.populateModuleEnvs(&module_envs, module_env, builtin_env, builtin_indices);
 
-        parse_ast.* = try parse.parse(&module_env.common, gpa);
-        errdefer parse_ast.deinit(gpa);
+        const parse_ast = try parse.parse(&allocators, &module_env.common);
+        errdefer parse_ast.deinit();
         parse_ast.store.emptyScratch();
 
         try module_env.initCIRFields(module_name);
@@ -310,8 +313,7 @@ const MonoTestEnv = struct {
         self.module_envs.deinit();
         self.can_instance.deinit();
         self.gpa.destroy(self.can_instance);
-        self.parse_ast.deinit(self.gpa);
-        self.gpa.destroy(self.parse_ast);
+        self.parse_ast.deinit();
         self.module_env.deinit();
         self.gpa.destroy(self.module_env);
         if (self.owns_builtin_module) {
@@ -626,11 +628,12 @@ test "type checker catches polymorphic recursion (infinite type)" {
     // Initialize test environment
     const gpa = testing.allocator;
 
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(gpa);
+    defer allocators.deinit();
+
     const module_env = try gpa.create(ModuleEnv);
     defer gpa.destroy(module_env);
-
-    const parse_ast = try gpa.create(parse.AST);
-    defer gpa.destroy(parse_ast);
 
     const can_instance = try gpa.create(Can);
     defer gpa.destroy(can_instance);
@@ -652,8 +655,8 @@ test "type checker catches polymorphic recursion (infinite type)" {
 
     try Can.populateModuleEnvs(&module_envs, module_env, builtin_module.env, builtin_indices);
 
-    parse_ast.* = try parse.parse(&module_env.common, gpa);
-    defer parse_ast.deinit(gpa);
+    const parse_ast = try parse.parse(&allocators, &module_env.common);
+    defer parse_ast.deinit();
     parse_ast.store.emptyScratch();
 
     try module_env.initCIRFields("Test");

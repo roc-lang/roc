@@ -25,6 +25,7 @@ const BuiltinModules = eval.BuiltinModules;
 const compile_package = @import("compile_package.zig");
 const Mode = compile_package.Mode;
 const Allocator = std.mem.Allocator;
+const Allocators = base.Allocators;
 const ModuleEnv = can.ModuleEnv;
 const Can = can.Can;
 const Check = check.Check;
@@ -1030,8 +1031,12 @@ pub const BuildEnv = struct {
 
         try env.common.calcLineStarts(self.gpa);
 
-        var ast = try parse.parse(&env.common, self.gpa);
-        defer ast.deinit(self.gpa);
+        var allocators: Allocators = undefined;
+        allocators.initInPlace(self.gpa);
+        defer allocators.deinit();
+
+        const ast = try parse.parse(&allocators, &env.common);
+        defer ast.deinit();
 
         // Check for parse errors - if any exist, we cannot proceed
         if (ast.tokenize_diagnostics.items.len > 0 or ast.parse_diagnostics.items.len > 0) {
@@ -1072,7 +1077,7 @@ pub const BuildEnv = struct {
                 const pf = ast.store.getRecordField(a.platform_idx);
                 const alias = ast.resolve(pf.name);
                 const value_expr = pf.value orelse return error.ExpectedPlatformString;
-                const plat_rel = try self.stringFromExpr(&ast, value_expr);
+                const plat_rel = try self.stringFromExpr(ast, value_expr);
                 defer self.gpa.free(plat_rel);
 
                 // Check if this is a URL - if so, resolve it to a cached local path
@@ -1107,7 +1112,7 @@ pub const BuildEnv = struct {
                         // If no value is provided for an app field, skip it
                         continue;
                     }
-                    const relp = try self.stringFromExpr(&ast, rf.value.?);
+                    const relp = try self.stringFromExpr(ast, rf.value.?);
                     defer self.gpa.free(relp);
 
                     // Check if this is a URL - if so, resolve it to a cached local path
@@ -1142,7 +1147,7 @@ pub const BuildEnv = struct {
                         // If no value is provided for a package field, skip it
                         continue;
                     }
-                    const relp = try self.stringFromExpr(&ast, rf.value.?);
+                    const relp = try self.stringFromExpr(ast, rf.value.?);
                     defer self.gpa.free(relp);
 
                     // Check if this is a URL - if so, resolve it to a cached local path
@@ -1183,7 +1188,7 @@ pub const BuildEnv = struct {
                         // If no value is provided for a platform field, skip it
                         continue;
                     }
-                    const relp = try self.stringFromExpr(&ast, rf.value.?);
+                    const relp = try self.stringFromExpr(ast, rf.value.?);
                     defer self.gpa.free(relp);
 
                     // Check if this is a URL - if so, resolve it to a cached local path

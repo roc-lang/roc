@@ -8,7 +8,9 @@ const std = @import("std");
 const protocol = @import("../protocol.zig");
 const parse = @import("parse");
 const can = @import("can");
+const base = @import("base");
 
+const Allocators = base.Allocators;
 const Token = parse.tokenize.Token;
 
 /// Handler for `textDocument/documentHighlight` requests.
@@ -161,10 +163,14 @@ fn findHighlightsByToken(allocator: std.mem.Allocator, source: []const u8, line:
     };
     defer module_env.deinit();
 
-    var ast = parse.parse(&module_env.common, allocator) catch {
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(allocator);
+    defer allocators.deinit();
+
+    const ast = parse.parse(&allocators, &module_env.common) catch {
         return &[_]DocumentHighlight{};
     };
-    defer ast.deinit(allocator);
+    defer ast.deinit();
 
     const tags = ast.tokens.tokens.items(.tag);
     const regions = ast.tokens.tokens.items(.region);

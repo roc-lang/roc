@@ -72,7 +72,7 @@ jobs:
               - '!src/**/*.md'
               - '!design/**'
               - '!examples/**'
-              - '!langref/**'
+              - '!docs/langref/**'
 
   call-zig-workflow:
     needs: check-changes

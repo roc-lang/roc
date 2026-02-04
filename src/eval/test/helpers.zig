@@ -34,6 +34,7 @@ const Check = check.Check;
 const Can = can.Can;
 const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
+const Allocators = base.Allocators;
 
 // Use std.testing.allocator for dev backend tests (tracks leaks)
 const test_allocator = std.testing.allocator;
@@ -1322,8 +1323,10 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     try module_env.common.calcLineStarts(module_env.gpa);
 
     // Parse the source code as an expression (following REPL pattern)
-    const parse_ast = try allocator.create(parse.AST);
-    parse_ast.* = try parse.parseExpr(&module_env.common, module_env.gpa);
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(allocator);
+    // NOTE: allocators is not freed here - caller handles cleanup via cleanupTestResources
+    const parse_ast = try parse.parseExpr(&allocators, &module_env.common);
 
     // Check for parse errors in test code
     // NOTE: This is TEST-ONLY behavior! In production, the parser continues and collects
@@ -1456,12 +1459,11 @@ pub fn cleanupParseAndCanonical(allocator: std.mem.Allocator, resources: anytype
     builtin_module_copy.deinit();
     resources.checker.deinit();
     resources.can.deinit();
-    resources.parse_ast.deinit(allocator);
+    resources.parse_ast.deinit();
     // module_env.source is not owned by module_env - don't free it
     resources.module_env.deinit();
     allocator.destroy(resources.checker);
     allocator.destroy(resources.can);
-    allocator.destroy(resources.parse_ast);
     allocator.destroy(resources.module_env);
 }
 

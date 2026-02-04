@@ -27,6 +27,10 @@ pub const tokensToHtml = @import("HTML.zig").tokensToHtml;
 
 const AST = @This();
 
+/// The allocator used for internal allocations (tokens, nodes, diagnostics).
+/// Also used to free the AST struct itself in deinit().
+gpa: Allocator,
+
 env: *CommonEnv,
 tokens: TokenizedBuffer,
 store: NodeStore,
@@ -118,11 +122,18 @@ pub fn appendRegionInfoToSexprTree(self: *const AST, env: *const CommonEnv, tree
     try tree.pushBytesRange(start.start.offset, end.end.offset, info);
 }
 
-pub fn deinit(self: *AST, gpa: std.mem.Allocator) void {
-    defer self.tokens.deinit(gpa);
-    defer self.store.deinit();
-    defer self.tokenize_diagnostics.deinit(gpa);
-    defer self.parse_diagnostics.deinit(gpa);
+/// Frees all internal allocations AND the AST struct itself.
+/// This follows the Zig std pattern (see std/Build/Watch.zig) where
+/// deinit() includes gpa.destroy(self) for always-heap-allocated types.
+pub fn deinit(self: *AST) void {
+    const gpa = self.gpa;
+
+    self.tokens.deinit(gpa);
+    self.store.deinit();
+    self.tokenize_diagnostics.deinit(gpa);
+    self.parse_diagnostics.deinit(gpa);
+
+    gpa.destroy(self);
 }
 
 /// Convert a tokenize diagnostic to a Report for rendering

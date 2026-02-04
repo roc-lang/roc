@@ -1953,8 +1953,12 @@ fn extractPlatformQualifier(ctx: *CliContext, roc_file_path: []const u8) !?[]con
     defer env.deinit();
     env.common.source = source;
 
-    var parse_ast = parse.parse(&env.common, ctx.gpa) catch return null;
-    defer parse_ast.deinit(ctx.gpa);
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(ctx.gpa);
+    defer allocators.deinit();
+
+    const parse_ast = parse.parse(&allocators, &env.common) catch return null;
+    defer parse_ast.deinit();
 
     const file_node = parse_ast.store.getFile();
     const header = parse_ast.store.getHeader(file_node.header);
@@ -2001,8 +2005,12 @@ fn extractNonPlatformPackages(
     defer env.deinit();
     env.common.source = source;
 
-    var parse_ast = parse.parse(&env.common, ctx.gpa) catch return packages;
-    defer parse_ast.deinit(ctx.gpa);
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(ctx.gpa);
+    defer allocators.deinit();
+
+    const parse_ast = parse.parse(&allocators, &env.common) catch return packages;
+    defer parse_ast.deinit();
 
     const file_node = parse_ast.store.getFile();
     const header = parse_ast.store.getHeader(file_node.header);
@@ -2274,8 +2282,12 @@ fn extractExposedModulesFromPlatform(ctx: *CliContext, roc_file_path: []const u8
     try env.common.calcLineStarts(ctx.gpa);
 
     // Parse the source code as a full module
-    var parse_ast = parse.parse(&env.common, ctx.gpa) catch return error.ParseFailed;
-    defer parse_ast.deinit(ctx.gpa);
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(ctx.gpa);
+    defer allocators.deinit();
+
+    const parse_ast = parse.parse(&allocators, &env.common) catch return error.ParseFailed;
+    defer parse_ast.deinit();
 
     // Look for platform header in the AST
     const file_node = parse_ast.store.getFile();
@@ -2286,7 +2298,7 @@ fn extractExposedModulesFromPlatform(ctx: *CliContext, roc_file_path: []const u8
         .platform => |platform_header| {
             // Validate platform header has targets section (non-blocking warning)
             // This helps platform authors know they need to add targets
-            _ = validatePlatformHeader(ctx, &parse_ast, roc_file_path);
+            _ = validatePlatformHeader(ctx, parse_ast, roc_file_path);
 
             // Get the exposes collection
             const exposes_coll = parse_ast.store.getCollection(platform_header.exposes);
@@ -2449,13 +2461,17 @@ fn extractPlatformSpecFromApp(ctx: *CliContext, app_file_path: []const u8) ![]co
     };
 
     // Parse the source
-    var ast = parse.parse(&env.common, ctx.gpa) catch {
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(ctx.gpa);
+    defer allocators.deinit();
+
+    const ast = parse.parse(&allocators, &env.common) catch {
         return ctx.fail(.{ .module_init_failed = .{
             .path = app_file_path,
             .err = error.OutOfMemory,
         } });
     };
-    defer ast.deinit(ctx.gpa);
+    defer ast.deinit();
 
     // Get the file header
     const file = ast.store.getFile();
@@ -2471,7 +2487,7 @@ fn extractPlatformSpecFromApp(ctx: *CliContext, app_file_path: []const u8) ![]co
             };
 
             // Extract the string value from the expression
-            const platform_spec = stringFromExpr(&ast, value_expr) catch {
+            const platform_spec = stringFromExpr(ast, value_expr) catch {
                 return ctx.fail(.{ .expected_platform_string = .{ .path = app_file_path } });
             };
             return try ctx.arena.dupe(u8, platform_spec);
@@ -2705,8 +2721,12 @@ fn extractEntrypointsFromPlatform(ctx: *CliContext, roc_file_path: []const u8, e
     try env.common.calcLineStarts(ctx.gpa);
 
     // Parse the source code as a full module
-    var parse_ast = parse.parse(&env.common, ctx.gpa) catch return error.ParseFailed;
-    defer parse_ast.deinit(ctx.gpa);
+    var allocators2: Allocators = undefined;
+    allocators2.initInPlace(ctx.gpa);
+    defer allocators2.deinit();
+
+    const parse_ast = parse.parse(&allocators2, &env.common) catch return error.ParseFailed;
+    defer parse_ast.deinit();
 
     // Look for platform header in the AST
     const file_node = parse_ast.store.getFile();
