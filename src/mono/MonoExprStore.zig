@@ -375,6 +375,11 @@ pub fn getSymbolDef(self: *const Self, symbol: MonoSymbol) ?MonoExprId {
     return self.symbol_defs.get(@bitCast(symbol));
 }
 
+/// Iterate over all registered symbol definitions.
+pub fn symbolDefIterator(self: *const Self) std.AutoHashMap(u48, MonoExprId).Iterator {
+    return self.symbol_defs.iterator();
+}
+
 /// Insert a string literal and return its index
 pub fn insertString(self: *Self, text: []const u8) Allocator.Error!base.StringLiteral.Idx {
     return self.strings.insert(self.allocator, text);

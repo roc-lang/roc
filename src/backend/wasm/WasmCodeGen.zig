@@ -127,6 +127,11 @@ pub fn generateModule(self: *Self, expr_id: MonoExprId, result_layout: layout.Id
         self.compileAllProcs(procs);
     }
 
+    // Note: top-level symbol definitions (lambdas/closures) are NOT pre-compiled
+    // here because some compile successfully but produce incorrect code when they
+    // contain partially-supported expressions (e.g., early_return, tag unions).
+    // Instead, they remain as UnsupportedExpr at call sites and silently skip.
+
     // Determine return type from the expression's actual wasm type.
     // We use exprValType because nominal layout indices can collide
     // with well-known sentinel values (e.g., Bool's nominal layout
@@ -2952,7 +2957,11 @@ fn compileLambda(self: *Self, expr_id: MonoExprId, lambda: anytype) Error!u32 {
     }
 
     // Generate the body expression
-    try self.generateExpr(lambda.body);
+    self.generateExpr(lambda.body) catch |err| {
+        // Restore state on failure
+        self.restoreState(saved_body, saved_body_cap, saved_locals, saved_next_local, saved_local_types, saved_local_types_cap, saved_stack_frame_size, saved_uses_stack_memory, saved_fp_local);
+        return err;
+    };
 
     // Build function body: locals declaration + instructions + end
     var func_body: std.ArrayList(u8) = .empty;
@@ -2997,18 +3006,7 @@ fn compileLambda(self: *Self, expr_id: MonoExprId, lambda: anytype) Error!u32 {
     self.module.setFunctionBody(func_idx, func_body.items) catch return error.OutOfMemory;
 
     // Restore previous codegen state
-    self.body.deinit(self.allocator);
-    self.body.items = saved_body;
-    self.body.capacity = saved_body_cap;
-    self.storage.locals.deinit();
-    self.storage.locals = saved_locals;
-    self.storage.next_local_idx = saved_next_local;
-    self.storage.local_types.deinit(self.allocator);
-    self.storage.local_types.items = saved_local_types;
-    self.storage.local_types.capacity = saved_local_types_cap;
-    self.stack_frame_size = saved_stack_frame_size;
-    self.uses_stack_memory = saved_uses_stack_memory;
-    self.fp_local = saved_fp_local;
+    self.restoreState(saved_body, saved_body_cap, saved_locals, saved_next_local, saved_local_types, saved_local_types_cap, saved_stack_frame_size, saved_uses_stack_memory, saved_fp_local);
 
     // Cache the compiled function
     self.compiled_lambdas.put(expr_key, func_idx) catch return error.OutOfMemory;
@@ -3112,7 +3110,10 @@ fn compileClosure(self: *Self, expr_id: MonoExprId, closure: anytype) Error!u32 
     }
 
     // Generate the body
-    try self.generateExpr(lambda.body);
+    self.generateExpr(lambda.body) catch |err| {
+        self.restoreState(saved_body, saved_body_cap, saved_locals, saved_next_local, saved_local_types, saved_local_types_cap, saved_stack_frame_size, saved_uses_stack_memory, saved_fp_local);
+        return err;
+    };
 
     // Build function body
     var func_body: std.ArrayList(u8) = .empty;
@@ -3151,18 +3152,7 @@ fn compileClosure(self: *Self, expr_id: MonoExprId, closure: anytype) Error!u32 
     self.module.setFunctionBody(func_idx, func_body.items) catch return error.OutOfMemory;
 
     // Restore previous state
-    self.body.deinit(self.allocator);
-    self.body.items = saved_body;
-    self.body.capacity = saved_body_cap;
-    self.storage.locals.deinit();
-    self.storage.locals = saved_locals;
-    self.storage.next_local_idx = saved_next_local;
-    self.storage.local_types.deinit(self.allocator);
-    self.storage.local_types.items = saved_local_types;
-    self.storage.local_types.capacity = saved_local_types_cap;
-    self.stack_frame_size = saved_stack_frame_size;
-    self.uses_stack_memory = saved_uses_stack_memory;
-    self.fp_local = saved_fp_local;
+    self.restoreState(saved_body, saved_body_cap, saved_locals, saved_next_local, saved_local_types, saved_local_types_cap, saved_stack_frame_size, saved_uses_stack_memory, saved_fp_local);
 
     // Cache
     self.compiled_lambdas.put(expr_key, func_idx) catch return error.OutOfMemory;
@@ -3188,6 +3178,45 @@ fn compileClosure(self: *Self, expr_id: MonoExprId, closure: anytype) Error!u32 
 pub fn compileAllProcs(self: *Self, procs: []const MonoProc) void {
     for (procs) |proc| {
         self.compileProc(proc) catch continue;
+    }
+}
+
+/// Pre-compile all top-level symbol definitions that are lambdas or closures.
+/// This populates symbol_funcs so that call sites can find them.
+fn compileSymbolDefs(self: *Self) void {
+    var it = self.store.symbolDefIterator();
+    while (it.next()) |entry| {
+        const sym_key = entry.key_ptr.*;
+        // Skip if already compiled
+        if (self.symbol_funcs.contains(sym_key)) continue;
+
+        const def_expr_id = entry.value_ptr.*;
+        const def_expr = self.store.getExpr(def_expr_id);
+        switch (def_expr) {
+            .lambda => |lambda| {
+                const fid = self.compileLambda(def_expr_id, lambda) catch continue;
+                self.symbol_funcs.put(sym_key, fid) catch continue;
+            },
+            .closure => |closure| {
+                const fid = self.compileClosure(def_expr_id, closure) catch continue;
+                self.symbol_funcs.put(sym_key, fid) catch continue;
+            },
+            .nominal => |nom| {
+                const inner = self.store.getExpr(nom.backing_expr);
+                switch (inner) {
+                    .lambda => |lambda| {
+                        const fid = self.compileLambda(nom.backing_expr, lambda) catch continue;
+                        self.symbol_funcs.put(sym_key, fid) catch continue;
+                    },
+                    .closure => |closure| {
+                        const fid = self.compileClosure(nom.backing_expr, closure) catch continue;
+                        self.symbol_funcs.put(sym_key, fid) catch continue;
+                    },
+                    else => {},
+                }
+            },
+            else => {},
+        }
     }
 }
 
@@ -3270,10 +3299,25 @@ fn compileProc(self: *Self, proc: MonoProc) Error!void {
 
     // Generate CFStmt body
     self.generateCFStmt(proc.body) catch {
+        // Failed to compile proc body — generate a stub that traps.
+        // Keep the function registered so callers can reference it
+        // (instead of crashing with no body).
         self.restoreState(saved_body, saved_body_cap, saved_locals, saved_next_local, saved_local_types, saved_local_types_cap, saved_stack_frame_size, saved_uses_stack_memory, saved_fp_local);
         self.cf_depth = saved_cf_depth;
-        _ = self.symbol_funcs.remove(key);
-        return unsupported(@src());
+
+        // Create a minimal function body: locals=0, unreachable, end
+        var stub_body: std.ArrayList(u8) = .empty;
+        defer stub_body.deinit(self.allocator);
+        // locals count = 0
+        stub_body.append(self.allocator, 0) catch return error.OutOfMemory;
+        // unreachable instruction
+        stub_body.append(self.allocator, Op.@"unreachable") catch return error.OutOfMemory;
+        // end
+        stub_body.append(self.allocator, Op.end) catch return error.OutOfMemory;
+
+        self.module.setFunctionBody(func_idx, stub_body.items) catch return error.OutOfMemory;
+        // Don't remove from symbol_funcs — keep the stub registered
+        return;
     };
 
     // End of ret block
