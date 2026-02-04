@@ -107,6 +107,7 @@ test "tokensToHtml generates valid HTML" {
     defer parse_diagnostics.deinit(gpa);
 
     var ast = AST{
+        .gpa = gpa,
         .env = &env,
         .tokens = result.tokens,
         .store = store,
@@ -158,6 +159,7 @@ test "tokensToHtml handles position errors gracefully" {
     defer parse_diagnostics.deinit(gpa);
 
     var ast = AST{
+        .gpa = gpa,
         .env = &env,
         .tokens = result.tokens,
         .store = store,

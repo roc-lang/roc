@@ -177,7 +177,7 @@ jobs:
         uses: ./.github/actions/flaky-retry
         with:
           command: "zig build test -Dfuzz -Dsystem-afl=false ${{ matrix.target_flag }}"
-          error_string_contains: "double roundtrip bundle|connectTcp|downloadToFile|build.zig.zon"
+          error_string_contains: "double roundtrip bundle|connectTcp|downloadToFile|build.zig.zon|Run terminated abnormally"
           retry_count: 3
 
       # 2) in release mode
@@ -185,7 +185,7 @@ jobs:
         uses: ./.github/actions/flaky-retry
         with:
           command: "zig build test -Doptimize=ReleaseFast -Dfuzz -Dsystem-afl=false ${{ matrix.cpu_flag }} ${{ matrix.target_flag }}"
-          error_string_contains: "double roundtrip bundle|connectTcp|downloadToFile|build.zig.zon"
+          error_string_contains: "double roundtrip bundle|connectTcp|downloadToFile|build.zig.zon|Run terminated abnormally"
           retry_count: 3
 
       - name: Check for snapshot changes

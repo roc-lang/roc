@@ -149,8 +149,7 @@ const ModuleState = struct {
         }
         // Free cached AST if present
         if (self.cached_ast) |ast| {
-            ast.deinit(gpa);
-            gpa.destroy(ast);
+            ast.deinit();
         }
         if (comptime trace_build) {
             std.debug.print("[MOD DEINIT DETAIL] {s}: getting source ptr (was_from_cache={})\n", .{ self.name, self.was_from_cache });
@@ -791,7 +790,10 @@ pub const PackageEnv = struct {
         // Parse AST and cache for reuse in doCanonicalize (avoids double parsing)
         // IMPORTANT: Use st.env.?.common (not local env.common) so the AST's pointer
         // to CommonEnv remains valid after this function returns.
-        var parse_ast = parse.parse(&st.env.?.common, self.gpa) catch {
+        var allocators: base.Allocators = undefined;
+        allocators.initInPlace(self.gpa);
+        // NOTE: allocators is not freed here - cleanup happens in doCanonicalize
+        const parse_ast = parse.parse(&allocators, &st.env.?.common) catch {
             // If parsing fails, proceed to canonicalization to report errors
             if (comptime trace_build) {
                 std.debug.print("[TRACE-CACHE] PHASE: {s} Parse->Canonicalize (parse error)\n", .{st.name});
@@ -802,10 +804,8 @@ pub const PackageEnv = struct {
         };
         parse_ast.store.emptyScratch();
 
-        // Cache AST on heap for reuse in doCanonicalize
-        const ast_ptr = try self.gpa.create(parse.AST);
-        ast_ptr.* = parse_ast;
-        st.cached_ast = ast_ptr;
+        // parse_ast is already heap-allocated by parse.parse
+        st.cached_ast = parse_ast;
 
         // Go directly to Canonicalize - sibling discovery happens after canonicalization
         // based on ModuleEnv.imports
@@ -834,10 +834,7 @@ pub const PackageEnv = struct {
         const parse_ast: *parse.AST = st.cached_ast orelse
             std.debug.panic("Internal compiler error: cached AST missing for module '{s}'. Please report this bug.", .{st.name});
         st.cached_ast = null; // Take ownership
-        defer {
-            parse_ast.deinit(self.gpa);
-            self.gpa.destroy(parse_ast);
-        }
+        defer parse_ast.deinit();
 
         // Convert parse diagnostics to reports
         for (parse_ast.tokenize_diagnostics.items) |diagnostic| {
@@ -858,8 +855,11 @@ pub const PackageEnv = struct {
         // Use the MODULE's directory (not package root) for sibling lookup - this is
         // important for platform modules where siblings are in the same subdir.
         const module_dir = std.fs.path.dirname(st.path) orelse self.root_dir;
+        var allocators: base.Allocators = undefined;
+        allocators.initInPlace(self.gpa);
+        defer allocators.deinit();
         try canonicalizeModuleWithSiblings(
-            self.gpa,
+            &allocators,
             env,
             parse_ast,
             self.builtin_modules.builtin_module.env,
@@ -1064,6 +1064,7 @@ pub const PackageEnv = struct {
     /// IMPORTANT: The returned checker holds a pointer to module_envs_out, so caller must keep
     /// module_envs_out alive until they're done using the checker (e.g., for type printing)
     pub fn canonicalizeAndTypeCheckModule(
+        allocators: *base.Allocators,
         gpa: Allocator,
         env: *ModuleEnv,
         parse_ast: *AST,
@@ -1081,7 +1082,7 @@ pub const PackageEnv = struct {
         );
 
         // Canonicalize
-        var czer = try Can.init(env, parse_ast, module_envs_out);
+        var czer = try Can.init(allocators, env, parse_ast, module_envs_out);
         try czer.canonicalizeFile();
         try czer.validateForChecking();
         czer.deinit();
@@ -1116,7 +1117,7 @@ pub const PackageEnv = struct {
     /// and includes additional known modules (e.g., from platform exposes).
     /// This prevents premature MODULE NOT FOUND errors for modules that exist but haven't been loaded yet.
     pub fn canonicalizeModuleWithSiblings(
-        gpa: Allocator,
+        allocators: *base.Allocators,
         env: *ModuleEnv,
         parse_ast: *AST,
         builtin_module_env: *const ModuleEnv,
@@ -1126,6 +1127,8 @@ pub const PackageEnv = struct {
         resolver: ?ImportResolver,
         additional_known_modules: []const KnownModule,
     ) !void {
+        const gpa = allocators.gpa;
+
         // Create module_envs map for auto-importing builtin types
         var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
         defer module_envs_map.deinit();
@@ -1247,7 +1250,7 @@ pub const PackageEnv = struct {
             }
         }
 
-        var czer = try Can.init(env, parse_ast, &module_envs_map);
+        var czer = try Can.init(allocators, env, parse_ast, &module_envs_map);
         try czer.canonicalizeFile();
         try czer.validateForChecking();
         czer.deinit();
