@@ -595,7 +595,8 @@ pub const RocModules = struct {
                     // IPC module needs libc for mmap, munmap, close on POSIX systems
                     // Bundle module needs libc for C zstd (unbundle uses stdlib zstd)
                     // Eval/repl modules need libc for setjmp/longjmp crash protection
-                    .link_libc = (module_type == .ipc or module_type == .bundle or module_type == .eval or module_type == .repl),
+                    // sljmp module needs libc for setjmp/longjmp functions
+                    .link_libc = (module_type == .ipc or module_type == .bundle or module_type == .eval or module_type == .repl or module_type == .sljmp),
                 }),
                 .filters = filter_injection.filters,
             });

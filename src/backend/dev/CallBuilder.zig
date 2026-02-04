@@ -291,8 +291,13 @@ pub fn CallBuilder(comptime Emit: type) type {
         /// Check if a struct argument needs to be passed by pointer.
         /// Windows x64: Only structs of size 1, 2, 4, 8 bytes can be passed by value.
         /// All other sizes must be passed by pointer.
+        /// System V: Never uses pass-by-pointer (large structs are copied to stack).
         pub fn needsPassByPointer(arg_size: usize) bool {
-            return !CC.canPassStructByValue(arg_size);
+            if (comptime builtin.cpu.arch == .x86_64 and builtin.os.tag == .windows) {
+                // Windows x64: only power-of-2 sizes up to 8 can pass by value
+                return !(arg_size == 1 or arg_size == 2 or arg_size == 4 or arg_size == 8);
+            }
+            return arg_size > CC.PASS_BY_PTR_THRESHOLD;
         }
 
         /// Set up return by pointer (for large return types)
