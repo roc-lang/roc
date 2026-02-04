@@ -1962,6 +1962,7 @@ const ClearRocCacheStep = struct {
 
 const PrintBuildSuccessStep = struct {
     step: Step,
+    files: std.ArrayList([]const u8),
 
     fn create(b: *std.Build) *PrintBuildSuccessStep {
         const self = b.allocator.create(PrintBuildSuccessStep) catch @panic("OOM");
@@ -1972,14 +1973,38 @@ const PrintBuildSuccessStep = struct {
                 .owner = b,
                 .makeFn = make,
             }),
+            .files = std.ArrayList([]const u8).empty,
         };
         return self;
     }
 
+    fn addFile(self: *PrintBuildSuccessStep, path: []const u8) void {
+        self.files.append(self.step.owner.allocator, path) catch @panic("OOM");
+    }
+
     fn make(step: *Step, options: Step.MakeOptions) !void {
-        _ = step;
         _ = options;
-        std.debug.print("Build succeeded!\n", .{});
+        const self: *PrintBuildSuccessStep = @fieldParentPtr("step", step);
+
+        // Collect files that actually exist
+        var existing_files = std.ArrayList([]const u8).empty;
+        defer existing_files.deinit(step.owner.allocator);
+
+        for (self.files.items) |file_path| {
+            // Check if file exists
+            std.fs.cwd().access(file_path, .{}) catch continue;
+            existing_files.append(step.owner.allocator, file_path) catch @panic("OOM");
+        }
+
+        // Print the message
+        if (existing_files.items.len > 0) {
+            std.debug.print("Successfully produced:\n", .{});
+            for (existing_files.items) |file_path| {
+                std.debug.print("  - {s}\n", .{file_path});
+            }
+        } else {
+            std.debug.print("Build succeeded!\n", .{});
+        }
     }
 };
 
@@ -3316,6 +3341,13 @@ fn install_and_run(
 
         // Add a step to print success message after build completes
         const success_step = PrintBuildSuccessStep.create(b);
+
+        // Register files to track
+        success_step.addFile("./zig-out/builtins/Builtin.bin");
+        success_step.addFile("./zig-out/builtins/builtin_indices.bin");
+        const exe_path = b.fmt("./zig-out/bin/{s}", .{exe.name});
+        success_step.addFile(exe_path);
+
         success_step.step.dependOn(&install.step);
         build_step.dependOn(&success_step.step);
 
