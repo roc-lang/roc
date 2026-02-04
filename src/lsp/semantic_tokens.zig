@@ -301,7 +301,7 @@ pub fn extractSemanticTokensWithImports(
     };
 
     // Create canonicalizer and run
-    var canonicalizer = can.Can.init(&module_env, parse_ast, null) catch {
+    var canonicalizer = can.Can.init(&allocators, &module_env, parse_ast, null) catch {
         return extractSemanticTokens(allocator, source, info);
     };
     defer canonicalizer.deinit();

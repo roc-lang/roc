@@ -17,6 +17,7 @@ const can = @import("can");
 pub const Allocators = base.Allocators;
 pub const AST = parse.AST;
 pub const ModuleEnv = can.ModuleEnv;
+pub const AutoImportedType = can.AutoImportedType;
 
 /// Parsing modes for different compilation contexts.
 pub const ParseMode = enum {
@@ -103,6 +104,47 @@ pub fn parseSingleModule(
     ast.store.emptyScratch();
 
     return ast;
+}
+
+/// Canonicalize a parsed module.
+///
+/// This function canonicalizes the AST into Canonical IR (CIR), performing:
+/// 1. Scope resolution
+/// 2. Desugaring
+/// 3. Semantic analysis
+/// 4. Validation for type checking
+///
+/// Results are stored in module_env (all_defs, all_statements, diagnostics, etc).
+///
+/// Memory ownership:
+/// - allocators: Caller provides and manages
+/// - module_env: Caller provides; results stored here
+/// - parse_ast: Caller provides and manages
+/// - module_envs: Optional map of imported module environments
+///
+/// Example:
+/// ```zig
+/// var allocators: Allocators = undefined;
+/// allocators.initInPlace(gpa);
+/// defer allocators.deinit();
+///
+/// var module_env = try ModuleEnv.init(allocators.gpa, source);
+/// defer module_env.deinit();
+///
+/// const ast = try parseSingleModule(&allocators, &module_env, .file, .{});
+/// defer ast.deinit();
+///
+/// try canonicalizeSingleModule(&allocators, &module_env, ast, null);
+///
+/// // Results are now in module_env
+/// ```
+pub fn canonicalizeSingleModule(
+    allocators: *Allocators,
+    module_env: *ModuleEnv,
+    parse_ast: *AST,
+    module_envs: ?*const std.AutoHashMap(base.Ident.Idx, AutoImportedType),
+) !void {
+    try can.canonicalizeModule(allocators, module_env, parse_ast, module_envs);
 }
 
 // Tests

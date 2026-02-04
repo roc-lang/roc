@@ -28,7 +28,7 @@ test "record literal uses record_unbound" {
         const ast = try parse.parseExpr(&allocators, &env.common);
         defer ast.deinit();
 
-        var can = try Can.init(&env, ast, null);
+        var can = try Can.init(&allocators, &env, ast, null);
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -63,7 +63,7 @@ test "record literal uses record_unbound" {
         const ast = try parse.parseExpr(&allocators, &env.common);
         defer ast.deinit();
 
-        var can = try Can.init(&env, ast, null);
+        var can = try Can.init(&allocators, &env, ast, null);
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -98,7 +98,7 @@ test "record literal uses record_unbound" {
         const ast = try parse.parseExpr(&allocators, &env.common);
         defer ast.deinit();
 
-        var can = try Can.init(&env, ast, null);
+        var can = try Can.init(&allocators, &env, ast, null);
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -143,7 +143,7 @@ test "record_unbound basic functionality" {
     const ast = try parse.parseExpr(&allocators, &env.common);
     defer ast.deinit();
 
-    var can = try Can.init(&env, ast, null);
+    var can = try Can.init(&allocators, &env, ast, null);
     defer can.deinit();
 
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -189,7 +189,7 @@ test "record_unbound with multiple fields" {
     const ast = try parse.parseExpr(&allocators, &env.common);
     defer ast.deinit();
 
-    var can = try Can.init(&env, ast, null);
+    var can = try Can.init(&allocators, &env, ast, null);
     defer can.deinit();
 
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -237,7 +237,7 @@ test "record pattern destructuring" {
     const ast = try parse.parseStatement(&allocators, &env.common);
     defer ast.deinit();
 
-    var can = try Can.init(&env, ast, null);
+    var can = try Can.init(&allocators, &env, ast, null);
     defer can.deinit();
 
     // Enter a function scope so we can have local bindings
@@ -314,7 +314,7 @@ test "record pattern with sub-patterns" {
     const ast = try parse.parseStatement(&allocators, &env.common);
     defer ast.deinit();
 
-    var can = try Can.init(&env, ast, null);
+    var can = try Can.init(&allocators, &env, ast, null);
     defer can.deinit();
 
     // Enter a function scope so we can have local bindings

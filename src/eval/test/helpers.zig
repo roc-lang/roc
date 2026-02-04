@@ -990,7 +990,7 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
 
     // Create czer with module_envs_map for qualified name resolution (following REPL pattern)
     const czer = try allocator.create(Can);
-    czer.* = try Can.init(module_env, parse_ast, &module_envs_map);
+    czer.* = try Can.init(&allocators, module_env, parse_ast, &module_envs_map);
 
     // Canonicalize the expression (following REPL pattern)
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);

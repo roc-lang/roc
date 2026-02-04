@@ -141,7 +141,7 @@ const MonoTestEnv = struct {
 
         try module_env.initCIRFields(module_name);
 
-        can_instance.* = try Can.init(module_env, parse_ast, &module_envs);
+        can_instance.* = try Can.init(&allocators, module_env, parse_ast, &module_envs);
         errdefer can_instance.deinit();
 
         try can_instance.canonicalizeFile();
@@ -243,7 +243,7 @@ const MonoTestEnv = struct {
 
         try module_env.initCIRFields(module_name);
 
-        can_instance.* = try Can.init(module_env, parse_ast, &module_envs);
+        can_instance.* = try Can.init(&allocators, module_env, parse_ast, &module_envs);
         errdefer can_instance.deinit();
 
         try can_instance.canonicalizeFile();
@@ -661,7 +661,7 @@ test "type checker catches polymorphic recursion (infinite type)" {
 
     try module_env.initCIRFields("Test");
 
-    can_instance.* = try Can.init(module_env, parse_ast, &module_envs);
+    can_instance.* = try Can.init(&allocators, module_env, parse_ast, &module_envs);
     defer can_instance.deinit();
 
     try can_instance.canonicalizeFile();

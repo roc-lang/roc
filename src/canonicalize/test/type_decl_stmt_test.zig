@@ -280,7 +280,7 @@ test "scopeLookupTypeDecl API is accessible" {
     const ast = try parse.parseExpr(&allocators, &env.common);
     defer ast.deinit();
 
-    var can = try Can.init(&env, ast, null);
+    var can = try Can.init(&allocators, &env, ast, null);
     defer can.deinit();
 
     // Enter a scope
@@ -309,7 +309,7 @@ test "introduceType API is accessible" {
     const ast = try parse.parseExpr(&allocators, &env.common);
     defer ast.deinit();
 
-    var can = try Can.init(&env, ast, null);
+    var can = try Can.init(&allocators, &env, ast, null);
     defer can.deinit();
 
     // Enter a scope for local type declarations
@@ -358,7 +358,7 @@ test "local type scoping - not visible after exiting block" {
     const ast = try parse.parseExpr(&allocators, &env.common);
     defer ast.deinit();
 
-    var can = try Can.init(&env, ast, null);
+    var can = try Can.init(&allocators, &env, ast, null);
     defer can.deinit();
 
     // Enter outer scope
