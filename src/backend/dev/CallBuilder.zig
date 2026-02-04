@@ -162,29 +162,30 @@ pub const CC = struct {
     };
 
     /// Threshold for "return via pointer" (first arg is output ptr)
-    /// Windows (both x64 and ARM64): > 8 bytes returned via pointer
-    /// Unix: > 16 bytes returned via pointer
+    /// Windows x64: > 8 bytes returned via pointer
+    /// Unix / aarch64: > 16 bytes returned via pointer
     pub const RETURN_BY_PTR_THRESHOLD: usize = switch (builtin.cpu.arch) {
-        .aarch64 => if (builtin.os.tag == .windows) 8 else 16,
+        .aarch64 => 16,
         .x86_64 => if (builtin.os.tag == .windows) 8 else 16,
         else => 16,
     };
 
     /// Threshold for "pass by pointer" (large struct arg becomes pointer)
-    /// Windows (both x64 and ARM64): structs > 8 bytes are passed by pointer
-    /// Note: Only power-of-2 sizes (1, 2, 4, 8) can be passed by value on Windows.
+    /// Windows x64: structs > 8 bytes are passed by pointer
+    /// Note: Only power-of-2 sizes (1, 2, 4, 8) can be passed by value on Windows x64.
     /// Use canPassStructByValue() for the complete check.
+    /// aarch64: Uses AAPCS64 regardless of OS - no pass-by-pointer for structs.
     pub const PASS_BY_PTR_THRESHOLD: usize = switch (builtin.cpu.arch) {
-        .aarch64 => if (builtin.os.tag == .windows) 8 else std.math.maxInt(usize),
         .x86_64 => if (builtin.os.tag == .windows) 8 else std.math.maxInt(usize),
         else => std.math.maxInt(usize),
     };
 
     /// Check if a struct of the given size can be passed by value in a register.
-    /// Windows ABI (x64 and ARM64): Only structs of size 1, 2, 4, or 8 bytes can be passed by value.
+    /// Windows x64 ABI: Only structs of size 1, 2, 4, or 8 bytes can be passed by value.
     /// All other sizes (including 3, 5, 6, 7, and >8) must be passed by pointer.
+    /// aarch64: Uses AAPCS64 - structs up to 16 bytes passed in registers.
     pub fn canPassStructByValue(size: usize) bool {
-        if (builtin.os.tag == .windows) {
+        if (builtin.cpu.arch == .x86_64 and builtin.os.tag == .windows) {
             return size == 1 or size == 2 or size == 4 or size == 8;
         }
         // System V / AAPCS64: structs up to 16 bytes can be passed in registers (2x 8-byte)
@@ -292,12 +293,13 @@ pub fn CallBuilder(comptime Emit: type) type {
         }
 
         /// Check if a struct argument needs to be passed by pointer.
-        /// Windows (x64 and ARM64): Only structs of size 1, 2, 4, 8 bytes can be passed by value.
+        /// Windows x64: Only structs of size 1, 2, 4, 8 bytes can be passed by value.
         /// All other sizes must be passed by pointer.
-        /// System V / AAPCS64: Never uses pass-by-pointer (large structs are copied to stack).
+        /// aarch64 (all OSes): Zig uses AAPCS64 for callconv(.c), no pass-by-pointer.
+        /// System V: Never uses pass-by-pointer (large structs are copied to stack).
         pub fn needsPassByPointer(arg_size: usize) bool {
-            if (comptime builtin.os.tag == .windows) {
-                // Windows: only power-of-2 sizes up to 8 can pass by value
+            if (comptime builtin.cpu.arch == .x86_64 and builtin.os.tag == .windows) {
+                // Windows x64: only power-of-2 sizes up to 8 can pass by value
                 return !(arg_size == 1 or arg_size == 2 or arg_size == 4 or arg_size == 8);
             }
             return arg_size > CC.PASS_BY_PTR_THRESHOLD;
@@ -1125,8 +1127,8 @@ test "needsPassByPointer" {
     const Emit = x86_64.Emit;
     const Builder = CallBuilder(Emit);
 
-    if (builtin.os.tag == .windows) {
-        // Windows (x64 and ARM64): only 1, 2, 4, 8 byte structs pass by value
+    if (builtin.cpu.arch == .x86_64 and builtin.os.tag == .windows) {
+        // Windows x64: only 1, 2, 4, 8 byte structs pass by value
         try std.testing.expect(!Builder.needsPassByPointer(1));
         try std.testing.expect(!Builder.needsPassByPointer(2));
         try std.testing.expect(!Builder.needsPassByPointer(4));
@@ -1141,7 +1143,7 @@ test "needsPassByPointer" {
         try std.testing.expect(Builder.needsPassByPointer(16));
         try std.testing.expect(Builder.needsPassByPointer(24));
     } else {
-        // System V / AAPCS64: up to 16 bytes pass by value, never uses pointer
+        // System V / AAPCS64 (all aarch64 including Windows): never uses pointer
         try std.testing.expect(!Builder.needsPassByPointer(16));
         try std.testing.expect(!Builder.needsPassByPointer(17));
         try std.testing.expect(!Builder.needsPassByPointer(1000));

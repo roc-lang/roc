@@ -9368,78 +9368,37 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             const result_offset = self.codegen.allocStackSlot(24);
 
             if (comptime builtin.cpu.arch == .aarch64) {
-                if (comptime builtin.os.tag == .windows) {
-                    // Windows ARM64 calling convention:
-                    // - Small values (≤8 bytes): X0=out, X1=value, X2=roc_ops
-                    // - Large values (i128/Dec): X0=out, X1=value_ptr, X2=roc_ops
-                    if (is_small_value) {
-                        const val_reg = try self.ensureInGeneralReg(val_loc);
-                        try self.codegen.emit.movRegReg(.w64, .X1, val_reg);
-                        self.codegen.freeGeneral(val_reg);
-                        // X2 = roc_ops
-                        try self.codegen.emit.movRegReg(.w64, .X2, roc_ops_reg);
-                    } else {
-                        // 16-byte value - ensure on stack and pass pointer in X1
-                        const val_slot = switch (val_loc) {
-                            .stack_i128, .stack => |offset| offset,
-                            .immediate_i128 => |val| blk: {
-                                const low: u64 = @truncate(@as(u128, @bitCast(val)));
-                                const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
-                                const slot = self.codegen.allocStackSlot(16);
-                                try self.codegen.emitLoadImm(.X9, @bitCast(low));
-                                try self.codegen.emit.strRegMemSoff(.w64, .X9, .FP, slot);
-                                try self.codegen.emitLoadImm(.X9, @bitCast(high));
-                                try self.codegen.emit.strRegMemSoff(.w64, .X9, .FP, slot + 8);
-                                break :blk slot;
-                            },
-                            else => blk: {
-                                const val_reg = try self.ensureInGeneralReg(val_loc);
-                                const slot = self.codegen.allocStackSlot(16);
-                                try self.codegen.emit.strRegMemSoff(.w64, val_reg, .FP, slot);
-                                self.codegen.freeGeneral(val_reg);
-                                try self.codegen.emitLoadImm(.X9, 0);
-                                try self.codegen.emit.strRegMemSoff(.w64, .X9, .FP, slot + 8);
-                                break :blk slot;
-                            },
-                        };
-                        // X1 = pointer to value on stack (FP + val_slot)
-                        try self.codegen.emit.movRegImm64(.X1, @bitCast(@as(i64, val_slot)));
-                        try self.codegen.emit.addRegRegReg(.w64, .X1, .FP, .X1);
-                        // X2 = roc_ops
-                        try self.codegen.emit.movRegReg(.w64, .X2, roc_ops_reg);
-                    }
+                // aarch64 (AAPCS64): X0=out, X1=value (X1+X2 for 16-byte), X2/X3=roc_ops
+                // Zig uses AAPCS64 for callconv(.c) on all aarch64 targets including Windows.
+                // Save value to a temp register first since ensureInGeneralReg might return X0
+                if (is_small_value) {
+                    const val_reg = try self.ensureInGeneralReg(val_loc);
+                    try self.codegen.emit.movRegReg(.w64, .X1, val_reg);
+                    self.codegen.freeGeneral(val_reg);
+                    // X2 = roc_ops
+                    try self.codegen.emit.movRegReg(.w64, .X2, roc_ops_reg);
                 } else {
-                    // Unix aarch64 (AAPCS64): X0=out, X1=value (X1+X2 for 16-byte), X2/X3=roc_ops
-                    // Save value to a temp register first since ensureInGeneralReg might return X0
-                    if (is_small_value) {
-                        const val_reg = try self.ensureInGeneralReg(val_loc);
-                        try self.codegen.emit.movRegReg(.w64, .X1, val_reg);
-                        self.codegen.freeGeneral(val_reg);
-                        // X2 = roc_ops
-                        try self.codegen.emit.movRegReg(.w64, .X2, roc_ops_reg);
-                    } else {
-                        // 16-byte value (Dec/i128): needs X1 and X2, roc_ops goes in X3
-                        switch (val_loc) {
-                            .stack_i128, .stack => |offset| {
-                                try self.codegen.emitLoadStack(.w64, .X1, offset);
-                                try self.codegen.emitLoadStack(.w64, .X2, offset + 8);
-                            },
-                            .immediate_i128 => |val| {
-                                const low: u64 = @truncate(@as(u128, @bitCast(val)));
-                                const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
-                                try self.codegen.emitLoadImm(.X1, @bitCast(low));
-                                try self.codegen.emitLoadImm(.X2, @bitCast(high));
-                            },
-                            else => {
-                                const val_reg = try self.ensureInGeneralReg(val_loc);
-                                try self.codegen.emit.movRegReg(.w64, .X1, val_reg);
-                                self.codegen.freeGeneral(val_reg);
-                                try self.codegen.emitLoadImm(.X2, 0);
-                            },
-                        }
-                        // X3 = roc_ops
-                        try self.codegen.emit.movRegReg(.w64, .X3, roc_ops_reg);
+                    // 16-byte value (Dec/i128): needs X1 and X2, roc_ops goes in X3
+                    switch (val_loc) {
+                        .stack_i128, .stack => |offset| {
+                            try self.codegen.emitLoadStack(.w64, .X1, offset);
+                            try self.codegen.emitLoadStack(.w64, .X2, offset + 8);
+                        },
+                        .immediate_i128 => |val| {
+                            const low: u64 = @truncate(@as(u128, @bitCast(val)));
+                            const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
+                            try self.codegen.emitLoadImm(.X1, @bitCast(low));
+                            try self.codegen.emitLoadImm(.X2, @bitCast(high));
+                        },
+                        else => {
+                            const val_reg = try self.ensureInGeneralReg(val_loc);
+                            try self.codegen.emit.movRegReg(.w64, .X1, val_reg);
+                            self.codegen.freeGeneral(val_reg);
+                            try self.codegen.emitLoadImm(.X2, 0);
+                        },
                     }
+                    // X3 = roc_ops
+                    try self.codegen.emit.movRegReg(.w64, .X3, roc_ops_reg);
                 }
 
                 // X0 = output pointer (FP + result_offset)
