@@ -1465,6 +1465,51 @@ fn generateCompositeI128Negate(self: *Self, expr: MonoExprId, result_layout: lay
     WasmModule.leb128WriteU32(self.allocator, &self.body, result_local) catch return error.OutOfMemory;
 }
 
+/// Convert an i64 value on the wasm stack to a 16-byte i128 in stack memory.
+/// The caller must ensure the value is i64 (extend i32 first if needed).
+/// If `signed` is true, sign-extends the high word; otherwise zero-extends.
+/// Pushes an i32 pointer to the 16-byte result.
+fn emitIntToI128(self: *Self, signed: bool) Error!void {
+    const result_offset = try self.allocStackMemory(16, 8);
+    const result_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitFpOffset(result_offset);
+    self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
+    WasmModule.leb128WriteU32(self.allocator, &self.body, result_local) catch return error.OutOfMemory;
+
+    // Save the i64 value from the stack
+    const val_local = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
+    self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
+    WasmModule.leb128WriteU32(self.allocator, &self.body, val_local) catch return error.OutOfMemory;
+
+    // Store low word
+    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+    WasmModule.leb128WriteU32(self.allocator, &self.body, result_local) catch return error.OutOfMemory;
+    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+    WasmModule.leb128WriteU32(self.allocator, &self.body, val_local) catch return error.OutOfMemory;
+    try self.emitStoreOp(.i64, 0);
+
+    // Store high word
+    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+    WasmModule.leb128WriteU32(self.allocator, &self.body, result_local) catch return error.OutOfMemory;
+    if (signed) {
+        // Sign extend: high = value >> 63 (arithmetic shift)
+        self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+        WasmModule.leb128WriteU32(self.allocator, &self.body, val_local) catch return error.OutOfMemory;
+        self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
+        WasmModule.leb128WriteI64(self.allocator, &self.body, 63) catch return error.OutOfMemory;
+        self.body.append(self.allocator, Op.i64_shr_s) catch return error.OutOfMemory;
+    } else {
+        // Zero extend: high = 0
+        self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
+        WasmModule.leb128WriteI64(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+    }
+    try self.emitStoreOp(.i64, 8);
+
+    // Push result pointer
+    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+    WasmModule.leb128WriteU32(self.allocator, &self.body, result_local) catch return error.OutOfMemory;
+}
+
 /// Resolve a layout.Idx to its wasm ValType, using the layout store for dynamic indices.
 /// This is the safe way to map layout indices that might be dynamically allocated
 /// (not one of the well-known sentinel values like .bool, .i32, etc.).
@@ -3171,20 +3216,85 @@ fn generateLowLevel(self: *Self, ll: anytype) Error!void {
         .i128_to_u8_try, .i128_to_u16_try, .i128_to_u32_try, .i128_to_u64_try, .i128_to_u128_try,
         => return error.UnsupportedExpr,
 
-        // 128-bit conversions (i128/u128 — not yet supported)
-        .u8_to_i128, .u8_to_u128,
-        .i8_to_i128, .i8_to_u128_wrap,
-        .u16_to_i128, .u16_to_u128,
-        .i16_to_i128, .i16_to_u128_wrap,
+        // Integer widening to i128/u128 (zero/sign-extend to 128 bits in stack memory)
+        .u8_to_i128, .u8_to_u128, .u16_to_i128, .u16_to_u128,
         .u32_to_i128, .u32_to_u128,
-        .i32_to_i128,
+        => {
+            // Unsigned i32→i128: zero-extend i32 to i64, then to i128
+            if (args.len > 0) try self.generateExpr(args[0]);
+            self.body.append(self.allocator, Op.i64_extend_i32_u) catch return error.OutOfMemory;
+            try self.emitIntToI128(false);
+        },
         .u64_to_i128, .u64_to_u128,
-        .i64_to_i128, .i64_to_u128_wrap,
-        .u128_to_i8_wrap, .u128_to_i16_wrap, .u128_to_i32_wrap, .u128_to_i64_wrap, .u128_to_i128_wrap,
-        .u128_to_u8_wrap, .u128_to_u16_wrap, .u128_to_u32_wrap, .u128_to_u64_wrap,
+        => {
+            // Unsigned i64→i128: value is already i64
+            if (args.len > 0) try self.generateExpr(args[0]);
+            try self.emitIntToI128(false);
+        },
+        .i8_to_i128, .i16_to_i128, .i32_to_i128,
+        => {
+            // Signed i32→i128: sign-extend i32 to i64, then to i128
+            if (args.len > 0) try self.generateExpr(args[0]);
+            self.body.append(self.allocator, Op.i64_extend_i32_s) catch return error.OutOfMemory;
+            try self.emitIntToI128(true);
+        },
+        .i64_to_i128,
+        => {
+            // Signed i64→i128: value is already i64
+            if (args.len > 0) try self.generateExpr(args[0]);
+            try self.emitIntToI128(true);
+        },
+        .i8_to_u128_wrap, .i16_to_u128_wrap,
+        => {
+            // Signed i32→u128 wrap: sign-extend to i64, then i128
+            if (args.len > 0) try self.generateExpr(args[0]);
+            self.body.append(self.allocator, Op.i64_extend_i32_s) catch return error.OutOfMemory;
+            try self.emitIntToI128(true);
+        },
+        .i64_to_u128_wrap,
+        => {
+            // Signed i64→u128 wrap: already i64, sign-extend to i128
+            if (args.len > 0) try self.generateExpr(args[0]);
+            try self.emitIntToI128(true);
+        },
+        // i128/u128 truncation to smaller types (load low word, mask)
+        .i128_to_i8_wrap, .i128_to_u8_wrap, .u128_to_i8_wrap, .u128_to_u8_wrap,
+        => {
+            if (args.len > 0) try self.generateExpr(args[0]);
+            // Load low i64, wrap to i32, mask to 8 bits
+            try self.emitLoadOp(.i64, 0);
+            self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI32(self.allocator, &self.body, 0xFF) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
+        },
+        .i128_to_i16_wrap, .i128_to_u16_wrap, .u128_to_i16_wrap, .u128_to_u16_wrap,
+        => {
+            if (args.len > 0) try self.generateExpr(args[0]);
+            try self.emitLoadOp(.i64, 0);
+            self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI32(self.allocator, &self.body, 0xFFFF) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
+        },
+        .i128_to_i32_wrap, .i128_to_u32_wrap, .u128_to_i32_wrap, .u128_to_u32_wrap,
+        => {
+            if (args.len > 0) try self.generateExpr(args[0]);
+            try self.emitLoadOp(.i64, 0);
+            self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
+        },
+        .i128_to_i64_wrap, .i128_to_u64_wrap, .u128_to_i64_wrap, .u128_to_u64_wrap,
+        => {
+            if (args.len > 0) try self.generateExpr(args[0]);
+            try self.emitLoadOp(.i64, 0);
+        },
+        .u128_to_i128_wrap, .i128_to_u128_wrap,
+        => {
+            // Same representation — just pass through (pointer stays the same)
+            if (args.len > 0) try self.generateExpr(args[0]);
+        },
+        // 128-bit conversions not yet supported
         .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe,
-        .i128_to_i8_wrap, .i128_to_i16_wrap, .i128_to_i32_wrap, .i128_to_i64_wrap,
-        .i128_to_u8_wrap, .i128_to_u16_wrap, .i128_to_u32_wrap, .i128_to_u64_wrap, .i128_to_u128_wrap,
         .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe,
         .f32_to_i128_trunc, .f32_to_u128_trunc,
         .f64_to_i128_trunc, .f64_to_u128_trunc,

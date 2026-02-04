@@ -149,6 +149,11 @@ pub const Op = struct {
     pub const i32_and: u8 = 0x71;
     pub const i32_or: u8 = 0x72;
     pub const i32_xor: u8 = 0x73;
+    pub const i32_shl: u8 = 0x74;
+    pub const i32_shr_s: u8 = 0x75;
+    pub const i32_shr_u: u8 = 0x76;
+    pub const i32_rotl: u8 = 0x77;
+    pub const i32_rotr: u8 = 0x78;
 
     // i64 arithmetic
     pub const i64_add: u8 = 0x7C;
@@ -161,6 +166,11 @@ pub const Op = struct {
     pub const i64_and: u8 = 0x83;
     pub const i64_or: u8 = 0x84;
     pub const i64_xor: u8 = 0x85;
+    pub const i64_shl: u8 = 0x86;
+    pub const i64_shr_s: u8 = 0x87;
+    pub const i64_shr_u: u8 = 0x88;
+    pub const i64_rotl: u8 = 0x89;
+    pub const i64_rotr: u8 = 0x8A;
 
     // f32 arithmetic
     pub const f32_abs: u8 = 0x8B;
