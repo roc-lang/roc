@@ -143,32 +143,61 @@ const DevRocEnv = struct {
         if (self.crash_message) |msg| self.allocator.free(msg);
     }
 
-    /// Allocation function for RocOps.
+    /// Shared static allocator state for alloc/realloc functions.
     /// WORKAROUND: Uses a static buffer instead of self.allocator.alignedAlloc.
     /// There's a mysterious crash when using allocator vtable calls from inside
     /// lambdas - it works the first time but crashes on subsequent calls from
     /// inside lambda execution contexts. The root cause appears to be related
     /// to vtable calls from C-calling-convention functions into Zig code.
     /// Using a static buffer completely avoids the vtable call.
+    const StaticAlloc = struct {
+        var buffer: [1024 * 1024]u8 align(16) = undefined; // 1MB static buffer
+        var offset: usize = 0;
+        // Track allocation sizes for realloc (simple array of ptr -> size pairs)
+        const max_allocs = 4096;
+        var alloc_ptrs: [max_allocs]usize = [_]usize{0} ** max_allocs;
+        var alloc_sizes: [max_allocs]usize = [_]usize{0} ** max_allocs;
+        var alloc_count: usize = 0;
+
+        fn recordAlloc(ptr: usize, size: usize) void {
+            if (alloc_count < max_allocs) {
+                alloc_ptrs[alloc_count] = ptr;
+                alloc_sizes[alloc_count] = size;
+                alloc_count += 1;
+            }
+        }
+
+        fn getAllocSize(ptr: usize) usize {
+            // Search backwards since recent allocations are more likely to be reallocated
+            var i: usize = alloc_count;
+            while (i > 0) {
+                i -= 1;
+                if (alloc_ptrs[i] == ptr) {
+                    return alloc_sizes[i];
+                }
+            }
+            return 0;
+        }
+    };
+
+    /// Allocation function for RocOps.
     fn rocAllocFn(roc_alloc: *RocAlloc, env: *anyopaque) callconv(.c) void {
         _ = env; // unused with static buffer workaround
-
-        const S = struct {
-            var buffer: [1024 * 1024]u8 align(16) = undefined; // 1MB static buffer
-            var offset: usize = 0;
-        };
 
         // Align the offset to the requested alignment
         const alignment = roc_alloc.alignment;
         const mask = alignment - 1;
-        const aligned_offset = (S.offset + mask) & ~mask;
+        const aligned_offset = (StaticAlloc.offset + mask) & ~mask;
 
-        if (aligned_offset + roc_alloc.length > S.buffer.len) {
+        if (aligned_offset + roc_alloc.length > StaticAlloc.buffer.len) {
             @panic("DevRocEnv: static buffer overflow");
         }
 
-        const ptr: [*]u8 = @ptrCast(&S.buffer[aligned_offset]);
-        S.offset = aligned_offset + roc_alloc.length;
+        const ptr: [*]u8 = @ptrCast(&StaticAlloc.buffer[aligned_offset]);
+        StaticAlloc.offset = aligned_offset + roc_alloc.length;
+
+        // Track this allocation for realloc
+        StaticAlloc.recordAlloc(@intFromPtr(ptr), roc_alloc.length);
 
         roc_alloc.answer = @ptrCast(ptr);
     }
@@ -182,27 +211,28 @@ const DevRocEnv = struct {
     /// Reallocation function for RocOps.
     /// With static buffer, we allocate new space and copy data (old space is not reclaimed).
     fn rocReallocFn(roc_realloc: *RocRealloc, _: *anyopaque) callconv(.c) void {
-
-        const S = struct {
-            var buffer: [1024 * 1024]u8 align(16) = undefined; // 1MB static buffer
-            var offset: usize = 0;
-        };
-
         // Align the offset to the requested alignment
         const alignment = roc_realloc.alignment;
         const mask = alignment - 1;
-        const aligned_offset = (S.offset + mask) & ~mask;
+        const aligned_offset = (StaticAlloc.offset + mask) & ~mask;
 
-        if (aligned_offset + roc_realloc.new_length > S.buffer.len) {
+        if (aligned_offset + roc_realloc.new_length > StaticAlloc.buffer.len) {
             @panic("DevRocEnv: static buffer overflow in realloc");
         }
 
-        const new_ptr: [*]u8 = @ptrCast(&S.buffer[aligned_offset]);
-        S.offset = aligned_offset + roc_realloc.new_length;
+        const new_ptr: [*]u8 = @ptrCast(&StaticAlloc.buffer[aligned_offset]);
+        StaticAlloc.offset = aligned_offset + roc_realloc.new_length;
 
-        // Copy old data to new location
+        // Track this new allocation
+        StaticAlloc.recordAlloc(@intFromPtr(new_ptr), roc_realloc.new_length);
+
+        // Copy old data to new location (only copy the old size, not new size)
         const old_ptr: [*]u8 = @ptrCast(@alignCast(roc_realloc.answer));
-        @memcpy(new_ptr[0..roc_realloc.new_length], old_ptr[0..roc_realloc.new_length]);
+        const old_size = StaticAlloc.getAllocSize(@intFromPtr(old_ptr));
+        const copy_len = @min(old_size, roc_realloc.new_length);
+        if (copy_len > 0) {
+            @memcpy(new_ptr[0..copy_len], old_ptr[0..copy_len]);
+        }
 
         // Return the new pointer
         roc_realloc.answer = @ptrCast(new_ptr);
