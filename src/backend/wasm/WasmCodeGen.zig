@@ -48,6 +48,14 @@ fp_local: u32 = 0,
 compiled_lambdas: std.AutoHashMap(u32, u32),
 /// Map from MonoSymbol → wasm function index (for let-bound lambdas).
 symbol_funcs: std.AutoHashMap(u48, u32),
+/// Map from MonoSymbol → capture info (for let-bound closures).
+/// At call sites, capture values are passed as extra leading arguments.
+closure_captures: std.AutoHashMap(u48, CaptureInfo),
+
+const CaptureInfo = struct {
+    symbols: []const MonoSymbol,
+    val_types: []const ValType,
+};
 
 pub fn init(allocator: Allocator, store: *const MonoExprStore, layout_store: ?*const LayoutStore) Self {
     return .{
@@ -62,6 +70,7 @@ pub fn init(allocator: Allocator, store: *const MonoExprStore, layout_store: ?*c
         .fp_local = 0,
         .compiled_lambdas = std.AutoHashMap(u32, u32).init(allocator),
         .symbol_funcs = std.AutoHashMap(u48, u32).init(allocator),
+        .closure_captures = std.AutoHashMap(u48, CaptureInfo).init(allocator),
     };
 }
 
@@ -71,6 +80,12 @@ pub fn deinit(self: *Self) void {
     self.storage.deinit();
     self.compiled_lambdas.deinit();
     self.symbol_funcs.deinit();
+    var it = self.closure_captures.iterator();
+    while (it.next()) |entry| {
+        self.allocator.free(entry.value_ptr.symbols);
+        self.allocator.free(entry.value_ptr.val_types);
+    }
+    self.closure_captures.deinit();
 }
 
 /// Result of generating a wasm module
@@ -374,6 +389,16 @@ fn generateExpr(self: *Self, expr_id: MonoExprId) Error!void {
                                 const key: u48 = @bitCast(bind.symbol);
                                 self.symbol_funcs.put(key, func_idx) catch return error.OutOfMemory;
                             },
+                            .closure => |closure| {
+                                const func_idx = try self.compileClosure(stmt.expr, closure);
+                                const key: u48 = @bitCast(bind.symbol);
+                                self.symbol_funcs.put(key, func_idx) catch return error.OutOfMemory;
+                                // Copy capture info from expr key to symbol key
+                                const expr_key: u32 = @intFromEnum(stmt.expr);
+                                if (self.closure_captures.get(@intCast(expr_key))) |cap_info| {
+                                    self.closure_captures.put(key, cap_info) catch return error.OutOfMemory;
+                                }
+                            },
                             else => {
                                 // Determine the target wasm type using layout store
                                 const vt = self.resolveValType(bind.layout_idx);
@@ -465,6 +490,14 @@ fn generateExpr(self: *Self, expr_id: MonoExprId) Error!void {
         },
         .tag => |t| {
             try self.generateTag(t);
+        },
+        .closure => |closure| {
+            // For closures used as values (not let-bound), compile and push func reference
+            const func_idx = try self.compileClosure(expr_id, closure);
+            _ = func_idx;
+            // Push dummy i32 (the closure as a value — caller will resolve via symbol)
+            self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
         },
         .str_literal => |str_idx| {
             try self.generateStrLiteral(str_idx);
@@ -737,6 +770,7 @@ fn exprLayoutIdx(self: *Self, expr_id: MonoExprId) ?layout.Idx {
         .tuple_access => |ta| ta.elem_layout,
         .zero_arg_tag => |z| z.union_layout,
         .tag => |t| t.union_layout,
+        .closure => |c| c.closure_layout,
         .dbg => |d| d.result_layout,
         .expect => |e| e.result_layout,
         .incref => |inc| self.exprLayoutIdx(inc.value),
@@ -773,6 +807,7 @@ fn exprValType(self: *Self, expr_id: MonoExprId) ValType {
         .empty_record => .i32,
         .call => |c| self.resolveValType(c.ret_layout),
         .lambda => .i32, // function reference (index)
+        .closure => .i32, // closure value (function reference)
         .record => .i32, // pointer to stack memory
         .tuple => .i32, // pointer to stack memory
         .field_access => |fa| self.resolveValType(fa.field_layout),
@@ -1182,6 +1217,173 @@ fn compileLambda(self: *Self, expr_id: MonoExprId, lambda: anytype) Error!u32 {
     return func_idx;
 }
 
+/// Compile a closure (lambda with captures) as a separate wasm function.
+/// Captures become extra leading parameters in the compiled function.
+/// Returns the wasm function index.
+fn compileClosure(self: *Self, expr_id: MonoExprId, closure: anytype) Error!u32 {
+    // Check if already compiled
+    const expr_key: u32 = @intFromEnum(expr_id);
+    if (self.compiled_lambdas.get(expr_key)) |existing| {
+        return existing;
+    }
+
+    // Get the inner lambda
+    const inner = self.store.getExpr(closure.lambda);
+    const lambda = switch (inner) {
+        .lambda => |l| l,
+        else => return error.UnsupportedExpr,
+    };
+
+    // Get captures
+    const captures = self.store.getCaptures(closure.captures);
+
+    // Build parameter types: captures first, then regular params
+    var param_types: std.ArrayList(ValType) = .empty;
+    defer param_types.deinit(self.allocator);
+
+    // Capture types
+    var capture_symbols = self.allocator.alloc(MonoSymbol, captures.len) catch return error.OutOfMemory;
+    var capture_val_types = self.allocator.alloc(ValType, captures.len) catch return error.OutOfMemory;
+    for (captures, 0..) |cap, i| {
+        const vt = self.resolveValType(cap.layout_idx);
+        param_types.append(self.allocator, vt) catch return error.OutOfMemory;
+        capture_symbols[i] = cap.symbol;
+        capture_val_types[i] = vt;
+    }
+
+    // Regular parameter types
+    const params = self.store.getPatternSpan(lambda.params);
+    for (params) |param_id| {
+        const pat = self.store.getPattern(param_id);
+        switch (pat) {
+            .bind => |bind| {
+                const vt = self.resolveValType(bind.layout_idx);
+                param_types.append(self.allocator, vt) catch return error.OutOfMemory;
+            },
+            .wildcard => {
+                param_types.append(self.allocator, .i32) catch return error.OutOfMemory;
+            },
+            else => return error.UnsupportedExpr,
+        }
+    }
+
+    const ret_vt = self.resolveValType(lambda.ret_layout);
+    const type_idx = self.module.addFuncType(param_types.items, &.{ret_vt}) catch return error.OutOfMemory;
+    const func_idx = self.module.addFunction(type_idx) catch return error.OutOfMemory;
+
+    // Save current codegen state
+    const saved_body = self.body.items;
+    const saved_body_cap = self.body.capacity;
+    const saved_locals = self.storage.locals;
+    const saved_next_local = self.storage.next_local_idx;
+    const saved_local_types = self.storage.local_types.items;
+    const saved_local_types_cap = self.storage.local_types.capacity;
+    const saved_stack_frame_size = self.stack_frame_size;
+    const saved_uses_stack_memory = self.uses_stack_memory;
+    const saved_fp_local = self.fp_local;
+
+    // Initialize fresh state
+    self.body = .empty;
+    self.storage.locals = std.AutoHashMap(u48, Storage.LocalInfo).init(self.allocator);
+    self.storage.next_local_idx = 0;
+    self.storage.local_types = .empty;
+    self.stack_frame_size = 0;
+    self.uses_stack_memory = false;
+    self.fp_local = 0;
+
+    // Bind capture parameters (first N locals)
+    for (captures) |cap| {
+        const vt = self.resolveValType(cap.layout_idx);
+        _ = self.storage.allocLocal(cap.symbol, vt) catch return error.OutOfMemory;
+    }
+
+    // Bind regular parameters
+    for (params) |param_id| {
+        const pat = self.store.getPattern(param_id);
+        switch (pat) {
+            .bind => |bind| {
+                const vt = self.resolveValType(bind.layout_idx);
+                _ = self.storage.allocLocal(bind.symbol, vt) catch return error.OutOfMemory;
+            },
+            .wildcard => {
+                _ = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            },
+            else => return error.UnsupportedExpr,
+        }
+    }
+
+    // Generate the body
+    try self.generateExpr(lambda.body);
+
+    // Build function body
+    var func_body: std.ArrayList(u8) = .empty;
+    defer func_body.deinit(self.allocator);
+
+    const param_count: u32 = @intCast(captures.len + params.len);
+    const total_locals = self.storage.next_local_idx;
+    if (total_locals > param_count) {
+        const types_slice = self.storage.local_types.items[param_count..];
+        var groups: std.ArrayList(struct { count: u32, val_type: ValType }) = .empty;
+        defer groups.deinit(self.allocator);
+
+        var i: usize = 0;
+        while (i < types_slice.len) {
+            const vt = types_slice[i];
+            var count: u32 = 1;
+            while (i + count < types_slice.len and types_slice[i + count] == vt) {
+                count += 1;
+            }
+            groups.append(self.allocator, .{ .count = count, .val_type = vt }) catch return error.OutOfMemory;
+            i += count;
+        }
+
+        WasmModule.leb128WriteU32(self.allocator, &func_body, @intCast(groups.items.len)) catch return error.OutOfMemory;
+        for (groups.items) |g| {
+            WasmModule.leb128WriteU32(self.allocator, &func_body, g.count) catch return error.OutOfMemory;
+            func_body.append(self.allocator, @intFromEnum(g.val_type)) catch return error.OutOfMemory;
+        }
+    } else {
+        WasmModule.leb128WriteU32(self.allocator, &func_body, 0) catch return error.OutOfMemory;
+    }
+
+    func_body.appendSlice(self.allocator, self.body.items) catch return error.OutOfMemory;
+    func_body.append(self.allocator, Op.end) catch return error.OutOfMemory;
+
+    self.module.setFunctionBody(func_idx, func_body.items) catch return error.OutOfMemory;
+
+    // Restore previous state
+    self.body.deinit(self.allocator);
+    self.body.items = saved_body;
+    self.body.capacity = saved_body_cap;
+    self.storage.locals.deinit();
+    self.storage.locals = saved_locals;
+    self.storage.next_local_idx = saved_next_local;
+    self.storage.local_types.deinit(self.allocator);
+    self.storage.local_types.items = saved_local_types;
+    self.storage.local_types.capacity = saved_local_types_cap;
+    self.stack_frame_size = saved_stack_frame_size;
+    self.uses_stack_memory = saved_uses_stack_memory;
+    self.fp_local = saved_fp_local;
+
+    // Cache
+    self.compiled_lambdas.put(expr_key, func_idx) catch return error.OutOfMemory;
+
+    // Store capture info for call sites (only if there are captures)
+    if (captures.len > 0) {
+        // Store with a hash key derived from the expression key
+        // The caller will associate this with the bound symbol
+        self.closure_captures.put(@intCast(expr_key), .{
+            .symbols = capture_symbols,
+            .val_types = capture_val_types,
+        }) catch return error.OutOfMemory;
+    } else {
+        self.allocator.free(capture_symbols);
+        self.allocator.free(capture_val_types);
+    }
+
+    return func_idx;
+}
+
 /// Generate a function call expression.
 fn generateCall(self: *Self, c: anytype) Error!void {
     const fn_expr = self.store.getExpr(c.fn_expr);
@@ -1189,8 +1391,8 @@ fn generateCall(self: *Self, c: anytype) Error!void {
     // Determine the function index to call
     const func_idx: ?u32 = switch (fn_expr) {
         .lambda => |lambda| try self.compileLambda(c.fn_expr, lambda),
+        .closure => |closure| try self.compileClosure(c.fn_expr, closure),
         .lookup => |lookup| blk: {
-            // Check if this symbol is bound to a compiled function
             const key: u48 = @bitCast(lookup.symbol);
             break :blk self.symbol_funcs.get(key);
         },
@@ -1198,7 +1400,32 @@ fn generateCall(self: *Self, c: anytype) Error!void {
     };
 
     if (func_idx) |idx| {
-        // Direct call to known function — push arguments, emit call
+        // Push capture values as leading arguments (if this is a closure call)
+        switch (fn_expr) {
+            .closure => |closure| {
+                // Inline closure call — push captures directly from current scope
+                const captures = self.store.getCaptures(closure.captures);
+                for (captures) |cap| {
+                    const local_idx = self.storage.getLocal(cap.symbol) orelse return error.UnsupportedExpr;
+                    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteU32(self.allocator, &self.body, local_idx) catch return error.OutOfMemory;
+                }
+            },
+            .lookup => |lookup| {
+                // Let-bound closure — look up captures by symbol
+                const key: u48 = @bitCast(lookup.symbol);
+                if (self.closure_captures.get(key)) |cap_info| {
+                    for (cap_info.symbols) |cap_sym| {
+                        const local_idx = self.storage.getLocal(cap_sym) orelse return error.UnsupportedExpr;
+                        self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                        WasmModule.leb128WriteU32(self.allocator, &self.body, local_idx) catch return error.OutOfMemory;
+                    }
+                }
+            },
+            else => {},
+        }
+
+        // Push regular arguments
         const args = self.store.getExprSpan(c.args);
         for (args) |arg_id| {
             try self.generateExpr(arg_id);
