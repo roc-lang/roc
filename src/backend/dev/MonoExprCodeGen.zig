@@ -320,9 +320,10 @@ fn wrapStrEscapeAndQuote(out: *RocStr, str_bytes: ?[*]u8, str_len: usize, str_ca
 
     const result_len = slice.len + extra + 2; // +2 for surrounding quotes
 
-    if (result_len < 24) {
+    const small_string_size = @sizeOf(RocStr);
+    if (result_len < small_string_size) {
         // Small string: build inline
-        var buf: [24]u8 = .{0} ** 24;
+        var buf: [small_string_size]u8 = .{0} ** small_string_size;
         buf[0] = '"';
         var pos: usize = 1;
         for (slice) |ch| {
@@ -334,7 +335,7 @@ fn wrapStrEscapeAndQuote(out: *RocStr, str_bytes: ?[*]u8, str_len: usize, str_ca
             pos += 1;
         }
         buf[pos] = '"';
-        buf[23] = @intCast(result_len | 0x80);
+        buf[small_string_size - 1] = @intCast(result_len | 0x80);
         out.* = @bitCast(buf);
     } else {
         // Large string: allocate heap memory
@@ -705,6 +706,22 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
     if (arch != .x86_64 and arch != .aarch64 and arch != .aarch64_be) {
         @compileError("MonoExprCodeGen requires x86_64 or aarch64 target");
     }
+
+    // ── Target-specific size constants ──
+    // These are derived from the target pointer size for the 64-bit architectures we support.
+    // RocStr and RocList both have the same layout: { ptr: [*]u8, length: usize, capacity: usize }
+
+    // Size of a pointer on the target architecture (8 bytes for x86_64/aarch64)
+    const target_ptr_size: u32 = 8;
+
+    // Size of a RocStr struct: ptr + length + capacity = 3 × pointer size (24 bytes on 64-bit)
+    const roc_str_size: u32 = 3 * target_ptr_size;
+
+    // Size of a RocList struct: ptr + length + capacity = 3 × pointer size (24 bytes on 64-bit)
+    const roc_list_size: u32 = 3 * target_ptr_size;
+
+    // Maximum length for small string optimization (struct size minus length byte, 23 bytes on 64-bit)
+    const small_str_max_len: u32 = roc_str_size - 1;
 
     // Select architecture-specific types based on target
     const CodeGen = if (arch == .x86_64)
@@ -1418,7 +1435,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     const alignment_bytes = elem_size_align.alignment.toByteUnits();
 
                     // Allocate stack space for result (RocList = 24 bytes)
-                    const result_offset = self.codegen.allocStackSlot(24);
+                    const result_offset = self.codegen.allocStackSlot(roc_str_size);
 
                     if (comptime target.toCpuArch() == .aarch64) {
                         // aarch64 calling convention: X0-X7 for args
@@ -1549,7 +1566,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             if (val != 0) {
                                 unreachable;
                             }
-                            const slot = self.codegen.allocStackSlot(24);
+                            const slot = self.codegen.allocStackSlot(roc_str_size);
                             const temp = try self.allocTempGeneral();
                             try self.codegen.emitLoadImm(temp, 0);
                             if (comptime target.toCpuArch() == .aarch64) {
@@ -1573,7 +1590,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     const elem_offset: i32 = try self.ensureOnStack(elem_loc, elem_size_align.size);
 
                     // Allocate result slot (24 bytes for RocList)
-                    const result_offset = self.codegen.allocStackSlot(24);
+                    const result_offset = self.codegen.allocStackSlot(roc_str_size);
 
                     const copy_fallback_addr: usize = @intFromPtr(&copy_fallback);
 
@@ -1983,9 +2000,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         };
                     };
 
-                    const list_a_off = try self.ensureOnStack(list_a_loc, 24);
-                    const list_b_off = try self.ensureOnStack(list_b_loc, 24);
-                    const result_offset = self.codegen.allocStackSlot(24);
+                    const list_a_off = try self.ensureOnStack(list_a_loc, roc_list_size);
+                    const list_b_off = try self.ensureOnStack(list_b_loc, roc_list_size);
+                    const result_offset = self.codegen.allocStackSlot(roc_str_size);
                     const alignment_bytes = elem_size_align.alignment.toByteUnits();
                     const fn_addr: usize = @intFromPtr(&wrapListConcat);
 
@@ -2056,9 +2073,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         };
                     };
 
-                    const list_off = try self.ensureOnStack(list_loc, 24);
+                    const list_off = try self.ensureOnStack(list_loc, roc_list_size);
                     const elem_off = try self.ensureOnStack(elem_loc, elem_size_align.size);
-                    const result_offset = self.codegen.allocStackSlot(24);
+                    const result_offset = self.codegen.allocStackSlot(roc_str_size);
                     const alignment_bytes = elem_size_align.alignment.toByteUnits();
                     const fn_addr: usize = @intFromPtr(&wrapListPrepend);
 
@@ -2163,7 +2180,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
                     // First: allocate list with capacity
                     const alignment_bytes = elem_size_align.alignment.toByteUnits();
-                    const result_offset = self.codegen.allocStackSlot(24);
+                    const result_offset = self.codegen.allocStackSlot(roc_str_size);
                     const cap_fn_addr: usize = @intFromPtr(&listWithCapacityC);
                     const rc_none_addr: usize = @intFromPtr(&rcNone);
 
@@ -2242,7 +2259,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     self.codegen.freeGeneral(ctr_reg2);
 
                     // Call listAppendUnsafeC (capacity is already reserved)
-                    const tmp_result = self.codegen.allocStackSlot(24);
+                    const tmp_result = self.codegen.allocStackSlot(roc_str_size);
                     const append_fn_addr: usize = @intFromPtr(&listAppendUnsafeC);
                     const copy_fallback_addr: usize = @intFromPtr(&copy_fallback);
 
@@ -3104,67 +3121,67 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     // str_to_utf8(str) -> List(U8)
                     if (args.len != 1) unreachable;
                     const str_loc = try self.generateExpr(args[0]);
-                    const str_off = try self.ensureOnStack(str_loc, 24);
+                    const str_off = try self.ensureOnStack(str_loc, roc_str_size);
                     return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrToUtf8), .list);
                 },
                 .str_is_empty => {
                     if (args.len != 1) unreachable;
                     const str_loc = try self.generateExpr(args[0]);
-                    const str_off = try self.ensureOnStack(str_loc, 24);
+                    const str_off = try self.ensureOnStack(str_loc, roc_str_size);
                     return try self.callStr1ToScalar(str_off, @intFromPtr(&wrapStrIsEmpty));
                 },
                 .str_is_eq => {
                     if (args.len != 2) unreachable;
                     const a_loc = try self.generateExpr(args[0]);
                     const b_loc = try self.generateExpr(args[1]);
-                    const a_off = try self.ensureOnStack(a_loc, 24);
-                    const b_off = try self.ensureOnStack(b_loc, 24);
+                    const a_off = try self.ensureOnStack(a_loc, roc_str_size);
+                    const b_off = try self.ensureOnStack(b_loc, roc_str_size);
                     return try self.callStr2ToScalar(a_off, b_off, @intFromPtr(&wrapStrEqual));
                 },
                 .str_concat => {
                     if (args.len != 2) unreachable;
                     const a_loc = try self.generateExpr(args[0]);
                     const b_loc = try self.generateExpr(args[1]);
-                    const a_off = try self.ensureOnStack(a_loc, 24);
-                    const b_off = try self.ensureOnStack(b_loc, 24);
+                    const a_off = try self.ensureOnStack(a_loc, roc_str_size);
+                    const b_off = try self.ensureOnStack(b_loc, roc_str_size);
                     return try self.callStr2RocOpsToStr(a_off, b_off, @intFromPtr(&wrapStrConcat));
                 },
                 .str_contains => {
                     if (args.len != 2) unreachable;
                     const a_loc = try self.generateExpr(args[0]);
                     const b_loc = try self.generateExpr(args[1]);
-                    const a_off = try self.ensureOnStack(a_loc, 24);
-                    const b_off = try self.ensureOnStack(b_loc, 24);
+                    const a_off = try self.ensureOnStack(a_loc, roc_str_size);
+                    const b_off = try self.ensureOnStack(b_loc, roc_str_size);
                     return try self.callStr2ToScalar(a_off, b_off, @intFromPtr(&wrapStrContains));
                 },
                 .str_starts_with => {
                     if (args.len != 2) unreachable;
                     const a_loc = try self.generateExpr(args[0]);
                     const b_loc = try self.generateExpr(args[1]);
-                    const a_off = try self.ensureOnStack(a_loc, 24);
-                    const b_off = try self.ensureOnStack(b_loc, 24);
+                    const a_off = try self.ensureOnStack(a_loc, roc_str_size);
+                    const b_off = try self.ensureOnStack(b_loc, roc_str_size);
                     return try self.callStr2ToScalar(a_off, b_off, @intFromPtr(&wrapStrStartsWith));
                 },
                 .str_ends_with => {
                     if (args.len != 2) unreachable;
                     const a_loc = try self.generateExpr(args[0]);
                     const b_loc = try self.generateExpr(args[1]);
-                    const a_off = try self.ensureOnStack(a_loc, 24);
-                    const b_off = try self.ensureOnStack(b_loc, 24);
+                    const a_off = try self.ensureOnStack(a_loc, roc_str_size);
+                    const b_off = try self.ensureOnStack(b_loc, roc_str_size);
                     return try self.callStr2ToScalar(a_off, b_off, @intFromPtr(&wrapStrEndsWith));
                 },
                 .str_count_utf8_bytes => {
                     if (args.len != 1) unreachable;
                     const str_loc = try self.generateExpr(args[0]);
-                    const str_off = try self.ensureOnStack(str_loc, 24);
+                    const str_off = try self.ensureOnStack(str_loc, roc_str_size);
                     return try self.callStr1ToScalar(str_off, @intFromPtr(&wrapStrCountUtf8Bytes));
                 },
                 .str_caseless_ascii_equals => {
                     if (args.len != 2) unreachable;
                     const a_loc = try self.generateExpr(args[0]);
                     const b_loc = try self.generateExpr(args[1]);
-                    const a_off = try self.ensureOnStack(a_loc, 24);
-                    const b_off = try self.ensureOnStack(b_loc, 24);
+                    const a_off = try self.ensureOnStack(a_loc, roc_str_size);
+                    const b_off = try self.ensureOnStack(b_loc, roc_str_size);
                     return try self.callStr2ToScalar(a_off, b_off, @intFromPtr(&wrapStrCaselessAsciiEquals));
                 },
                 .str_repeat => {
@@ -3172,26 +3189,26 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     if (args.len != 2) unreachable;
                     const str_loc = try self.generateExpr(args[0]);
                     const count_loc = try self.generateExpr(args[1]);
-                    const str_off = try self.ensureOnStack(str_loc, 24);
+                    const str_off = try self.ensureOnStack(str_loc, roc_str_size);
                     const count_off = try self.ensureOnStack(count_loc, 8);
                     return try self.callStr1U64RocOpsToStr(str_off, count_off, @intFromPtr(&wrapStrRepeat));
                 },
                 .str_trim => {
                     if (args.len != 1) unreachable;
                     const str_loc = try self.generateExpr(args[0]);
-                    const str_off = try self.ensureOnStack(str_loc, 24);
+                    const str_off = try self.ensureOnStack(str_loc, roc_str_size);
                     return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrTrim), .str);
                 },
                 .str_trim_start => {
                     if (args.len != 1) unreachable;
                     const str_loc = try self.generateExpr(args[0]);
-                    const str_off = try self.ensureOnStack(str_loc, 24);
+                    const str_off = try self.ensureOnStack(str_loc, roc_str_size);
                     return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrTrimStart), .str);
                 },
                 .str_trim_end => {
                     if (args.len != 1) unreachable;
                     const str_loc = try self.generateExpr(args[0]);
-                    const str_off = try self.ensureOnStack(str_loc, 24);
+                    const str_off = try self.ensureOnStack(str_loc, roc_str_size);
                     return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrTrimEnd), .str);
                 },
                 .str_split => {
@@ -3199,8 +3216,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     if (args.len != 2) unreachable;
                     const a_loc = try self.generateExpr(args[0]);
                     const b_loc = try self.generateExpr(args[1]);
-                    const a_off = try self.ensureOnStack(a_loc, 24);
-                    const b_off = try self.ensureOnStack(b_loc, 24);
+                    const a_off = try self.ensureOnStack(a_loc, roc_str_size);
+                    const b_off = try self.ensureOnStack(b_loc, roc_str_size);
                     return try self.callStr2RocOpsToResult(a_off, b_off, @intFromPtr(&wrapStrSplit), .list);
                 },
                 .str_join_with => {
@@ -3208,8 +3225,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     if (args.len != 2) unreachable;
                     const list_loc = try self.generateExpr(args[0]);
                     const sep_loc = try self.generateExpr(args[1]);
-                    const list_off = try self.ensureOnStack(list_loc, 24);
-                    const sep_off = try self.ensureOnStack(sep_loc, 24);
+                    const list_off = try self.ensureOnStack(list_loc, roc_list_size);
+                    const sep_off = try self.ensureOnStack(sep_loc, roc_str_size);
                     return try self.callStr2RocOpsToResult(list_off, sep_off, @intFromPtr(&wrapStrJoinWith), .str);
                 },
                 .str_reserve => {
@@ -3217,14 +3234,14 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     if (args.len != 2) unreachable;
                     const str_loc = try self.generateExpr(args[0]);
                     const spare_loc = try self.generateExpr(args[1]);
-                    const str_off = try self.ensureOnStack(str_loc, 24);
+                    const str_off = try self.ensureOnStack(str_loc, roc_str_size);
                     const spare_off = try self.ensureOnStack(spare_loc, 8);
                     return try self.callStr1U64RocOpsToStr(str_off, spare_off, @intFromPtr(&wrapStrReserve));
                 },
                 .str_release_excess_capacity => {
                     if (args.len != 1) unreachable;
                     const str_loc = try self.generateExpr(args[0]);
-                    const str_off = try self.ensureOnStack(str_loc, 24);
+                    const str_off = try self.ensureOnStack(str_loc, roc_str_size);
                     return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrReleaseExcessCapacity), .str);
                 },
                 .str_with_capacity => {
@@ -3232,7 +3249,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     if (args.len != 1) unreachable;
                     const cap_loc = try self.generateExpr(args[0]);
                     const roc_ops_reg = self.roc_ops_reg orelse unreachable;
-                    const result_offset = self.codegen.allocStackSlot(24);
+                    const result_offset = self.codegen.allocStackSlot(roc_str_size);
                     const fn_addr: usize = @intFromPtr(&wrapStrWithCapacity);
                     const cap_reg = try self.ensureInGeneralReg(cap_loc);
 
@@ -3259,28 +3276,28 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     if (args.len != 2) unreachable;
                     const a_loc = try self.generateExpr(args[0]);
                     const b_loc = try self.generateExpr(args[1]);
-                    const a_off = try self.ensureOnStack(a_loc, 24);
-                    const b_off = try self.ensureOnStack(b_loc, 24);
+                    const a_off = try self.ensureOnStack(a_loc, roc_str_size);
+                    const b_off = try self.ensureOnStack(b_loc, roc_str_size);
                     return try self.callStr2RocOpsToResult(a_off, b_off, @intFromPtr(&wrapStrDropPrefix), .str);
                 },
                 .str_drop_suffix => {
                     if (args.len != 2) unreachable;
                     const a_loc = try self.generateExpr(args[0]);
                     const b_loc = try self.generateExpr(args[1]);
-                    const a_off = try self.ensureOnStack(a_loc, 24);
-                    const b_off = try self.ensureOnStack(b_loc, 24);
+                    const a_off = try self.ensureOnStack(a_loc, roc_str_size);
+                    const b_off = try self.ensureOnStack(b_loc, roc_str_size);
                     return try self.callStr2RocOpsToResult(a_off, b_off, @intFromPtr(&wrapStrDropSuffix), .str);
                 },
                 .str_with_ascii_lowercased => {
                     if (args.len != 1) unreachable;
                     const str_loc = try self.generateExpr(args[0]);
-                    const str_off = try self.ensureOnStack(str_loc, 24);
+                    const str_off = try self.ensureOnStack(str_loc, roc_str_size);
                     return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrWithAsciiLowercased), .str);
                 },
                 .str_with_ascii_uppercased => {
                     if (args.len != 1) unreachable;
                     const str_loc = try self.generateExpr(args[0]);
-                    const str_off = try self.ensureOnStack(str_loc, 24);
+                    const str_off = try self.ensureOnStack(str_loc, roc_str_size);
                     return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrWithAsciiUppercased), .str);
                 },
                 .str_with_prefix => {
@@ -3288,15 +3305,15 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     if (args.len != 2) unreachable;
                     const str_loc = try self.generateExpr(args[0]);
                     const pfx_loc = try self.generateExpr(args[1]);
-                    const str_off = try self.ensureOnStack(str_loc, 24);
-                    const pfx_off = try self.ensureOnStack(pfx_loc, 24);
+                    const str_off = try self.ensureOnStack(str_loc, roc_str_size);
+                    const pfx_off = try self.ensureOnStack(pfx_loc, roc_str_size);
                     return try self.callStr2RocOpsToResult(str_off, pfx_off, @intFromPtr(&wrapStrWithPrefix), .str);
                 },
                 .str_from_utf8_lossy => {
                     // str_from_utf8_lossy(list) -> Str
                     if (args.len != 1) unreachable;
                     const list_loc = try self.generateExpr(args[0]);
-                    const list_off = try self.ensureOnStack(list_loc, 24);
+                    const list_off = try self.ensureOnStack(list_loc, roc_list_size);
                     return try self.callStr1RocOpsToResult(list_off, @intFromPtr(&wrapStrFromUtf8Lossy), .str);
                 },
                 .str_from_utf8 => {
@@ -3305,7 +3322,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     // TODO: proper from_utf8 with validation
                     if (args.len != 1) unreachable;
                     const list_loc = try self.generateExpr(args[0]);
-                    const list_off = try self.ensureOnStack(list_loc, 24);
+                    const list_off = try self.ensureOnStack(list_loc, roc_list_size);
                     return try self.callStr1RocOpsToResult(list_off, @intFromPtr(&wrapStrFromUtf8Lossy), .str);
                 },
 
@@ -3330,10 +3347,10 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         };
                     };
 
-                    const list_off = try self.ensureOnStack(list_loc, 24);
+                    const list_off = try self.ensureOnStack(list_loc, roc_list_size);
                     const index_off = try self.ensureOnStack(index_loc, 8);
                     const elem_off = try self.ensureOnStack(elem_loc, elem_size_align.size);
-                    const result_offset = self.codegen.allocStackSlot(24);
+                    const result_offset = self.codegen.allocStackSlot(roc_str_size);
                     // We need a scratch slot for the old element (out_element param)
                     const old_elem_slot = self.codegen.allocStackSlot(@intCast(if (elem_size_align.size > 0) elem_size_align.size else 8));
                     const alignment_bytes = elem_size_align.alignment.toByteUnits();
@@ -3595,7 +3612,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
         /// Used for str->str and str->list ops that take 1 string + roc_ops
         fn callStr1RocOpsToResult(self: *Self, str_off: i32, fn_addr: usize, result_kind: enum { str, list }) Error!ValueLocation {
             const roc_ops_reg = self.roc_ops_reg orelse unreachable;
-            const result_offset = self.codegen.allocStackSlot(24);
+            const result_offset = self.codegen.allocStackSlot(roc_str_size);
 
             // fn(out, str_bytes, str_len, str_cap, roc_ops) - 5 args
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
@@ -3665,7 +3682,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
         fn callStr2RocOpsToResult(self: *Self, a_off: i32, b_off: i32, fn_addr: usize, result_kind: enum { str, list }) Error!ValueLocation {
             const roc_ops_reg = self.roc_ops_reg orelse unreachable;
-            const result_offset = self.codegen.allocStackSlot(24);
+            const result_offset = self.codegen.allocStackSlot(roc_str_size);
 
             // fn(out, a_bytes, a_len, a_cap, b_bytes, b_len, b_cap, roc_ops) -> void - 8 args
             const base_ptr = if (comptime target.toCpuArch() == .aarch64) .FP else .RBP;
@@ -3690,7 +3707,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
         /// Used for (str, u64, roc_ops) -> str ops like str_repeat, str_reserve
         fn callStr1U64RocOpsToStr(self: *Self, str_off: i32, u64_off: i32, fn_addr: usize) Error!ValueLocation {
             const roc_ops_reg = self.roc_ops_reg orelse unreachable;
-            const result_offset = self.codegen.allocStackSlot(24);
+            const result_offset = self.codegen.allocStackSlot(roc_str_size);
 
             // fn(out, str_bytes, str_len, str_cap, u64_val, roc_ops) -> void - 6 args
             const base_ptr = if (comptime target.toCpuArch() == .aarch64) .FP else .RBP;
@@ -3721,7 +3738,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 };
             };
 
-            const list_off = try self.ensureOnStack(list_loc, 24);
+            const list_off = try self.ensureOnStack(list_loc, roc_list_size);
             const n_reg = try self.ensureInGeneralReg(n_loc);
 
             // Load list length from the struct (offset 8)
@@ -3823,7 +3840,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             self.codegen.freeGeneral(len_reg);
 
             // Call wrapListSublist(out, list_bytes, list_len, list_cap, alignment, element_width, start, len, roc_ops)
-            const result_offset = self.codegen.allocStackSlot(24);
+            const result_offset = self.codegen.allocStackSlot(roc_str_size);
             const alignment_bytes = elem_size_align.alignment.toByteUnits();
             const fn_addr: usize = @intFromPtr(&wrapListSublist);
 
@@ -4165,8 +4182,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 };
             };
 
-            const list_off = try self.ensureOnStack(list_loc, 24);
-            const result_offset = self.codegen.allocStackSlot(24);
+            const list_off = try self.ensureOnStack(list_loc, roc_list_size);
+            const result_offset = self.codegen.allocStackSlot(roc_str_size);
             const alignment_bytes = elem_size_align.alignment.toByteUnits();
 
             // Allocate list with same capacity as input length
@@ -4380,9 +4397,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 };
             };
 
-            const list_off = try self.ensureOnStack(list_loc, 24);
+            const list_off = try self.ensureOnStack(list_loc, roc_list_size);
             const spare_off = try self.ensureOnStack(spare_loc, 8);
-            const result_offset = self.codegen.allocStackSlot(24);
+            const result_offset = self.codegen.allocStackSlot(roc_str_size);
             const alignment_bytes = elem_size_align.alignment.toByteUnits();
             const fn_addr: usize = @intFromPtr(&wrapListReserve);
 
@@ -4436,8 +4453,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 };
             };
 
-            const list_off = try self.ensureOnStack(list_loc, 24);
-            const result_offset = self.codegen.allocStackSlot(24);
+            const list_off = try self.ensureOnStack(list_loc, roc_list_size);
+            const result_offset = self.codegen.allocStackSlot(roc_str_size);
             const alignment_bytes = elem_size_align.alignment.toByteUnits();
             const fn_addr: usize = @intFromPtr(&wrapListReleaseExcessCapacity);
 
@@ -6568,8 +6585,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 break :blk false;
             };
 
-            // For nested lists, elements are 24-byte structs regardless of elem_layout
-            const elem_size: i32 = if (is_nested_list) 24 else switch (elem_layout) {
+            // For nested lists, elements are roc_list_size-byte structs regardless of elem_layout
+            const elem_size: i32 = if (is_nested_list) roc_list_size else switch (elem_layout) {
                 .i8, .u8 => 1,
                 .i16, .u16 => 2,
                 .i32, .u32, .f32 => 4,
@@ -6866,15 +6883,15 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     }
                     self.codegen.freeGeneral(lhs_reg);
                     self.codegen.freeGeneral(rhs_reg);
-                } else if (field_size == 24) {
-                    // String/list-sized field: compare as 3 x 8-byte chunks (XOR+OR)
+                } else if (field_size == roc_str_size) {
+                    // String/list-sized field: compare as 3 x pointer-sized chunks (XOR+OR)
                     const tmp_a = try self.allocTempGeneral();
                     const tmp_b = try self.allocTempGeneral();
                     const xor_acc = try self.allocTempGeneral();
                     try self.codegen.emitLoadImm(xor_acc, 0);
 
                     var chunk: i32 = 0;
-                    while (chunk < 24) : (chunk += 8) {
+                    while (chunk < roc_str_size) : (chunk += target_ptr_size) {
                         try self.codegen.emitLoadStack(.w64, tmp_a, lhs_field_off + chunk);
                         try self.codegen.emitLoadStack(.w64, tmp_b, rhs_field_off + chunk);
                         if (comptime target.toCpuArch() == .aarch64) {
@@ -7198,14 +7215,14 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 .i128, .u128, .dec => 16,
                 .str => blk: {
                     is_str_result = true;
-                    break :blk 24; // Strings are 24 bytes (ptr, len, capacity)
+                    break :blk roc_str_size;
                 },
                 else => if (self.layout_store) |ls| blk: {
                     const result_layout = ls.getLayout(ite.result_layout);
                     break :blk switch (result_layout.tag) {
                         .list, .list_of_zst => inner: {
                             is_list_result = true;
-                            break :inner 24; // Lists are 24 bytes (ptr, len, capacity)
+                            break :inner roc_list_size;
                         },
                         .tuple => ls.getTupleData(result_layout.data.tuple.idx).size,
                         .record => ls.getRecordData(result_layout.data.record.idx).size,
@@ -7243,8 +7260,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     // (cross-module layouts may be out of bounds)
                     if (!is_list_result and body_loc == .list_stack) {
                         is_list_result = true;
-                        // Update result_size since layout check might have defaulted to 8
-                        result_size = 24;
+                        // Update result_size since layout check might have defaulted to target_ptr_size
+                        result_size = roc_list_size;
                     }
                     // Use stack for types > 8 bytes (e.g., i128, Dec) or stack-based values
                     if (result_size > 8) {
@@ -7724,7 +7741,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
                         // Handle rest pattern (e.g. [first, .. as rest])
                         if (!list_pattern.rest.isNone()) {
-                            const rest_slot = self.codegen.allocStackSlot(24);
+                            const rest_slot = self.codegen.allocStackSlot(roc_str_size);
 
                             const prefix_count = @as(u32, @intCast(prefix_patterns.len));
                             const prefix_byte_offset = prefix_count * @as(u32, @intCast(elem_size));
@@ -7890,7 +7907,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     }
                 }
                 // Fallback: use size-based heuristics (covers dynamic upgrade case)
-                if (result_size >= 24) {
+                if (result_size >= roc_str_size) {
                     return .{ .stack_str = result_slot };
                 } else if (result_size >= 16) {
                     return .{ .stack_i128 = result_slot };
@@ -7914,8 +7931,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             // Check if we need to upgrade from register to stack mode
             if (!use_stack_result.*) {
                 const needed_size: ?u32 = switch (body_loc) {
-                    .stack_str => 24,
-                    .list_stack => 24,
+                    .stack_str => roc_str_size,
+                    .list_stack => roc_list_size,
                     .stack_i128 => 16,
                     .immediate_i128 => 16,
                     else => null,
@@ -7965,7 +7982,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             // Empty list: ptr = null, len = 0, capacity = 0
             // Materialize as a proper 24-byte list struct on the stack so that
             // when passed as a function argument, all 3 registers are set correctly.
-            const list_struct_offset: i32 = self.codegen.allocStackSlot(24);
+            const list_struct_offset: i32 = self.codegen.allocStackSlot(roc_str_size);
             const zero_reg = try self.allocTempGeneral();
             try self.codegen.emitLoadImm(zero_reg, 0);
 
@@ -7992,7 +8009,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             const elems = self.store.getExprSpan(list.elems);
             if (elems.len == 0) {
                 // Empty list: ptr = null, len = 0, capacity = 0
-                const list_struct_offset: i32 = self.codegen.allocStackSlot(24);
+                const list_struct_offset: i32 = self.codegen.allocStackSlot(roc_str_size);
                 const zero_reg = try self.allocTempGeneral();
                 try self.codegen.emitLoadImm(zero_reg, 0);
 
@@ -8087,10 +8104,10 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         self.codegen.freeGeneral(temp_reg);
                     },
                     .list_stack => |list_info| {
-                        // For lists, copy the full 24-byte struct
+                        // For lists, copy the full RocList struct
                         const temp_reg = try self.allocTempGeneral();
                         var copied: u32 = 0;
-                        while (copied < 24) : (copied += 8) {
+                        while (copied < roc_list_size) : (copied += target_ptr_size) {
                             const chunk_src = list_info.struct_offset + @as(i32, @intCast(copied));
                             const chunk_dst = elem_heap_offset + @as(i32, @intCast(copied));
                             if (comptime target.toCpuArch() == .aarch64) {
@@ -8185,7 +8202,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
             // Create the list struct: (ptr, len, capacity)
             // ptr points to heap memory, len = capacity = num_elems
-            const list_struct_offset: i32 = self.codegen.allocStackSlot(24);
+            const list_struct_offset: i32 = self.codegen.allocStackSlot(roc_str_size);
 
             // Load heap pointer and length
             const ptr_reg = try self.allocTempGeneral();
@@ -8269,7 +8286,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
         /// Determine the size of a value from its ValueLocation alone.
         fn valueSizeFromLoc(_: *Self, loc: ValueLocation) u32 {
             return switch (loc) {
-                .stack_str, .list_stack => 24,
+                .stack_str => roc_str_size,
+                .list_stack => roc_list_size,
                 .stack_i128, .immediate_i128 => 16,
                 .immediate_i64, .general_reg, .stack, .float_reg, .immediate_f64 => 8,
                 else => 8,
@@ -8691,13 +8709,13 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                 try self.codegen.emitLoadImm(reg, high);
                                 try self.codegen.emitStoreStack(.w64, dest_offset + 8, reg);
                             },
-                            24 => {
-                                // Empty list (immediate 0) being stored as a 24-byte list struct
+                            roc_list_size => {
+                                // Empty list (immediate 0) being stored as a roc_list_size-byte list struct
                                 // An empty list has ptr=0, len=0, capacity=0 (all zeros)
                                 std.debug.assert(val == 0);
                                 try self.codegen.emitStoreStack(.w64, dest_offset, reg);
-                                try self.codegen.emitStoreStack(.w64, dest_offset + 8, reg);
-                                try self.codegen.emitStoreStack(.w64, dest_offset + 16, reg);
+                                try self.codegen.emitStoreStack(.w64, dest_offset + target_ptr_size, reg);
+                                try self.codegen.emitStoreStack(.w64, dest_offset + 2 * target_ptr_size, reg);
                             },
                             else => unreachable,
                         }
@@ -8715,13 +8733,13 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                 try self.codegen.emitLoadImm(reg, high);
                                 try self.codegen.emitStoreStack(.w64, dest_offset + 8, reg);
                             },
-                            24 => {
-                                // Empty list (immediate 0) being stored as a 24-byte list struct
+                            roc_list_size => {
+                                // Empty list (immediate 0) being stored as a roc_list_size-byte list struct
                                 // An empty list has ptr=0, len=0, capacity=0 (all zeros)
                                 std.debug.assert(val == 0);
                                 try self.codegen.emitStoreStack(.w64, dest_offset, reg);
-                                try self.codegen.emitStoreStack(.w64, dest_offset + 8, reg);
-                                try self.codegen.emitStoreStack(.w64, dest_offset + 16, reg);
+                                try self.codegen.emitStoreStack(.w64, dest_offset + target_ptr_size, reg);
+                                try self.codegen.emitStoreStack(.w64, dest_offset + 2 * target_ptr_size, reg);
                             },
                             else => unreachable,
                         }
@@ -8855,30 +8873,30 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
         fn generateStrLiteral(self: *Self, str_idx: base.StringLiteral.Idx) Error!ValueLocation {
             const str_bytes = self.store.getString(str_idx);
 
-            // Allocate 24 bytes on stack for Roc string representation
-            const base_offset = self.codegen.allocStackSlot(24);
+            // Allocate space on stack for Roc string representation
+            const base_offset = self.codegen.allocStackSlot(roc_str_size);
 
-            if (str_bytes.len < 24) {
+            if (str_bytes.len < roc_str_size) {
                 // Small string optimization: store inline with length in high bit of last byte
                 // Format: [data..., length | 0x80] where 0x80 marks it as small string
-                var bytes: [24]u8 = .{0} ** 24;
+                var bytes: [roc_str_size]u8 = .{0} ** roc_str_size;
                 @memcpy(bytes[0..str_bytes.len], str_bytes);
-                bytes[23] = @intCast(str_bytes.len | 0x80); // Set high bit to indicate small string
+                bytes[small_str_max_len] = @intCast(str_bytes.len | 0x80); // Set high bit to indicate small string
 
-                // Store as 3 x 8-byte chunks
+                // Store as 3 x pointer-sized chunks
                 const reg = try self.allocTempGeneral();
 
-                const chunk0: u64 = @bitCast(bytes[0..8].*);
+                const chunk0: u64 = @bitCast(bytes[0..target_ptr_size].*);
                 try self.codegen.emitLoadImm(reg, @bitCast(chunk0));
                 try self.codegen.emitStoreStack(.w64, base_offset, reg);
 
-                const chunk1: u64 = @bitCast(bytes[8..16].*);
+                const chunk1: u64 = @bitCast(bytes[target_ptr_size .. 2 * target_ptr_size].*);
                 try self.codegen.emitLoadImm(reg, @bitCast(chunk1));
-                try self.codegen.emitStoreStack(.w64, base_offset + 8, reg);
+                try self.codegen.emitStoreStack(.w64, base_offset + target_ptr_size, reg);
 
-                const chunk2: u64 = @bitCast(bytes[16..24].*);
+                const chunk2: u64 = @bitCast(bytes[2 * target_ptr_size .. 3 * target_ptr_size].*);
                 try self.codegen.emitLoadImm(reg, @bitCast(chunk2));
-                try self.codegen.emitStoreStack(.w64, base_offset + 16, reg);
+                try self.codegen.emitStoreStack(.w64, base_offset + 2 * target_ptr_size, reg);
 
                 self.codegen.freeGeneral(reg);
             } else {
@@ -9392,13 +9410,13 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             // Multi-element: fold-left concatenation
             // result = concat(concat(...concat(a, b), c), ...)
             var acc_loc = try self.generateExpr(expr_ids[0]);
-            var acc_off = try self.ensureOnStack(acc_loc, 24);
+            var acc_off = try self.ensureOnStack(acc_loc, roc_str_size);
 
             for (expr_ids[1..]) |next_expr| {
                 const next_loc = try self.generateExpr(next_expr);
-                const next_off = try self.ensureOnStack(next_loc, 24);
+                const next_off = try self.ensureOnStack(next_loc, roc_str_size);
                 acc_loc = try self.callStr2RocOpsToStr(acc_off, next_off, @intFromPtr(&wrapStrConcat));
-                acc_off = try self.ensureOnStack(acc_loc, 24);
+                acc_off = try self.ensureOnStack(acc_loc, roc_str_size);
             }
 
             return acc_loc;
@@ -9408,7 +9426,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
         fn generateEmptyString(self: *Self) Error!ValueLocation {
             // Empty small string in Roc format: all zeros except byte 23 = 0x80
             // (small string flag set, length 0)
-            const str_slot = self.codegen.allocStackSlot(24);
+            const str_slot = self.codegen.allocStackSlot(roc_str_size);
             const zero_reg = try self.allocTempGeneral();
             try self.codegen.emitLoadImm(zero_reg, 0);
 
@@ -9483,7 +9501,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             const roc_ops_reg = self.roc_ops_reg orelse unreachable;
 
             // Allocate stack space for result (RocStr = 24 bytes)
-            const result_offset = self.codegen.allocStackSlot(24);
+            const result_offset = self.codegen.allocStackSlot(roc_str_size);
 
             if (comptime target.toCpuArch() == .aarch64) {
                 // aarch64 (AAPCS64): X0=out, X1=value (X1+X2 for 16-byte), X2/X3=roc_ops
@@ -9696,7 +9714,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             const roc_ops_reg = self.roc_ops_reg orelse unreachable;
 
             // Allocate stack space for result (RocStr = 24 bytes)
-            const result_offset = self.codegen.allocStackSlot(24);
+            const result_offset = self.codegen.allocStackSlot(roc_str_size);
 
             // Decompose the i128 value into low and high halves
             const decomposed = try self.decomposeI128Value(val_loc);
@@ -9790,7 +9808,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
         /// Generate code for str_escape_and_quote
         fn generateStrEscapeAndQuote(self: *Self, expr_id: anytype) Error!ValueLocation {
             const str_loc = try self.generateExpr(expr_id);
-            const str_off = try self.ensureOnStack(str_loc, 24);
+            const str_off = try self.ensureOnStack(str_loc, roc_str_size);
             return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrEscapeAndQuote), .str);
         }
 
@@ -9923,7 +9941,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             self.codegen.freeGeneral(disc_reg);
 
             // Return with appropriate value location type
-            if (result_is_str or result_slot_size == 24) {
+            if (result_is_str or result_slot_size == roc_str_size) {
                 return .{ .stack_str = result_slot };
             } else if (result_is_i128 or result_slot_size == 16) {
                 return .{ .stack_i128 = result_slot };
@@ -10187,8 +10205,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                     .data_offset = 0,
                                     .num_elements = 0,
                                 } });
-                            } else if (value_loc == .stack_str or size == 24) {
-                                // Strings are 24 bytes - preserve .stack_str so return handling
+                            } else if (value_loc == .stack_str or size == roc_str_size) {
+                                // Strings are roc_str_size bytes - preserve .stack_str so return handling
                                 // loads all 3 registers (ptr, len, capacity)
                                 try self.symbol_locations.put(symbol_key, .{ .stack_str = fixed_slot });
                             } else if (value_loc == .stack_i128 or size == 16) {
@@ -10351,7 +10369,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     if (!lst.rest.isNone()) {
                         // Create a new RocList for the remaining elements
                         // RocList layout: bytes (ptr), length (usize), capacity_or_alloc_ptr (usize)
-                        const rest_slot = self.codegen.allocStackSlot(24);
+                        const rest_slot = self.codegen.allocStackSlot(roc_str_size);
 
                         const prefix_count = @as(u32, @intCast(prefix_patterns.len));
                         const prefix_byte_offset = prefix_count * elem_size;
@@ -11661,7 +11679,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
             // Check if return type is a string (24 bytes)
             if (ret_layout == .str) {
-                const stack_offset = self.codegen.allocStackSlot(24);
+                const stack_offset = self.codegen.allocStackSlot(roc_str_size);
                 if (comptime target.toCpuArch() == .aarch64) {
                     try self.codegen.emit.strRegMemSoff(.w64, .X0, .FP, stack_offset);
                     try self.codegen.emit.strRegMemSoff(.w64, .X1, .FP, stack_offset + 8);
@@ -11684,7 +11702,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 // List return (24 bytes) - save X0/X1/X2 to stack
                 // Use .list_stack so recursive calls properly detect this as a list argument
                 // (the fallback check at arg_loc == .list_stack needs this)
-                const stack_offset = self.codegen.allocStackSlot(24);
+                const stack_offset = self.codegen.allocStackSlot(roc_str_size);
                 if (comptime target.toCpuArch() == .aarch64) {
                     try self.codegen.emit.strRegMemSoff(.w64, .X0, .FP, stack_offset);
                     try self.codegen.emit.strRegMemSoff(.w64, .X1, .FP, stack_offset + 8);
@@ -11890,7 +11908,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
         /// Get the size in bytes for a layout index.
         fn getLayoutSizeForIdx(self: *Self, layout_idx: layout.Idx) u32 {
             // Handle well-known types first
-            if (layout_idx == .str) return 24;
+            if (layout_idx == .str) return roc_str_size;
             if (layout_idx == .i128 or layout_idx == .u128 or layout_idx == .dec) return 16;
             if (layout_idx == .i64 or layout_idx == .u64 or layout_idx == .f64) return 8;
             if (layout_idx == .i32 or layout_idx == .u32 or layout_idx == .f32) return 4;
@@ -11899,10 +11917,10 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
             if (self.layout_store) |ls| {
                 const layout_val = ls.getLayout(layout_idx);
-                if (layout_val.tag == .list or layout_val.tag == .list_of_zst) return 24;
+                if (layout_val.tag == .list or layout_val.tag == .list_of_zst) return roc_list_size;
                 return ls.layoutSizeAlign(layout_val).size;
             }
-            return 8; // Default to pointer size
+            return target_ptr_size; // Default to pointer size
         }
 
         /// Get the size of a result from its location and fallback layout.
@@ -11912,8 +11930,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             // Use the location type to infer size when possible
             switch (loc) {
                 .stack_i128 => return 16,
-                .stack_str => return 24,
-                .list_stack => return 24,
+                .stack_str => return roc_str_size,
+                .list_stack => return roc_list_size,
                 .immediate_i128 => return 16,
                 .immediate_i64, .general_reg => return 8,
                 .stack => {
@@ -12420,15 +12438,15 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                 return;
                             },
                             .list, .list_of_zst => {
-                                // Lists are 24-byte structs (ptr, len, capacity)
-                                try self.copyStackToPtr(loc, saved_ptr_reg, 24);
+                                // Lists are roc_list_size-byte structs (ptr, len, capacity)
+                                try self.copyStackToPtr(loc, saved_ptr_reg, roc_list_size);
                                 return;
                             },
                             .scalar => {
                                 const sa = ls.layoutSizeAlign(layout_val);
-                                if (sa.size == 24) {
-                                    // Str: 24-byte struct (ptr, len, capacity)
-                                    try self.copyStackToPtr(loc, saved_ptr_reg, 24);
+                                if (sa.size == roc_str_size) {
+                                    // Str: roc_str_size-byte struct (ptr, len, capacity)
+                                    try self.copyStackToPtr(loc, saved_ptr_reg, roc_str_size);
                                 } else if (sa.size == 16) {
                                     // i128/u128/Dec
                                     try self.storeI128ToMem(saved_ptr_reg, loc);
@@ -13145,7 +13163,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                 const arg_reg1 = self.getArgumentRegister(reg_idx + 1);
                                 const arg_reg2 = self.getArgumentRegister(reg_idx + 2);
 
-                                const stack_offset = self.codegen.allocStackSlot(24);
+                                const stack_offset = self.codegen.allocStackSlot(roc_str_size);
                                 try self.codegen.emitStoreStack(.w64, stack_offset, arg_reg0);
                                 try self.codegen.emitStoreStack(.w64, stack_offset + 8, arg_reg1);
                                 try self.codegen.emitStoreStack(.w64, stack_offset + 16, arg_reg2);
@@ -13170,7 +13188,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                         const arg_reg1 = self.getArgumentRegister(reg_idx + 1);
                                         const arg_reg2 = self.getArgumentRegister(reg_idx + 2);
 
-                                        const stack_offset = self.codegen.allocStackSlot(24);
+                                        const stack_offset = self.codegen.allocStackSlot(roc_str_size);
                                         try self.codegen.emitStoreStack(.w64, stack_offset, arg_reg0);
                                         try self.codegen.emitStoreStack(.w64, stack_offset + 8, arg_reg1);
                                         try self.codegen.emitStoreStack(.w64, stack_offset + 16, arg_reg2);
@@ -13285,7 +13303,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     .list => {
                         // List destructuring: lists are 24 bytes (ptr, len, capacity) = 3 registers
                         if (reg_idx + 3 <= max_arg_regs) {
-                            const stack_offset = self.codegen.allocStackSlot(24);
+                            const stack_offset = self.codegen.allocStackSlot(roc_str_size);
                             const arg_reg0 = self.getArgumentRegister(reg_idx);
                             const arg_reg1 = self.getArgumentRegister(reg_idx + 1);
                             const arg_reg2 = self.getArgumentRegister(reg_idx + 2);
@@ -13296,9 +13314,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             try self.bindPattern(pattern_id, .{ .stack = stack_offset });
                         } else {
                             // Read from caller's stack
-                            const stack_offset = self.codegen.allocStackSlot(24);
+                            const stack_offset = self.codegen.allocStackSlot(roc_list_size);
                             try self.copyFromCallerStack(stack_arg_offset, stack_offset, 3);
-                            stack_arg_offset += 24;
+                            stack_arg_offset += roc_list_size;
                             reg_idx = max_arg_regs;
                             try self.bindPattern(pattern_id, .{ .stack = stack_offset });
                         }
@@ -13728,7 +13746,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             // Check if return type is a string (24 bytes)
             if (ret_layout == .str) {
                 // String return (24 bytes) - save X0/X1/X2 to stack
-                const stack_offset = self.codegen.allocStackSlot(24);
+                const stack_offset = self.codegen.allocStackSlot(roc_str_size);
                 if (comptime target.toCpuArch() == .aarch64) {
                     try self.codegen.emit.strRegMemSoff(.w64, .X0, .FP, stack_offset);
                     try self.codegen.emit.strRegMemSoff(.w64, .X1, .FP, stack_offset + 8);
@@ -13749,7 +13767,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
             if (is_list_return) {
                 // List return (24 bytes) - save X0/X1/X2 to stack
-                const stack_offset = self.codegen.allocStackSlot(24);
+                const stack_offset = self.codegen.allocStackSlot(roc_str_size);
                 if (comptime target.toCpuArch() == .aarch64) {
                     try self.codegen.emit.strRegMemSoff(.w64, .X0, .FP, stack_offset);
                     try self.codegen.emit.strRegMemSoff(.w64, .X1, .FP, stack_offset + 8);
@@ -13961,7 +13979,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                 try self.symbol_locations.put(symbol_key, .{ .stack_i128 = stack_offset });
                                 reg_idx += 2;
                             } else if (is_list) {
-                                const stack_offset = self.codegen.allocStackSlot(24);
+                                const stack_offset = self.codegen.allocStackSlot(roc_str_size);
                                 if (comptime target.toCpuArch() == .aarch64) {
                                     const reg0 = self.getArgumentRegister(reg_idx);
                                     const reg1 = self.getArgumentRegister(reg_idx + 1);
@@ -14289,7 +14307,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
                             if (is_list) {
                                 // List types need 3 consecutive registers
-                                const stack_offset = self.codegen.allocStackSlot(24);
+                                const stack_offset = self.codegen.allocStackSlot(roc_str_size);
 
                                 if (comptime target.toCpuArch() == .aarch64) {
                                     const reg0 = self.getArgumentRegister(reg_idx);
