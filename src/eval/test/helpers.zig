@@ -369,6 +369,17 @@ fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_i
             return error.WasmExecFailed;
         };
 
+        // roc_dec_to_str: (i32 dec_ptr, i32 buf_ptr) -> i32 str_len
+        env_imports.addHostFunction(
+            "roc_dec_to_str",
+            &[_]bytebox.ValType{ .I32, .I32 },
+            &[_]bytebox.ValType{.I32},
+            hostDecToStr,
+            null,
+        ) catch {
+            return error.WasmExecFailed;
+        };
+
         const imports = [_]bytebox.ModuleImportPackage{env_imports};
         module_instance.instantiate(.{ .stack_size = 1024 * 64, .imports = &imports }) catch {
             return error.WasmExecFailed;
@@ -561,6 +572,38 @@ fn hostDecMul(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const 
     const result_u128: u128 = @bitCast(result.value.num);
     std.mem.writeInt(u64, buffer[result_ptr..][0..8], @truncate(result_u128), .little);
     std.mem.writeInt(u64, buffer[result_ptr + 8 ..][0..8], @truncate(result_u128 >> 64), .little);
+}
+
+/// Host function for roc_dec_to_str: formats a Dec value as a string.
+/// Signature: (i32 dec_ptr, i32 buf_ptr) -> i32 str_len
+fn hostDecToStr(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
+    const RocDec = builtins.dec.RocDec;
+    const mem = module.store.getMemory(0);
+    const buffer = mem.buffer();
+
+    const dec_ptr: usize = @intCast(params[0].I32);
+    const buf_ptr: usize = @intCast(params[1].I32);
+
+    if (dec_ptr + 16 > buffer.len or buf_ptr + 48 > buffer.len) {
+        results[0] = bytebox.Val{ .I32 = 0 };
+        return;
+    }
+
+    // Read i128 value from wasm memory (little-endian)
+    const low: u64 = std.mem.readInt(u64, buffer[dec_ptr..][0..8], .little);
+    const high: u64 = std.mem.readInt(u64, buffer[dec_ptr + 8 ..][0..8], .little);
+    const dec_i128: i128 = @bitCast(@as(u128, high) << 64 | @as(u128, low));
+
+    // Format using RocDec
+    const dec = RocDec{ .num = dec_i128 };
+    var fmt_buf: [RocDec.max_str_length]u8 = undefined;
+    const formatted = dec.format_to_buf(&fmt_buf);
+
+    // Write formatted string to wasm memory buffer
+    const len = formatted.len;
+    @memcpy(buffer[buf_ptr..][0..len], formatted);
+
+    results[0] = bytebox.Val{ .I32 = @intCast(len) };
 }
 
 /// Compare Interpreter result string with WasmEvaluator result string.

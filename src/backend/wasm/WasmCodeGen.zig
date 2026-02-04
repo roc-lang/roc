@@ -68,6 +68,8 @@ join_point_depths: std.AutoHashMap(u32, u32),
 join_point_param_locals: std.AutoHashMap(u32, []u32),
 /// Wasm function index for imported roc_dec_mul host function.
 dec_mul_import: ?u32 = null,
+/// Wasm function index for imported roc_dec_to_str host function.
+dec_to_str_import: ?u32 = null,
 
 const CaptureInfo = struct {
     symbols: []const MonoSymbol,
@@ -125,6 +127,15 @@ fn registerHostImports(self: *Self) !void {
         &.{},
     );
     self.dec_mul_import = try self.module.addImport("env", "roc_dec_mul", dec_mul_type);
+
+    // roc_dec_to_str: (i32 dec_ptr, i32 buf_ptr) -> i32 str_len
+    // Reads 16-byte Dec value from dec_ptr, formats it as a string,
+    // writes the string bytes to buf_ptr, returns the length.
+    const dec_to_str_type = try self.module.addFuncType(
+        &.{ .i32, .i32 },
+        &.{.i32},
+    );
+    self.dec_to_str_import = try self.module.addImport("env", "roc_dec_to_str", dec_to_str_type);
 }
 
 /// Result of generating a wasm module
@@ -8382,11 +8393,33 @@ fn generateFloatToStr(self: *Self, fts: anytype) Error!void {
 }
 
 /// Generate dec_to_str: convert a RocDec (i128 scaled by 10^18) to string.
-/// This is complex, so for now return UnsupportedExpr.
+/// Uses a host function import to perform the formatting.
 fn generateDecToStr(self: *Self, dec_expr: anytype) Error!void {
-    _ = self;
-    _ = dec_expr;
-    return unsupported(@src());
+    const import_idx = self.dec_to_str_import orelse return unsupported(@src());
+
+    // Generate the Dec expression → pointer to 16-byte Dec value in stack memory
+    try self.generateExpr(dec_expr);
+    const dec_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    self.emitLocalSet(dec_ptr);
+
+    // Allocate a 48-byte buffer on the heap for the formatted string
+    // (max Dec string length is 41 bytes: 39 digits + sign + decimal point)
+    try self.emitHeapAllocConst(48, 1);
+    const buf_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    self.emitLocalSet(buf_ptr);
+
+    // Call roc_dec_to_str(dec_ptr, buf_ptr) -> str_len
+    self.emitLocalGet(dec_ptr);
+    self.emitLocalGet(buf_ptr);
+    self.body.append(self.allocator, Op.call) catch return error.OutOfMemory;
+    WasmModule.leb128WriteU32(self.allocator, &self.body, import_idx) catch return error.OutOfMemory;
+
+    // Result (str_len) is on the stack
+    const str_len = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    self.emitLocalSet(str_len);
+
+    // Build a heap RocStr from buf_ptr and str_len
+    try self.buildHeapRocStr(buf_ptr, str_len);
 }
 
 /// Generate str_escape_and_quote: surround string with quotes and escape special chars.
