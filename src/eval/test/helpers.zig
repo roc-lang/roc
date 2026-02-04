@@ -67,9 +67,10 @@ const DevEvalError = error{
     GenerateCodeFailed,
     ExecInitFailed,
     RocCrashed,
+    Segfault, // Windows SEH-caught segfault (access violation)
     UnsupportedLayout,
     OutOfMemory,
-    ChildSegfaulted,
+    ChildSegfaulted, // Unix fork-based segfault detection
     ChildExecFailed,
     ForkFailed,
     PipeCreationFailed,
