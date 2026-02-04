@@ -29,10 +29,10 @@ jobs:
       - name: Verify prerequisites
         run: nix develop ./src/ -c bash -c "hyperfine --version && jq --version && zig version"
 
-      - name: Build main branch release binary and snapshot tool
+      - name: Build main branch release binary
         uses: ./.github/actions/flaky-retry
         with:
-          command: "nix develop ./src/ -c bash -c 'zig build release snapshot  -Doptimize=ReleaseFast'"
+          command: "nix develop ./src/ -c bash -c 'zig build release'"
           error_string_contains: "build.zig.zon"
           retry_count: 3
 
@@ -40,7 +40,6 @@ jobs:
         run: |
           mkdir -p bench-main
           cp zig-out/bin/roc bench-main/roc
-          cp zig-out/bin/snapshot bench-main/snapshot
 
       # === PR BRANCH BUILD ===
       - name: Checkout PR branch
@@ -48,10 +47,10 @@ jobs:
         with:
           clean: "false"
 
-      - name: Build PR branch release binary and snapshot tool
+      - name: Build PR branch release binary
         uses: ./.github/actions/flaky-retry
         with:
-          command: "nix develop ./src/ -c bash -c 'zig build release snapshot -Doptimize=ReleaseFast'"
+          command: "nix develop ./src/ -c bash -c 'zig build release'"
           error_string_contains: "build.zig.zon"
           retry_count: 3
 
@@ -59,7 +58,6 @@ jobs:
         run: |
           mkdir -p bench-pr
           cp zig-out/bin/roc bench-pr/roc
-          cp zig-out/bin/snapshot bench-pr/snapshot
 
       # === RUN BENCHMARKS ===
       - name: Run benchmarks

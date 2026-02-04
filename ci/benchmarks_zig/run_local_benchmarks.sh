@@ -10,8 +10,6 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 # Default options
 BASE_BRANCH="main"
-SKIP_FX=false
-SKIP_SNAPSHOT=false
 KEEP_ARTIFACTS=false
 MAIN_DIR=""  # Pre-built binaries directory for main/base
 PR_DIR=""    # Pre-built binaries directory for PR/current
@@ -30,8 +28,6 @@ Run zig compiler benchmarks locally, comparing current branch against base branc
 
 OPTIONS:
     --base <branch>     Base branch to compare against (default: main)
-    --skip-fx           Skip FX file benchmarks
-    --skip-snapshot     Skip snapshot tool benchmarks
     --keep-artifacts    Keep bench-main and bench-local directories after run
     --main-dir <dir>    Use pre-built binaries from this directory (skip base build)
     --pr-dir <dir>      Use pre-built binaries from this directory (skip PR build)
@@ -45,7 +41,6 @@ PREREQUISITES:
 EXAMPLES:
     $(basename "$0")                    # Compare current branch vs main
     $(basename "$0") --base develop     # Compare current branch vs develop
-    $(basename "$0") --skip-snapshot    # Only run FX benchmarks
     $(basename "$0") --main-dir bench-main --pr-dir bench-pr  # Use pre-built binaries (CI mode)
 EOF
 }
@@ -128,14 +123,6 @@ parse_args() {
                 BASE_BRANCH="$2"
                 shift 2
                 ;;
-            --skip-fx)
-                SKIP_FX=true
-                shift
-                ;;
-            --skip-snapshot)
-                SKIP_SNAPSHOT=true
-                shift
-                ;;
             --keep-artifacts)
                 KEEP_ARTIFACTS=true
                 shift
@@ -157,10 +144,6 @@ parse_args() {
                 ;;
         esac
     done
-
-    if [ "$SKIP_FX" = "true" ] && [ "$SKIP_SNAPSHOT" = "true" ]; then
-        error "Cannot skip both FX and snapshot benchmarks"
-    fi
 
     # Validate pre-built binary options
     if [ -n "$MAIN_DIR" ] && [ -z "$PR_DIR" ]; then
@@ -192,27 +175,11 @@ main() {
         if [ ! -f "$PR_DIR/roc" ]; then
             error "PR binary not found: $PR_DIR/roc"
         fi
-        if [ "$SKIP_SNAPSHOT" = "false" ]; then
-            if [ ! -f "$MAIN_DIR/snapshot" ]; then
-                error "Main snapshot binary not found: $MAIN_DIR/snapshot"
-            fi
-            if [ ! -f "$PR_DIR/snapshot" ]; then
-                error "PR snapshot binary not found: $PR_DIR/snapshot"
-            fi
-        fi
 
         # Run benchmarks with pre-built binaries
-        if [ "$SKIP_FX" = "false" ]; then
-            log "Running FX benchmarks"
-            "$SCRIPT_DIR/run_fx_benchmarks.sh" "$MAIN_DIR/roc" "$PR_DIR/roc" "$BASE_BRANCH" "HEAD"
-            echo ""
-        fi
-
-        if [ "$SKIP_SNAPSHOT" = "false" ]; then
-            log "Running snapshot benchmarks"
-            "$SCRIPT_DIR/run_snapshot_benchmark.sh" "$MAIN_DIR/snapshot" "$PR_DIR/snapshot" "$BASE_BRANCH" "HEAD"
-            echo ""
-        fi
+        log "Running FX benchmarks"
+        "$SCRIPT_DIR/run_fx_benchmarks.sh" "$MAIN_DIR/roc" "$PR_DIR/roc" "$BASE_BRANCH" "HEAD"
+        echo ""
 
         log "Benchmark Complete"
         echo "  Main dir: $MAIN_DIR"
@@ -248,7 +215,6 @@ main() {
     log "Copying benchmark scripts to temp location"
     TEMP_SCRIPTS_DIR=$(mktemp -d)
     cp "$SCRIPT_DIR/run_fx_benchmarks.sh" "$TEMP_SCRIPTS_DIR/"
-    cp "$SCRIPT_DIR/run_snapshot_benchmark.sh" "$TEMP_SCRIPTS_DIR/"
     chmod +x "$TEMP_SCRIPTS_DIR"/*.sh
     echo "  Scripts copied to $TEMP_SCRIPTS_DIR"
     echo ""
@@ -257,14 +223,13 @@ main() {
     log "Building $BASE_BRANCH branch"
     git checkout "$BASE_BRANCH" --quiet
 
-    echo "  Running: zig build release snapshot -Doptimize=ReleaseFast"
-    if ! zig build release snapshot -Doptimize=ReleaseFast; then
+    echo "  Running: zig build release"
+    if ! zig build release; then
         error "Failed to build $BASE_BRANCH branch"
     fi
 
     mkdir -p bench-main
     cp zig-out/bin/roc bench-main/roc
-    cp zig-out/bin/snapshot bench-main/snapshot
     echo "  Built binaries copied to bench-main/"
     echo ""
 
@@ -272,29 +237,20 @@ main() {
     log "Building $ORIGINAL_BRANCH branch"
     git checkout "$ORIGINAL_BRANCH" --quiet
 
-    echo "  Running: zig build release snapshot -Doptimize=ReleaseFast"
-    if ! zig build release snapshot -Doptimize=ReleaseFast; then
+    echo "  Running: zig build release"
+    if ! zig build release; then
         error "Failed to build $ORIGINAL_BRANCH branch"
     fi
 
     mkdir -p bench-local
     cp zig-out/bin/roc bench-local/roc
-    cp zig-out/bin/snapshot bench-local/snapshot
     echo "  Built binaries copied to bench-local/"
     echo ""
 
     # === RUN BENCHMARKS ===
-    if [ "$SKIP_FX" = "false" ]; then
-        log "Running FX benchmarks"
-        "$TEMP_SCRIPTS_DIR/run_fx_benchmarks.sh" bench-main/roc bench-local/roc "$BASE_BRANCH" "$ORIGINAL_BRANCH"
-        echo ""
-    fi
-
-    if [ "$SKIP_SNAPSHOT" = "false" ]; then
-        log "Running snapshot benchmarks"
-        "$TEMP_SCRIPTS_DIR/run_snapshot_benchmark.sh" bench-main/snapshot bench-local/snapshot "$BASE_BRANCH" "$ORIGINAL_BRANCH"
-        echo ""
-    fi
+    log "Running FX benchmarks"
+    "$TEMP_SCRIPTS_DIR/run_fx_benchmarks.sh" bench-main/roc bench-local/roc "$BASE_BRANCH" "$ORIGINAL_BRANCH"
+    echo ""
 
     # === SUMMARY ===
     log "Benchmark Complete"
