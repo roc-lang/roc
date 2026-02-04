@@ -1181,7 +1181,9 @@ test "prologue: no writes to red zone (below RSP before allocation)" {
         // Check instructions before SUB RSP for RSP-relative negative offsets
         // This is a simplified check - we mainly verify the code structure is correct
         // The fact that we use RBP-relative addressing (after MOV RBP,RSP) is the key
-        try std.testing.expect(pos > 4); // At minimum: push rbp (1) + mov rbp,rsp (3)
+        // push rbp (1 byte at pos 0) + mov rbp,rsp (3 bytes at pos 1-3) = 4 bytes
+        // So SUB RSP should be at position 4 or later
+        try std.testing.expect(pos >= 4); // At minimum: push rbp (1) + mov rbp,rsp (3)
     }
 }
 
