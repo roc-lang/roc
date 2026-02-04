@@ -1089,16 +1089,13 @@ test "CC constants are consistent" {
     try std.testing.expect(CC.PARAM_REGS.len >= 4);
     try std.testing.expect(CC.RETURN_REGS.len >= 1);
 
-    // Windows (x64 and ARM64) has specific thresholds
-    if (builtin.os.tag == .windows) {
-        if (builtin.cpu.arch == .x86_64) {
-            try std.testing.expectEqual(@as(u8, 32), CC.SHADOW_SPACE);
-        } else {
-            try std.testing.expectEqual(@as(u8, 0), CC.SHADOW_SPACE);
-        }
+    // Windows x64 has specific thresholds
+    if (builtin.cpu.arch == .x86_64 and builtin.os.tag == .windows) {
+        try std.testing.expectEqual(@as(u8, 32), CC.SHADOW_SPACE);
         try std.testing.expectEqual(@as(usize, 8), CC.RETURN_BY_PTR_THRESHOLD);
         try std.testing.expectEqual(@as(usize, 8), CC.PASS_BY_PTR_THRESHOLD);
     } else if (builtin.cpu.arch == .x86_64 or builtin.cpu.arch == .aarch64) {
+        // Unix x86_64, Unix aarch64, and Windows aarch64 (using AAPCS64)
         try std.testing.expectEqual(@as(u8, 0), CC.SHADOW_SPACE);
         try std.testing.expectEqual(@as(usize, 16), CC.RETURN_BY_PTR_THRESHOLD);
         try std.testing.expectEqual(std.math.maxInt(usize), CC.PASS_BY_PTR_THRESHOLD);
@@ -1113,8 +1110,8 @@ test "needsReturnByPointer" {
     try std.testing.expect(!Builder.needsReturnByPointer(1));
     try std.testing.expect(!Builder.needsReturnByPointer(8));
 
-    // Large values need pointer (threshold is 8 on Windows, 16 on Unix)
-    if (builtin.os.tag == .windows) {
+    // Large values need pointer (threshold is 8 on Windows x64, 16 on Unix/aarch64)
+    if (builtin.cpu.arch == .x86_64 and builtin.os.tag == .windows) {
         try std.testing.expect(Builder.needsReturnByPointer(9));
         try std.testing.expect(Builder.needsReturnByPointer(16));
     } else {
