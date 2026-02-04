@@ -347,7 +347,7 @@ test "Repl - minimal interpreter integration" {
     // Resolve imports - map each import to its index in imported_envs
     cir.imports.resolveImports(cir, &imported_envs);
 
-    var checker = try Check.init(gpa, &module_env.types, cir, &imported_envs, null, &cir.store.regions, builtin_ctx);
+    var checker = try Check.init(&allocators, &module_env.types, cir, &imported_envs, null, &cir.store.regions, builtin_ctx);
     defer checker.deinit();
 
     _ = try checker.checkExprRepl(canonical_expr_idx.get_idx());

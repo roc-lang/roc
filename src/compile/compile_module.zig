@@ -13,11 +13,16 @@ const std = @import("std");
 const base = @import("base");
 const parse = @import("parse");
 const can = @import("can");
+const check = @import("check");
 
 pub const Allocators = base.Allocators;
 pub const AST = parse.AST;
+pub const CIR = can.CIR;
+pub const Can = can.Can;
 pub const ModuleEnv = can.ModuleEnv;
 pub const AutoImportedType = can.AutoImportedType;
+pub const Check = check.Check;
+pub const BuiltinContext = Check.BuiltinContext;
 
 /// Parsing modes for different compilation contexts.
 pub const ParseMode = enum {
@@ -29,6 +34,34 @@ pub const ParseMode = enum {
     statement,
     /// Module header only (Snapshot header tests).
     header,
+};
+
+/// Canonicalization modes for different compilation contexts.
+pub const CanonicalizeMode = union(enum) {
+    /// Full module file.
+    file,
+    /// Single expression (input: AST expression index from parse_ast.root_node_idx).
+    expr: AST.Expr.Idx,
+    /// Single statement (input: AST statement index from parse_ast.root_node_idx).
+    statement: AST.Statement.Idx,
+};
+
+/// Result of canonicalization, varies by mode.
+pub const CanonicalizeResult = union(enum) {
+    /// File mode - results stored in module_env.
+    file,
+    /// Expression mode - canonical expression (null if canonicalization failed).
+    expr: ?Can.CanonicalizedExpr,
+    /// Statement mode - canonical statement (null if canonicalization failed).
+    statement: ?CIR.Statement.Idx,
+};
+
+/// Type checking modes for different compilation contexts.
+pub const TypeCheckMode = union(enum) {
+    /// Full module file.
+    file,
+    /// Single expression (input: CIR expression index from canonicalization).
+    expr: CIR.Expr.Idx,
 };
 
 /// Compilation options.
@@ -112,7 +145,16 @@ pub fn parseSingleModule(
 /// 1. Scope resolution
 /// 2. Desugaring
 /// 3. Semantic analysis
-/// 4. Validation for type checking
+///
+/// Note: This does NOT call validateForChecking(). For full module validation
+/// (checking main function, type module requirements, etc.), either:
+/// - Use can.canonicalizeModule() which includes validation
+/// - Call validateForChecking() separately after canonicalization
+///
+/// The mode determines what to canonicalize:
+/// - `.file`: Full module file (results in module_env)
+/// - `.expr`: Single expression (returns canonical expression index)
+/// - `.statement`: Single statement (returns canonical statement index)
 ///
 /// Results are stored in module_env (all_defs, all_statements, diagnostics, etc).
 ///
@@ -122,29 +164,129 @@ pub fn parseSingleModule(
 /// - parse_ast: Caller provides and manages
 /// - module_envs: Optional map of imported module environments
 ///
-/// Example:
+/// Example (file mode):
 /// ```zig
-/// var allocators: Allocators = undefined;
-/// allocators.initInPlace(gpa);
-/// defer allocators.deinit();
-///
-/// var module_env = try ModuleEnv.init(allocators.gpa, source);
-/// defer module_env.deinit();
-///
-/// const ast = try parseSingleModule(&allocators, &module_env, .file, .{});
-/// defer ast.deinit();
-///
-/// try canonicalizeSingleModule(&allocators, &module_env, ast, null);
-///
+/// const result = try canonicalizeSingleModule(&allocators, &module_env, ast, null, .file);
 /// // Results are now in module_env
+/// ```
+///
+/// Example (expr mode):
+/// ```zig
+/// const ast_expr_idx: AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
+/// const result = try canonicalizeSingleModule(&allocators, &module_env, ast, null, .{ .expr = ast_expr_idx });
+/// if (result.expr) |can_expr| {
+///     // Use can_expr.idx for type checking
+/// }
 /// ```
 pub fn canonicalizeSingleModule(
     allocators: *Allocators,
     module_env: *ModuleEnv,
     parse_ast: *AST,
     module_envs: ?*const std.AutoHashMap(base.Ident.Idx, AutoImportedType),
-) !void {
-    try can.canonicalizeModule(allocators, module_env, parse_ast, module_envs);
+    mode: CanonicalizeMode,
+) !CanonicalizeResult {
+    var czer = try Can.init(allocators, module_env, parse_ast, module_envs);
+    defer czer.deinit();
+
+    switch (mode) {
+        .file => {
+            try czer.canonicalizeFile();
+            // Note: callers who need validation should call czer.validateForChecking()
+            // separately or use canonicalizeModule() from can/mod.zig which includes it.
+            return .file;
+        },
+        .expr => |ast_expr_idx| {
+            const result = try czer.canonicalizeExpr(ast_expr_idx);
+            return .{ .expr = result };
+        },
+        .statement => |ast_stmt_idx| {
+            const ast_stmt = parse_ast.store.getStatement(ast_stmt_idx);
+            const stmt_result = try czer.canonicalizeBlockStatement(ast_stmt, &.{}, 0);
+            if (stmt_result.canonicalized_stmt) |can_stmt| {
+                // Track scratch statements for statement mode
+                const scratch_statements_start = module_env.store.scratch.?.statements.top();
+                try module_env.store.addScratchStatement(can_stmt.idx);
+                module_env.all_statements = try module_env.store.statementSpanFrom(scratch_statements_start);
+                return .{ .statement = can_stmt.idx };
+            }
+            return .{ .statement = null };
+        },
+    }
+}
+
+/// Type check a canonicalized module.
+///
+/// This function performs Hindley-Milner type inference on the CIR:
+/// 1. Constraint generation
+/// 2. Unification
+/// 3. Type error detection
+///
+/// The mode determines what to type check:
+/// - `.file`: Full module file (calls checkFile)
+/// - `.expr`: Single expression (calls checkExprRepl)
+///
+/// Returns a heap-allocated `*Check` that provides access to solver state,
+/// import mappings, and type checking results. Results are also stored in
+/// module_env.types.
+///
+/// Memory ownership:
+/// - allocators: Caller provides and manages
+/// - module_env: Caller provides; type information stored here
+/// - imported_modules: Slice of imported module environments
+/// - auto_imported_types: Optional map of auto-imported type environments
+/// - builtin_ctx: Builtin type context for Bool, Try, Str resolution
+/// - Returned *Check: Heap-allocated; caller must call `checker.deinit()` and
+///   `allocators.gpa.destroy(checker)` when done
+///
+/// Example (file mode):
+/// ```zig
+/// const checker = try typeCheckSingleModule(&allocators, &module_env, &.{builtin_env}, &module_envs, builtin_ctx, .file);
+/// defer {
+///     checker.deinit();
+///     allocators.gpa.destroy(checker);
+/// }
+/// ```
+///
+/// Example (expr mode):
+/// ```zig
+/// const checker = try typeCheckSingleModule(&allocators, &module_env, &.{builtin_env}, &module_envs, builtin_ctx, .{ .expr = can_expr_idx });
+/// defer {
+///     checker.deinit();
+///     allocators.gpa.destroy(checker);
+/// }
+/// ```
+pub fn typeCheckSingleModule(
+    allocators: *Allocators,
+    module_env: *ModuleEnv,
+    imported_modules: []const *const ModuleEnv,
+    auto_imported_types: ?*const std.AutoHashMap(base.Ident.Idx, AutoImportedType),
+    builtin_ctx: BuiltinContext,
+    mode: TypeCheckMode,
+) !*Check {
+    const gpa = allocators.gpa;
+
+    const checker = try gpa.create(Check);
+    errdefer gpa.destroy(checker);
+
+    checker.* = try Check.init(
+        allocators,
+        &module_env.types,
+        module_env,
+        imported_modules,
+        auto_imported_types,
+        &module_env.store.regions,
+        builtin_ctx,
+    );
+    errdefer checker.deinit();
+
+    checker.fixupTypeWriter();
+
+    switch (mode) {
+        .file => try checker.checkFile(),
+        .expr => |expr_idx| _ = try checker.checkExprRepl(expr_idx),
+    }
+
+    return checker;
 }
 
 // Tests

@@ -30,6 +30,7 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
     problems: *check.problem.Store,
     builtin_module: builtin_loading.LoadedModule,
     checker: *Check,
+    allocators: *Allocators,
     imported_envs: []*const ModuleEnv,
 } {
     const gpa = test_allocator;
@@ -43,11 +44,11 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
     module_env.module_name = "TestModule";
     try module_env.common.calcLineStarts(module_env.gpa);
 
-    var allocators: Allocators = undefined;
+    const allocators = try gpa.create(Allocators);
+    errdefer gpa.destroy(allocators);
     allocators.initInPlace(gpa);
-    defer allocators.deinit();
 
-    const parse_ast = try parse.parse(&allocators, &module_env.common);
+    const parse_ast = try parse.parse(allocators, &module_env.common);
     defer parse_ast.deinit();
 
     parse_ast.store.emptyScratch();
@@ -79,7 +80,7 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
         builtin_indices,
     );
 
-    var czer = try Can.init(&allocators, module_env, parse_ast, &module_envs_map);
+    var czer = try Can.init(allocators, module_env, parse_ast, &module_envs_map);
     defer czer.deinit();
 
     try czer.canonicalizeFile();
@@ -95,7 +96,7 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
 
     const checker = try gpa.create(Check);
     errdefer gpa.destroy(checker);
-    checker.* = try Check.init(gpa, &module_env.types, module_env, imported_envs, null, &module_env.store.regions, builtin_ctx);
+    checker.* = try Check.init(allocators, &module_env.types, module_env, imported_envs, null, &module_env.store.regions, builtin_ctx);
     errdefer checker.deinit();
 
     try checker.checkFile();
@@ -113,6 +114,7 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
         .problems = problems,
         .builtin_module = builtin_module,
         .checker = checker,
+        .allocators = allocators,
         .imported_envs = imported_envs,
     };
 }
@@ -130,6 +132,9 @@ fn cleanupEvalModule(result: anytype) void {
     test_allocator.destroy(result.problems);
     result.module_env.deinit();
     test_allocator.destroy(result.module_env);
+
+    result.allocators.deinit();
+    test_allocator.destroy(result.allocators);
 
     test_allocator.free(result.imported_envs);
 

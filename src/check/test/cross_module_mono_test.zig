@@ -162,7 +162,7 @@ const MonoTestEnv = struct {
         module_env.imports.resolveImports(module_env, imported_envs_list.items);
 
         var checker = try Check.init(
-            gpa,
+            &allocators,
             &module_env.types,
             module_env,
             imported_envs_list.items,
@@ -272,7 +272,7 @@ const MonoTestEnv = struct {
         module_env.imports.resolveImports(module_env, imported_envs_list.items);
 
         var checker = try Check.init(
-            gpa,
+            &allocators,
             &module_env.types,
             module_env,
             imported_envs_list.items,
@@ -683,7 +683,7 @@ test "type checker catches polymorphic recursion (infinite type)" {
     module_env.imports.resolveImports(module_env, imported_envs_list.items);
 
     var checker = try Check.init(
-        gpa,
+        &allocators,
         &module_env.types,
         module_env,
         imported_envs_list.items,

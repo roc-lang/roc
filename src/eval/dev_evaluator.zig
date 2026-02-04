@@ -1666,7 +1666,7 @@ pub const DevEvaluator = struct {
         };
 
         var checker = Check.init(
-            self.allocator,
+            &allocators,
             &module_env.types,
             &module_env,
             &imported_modules,

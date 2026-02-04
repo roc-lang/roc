@@ -84,7 +84,7 @@ fn parseCheckAndEvalModuleWithName(src: []const u8, module_name: []const u8) !Ev
     // Resolve imports - map each import to its index in imported_envs
     module_env.imports.resolveImports(module_env, &imported_envs);
 
-    var checker = try Check.init(gpa, &module_env.types, module_env, &imported_envs, null, &module_env.store.regions, builtin_ctx);
+    var checker = try Check.init(&allocators, &module_env.types, module_env, &imported_envs, null, &module_env.store.regions, builtin_ctx);
     defer checker.deinit();
 
     try checker.checkFile();
@@ -189,7 +189,7 @@ fn parseCheckAndEvalModuleWithImport(src: []const u8, import_name: []const u8, i
     module_env.imports.resolveImports(module_env, imported_envs.items);
 
     // Type check the module
-    var checker = try Check.init(gpa, &module_env.types, module_env, imported_envs.items, &module_envs, &module_env.store.regions, builtin_ctx);
+    var checker = try Check.init(&allocators, &module_env.types, module_env, imported_envs.items, &module_envs, &module_env.store.regions, builtin_ctx);
     defer checker.deinit();
 
     try checker.checkFile();

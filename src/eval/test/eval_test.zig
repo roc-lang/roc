@@ -766,7 +766,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
     // Resolve imports - map each import to its index in imported_envs
     original_env.imports.resolveImports(&original_env, &imported_envs);
 
-    var checker = try Check.init(gpa, &original_env.types, &original_env, &imported_envs, &module_envs_map, &original_env.store.regions, builtin_ctx);
+    var checker = try Check.init(&allocators, &original_env.types, &original_env, &imported_envs, &module_envs_map, &original_env.store.regions, builtin_ctx);
     defer checker.deinit();
 
     _ = try checker.checkExprRepl(canonicalized_expr_idx.get_idx());

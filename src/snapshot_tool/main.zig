@@ -964,7 +964,7 @@ fn processSnapshotContent(
             // All file types that use canonicalizeFile() will use the combined function below
         },
         .snippet, .mono => {
-            // Snippet and mono tests are full modules
+            // Snippet and mono tests are full modules - use unified helper
             var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
             defer module_envs.deinit();
 
@@ -972,16 +972,13 @@ fn processSnapshotContent(
                 try Can.populateModuleEnvs(&module_envs, can_ir, builtin_env, config.builtin_indices);
             }
 
-            var czer = try Can.init(&allocators, can_ir, parse_ast, &module_envs);
-            defer czer.deinit();
-            try czer.canonicalizeFile();
+            _ = try single_module.canonicalizeSingleModule(&allocators, can_ir, parse_ast, &module_envs, .file);
         },
         .header => {
             // TODO: implement canonicalize_header when available
         },
-        .expr, .statement => {
-            // Expr and statement tests use different canonicalization methods
-            // Auto-inject builtin types (Bool, Try, List, Dict, Set, Str, and numeric types) as available imports
+        .expr => {
+            // Expression tests - use unified helper with expr mode
             var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
             defer module_envs.deinit();
 
@@ -989,26 +986,21 @@ fn processSnapshotContent(
                 try Can.populateModuleEnvs(&module_envs, can_ir, builtin_env, config.builtin_indices);
             }
 
-            var czer = try Can.init(&allocators, can_ir, parse_ast, &module_envs);
-            defer czer.deinit();
+            const ast_expr_idx: AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
+            const result = try single_module.canonicalizeSingleModule(&allocators, can_ir, parse_ast, &module_envs, .{ .expr = ast_expr_idx });
+            maybe_expr_idx = result.expr;
+        },
+        .statement => {
+            // Statement tests - use unified helper with statement mode
+            var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
+            defer module_envs.deinit();
 
-            switch (content.meta.node_type) {
-                .expr => {
-                    const expr_idx: AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
-                    maybe_expr_idx = try czer.canonicalizeExpr(expr_idx);
-                },
-                .statement => {
-                    const ast_stmt_idx: AST.Statement.Idx = @enumFromInt(parse_ast.root_node_idx);
-                    const can_stmt_result = try czer.canonicalizeBlockStatement(czer.parse_ir.store.getStatement(ast_stmt_idx), &.{}, 0);
-                    if (can_stmt_result.canonicalized_stmt) |can_stmt| {
-                        // Manually track scratch statements because we aren't using the file entrypoint
-                        const scratch_statements_start = can_ir.store.scratch.?.statements.top();
-                        try can_ir.store.addScratchStatement(can_stmt.idx);
-                        can_ir.all_statements = try can_ir.store.statementSpanFrom(scratch_statements_start);
-                    }
-                },
-                else => unreachable,
+            if (config.builtin_module) |builtin_env| {
+                try Can.populateModuleEnvs(&module_envs, can_ir, builtin_env, config.builtin_indices);
             }
+
+            const ast_stmt_idx: AST.Statement.Idx = @enumFromInt(parse_ast.root_node_idx);
+            _ = try single_module.canonicalizeSingleModule(&allocators, can_ir, parse_ast, &module_envs, .{ .statement = ast_stmt_idx });
         },
         .repl => unreachable, // Handled above
     }
@@ -1074,23 +1066,21 @@ fn processSnapshotContent(
     defer if (module_envs_for_file) |*envs| envs.deinit();
 
     var solver = if (maybe_expr_idx) |expr_idx| blk: {
-        // For REPL/expr tests, create module_envs for type checking
+        // For REPL/expr tests, use unified helper with expr mode
         var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
 
         if (config.builtin_module) |builtin_env| {
             try Can.populateModuleEnvs(&module_envs, can_ir, builtin_env, config.builtin_indices);
         }
 
-        var checker = try Check.init(
-            allocator,
-            &can_ir.types,
+        const checker = try single_module.typeCheckSingleModule(
+            &allocators,
             can_ir,
             builtin_modules.items,
             &module_envs,
-            &can_ir.store.regions,
             builtin_ctx,
+            .{ .expr = expr_idx.idx },
         );
-        _ = try checker.checkExprRepl(expr_idx.idx);
         module_envs_for_repl_expr = module_envs; // Keep alive
         break :blk checker;
     } else switch (content.meta.node_type) {
@@ -1111,7 +1101,6 @@ fn processSnapshotContent(
 
             const checker = try compile.PackageEnv.canonicalizeAndTypeCheckModule(
                 &allocators,
-                allocator,
                 can_ir,
                 parse_ast,
                 builtin_env,
@@ -1122,7 +1111,7 @@ fn processSnapshotContent(
             break :blk checker;
         },
         .snippet, .statement, .header, .expr, .mono => blk: {
-            // For snippet/statement/header/expr/mono tests, type check the already-canonicalized IR
+            // For snippet/statement/header/expr/mono tests, use unified helper with file mode
             // Note: .expr and .mono can reach here if canonicalizeExpr returned null (error during canonicalization)
             var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
 
@@ -1130,22 +1119,23 @@ fn processSnapshotContent(
                 try Can.populateModuleEnvs(&module_envs, can_ir, builtin_env, config.builtin_indices);
             }
 
-            var checker = try Check.init(
-                allocator,
-                &can_ir.types,
+            const checker = try single_module.typeCheckSingleModule(
+                &allocators,
                 can_ir,
                 builtin_modules.items,
                 &module_envs,
-                &can_ir.store.regions,
                 builtin_ctx,
+                .file,
             );
-            try checker.checkFile();
             module_envs_for_snippet = module_envs; // Keep alive
             break :blk checker;
         },
         .repl => unreachable, // Should never reach here - repl is handled earlier
     };
-    defer solver.deinit();
+    defer {
+        solver.deinit();
+        allocator.destroy(solver);
+    }
 
     // Assert that we have regions for every type variable
     solver.debugAssertArraysInSync();
@@ -1370,7 +1360,7 @@ fn processSnapshotContent(
     try generateHtmlWrapper(&output, &content);
 
     // Generate reports once and use for both EXPECTED and PROBLEMS sections
-    var generated_reports = try generateAllReports(allocator, parse_ast, can_ir, &solver, output_path, can_ir);
+    var generated_reports = try generateAllReports(allocator, parse_ast, can_ir, solver, output_path, can_ir);
     defer {
         for (generated_reports.items) |*report| {
             report.deinit();
@@ -2944,7 +2934,7 @@ fn validateMonoOutput(allocator: Allocator, mono_source: []const u8, source_path
     };
 
     var checker = Check.init(
-        allocator,
+        &allocators,
         &validation_env.types,
         &validation_env,
         &.{}, // No imported modules

@@ -2155,8 +2155,11 @@ pub const Coordinator = struct {
 
         // Type check - use worker allocator for thread safety
         const check_alloc = self.getWorkerAllocator();
+        var check_allocators: base.Allocators = undefined;
+        check_allocators.initInPlace(check_alloc);
+        defer check_allocators.deinit();
         var checker = compile_package.PackageEnv.typeCheckModule(
-            check_alloc,
+            &check_allocators,
             env,
             self.builtin_modules.builtin_module.env,
             task.imported_envs,

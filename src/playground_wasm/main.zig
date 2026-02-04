@@ -1137,7 +1137,7 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
         type_can_ir.imports.resolveImports(type_can_ir, imported_envs);
 
         // Use pointer to the stored CIR to ensure solver references valid memory
-        var solver = try Check.init(allocator, &type_can_ir.types, type_can_ir, imported_envs, &module_envs_map, &type_can_ir.store.regions, module_builtin_ctx);
+        var solver = try Check.init(&allocators, &type_can_ir.types, type_can_ir, imported_envs, &module_envs_map, &type_can_ir.store.regions, module_builtin_ctx);
         result.solver = solver;
 
         solver.checkFile() catch |check_err| {

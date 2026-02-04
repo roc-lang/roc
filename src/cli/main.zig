@@ -2188,9 +2188,14 @@ fn checkPlatformRequirementsFromCoordinator(
         .builtin_indices = builtin_indices,
     };
 
+    // Create allocators for type checking
+    var allocators: base.Allocators = undefined;
+    allocators.initInPlace(ctx.gpa);
+    defer allocators.deinit();
+
     // Create type checker for the app module
     var checker = try Check.init(
-        ctx.gpa,
+        &allocators,
         &app_root_env.types,
         app_root_env,
         &.{}, // No imported modules needed for checking exports
