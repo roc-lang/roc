@@ -362,25 +362,28 @@ pub fn addFuncType(self: *Self, params: []const ValType, results: []const ValTyp
     return idx;
 }
 
-/// Add a function (maps to a type index) and return the function index.
+/// Add a function (maps to a type index) and return the global function index.
+/// Global indices account for imports: imports occupy indices 0..import_count-1,
+/// and locally-defined functions start at import_count.
 pub fn addFunction(self: *Self, type_idx: u32) !u32 {
-    const func_idx: u32 = @intCast(self.func_type_indices.items.len);
+    const local_idx: u32 = @intCast(self.func_type_indices.items.len);
     try self.func_type_indices.append(self.allocator, type_idx);
-    return func_idx;
+    return local_idx + self.importCount();
 }
 
-/// Set the body of a function.
-pub fn setFunctionBody(self: *Self, func_idx: u32, body: []const u8) !void {
+/// Set the body of a function. Takes a global function index (as returned by addFunction).
+pub fn setFunctionBody(self: *Self, global_func_idx: u32, body: []const u8) !void {
+    const local_idx = global_func_idx - self.importCount();
     const body_copy = try self.allocator.dupe(u8, body);
     // Ensure we have enough slots
-    while (self.func_bodies.items.len <= func_idx) {
+    while (self.func_bodies.items.len <= local_idx) {
         try self.func_bodies.append(self.allocator, .{ .body = &.{} });
     }
     // Free any old body
-    if (self.func_bodies.items[func_idx].body.len > 0) {
-        self.allocator.free(self.func_bodies.items[func_idx].body);
+    if (self.func_bodies.items[local_idx].body.len > 0) {
+        self.allocator.free(self.func_bodies.items[local_idx].body);
     }
-    self.func_bodies.items[func_idx] = .{ .body = body_copy };
+    self.func_bodies.items[local_idx] = .{ .body = body_copy };
 }
 
 /// Add an export.

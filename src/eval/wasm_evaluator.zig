@@ -70,6 +70,7 @@ pub const WasmCodeResult = struct {
     wasm_bytes: []const u8,
     result_layout: layout.Idx,
     tuple_len: usize,
+    has_imports: bool = false,
     allocator: Allocator,
 
     pub fn deinit(self: *WasmCodeResult) void {
@@ -205,6 +206,7 @@ pub const WasmEvaluator = struct {
             .wasm_bytes = gen_result.wasm_bytes,
             .result_layout = gen_result.result_layout,
             .tuple_len = tuple_len,
+            .has_imports = gen_result.has_imports,
             .allocator = self.allocator,
         };
     }

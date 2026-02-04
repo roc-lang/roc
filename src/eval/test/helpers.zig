@@ -351,9 +351,33 @@ fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_i
     };
     defer module_instance.destroy();
 
-    module_instance.instantiate(.{ .stack_size = 1024 * 64 }) catch {
-        return error.WasmExecFailed;
-    };
+    if (wasm_result.has_imports) {
+        // Register host function imports for bytebox
+        var env_imports = bytebox.ModuleImportPackage.init("env", null, null, allocator) catch {
+            return error.WasmExecFailed;
+        };
+        defer env_imports.deinit();
+
+        // roc_dec_mul: (i32 lhs_ptr, i32 rhs_ptr, i32 result_ptr) -> void
+        env_imports.addHostFunction(
+            "roc_dec_mul",
+            &[_]bytebox.ValType{ .I32, .I32, .I32 },
+            &[_]bytebox.ValType{},
+            hostDecMul,
+            null,
+        ) catch {
+            return error.WasmExecFailed;
+        };
+
+        const imports = [_]bytebox.ModuleImportPackage{env_imports};
+        module_instance.instantiate(.{ .stack_size = 1024 * 64, .imports = &imports }) catch {
+            return error.WasmExecFailed;
+        };
+    } else {
+        module_instance.instantiate(.{ .stack_size = 1024 * 64 }) catch {
+            return error.WasmExecFailed;
+        };
+    }
 
     const handle = module_instance.getFunctionHandle("main") catch {
         return error.WasmExecFailed;
@@ -503,6 +527,40 @@ fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_i
             }
         },
     };
+}
+
+/// Host function: Dec multiply — called by wasm module for Dec * Dec.
+/// Reads two 16-byte Dec (i128) values from linear memory, multiplies them,
+/// and writes the 16-byte result to the output pointer.
+fn hostDecMul(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    const RocDec = builtins.dec.RocDec;
+    const mem = module.store.getMemory(0);
+    const buffer = mem.buffer();
+
+    const lhs_ptr: usize = @intCast(params[0].I32);
+    const rhs_ptr: usize = @intCast(params[1].I32);
+    const result_ptr: usize = @intCast(params[2].I32);
+
+    if (lhs_ptr + 16 > buffer.len or rhs_ptr + 16 > buffer.len or result_ptr + 16 > buffer.len) return;
+
+    // Read i128 values from wasm memory (little-endian)
+    const lhs_low: u64 = std.mem.readInt(u64, buffer[lhs_ptr..][0..8], .little);
+    const lhs_high: u64 = std.mem.readInt(u64, buffer[lhs_ptr + 8 ..][0..8], .little);
+    const lhs_i128: i128 = @bitCast(@as(u128, lhs_high) << 64 | @as(u128, lhs_low));
+
+    const rhs_low: u64 = std.mem.readInt(u64, buffer[rhs_ptr..][0..8], .little);
+    const rhs_high: u64 = std.mem.readInt(u64, buffer[rhs_ptr + 8 ..][0..8], .little);
+    const rhs_i128: i128 = @bitCast(@as(u128, rhs_high) << 64 | @as(u128, rhs_low));
+
+    // Compute Dec multiply using the Roc builtin
+    const lhs_dec = RocDec{ .num = lhs_i128 };
+    const rhs_dec = RocDec{ .num = rhs_i128 };
+    const result = lhs_dec.mulWithOverflow(rhs_dec);
+
+    // Write result to wasm memory
+    const result_u128: u128 = @bitCast(result.value.num);
+    std.mem.writeInt(u64, buffer[result_ptr..][0..8], @truncate(result_u128), .little);
+    std.mem.writeInt(u64, buffer[result_ptr + 8 ..][0..8], @truncate(result_u128 >> 64), .little);
 }
 
 /// Compare Interpreter result string with WasmEvaluator result string.
