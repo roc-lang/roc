@@ -397,7 +397,7 @@ pub const RocModules = struct {
             .unbundle = b.addModule("unbundle", .{ .root_source_file = b.path("src/unbundle/mod.zig") }),
             .base58 = b.addModule("base58", .{ .root_source_file = b.path("src/base58/mod.zig") }),
             .lsp = b.addModule("lsp", .{ .root_source_file = b.path("src/lsp/mod.zig") }),
-            .backend = b.addModule("backend", .{ .root_source_file = b.path("src/backend/dev/mod.zig") }),
+            .backend = b.addModule("backend", .{ .root_source_file = b.path("src/backend/mod.zig") }),
             .mono = b.addModule("mono", .{ .root_source_file = b.path("src/mono/mod.zig") }),
             .roc_target = b.addModule("roc_target", .{ .root_source_file = b.path("src/target/mod.zig") }),
         };

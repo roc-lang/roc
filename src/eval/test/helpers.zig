@@ -21,6 +21,8 @@ const LoadedModule = builtin_loading_mod.LoadedModule;
 const deserializeBuiltinIndices = builtin_loading_mod.deserializeBuiltinIndices;
 const loadCompiledModule = builtin_loading_mod.loadCompiledModule;
 const backend = @import("backend");
+const bytebox = @import("bytebox");
+const WasmEvaluator = eval_mod.WasmEvaluator;
 
 const Check = check.Check;
 const Can = can.Can;
@@ -305,6 +307,116 @@ fn compareWithDevEvaluator(allocator: std.mem.Allocator, interpreter_str: []cons
     }
 }
 
+/// Errors that can occur during WasmEvaluator string generation
+const WasmEvalError = error{
+    WasmEvaluatorInitFailed,
+    WasmGenerateCodeFailed,
+    WasmExecFailed,
+    UnsupportedLayout,
+    OutOfMemory,
+};
+
+/// Evaluate an expression using the WasmEvaluator + bytebox and return the result as a string.
+fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) WasmEvalError![]const u8 {
+    var wasm_eval = WasmEvaluator.init(allocator) catch {
+        return error.WasmEvaluatorInitFailed;
+    };
+    defer wasm_eval.deinit();
+
+    const all_module_envs = [_]*ModuleEnv{ module_env, @constCast(builtin_module_env) };
+
+    var wasm_result = wasm_eval.generateWasm(module_env, expr_idx, &all_module_envs) catch {
+        return error.WasmGenerateCodeFailed;
+    };
+    defer wasm_result.deinit();
+
+    if (wasm_result.wasm_bytes.len == 0) {
+        return error.WasmGenerateCodeFailed;
+    }
+
+    // Execute via bytebox
+    var arena_impl = std.heap.ArenaAllocator.init(allocator);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var module_def = bytebox.createModuleDefinition(arena, .{}) catch {
+        return error.WasmExecFailed;
+    };
+    module_def.decode(wasm_result.wasm_bytes) catch {
+        return error.WasmExecFailed;
+    };
+
+    var module_instance = bytebox.createModuleInstance(.Stack, module_def, allocator) catch {
+        return error.WasmExecFailed;
+    };
+    defer module_instance.destroy();
+
+    module_instance.instantiate(.{ .stack_size = 1024 * 64 }) catch {
+        return error.WasmExecFailed;
+    };
+
+    const handle = module_instance.getFunctionHandle("main") catch {
+        return error.WasmExecFailed;
+    };
+
+    var params: [0]bytebox.Val = undefined;
+    var returns: [1]bytebox.Val = undefined;
+    _ = module_instance.invoke(handle, &params, &returns, .{}) catch {
+        return error.WasmExecFailed;
+    };
+
+    // Format the result based on layout
+    const layout_mod = @import("layout");
+    return switch (wasm_result.result_layout) {
+        layout_mod.Idx.i64, layout_mod.Idx.i8, layout_mod.Idx.i16, layout_mod.Idx.i32 => blk: {
+            const val = returns[0].I64;
+            break :blk std.fmt.allocPrint(allocator, "{}", .{val});
+        },
+        layout_mod.Idx.u64, layout_mod.Idx.u8, layout_mod.Idx.u16, layout_mod.Idx.u32 => blk: {
+            const val: u64 = @bitCast(returns[0].I64);
+            break :blk std.fmt.allocPrint(allocator, "{}", .{val});
+        },
+        layout_mod.Idx.bool => blk: {
+            const val = returns[0].I32;
+            break :blk std.fmt.allocPrint(allocator, "{}", .{val});
+        },
+        layout_mod.Idx.f64 => blk: {
+            const val: f64 = @bitCast(returns[0].I64);
+            break :blk std.fmt.allocPrint(allocator, "{d}", .{val});
+        },
+        layout_mod.Idx.f32 => blk: {
+            const val: f32 = @bitCast(returns[0].I32);
+            break :blk std.fmt.allocPrint(allocator, "{d}", .{val});
+        },
+        layout_mod.Idx.dec, layout_mod.Idx.i128, layout_mod.Idx.u128 => {
+            // TODO: Phase 7 - Dec/i128/u128 need linear memory (16 bytes)
+            return error.UnsupportedLayout;
+        },
+        else => error.UnsupportedLayout,
+    };
+}
+
+/// Compare Interpreter result string with WasmEvaluator result string.
+/// If the wasm evaluator can't handle the expression (unsupported expr type),
+/// we skip silently since not all expressions are supported yet.
+fn compareWithWasmEvaluator(allocator: std.mem.Allocator, interpreter_str: []const u8, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) !void {
+    const wasm_str = wasmEvaluatorStr(allocator, module_env, expr_idx, builtin_module_env) catch |err| {
+        switch (err) {
+            error.WasmGenerateCodeFailed, error.UnsupportedLayout => return, // Unsupported - skip
+            else => return err,
+        }
+    };
+    defer allocator.free(wasm_str);
+
+    if (!numericStringsEqual(interpreter_str, wasm_str)) {
+        std.debug.print(
+            "\nWasm evaluator mismatch! Interpreter: {s}, WasmEvaluator: {s}\n",
+            .{ interpreter_str, wasm_str },
+        );
+        return error.EvaluatorMismatch;
+    }
+}
+
 /// Check if two strings represent the same numeric value.
 /// Handles cases like "42" vs "42.0" or "-5" vs "-5.0".
 fn numericStringsEqual(a: []const u8, b: []const u8) bool {
@@ -445,6 +557,7 @@ pub fn runExpectI64(src: []const u8, expected_int: i128, should_trace: enum { tr
     const int_str = try std.fmt.allocPrint(test_allocator, "{}", .{int_value});
     defer test_allocator.free(int_str);
     try compareWithDevEvaluator(test_allocator, int_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    try compareWithWasmEvaluator(test_allocator, int_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     try std.testing.expectEqual(expected_int, int_value);
 }
@@ -490,6 +603,7 @@ pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: enum { 
     const int_str = try std.fmt.allocPrint(test_allocator, "{}", .{int_val});
     defer test_allocator.free(int_str);
     try compareWithDevEvaluator(test_allocator, int_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    try compareWithWasmEvaluator(test_allocator, int_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     const bool_val = int_val != 0;
     try std.testing.expectEqual(expected_bool, bool_val);
@@ -526,6 +640,7 @@ pub fn runExpectF32(src: []const u8, expected_f32: f32, should_trace: enum { tra
     const float_str = try std.fmt.allocPrint(test_allocator, "{d}", .{actual});
     defer test_allocator.free(float_str);
     try compareWithDevEvaluator(test_allocator, float_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    try compareWithWasmEvaluator(test_allocator, float_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     const epsilon: f32 = 0.0001;
     const diff = @abs(actual - expected_f32);
@@ -566,6 +681,7 @@ pub fn runExpectF64(src: []const u8, expected_f64: f64, should_trace: enum { tra
     const float_str = try std.fmt.allocPrint(test_allocator, "{d}", .{actual});
     defer test_allocator.free(float_str);
     try compareWithDevEvaluator(test_allocator, float_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    try compareWithWasmEvaluator(test_allocator, float_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     const epsilon: f64 = 0.000000001;
     const diff = @abs(actual - expected_f64);
@@ -612,6 +728,7 @@ pub fn runExpectIntDec(src: []const u8, expected_int: i128, should_trace: enum {
     const dec_str = try test_allocator.dupe(u8, dec_slice);
     defer test_allocator.free(dec_str);
     try compareWithDevEvaluator(test_allocator, dec_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    try compareWithWasmEvaluator(test_allocator, dec_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     const expected_dec = expected_int * dec_scale;
     if (actual_dec.num != expected_dec) {
@@ -655,6 +772,7 @@ pub fn runExpectDec(src: []const u8, expected_dec_num: i128, should_trace: enum 
     const dec_str = try test_allocator.dupe(u8, dec_slice);
     defer test_allocator.free(dec_str);
     try compareWithDevEvaluator(test_allocator, dec_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    try compareWithWasmEvaluator(test_allocator, dec_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     if (actual_dec.num != expected_dec_num) {
         std.debug.print("Expected Dec({d}), got Dec({d})\n", .{ expected_dec_num, actual_dec.num });
