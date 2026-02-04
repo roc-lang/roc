@@ -2418,12 +2418,15 @@ fn generateLowLevel(self: *Self, ll: anytype) Error!void {
         },
 
         // Narrowing/wrapping conversions
-        .i64_to_i32_wrap, .u64_to_u32_wrap, .u64_to_i32_wrap => {
+        .i64_to_i32_wrap, .u64_to_u32_wrap, .u64_to_i32_wrap, .i64_to_u32_wrap => {
             if (args.len > 0) try self.generateExpr(args[0]);
             self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
         },
         .i32_to_i8_wrap, .u32_to_u8_wrap, .i32_to_u8_wrap,
-        .i64_to_u8_wrap, .u64_to_u8_wrap,
+        .i64_to_u8_wrap, .u64_to_u8_wrap, .i64_to_i8_wrap,
+        .u64_to_i8_wrap,
+        .u16_to_i8_wrap, .u16_to_u8_wrap, .i16_to_i8_wrap,
+        .i16_to_u8_wrap, .u32_to_i8_wrap,
         => {
             if (args.len > 0) try self.generateExpr(args[0]);
             // May need to wrap i64 to i32 first
@@ -2437,7 +2440,8 @@ fn generateLowLevel(self: *Self, ll: anytype) Error!void {
             self.body.append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
         },
         .i32_to_i16_wrap, .u32_to_u16_wrap, .i32_to_u16_wrap,
-        .i64_to_u16_wrap, .u64_to_u16_wrap,
+        .i64_to_u16_wrap, .u64_to_u16_wrap, .i64_to_i16_wrap,
+        .u64_to_i16_wrap, .u32_to_i16_wrap,
         => {
             if (args.len > 0) try self.generateExpr(args[0]);
             const arg_vt = if (args.len > 0) self.exprValType(args[0]) else ValType.i32;
@@ -2449,7 +2453,10 @@ fn generateLowLevel(self: *Self, ll: anytype) Error!void {
             WasmModule.leb128WriteI32(self.allocator, &self.body, 0xFFFF) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
         },
-        .i32_to_u32_wrap, .u32_to_i32_wrap => {
+        .i32_to_u32_wrap, .u32_to_i32_wrap,
+        .u8_to_i8_wrap, .i8_to_u8_wrap,
+        .u16_to_i16_wrap, .i16_to_u16_wrap,
+        => {
             // Same representation in wasm (both i32), no-op
             if (args.len > 0) try self.generateExpr(args[0]);
         },
@@ -2457,6 +2464,54 @@ fn generateLowLevel(self: *Self, ll: anytype) Error!void {
             // Same representation in wasm (both i64), no-op
             if (args.len > 0) try self.generateExpr(args[0]);
         },
+
+        // Signed sub-i32 to unsigned wider wrapping (needs sign extension)
+        .i8_to_u32_wrap => {
+            if (args.len > 0) try self.generateExpr(args[0]);
+            self.body.append(self.allocator, Op.i32_extend8_s) catch return error.OutOfMemory;
+        },
+        .i16_to_u32_wrap => {
+            if (args.len > 0) try self.generateExpr(args[0]);
+            self.body.append(self.allocator, Op.i32_extend16_s) catch return error.OutOfMemory;
+        },
+        .i8_to_u16_wrap => {
+            if (args.len > 0) try self.generateExpr(args[0]);
+            // Sign-extend from 8 bits then mask to 16 bits
+            self.body.append(self.allocator, Op.i32_extend8_s) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI32(self.allocator, &self.body, 0xFFFF) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
+        },
+        .i8_to_u64_wrap => {
+            if (args.len > 0) {
+                try self.generateExpr(args[0]);
+                if (self.exprValType(args[0]) == .i64) {
+                    self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
+                }
+            }
+            self.body.append(self.allocator, Op.i32_extend8_s) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.i64_extend_i32_s) catch return error.OutOfMemory;
+        },
+        .i16_to_u64_wrap => {
+            if (args.len > 0) {
+                try self.generateExpr(args[0]);
+                if (self.exprValType(args[0]) == .i64) {
+                    self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
+                }
+            }
+            self.body.append(self.allocator, Op.i32_extend16_s) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.i64_extend_i32_s) catch return error.OutOfMemory;
+        },
+        .i32_to_u64_wrap => {
+            if (args.len > 0) {
+                try self.generateExpr(args[0]);
+                if (self.exprValType(args[0]) == .i64) {
+                    self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
+                }
+            }
+            self.body.append(self.allocator, Op.i64_extend_i32_s) catch return error.OutOfMemory;
+        },
+        .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try => return error.UnsupportedExpr,
 
         // Float conversions
         .f32_to_f64 => {
@@ -2714,7 +2769,66 @@ fn generateLowLevel(self: *Self, ll: anytype) Error!void {
             self.body.append(self.allocator, Op.@"unreachable") catch return error.OutOfMemory;
         },
 
-        else => return error.UnsupportedExpr,
+        // Try conversions (bounds-checking, return Result tag union — not yet supported)
+        .u8_to_i8_try,
+        .i8_to_u8_try, .i8_to_u16_try, .i8_to_u32_try, .i8_to_u64_try, .i8_to_u128_try,
+        .u16_to_i8_try, .u16_to_i16_try, .u16_to_u8_try,
+        .i16_to_i8_try, .i16_to_u8_try, .i16_to_u16_try, .i16_to_u32_try, .i16_to_u64_try, .i16_to_u128_try,
+        .u32_to_i8_try, .u32_to_i16_try, .u32_to_i32_try, .u32_to_u8_try, .u32_to_u16_try,
+        .i32_to_i8_try, .i32_to_i16_try, .i32_to_u8_try, .i32_to_u16_try, .i32_to_u32_try,
+        .u64_to_i8_try, .u64_to_i16_try, .u64_to_i32_try, .u64_to_i64_try,
+        .u64_to_u8_try, .u64_to_u16_try, .u64_to_u32_try,
+        .i64_to_i8_try, .i64_to_i16_try, .i64_to_i32_try,
+        .i64_to_u8_try, .i64_to_u16_try, .i64_to_u32_try, .i64_to_u64_try, .i64_to_u128_try,
+        .u128_to_i8_try, .u128_to_i16_try, .u128_to_i32_try, .u128_to_i64_try, .u128_to_i128_try,
+        .u128_to_u8_try, .u128_to_u16_try, .u128_to_u32_try, .u128_to_u64_try,
+        .i128_to_i8_try, .i128_to_i16_try, .i128_to_i32_try, .i128_to_i64_try,
+        .i128_to_u8_try, .i128_to_u16_try, .i128_to_u32_try, .i128_to_u64_try, .i128_to_u128_try,
+        => return error.UnsupportedExpr,
+
+        // 128-bit conversions (i128/u128 — not yet supported)
+        .u8_to_i128, .u8_to_u128,
+        .i8_to_i128, .i8_to_u128_wrap,
+        .u16_to_i128, .u16_to_u128,
+        .i16_to_i128, .i16_to_u128_wrap,
+        .u32_to_i128, .u32_to_u128,
+        .i32_to_i128,
+        .u64_to_i128, .u64_to_u128,
+        .i64_to_i128, .i64_to_u128_wrap,
+        .u128_to_i8_wrap, .u128_to_i16_wrap, .u128_to_i32_wrap, .u128_to_i64_wrap, .u128_to_i128_wrap,
+        .u128_to_u8_wrap, .u128_to_u16_wrap, .u128_to_u32_wrap, .u128_to_u64_wrap,
+        .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe,
+        .i128_to_i8_wrap, .i128_to_i16_wrap, .i128_to_i32_wrap, .i128_to_i64_wrap,
+        .i128_to_u8_wrap, .i128_to_u16_wrap, .i128_to_u32_wrap, .i128_to_u64_wrap, .i128_to_u128_wrap,
+        .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe,
+        .f32_to_i128_trunc, .f32_to_u128_trunc,
+        .f64_to_i128_trunc, .f64_to_u128_trunc,
+        => return error.UnsupportedExpr,
+
+        // Decimal conversions (not yet supported)
+        .u8_to_dec, .i8_to_dec, .u16_to_dec, .i16_to_dec,
+        .u32_to_dec, .i32_to_dec, .u64_to_dec, .i64_to_dec,
+        .dec_to_i8_trunc, .dec_to_i16_trunc, .dec_to_i32_trunc, .dec_to_i64_trunc, .dec_to_i128_trunc,
+        .dec_to_u8_trunc, .dec_to_u16_trunc, .dec_to_u32_trunc, .dec_to_u64_trunc, .dec_to_u128_trunc,
+        .dec_to_f32_wrap, .dec_to_f64,
+        .dec_to_i8_try_unsafe, .dec_to_i16_try_unsafe, .dec_to_i32_try_unsafe,
+        .dec_to_i64_try_unsafe, .dec_to_i128_try_unsafe,
+        .dec_to_u8_try_unsafe, .dec_to_u16_try_unsafe, .dec_to_u32_try_unsafe,
+        .dec_to_u64_try_unsafe, .dec_to_u128_try_unsafe,
+        .dec_to_f32_try_unsafe,
+        => return error.UnsupportedExpr,
+
+        // Float try_unsafe conversions (bounds-checking — not yet supported)
+        .f32_to_i8_try_unsafe, .f32_to_i16_try_unsafe, .f32_to_i32_try_unsafe,
+        .f32_to_i64_try_unsafe, .f32_to_i128_try_unsafe,
+        .f32_to_u8_try_unsafe, .f32_to_u16_try_unsafe, .f32_to_u32_try_unsafe,
+        .f32_to_u64_try_unsafe, .f32_to_u128_try_unsafe,
+        .f64_to_i8_try_unsafe, .f64_to_i16_try_unsafe, .f64_to_i32_try_unsafe,
+        .f64_to_i64_try_unsafe, .f64_to_i128_try_unsafe,
+        .f64_to_u8_try_unsafe, .f64_to_u16_try_unsafe, .f64_to_u32_try_unsafe,
+        .f64_to_u64_try_unsafe, .f64_to_u128_try_unsafe,
+        .f64_to_f32_try_unsafe,
+        => return error.UnsupportedExpr,
     }
 }
 
