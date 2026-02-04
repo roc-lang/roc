@@ -466,6 +466,9 @@ fn generateExpr(self: *Self, expr_id: MonoExprId) Error!void {
         .tag => |t| {
             try self.generateTag(t);
         },
+        .str_literal => |str_idx| {
+            try self.generateStrLiteral(str_idx);
+        },
         .dbg => |d| {
             // Debug: evaluate expression and return its value (print is a no-op in wasm)
             try self.generateExpr(d.expr);
@@ -745,6 +748,7 @@ fn exprLayoutIdx(self: *Self, expr_id: MonoExprId) ?layout.Idx {
         .bool_literal => layout.Idx.bool,
         .i128_literal => layout.Idx.i128,
         .dec_literal => layout.Idx.dec,
+        .str_literal => layout.Idx.str,
         else => null,
     };
 }
@@ -1622,4 +1626,85 @@ fn generateTag(self: *Self, t: anytype) Error!void {
     // Push base pointer
     self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
     WasmModule.leb128WriteU32(self.allocator, &self.body, base_local) catch return error.OutOfMemory;
+}
+
+/// Generate a RocStr for a string literal.
+/// On wasm32, RocStr is 12 bytes: { ptr/bytes[0..3], len/bytes[4..7], cap/bytes[8..11] }.
+/// Small strings (≤11 bytes) use SSO: bytes inline, byte 11 = len | 0x80.
+/// Large strings (>11 bytes) use a data segment in linear memory.
+fn generateStrLiteral(self: *Self, str_idx: anytype) Error!void {
+    const str_bytes = self.store.getString(str_idx);
+    const len = str_bytes.len;
+
+    // Allocate 12 bytes on stack frame for the RocStr struct
+    const base_offset = try self.allocStackMemory(12, 4);
+    const base_local = self.fp_local;
+
+    if (len <= 11) {
+        // Small string optimization (SSO)
+        // Store string bytes inline in the 12-byte struct
+        // First, zero out the 12 bytes (3 × i32.store)
+        for (0..3) |i| {
+            self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+            WasmModule.leb128WriteU32(self.allocator, &self.body, base_local) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+            try self.emitStoreOp(.i32, base_offset + @as(u32, @intCast(i)) * 4);
+        }
+
+        // Store string bytes one at a time
+        for (str_bytes, 0..) |byte, i| {
+            self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+            WasmModule.leb128WriteU32(self.allocator, &self.body, base_local) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(byte)) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.i32_store8) catch return error.OutOfMemory;
+            // alignment = 0 (byte-aligned)
+            WasmModule.leb128WriteU32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+            // offset
+            WasmModule.leb128WriteU32(self.allocator, &self.body, base_offset + @as(u32, @intCast(i))) catch return error.OutOfMemory;
+        }
+
+        // Store SSO marker: byte 11 = len | 0x80
+        self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+        WasmModule.leb128WriteU32(self.allocator, &self.body, base_local) catch return error.OutOfMemory;
+        self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+        WasmModule.leb128WriteI32(self.allocator, &self.body, @as(i32, @intCast(len)) | @as(i32, 0x80)) catch return error.OutOfMemory;
+        self.body.append(self.allocator, Op.i32_store8) catch return error.OutOfMemory;
+        WasmModule.leb128WriteU32(self.allocator, &self.body, 0) catch return error.OutOfMemory; // align
+        WasmModule.leb128WriteU32(self.allocator, &self.body, base_offset + 11) catch return error.OutOfMemory; // offset
+    } else {
+        // Large string — place data in a data segment
+        const data_offset = self.module.addDataSegment(str_bytes, 4) catch return error.OutOfMemory;
+
+        // Store ptr (offset 0)
+        self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+        WasmModule.leb128WriteU32(self.allocator, &self.body, base_local) catch return error.OutOfMemory;
+        self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+        WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(data_offset)) catch return error.OutOfMemory;
+        try self.emitStoreOp(.i32, base_offset);
+
+        // Store len (offset 4)
+        self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+        WasmModule.leb128WriteU32(self.allocator, &self.body, base_local) catch return error.OutOfMemory;
+        self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+        WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(len)) catch return error.OutOfMemory;
+        try self.emitStoreOp(.i32, base_offset + 4);
+
+        // Store capacity (offset 8) — same as len for constants
+        self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+        WasmModule.leb128WriteU32(self.allocator, &self.body, base_local) catch return error.OutOfMemory;
+        self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+        WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(len)) catch return error.OutOfMemory;
+        try self.emitStoreOp(.i32, base_offset + 8);
+    }
+
+    // Push pointer to the RocStr on the stack
+    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+    WasmModule.leb128WriteU32(self.allocator, &self.body, base_local) catch return error.OutOfMemory;
+    if (base_offset > 0) {
+        self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+        WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(base_offset)) catch return error.OutOfMemory;
+        self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+    }
 }

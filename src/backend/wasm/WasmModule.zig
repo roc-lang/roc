@@ -211,12 +211,21 @@ const FuncBody = struct {
     body: []const u8,
 };
 
+/// A data segment placed in linear memory
+const DataSegment = struct {
+    offset: u32, // offset in linear memory
+    data: []const u8, // bytes to place
+};
+
 /// Module state
 allocator: Allocator,
 func_types: std.ArrayList(FuncType),
 func_type_indices: std.ArrayList(u32), // func_idx -> type_idx
 func_bodies: std.ArrayList(FuncBody),
 exports: std.ArrayList(Export),
+data_segments: std.ArrayList(DataSegment),
+/// Next available offset for data placement in linear memory (grows up from 0).
+data_offset: u32,
 has_memory: bool,
 memory_min_pages: u32,
 has_stack_pointer: bool,
@@ -228,6 +237,8 @@ pub fn init(allocator: Allocator) Self {
         .func_type_indices = .empty,
         .func_bodies = .empty,
         .exports = .empty,
+        .data_segments = .empty,
+        .data_offset = 1024, // reserve first 1KB for future use
         .has_memory = false,
         .memory_min_pages = 1,
         .has_stack_pointer = false,
@@ -248,6 +259,10 @@ pub fn deinit(self: *Self) void {
     }
     self.func_bodies.deinit(self.allocator);
     self.exports.deinit(self.allocator);
+    for (self.data_segments.items) |ds| {
+        self.allocator.free(ds.data);
+    }
+    self.data_segments.deinit(self.allocator);
 }
 
 /// Add a function type (signature) and return its index.
@@ -299,6 +314,23 @@ pub fn enableMemory(self: *Self, min_pages: u32) void {
     self.memory_min_pages = min_pages;
 }
 
+/// Add a data segment to linear memory. Returns the offset where the data
+/// will be placed. The data is copied and aligned to `align_bytes`.
+pub fn addDataSegment(self: *Self, data: []const u8, align_bytes: u32) !u32 {
+    // Align the offset
+    const alignment = if (align_bytes > 0) align_bytes else 1;
+    self.data_offset = (self.data_offset + alignment - 1) & ~(alignment - 1);
+
+    const offset = self.data_offset;
+    const data_copy = try self.allocator.dupe(u8, data);
+    try self.data_segments.append(self.allocator, .{
+        .offset = offset,
+        .data = data_copy,
+    });
+    self.data_offset += @intCast(data.len);
+    return offset;
+}
+
 /// Enable the __stack_pointer global.
 pub fn enableStackPointer(self: *Self, initial_value: u32) void {
     _ = initial_value;
@@ -342,6 +374,11 @@ pub fn encode(self: *Self, allocator: Allocator) ![]u8 {
     // Code section
     if (self.func_bodies.items.len > 0) {
         try self.encodeCodeSection(allocator, &output);
+    }
+
+    // Data section
+    if (self.data_segments.items.len > 0) {
+        try self.encodeDataSection(allocator, &output);
     }
 
     return output.toOwnedSlice(allocator);
@@ -442,6 +479,28 @@ fn encodeCodeSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) !v
     }
 
     try output.append(gpa, @intFromEnum(SectionId.code_section));
+    try leb128WriteU32(gpa, output, @intCast(section_data.items.len));
+    try output.appendSlice(gpa, section_data.items);
+}
+
+fn encodeDataSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) !void {
+    var section_data: std.ArrayList(u8) = .empty;
+    defer section_data.deinit(gpa);
+
+    try leb128WriteU32(gpa, &section_data, @intCast(self.data_segments.items.len));
+    for (self.data_segments.items) |ds| {
+        // Active segment for memory 0
+        try leb128WriteU32(gpa, &section_data, 0); // flags: active, memory 0
+        // Offset expression: i32.const <offset>; end
+        try section_data.append(gpa, Op.i32_const);
+        try leb128WriteI32(gpa, &section_data, @intCast(ds.offset));
+        try section_data.append(gpa, Op.end);
+        // Data bytes
+        try leb128WriteU32(gpa, &section_data, @intCast(ds.data.len));
+        try section_data.appendSlice(gpa, ds.data);
+    }
+
+    try output.append(gpa, @intFromEnum(SectionId.data_section));
     try leb128WriteU32(gpa, output, @intCast(section_data.items.len));
     try output.appendSlice(gpa, section_data.items);
 }

@@ -433,6 +433,29 @@ fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_i
             const val: u128 = @as(u128, high) << 64 | @as(u128, low);
             break :blk std.fmt.allocPrint(allocator, "{}", .{val});
         },
+        layout_mod.Idx.str => blk: {
+            // RocStr is 12 bytes on wasm32: { ptr/bytes[0..3], len/bytes[4..7], cap/bytes[8..11] }
+            const str_ptr: u32 = @bitCast(returns[0].I32);
+            const mem_slice = module_instance.memoryAll();
+            if (str_ptr + 12 > mem_slice.len) return error.WasmExecFailed;
+
+            // Check SSO: high bit of byte 11
+            const byte11 = mem_slice[str_ptr + 11];
+            if (byte11 & 0x80 != 0) {
+                // Small string: bytes stored inline, length in byte 11 (masked)
+                const sso_len: u32 = byte11 & 0x7F;
+                if (sso_len > 11) return error.WasmExecFailed;
+                const str_data = mem_slice[str_ptr..][0..sso_len];
+                break :blk allocator.dupe(u8, str_data);
+            } else {
+                // Large string: ptr at offset 0, len at offset 4
+                const data_ptr: u32 = @bitCast(mem_slice[str_ptr..][0..4].*);
+                const data_len: u32 = @bitCast(mem_slice[str_ptr + 4 ..][0..4].*);
+                if (data_ptr + data_len > mem_slice.len) return error.WasmExecFailed;
+                const str_data = mem_slice[data_ptr..][0..data_len];
+                break :blk allocator.dupe(u8, str_data);
+            }
+        },
         else => error.UnsupportedLayout,
     };
 }
@@ -853,6 +876,7 @@ pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: enu
 
     // Compare with DevEvaluator
     try compareWithDevEvaluator(test_allocator, str_slice, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    try compareWithWasmEvaluator(test_allocator, str_slice, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     try std.testing.expectEqualStrings(expected_str, str_slice);
 
