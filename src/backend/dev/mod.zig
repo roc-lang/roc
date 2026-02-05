@@ -40,8 +40,31 @@ pub const ExecutableMemory = @import("ExecutableMemory.zig").ExecutableMemory;
 // Static data interner for string literals and other static data
 pub const StaticDataInterner = @import("StaticDataInterner.zig");
 
-/// Mono IR code generator for x86_64
-pub const MonoExprCodeGen = @import("MonoExprCodeGen.zig").MonoExprCodeGen;
+// MonoExprCodeGen - parameterized by RocTarget for cross-compilation support
+const MonoExprCodeGenMod = @import("MonoExprCodeGen.zig");
+
+/// Mono IR code generator parameterized by target (use MonoExprCodeGen(target) to instantiate)
+pub const MonoExprCodeGen = MonoExprCodeGenMod.MonoExprCodeGen;
+
+/// Pre-instantiated MonoExprCodeGen for native host target
+pub const NativeMonoExprCodeGen = MonoExprCodeGenMod.NativeMonoExprCodeGen;
+
+/// x86_64 Linux with glibc
+pub const X64GlibcMonoExprCodeGen = MonoExprCodeGenMod.X64GlibcMonoExprCodeGen;
+/// x86_64 Linux with musl
+pub const X64MuslMonoExprCodeGen = MonoExprCodeGenMod.X64MuslMonoExprCodeGen;
+/// x86_64 Windows
+pub const X64WinMonoExprCodeGen = MonoExprCodeGenMod.X64WinMonoExprCodeGen;
+/// x86_64 macOS
+pub const X64MacMonoExprCodeGen = MonoExprCodeGenMod.X64MacMonoExprCodeGen;
+/// ARM64 Linux with glibc
+pub const Arm64GlibcMonoExprCodeGen = MonoExprCodeGenMod.Arm64GlibcMonoExprCodeGen;
+/// ARM64 Linux with musl
+pub const Arm64MuslMonoExprCodeGen = MonoExprCodeGenMod.Arm64MuslMonoExprCodeGen;
+/// ARM64 Windows
+pub const Arm64WinMonoExprCodeGen = MonoExprCodeGenMod.Arm64WinMonoExprCodeGen;
+/// ARM64 macOS
+pub const Arm64MacMonoExprCodeGen = MonoExprCodeGenMod.Arm64MacMonoExprCodeGen;
 
 /// Generic development backend parameterized by architecture-specific types.
 ///

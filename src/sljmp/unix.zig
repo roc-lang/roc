@@ -8,6 +8,8 @@ pub const JmpBuf = switch (builtin.os.tag) {
     .linux => switch (builtin.cpu.arch) {
         .aarch64 => [64]c_long,
         .x86_64 => [25]c_long,
+        .arm => [32]c_longlong, // musl: unsigned long long __jb[32]
+        .x86 => [6]c_ulong, // musl: unsigned long __jb[6]
         else => @compileError("Unsupported architecture for jmp_buf"),
     },
     else => @compileError("Unsupported OS for jmp_buf"),

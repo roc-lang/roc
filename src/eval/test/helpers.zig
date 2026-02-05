@@ -266,8 +266,8 @@ noinline fn executeAndFormat(
             // Check if small string (capacity_or_alloc_ptr is negative when cast to signed)
             if (@as(isize, @bitCast(result.capacity_or_alloc_ptr)) < 0) {
                 // Small string: length is in the last byte of the struct XOR'd with 0x80
-                const result_bytes: *const [24]u8 = @ptrCast(&result);
-                const len = result_bytes[23] ^ 0x80;
+                const result_bytes: *const [@sizeOf(builtins.str.RocStr)]u8 = @ptrCast(&result);
+                const len = result_bytes[@sizeOf(builtins.str.RocStr) - 1] ^ 0x80;
                 // Return the string content directly (no quotes in result)
                 break :blk std.fmt.allocPrint(alloc, "{s}", .{result_bytes[0..len]});
             } else {

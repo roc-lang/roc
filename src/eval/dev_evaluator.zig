@@ -713,7 +713,8 @@ pub const DevEvaluator = struct {
             1;
 
         // Create the code generator with the layout store
-        var codegen = backend.MonoExprCodeGen.init(
+        // Use NativeMonoExprCodeGen since we're executing on the host machine
+        var codegen = backend.NativeMonoExprCodeGen.init(
             self.allocator,
             &mono_store,
             layout_store_ptr,
@@ -776,7 +777,8 @@ pub const DevEvaluator = struct {
     };
 
     /// RocStr constants
-    const ROCSTR_SIZE: usize = 24;
+    const RocStr = builtins.str.RocStr;
+    const ROCSTR_SIZE: usize = @sizeOf(RocStr);
     const SMALL_STR_MASK: u8 = 0x80;
 
     /// Evaluate source code and return the result
@@ -845,15 +847,15 @@ pub const DevEvaluator = struct {
                     const str_copy = self.allocator.dupe(u8, roc_str_bytes[0..len]) catch return error.OutOfMemory;
                     break :blk EvalResult{ .str_val = str_copy };
                 } else {
-                    // Big string: first 8 bytes are pointer to data, next 8 bytes are length
+                    // Big string: first usize bytes are pointer to data, next usize bytes are length
                     const bytes_ptr: *const [*]const u8 = @ptrCast(@alignCast(&roc_str_bytes[0]));
-                    const length_ptr: *const u64 = @ptrCast(@alignCast(&roc_str_bytes[8]));
+                    const length_ptr: *const usize = @ptrCast(@alignCast(&roc_str_bytes[@sizeOf(usize)]));
 
                     const data_ptr = bytes_ptr.*;
                     const length = length_ptr.*;
 
                     // Handle the seamless slice bit (high bit of length indicates seamless slice)
-                    const SEAMLESS_SLICE_BIT: u64 = @as(u64, @bitCast(@as(i64, std.math.minInt(i64))));
+                    const SEAMLESS_SLICE_BIT: usize = @as(usize, @bitCast(@as(isize, std.math.minInt(isize))));
                     const actual_length = length & ~SEAMLESS_SLICE_BIT;
 
                     if (actual_length == 0) {

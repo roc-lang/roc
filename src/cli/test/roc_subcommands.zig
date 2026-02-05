@@ -764,6 +764,20 @@ test "roc check returns exit code 0 for no warnings or errors" {
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
+    // Print diagnostic info on failure
+    if (!(result.term == .Exited and result.term.Exited == 0)) {
+        std.debug.print("\n=== Test Failure Diagnostics ===\n", .{});
+        std.debug.print("Expected: exit code 0\n", .{});
+        switch (result.term) {
+            .Exited => |code| std.debug.print("Actual: exit code {}\n", .{code}),
+            .Signal => |sig| std.debug.print("Actual: killed by signal {}\n", .{sig}),
+            else => std.debug.print("Actual: {}\n", .{result.term}),
+        }
+        std.debug.print("stdout: {s}\n", .{result.stdout});
+        std.debug.print("stderr: {s}\n", .{result.stderr});
+        std.debug.print("================================\n", .{});
+    }
+
     // Verify that command exits with code 0 (no warnings, no errors)
     try testing.expect(result.term == .Exited and result.term.Exited == 0);
 }
