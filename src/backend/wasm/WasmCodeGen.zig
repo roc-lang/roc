@@ -154,7 +154,7 @@ pub fn generateModule(self: *Self, expr_id: MonoExprId, result_layout: layout.Id
     // Compile any procedures (recursive functions) before the main expression
     const procs = self.store.getProcs();
     if (procs.len > 0) {
-        self.compileAllProcs(procs);
+        self.compileAllProcs(procs) catch return error.OutOfMemory;
     }
 
     // NOTE: compileSymbolDefs() is intentionally disabled.
@@ -204,7 +204,7 @@ pub fn generateModule(self: *Self, expr_id: MonoExprId, result_layout: layout.Id
     defer func_body.deinit(self.allocator);
 
     // Encode locals declaration
-    try self.encodeLocalsDecl(&func_body);
+    try self.encodeLocalsDecl(&func_body, 0);
 
     if (self.uses_stack_memory) {
         // Prologue: allocate stack frame
@@ -262,12 +262,15 @@ pub fn generateModule(self: *Self, expr_id: MonoExprId, result_layout: layout.Id
 
 /// Encode the locals declaration vector for a function body.
 /// Groups consecutive locals of the same type: (count, type)*
-fn encodeLocalsDecl(self: *Self, func_body: *std.ArrayList(u8)) Error!void {
-    const types = self.storage.local_types.items;
-    if (types.len == 0) {
+/// `skip_count` is the number of leading locals to skip (e.g., function parameters).
+fn encodeLocalsDecl(self: *Self, func_body: *std.ArrayList(u8), skip_count: u32) Error!void {
+    const all_types = self.storage.local_types.items;
+    if (all_types.len <= skip_count) {
         WasmModule.leb128WriteU32(self.allocator, func_body, 0) catch return error.OutOfMemory;
         return;
     }
+
+    const types = all_types[skip_count..];
 
     // Build groups of consecutive locals with the same type
     var groups: std.ArrayList(struct { count: u32, val_type: ValType }) = .empty;
@@ -3135,19 +3138,6 @@ fn emitConversion(self: *Self, source: ValType, target: ValType) Error!void {
     }
 }
 
-/// Saved codegen state for restoring after compiling a nested function.
-const SavedState = struct {
-    body_items: []u8,
-    body_capacity: usize,
-    storage_locals: std.AutoHashMap(u48, Storage.LocalInfo),
-    storage_next_local_idx: u32,
-    storage_local_types_items: []ValType,
-    storage_local_types_capacity: usize,
-    stack_frame_size: u32,
-    uses_stack_memory: bool,
-    fp_local: u32,
-};
-
 /// Compile a lambda expression as a separate wasm function.
 /// Returns the wasm function index.
 fn compileLambda(self: *Self, expr_id: MonoExprId, lambda: anytype) Error!u32 {
@@ -3184,15 +3174,7 @@ fn compileLambda(self: *Self, expr_id: MonoExprId, lambda: anytype) Error!u32 {
     const func_idx = self.module.addFunction(type_idx) catch return error.OutOfMemory;
 
     // Save current codegen state
-    const saved_body = self.body.items;
-    const saved_body_cap = self.body.capacity;
-    const saved_locals = self.storage.locals;
-    const saved_next_local = self.storage.next_local_idx;
-    const saved_local_types = self.storage.local_types.items;
-    const saved_local_types_cap = self.storage.local_types.capacity;
-    const saved_stack_frame_size = self.stack_frame_size;
-    const saved_uses_stack_memory = self.uses_stack_memory;
-    const saved_fp_local = self.fp_local;
+    const saved = self.saveState();
 
     // Initialize fresh state for the lambda body
     self.body = .empty;
@@ -3220,8 +3202,7 @@ fn compileLambda(self: *Self, expr_id: MonoExprId, lambda: anytype) Error!u32 {
 
     // Generate the body expression
     self.generateExpr(lambda.body) catch |err| {
-        // Restore state on failure
-        self.restoreState(saved_body, saved_body_cap, saved_locals, saved_next_local, saved_local_types, saved_local_types_cap, saved_stack_frame_size, saved_uses_stack_memory, saved_fp_local);
+        self.restoreState(saved);
         return err;
     };
 
@@ -3230,34 +3211,7 @@ fn compileLambda(self: *Self, expr_id: MonoExprId, lambda: anytype) Error!u32 {
     defer func_body.deinit(self.allocator);
 
     // Locals declaration — only for locals beyond the parameters
-    const param_count: u32 = @intCast(params.len);
-    const total_locals = self.storage.next_local_idx;
-    if (total_locals > param_count) {
-        // Build groups of consecutive non-param locals
-        const types_slice = self.storage.local_types.items[param_count..];
-        var groups: std.ArrayList(struct { count: u32, val_type: ValType }) = .empty;
-        defer groups.deinit(self.allocator);
-
-        var i: usize = 0;
-        while (i < types_slice.len) {
-            const vt = types_slice[i];
-            var count: u32 = 1;
-            while (i + count < types_slice.len and types_slice[i + count] == vt) {
-                count += 1;
-            }
-            groups.append(self.allocator, .{ .count = count, .val_type = vt }) catch return error.OutOfMemory;
-            i += count;
-        }
-
-        WasmModule.leb128WriteU32(self.allocator, &func_body, @intCast(groups.items.len)) catch return error.OutOfMemory;
-        for (groups.items) |g| {
-            WasmModule.leb128WriteU32(self.allocator, &func_body, g.count) catch return error.OutOfMemory;
-            func_body.append(self.allocator, @intFromEnum(g.val_type)) catch return error.OutOfMemory;
-        }
-    } else {
-        // No locals beyond parameters
-        WasmModule.leb128WriteU32(self.allocator, &func_body, 0) catch return error.OutOfMemory;
-    }
+    try self.encodeLocalsDecl(&func_body, @intCast(params.len));
 
     // Body instructions
     func_body.appendSlice(self.allocator, self.body.items) catch return error.OutOfMemory;
@@ -3268,7 +3222,7 @@ fn compileLambda(self: *Self, expr_id: MonoExprId, lambda: anytype) Error!u32 {
     self.module.setFunctionBody(func_idx, func_body.items) catch return error.OutOfMemory;
 
     // Restore previous codegen state
-    self.restoreState(saved_body, saved_body_cap, saved_locals, saved_next_local, saved_local_types, saved_local_types_cap, saved_stack_frame_size, saved_uses_stack_memory, saved_fp_local);
+    self.restoreState(saved);
 
     // Cache the compiled function
     self.compiled_lambdas.put(expr_key, func_idx) catch return error.OutOfMemory;
@@ -3331,15 +3285,7 @@ fn compileClosure(self: *Self, expr_id: MonoExprId, closure: anytype) Error!u32 
     const func_idx = self.module.addFunction(type_idx) catch return error.OutOfMemory;
 
     // Save current codegen state
-    const saved_body = self.body.items;
-    const saved_body_cap = self.body.capacity;
-    const saved_locals = self.storage.locals;
-    const saved_next_local = self.storage.next_local_idx;
-    const saved_local_types = self.storage.local_types.items;
-    const saved_local_types_cap = self.storage.local_types.capacity;
-    const saved_stack_frame_size = self.stack_frame_size;
-    const saved_uses_stack_memory = self.uses_stack_memory;
-    const saved_fp_local = self.fp_local;
+    const saved = self.saveState();
 
     // Initialize fresh state
     self.body = .empty;
@@ -3373,7 +3319,7 @@ fn compileClosure(self: *Self, expr_id: MonoExprId, closure: anytype) Error!u32 
 
     // Generate the body
     self.generateExpr(lambda.body) catch |err| {
-        self.restoreState(saved_body, saved_body_cap, saved_locals, saved_next_local, saved_local_types, saved_local_types_cap, saved_stack_frame_size, saved_uses_stack_memory, saved_fp_local);
+        self.restoreState(saved);
         return err;
     };
 
@@ -3381,32 +3327,7 @@ fn compileClosure(self: *Self, expr_id: MonoExprId, closure: anytype) Error!u32 
     var func_body: std.ArrayList(u8) = .empty;
     defer func_body.deinit(self.allocator);
 
-    const param_count: u32 = @intCast(captures.len + params.len);
-    const total_locals = self.storage.next_local_idx;
-    if (total_locals > param_count) {
-        const types_slice = self.storage.local_types.items[param_count..];
-        var groups: std.ArrayList(struct { count: u32, val_type: ValType }) = .empty;
-        defer groups.deinit(self.allocator);
-
-        var i: usize = 0;
-        while (i < types_slice.len) {
-            const vt = types_slice[i];
-            var count: u32 = 1;
-            while (i + count < types_slice.len and types_slice[i + count] == vt) {
-                count += 1;
-            }
-            groups.append(self.allocator, .{ .count = count, .val_type = vt }) catch return error.OutOfMemory;
-            i += count;
-        }
-
-        WasmModule.leb128WriteU32(self.allocator, &func_body, @intCast(groups.items.len)) catch return error.OutOfMemory;
-        for (groups.items) |g| {
-            WasmModule.leb128WriteU32(self.allocator, &func_body, g.count) catch return error.OutOfMemory;
-            func_body.append(self.allocator, @intFromEnum(g.val_type)) catch return error.OutOfMemory;
-        }
-    } else {
-        WasmModule.leb128WriteU32(self.allocator, &func_body, 0) catch return error.OutOfMemory;
-    }
+    try self.encodeLocalsDecl(&func_body, @intCast(captures.len + params.len));
 
     func_body.appendSlice(self.allocator, self.body.items) catch return error.OutOfMemory;
     func_body.append(self.allocator, Op.end) catch return error.OutOfMemory;
@@ -3414,7 +3335,7 @@ fn compileClosure(self: *Self, expr_id: MonoExprId, closure: anytype) Error!u32 
     self.module.setFunctionBody(func_idx, func_body.items) catch return error.OutOfMemory;
 
     // Restore previous state
-    self.restoreState(saved_body, saved_body_cap, saved_locals, saved_next_local, saved_local_types, saved_local_types_cap, saved_stack_frame_size, saved_uses_stack_memory, saved_fp_local);
+    self.restoreState(saved);
 
     // Cache
     self.compiled_lambdas.put(expr_key, func_idx) catch return error.OutOfMemory;
@@ -3437,9 +3358,12 @@ fn compileClosure(self: *Self, expr_id: MonoExprId, closure: anytype) Error!u32 
 
 /// Compile all MonoProcs as separate wasm functions.
 /// Must be called before generateExpr so that call sites can find compiled procs.
-pub fn compileAllProcs(self: *Self, procs: []const MonoProc) void {
+pub fn compileAllProcs(self: *Self, procs: []const MonoProc) Allocator.Error!void {
     for (procs) |proc| {
-        self.compileProc(proc) catch continue;
+        self.compileProc(proc) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.UnsupportedExpr => continue,
+        };
     }
 }
 
@@ -3529,16 +3453,7 @@ fn compileProc(self: *Self, proc: MonoProc) Error!void {
     self.symbol_funcs.put(key, func_idx) catch return error.OutOfMemory;
 
     // Save current codegen state
-    const saved_body = self.body.items;
-    const saved_body_cap = self.body.capacity;
-    const saved_locals = self.storage.locals;
-    const saved_next_local = self.storage.next_local_idx;
-    const saved_local_types = self.storage.local_types.items;
-    const saved_local_types_cap = self.storage.local_types.capacity;
-    const saved_stack_frame_size = self.stack_frame_size;
-    const saved_uses_stack_memory = self.uses_stack_memory;
-    const saved_fp_local = self.fp_local;
-    const saved_cf_depth = self.cf_depth;
+    const saved = self.saveState();
 
     // Initialize fresh state
     self.body = .empty;
@@ -3565,9 +3480,7 @@ fn compileProc(self: *Self, proc: MonoProc) Error!void {
             },
             else => {
                 // Unsupported pattern type in proc params
-                self.restoreState(saved_body, saved_body_cap, saved_locals, saved_next_local, saved_local_types, saved_local_types_cap, saved_stack_frame_size, saved_uses_stack_memory, saved_fp_local);
-                self.cf_depth = saved_cf_depth;
-                // Remove the registration since we can't compile this proc
+                self.restoreState(saved);
                 _ = self.symbol_funcs.remove(key);
                 return unsupported(@src());
             },
@@ -3581,25 +3494,10 @@ fn compileProc(self: *Self, proc: MonoProc) Error!void {
 
     // Generate CFStmt body
     self.generateCFStmt(proc.body) catch {
-        // Failed to compile proc body — generate a stub that traps.
-        // Keep the function registered so callers can reference it
-        // (instead of crashing with no body).
-        self.restoreState(saved_body, saved_body_cap, saved_locals, saved_next_local, saved_local_types, saved_local_types_cap, saved_stack_frame_size, saved_uses_stack_memory, saved_fp_local);
-        self.cf_depth = saved_cf_depth;
-
-        // Create a minimal function body: locals=0, unreachable, end
-        var stub_body: std.ArrayList(u8) = .empty;
-        defer stub_body.deinit(self.allocator);
-        // locals count = 0
-        stub_body.append(self.allocator, 0) catch return error.OutOfMemory;
-        // unreachable instruction
-        stub_body.append(self.allocator, Op.@"unreachable") catch return error.OutOfMemory;
-        // end
-        stub_body.append(self.allocator, Op.end) catch return error.OutOfMemory;
-
-        self.module.setFunctionBody(func_idx, stub_body.items) catch return error.OutOfMemory;
-        // Don't remove from symbol_funcs — keep the stub registered
-        return;
+        // Failed to compile proc body — remove registration and propagate
+        self.restoreState(saved);
+        _ = self.symbol_funcs.remove(key);
+        return error.UnsupportedExpr;
     };
 
     // End of ret block
@@ -3610,32 +3508,7 @@ fn compileProc(self: *Self, proc: MonoProc) Error!void {
     defer func_body.deinit(self.allocator);
 
     // Locals declaration (beyond parameters)
-    const param_count: u32 = @intCast(params.len);
-    const total_locals = self.storage.next_local_idx;
-    if (total_locals > param_count) {
-        const types_slice = self.storage.local_types.items[param_count..];
-        var groups: std.ArrayList(struct { count: u32, val_type: ValType }) = .empty;
-        defer groups.deinit(self.allocator);
-
-        var i: usize = 0;
-        while (i < types_slice.len) {
-            const vt = types_slice[i];
-            var count: u32 = 1;
-            while (i + count < types_slice.len and types_slice[i + count] == vt) {
-                count += 1;
-            }
-            groups.append(self.allocator, .{ .count = count, .val_type = vt }) catch return error.OutOfMemory;
-            i += count;
-        }
-
-        WasmModule.leb128WriteU32(self.allocator, &func_body, @intCast(groups.items.len)) catch return error.OutOfMemory;
-        for (groups.items) |g| {
-            WasmModule.leb128WriteU32(self.allocator, &func_body, g.count) catch return error.OutOfMemory;
-            func_body.append(self.allocator, @intFromEnum(g.val_type)) catch return error.OutOfMemory;
-        }
-    } else {
-        WasmModule.leb128WriteU32(self.allocator, &func_body, 0) catch return error.OutOfMemory;
-    }
+    try self.encodeLocalsDecl(&func_body, @intCast(params.len));
 
     // Prologue (if stack memory used)
     if (self.uses_stack_memory) {
@@ -3660,9 +3533,7 @@ fn compileProc(self: *Self, proc: MonoProc) Error!void {
 
     if (self.uses_stack_memory) {
         // Epilogue: restore stack pointer
-        // Save result to temp (result is on stack after block end)
         func_body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
-        // Use fp_local + 1 as temp (allocate it if needed)
         const result_tmp = self.storage.allocAnonymousLocal(ret_vt) catch return error.OutOfMemory;
         WasmModule.leb128WriteU32(self.allocator, &func_body, result_tmp) catch return error.OutOfMemory;
         // local.get $fp
@@ -3687,35 +3558,54 @@ fn compileProc(self: *Self, proc: MonoProc) Error!void {
     self.module.setFunctionBody(func_idx, func_body.items) catch return error.OutOfMemory;
 
     // Restore state
-    self.restoreState(saved_body, saved_body_cap, saved_locals, saved_next_local, saved_local_types, saved_local_types_cap, saved_stack_frame_size, saved_uses_stack_memory, saved_fp_local);
-    self.cf_depth = saved_cf_depth;
+    self.restoreState(saved);
 }
 
-/// Helper to restore codegen state after compiling a nested function.
-fn restoreState(
-    self: *Self,
-    saved_body: []u8,
-    saved_body_cap: usize,
-    saved_locals: std.AutoHashMap(u48, Storage.LocalInfo),
-    saved_next_local: u32,
-    saved_local_types: []ValType,
-    saved_local_types_cap: usize,
-    saved_stack_frame_size: u32,
-    saved_uses_stack_memory: bool,
-    saved_fp_local: u32,
-) void {
+/// Saved codegen state for restoring after compiling a nested function.
+const SavedState = struct {
+    body_items: []u8,
+    body_capacity: usize,
+    locals: std.AutoHashMap(u48, Storage.LocalInfo),
+    next_local_idx: u32,
+    local_types_items: []ValType,
+    local_types_capacity: usize,
+    stack_frame_size: u32,
+    uses_stack_memory: bool,
+    fp_local: u32,
+    cf_depth: u32,
+};
+
+/// Capture current codegen state for later restoration.
+fn saveState(self: *Self) SavedState {
+    return .{
+        .body_items = self.body.items,
+        .body_capacity = self.body.capacity,
+        .locals = self.storage.locals,
+        .next_local_idx = self.storage.next_local_idx,
+        .local_types_items = self.storage.local_types.items,
+        .local_types_capacity = self.storage.local_types.capacity,
+        .stack_frame_size = self.stack_frame_size,
+        .uses_stack_memory = self.uses_stack_memory,
+        .fp_local = self.fp_local,
+        .cf_depth = self.cf_depth,
+    };
+}
+
+/// Restore codegen state after compiling a nested function.
+fn restoreState(self: *Self, saved: SavedState) void {
     self.body.deinit(self.allocator);
-    self.body.items = saved_body;
-    self.body.capacity = saved_body_cap;
+    self.body.items = saved.body_items;
+    self.body.capacity = saved.body_capacity;
     self.storage.locals.deinit();
-    self.storage.locals = saved_locals;
-    self.storage.next_local_idx = saved_next_local;
+    self.storage.locals = saved.locals;
+    self.storage.next_local_idx = saved.next_local_idx;
     self.storage.local_types.deinit(self.allocator);
-    self.storage.local_types.items = saved_local_types;
-    self.storage.local_types.capacity = saved_local_types_cap;
-    self.stack_frame_size = saved_stack_frame_size;
-    self.uses_stack_memory = saved_uses_stack_memory;
-    self.fp_local = saved_fp_local;
+    self.storage.local_types.items = saved.local_types_items;
+    self.storage.local_types.capacity = saved.local_types_capacity;
+    self.stack_frame_size = saved.stack_frame_size;
+    self.uses_stack_memory = saved.uses_stack_memory;
+    self.fp_local = saved.fp_local;
+    self.cf_depth = saved.cf_depth;
 }
 
 /// Generate code for a control flow statement (used in MonoProc bodies).
