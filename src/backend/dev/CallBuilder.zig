@@ -1993,3 +1993,69 @@ test "CallingConvention.forTarget for aarch64 targets" {
     try std.testing.expectEqual(linux_cc.shadow_space, win_cc.shadow_space);
     try std.testing.expectEqual(@as(u8, 0), linux_cc.shadow_space);
 }
+
+test "CC constants for macOS x64" {
+    const MacEmit = x86_64.Emit(.x64mac);
+    try std.testing.expect(MacEmit.CC.PARAM_REGS.len >= 4);
+    try std.testing.expect(MacEmit.CC.RETURN_REGS.len >= 1);
+    try std.testing.expectEqual(@as(u8, 0), MacEmit.CC.SHADOW_SPACE);
+    try std.testing.expectEqual(@as(usize, 16), MacEmit.CC.RETURN_BY_PTR_THRESHOLD);
+    try std.testing.expectEqual(std.math.maxInt(usize), MacEmit.CC.PASS_BY_PTR_THRESHOLD);
+}
+
+test "macOS x64 CC matches Linux x64 (both System V)" {
+    const LinuxEmit = x86_64.Emit(.x64glibc);
+    const MacEmit = x86_64.Emit(.x64mac);
+
+    // macOS and Linux both use System V ABI - verify they're identical
+    try std.testing.expectEqual(LinuxEmit.CC.PARAM_REGS.len, MacEmit.CC.PARAM_REGS.len);
+    try std.testing.expectEqual(LinuxEmit.CC.RETURN_REGS.len, MacEmit.CC.RETURN_REGS.len);
+    try std.testing.expectEqual(LinuxEmit.CC.FLOAT_PARAM_REGS.len, MacEmit.CC.FLOAT_PARAM_REGS.len);
+    try std.testing.expectEqual(LinuxEmit.CC.SHADOW_SPACE, MacEmit.CC.SHADOW_SPACE);
+    try std.testing.expectEqual(LinuxEmit.CC.RETURN_BY_PTR_THRESHOLD, MacEmit.CC.RETURN_BY_PTR_THRESHOLD);
+    try std.testing.expectEqual(LinuxEmit.CC.PASS_BY_PTR_THRESHOLD, MacEmit.CC.PASS_BY_PTR_THRESHOLD);
+
+    // Both should NOT be Windows
+    const linux_cc = CallingConvention.forTarget(.x64glibc);
+    const mac_cc = CallingConvention.forTarget(.x64mac);
+    try std.testing.expect(!linux_cc.is_windows);
+    try std.testing.expect(!mac_cc.is_windows);
+}
+
+test "CallBuilder macOS 6-arg call - all args in registers (System V)" {
+    const MacEmit = x86_64.Emit(.x64mac);
+    const Builder = CallBuilder(MacEmit);
+
+    var emit = MacEmit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var stack_offset: i32 = 0;
+    var builder = try Builder.init(&emit, &stack_offset);
+
+    // System V: 6 register args (RDI, RSI, RDX, RCX, R8, R9)
+    try builder.addImmArg(1);
+    try builder.addImmArg(2);
+    try builder.addImmArg(3);
+    try builder.addImmArg(4);
+    try builder.addImmArg(5);
+    try builder.addImmArg(6);
+
+    try builder.call(0x12345678);
+
+    const mac_code = emit.buf.items;
+
+    // Verify code matches Linux (both System V)
+    var linux_emit = x86_64.Emit(.x64glibc).init(std.testing.allocator);
+    defer linux_emit.deinit();
+    var linux_stack: i32 = 0;
+    var linux_builder = try CallBuilder(x86_64.Emit(.x64glibc)).init(&linux_emit, &linux_stack);
+    try linux_builder.addImmArg(1);
+    try linux_builder.addImmArg(2);
+    try linux_builder.addImmArg(3);
+    try linux_builder.addImmArg(4);
+    try linux_builder.addImmArg(5);
+    try linux_builder.addImmArg(6);
+    try linux_builder.call(0x12345678);
+
+    try std.testing.expectEqualSlices(u8, linux_emit.buf.items, mac_code);
+}

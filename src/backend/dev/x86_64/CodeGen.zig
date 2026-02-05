@@ -828,6 +828,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
 
 const LinuxCodeGen = CodeGen(.x64linux);
 const WinCodeGen = CodeGen(.x64win);
+const MacCodeGen = CodeGen(.x64mac);
 
 test "prologue and epilogue" {
     var cg = LinuxCodeGen.init(std.testing.allocator);
@@ -1202,4 +1203,70 @@ test "emitPrologueWithAlloc produces 16-byte aligned frame" {
             break;
         }
     }
+}
+
+test "MacCodeGen matches LinuxCodeGen (both System V)" {
+    // macOS and Linux both use System V ABI - verify they're identical
+    try std.testing.expectEqual(LinuxCodeGen.CALLEE_SAVED_GENERAL_MASK, MacCodeGen.CALLEE_SAVED_GENERAL_MASK);
+    try std.testing.expectEqual(LinuxCodeGen.CALLEE_SAVED_AREA_SIZE, MacCodeGen.CALLEE_SAVED_AREA_SIZE);
+    try std.testing.expectEqual(LinuxCodeGen.roc_target.isWindows(), MacCodeGen.roc_target.isWindows());
+
+    // Both should NOT be Windows
+    try std.testing.expect(!LinuxCodeGen.roc_target.isWindows());
+    try std.testing.expect(!MacCodeGen.roc_target.isWindows());
+}
+
+test "macOS x64 CALLEE_SAVED_AREA_SIZE matches Linux" {
+    // System V: 5 registers * 8 bytes = 40 bytes (same as Linux)
+    try std.testing.expectEqual(@as(i32, 40), MacCodeGen.CALLEE_SAVED_AREA_SIZE);
+    try std.testing.expectEqual(LinuxCodeGen.CALLEE_SAVED_AREA_SIZE, MacCodeGen.CALLEE_SAVED_AREA_SIZE);
+}
+
+test "macOS x64 callee-saved register count matches Linux" {
+    // System V: 5 callee-saved registers (RBX, R12-R15) - same as Linux
+    try std.testing.expectEqual(@as(u32, 5), @popCount(MacCodeGen.CALLEE_SAVED_GENERAL_MASK));
+    try std.testing.expectEqual(@popCount(LinuxCodeGen.CALLEE_SAVED_GENERAL_MASK), @popCount(MacCodeGen.CALLEE_SAVED_GENERAL_MASK));
+}
+
+test "MacCodeGen prologue/epilogue matches LinuxCodeGen" {
+    // macOS and Linux should produce identical code (both System V)
+    var mac_cg = MacCodeGen.init(std.testing.allocator);
+    defer mac_cg.deinit();
+
+    var linux_cg = LinuxCodeGen.init(std.testing.allocator);
+    defer linux_cg.deinit();
+
+    // Emit prologue and epilogue for both
+    try mac_cg.emitPrologueWithAlloc(0);
+    try mac_cg.emitEpilogue();
+
+    try linux_cg.emitPrologueWithAlloc(0);
+    try linux_cg.emitEpilogue();
+
+    // Should produce identical code
+    try std.testing.expectEqualSlices(u8, linux_cg.getCode(), mac_cg.getCode());
+}
+
+test "macOS x64: use callee-saved registers when caller-saved exhausted" {
+    var cg = MacCodeGen.init(std.testing.allocator);
+    defer cg.deinit();
+
+    // System V has 9 caller-saved registers (same as Linux)
+    const num_caller_saved: usize = 9;
+    var regs: [9]GeneralReg = undefined;
+    for (0..num_caller_saved) |i| {
+        regs[i] = try cg.allocGeneralFor(@intCast(i));
+    }
+
+    // callee_saved_used should still be 0 (all were caller-saved)
+    try std.testing.expectEqual(@as(u16, 0), cg.callee_saved_used);
+
+    // Next allocation should use a callee-saved register
+    const callee_reg = try cg.allocGeneralFor(@intCast(num_caller_saved));
+
+    // Now callee_saved_used should have a bit set
+    try std.testing.expect(cg.callee_saved_used != 0);
+
+    // The register should be one of the callee-saved ones (System V)
+    try std.testing.expect(SystemV.isCalleeSaved(callee_reg));
 }
