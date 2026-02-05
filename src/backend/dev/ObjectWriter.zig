@@ -109,7 +109,7 @@ pub fn generateObjectFile(
 
             try coff_writer.setCode(code);
 
-            // Add symbols
+            // Add symbols and function info for unwind tables
             for (symbols) |sym| {
                 const sym_idx = try coff_writer.addSymbol(.{
                     .name = sym.name,
@@ -130,6 +130,18 @@ pub fn generateObjectFile(
                         try coff_writer.addTextRelocation(@intCast(rel.getOffset()), sym_idx);
                     }
                 }
+
+                // Add function info for Windows x64 unwind tables
+                if (coff_arch == .x86_64 and sym.is_function and !sym.is_external) {
+                    try coff_writer.addFunctionInfo(.{
+                        .start_offset = @intCast(sym.offset),
+                        .end_offset = @intCast(sym.offset + sym.size),
+                        .prologue_size = sym.prologue_size,
+                        .frame_reg_offset = 0, // RSP offset not scaled for our simple case
+                        .uses_frame_pointer = sym.uses_frame_pointer,
+                        .stack_alloc = sym.stack_alloc,
+                    });
+                }
             }
 
             try coff_writer.write(output);
@@ -146,6 +158,10 @@ pub const Symbol = struct {
     is_global: bool,
     is_function: bool,
     is_external: bool,
+    // Unwind info for Windows x64
+    prologue_size: u8 = 0,
+    stack_alloc: u32 = 0,
+    uses_frame_pointer: bool = true,
 };
 
 // Tests

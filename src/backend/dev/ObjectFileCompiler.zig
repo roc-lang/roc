@@ -129,6 +129,10 @@ pub const ObjectFileCompiler = struct {
                 .is_global = true,
                 .is_function = true,
                 .is_external = false,
+                // Unwind info for Windows x64
+                .prologue_size = export_info.prologue_size,
+                .stack_alloc = export_info.stack_alloc,
+                .uses_frame_pointer = export_info.uses_frame_pointer,
             }) catch {
                 return CompilationError.OutOfMemory;
             };

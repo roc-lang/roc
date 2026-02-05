@@ -17,8 +17,10 @@ const COFF = struct {
 
     // Section flags
     const IMAGE_SCN_CNT_CODE = 0x00000020;
+    const IMAGE_SCN_CNT_INITIALIZED_DATA = 0x00000040;
     const IMAGE_SCN_MEM_EXECUTE = 0x20000000;
     const IMAGE_SCN_MEM_READ = 0x40000000;
+    const IMAGE_SCN_ALIGN_4BYTES = 0x00300000;
     const IMAGE_SCN_ALIGN_16BYTES = 0x00500000;
 
     // Symbol storage class
@@ -34,9 +36,19 @@ const COFF = struct {
 
     // x86_64 relocation types
     const IMAGE_REL_AMD64_REL32 = 0x0004;
+    const IMAGE_REL_AMD64_ADDR32NB = 0x0003; // 32-bit address w/o base (RVA)
 
     // ARM64 relocation types
     const IMAGE_REL_ARM64_BRANCH26 = 0x0003;
+
+    // x64 Unwind operation codes
+    const UWOP_PUSH_NONVOL = 0; // Push a nonvolatile register
+    const UWOP_ALLOC_LARGE = 1; // Allocate large stack area
+    const UWOP_ALLOC_SMALL = 2; // Allocate small stack area (8-128 bytes)
+    const UWOP_SET_FPREG = 3; // Set frame pointer register
+
+    // x64 register numbers for unwind info
+    const UNWIND_REG_RBP = 5;
 };
 
 /// COFF File Header (20 bytes)
@@ -141,6 +153,17 @@ pub const Symbol = struct {
     is_function: bool,
 };
 
+/// Function info for generating unwind data (.pdata/.xdata on Windows x64)
+/// This is required for proper exception handling and debugger stack walking.
+pub const FunctionInfo = struct {
+    start_offset: u32, // Offset of function start in .text
+    end_offset: u32, // Offset of function end in .text (one past last byte)
+    prologue_size: u8, // Size of function prologue in bytes
+    frame_reg_offset: u8, // Offset of frame register from RSP (scaled by 16)
+    uses_frame_pointer: bool, // Whether function uses RBP as frame pointer
+    stack_alloc: u32, // Stack allocation size (for UWOP_ALLOC_*)
+};
+
 /// Section types
 pub const Section = enum {
     text,
@@ -171,6 +194,9 @@ pub const CoffWriter = struct {
     // String table (for long symbol names)
     strtab: std.ArrayList(u8),
 
+    // Function info for unwind data (Windows x64 only)
+    functions: std.ArrayList(FunctionInfo),
+
     const TextReloc = struct {
         offset: u32, // Offset in .text where relocation applies
         symbol_idx: u32, // Index into symbol table
@@ -187,6 +213,7 @@ pub const CoffWriter = struct {
             .symbols = .{},
             .text_relocs = .{},
             .strtab = .{},
+            .functions = .{},
         };
 
         // String table starts with 4-byte size (will be filled in later)
@@ -203,6 +230,7 @@ pub const CoffWriter = struct {
         self.symbols.deinit(self.allocator);
         self.text_relocs.deinit(self.allocator);
         self.strtab.deinit(self.allocator);
+        self.functions.deinit(self.allocator);
     }
 
     /// Set the code section contents
@@ -238,6 +266,12 @@ pub const CoffWriter = struct {
         });
     }
 
+    /// Add function info for unwind data generation (Windows x64)
+    /// This must be called for each function to enable proper exception handling.
+    pub fn addFunctionInfo(self: *Self, info: FunctionInfo) !void {
+        try self.functions.append(self.allocator, info);
+    }
+
     /// Add a string to the string table, return its offset
     /// COFF string table offsets start at 4 (after the size field)
     fn addString(self: *Self, str: []const u8) !u32 {
@@ -247,45 +281,138 @@ pub const CoffWriter = struct {
         return offset;
     }
 
+    /// Write a COFF relocation entry (10 bytes) manually to avoid struct padding issues
+    fn writeRelocation(self: *Self, output: *std.ArrayList(u8), virtual_address: u32, symbol_idx: u32, reloc_type: u16) !void {
+        var buf: [10]u8 = undefined;
+        std.mem.writeInt(u32, buf[0..4], virtual_address, .little);
+        std.mem.writeInt(u32, buf[4..8], symbol_idx, .little);
+        std.mem.writeInt(u16, buf[8..10], reloc_type, .little);
+        try output.appendSlice(self.allocator, &buf);
+    }
+
     /// Write the COFF object file to a buffer
     pub fn write(self: *Self, output: *std.ArrayList(u8)) !void {
         // Section indices (1-based in COFF)
         const SECT_TEXT: i16 = 1;
 
+        // Check if we need unwind sections (Windows x64 only with functions defined)
+        const need_unwind = self.arch == .x86_64 and self.functions.items.len > 0;
+        // Section indices: 1=.text, 2=.pdata, 3=.xdata
+        const SECT_XDATA: i16 = if (need_unwind) 3 else 0;
+
         // Calculate layout
         const header_size: u32 = @sizeOf(CoffHeader);
         const section_header_size: u32 = @sizeOf(SectionHeader);
-        const num_sections: u16 = 1; // Just .text for now
+        const num_sections: u16 = if (need_unwind) 3 else 1; // .text, .pdata, .xdata
+
+        // Calculate .pdata and .xdata sizes
+        // .pdata: 12 bytes per RUNTIME_FUNCTION (BeginAddress, EndAddress, UnwindData)
+        const pdata_size: u32 = if (need_unwind) @intCast(self.functions.items.len * 12) else 0;
+
+        // .xdata: UNWIND_INFO for each function
+        // Minimal UNWIND_INFO: 4 bytes header + 2 bytes per unwind code (padded to 4-byte alignment)
+        var xdata_size: u32 = 0;
+        if (need_unwind) {
+            for (self.functions.items) |func| {
+                // Calculate unwind code count for this function
+                var code_count: u32 = 0;
+                if (func.uses_frame_pointer) {
+                    code_count += 1; // UWOP_SET_FPREG
+                    code_count += 1; // UWOP_PUSH_NONVOL for RBP
+                }
+                if (func.stack_alloc > 0) {
+                    if (func.stack_alloc <= 128) {
+                        code_count += 1; // UWOP_ALLOC_SMALL
+                    } else if (func.stack_alloc <= 512 * 1024 - 8) {
+                        code_count += 2; // UWOP_ALLOC_LARGE with 1 extra slot
+                    } else {
+                        code_count += 3; // UWOP_ALLOC_LARGE with 2 extra slots
+                    }
+                }
+                // UNWIND_INFO header (4 bytes) + unwind codes (2 bytes each, padded to 4 bytes)
+                const codes_size = (code_count * 2 + 3) & ~@as(u32, 3); // Round up to 4 bytes
+                xdata_size += 4 + codes_size;
+            }
+        }
 
         // Calculate offsets
         const section_headers_offset: u32 = header_size;
         const text_offset: u32 = section_headers_offset + section_header_size * num_sections;
         const text_size: u32 = @intCast(self.text.items.len);
 
-        // Align text section to 16 bytes and add relocations after
-        const text_end: u32 = text_offset + text_size;
-        const reloc_offset: u32 = text_end;
-        const reloc_size: u32 = @intCast(self.text_relocs.items.len * @sizeOf(CoffRelocation));
+        // .pdata follows .text
+        const pdata_offset: u32 = text_offset + text_size;
+        // .xdata follows .pdata
+        const xdata_offset: u32 = pdata_offset + pdata_size;
 
-        // Symbol table comes after relocations
-        const symtab_offset: u32 = reloc_offset + reloc_size;
+        // Relocations follow all section data
+        // Note: COFF relocations are exactly 10 bytes (not @sizeOf which may include padding)
+        const reloc_entry_size: u32 = 10;
+        const text_reloc_offset: u32 = xdata_offset + xdata_size;
+        const text_reloc_size: u32 = @as(u32, @intCast(self.text_relocs.items.len)) * reloc_entry_size;
+
+        // .pdata relocations (3 per RUNTIME_FUNCTION: BeginAddress, EndAddress, UnwindData)
+        const pdata_reloc_offset: u32 = text_reloc_offset + text_reloc_size;
+        const pdata_reloc_count: u32 = if (need_unwind) @intCast(self.functions.items.len * 3) else 0;
+        const pdata_reloc_size: u32 = pdata_reloc_count * reloc_entry_size;
+
+        // Symbol table comes after all relocations
+        const symtab_offset: u32 = pdata_reloc_offset + pdata_reloc_size;
+
+        // Add section symbols for relocations to reference (these must be added before counting)
+        // We need symbols for .text, .pdata (for EndAddress relocs), .xdata (for UnwindData relocs)
+        const text_section_sym_idx: u32 = @intCast(self.symbols.items.len);
+        try self.symbols.append(self.allocator, .{
+            .name = ".text",
+            .section = .text,
+            .offset = 0,
+            .is_global = false,
+            .is_function = false,
+        });
+
+        var xdata_section_sym_idx: u32 = 0;
+        if (need_unwind) {
+            xdata_section_sym_idx = @intCast(self.symbols.items.len);
+            try self.symbols.append(self.allocator, .{
+                .name = ".xdata",
+                .section = .rdata, // .xdata uses rdata characteristics but we track it separately
+                .offset = 0,
+                .is_global = false,
+                .is_function = false,
+            });
+        }
+
         const num_symbols: u32 = @intCast(self.symbols.items.len);
 
         // Build symbol table entries and string table
         var symtab: std.ArrayList(u8) = .{};
         defer symtab.deinit(self.allocator);
 
-        for (self.symbols.items) |sym| {
+        for (self.symbols.items, 0..) |sym, idx| {
+            // Determine section number - handle special section symbols
+            const section_number: i16 = blk: {
+                // Check if this is the .xdata section symbol
+                if (need_unwind and idx == xdata_section_sym_idx) {
+                    break :blk SECT_XDATA;
+                }
+                // Check if this is the .text section symbol
+                if (idx == text_section_sym_idx) {
+                    break :blk SECT_TEXT;
+                }
+                // Regular symbol
+                break :blk switch (sym.section) {
+                    .text => SECT_TEXT,
+                    .data => 0, // Would be section 2 if we had .data
+                    .rdata => if (need_unwind) SECT_XDATA else 0,
+                    .bss => 0,
+                    .undef => COFF.IMAGE_SYM_UNDEFINED,
+                };
+            };
+
             var coff_sym = CoffSymbol{
                 .name_bytes = undefined,
                 .value = sym.offset,
-                .section_number = switch (sym.section) {
-                    .text => SECT_TEXT,
-                    .data => 0, // Would be section 2
-                    .rdata => 0,
-                    .bss => 0,
-                    .undef => COFF.IMAGE_SYM_UNDEFINED,
-                },
+                .section_number = section_number,
                 .type = if (sym.is_function) COFF.IMAGE_SYM_DTYPE_FUNCTION else COFF.IMAGE_SYM_TYPE_NULL,
                 .storage_class = if (sym.is_global) COFF.IMAGE_SYM_CLASS_EXTERNAL else COFF.IMAGE_SYM_CLASS_STATIC,
                 .number_of_aux_symbols = 0,
@@ -328,7 +455,7 @@ pub const CoffWriter = struct {
             .virtual_address = 0,
             .size_of_raw_data = text_size,
             .pointer_to_raw_data = if (text_size > 0) text_offset else 0,
-            .pointer_to_relocations = if (self.text_relocs.items.len > 0) reloc_offset else 0,
+            .pointer_to_relocations = if (self.text_relocs.items.len > 0) text_reloc_offset else 0,
             .pointer_to_line_numbers = 0,
             .number_of_relocations = @intCast(self.text_relocs.items.len),
             .number_of_line_numbers = 0,
@@ -339,17 +466,180 @@ pub const CoffWriter = struct {
         };
         try output.appendSlice(self.allocator, std.mem.asBytes(&text_header));
 
+        // Write .pdata section header (if needed)
+        if (need_unwind) {
+            var pdata_name: [8]u8 = std.mem.zeroes([8]u8);
+            @memcpy(pdata_name[0..6], ".pdata");
+
+            const pdata_header = SectionHeader{
+                .name = pdata_name,
+                .virtual_size = 0,
+                .virtual_address = 0,
+                .size_of_raw_data = pdata_size,
+                .pointer_to_raw_data = pdata_offset,
+                .pointer_to_relocations = if (pdata_reloc_count > 0) pdata_reloc_offset else 0,
+                .pointer_to_line_numbers = 0,
+                .number_of_relocations = @intCast(pdata_reloc_count),
+                .number_of_line_numbers = 0,
+                .characteristics = COFF.IMAGE_SCN_CNT_INITIALIZED_DATA |
+                    COFF.IMAGE_SCN_MEM_READ |
+                    COFF.IMAGE_SCN_ALIGN_4BYTES,
+            };
+            try output.appendSlice(self.allocator, std.mem.asBytes(&pdata_header));
+
+            // Write .xdata section header
+            var xdata_name: [8]u8 = std.mem.zeroes([8]u8);
+            @memcpy(xdata_name[0..6], ".xdata");
+
+            const xdata_header = SectionHeader{
+                .name = xdata_name,
+                .virtual_size = 0,
+                .virtual_address = 0,
+                .size_of_raw_data = xdata_size,
+                .pointer_to_raw_data = xdata_offset,
+                .pointer_to_relocations = 0, // .xdata has no relocations
+                .pointer_to_line_numbers = 0,
+                .number_of_relocations = 0,
+                .number_of_line_numbers = 0,
+                .characteristics = COFF.IMAGE_SCN_CNT_INITIALIZED_DATA |
+                    COFF.IMAGE_SCN_MEM_READ |
+                    COFF.IMAGE_SCN_ALIGN_4BYTES,
+            };
+            try output.appendSlice(self.allocator, std.mem.asBytes(&xdata_header));
+        }
+
         // Write .text section content
         try output.appendSlice(self.allocator, self.text.items);
 
-        // Write relocations
+        // Write .pdata section content (RUNTIME_FUNCTION entries)
+        if (need_unwind) {
+            for (self.functions.items) |func| {
+                // RUNTIME_FUNCTION: BeginAddress, EndAddress, UnwindData
+                // These will be fixed up by relocations at link time
+                // For now, write the offsets within their respective sections
+                var runtime_func: [12]u8 = undefined;
+                std.mem.writeInt(u32, runtime_func[0..4], func.start_offset, .little); // BeginAddress
+                std.mem.writeInt(u32, runtime_func[4..8], func.end_offset, .little); // EndAddress
+                std.mem.writeInt(u32, runtime_func[8..12], 0, .little); // UnwindData (offset in .xdata, set below)
+                try output.appendSlice(self.allocator, &runtime_func);
+            }
+        }
+
+        // Write .xdata section content (UNWIND_INFO structures)
+        var xdata_offsets: std.ArrayList(u32) = .{};
+        defer xdata_offsets.deinit(self.allocator);
+
+        if (need_unwind) {
+            var current_xdata_offset: u32 = 0;
+            for (self.functions.items) |func| {
+                try xdata_offsets.append(self.allocator, current_xdata_offset);
+
+                // Calculate unwind codes for this function
+                var unwind_codes: std.ArrayList(u8) = .{};
+                defer unwind_codes.deinit(self.allocator);
+
+                // Track prologue offset for each code
+                const prolog_offset: u8 = func.prologue_size;
+
+                // Build unwind codes in reverse order of execution
+                // (first in array = last prologue instruction)
+
+                // Stack allocation (if any) - happens last in prologue
+                if (func.stack_alloc > 0) {
+                    if (func.stack_alloc <= 128) {
+                        // UWOP_ALLOC_SMALL: OpInfo = (size - 8) / 8
+                        const op_info: u8 = @intCast((func.stack_alloc - 8) / 8);
+                        try unwind_codes.append(self.allocator, prolog_offset); // Offset in prolog
+                        try unwind_codes.append(self.allocator, (op_info << 4) | COFF.UWOP_ALLOC_SMALL);
+                    } else if (func.stack_alloc <= 512 * 1024 - 8) {
+                        // UWOP_ALLOC_LARGE with OpInfo=0: size/8 in next slot
+                        try unwind_codes.append(self.allocator, prolog_offset);
+                        try unwind_codes.append(self.allocator, COFF.UWOP_ALLOC_LARGE); // OpInfo=0
+                        // Next slot contains size/8 as 16-bit value
+                        const size_scaled: u16 = @intCast(func.stack_alloc / 8);
+                        try unwind_codes.append(self.allocator, @truncate(size_scaled));
+                        try unwind_codes.append(self.allocator, @truncate(size_scaled >> 8));
+                    } else {
+                        // UWOP_ALLOC_LARGE with OpInfo=1: full 32-bit size in next 2 slots
+                        try unwind_codes.append(self.allocator, prolog_offset);
+                        try unwind_codes.append(self.allocator, (1 << 4) | COFF.UWOP_ALLOC_LARGE);
+                        // Next 2 slots contain full 32-bit size
+                        try unwind_codes.append(self.allocator, @truncate(func.stack_alloc));
+                        try unwind_codes.append(self.allocator, @truncate(func.stack_alloc >> 8));
+                        try unwind_codes.append(self.allocator, @truncate(func.stack_alloc >> 16));
+                        try unwind_codes.append(self.allocator, @truncate(func.stack_alloc >> 24));
+                    }
+                }
+
+                // Set frame pointer (if used) - happens in middle of prologue
+                if (func.uses_frame_pointer) {
+                    // UWOP_SET_FPREG: no OpInfo, frame reg and offset are in header
+                    // Prolog offset should be where MOV RBP,RSP happens (after PUSH RBP)
+                    const set_fpreg_offset: u8 = if (prolog_offset > 4) 4 else prolog_offset;
+                    try unwind_codes.append(self.allocator, set_fpreg_offset);
+                    try unwind_codes.append(self.allocator, COFF.UWOP_SET_FPREG);
+                }
+
+                // Push RBP (if frame pointer used) - happens first in prologue
+                if (func.uses_frame_pointer) {
+                    // UWOP_PUSH_NONVOL: OpInfo = register number (RBP = 5)
+                    try unwind_codes.append(self.allocator, 1); // Offset 1 (after PUSH RBP)
+                    try unwind_codes.append(self.allocator, (COFF.UNWIND_REG_RBP << 4) | COFF.UWOP_PUSH_NONVOL);
+                }
+
+                // Write UNWIND_INFO header
+                const code_count: u8 = @intCast(unwind_codes.items.len / 2);
+                const version_flags: u8 = 1; // Version 1, no flags
+                const frame_reg: u8 = if (func.uses_frame_pointer) COFF.UNWIND_REG_RBP else 0;
+                const frame_offset: u8 = func.frame_reg_offset; // Scaled offset
+
+                try output.append(self.allocator, version_flags);
+                try output.append(self.allocator, func.prologue_size);
+                try output.append(self.allocator, code_count);
+                try output.append(self.allocator, (frame_offset << 4) | frame_reg);
+
+                // Write unwind codes
+                try output.appendSlice(self.allocator, unwind_codes.items);
+
+                // Pad to 4-byte alignment
+                const total_size = 4 + unwind_codes.items.len;
+                const padded_size = (total_size + 3) & ~@as(usize, 3);
+                const padding = padded_size - total_size;
+                for (0..padding) |_| {
+                    try output.append(self.allocator, 0);
+                }
+
+                current_xdata_offset += @intCast(padded_size);
+            }
+        }
+
+        // Write .text relocations (10 bytes each: u32 offset, u32 symbol_idx, u16 type)
         for (self.text_relocs.items) |rel| {
-            const coff_reloc = CoffRelocation{
-                .virtual_address = rel.offset,
-                .symbol_table_index = rel.symbol_idx,
-                .type = rel.reloc_type,
-            };
-            try output.appendSlice(self.allocator, std.mem.asBytes(&coff_reloc));
+            try self.writeRelocation(output, rel.offset, rel.symbol_idx, rel.reloc_type);
+        }
+
+        // Write .pdata relocations (3 per RUNTIME_FUNCTION)
+        if (need_unwind) {
+            for (self.functions.items, 0..) |_, func_idx| {
+                const pdata_entry_offset: u32 = @intCast(func_idx * 12);
+                const xdata_offset_for_func = xdata_offsets.items[func_idx];
+
+                // Relocation for BeginAddress (offset 0 in entry) -> .text section
+                try self.writeRelocation(output, pdata_entry_offset + 0, text_section_sym_idx, COFF.IMAGE_REL_AMD64_ADDR32NB);
+
+                // Relocation for EndAddress (offset 4 in entry) -> .text section
+                try self.writeRelocation(output, pdata_entry_offset + 4, text_section_sym_idx, COFF.IMAGE_REL_AMD64_ADDR32NB);
+
+                // Relocation for UnwindData (offset 8 in entry) -> .xdata section
+                try self.writeRelocation(output, pdata_entry_offset + 8, xdata_section_sym_idx, COFF.IMAGE_REL_AMD64_ADDR32NB);
+
+                // Update the UnwindData field in .pdata with the correct offset
+                // We need to patch the .pdata content we wrote earlier
+                // Calculate where in output buffer this entry is
+                const pdata_content_start = pdata_offset;
+                const unwind_data_field_offset = pdata_content_start + pdata_entry_offset + 8;
+                std.mem.writeInt(u32, output.items[unwind_data_field_offset..][0..4], xdata_offset_for_func, .little);
+            }
         }
 
         // Write symbol table

@@ -939,6 +939,12 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             offset: usize,
             /// Size of the function in bytes
             size: usize,
+            /// Size of the function prologue in bytes (for unwind info)
+            prologue_size: u8 = 0,
+            /// Stack allocation size (for unwind info)
+            stack_alloc: u32 = 0,
+            /// Whether function uses frame pointer
+            uses_frame_pointer: bool = true,
         };
 
         /// Result of entrypoint compilation for native code generation.
@@ -4099,7 +4105,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             var total_args_size: usize = 0;
             var max_alignment: usize = 1;
             for (args) |arg_id| {
-                if (self.getExprLayout(arg_id)) |arg_layout_idx| {
+                const maybe_layout = self.getExprLayout(arg_id);
+                if (maybe_layout) |arg_layout_idx| {
                     const arg_layout = ls.getLayout(arg_layout_idx);
                     const arg_size = ls.layoutSize(arg_layout);
                     const arg_align = arg_layout.alignment(ls.targetUsize());
@@ -4167,16 +4174,13 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 try self.codegen.emit.blrReg(.X9);
             } else if (arch == .x86_64) {
                 // Load hosted_fns.fns pointer: [roc_ops + 64]
-                const fns_ptr_reg = try self.allocTempGeneral();
-                try self.codegen.emit.movRegMem(.w64, fns_ptr_reg, roc_ops_reg, 64);
+                // Use RAX as intermediate, then R10 for the function pointer
+                // R10 is a scratch register that won't be clobbered by argument setup
+                try self.codegen.emit.movRegMem(.w64, .RAX, roc_ops_reg, 64);
 
-                // Load function pointer into R10 (scratch register, not used for arguments)
-                // IMPORTANT: We use R10 instead of allocTempGeneral() because the allocated
-                // register could be RDI/RSI/RDX/RCX/R8 which would get clobbered when we
-                // set up the call arguments below.
+                // Load function pointer into R10: fns[index] = [RAX + index * 8]
                 const fn_offset: i32 = @intCast(hc.index * 8);
-                try self.codegen.emit.movRegMem(.w64, .R10, fns_ptr_reg, fn_offset);
-                self.codegen.freeGeneral(fns_ptr_reg);
+                try self.codegen.emit.movRegMem(.w64, .R10, .RAX, fn_offset);
 
                 // Set up arguments for the hosted function call
                 // Windows x64 ABI: RCX, RDX, R8, R9
@@ -4188,11 +4192,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     // R8 = args pointer (RBP + args_slot)
 
                     try self.emitMovRegReg(.RCX, roc_ops_reg);
-
-                    // RDX = ret_ptr
                     try self.codegen.emit.leaRegMem(.RDX, .RBP, ret_slot);
-
-                    // R8 = args_ptr
                     try self.codegen.emit.leaRegMem(.R8, .RBP, args_slot);
 
                     // Windows x64 ABI requires 32 bytes of shadow space for the callee
@@ -4210,11 +4210,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     // RDX = args pointer (RBP + args_slot)
 
                     try self.emitMovRegReg(.RDI, roc_ops_reg);
-
-                    // RSI = ret_ptr
                     try self.codegen.emit.leaRegMem(.RSI, .RBP, ret_slot);
-
-                    // RDX = args_ptr
                     try self.codegen.emit.leaRegMem(.RDX, .RBP, args_slot);
 
                     // Call the hosted function (R10 is safe from argument setup)
@@ -13208,15 +13204,23 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             // and overwrite the roc_ops pointer, causing crashes when calling builtins.
 
             // Mark R12/X20 as used so the prologue will save/restore it.
-            // The lambda receives roc_ops as its last argument and stores it in R12/X20.
+            // The lambda uses R12/X20 to hold roc_ops (inherited from the caller).
             // Without this, the prologue wouldn't save R12/X20, and if anything inside
             // the lambda (e.g., a called function) clobbers it, roc_ops would be lost.
+            //
+            // CRITICAL: Also REMOVE R12/X20 from callee_saved_available!
+            // Otherwise, allocTempGeneral could allocate R12 as a temp register,
+            // overwriting roc_ops and causing crashes when calling builtins/hosted functions.
             if (comptime target.toCpuArch() == .x86_64) {
                 const r12_bit = @as(u16, 1) << @intFromEnum(x86_64.GeneralReg.R12);
                 self.codegen.callee_saved_used |= r12_bit;
+                // Remove R12 from available pool so it can't be allocated
+                self.codegen.callee_saved_available &= ~(@as(u32, 1) << @intFromEnum(x86_64.GeneralReg.R12));
             } else {
                 const x20_bit = @as(u32, 1) << @intFromEnum(aarch64.GeneralReg.X20);
                 self.codegen.callee_saved_used |= x20_bit;
+                // Remove X20 from available pool so it can't be allocated
+                self.codegen.callee_saved_available &= ~(@as(u32, 1) << @intFromEnum(aarch64.GeneralReg.X20));
             }
 
             // Save early return state before generating body
@@ -15425,6 +15429,10 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             // Record start position
             const func_start = self.codegen.currentOffset();
 
+            // Track prologue info for unwind tables (Windows x64)
+            var prologue_size: u8 = 0;
+            var stack_alloc: u32 = 0;
+
             // Clear state for this entrypoint
             self.symbol_locations.clearRetainingCapacity();
             self.mutable_var_slots.clearRetainingCapacity();
@@ -15518,6 +15526,10 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 const local_space: i32 = 64;
                 try self.codegen.emit.subRegImm32(.w64, .RSP, @intCast(local_space));
 
+                // Track prologue info for unwind tables
+                prologue_size = @intCast(self.codegen.currentOffset() - func_start);
+                stack_alloc = @intCast(local_space);
+
                 // On entry, arguments are in different registers depending on ABI:
                 // Windows x64 ABI: RCX=roc_ops, RDX=ret_ptr, R8=args_ptr
                 // System V ABI (Linux/macOS): RDI=roc_ops, RSI=ret_ptr, RDX=args_ptr
@@ -15557,11 +15569,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 }
 
                 // Generate the body expression
-                std.debug.print("[ENTRYPOINT x86_64] Generating body expr {d}\n", .{@intFromEnum(body_expr)});
-                const body_mono_expr = self.store.getExpr(body_expr);
-                std.debug.print("[ENTRYPOINT x86_64] Body expr type: {s}\n", .{@tagName(body_mono_expr)});
                 const result_loc = try self.generateExpr(body_expr);
-                std.debug.print("[ENTRYPOINT x86_64] Result loc: {s}\n", .{@tagName(result_loc)});
 
                 // If the body is a lambda or closure (function value), we need to CALL it, not return it.
                 // This happens when the entrypoint is defined as `main_for_host! = main!` where
@@ -15569,9 +15577,15 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 // to invoke it to get the actual result.
                 const final_result = switch (result_loc) {
                     .lambda_code => |lc| blk: {
-                        std.debug.print("[ENTRYPOINT x86_64] Body is lambda_code, calling at offset {d}\n", .{lc.code_offset});
-                        // Call the lambda with no arguments (entrypoint lambdas take no args)
-                        // The lambda's code is at lc.code_offset
+                        // Call the lambda with roc_ops as first argument
+                        // The lambda's code is at lc.code_offset and expects roc_ops in RCX (Windows)
+                        // R12 holds roc_ops, so pass it to the lambda
+                        if (target.isWindows()) {
+                            try self.codegen.emit.movRegReg(.w64, .RCX, .R12);
+                        } else {
+                            try self.codegen.emit.movRegReg(.w64, .RDI, .R12);
+                        }
+
                         const rel_offset = @as(i32, @intCast(lc.code_offset)) - @as(i32, @intCast(self.codegen.currentOffset() + 5));
                         try self.codegen.emit.callRel32(rel_offset);
 
@@ -15579,7 +15593,6 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         break :blk ValueLocation{ .general_reg = .RAX };
                     },
                     .closure_value => |cv| blk: {
-                        std.debug.print("[ENTRYPOINT x86_64] Body is closure_value, dispatching\n", .{});
                         // Dispatch the closure call with no arguments
                         // Use an empty span - entrypoint functions take no user-visible args
                         const empty_span = mono.MonoIR.MonoExprSpan.empty();
@@ -15606,6 +15619,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 .name = "", // Caller should set this
                 .offset = func_start,
                 .size = func_end - func_start,
+                .prologue_size = prologue_size,
+                .stack_alloc = stack_alloc,
+                .uses_frame_pointer = true,
             };
         }
 
