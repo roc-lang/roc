@@ -7810,8 +7810,7 @@ fn generateIntToStr(self: *Self, its: anytype) Error!void {
 }
 
 /// Generate float_to_str: convert a float to its string representation.
-/// This is complex (proper float formatting). For now, we implement a simplified version
-/// that handles common cases.
+/// Handles NaN, infinity, then formats integer and fractional parts.
 fn generateFloatToStr(self: *Self, fts: anytype) Error!void {
     const precision = fts.float_precision;
 
@@ -7819,7 +7818,6 @@ fn generateFloatToStr(self: *Self, fts: anytype) Error!void {
     if (precision == .dec) return unsupported(@src());
 
     const is_f64 = precision == .f64;
-    const val_type: ValType = if (is_f64) .f64 else .f32;
 
     // Generate value expression
     try self.generateExpr(fts.value);
@@ -7857,13 +7855,38 @@ fn generateFloatToStr(self: *Self, fts: anytype) Error!void {
 
     self.body.append(self.allocator, Op.@"else") catch return error.OutOfMemory;
 
-    // Check for infinity: value == inf or value == -inf
-    // We use the trick: if abs(value) > max_finite, it's infinity
-    // Simpler: check if value - value != 0 (true for inf, false for finite)
-    // But NaN is already handled, so for non-NaN: value - value == 0 for finite, NaN for inf
-    // Actually simplest: reinterpret bits and check exponent
-    // Let me just use a simpler approach: convert integer part, then fractional
-    // For now, a very basic implementation that handles integers and simple decimals
+    // Check for infinity: abs(value) == inf
+    try self.emitLocalGet(f64_local);
+    self.body.append(self.allocator, Op.f64_abs) catch return error.OutOfMemory;
+    self.body.append(self.allocator, Op.f64_const) catch return error.OutOfMemory;
+    try self.emitF64Bytes(std.math.inf(f64));
+    self.body.append(self.allocator, Op.f64_eq) catch return error.OutOfMemory;
+    self.body.append(self.allocator, Op.@"if") catch return error.OutOfMemory;
+    self.body.append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
+
+    // Infinity: check sign and write "Infinity" or "-Infinity"
+    try self.emitLocalGet(f64_local);
+    self.body.append(self.allocator, Op.f64_const) catch return error.OutOfMemory;
+    try self.emitF64Bytes(0.0);
+    self.body.append(self.allocator, Op.f64_lt) catch return error.OutOfMemory;
+    self.body.append(self.allocator, Op.@"if") catch return error.OutOfMemory;
+    self.body.append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
+    // Negative infinity: write "-Infinity"
+    try self.emitWriteStringConst(buf_local, pos_local, "-Infinity");
+    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+    WasmModule.leb128WriteI32(self.allocator, &self.body, 9) catch return error.OutOfMemory;
+    try self.emitLocalSet(pos_local);
+    self.body.append(self.allocator, Op.@"else") catch return error.OutOfMemory;
+    // Positive infinity: write "Infinity"
+    try self.emitWriteStringConst(buf_local, pos_local, "Infinity");
+    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+    WasmModule.leb128WriteI32(self.allocator, &self.body, 8) catch return error.OutOfMemory;
+    try self.emitLocalSet(pos_local);
+    self.body.append(self.allocator, Op.end) catch return error.OutOfMemory; // end sign check
+
+    self.body.append(self.allocator, Op.@"else") catch return error.OutOfMemory;
+
+    // Finite, non-NaN value: format integer and fractional parts
 
     // Check sign: if negative, write '-' and negate
     const is_neg_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -8137,7 +8160,10 @@ fn generateFloatToStr(self: *Self, fts: anytype) Error!void {
 
     self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
 
-    // end else (non-NaN path)
+    // end infinity if/else
+    self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
+
+    // end NaN if/else
     self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
 
     // Build RocStr from buf[0..pos]
@@ -8146,8 +8172,6 @@ fn generateFloatToStr(self: *Self, fts: anytype) Error!void {
     try self.emitLocalSet(str_len_local);
 
     try self.buildHeapRocStr(buf_local, str_len_local);
-
-    _ = val_type;
 }
 
 /// Generate dec_to_str: convert a RocDec (i128 scaled by 10^18) to string.
