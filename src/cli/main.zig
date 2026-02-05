@@ -114,6 +114,10 @@ const ShimLibraries = struct {
     /// WebAssembly target shim (wasm32-freestanding)
     const wasm32 = if (builtin.is_test) &[_]u8{} else @embedFile("targets/wasm32/libroc_interpreter_shim.a");
 
+    /// Cross-compilation target shims (Windows targets)
+    const x64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64win/roc_interpreter_shim.lib");
+    const arm64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64win/roc_interpreter_shim.lib");
+
     /// Get the appropriate shim library bytes for the given target
     pub fn forTarget(target: roc_target.RocTarget) []const u8 {
         return switch (target) {
@@ -122,8 +126,10 @@ const ShimLibraries = struct {
             .x64glibc => x64glibc,
             .arm64glibc => arm64glibc,
             .wasm32 => wasm32,
+            .x64win => x64win,
+            .arm64win => arm64win,
             // Native/host targets use the native shim
-            .x64mac, .arm64mac, .x64win, .arm64win => native,
+            .x64mac, .arm64mac => native,
             // Fallback for other targets (will use native, may not work for cross-compilation)
             else => native,
         };
