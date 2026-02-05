@@ -3910,8 +3910,30 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     const elapsed_ns = timer.read();
     const elapsed_ms = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000.0;
 
+    // Get cache statistics for verbose output
+    const cache_stats = build_env.getCacheStats();
+    const cache_percent = if (cache_stats.modules_total > 0)
+        @as(u32, @intCast((cache_stats.cache_hits * 100) / cache_stats.modules_total))
+    else
+        0;
+
     const stdout = ctx.io.stdout();
-    try stdout.print("Built {s} in {d:.1}ms (native dev backend)\n", .{ final_output_path, elapsed_ms });
+    try stdout.print("Built {s} in {d:.1}ms", .{ final_output_path, elapsed_ms });
+    if (cache_stats.modules_total > 0 and cache_stats.cache_hits > 0) {
+        try stdout.print(" with {}% cache hit", .{cache_percent});
+    }
+    try stdout.writeAll(" (dev backend)\n");
+
+    // Print verbose stats if requested
+    if (args.verbose) {
+        try stdout.print("\n    Modules: {} total, {} cached, {} built\n", .{
+            cache_stats.modules_total,
+            cache_stats.cache_hits,
+            cache_stats.modules_compiled,
+        });
+        try stdout.print("    Cache Hit: {}%\n", .{cache_percent});
+    }
+
     if (total_warning_count > 0) {
         try stdout.print("  {} warning(s)\n", .{total_warning_count});
     }

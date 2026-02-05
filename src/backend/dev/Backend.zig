@@ -113,7 +113,7 @@ pub fn generateObjectFile(
 
             try macho.setCode(code);
 
-            // Add symbols
+            // Add symbols (underscore prefix for C ABI is added in MachOWriter.write())
             for (symbols) |sym| {
                 const sym_idx = try macho.addSymbol(.{
                     .name = sym.name,
@@ -226,9 +226,10 @@ test "generate x86_64 macos object" {
     // Simple x86_64 code: ret
     const code = &[_]u8{0xC3};
 
+    // Symbol name without underscore - prefix is added automatically for Mach-O
     const symbols = &[_]Symbol{
         .{
-            .name = "_test_func",
+            .name = "test_func",
             .offset = 0,
             .size = 1,
             .is_global = true,

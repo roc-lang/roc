@@ -334,8 +334,9 @@ pub const MachOWriter = struct {
 
         const strtab_offset: u32 = symtab_offset + symtab_size;
 
-        // Build string table with symbol names
+        // Build string table with symbol names (Mach-O C ABI requires underscore prefix)
         for (self.symbols.items) |*sym| {
+            try self.strtab.append(self.allocator, '_');
             _ = try self.addString(sym.name);
         }
         const strtab_size: u32 = @intCast(self.strtab.items.len);
@@ -465,7 +466,7 @@ pub const MachOWriter = struct {
             };
             try output.appendSlice(self.allocator, std.mem.asBytes(&nlist));
 
-            str_offset += @intCast(sym.name.len + 1);
+            str_offset += @intCast(sym.name.len + 2); // +1 underscore prefix, +1 null terminator
         }
 
         // Write string table

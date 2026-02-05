@@ -37,7 +37,7 @@ pub const SymbolResolver = relocation_mod.SymbolResolver;
 pub const CodeGen = @import("CodeGen.zig");
 pub const Backend = @import("Backend.zig");
 
-// ExecutableMemory and NativeCompiler use OS-specific APIs not available on freestanding
+/// Executable memory for running generated code. Uses OS-specific APIs not available on freestanding.
 pub const ExecutableMemory = if (builtin.os.tag == .freestanding)
     void
 else
