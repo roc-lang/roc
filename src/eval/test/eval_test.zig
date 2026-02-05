@@ -33,6 +33,7 @@ const runExpectStr = helpers.runExpectStr;
 const runExpectRecord = helpers.runExpectRecord;
 const runExpectListI64 = helpers.runExpectListI64;
 const runExpectListZst = helpers.runExpectListZst;
+const runExpectUnit = helpers.runExpectUnit;
 const ExpectedField = helpers.ExpectedField;
 
 const TraceWriterState = struct {
@@ -377,6 +378,15 @@ test "lambdas with unary minus" {
     try runExpectI64("(|x| -5.I64)(999.I64)", -5, .no_trace);
     try runExpectI64("(|x| if True -x else 0.I64)(5.I64)", -5, .no_trace);
     try runExpectI64("(|x| if True -10.I64 else x)(999.I64)", -10, .no_trace);
+}
+
+test "lambdas returning unit (ZST)" {
+    // Regression test for ZST return handling - these would crash before the fix
+    // because we tried to store to ret_ptr even when return type is zero-sized
+    try runExpectUnit("(|_x| {})(42.I64)", .no_trace);
+    try runExpectUnit("(|_a, _b| {})(1.I64, 2.I64)", .no_trace);
+    // Multi-arg lambda returning unit
+    try runExpectUnit("(|_x, _y, _z| {})(1.I64, 2.I64, 3.I64)", .no_trace);
 }
 
 test "lambdas closures" {

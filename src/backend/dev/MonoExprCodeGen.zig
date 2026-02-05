@@ -1112,8 +1112,56 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             // Generate code for the expression - result ends up in a register
             const result_loc = try self.generateExpr(expr_id);
 
-            // Store result to the saved result pointer
-            try self.storeResultToSavedPtr(result_loc, result_layout, result_ptr_save_reg, tuple_len);
+            // Track the actual return layout (may differ from result_layout if body is a closure/lambda)
+            var actual_ret_layout = result_layout;
+
+            const final_result = switch (result_loc) {
+                .lambda_code => |lc| blk: {
+                    // The lambda's return layout is the actual return type
+                    actual_ret_layout = lc.ret_layout;
+                    // Call the lambda
+                    const current_offset = self.codegen.currentOffset();
+                    if (comptime target.toCpuArch() == .aarch64) {
+                        const rel_offset: i28 = @intCast(@as(i32, @intCast(lc.code_offset)) - @as(i32, @intCast(current_offset)));
+                        try self.codegen.emit.bl(rel_offset);
+                    } else {
+                        // x86_64: emit relative call
+                        const rel_offset: i32 = @intCast(@as(i32, @intCast(lc.code_offset)) - @as(i32, @intCast(current_offset)) - 5);
+                        try self.codegen.emit.callRel32(rel_offset);
+                    }
+                    // Result is in X0/RAX
+                    break :blk if (comptime target.toCpuArch() == .aarch64)
+                        ValueLocation{ .general_reg = .X0 }
+                    else
+                        ValueLocation{ .general_reg = .RAX };
+                },
+                .closure_value => |cv| blk: {
+                    // Dispatch the closure call with no arguments
+                    // The closure's return layout is the actual return type, not the closure layout
+                    const lambda_expr = self.store.getExpr(cv.lambda);
+                    const lambda = switch (lambda_expr) {
+                        .lambda => |l| l,
+                        .closure => |c| inner: {
+                            const inner = self.store.getExpr(c.lambda);
+                            if (inner == .lambda) break :inner inner.lambda;
+                            unreachable;
+                        },
+                        else => unreachable,
+                    };
+                    actual_ret_layout = lambda.ret_layout;
+                    const empty_span = mono.MonoIR.MonoExprSpan.empty();
+                    break :blk try self.generateClosureDispatch(cv, empty_span, actual_ret_layout);
+                },
+                else => result_loc,
+            };
+
+            // Store result to the saved result pointer - but only if return type is non-zero-sized
+            // Per RocCall ABI: "If the Roc function returns a zero-sized type like `{}`,
+            // it will not write anything into this address."
+            const ret_size = self.getLayoutSize(actual_ret_layout);
+            if (ret_size > 0) {
+                try self.storeResultToSavedPtr(final_result, actual_ret_layout, result_ptr_save_reg, tuple_len);
+            }
 
             // Emit epilogue to restore callee-saved registers and return
             try self.emitMainEpilogue();
@@ -10308,6 +10356,11 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         try self.codegen.emit.movMemReg(.w64, .RBP, slot, reg);
                     }
                 },
+                // Lambda and closure values should be called/dispatched first, not stored directly.
+                // The caller must handle these by extracting the actual return layout and calling.
+                .lambda_code, .closure_value => {
+                    std.debug.panic("storeResultToSlot: cannot store lambda_code or closure_value directly - caller must call/dispatch and store the result", .{});
+                },
                 else => {
                     // For other types, try a generic copy using slot_size
                     var offset: u32 = 0;
@@ -15482,8 +15535,13 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 // If the body is a lambda or closure (function value), we need to CALL it, not return it.
                 // This happens when the entrypoint is defined as `main_for_host! = main!` where
                 // `main!` is a lambda/closure.
+                // Track the actual return layout (may differ from ret_layout if body is a closure)
+                var actual_ret_layout = ret_layout;
+
                 const final_result = switch (result_loc) {
                     .lambda_code => |lc| blk: {
+                        // The lambda's return layout is the actual return type
+                        actual_ret_layout = lc.ret_layout;
                         // Call the lambda with BL instruction (aarch64)
                         // Calculate relative offset from current position
                         const current_offset = self.codegen.currentOffset();
@@ -15495,14 +15553,31 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     },
                     .closure_value => |cv| blk: {
                         // Dispatch the closure call with no arguments
+                        // The closure's return layout is the actual return type, not the closure layout
+                        const lambda_expr = self.store.getExpr(cv.lambda);
+                        const lambda = switch (lambda_expr) {
+                            .lambda => |l| l,
+                            .closure => |c| inner: {
+                                const inner = self.store.getExpr(c.lambda);
+                                if (inner == .lambda) break :inner inner.lambda;
+                                unreachable;
+                            },
+                            else => unreachable,
+                        };
+                        actual_ret_layout = lambda.ret_layout;
                         const empty_span = mono.MonoIR.MonoExprSpan.empty();
-                        break :blk try self.generateClosureDispatch(cv, empty_span, ret_layout);
+                        break :blk try self.generateClosureDispatch(cv, empty_span, actual_ret_layout);
                     },
                     else => result_loc,
                 };
 
-                // Store result to ret_ptr (X20)
-                try self.storeResultToSavedPtr(final_result, ret_layout, .X20, 1);
+                // Store result to ret_ptr (X20) - but only if return type is non-zero-sized
+                // Per RocCall ABI: "If the Roc function returns a zero-sized type like `{}`,
+                // it will not write anything into this address."
+                const ret_size = self.getLayoutSize(actual_ret_layout);
+                if (ret_size > 0) {
+                    try self.storeResultToSavedPtr(final_result, actual_ret_layout, .X20, 1);
+                }
 
                 // Epilogue: restore callee-saved registers first
                 try self.codegen.emit.ldpSignedOffset(.w64, .X21, .X22, .FP, 4); // FP + 32
@@ -15575,8 +15650,13 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 // This happens when the entrypoint is defined as `main_for_host! = main!` where
                 // `main!` is a lambda/closure. Evaluating the body gives us the function, but we need
                 // to invoke it to get the actual result.
+                // Track the actual return layout (may differ from ret_layout if body is a closure)
+                var actual_ret_layout = ret_layout;
+
                 const final_result = switch (result_loc) {
                     .lambda_code => |lc| blk: {
+                        // The lambda's return layout is the actual return type
+                        actual_ret_layout = lc.ret_layout;
                         // Call the lambda with roc_ops as first argument
                         // The lambda's code is at lc.code_offset and expects roc_ops in RCX (Windows)
                         // R12 holds roc_ops, so pass it to the lambda
@@ -15594,15 +15674,31 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     },
                     .closure_value => |cv| blk: {
                         // Dispatch the closure call with no arguments
-                        // Use an empty span - entrypoint functions take no user-visible args
+                        // The closure's return layout is the actual return type, not the closure layout
+                        const lambda_expr = self.store.getExpr(cv.lambda);
+                        const lambda = switch (lambda_expr) {
+                            .lambda => |l| l,
+                            .closure => |c| inner: {
+                                const inner = self.store.getExpr(c.lambda);
+                                if (inner == .lambda) break :inner inner.lambda;
+                                unreachable;
+                            },
+                            else => unreachable,
+                        };
+                        actual_ret_layout = lambda.ret_layout;
                         const empty_span = mono.MonoIR.MonoExprSpan.empty();
-                        break :blk try self.generateClosureDispatch(cv, empty_span, ret_layout);
+                        break :blk try self.generateClosureDispatch(cv, empty_span, actual_ret_layout);
                     },
                     else => result_loc,
                 };
 
-                // Store result to ret_ptr (RBX)
-                try self.storeResultToSavedPtr(final_result, ret_layout, .RBX, 1);
+                // Store result to ret_ptr (RBX) - but only if return type is non-zero-sized
+                // Per RocCall ABI: "If the Roc function returns a zero-sized type like `{}`,
+                // it will not write anything into this address."
+                const ret_size = self.getLayoutSize(actual_ret_layout);
+                if (ret_size > 0) {
+                    try self.storeResultToSavedPtr(final_result, actual_ret_layout, .RBX, 1);
+                }
 
                 // Epilogue: deallocate locals, restore callee-saved, return
                 try self.codegen.emit.addRegImm32(.w64, .RSP, @intCast(local_space));
@@ -15633,6 +15729,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             }
             // Default sizes for well-known layouts
             return switch (layout_idx) {
+                .zst => 0, // Zero-sized type (empty records, empty tuples, etc.)
                 .i8, .u8, .bool => 1,
                 .i16, .u16 => 2,
                 .i32, .u32, .f32 => 4,
