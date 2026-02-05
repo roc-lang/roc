@@ -15519,6 +15519,11 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
                 self.roc_ops_reg = .X19;
 
+                // Initialize stack_offset to skip over saved registers
+                // Frame layout: [FP+0]=FP, [FP+8]=LR, [FP+16]=x19, [FP+24]=x20, [FP+32]=x21, [FP+40]=x22
+                // Locals start at [FP+48]
+                self.codegen.stack_offset = 48;
+
                 // Unpack arguments from args_ptr (X21) to argument registers
                 var args_offset: i32 = 0;
                 for (arg_layouts, 0..) |arg_layout, i| {
