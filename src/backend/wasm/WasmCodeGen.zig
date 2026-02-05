@@ -4071,9 +4071,10 @@ fn generateRecord(self: *Self, r: anytype) Error!void {
     // to the same stack offset each iteration).
     const fields = self.store.getExprSpan(r.fields);
 
-    // Use a bounded array to store field value locals (max 32 fields inline)
-    var field_val_locals: [32]u32 = undefined;
-    var field_val_types: [32]ValType = undefined;
+    const field_val_locals = self.allocator.alloc(u32, fields.len) catch return error.OutOfMemory;
+    defer self.allocator.free(field_val_locals);
+    const field_val_types = self.allocator.alloc(ValType, fields.len) catch return error.OutOfMemory;
+    defer self.allocator.free(field_val_types);
 
     for (fields, 0..) |field_expr_id, i| {
         const field_layout_idx = ls.getRecordFieldLayout(l.data.record.idx, @intCast(i));
