@@ -31,6 +31,10 @@ const MachO = struct {
     const LC_SEGMENT_64 = 0x19;
     const LC_SYMTAB = 0x2;
     const LC_DYSYMTAB = 0xb;
+    const LC_BUILD_VERSION = 0x32;
+
+    // Platform constants for LC_BUILD_VERSION
+    const PLATFORM_MACOS = 1;
 
     // Section types
     const S_ATTR_PURE_INSTRUCTIONS = 0x80000000;
@@ -123,6 +127,16 @@ const DysymtabCommand = extern struct {
     nextrel: u32,
     locreloff: u32,
     nlocrel: u32,
+};
+
+/// Build version command (24 bytes)
+const BuildVersionCommand = extern struct {
+    cmd: u32,
+    cmdsize: u32,
+    platform: u32,
+    minos: u32, // X.Y.Z encoded as xxxx.yy.zz
+    sdk: u32,
+    ntools: u32,
 };
 
 /// 64-bit nlist (symbol table entry)
@@ -303,7 +317,8 @@ pub const MachOWriter = struct {
         const segment_cmd_size: u32 = @sizeOf(SegmentCommand64) + @sizeOf(Section64);
         const symtab_cmd_size: u32 = @sizeOf(SymtabCommand);
         const dysymtab_cmd_size: u32 = @sizeOf(DysymtabCommand);
-        const total_cmd_size: u32 = segment_cmd_size + symtab_cmd_size + dysymtab_cmd_size;
+        const build_version_cmd_size: u32 = @sizeOf(BuildVersionCommand);
+        const total_cmd_size: u32 = segment_cmd_size + symtab_cmd_size + dysymtab_cmd_size + build_version_cmd_size;
 
         // Calculate offsets
         const text_offset: u32 = header_size + total_cmd_size;
@@ -347,7 +362,7 @@ pub const MachOWriter = struct {
             .cputype = self.arch.cpuType(),
             .cpusubtype = self.arch.cpuSubtype(),
             .filetype = MachO.MH_OBJECT,
-            .ncmds = 3, // segment, symtab, dysymtab
+            .ncmds = 4, // segment, symtab, dysymtab, build_version
             .sizeofcmds = total_cmd_size,
             .flags = MachO.MH_SUBSECTIONS_VIA_SYMBOLS,
             .reserved = 0,
@@ -430,6 +445,18 @@ pub const MachOWriter = struct {
             .nlocrel = 0,
         };
         try output.appendSlice(self.allocator, std.mem.asBytes(&dysymtab_cmd));
+
+        // Write build version command (required for modern macOS)
+        // minos/sdk format: nibbles are xxxx.yy.zz (e.g., 0x000d0000 = 13.0.0)
+        const build_version_cmd = BuildVersionCommand{
+            .cmd = MachO.LC_BUILD_VERSION,
+            .cmdsize = build_version_cmd_size,
+            .platform = MachO.PLATFORM_MACOS,
+            .minos = 0x000d0000, // macOS 13.0.0
+            .sdk = 0x000d0000, // macOS 13.0.0
+            .ntools = 0,
+        };
+        try output.appendSlice(self.allocator, std.mem.asBytes(&build_version_cmd));
 
         // Write text section content
         try output.appendSlice(self.allocator, self.text.items);

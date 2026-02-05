@@ -4143,9 +4143,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 try self.codegen.emit.ldrRegMemSoff(.w64, fns_ptr_reg, roc_ops_reg, 64);
 
                 // Load function pointer: fns[index] = [fns_ptr + index * 8]
-                const fn_ptr_reg = try self.allocTempGeneral();
+                // Use X9 as scratch register for fn_ptr to avoid conflicts with argument registers X0-X2
                 const fn_offset: i32 = @intCast(hc.index * 8);
-                try self.codegen.emit.ldrRegMemSoff(.w64, fn_ptr_reg, fns_ptr_reg, fn_offset);
+                try self.codegen.emit.ldrRegMemSoff(.w64, .X9, fns_ptr_reg, fn_offset);
                 self.codegen.freeGeneral(fns_ptr_reg);
 
                 // Set up arguments for the hosted function call:
@@ -4163,18 +4163,19 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 try self.codegen.emit.movRegImm64(.X2, @bitCast(@as(i64, args_slot)));
                 try self.codegen.emit.addRegRegReg(.w64, .X2, .FP, .X2);
 
-                // Call the hosted function
-                try self.codegen.emit.blrReg(fn_ptr_reg);
-                self.codegen.freeGeneral(fn_ptr_reg);
+                // Call the hosted function (fn_ptr is in X9, safe from argument setup)
+                try self.codegen.emit.blrReg(.X9);
             } else if (arch == .x86_64) {
                 // Load hosted_fns.fns pointer: [roc_ops + 64]
                 const fns_ptr_reg = try self.allocTempGeneral();
                 try self.codegen.emit.movRegMem(.w64, fns_ptr_reg, roc_ops_reg, 64);
 
-                // Load function pointer: fns[index] = [fns_ptr + index * 8]
-                const fn_ptr_reg = try self.allocTempGeneral();
+                // Load function pointer into R10 (scratch register, not used for arguments)
+                // IMPORTANT: We use R10 instead of allocTempGeneral() because the allocated
+                // register could be RDI/RSI/RDX/RCX/R8 which would get clobbered when we
+                // set up the call arguments below.
                 const fn_offset: i32 = @intCast(hc.index * 8);
-                try self.codegen.emit.movRegMem(.w64, fn_ptr_reg, fns_ptr_reg, fn_offset);
+                try self.codegen.emit.movRegMem(.w64, .R10, fns_ptr_reg, fn_offset);
                 self.codegen.freeGeneral(fns_ptr_reg);
 
                 // Set up arguments for the hosted function call
@@ -4197,8 +4198,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     // Windows x64 ABI requires 32 bytes of shadow space for the callee
                     try self.codegen.emit.subRegImm32(.w64, .RSP, 32);
 
-                    // Call the hosted function
-                    try self.codegen.emit.callReg(fn_ptr_reg);
+                    // Call the hosted function (R10 is safe from argument setup)
+                    try self.codegen.emit.callReg(.R10);
 
                     // Clean up shadow space
                     try self.codegen.emit.addRegImm32(.w64, .RSP, 32);
@@ -4216,10 +4217,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     // RDX = args_ptr
                     try self.codegen.emit.leaRegMem(.RDX, .RBP, args_slot);
 
-                    // Call the hosted function
-                    try self.codegen.emit.callReg(fn_ptr_reg);
+                    // Call the hosted function (R10 is safe from argument setup)
+                    try self.codegen.emit.callReg(.R10);
                 }
-                self.codegen.freeGeneral(fn_ptr_reg);
             }
 
             // Return the result location based on return type
@@ -12986,8 +12986,10 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 // Reserve 40 bytes for 5 callee-saved registers at fixed offsets
                 self.codegen.stack_offset = -CodeGen.CALLEE_SAVED_AREA_SIZE;
             } else {
-                // aarch64: FP-relative addressing, first slot at FP+16
-                self.codegen.stack_offset = 16;
+                // aarch64: FP-relative addressing
+                // Reserve space for: FP/LR (16 bytes) + callee-saved area (80 bytes)
+                // First slot at FP + 16 + 80 = FP + 96
+                self.codegen.stack_offset = 16 + CodeGen.CALLEE_SAVED_AREA_SIZE;
             }
 
             const body_start = self.codegen.currentOffset();
@@ -13099,10 +13101,13 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
                 // Emit aarch64 prologue
                 const prologue_start = self.codegen.currentOffset();
-                const total_frame = 16 + PROC_STACK_SIZE;
+                // Total frame = FP/LR (16) + callee-saved area (80) + locals (PROC_STACK_SIZE)
+                const total_frame = 16 + CodeGen.CALLEE_SAVED_AREA_SIZE + PROC_STACK_SIZE;
                 const scaled_offset: i7 = @intCast(@divExact(-total_frame, 8));
                 try self.codegen.emit.stpPreIndex(.w64, .FP, .LR, .ZRSP, scaled_offset);
                 try self.codegen.emit.movRegReg(.w64, .FP, .ZRSP);
+                // Save callee-saved registers at fixed offsets [FP+16], [FP+32], etc.
+                try self.codegen.emitSaveCalleeSavedToFrame();
                 const prologue_size = self.codegen.currentOffset() - prologue_start;
 
                 // PHASE 2.5: Patch self-calls in body_bytes
@@ -13223,7 +13228,10 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             if (comptime target.toCpuArch() == .x86_64) {
                 self.codegen.stack_offset = -CodeGen.CALLEE_SAVED_AREA_SIZE;
             } else {
-                self.codegen.stack_offset = 16;
+                // aarch64: FP-relative addressing
+                // Reserve space for: FP/LR (16 bytes) + callee-saved area (80 bytes)
+                // First slot at FP + 16 + 80 = FP + 96
+                self.codegen.stack_offset = 16 + CodeGen.CALLEE_SAVED_AREA_SIZE;
             }
 
             const body_start = self.codegen.currentOffset();
@@ -13340,10 +13348,13 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
                 // Emit aarch64 prologue
                 const prologue_start = self.codegen.currentOffset();
-                const total_frame = 16 + PROC_STACK_SIZE;
+                // Total frame = FP/LR (16) + callee-saved area (80) + locals (PROC_STACK_SIZE)
+                const total_frame = 16 + CodeGen.CALLEE_SAVED_AREA_SIZE + PROC_STACK_SIZE;
                 const scaled_offset: i7 = @intCast(@divExact(-total_frame, 8));
                 try self.codegen.emit.stpPreIndex(.w64, .FP, .LR, .ZRSP, scaled_offset);
                 try self.codegen.emit.movRegReg(.w64, .FP, .ZRSP);
+                // Save callee-saved registers at fixed offsets [FP+16], [FP+32], etc.
+                try self.codegen.emitSaveCalleeSavedToFrame();
                 const prologue_size = self.codegen.currentOffset() - prologue_start;
 
                 // Re-append body
@@ -14126,17 +14137,20 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
         fn emitPrologue(self: *Self) Error!void {
             if (comptime target.toCpuArch() == .aarch64) {
                 // AArch64 prologue:
-                // stp x29, x30, [sp, #-(16+STACK_SIZE)]!  ; Save FP/LR and allocate stack
-                // mov x29, sp                             ; Set up new frame pointer
-                // Total frame = 16 (FP/LR) + PROC_STACK_SIZE (locals)
+                // stp x29, x30, [sp, #-(16+CALLEE_SAVED+STACK_SIZE)]!  ; Save FP/LR and allocate stack
+                // mov x29, sp                                          ; Set up new frame pointer
+                // Save callee-saved registers at fixed offsets
+                // Total frame = 16 (FP/LR) + CALLEE_SAVED_AREA (80) + PROC_STACK_SIZE (locals)
                 // stp offset is in units of 8 bytes (scaled)
-                const total_frame = 16 + PROC_STACK_SIZE;
+                const total_frame = 16 + CodeGen.CALLEE_SAVED_AREA_SIZE + PROC_STACK_SIZE;
                 const scaled_offset: i7 = @intCast(@divExact(-total_frame, 8));
                 try self.codegen.emit.stpPreIndex(.w64, .FP, .LR, .ZRSP, scaled_offset);
                 try self.codegen.emit.movRegReg(.w64, .FP, .ZRSP);
+                // Save callee-saved registers at fixed offsets [FP+16], [FP+32], etc.
+                try self.codegen.emitSaveCalleeSavedToFrame();
                 // Reset stack_offset to account for the pre-allocated space
-                // Stack slots start at FP+16 (above saved FP/LR) and go up
-                self.codegen.stack_offset = 16; // First slot at [FP+16]
+                // Stack slots start at FP+16+80 (above saved FP/LR and callee-saved) and go up
+                self.codegen.stack_offset = 16 + CodeGen.CALLEE_SAVED_AREA_SIZE;
             } else {
                 // x86_64 prologue:
                 // push rbp                    ; Save frame pointer
@@ -14155,10 +14169,12 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
         fn emitEpilogue(self: *Self) Error!void {
             if (comptime target.toCpuArch() == .aarch64) {
                 // AArch64 epilogue:
-                // ldp x29, x30, [sp], #(16+STACK_SIZE)  ; Restore FP/LR and deallocate
-                // ret                                   ; Return to caller
+                // First restore callee-saved registers from fixed offsets [FP+16], [FP+32], etc.
+                try self.codegen.emitRestoreCalleeSavedFromFrame();
+                // ldp x29, x30, [sp], #(16+CALLEE_SAVED+STACK_SIZE)  ; Restore FP/LR and deallocate
+                // ret                                                 ; Return to caller
                 // ldp offset is in units of 8 bytes (scaled)
-                const total_frame = 16 + PROC_STACK_SIZE;
+                const total_frame = 16 + CodeGen.CALLEE_SAVED_AREA_SIZE + PROC_STACK_SIZE;
                 const scaled_offset: i7 = @intCast(@divExact(total_frame, 8));
                 try self.codegen.emit.ldpPostIndex(.w64, .FP, .LR, .ZRSP, scaled_offset);
                 try self.codegen.emit.ret();
@@ -15419,13 +15435,19 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             // aarch64 AAPCS64: X0=roc_ops, X1=ret_ptr, X2=args_ptr
 
             if (arch == .aarch64 or arch == .aarch64_be) {
-                // Reserve space for callee-saved registers and locals
-                // FP and LR are saved by STP instruction
-                const frame_size: i32 = 64; // Space for saved regs + locals
+                // Reserve space for: FP/LR (16) + callee-saved x19/x20 (16) + x21 with padding (16) + locals (64)
+                // Total: 112 bytes
+                const frame_size: i32 = 112;
                 const scaled_offset: i7 = @intCast(@divExact(-frame_size, 8));
                 try self.codegen.emit.stpPreIndex(.w64, .FP, .LR, .ZRSP, scaled_offset);
                 try self.codegen.emit.movRegReg(.w64, .FP, .ZRSP);
 
+                // Save callee-saved registers at fixed offsets from FP
+                // [FP+16] = x19/x20, [FP+32] = x21 (paired with x22 for alignment)
+                try self.codegen.emit.stpSignedOffset(.w64, .X19, .X20, .FP, 2); // FP + 16
+                try self.codegen.emit.stpSignedOffset(.w64, .X21, .X22, .FP, 4); // FP + 32
+
+                // Now safe to use callee-saved registers
                 // Save RocOps pointer (X0) to callee-saved register X19
                 try self.codegen.emit.movRegReg(.w64, .X19, .X0);
                 // Save ret_ptr (X1) to callee-saved register X20
@@ -15474,7 +15496,11 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 // Store result to ret_ptr (X20)
                 try self.storeResultToSavedPtr(final_result, ret_layout, .X20, 1);
 
-                // Epilogue: restore FP/LR and return
+                // Epilogue: restore callee-saved registers first
+                try self.codegen.emit.ldpSignedOffset(.w64, .X21, .X22, .FP, 4); // FP + 32
+                try self.codegen.emit.ldpSignedOffset(.w64, .X19, .X20, .FP, 2); // FP + 16
+
+                // Restore FP/LR and return
                 try self.codegen.emit.ldpPostIndex(.w64, .FP, .LR, .ZRSP, @intCast(@divExact(frame_size, 8)));
                 try self.codegen.emit.ret();
             } else {

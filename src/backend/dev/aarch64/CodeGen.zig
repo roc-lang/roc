@@ -40,6 +40,10 @@ pub fn CodeGen(comptime target: RocTarget) type {
         /// Number of float registers
         const NUM_FLOAT_REGS = 32;
 
+        /// Size of callee-saved area in bytes (5 pairs * 16 bytes = 80)
+        /// Used by MonoExprCodeGen to reserve stack space for callee-saved registers
+        pub const CALLEE_SAVED_AREA_SIZE: i32 = 80;
+
         /// Bitmask of callee-saved general registers available for allocation
         /// X19-X28 (not FP/X29 or LR/X30 - they're special)
         pub const CALLEE_SAVED_GENERAL_MASK: u32 =
@@ -414,7 +418,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
 
         /// Callee-saved registers in pairs for saving/restoring
         /// aarch64 saves registers in pairs for efficiency
-        const CALLEE_SAVED_PAIRS = [_][2]GeneralReg{
+        pub const CALLEE_SAVED_PAIRS = [_][2]GeneralReg{
             .{ .X19, .X20 },
             .{ .X21, .X22 },
             .{ .X23, .X24 },
@@ -423,10 +427,38 @@ pub fn CodeGen(comptime target: RocTarget) type {
         };
 
         /// Check if any register in a pair is used
-        fn isPairUsed(self: *Self, pair: [2]GeneralReg) bool {
+        pub fn isPairUsed(self: *Self, pair: [2]GeneralReg) bool {
             const mask1 = @as(u32, 1) << @intFromEnum(pair[0]);
             const mask2 = @as(u32, 1) << @intFromEnum(pair[1]);
             return (self.callee_saved_used & (mask1 | mask2)) != 0;
+        }
+
+        /// Emit callee-saved register saves at fixed offsets from FP
+        /// Used by MonoExprCodeGen for procedures that pre-allocate the frame
+        /// Saves to [FP + 16], [FP + 32], etc. for each used pair
+        /// The offset is scaled by 8 for stp/ldp (i.e., offset=2 means 16 bytes)
+        pub fn emitSaveCalleeSavedToFrame(self: *Self) !void {
+            var scaled_offset: i7 = 2; // Start after FP/LR: 2 * 8 = 16 bytes
+            for (CALLEE_SAVED_PAIRS) |pair| {
+                if (self.isPairUsed(pair)) {
+                    try self.emit.stpSignedOffset(.w64, pair[0], pair[1], .FP, scaled_offset);
+                }
+                scaled_offset += 2; // Each pair is 16 bytes = 2 * 8
+            }
+        }
+
+        /// Emit callee-saved register restores from fixed offsets from FP
+        /// Used by MonoExprCodeGen for procedures that pre-allocate the frame
+        /// Restores from [FP + 16], [FP + 32], etc. for each used pair
+        /// The offset is scaled by 8 for stp/ldp (i.e., offset=2 means 16 bytes)
+        pub fn emitRestoreCalleeSavedFromFrame(self: *Self) !void {
+            var scaled_offset: i7 = 2; // Start after FP/LR: 2 * 8 = 16 bytes
+            for (CALLEE_SAVED_PAIRS) |pair| {
+                if (self.isPairUsed(pair)) {
+                    try self.emit.ldpSignedOffset(.w64, pair[0], pair[1], .FP, scaled_offset);
+                }
+                scaled_offset += 2; // Each pair is 16 bytes = 2 * 8
+            }
         }
 
         /// Emit function prologue (called at start of function)

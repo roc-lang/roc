@@ -1000,6 +1000,62 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.emit32(inst);
         }
 
+        /// STP (store pair) with signed offset - no writeback
+        /// Used for saving registers to pre-allocated frame slots
+        pub fn stpSignedOffset(self: *Self, width: RegisterWidth, reg1: GeneralReg, reg2: GeneralReg, base: GeneralReg, imm_offset: i7) !void {
+            // STP <Xt1>, <Xt2>, [<Xn|SP>, #<imm>]
+            // ARM encoding: opc 101 V 010 L imm7 Rt2 Rn Rt
+            // bits 31-30: opc (10 for 64-bit, 00 for 32-bit)
+            // bits 29-27: 101
+            // bit 26: V (0 for scalar)
+            // bits 25-23: 010 (signed offset, no writeback)
+            // bit 22: L (0 for store STP)
+            // bits 21-15: imm7 (signed, scaled by register size)
+            // bits 14-10: Rt2
+            // bits 9-5: Rn (base register)
+            // bits 4-0: Rt
+            const opc: u2 = if (width == .w64) 0b10 else 0b00;
+            const imm7: u7 = @bitCast(imm_offset);
+            const inst: u32 = (@as(u32, opc) << 30) |
+                (0b101 << 27) |
+                (0b0 << 26) |
+                (0b010 << 23) | // Signed offset mode: bits 25-23 = 010
+                (0b0 << 22) | // L=0 for STP (store)
+                (@as(u32, imm7) << 15) |
+                (@as(u32, reg2.enc()) << 10) |
+                (@as(u32, base.enc()) << 5) |
+                reg1.enc();
+            try self.emit32(inst);
+        }
+
+        /// LDP (load pair) with signed offset - no writeback
+        /// Used for restoring registers from pre-allocated frame slots
+        pub fn ldpSignedOffset(self: *Self, width: RegisterWidth, reg1: GeneralReg, reg2: GeneralReg, base: GeneralReg, imm_offset: i7) !void {
+            // LDP <Xt1>, <Xt2>, [<Xn|SP>, #<imm>]
+            // ARM encoding: opc 101 V 010 L imm7 Rt2 Rn Rt
+            // bits 31-30: opc (10 for 64-bit, 00 for 32-bit)
+            // bits 29-27: 101
+            // bit 26: V (0 for scalar)
+            // bits 25-23: 010 (signed offset, no writeback)
+            // bit 22: L (1 for load LDP)
+            // bits 21-15: imm7 (signed, scaled by register size)
+            // bits 14-10: Rt2
+            // bits 9-5: Rn (base register)
+            // bits 4-0: Rt
+            const opc: u2 = if (width == .w64) 0b10 else 0b00;
+            const imm7: u7 = @bitCast(imm_offset);
+            const inst: u32 = (@as(u32, opc) << 30) |
+                (0b101 << 27) |
+                (0b0 << 26) |
+                (0b010 << 23) | // Signed offset mode: bits 25-23 = 010
+                (0b1 << 22) | // L=1 for LDP (load)
+                (@as(u32, imm7) << 15) |
+                (@as(u32, reg2.enc()) << 10) |
+                (@as(u32, base.enc()) << 5) |
+                reg1.enc();
+            try self.emit32(inst);
+        }
+
         // Floating-point instructions
 
         /// Float type for instruction encoding
