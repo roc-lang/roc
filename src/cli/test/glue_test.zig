@@ -33,7 +33,7 @@ test "glue command with DebugGlue succeeds" {
         try std.testing.expect(false);
     }
 
-    // Emtpy string would indicate an encoding bug with the small string optimization
+    // Empty string would indicate an encoding bug with the small string optimization
     try std.testing.expect(std.mem.indexOf(u8, result.stderr, "name: \"\"") == null);
 
     // Should show the actual entry point name from the platform header
