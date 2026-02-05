@@ -1314,6 +1314,11 @@ fn runWithWindowsHandleInheritance(ctx: *CliContext, exe_path: []const u8, shm_h
     );
 
     if (success == 0) {
+        const last_error = std.os.windows.kernel32.GetLastError();
+        std.log.err("CreateProcessW failed with Windows error code: {}", .{last_error});
+        std.log.err("exe_path: {s}", .{exe_path});
+        std.log.err("cmd_line: {s}", .{cmd_builder.items[0 .. cmd_builder.items.len - 1]});
+        std.log.err("cwd: {s}", .{cwd});
         return ctx.fail(.{ .child_process_spawn_failed = .{
             .command = exe_path,
             .err = error.ProcessCreationFailed,
