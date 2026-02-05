@@ -126,7 +126,6 @@ roc_type_to_c : Str -> Str
 roc_type_to_c = |roc_type| {
 	trimmed = Str.trim(roc_type)
 
-	# Handle special cases first
 	if trimmed == "{}" or trimmed == "()" or trimmed == "{  }" {
 		return "void"
 	}
@@ -135,7 +134,6 @@ roc_type_to_c = |roc_type| {
 		return "RocList"
 	}
 
-	# Handle primitive types with match
 	match trimmed {
 		"Str" => "RocStr"
 		"Bool" => "bool"
@@ -204,12 +202,11 @@ to_screaming_snake_case = |s| {
 	var $prev_was_lower = Bool.False
 
 	for byte in bytes {
-		is_upper = byte >= 65 and byte <= 90 # A-Z
-		is_lower = byte >= 97 and byte <= 122 # a-z
+		is_upper = byte >= 'A' and byte <= 'Z'
+		is_lower = byte >= 'a' and byte <= 'z'
 
 		if is_upper and $prev_was_lower {
-			# Insert underscore before uppercase following lowercase
-			$output = $output.append(95) # 95 is underscore
+			$output = $output.append('_')
 		}
 
 		# Convert to uppercase
@@ -301,42 +298,41 @@ generate_args_struct = |func| {
 	parsed = parse_type_str(func.type_str)
 
 	if List.is_empty(parsed.args) {
-		""
-	} else {
-		struct_name = name_to_struct_name(func.name)
-		c_func_name = name_to_c_func_name(func.name)
-		ret_c_type = roc_type_to_c(parsed.ret)
-
-		var $fields = ""
-		var $idx = 0
-		for arg in parsed.args {
-			c_type = roc_type_to_c(arg)
-			if $idx > 0 {
-				$fields = Str.concat($fields, "\n")
-			}
-			$fields = Str.concat(
-				$fields,
-				"    ${c_type} arg${U64.to_str($idx)};  // ${arg}",
-			)
-			$idx = $idx + 1
-		}
-
-		struct_doc = doc_comment(
-			[
-				"Arguments for ${func.name}",
-				"Roc signature: ${func.type_str}",
-				"C function name: ${c_func_name}",
-				"Return type: ${ret_c_type}",
-			],
-		)
-		struct_def = "typedef struct {\n${$fields}\n} ${struct_name}Args;\n\n"
-		size_assert = "_Static_assert(sizeof(${struct_name}Args) > 0, \"${struct_name}Args must have non-zero size\");\n"
-		align_assert = "_Static_assert(_Alignof(${struct_name}Args) >= 1, \"${struct_name}Args must be aligned\");\n\n"
-		example = generate_example_impl(func.name, struct_name, parsed.args, ret_c_type)
-
-		"${struct_doc}${struct_def}${size_assert}${align_assert}${example}"
+		return ""
 	}
 
+	struct_name = name_to_struct_name(func.name)
+	c_func_name = name_to_c_func_name(func.name)
+	ret_c_type = roc_type_to_c(parsed.ret)
+
+	var $fields = ""
+	var $idx = 0
+	for arg in parsed.args {
+		c_type = roc_type_to_c(arg)
+		if $idx > 0 {
+			$fields = Str.concat($fields, "\n")
+		}
+		$fields = Str.concat(
+			$fields,
+			"    ${c_type} arg${U64.to_str($idx)};  // ${arg}",
+		)
+		$idx = $idx + 1
+	}
+
+	struct_doc = doc_comment(
+		[
+			"Arguments for ${func.name}",
+			"Roc signature: ${func.type_str}",
+			"C function name: ${c_func_name}",
+			"Return type: ${ret_c_type}",
+		],
+	)
+	struct_def = "typedef struct {\n${$fields}\n} ${struct_name}Args;\n\n"
+	size_assert = "_Static_assert(sizeof(${struct_name}Args) > 0, \"${struct_name}Args must have non-zero size\");\n"
+	align_assert = "_Static_assert(_Alignof(${struct_name}Args) >= 1, \"${struct_name}Args must be aligned\");\n\n"
+	example = generate_example_impl(func.name, struct_name, parsed.args, ret_c_type)
+
+	"${struct_doc}${struct_def}${size_assert}${align_assert}${example}"
 }
 
 ## Convert function name to lowercase C function name
@@ -361,8 +357,8 @@ to_lower_snake_case = |s| {
 	var $prev_was_lower = Bool.False
 
 	for byte in bytes {
-		is_upper = byte >= 65 and byte <= 90 # A-Z
-		is_lower = byte >= 97 and byte <= 122 # a-z
+		is_upper = byte >= 'A' and byte <= 'Z'
+		is_lower = byte >= 'a' and byte <= 'z'
 
 		new_byte = 
 			if is_upper {
@@ -372,8 +368,7 @@ to_lower_snake_case = |s| {
 			}
 
 		if is_upper and $prev_was_lower {
-			# Insert underscore before uppercase following lowercase
-			$output = $output.append(95) # 95 is underscore
+			$output = $output.append('_')
 		}
 		$output = $output.append(new_byte)
 		$prev_was_lower = is_lower

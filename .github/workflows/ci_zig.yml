@@ -216,7 +216,7 @@ jobs:
         run: |
           # Install libc6-dbg which is required for Valgrind's function redirections
           sudo apt-get update && sudo apt-get install -y libc6-dbg
-          sudo snap install valgrind --classic
+          sudo apt-get install -y valgrind
           valgrind --version
           ./ci/custom_valgrind.sh ./zig-out/bin/snapshot --debug --verbose
           ./ci/custom_valgrind.sh ./zig-out/bin/roc --no-cache test/str/app.roc
