@@ -3819,8 +3819,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         &layout_store,
         entrypoints.items,
         procs,
-        target_arch,
-        target_os,
+        target,
         obj_path,
     ) catch |err| {
         std.log.err("Native compilation failed: {}", .{err});

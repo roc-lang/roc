@@ -7,53 +7,8 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const object = @import("object/mod.zig");
-const x86_64 = @import("x86_64/mod.zig");
-const aarch64 = @import("aarch64/mod.zig");
+const RocTarget = @import("roc_target").RocTarget;
 const Relocation = @import("Relocation.zig").Relocation;
-
-/// Target architecture for code generation
-pub const Architecture = enum {
-    x86_64,
-    aarch64,
-
-    pub fn fromTarget(target: anytype) Architecture {
-        const arch = if (@hasField(@TypeOf(target), "cpu"))
-            target.cpu.arch
-        else if (@hasField(@TypeOf(target), "arch"))
-            target.arch
-        else
-            @compileError("Unknown target type");
-
-        return switch (arch) {
-            .x86_64 => .x86_64,
-            .aarch64 => .aarch64,
-            else => @panic("Unsupported architecture for dev backend"),
-        };
-    }
-};
-
-/// Target operating system
-pub const OperatingSystem = enum {
-    linux,
-    macos,
-    windows,
-
-    pub fn fromTarget(target: anytype) OperatingSystem {
-        const os_tag = if (@hasField(@TypeOf(target), "os"))
-            target.os.tag
-        else if (@hasField(@TypeOf(target), "os_tag"))
-            target.os_tag
-        else
-            @compileError("Unknown target type");
-
-        return switch (os_tag) {
-            .linux => .linux,
-            .macos => .macos,
-            .windows => .windows,
-            else => .linux, // Default to Linux for other Unix-like systems
-        };
-    }
-};
 
 /// Generate an object file from code and relocations.
 ///
@@ -61,19 +16,23 @@ pub const OperatingSystem = enum {
 /// machine code and produces a relocatable object file.
 pub fn generateObjectFile(
     allocator: Allocator,
-    arch: Architecture,
-    os: OperatingSystem,
+    target: RocTarget,
     code: []const u8,
     symbols: []const Symbol,
     relocations: []const Relocation,
     output: *std.ArrayList(u8),
 ) !void {
-    switch (os) {
-        .linux => {
-            var elf = try object.ElfWriter.init(allocator, switch (arch) {
+    const cpu_arch = target.toCpuArch();
+    const os_tag = target.toOsTag();
+
+    switch (os_tag) {
+        .linux, .freebsd, .openbsd, .netbsd => {
+            const elf_arch: object.elf.Architecture = switch (cpu_arch) {
                 .x86_64 => .x86_64,
                 .aarch64 => .aarch64,
-            });
+                else => return error.UnsupportedTarget,
+            };
+            var elf = try object.ElfWriter.init(allocator, elf_arch);
             defer elf.deinit();
 
             try elf.setCode(code);
@@ -105,10 +64,12 @@ pub fn generateObjectFile(
             try elf.write(output);
         },
         .macos => {
-            var macho = try object.MachOWriter.init(allocator, switch (arch) {
+            const macho_arch: object.macho.Architecture = switch (cpu_arch) {
                 .x86_64 => .x86_64,
                 .aarch64 => .aarch64,
-            });
+                else => return error.UnsupportedTarget,
+            };
+            var macho = try object.MachOWriter.init(allocator, macho_arch);
             defer macho.deinit();
 
             try macho.setCode(code);
@@ -138,10 +99,12 @@ pub fn generateObjectFile(
             try macho.write(output);
         },
         .windows => {
-            var coff_writer = try object.CoffWriter.init(allocator, switch (arch) {
+            const coff_arch: object.coff.Architecture = switch (cpu_arch) {
                 .x86_64 => .x86_64,
                 .aarch64 => .aarch64,
-            });
+                else => return error.UnsupportedTarget,
+            };
+            var coff_writer = try object.CoffWriter.init(allocator, coff_arch);
             defer coff_writer.deinit();
 
             try coff_writer.setCode(code);
@@ -171,6 +134,7 @@ pub fn generateObjectFile(
 
             try coff_writer.write(output);
         },
+        else => return error.UnsupportedTarget,
     }
 }
 
@@ -208,8 +172,7 @@ test "generate x86_64 linux object" {
 
     try generateObjectFile(
         allocator,
-        .x86_64,
-        .linux,
+        .x64linux,
         code,
         symbols,
         &.{},
@@ -243,8 +206,7 @@ test "generate x86_64 macos object" {
 
     try generateObjectFile(
         allocator,
-        .x86_64,
-        .macos,
+        .x64mac,
         code,
         symbols,
         &.{},
@@ -278,8 +240,7 @@ test "generate aarch64 linux object" {
 
     try generateObjectFile(
         allocator,
-        .aarch64,
-        .linux,
+        .arm64linux,
         code,
         symbols,
         &.{},
@@ -312,8 +273,7 @@ test "generate x86_64 windows object" {
 
     try generateObjectFile(
         allocator,
-        .x86_64,
-        .windows,
+        .x64win,
         code,
         symbols,
         &.{},
@@ -347,8 +307,7 @@ test "generate aarch64 windows object" {
 
     try generateObjectFile(
         allocator,
-        .aarch64,
-        .windows,
+        .arm64win,
         code,
         symbols,
         &.{},

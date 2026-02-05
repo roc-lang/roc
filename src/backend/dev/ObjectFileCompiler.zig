@@ -16,6 +16,7 @@ const Allocator = std.mem.Allocator;
 
 const layout = @import("layout");
 const mono = @import("mono");
+const RocTarget = @import("roc_target").RocTarget;
 
 const ObjectWriter = @import("ObjectWriter.zig");
 const HostMonoExprCodeGen = @import("MonoExprCodeGen.zig").HostMonoExprCodeGen;
@@ -76,8 +77,7 @@ pub const ObjectFileCompiler = struct {
         layout_store: *const layout.Store,
         entrypoints: []const Entrypoint,
         procs: []const mono.MonoProc,
-        target_arch: std.Target.Cpu.Arch,
-        target_os: std.Target.Os.Tag,
+        target: RocTarget,
     ) CompilationError!CompilationResult {
         if (entrypoints.len == 0) {
             return CompilationError.NoEntrypoints;
@@ -192,23 +192,9 @@ pub const ObjectFileCompiler = struct {
         var output = std.ArrayList(u8).empty;
         errdefer output.deinit(self.allocator);
 
-        const arch = switch (target_arch) {
-            .x86_64 => ObjectWriter.Architecture.x86_64,
-            .aarch64 => ObjectWriter.Architecture.aarch64,
-            else => return CompilationError.UnsupportedTarget,
-        };
-
-        const os = switch (target_os) {
-            .linux => ObjectWriter.OperatingSystem.linux,
-            .macos => ObjectWriter.OperatingSystem.macos,
-            .windows => ObjectWriter.OperatingSystem.windows,
-            else => ObjectWriter.OperatingSystem.linux, // Default to Linux for other Unix-like
-        };
-
         ObjectWriter.generateObjectFile(
             self.allocator,
-            arch,
-            os,
+            target,
             code,
             symbols.items,
             relocations,
@@ -232,8 +218,7 @@ pub const ObjectFileCompiler = struct {
         layout_store: *const layout.Store,
         entrypoints: []const Entrypoint,
         procs: []const mono.MonoProc,
-        target_arch: std.Target.Cpu.Arch,
-        target_os: std.Target.Os.Tag,
+        target: RocTarget,
         output_path: []const u8,
     ) CompilationError!void {
         var result = try self.compileToObjectFile(
@@ -241,8 +226,7 @@ pub const ObjectFileCompiler = struct {
             layout_store,
             entrypoints,
             procs,
-            target_arch,
-            target_os,
+            target,
         );
         defer result.deinit();
 
