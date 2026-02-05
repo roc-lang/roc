@@ -73,6 +73,8 @@ dec_mul_import: ?u32 = null,
 dec_to_str_import: ?u32 = null,
 /// Wasm function index for imported roc_str_eq host function.
 str_eq_import: ?u32 = null,
+/// Wasm function index for imported roc_panic host function.
+roc_panic_import: ?u32 = null,
 
 const CaptureInfo = struct {
     symbols: []const MonoSymbol,
@@ -150,6 +152,14 @@ fn registerHostImports(self: *Self) !void {
         &.{.i32},
     );
     self.str_eq_import = try self.module.addImport("env", "roc_str_eq", str_eq_type);
+
+    // roc_panic: (i32 msg_ptr, i32 msg_len) -> void
+    // Receives a crash message as a pointer and length, then traps.
+    const panic_type = try self.module.addFuncType(
+        &.{ .i32, .i32 },
+        &.{},
+    );
+    self.roc_panic_import = try self.module.addImport("env", "roc_panic", panic_type);
 }
 
 /// Result of generating a wasm module
@@ -749,8 +759,17 @@ fn generateExpr(self: *Self, expr_id: MonoExprId) Error!void {
         .runtime_error => {
             self.body.append(self.allocator, Op.@"unreachable") catch return error.OutOfMemory;
         },
-        .crash => {
-            // For now, emit unreachable (Phase 7 will call roc_panic import)
+        .crash => |crash| {
+            const import_idx = self.roc_panic_import orelse return unsupported(@src());
+            const msg_bytes = self.store.getString(crash.msg);
+            const data_offset = self.module.addDataSegment(msg_bytes, 1) catch return error.OutOfMemory;
+            // Push message pointer and length
+            self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(data_offset)) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(msg_bytes.len)) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.call) catch return error.OutOfMemory;
+            WasmModule.leb128WriteU32(self.allocator, &self.body, import_idx) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.@"unreachable") catch return error.OutOfMemory;
         },
         .early_return => |er| {

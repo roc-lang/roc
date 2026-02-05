@@ -391,6 +391,16 @@ fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_i
             return error.WasmExecFailed;
         };
 
+        env_imports.addHostFunction(
+            "roc_panic",
+            &[_]bytebox.ValType{ .I32, .I32 },
+            &[_]bytebox.ValType{},
+            hostPanic,
+            null,
+        ) catch {
+            return error.WasmExecFailed;
+        };
+
         const imports = [_]bytebox.ModuleImportPackage{env_imports};
         module_instance.instantiate(.{ .stack_size = 1024 * 64, .imports = &imports }) catch {
             return error.WasmExecFailed;
@@ -665,6 +675,19 @@ fn hostStrEq(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const b
 
     const equal = std.mem.eql(u8, a_data[0..a_len], b_data[0..b_len]);
     results[0] = bytebox.Val{ .I32 = if (equal) 1 else 0 };
+}
+
+fn hostPanic(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    const mem = module.store.getMemory(0);
+    const buffer = mem.buffer();
+
+    const msg_ptr: usize = @intCast(params[0].I32);
+    const msg_len: usize = @intCast(params[1].I32);
+
+    if (msg_ptr + msg_len <= buffer.len) {
+        const msg = buffer[msg_ptr..][0..msg_len];
+        std.debug.print("Roc crashed: {s}\n", .{msg});
+    }
 }
 
 /// Compare Interpreter result string with WasmEvaluator result string.
