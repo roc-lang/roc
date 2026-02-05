@@ -5167,15 +5167,47 @@ fn generateLowLevel(self: *Self, ll: anytype) Error!void {
         // String operations
         .str_is_empty => {
             // Check if string length is 0
-            // For SSO: byte 11 has length in high nibble (masked to 0x7F)
-            // For heap: offset 4 has length
-            // Simplified: load byte 11, check SSO bit, then compare len to 0
-            // For now, just load the 4-byte length field at offset 4 and check
+            // RocStr layout (12 bytes on wasm32):
+            //   SSO:  bytes[0..10] = inline data, byte 11 = len | 0x80
+            //   Heap: i32 ptr (offset 0), i32 len (offset 4), i32 cap (offset 8)
             try self.generateExpr(args[0]);
-            // Load the length/SSO word at offset 4
-            try self.emitLoadOp(.i32, 4);
-            // If it's 0, the string is empty (works for both SSO and heap empty strings)
+            const str_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitLocalSet(str_local);
+
+            // Load byte 11 to check SSO flag
+            try self.emitLocalGet(str_local);
+            self.body.append(self.allocator, Op.i32_load8_u) catch return error.OutOfMemory;
+            WasmModule.leb128WriteU32(self.allocator, &self.body, 0) catch return error.OutOfMemory; // align
+            WasmModule.leb128WriteU32(self.allocator, &self.body, 11) catch return error.OutOfMemory; // offset
+
+            const byte11 = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitLocalSet(byte11);
+
+            // Check high bit (0x80) for SSO flag
+            try self.emitLocalGet(byte11);
+            self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI32(self.allocator, &self.body, 0x80) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
+
+            // if (SSO)
+            self.body.append(self.allocator, Op.@"if") catch return error.OutOfMemory;
+            self.body.append(self.allocator, @intFromEnum(ValType.i32)) catch return error.OutOfMemory;
+
+            // SSO: length = byte11 & 0x7F, check == 0
+            try self.emitLocalGet(byte11);
+            self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI32(self.allocator, &self.body, 0x7F) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
+
+            self.body.append(self.allocator, Op.@"else") catch return error.OutOfMemory;
+
+            // Heap: load i32 length at offset 4, check == 0
+            try self.emitLocalGet(str_local);
+            try self.emitLoadOp(.i32, 4);
+            self.body.append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
+
+            self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
         },
 
         // Bitwise operations
