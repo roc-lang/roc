@@ -1072,14 +1072,8 @@ fn setupExternalCallTypeScope(
     call_expr_idx: CIR.Expr.Idx,
 ) Allocator.Error!void {
     // Get the external module
-    const ext_module_idx = caller_module_env.imports.getResolvedModule(lookup.module_idx) orelse {
-        std.debug.print("setupExternalCallTypeScope: import not resolved for module_idx={}\n", .{@intFromEnum(lookup.module_idx)});
-        return;
-    };
-    if (ext_module_idx >= self.all_module_envs.len) {
-        std.debug.print("setupExternalCallTypeScope: ext_module_idx={} out of bounds (len={})\n", .{ ext_module_idx, self.all_module_envs.len });
-        return;
-    }
+    const ext_module_idx = caller_module_env.imports.getResolvedModule(lookup.module_idx) orelse return;
+    if (ext_module_idx >= self.all_module_envs.len) return;
     const ext_module_env = self.all_module_envs[ext_module_idx];
 
     // Check if this is actually a def node (type modules with hosted functions may have different node types)
@@ -1642,15 +1636,8 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             // the platform's `requires` clause. E.g., `main!` in `requires { main! : ... }`
 
             // Get the app module index (set during lowerer initialization)
-            const app_idx = self.app_module_idx orelse {
-                std.debug.print("e_lookup_required: app_module_idx not set\n", .{});
-                break :blk .{ .runtime_error = {} };
-            };
-
-            if (app_idx >= self.all_module_envs.len) {
-                std.debug.print("e_lookup_required: app_module_idx {} out of bounds\n", .{app_idx});
-                break :blk .{ .runtime_error = {} };
-            }
+            const app_idx = self.app_module_idx orelse break :blk .{ .runtime_error = {} };
+            if (app_idx >= self.all_module_envs.len) break :blk .{ .runtime_error = {} };
 
             const app_env = self.all_module_envs[app_idx];
 
@@ -1677,7 +1664,6 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             }
 
             if (found_def_idx == null or found_ident_idx == null) {
-                std.debug.print("e_lookup_required: '{s}' not found in app exports (exports.len={})\n", .{ required_name, exports.len });
                 break :blk .{ .runtime_error = {} };
             }
 
@@ -2756,8 +2742,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             // Use the function's RETURN type for ret_layout
             const ret_layout = if (func_type) |ft| ret_blk: {
                 break :ret_blk ls.fromTypeVar(self.current_module_idx, ft.ret, &self.type_scope, self.type_scope_caller_module) catch unreachable;
-            } else
-                self.getExprLayoutFromIdx(module_env, expr_idx);
+            } else self.getExprLayoutFromIdx(module_env, expr_idx);
 
             // Create the hosted call as the body
             const body_id = try self.store.addExpr(.{
@@ -4593,7 +4578,7 @@ pub fn lowerExpression(
     module_idx: u16,
     expr_idx: CIR.Expr.Idx,
 ) Allocator.Error!MonoExprId {
-    var lowerer = init(allocator, store, all_module_envs, null, null);
+    var lowerer = init(allocator, store, all_module_envs, null, null, null, null);
     defer lowerer.deinit();
     return lowerer.lowerExpr(module_idx, expr_idx);
 }
@@ -4694,7 +4679,7 @@ pub fn lowerFromEntryPoints(
     layout_store: ?*LayoutStore,
     entry_points: []const EntryPoint,
 ) Allocator.Error!void {
-    var lowerer = init(allocator, store, all_module_envs, lambda_inference, layout_store);
+    var lowerer = init(allocator, store, all_module_envs, lambda_inference, layout_store, null, null);
     defer lowerer.deinit();
 
     for (entry_points) |entry| {

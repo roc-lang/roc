@@ -8,6 +8,7 @@
 //! - aarch64: Linux and macOS (AAPCS64)
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const layout = @import("layout");
 const builtins = @import("builtins");
@@ -35,7 +36,12 @@ pub const applyRelocations = relocation_mod.applyRelocations;
 pub const SymbolResolver = relocation_mod.SymbolResolver;
 pub const CodeGen = @import("CodeGen.zig");
 pub const Backend = @import("Backend.zig");
-pub const ExecutableMemory = @import("ExecutableMemory.zig").ExecutableMemory;
+
+// ExecutableMemory and NativeCompiler use OS-specific APIs not available on freestanding
+pub const ExecutableMemory = if (builtin.os.tag == .freestanding)
+    void
+else
+    @import("ExecutableMemory.zig").ExecutableMemory;
 
 // Static data interner for string literals and other static data
 pub const StaticDataInterner = @import("StaticDataInterner.zig");
@@ -67,9 +73,10 @@ pub const Arm64WinMonoExprCodeGen = MonoExprCodeGenMod.Arm64WinMonoExprCodeGen;
 pub const Arm64MacMonoExprCodeGen = MonoExprCodeGenMod.Arm64MacMonoExprCodeGen;
 
 /// Native compiler for generating object files from Mono IR
-pub const NativeCompiler = @import("NativeCompiler.zig").NativeCompiler;
-pub const Entrypoint = @import("NativeCompiler.zig").Entrypoint;
-pub const CompilationResult = @import("NativeCompiler.zig").CompilationResult;
+/// Only available on non-freestanding targets (uses std.fs)
+pub const NativeCompiler = if (builtin.os.tag == .freestanding) void else @import("NativeCompiler.zig").NativeCompiler;
+pub const Entrypoint = if (builtin.os.tag == .freestanding) void else @import("NativeCompiler.zig").Entrypoint;
+pub const CompilationResult = if (builtin.os.tag == .freestanding) void else @import("NativeCompiler.zig").CompilationResult;
 
 /// Generic development backend parameterized by architecture-specific types.
 ///

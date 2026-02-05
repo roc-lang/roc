@@ -12,13 +12,11 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-const base = @import("base");
 const layout = @import("layout");
 const mono = @import("mono");
 
 const Backend = @import("Backend.zig");
 const NativeMonoExprCodeGen = @import("MonoExprCodeGen.zig").NativeMonoExprCodeGen;
-const Relocation = @import("Relocation.zig").Relocation;
 const StaticDataInterner = @import("StaticDataInterner.zig");
 
 /// Information about an entrypoint to compile
@@ -260,7 +258,7 @@ pub const NativeCompiler = struct {
 test "NativeCompiler initialization" {
     const allocator = std.testing.allocator;
     const compiler = NativeCompiler.init(allocator);
-    _ = compiler;
+    try std.testing.expectEqual(allocator, compiler.allocator);
 }
 
 // Note: Full integration tests for compileToObjectFile require complex setup
