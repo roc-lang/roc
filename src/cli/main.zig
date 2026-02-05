@@ -3543,7 +3543,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
 
     // Drain reports and count errors/warnings
     const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
-    defer build_env.gpa.free(drained);
+    defer build_env.freeDrainedReports(drained);
 
     var total_error_count: usize = 0;
     var total_warning_count: usize = 0;
@@ -3600,15 +3600,30 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     };
     std.log.debug("Found {} entrypoints", .{entrypoint_info.items.len});
 
-    // Build module envs array for layout store
-    var all_module_envs = try ctx.arena.alloc(*ModuleEnv, modules.len);
+    // Build module envs array for layout store and lowering.
+    // Include the Builtin module first, matching the layout used during type-checking
+    // (where resolveImports resolved "Builtin" to index 0). Without this, resolved
+    // import indices for builtins (List, Str, Bool, etc.) point to the wrong module.
+    const builtin_env = build_env.builtin_modules.builtin_module.env;
+    var all_module_envs = try ctx.arena.alloc(*ModuleEnv, modules.len + 1);
+    all_module_envs[0] = builtin_env;
     for (modules, 0..) |mod, i| {
-        all_module_envs[i] = mod.env;
+        all_module_envs[i + 1] = mod.env;
     }
+
+    // Re-resolve imports against all_module_envs so resolved indices match this array.
+    // During type-checking, imports were resolved against a per-module imported_envs array
+    // (with Builtin at index 0). Now we re-resolve against the unified all_module_envs.
+    for (all_module_envs[1..]) |module| {
+        module.imports.resolveImports(module, all_module_envs);
+    }
+
+    // Compiled modules (excluding Builtin at index 0) for pipelines that shouldn't process Builtin
+    const compiled_module_envs = all_module_envs[1..];
 
     // Run closure pipeline on modules (lambda lifting, inference, transformation)
     std.log.debug("Running closure pipeline...", .{});
-    for (all_module_envs) |module| {
+    for (compiled_module_envs) |module| {
         if (!module.is_lambda_lifted) {
             var top_level_patterns = std.AutoHashMap(can.CIR.Pattern.Idx, void).init(ctx.gpa);
             defer top_level_patterns.deinit();
@@ -3634,9 +3649,9 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     var lambda_inference = can.LambdaSetInference.init(ctx.gpa);
     defer lambda_inference.deinit();
 
-    // Convert to mutable slice for inferAll
-    var mutable_envs = try ctx.arena.alloc(*ModuleEnv, all_module_envs.len);
-    for (all_module_envs, 0..) |env, i| {
+    // Convert to mutable slice for inferAll (compiled modules only)
+    var mutable_envs = try ctx.arena.alloc(*ModuleEnv, compiled_module_envs.len);
+    for (compiled_module_envs, 0..) |env, i| {
         mutable_envs[i] = env;
     }
     lambda_inference.inferAll(mutable_envs) catch {
@@ -3744,7 +3759,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
                                 // Register in the hosted function map for fast lookup during lowering
                                 // Store mappings for def_idx, pattern_idx, and expr_idx so lookup
                                 // succeeds regardless of which node target_node_idx points to
-                                const mod_idx: u16 = @intCast(global_module_idx);
+                                const mod_idx: u16 = @intCast(global_module_idx + 1);
                                 hosted_functions.put(mono.Lower.hostedFunctionKey(mod_idx, @intFromEnum(def_idx)), hosted_index) catch {};
                                 hosted_functions.put(mono.Lower.hostedFunctionKey(mod_idx, @intFromEnum(def.pattern)), hosted_index) catch {};
                                 hosted_functions.put(mono.Lower.hostedFunctionKey(mod_idx, @intFromEnum(def.expr)), hosted_index) catch {};
@@ -3780,7 +3795,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     var app_module_idx: ?u16 = null;
     for (modules, 0..) |mod, i| {
         if (mod.is_app) {
-            app_module_idx = @intCast(i);
+            app_module_idx = @intCast(i + 1);
             break;
         }
     }
@@ -3823,7 +3838,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
 
         if (found_expr) |expr_idx| {
             // Lower the expression from the platform module
-            const mono_expr_id = lowerer.lowerExpr(@intCast(platform_idx), expr_idx) catch |err| {
+            const mono_expr_id = lowerer.lowerExpr(@intCast(platform_idx + 1), expr_idx) catch |err| {
                 std.log.err("Failed to lower expression for entrypoint {s} ({s}): {}", .{ ep_info.roc_ident, ep_info.ffi_symbol, err });
                 continue;
             };
@@ -3832,7 +3847,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
             const type_var = can.ModuleEnv.varFrom(expr_idx);
             var type_scope = @import("types").TypeScope.init(ctx.gpa);
             defer type_scope.deinit();
-            const ret_layout = layout_store.fromTypeVar(@intCast(platform_idx), type_var, &type_scope, null) catch {
+            const ret_layout = layout_store.fromTypeVar(@intCast(platform_idx + 1), type_var, &type_scope, null) catch {
                 std.log.err("Failed to get layout for entrypoint {s}", .{ep_info.roc_ident});
                 continue;
             };

@@ -278,6 +278,10 @@ fn lowerExternalDefByIdx(self: *Self, symbol: MonoSymbol, target_def_idx: u16) A
     // Get the external module environment
     const ext_module_env = self.all_module_envs[symbol.module_idx];
 
+    // Assert target_def_idx is within the external module's node store.
+    // If this fires, import resolution mapped to the wrong module.
+    std.debug.assert(target_def_idx < ext_module_env.store.nodes.len());
+
     // Check if this is actually a def node (type modules with hosted functions may have different node types)
     if (!ext_module_env.store.isDefNode(target_def_idx)) {
         // Not a def node - this could be a hosted lambda or other special node type
@@ -958,6 +962,9 @@ fn getExternalLowLevelLambda(self: *Self, caller_env: *ModuleEnv, lookup: anytyp
     const ext_module_idx = caller_env.imports.getResolvedModule(lookup.module_idx) orelse return null;
     if (ext_module_idx >= self.all_module_envs.len) return null;
     const ext_env = self.all_module_envs[ext_module_idx];
+    // Assert target_node_idx is within the external module's node store.
+    // If this fires, import resolution mapped to the wrong module.
+    std.debug.assert(lookup.target_node_idx < ext_env.store.nodes.len());
     // Check if this is actually a def node (type modules with hosted functions may have different node types)
     if (!ext_env.store.isDefNode(lookup.target_node_idx)) return null;
     const def_idx: CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
@@ -1075,6 +1082,10 @@ fn setupExternalCallTypeScope(
     const ext_module_idx = caller_module_env.imports.getResolvedModule(lookup.module_idx) orelse return;
     if (ext_module_idx >= self.all_module_envs.len) return;
     const ext_module_env = self.all_module_envs[ext_module_idx];
+
+    // Assert target_node_idx is within the external module's node store.
+    // If this fires, import resolution mapped to the wrong module.
+    std.debug.assert(lookup.target_node_idx < ext_module_env.store.nodes.len());
 
     // Check if this is actually a def node (type modules with hosted functions may have different node types)
     if (!ext_module_env.store.isDefNode(lookup.target_node_idx)) {
