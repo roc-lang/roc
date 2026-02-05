@@ -380,6 +380,17 @@ fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_i
             return error.WasmExecFailed;
         };
 
+        // roc_str_eq: (i32 str_a_ptr, i32 str_b_ptr) -> i32 (0 or 1)
+        env_imports.addHostFunction(
+            "roc_str_eq",
+            &[_]bytebox.ValType{ .I32, .I32 },
+            &[_]bytebox.ValType{.I32},
+            hostStrEq,
+            null,
+        ) catch {
+            return error.WasmExecFailed;
+        };
+
         const imports = [_]bytebox.ModuleImportPackage{env_imports};
         module_instance.instantiate(.{ .stack_size = 1024 * 64, .imports = &imports }) catch {
             return error.WasmExecFailed;
@@ -604,6 +615,56 @@ fn hostDecToStr(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]cons
     @memcpy(buffer[buf_ptr..][0..len], formatted);
 
     results[0] = bytebox.Val{ .I32 = @intCast(len) };
+}
+
+/// Host function for roc_str_eq: compares two RocStr structs for content equality.
+/// Signature: (i32 str_a_ptr, i32 str_b_ptr) -> i32 (0 or 1)
+/// Handles both SSO (small string optimization) and heap-allocated strings.
+fn hostStrEq(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
+    const mem = module.store.getMemory(0);
+    const buffer = mem.buffer();
+
+    const a_ptr: usize = @intCast(params[0].I32);
+    const b_ptr: usize = @intCast(params[1].I32);
+
+    if (a_ptr + 12 > buffer.len or b_ptr + 12 > buffer.len) {
+        results[0] = bytebox.Val{ .I32 = 0 };
+        return;
+    }
+
+    // Read 12-byte RocStr structs
+    const a_bytes = buffer[a_ptr..][0..12];
+    const b_bytes = buffer[b_ptr..][0..12];
+
+    // Check SSO flag (high bit of byte 11)
+    const a_is_sso = (a_bytes[11] & 0x80) != 0;
+    const b_is_sso = (b_bytes[11] & 0x80) != 0;
+
+    // Extract pointer and length for each string
+    const a_data: [*]const u8, const a_len: usize = if (a_is_sso) .{
+        a_bytes[0..11].ptr,
+        @as(usize, a_bytes[11] & 0x7F),
+    } else .{
+        buffer[@as(usize, std.mem.readInt(u32, a_bytes[0..4], .little))..].ptr,
+        @as(usize, std.mem.readInt(u32, a_bytes[4..8], .little)),
+    };
+
+    const b_data: [*]const u8, const b_len: usize = if (b_is_sso) .{
+        b_bytes[0..11].ptr,
+        @as(usize, b_bytes[11] & 0x7F),
+    } else .{
+        buffer[@as(usize, std.mem.readInt(u32, b_bytes[0..4], .little))..].ptr,
+        @as(usize, std.mem.readInt(u32, b_bytes[4..8], .little)),
+    };
+
+    // Compare lengths first, then contents
+    if (a_len != b_len) {
+        results[0] = bytebox.Val{ .I32 = 0 };
+        return;
+    }
+
+    const equal = std.mem.eql(u8, a_data[0..a_len], b_data[0..b_len]);
+    results[0] = bytebox.Val{ .I32 = if (equal) 1 else 0 };
 }
 
 /// Compare Interpreter result string with WasmEvaluator result string.

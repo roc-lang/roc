@@ -71,6 +71,8 @@ join_point_param_locals: std.AutoHashMap(u32, []u32),
 dec_mul_import: ?u32 = null,
 /// Wasm function index for imported roc_dec_to_str host function.
 dec_to_str_import: ?u32 = null,
+/// Wasm function index for imported roc_str_eq host function.
+str_eq_import: ?u32 = null,
 
 const CaptureInfo = struct {
     symbols: []const MonoSymbol,
@@ -140,6 +142,14 @@ fn registerHostImports(self: *Self) !void {
         &.{.i32},
     );
     self.dec_to_str_import = try self.module.addImport("env", "roc_dec_to_str", dec_to_str_type);
+
+    // roc_str_eq: (i32 str_a_ptr, i32 str_b_ptr) -> i32 (0 or 1)
+    // Compares two 12-byte RocStr structs for content equality.
+    const str_eq_type = try self.module.addFuncType(
+        &.{ .i32, .i32 },
+        &.{.i32},
+    );
+    self.str_eq_import = try self.module.addImport("env", "roc_str_eq", str_eq_type);
 }
 
 /// Result of generating a wasm module
@@ -5737,47 +5747,19 @@ fn generateLowLevel(self: *Self, ll: anytype) Error!void {
         },
 
         .str_is_eq => {
-            // String equality: compare 12 bytes of RocStr structs
-            // For SSO strings, the bytes are inline so comparing all 12 bytes works.
-            // For heap strings, comparing ptr+len+cap would match for aliased strings,
-            // but not for strings with the same content at different addresses.
-            // Full implementation would need byte-by-byte comparison for heap strings.
-            // Simplified: compare all three i32 words of the 12-byte struct.
+            // String equality via host function (handles both SSO and heap strings)
+            const import_idx = self.str_eq_import orelse return unsupported(@src());
             try self.generateExpr(args[0]);
             const a = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
-            WasmModule.leb128WriteU32(self.allocator, &self.body, a) catch return error.OutOfMemory;
+            try self.emitLocalSet(a);
             try self.generateExpr(args[1]);
             const b = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
-            WasmModule.leb128WriteU32(self.allocator, &self.body, b) catch return error.OutOfMemory;
-
-            // Compare word 0 (bytes 0-3)
-            self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-            WasmModule.leb128WriteU32(self.allocator, &self.body, a) catch return error.OutOfMemory;
-            try self.emitLoadOp(.i32, 0);
-            self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-            WasmModule.leb128WriteU32(self.allocator, &self.body, b) catch return error.OutOfMemory;
-            try self.emitLoadOp(.i32, 0);
-            self.body.append(self.allocator, Op.i32_eq) catch return error.OutOfMemory;
-            // Compare word 1 (bytes 4-7)
-            self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-            WasmModule.leb128WriteU32(self.allocator, &self.body, a) catch return error.OutOfMemory;
-            try self.emitLoadOp(.i32, 4);
-            self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-            WasmModule.leb128WriteU32(self.allocator, &self.body, b) catch return error.OutOfMemory;
-            try self.emitLoadOp(.i32, 4);
-            self.body.append(self.allocator, Op.i32_eq) catch return error.OutOfMemory;
-            self.body.append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
-            // Compare word 2 (bytes 8-11)
-            self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-            WasmModule.leb128WriteU32(self.allocator, &self.body, a) catch return error.OutOfMemory;
-            try self.emitLoadOp(.i32, 8);
-            self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-            WasmModule.leb128WriteU32(self.allocator, &self.body, b) catch return error.OutOfMemory;
-            try self.emitLoadOp(.i32, 8);
-            self.body.append(self.allocator, Op.i32_eq) catch return error.OutOfMemory;
-            self.body.append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
+            try self.emitLocalSet(b);
+            // Push both pointers and call host function
+            try self.emitLocalGet(a);
+            try self.emitLocalGet(b);
+            self.body.append(self.allocator, Op.call) catch return error.OutOfMemory;
+            WasmModule.leb128WriteU32(self.allocator, &self.body, import_idx) catch return error.OutOfMemory;
         },
         .str_concat => {
             // LowLevel str_concat: concatenate 2 strings
