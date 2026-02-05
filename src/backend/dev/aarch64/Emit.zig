@@ -9,7 +9,6 @@
 //! Each target variant is specialized at comptime with the correct calling convention.
 
 const std = @import("std");
-const builtin = @import("builtin");
 const RocTarget = @import("roc_target").RocTarget;
 const Registers = @import("Registers.zig");
 const RegisterWidth = Registers.RegisterWidth;
@@ -42,7 +41,7 @@ pub fn Emit(comptime target: RocTarget) type {
             };
 
             pub const FLOAT_PARAM_REGS = [_]Registers.FloatReg{
-                .D0, .D1, .D2, .D3, .D4, .D5, .D6, .D7,
+                .V0, .V1, .V2, .V3, .V4, .V5, .V6, .V7,
             };
 
             pub const RETURN_REGS = [_]Registers.GeneralReg{ .X0, .X1 };
@@ -1320,17 +1319,15 @@ pub fn Emit(comptime target: RocTarget) type {
     }; // end of struct returned by Emit
 }
 
-// Native Emit type for tests (uses host platform's native target)
-// For aarch64 tests, we use arm64linux as a representative target
-const NativeEmit = if (builtin.cpu.arch == .aarch64 or builtin.cpu.arch == .aarch64_be)
-    Emit(RocTarget.detectNative())
-else
-    Emit(.arm64linux);
+// Target-specific Emit types for cross-platform testing
+const LinuxEmit = Emit(.arm64linux);
+const WinEmit = Emit(.arm64win);
+const MacEmit = Emit(.arm64mac);
 
 // Tests
 
 test "mov reg, reg" {
-    var asm_buf = NativeEmit.init(std.testing.allocator);
+    var asm_buf = LinuxEmit.init(std.testing.allocator);
     defer asm_buf.deinit();
 
     // mov x0, x1 should be encoded as: ORR X0, XZR, X1
@@ -1342,7 +1339,7 @@ test "mov reg, reg" {
 }
 
 test "movz" {
-    var asm_buf = NativeEmit.init(std.testing.allocator);
+    var asm_buf = LinuxEmit.init(std.testing.allocator);
     defer asm_buf.deinit();
 
     // movz x0, #0x1234
@@ -1353,7 +1350,7 @@ test "movz" {
 }
 
 test "ret" {
-    var asm_buf = NativeEmit.init(std.testing.allocator);
+    var asm_buf = LinuxEmit.init(std.testing.allocator);
     defer asm_buf.deinit();
 
     try asm_buf.ret();
@@ -1362,7 +1359,7 @@ test "ret" {
 }
 
 test "add reg, reg, imm12" {
-    var asm_buf = NativeEmit.init(std.testing.allocator);
+    var asm_buf = LinuxEmit.init(std.testing.allocator);
     defer asm_buf.deinit();
 
     // add x0, x1, #0x10 (0x91004020)
@@ -1371,7 +1368,7 @@ test "add reg, reg, imm12" {
 }
 
 test "cmp reg, reg" {
-    var asm_buf = NativeEmit.init(std.testing.allocator);
+    var asm_buf = LinuxEmit.init(std.testing.allocator);
     defer asm_buf.deinit();
 
     // cmp x0, x1 is subs xzr, x0, x1 (0xEB01001F)
@@ -1380,7 +1377,7 @@ test "cmp reg, reg" {
 }
 
 test "conditional branch" {
-    var asm_buf = NativeEmit.init(std.testing.allocator);
+    var asm_buf = LinuxEmit.init(std.testing.allocator);
     defer asm_buf.deinit();
 
     // b.eq +8 (0x54000040)
@@ -1389,7 +1386,7 @@ test "conditional branch" {
 }
 
 test "fadd" {
-    var asm_buf = NativeEmit.init(std.testing.allocator);
+    var asm_buf = LinuxEmit.init(std.testing.allocator);
     defer asm_buf.deinit();
 
     // fadd d0, d1, d2 (0x1E622820)
@@ -1398,8 +1395,64 @@ test "fadd" {
 }
 
 test "condition invert" {
-    try std.testing.expectEqual(NativeEmit.Condition.ne, NativeEmit.Condition.eq.invert());
-    try std.testing.expectEqual(NativeEmit.Condition.eq, NativeEmit.Condition.ne.invert());
-    try std.testing.expectEqual(NativeEmit.Condition.lt, NativeEmit.Condition.ge.invert());
-    try std.testing.expectEqual(NativeEmit.Condition.ge, NativeEmit.Condition.lt.invert());
+    try std.testing.expectEqual(LinuxEmit.Condition.ne, LinuxEmit.Condition.eq.invert());
+    try std.testing.expectEqual(LinuxEmit.Condition.eq, LinuxEmit.Condition.ne.invert());
+    try std.testing.expectEqual(LinuxEmit.Condition.lt, LinuxEmit.Condition.ge.invert());
+    try std.testing.expectEqual(LinuxEmit.Condition.ge, LinuxEmit.Condition.lt.invert());
+}
+
+// Multi-target calling convention tests - verify AAPCS64 is uniform across all aarch64 targets
+
+test "CC constants identical across all aarch64 targets" {
+    // All aarch64 targets use AAPCS64 - 8 param regs
+    try std.testing.expectEqual(@as(usize, 8), LinuxEmit.CC.PARAM_REGS.len);
+    try std.testing.expectEqual(@as(usize, 8), WinEmit.CC.PARAM_REGS.len);
+    try std.testing.expectEqual(@as(usize, 8), MacEmit.CC.PARAM_REGS.len);
+
+    // 8 float param regs
+    try std.testing.expectEqual(@as(usize, 8), LinuxEmit.CC.FLOAT_PARAM_REGS.len);
+    try std.testing.expectEqual(@as(usize, 8), WinEmit.CC.FLOAT_PARAM_REGS.len);
+    try std.testing.expectEqual(@as(usize, 8), MacEmit.CC.FLOAT_PARAM_REGS.len);
+
+    // 2 return regs (X0, X1)
+    try std.testing.expectEqual(@as(usize, 2), LinuxEmit.CC.RETURN_REGS.len);
+    try std.testing.expectEqual(@as(usize, 2), WinEmit.CC.RETURN_REGS.len);
+    try std.testing.expectEqual(@as(usize, 2), MacEmit.CC.RETURN_REGS.len);
+
+    // No shadow space on any aarch64 target
+    try std.testing.expectEqual(@as(u8, 0), LinuxEmit.CC.SHADOW_SPACE);
+    try std.testing.expectEqual(@as(u8, 0), WinEmit.CC.SHADOW_SPACE);
+    try std.testing.expectEqual(@as(u8, 0), MacEmit.CC.SHADOW_SPACE);
+
+    // Return by pointer threshold is 16 bytes for all
+    try std.testing.expectEqual(@as(usize, 16), LinuxEmit.CC.RETURN_BY_PTR_THRESHOLD);
+    try std.testing.expectEqual(@as(usize, 16), WinEmit.CC.RETURN_BY_PTR_THRESHOLD);
+    try std.testing.expectEqual(@as(usize, 16), MacEmit.CC.RETURN_BY_PTR_THRESHOLD);
+}
+
+test "CC.canPassStructByValue identical across aarch64 targets" {
+    // AAPCS64: structs up to 16 bytes can be passed by value
+    try std.testing.expect(LinuxEmit.CC.canPassStructByValue(1));
+    try std.testing.expect(LinuxEmit.CC.canPassStructByValue(16));
+    try std.testing.expect(!LinuxEmit.CC.canPassStructByValue(17));
+
+    try std.testing.expect(WinEmit.CC.canPassStructByValue(16));
+    try std.testing.expect(!WinEmit.CC.canPassStructByValue(17));
+
+    try std.testing.expect(MacEmit.CC.canPassStructByValue(16));
+    try std.testing.expect(!MacEmit.CC.canPassStructByValue(17));
+}
+
+test "CC.passI128ByPointer is false for all aarch64 targets" {
+    // AAPCS64: i128 passed in register pair, not by pointer
+    try std.testing.expect(!LinuxEmit.CC.passI128ByPointer());
+    try std.testing.expect(!WinEmit.CC.passI128ByPointer());
+    try std.testing.expect(!MacEmit.CC.passI128ByPointer());
+}
+
+test "CC.returnI128ByPointer is false for all aarch64 targets" {
+    // AAPCS64: i128 returned in register pair
+    try std.testing.expect(!LinuxEmit.CC.returnI128ByPointer());
+    try std.testing.expect(!WinEmit.CC.returnI128ByPointer());
+    try std.testing.expect(!MacEmit.CC.returnI128ByPointer());
 }

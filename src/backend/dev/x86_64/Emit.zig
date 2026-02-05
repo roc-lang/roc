@@ -1040,13 +1040,15 @@ pub fn Emit(comptime target: RocTarget) type {
     }; // end of struct returned by Emit
 }
 
-// Native Emit type for tests (uses host platform's native target)
-const NativeEmit = Emit(RocTarget.detectNative());
+// Target-specific Emit types for cross-platform testing
+const LinuxEmit = Emit(.x64linux);
+const WinEmit = Emit(.x64win);
+const MacEmit = Emit(.x64mac);
 
 // Tests
 
 test "mov reg, reg" {
-    var asm_buf = NativeEmit.init(std.testing.allocator);
+    var asm_buf = LinuxEmit.init(std.testing.allocator);
     defer asm_buf.deinit();
 
     // mov rax, rbx (48 89 D8)
@@ -1055,7 +1057,7 @@ test "mov reg, reg" {
 }
 
 test "mov r8, r9" {
-    var asm_buf = NativeEmit.init(std.testing.allocator);
+    var asm_buf = LinuxEmit.init(std.testing.allocator);
     defer asm_buf.deinit();
 
     // mov r8, r9 (4D 89 C8)
@@ -1064,7 +1066,7 @@ test "mov r8, r9" {
 }
 
 test "mov rax, imm64" {
-    var asm_buf = NativeEmit.init(std.testing.allocator);
+    var asm_buf = LinuxEmit.init(std.testing.allocator);
     defer asm_buf.deinit();
 
     // movabs rax, 0x123456789ABCDEF0
@@ -1076,7 +1078,7 @@ test "mov rax, imm64" {
 }
 
 test "ret" {
-    var asm_buf = NativeEmit.init(std.testing.allocator);
+    var asm_buf = LinuxEmit.init(std.testing.allocator);
     defer asm_buf.deinit();
 
     try asm_buf.ret();
@@ -1084,7 +1086,7 @@ test "ret" {
 }
 
 test "push and pop" {
-    var asm_buf = NativeEmit.init(std.testing.allocator);
+    var asm_buf = LinuxEmit.init(std.testing.allocator);
     defer asm_buf.deinit();
 
     try asm_buf.pushReg(.RBP);
@@ -1093,7 +1095,7 @@ test "push and pop" {
 }
 
 test "add reg, imm32" {
-    var asm_buf = NativeEmit.init(std.testing.allocator);
+    var asm_buf = LinuxEmit.init(std.testing.allocator);
     defer asm_buf.deinit();
 
     // add rax, 0x12345678 (special short form: 48 05 + imm32)
@@ -1102,7 +1104,7 @@ test "add reg, imm32" {
 }
 
 test "cmp reg, reg" {
-    var asm_buf = NativeEmit.init(std.testing.allocator);
+    var asm_buf = LinuxEmit.init(std.testing.allocator);
     defer asm_buf.deinit();
 
     // cmp rax, rbx (48 39 D8)
@@ -1111,7 +1113,7 @@ test "cmp reg, reg" {
 }
 
 test "conditional jump" {
-    var asm_buf = NativeEmit.init(std.testing.allocator);
+    var asm_buf = LinuxEmit.init(std.testing.allocator);
     defer asm_buf.deinit();
 
     // je +0x10 (short form: 74 10)
@@ -1120,7 +1122,7 @@ test "conditional jump" {
 }
 
 test "addsd xmm, xmm" {
-    var asm_buf = NativeEmit.init(std.testing.allocator);
+    var asm_buf = LinuxEmit.init(std.testing.allocator);
     defer asm_buf.deinit();
 
     // addsd xmm0, xmm1 (F2 0F 58 C1)
@@ -1129,30 +1131,30 @@ test "addsd xmm, xmm" {
 }
 
 test "condition invert" {
-    try std.testing.expectEqual(NativeEmit.Condition.not_equal, NativeEmit.Condition.equal.invert());
-    try std.testing.expectEqual(NativeEmit.Condition.equal, NativeEmit.Condition.not_equal.invert());
-    try std.testing.expectEqual(NativeEmit.Condition.greater_or_equal, NativeEmit.Condition.less.invert());
-    try std.testing.expectEqual(NativeEmit.Condition.less, NativeEmit.Condition.greater_or_equal.invert());
+    try std.testing.expectEqual(LinuxEmit.Condition.not_equal, LinuxEmit.Condition.equal.invert());
+    try std.testing.expectEqual(LinuxEmit.Condition.equal, LinuxEmit.Condition.not_equal.invert());
+    try std.testing.expectEqual(LinuxEmit.Condition.greater_or_equal, LinuxEmit.Condition.less.invert());
+    try std.testing.expectEqual(LinuxEmit.Condition.less, LinuxEmit.Condition.greater_or_equal.invert());
 }
 
-const ALL_GENERAL_REGS = [_]NativeEmit.GeneralReg{
+const ALL_GENERAL_REGS = [_]LinuxEmit.GeneralReg{
     .RAX, .RCX, .RDX, .RBX, .RSP, .RBP, .RSI, .RDI,
     .R8,  .R9,  .R10, .R11, .R12, .R13, .R14, .R15,
 };
 
-const SAFE_GENERAL_REGS = [_]NativeEmit.GeneralReg{
+const SAFE_GENERAL_REGS = [_]LinuxEmit.GeneralReg{
     .RAX, .RCX, .RDX, .RBX, .RSI, .RDI,
     .R8,  .R9,  .R10, .R11, .R12, .R13,
     .R14, .R15,
 };
 
-const ALL_FLOAT_REGS = [_]NativeEmit.FloatReg{
+const ALL_FLOAT_REGS = [_]LinuxEmit.FloatReg{
     .XMM0, .XMM1, .XMM2,  .XMM3,  .XMM4,  .XMM5,  .XMM6,  .XMM7,
     .XMM8, .XMM9, .XMM10, .XMM11, .XMM12, .XMM13, .XMM14, .XMM15,
 };
 
 test "mov reg64, reg64 - all register combinations" {
-    var emit = NativeEmit.init(std.testing.allocator);
+    var emit = LinuxEmit.init(std.testing.allocator);
     defer emit.deinit();
 
     for (ALL_GENERAL_REGS) |dst| {
@@ -1165,7 +1167,7 @@ test "mov reg64, reg64 - all register combinations" {
 }
 
 test "add reg64, reg64 - all combinations" {
-    var emit = NativeEmit.init(std.testing.allocator);
+    var emit = LinuxEmit.init(std.testing.allocator);
     defer emit.deinit();
 
     for (SAFE_GENERAL_REGS) |dst| {
@@ -1179,7 +1181,7 @@ test "add reg64, reg64 - all combinations" {
 }
 
 test "sub reg64, reg64 - all combinations" {
-    var emit = NativeEmit.init(std.testing.allocator);
+    var emit = LinuxEmit.init(std.testing.allocator);
     defer emit.deinit();
 
     for (SAFE_GENERAL_REGS) |dst| {
@@ -1193,7 +1195,7 @@ test "sub reg64, reg64 - all combinations" {
 }
 
 test "imul reg64, reg64 - all combinations" {
-    var emit = NativeEmit.init(std.testing.allocator);
+    var emit = LinuxEmit.init(std.testing.allocator);
     defer emit.deinit();
 
     for (SAFE_GENERAL_REGS) |dst| {
@@ -1214,7 +1216,7 @@ test "imul reg64, reg64 - all combinations" {
 }
 
 test "cmp reg64, reg64 - all combinations" {
-    var emit = NativeEmit.init(std.testing.allocator);
+    var emit = LinuxEmit.init(std.testing.allocator);
     defer emit.deinit();
 
     for (SAFE_GENERAL_REGS) |a| {
@@ -1228,7 +1230,7 @@ test "cmp reg64, reg64 - all combinations" {
 }
 
 test "movabs reg64, imm64 - all registers" {
-    var emit = NativeEmit.init(std.testing.allocator);
+    var emit = LinuxEmit.init(std.testing.allocator);
     defer emit.deinit();
 
     const test_imm: i64 = 0x123456789ABCDEF0;
@@ -1240,7 +1242,7 @@ test "movabs reg64, imm64 - all registers" {
 }
 
 test "push/pop - all registers" {
-    var emit = NativeEmit.init(std.testing.allocator);
+    var emit = LinuxEmit.init(std.testing.allocator);
     defer emit.deinit();
 
     for (ALL_GENERAL_REGS) |reg| {
@@ -1265,10 +1267,10 @@ test "push/pop - all registers" {
 }
 
 test "jcc rel8 - all conditions" {
-    var emit = NativeEmit.init(std.testing.allocator);
+    var emit = LinuxEmit.init(std.testing.allocator);
     defer emit.deinit();
 
-    const conditions = [_]NativeEmit.Condition{
+    const conditions = [_]LinuxEmit.Condition{
         .overflow, .not_overflow,     .below,          .above_or_equal,
         .equal,    .not_equal,        .below_or_equal, .above,
         .sign,     .not_sign,         .parity_even,    .parity_odd,
@@ -1284,10 +1286,10 @@ test "jcc rel8 - all conditions" {
 }
 
 test "jcc rel32 - all conditions" {
-    var emit = NativeEmit.init(std.testing.allocator);
+    var emit = LinuxEmit.init(std.testing.allocator);
     defer emit.deinit();
 
-    const conditions = [_]NativeEmit.Condition{
+    const conditions = [_]LinuxEmit.Condition{
         .overflow, .not_overflow,     .below,          .above_or_equal,
         .equal,    .not_equal,        .below_or_equal, .above,
         .sign,     .not_sign,         .parity_even,    .parity_odd,
@@ -1303,7 +1305,7 @@ test "jcc rel32 - all conditions" {
 }
 
 test "movsd xmm, xmm - all combinations" {
-    var emit = NativeEmit.init(std.testing.allocator);
+    var emit = LinuxEmit.init(std.testing.allocator);
     defer emit.deinit();
 
     for (ALL_FLOAT_REGS) |dst| {
@@ -1316,7 +1318,7 @@ test "movsd xmm, xmm - all combinations" {
 }
 
 test "addsd xmm, xmm - all combinations" {
-    var emit = NativeEmit.init(std.testing.allocator);
+    var emit = LinuxEmit.init(std.testing.allocator);
     defer emit.deinit();
 
     for (ALL_FLOAT_REGS) |dst| {
@@ -1329,7 +1331,7 @@ test "addsd xmm, xmm - all combinations" {
 }
 
 test "subsd/mulsd/divsd xmm, xmm encoding" {
-    var emit = NativeEmit.init(std.testing.allocator);
+    var emit = LinuxEmit.init(std.testing.allocator);
     defer emit.deinit();
 
     try emit.subsdRegReg(.XMM0, .XMM1);
@@ -1345,7 +1347,7 @@ test "subsd/mulsd/divsd xmm, xmm encoding" {
 }
 
 test "bitwise ops - and/or/xor" {
-    var emit = NativeEmit.init(std.testing.allocator);
+    var emit = LinuxEmit.init(std.testing.allocator);
     defer emit.deinit();
 
     try emit.andRegReg(.w64, .RAX, .RBX);
@@ -1361,7 +1363,7 @@ test "bitwise ops - and/or/xor" {
 }
 
 test "shift ops - shl/shr/sar" {
-    var emit = NativeEmit.init(std.testing.allocator);
+    var emit = LinuxEmit.init(std.testing.allocator);
     defer emit.deinit();
 
     try emit.shlRegImm8(.w64, .RAX, 1);
@@ -1381,7 +1383,7 @@ test "shift ops - shl/shr/sar" {
 }
 
 test "neg and not" {
-    var emit = NativeEmit.init(std.testing.allocator);
+    var emit = LinuxEmit.init(std.testing.allocator);
     defer emit.deinit();
 
     try emit.negReg(.w64, .RAX);
@@ -1393,7 +1395,7 @@ test "neg and not" {
 }
 
 test "xor zeroing idiom" {
-    var emit = NativeEmit.init(std.testing.allocator);
+    var emit = LinuxEmit.init(std.testing.allocator);
     defer emit.deinit();
 
     try emit.xorRegReg(.w32, .RAX, .RAX);
@@ -1401,10 +1403,10 @@ test "xor zeroing idiom" {
 }
 
 test "extended registers require REX" {
-    var emit = NativeEmit.init(std.testing.allocator);
+    var emit = LinuxEmit.init(std.testing.allocator);
     defer emit.deinit();
 
-    const extended_regs = [_]NativeEmit.GeneralReg{ .R8, .R9, .R10, .R11, .R12, .R13, .R14, .R15 };
+    const extended_regs = [_]LinuxEmit.GeneralReg{ .R8, .R9, .R10, .R11, .R12, .R13, .R14, .R15 };
     for (extended_regs) |reg| {
         emit.buf.clearRetainingCapacity();
         try emit.movRegReg(.w64, reg, .RAX);
@@ -1413,7 +1415,7 @@ test "extended registers require REX" {
 }
 
 test "float conversion ops" {
-    var emit = NativeEmit.init(std.testing.allocator);
+    var emit = LinuxEmit.init(std.testing.allocator);
     defer emit.deinit();
 
     try emit.cvtss2sdRegReg(.XMM0, .XMM1);
@@ -1425,7 +1427,7 @@ test "float conversion ops" {
 }
 
 test "ucomisd comparison" {
-    var emit = NativeEmit.init(std.testing.allocator);
+    var emit = LinuxEmit.init(std.testing.allocator);
     defer emit.deinit();
 
     try emit.ucomisdRegReg(.XMM0, .XMM1);
@@ -1433,7 +1435,7 @@ test "ucomisd comparison" {
 }
 
 test "xorpd zeroing" {
-    var emit = NativeEmit.init(std.testing.allocator);
+    var emit = LinuxEmit.init(std.testing.allocator);
     defer emit.deinit();
 
     try emit.xorpdRegReg(.XMM0, .XMM0);
@@ -1441,7 +1443,7 @@ test "xorpd zeroing" {
 }
 
 test "function prologue sequence" {
-    var emit = NativeEmit.init(std.testing.allocator);
+    var emit = LinuxEmit.init(std.testing.allocator);
     defer emit.deinit();
 
     try emit.pushReg(.RBP);
@@ -1450,7 +1452,7 @@ test "function prologue sequence" {
 }
 
 test "movRegMem - load from [rbp-144]" {
-    var emit = NativeEmit.init(std.testing.allocator);
+    var emit = LinuxEmit.init(std.testing.allocator);
     defer emit.deinit();
 
     // mov rax, [rbp-144]
@@ -1460,7 +1462,7 @@ test "movRegMem - load from [rbp-144]" {
 }
 
 test "movRegMem - load from [rsp+32] requires SIB byte" {
-    var emit = NativeEmit.init(std.testing.allocator);
+    var emit = LinuxEmit.init(std.testing.allocator);
     defer emit.deinit();
 
     // mov rcx, [rsp+32]
@@ -1471,7 +1473,7 @@ test "movRegMem - load from [rsp+32] requires SIB byte" {
 }
 
 test "movRegMem - load from [r12+offset] requires SIB byte" {
-    var emit = NativeEmit.init(std.testing.allocator);
+    var emit = LinuxEmit.init(std.testing.allocator);
     defer emit.deinit();
 
     // mov rax, [r12+16]
@@ -1482,7 +1484,7 @@ test "movRegMem - load from [r12+offset] requires SIB byte" {
 }
 
 test "movMemReg - store to [rbp-8]" {
-    var emit = NativeEmit.init(std.testing.allocator);
+    var emit = LinuxEmit.init(std.testing.allocator);
     defer emit.deinit();
 
     // mov [rbp-8], rax
@@ -1492,7 +1494,7 @@ test "movMemReg - store to [rbp-8]" {
 }
 
 test "movMemReg - store to [rsp+32] requires SIB byte" {
-    var emit = NativeEmit.init(std.testing.allocator);
+    var emit = LinuxEmit.init(std.testing.allocator);
     defer emit.deinit();
 
     // mov [rsp+32], r11
@@ -1502,7 +1504,7 @@ test "movMemReg - store to [rsp+32] requires SIB byte" {
 }
 
 test "leaRegMem - lea rax, [rbp-32]" {
-    var emit = NativeEmit.init(std.testing.allocator);
+    var emit = LinuxEmit.init(std.testing.allocator);
     defer emit.deinit();
 
     // lea rax, [rbp-32]
@@ -1512,7 +1514,7 @@ test "leaRegMem - lea rax, [rbp-32]" {
 }
 
 test "leaRegMem - lea rcx, [rsp+64] requires SIB" {
-    var emit = NativeEmit.init(std.testing.allocator);
+    var emit = LinuxEmit.init(std.testing.allocator);
     defer emit.deinit();
 
     // lea rcx, [rsp+64]
@@ -1522,7 +1524,7 @@ test "leaRegMem - lea rcx, [rsp+64] requires SIB" {
 }
 
 test "subRegImm32 - sub rsp, 80 (stack allocation)" {
-    var emit = NativeEmit.init(std.testing.allocator);
+    var emit = LinuxEmit.init(std.testing.allocator);
     defer emit.deinit();
 
     // sub rsp, 80
@@ -1532,7 +1534,7 @@ test "subRegImm32 - sub rsp, 80 (stack allocation)" {
 }
 
 test "addRegImm32 - add rsp, 80 (stack deallocation)" {
-    var emit = NativeEmit.init(std.testing.allocator);
+    var emit = LinuxEmit.init(std.testing.allocator);
     defer emit.deinit();
 
     // add rsp, 80
@@ -1542,7 +1544,7 @@ test "addRegImm32 - add rsp, 80 (stack deallocation)" {
 }
 
 test "callReg - call r11" {
-    var emit = NativeEmit.init(std.testing.allocator);
+    var emit = LinuxEmit.init(std.testing.allocator);
     defer emit.deinit();
 
     // call r11
@@ -1552,7 +1554,7 @@ test "callReg - call r11" {
 }
 
 test "callReg - call rax (no REX needed)" {
-    var emit = NativeEmit.init(std.testing.allocator);
+    var emit = LinuxEmit.init(std.testing.allocator);
     defer emit.deinit();
 
     // call rax
@@ -1562,7 +1564,7 @@ test "callReg - call rax (no REX needed)" {
 }
 
 test "pushReg - push r12" {
-    var emit = NativeEmit.init(std.testing.allocator);
+    var emit = LinuxEmit.init(std.testing.allocator);
     defer emit.deinit();
 
     // push r12
@@ -1572,7 +1574,7 @@ test "pushReg - push r12" {
 }
 
 test "popReg - pop r12" {
-    var emit = NativeEmit.init(std.testing.allocator);
+    var emit = LinuxEmit.init(std.testing.allocator);
     defer emit.deinit();
 
     // pop r12
@@ -1582,7 +1584,7 @@ test "popReg - pop r12" {
 }
 
 test "movRegImm64 - movabs r11, address" {
-    var emit = NativeEmit.init(std.testing.allocator);
+    var emit = LinuxEmit.init(std.testing.allocator);
     defer emit.deinit();
 
     // movabs r11, 0x00007FFF12345678
@@ -1595,7 +1597,7 @@ test "movRegImm64 - movabs r11, address" {
 }
 
 test "Windows x64 call sequence - shadow space + call" {
-    var emit = NativeEmit.init(std.testing.allocator);
+    var emit = LinuxEmit.init(std.testing.allocator);
     defer emit.deinit();
 
     // Typical Windows x64 call setup:
@@ -1619,7 +1621,7 @@ test "Windows x64 call sequence - shadow space + call" {
 }
 
 test "movMemReg 32-bit width" {
-    var emit = NativeEmit.init(std.testing.allocator);
+    var emit = LinuxEmit.init(std.testing.allocator);
     defer emit.deinit();
 
     // mov [rbp-16], eax (32-bit store, no REX.W)
@@ -1629,7 +1631,7 @@ test "movMemReg 32-bit width" {
 }
 
 test "movRegMem 32-bit width" {
-    var emit = NativeEmit.init(std.testing.allocator);
+    var emit = LinuxEmit.init(std.testing.allocator);
     defer emit.deinit();
 
     // mov eax, [rbp-16] (32-bit load, no REX.W)
@@ -1638,7 +1640,7 @@ test "movRegMem 32-bit width" {
 }
 
 test "jmpRel32 encoding" {
-    var emit = NativeEmit.init(std.testing.allocator);
+    var emit = LinuxEmit.init(std.testing.allocator);
     defer emit.deinit();
 
     // jmp +0x12345678
@@ -1647,10 +1649,72 @@ test "jmpRel32 encoding" {
 }
 
 test "callRel32 encoding" {
-    var emit = NativeEmit.init(std.testing.allocator);
+    var emit = LinuxEmit.init(std.testing.allocator);
     defer emit.deinit();
 
     // call +0x100
     try emit.callRel32(0x100);
     try std.testing.expectEqualSlices(u8, &[_]u8{ 0xE8, 0x00, 0x01, 0x00, 0x00 }, emit.buf.items);
+}
+
+// Multi-target calling convention tests
+
+test "CC constants differ between Windows and System V" {
+    // Windows uses 4 param regs, System V uses 6
+    try std.testing.expectEqual(@as(usize, 4), WinEmit.CC.PARAM_REGS.len);
+    try std.testing.expectEqual(@as(usize, 6), LinuxEmit.CC.PARAM_REGS.len);
+    try std.testing.expectEqual(@as(usize, 6), MacEmit.CC.PARAM_REGS.len);
+
+    // Windows has 32-byte shadow space, System V has none
+    try std.testing.expectEqual(@as(u8, 32), WinEmit.CC.SHADOW_SPACE);
+    try std.testing.expectEqual(@as(u8, 0), LinuxEmit.CC.SHADOW_SPACE);
+    try std.testing.expectEqual(@as(u8, 0), MacEmit.CC.SHADOW_SPACE);
+
+    // Windows first param is RCX, System V is RDI
+    try std.testing.expectEqual(Registers.GeneralReg.RCX, WinEmit.CC.PARAM_REGS[0]);
+    try std.testing.expectEqual(Registers.GeneralReg.RDI, LinuxEmit.CC.PARAM_REGS[0]);
+    try std.testing.expectEqual(Registers.GeneralReg.RDI, MacEmit.CC.PARAM_REGS[0]);
+
+    // Windows uses 4 float param regs, System V uses 8
+    try std.testing.expectEqual(@as(usize, 4), WinEmit.CC.FLOAT_PARAM_REGS.len);
+    try std.testing.expectEqual(@as(usize, 8), LinuxEmit.CC.FLOAT_PARAM_REGS.len);
+    try std.testing.expectEqual(@as(usize, 8), MacEmit.CC.FLOAT_PARAM_REGS.len);
+
+    // Windows returns in RAX only, System V can use RAX+RDX
+    try std.testing.expectEqual(@as(usize, 1), WinEmit.CC.RETURN_REGS.len);
+    try std.testing.expectEqual(@as(usize, 2), LinuxEmit.CC.RETURN_REGS.len);
+    try std.testing.expectEqual(@as(usize, 2), MacEmit.CC.RETURN_REGS.len);
+}
+
+test "CC.canPassStructByValue differs between Windows and System V" {
+    // Windows: only power-of-2 sizes (1, 2, 4, 8)
+    try std.testing.expect(WinEmit.CC.canPassStructByValue(1));
+    try std.testing.expect(WinEmit.CC.canPassStructByValue(2));
+    try std.testing.expect(WinEmit.CC.canPassStructByValue(4));
+    try std.testing.expect(WinEmit.CC.canPassStructByValue(8));
+    try std.testing.expect(!WinEmit.CC.canPassStructByValue(3));
+    try std.testing.expect(!WinEmit.CC.canPassStructByValue(9));
+    try std.testing.expect(!WinEmit.CC.canPassStructByValue(16));
+
+    // System V: any size up to 16
+    try std.testing.expect(LinuxEmit.CC.canPassStructByValue(1));
+    try std.testing.expect(LinuxEmit.CC.canPassStructByValue(9));
+    try std.testing.expect(LinuxEmit.CC.canPassStructByValue(16));
+    try std.testing.expect(!LinuxEmit.CC.canPassStructByValue(17));
+}
+
+test "CC.passI128ByPointer differs between Windows and System V" {
+    // Windows requires i128 pass-by-pointer
+    try std.testing.expect(WinEmit.CC.passI128ByPointer());
+    // System V passes i128 in registers (RAX+RDX)
+    try std.testing.expect(!LinuxEmit.CC.passI128ByPointer());
+    try std.testing.expect(!MacEmit.CC.passI128ByPointer());
+}
+
+test "CC.returnI128ByPointer differs between Windows and System V" {
+    // Windows uses hidden pointer for i128 returns
+    try std.testing.expect(WinEmit.CC.returnI128ByPointer());
+    // System V returns i128 in RAX+RDX
+    try std.testing.expect(!LinuxEmit.CC.returnI128ByPointer());
+    try std.testing.expect(!MacEmit.CC.returnI128ByPointer());
 }

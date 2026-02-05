@@ -17,7 +17,6 @@
 //! - CC: Calling convention constants
 
 const std = @import("std");
-const builtin = @import("builtin");
 const RocTarget = @import("roc_target").RocTarget;
 
 const x86_64 = @import("x86_64/mod.zig");
@@ -1252,10 +1251,8 @@ test "CallBuilder 4-arg call with immediates on Windows x64" {
     try std.testing.expect(found_sub);
 }
 
-test "CallBuilder 6-arg call puts args 5-6 on stack" {
-    if (builtin.cpu.arch != .x86_64) return;
-
-    const Emit = x86_64.NativeEmit;
+test "CallBuilder 6-arg call System V - all args in registers" {
+    const Emit = x86_64.LinuxEmit;
     const Builder = CallBuilder(Emit);
 
     var emit = Emit.init(std.testing.allocator);
@@ -1274,7 +1271,44 @@ test "CallBuilder 6-arg call puts args 5-6 on stack" {
 
     try builder.call(0x12345678);
 
-    // Verify code was emitted - should be longer than 4-arg call
+    // System V: 6 register args (RDI, RSI, RDX, RCX, R8, R9) - no stack args
+    // Should be shorter than Windows version (no shadow space)
+    try std.testing.expect(emit.buf.items.len > 50);
+
+    // Look for the call instruction (call r11 = 41 FF D3)
+    var found_call = false;
+    for (0..emit.buf.items.len - 2) |i| {
+        if (emit.buf.items[i] == 0x41 and emit.buf.items[i + 1] == 0xFF and emit.buf.items[i + 2] == 0xD3) {
+            found_call = true;
+            break;
+        }
+    }
+    try std.testing.expect(found_call);
+}
+
+test "CallBuilder 6-arg call Windows - 4 reg + 2 stack args" {
+    const Emit = x86_64.WinEmit;
+    const Builder = CallBuilder(Emit);
+
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var stack_offset: i32 = 0;
+    var builder = try Builder.init(&emit, &stack_offset);
+
+    // Add 6 immediate arguments
+    try builder.addImmArg(1);
+    try builder.addImmArg(2);
+    try builder.addImmArg(3);
+    try builder.addImmArg(4);
+    try builder.addImmArg(5);
+    try builder.addImmArg(6);
+
+    try builder.call(0x12345678);
+
+    // Windows x64: 4 register args (RCX, RDX, R8, R9) + 2 stack args
+    // Stack args go at [RSP+32] and [RSP+40] (after shadow space)
+    // Total stack space = 32 (shadow) + 16 (2 args) = 48
     try std.testing.expect(emit.buf.items.len > 50);
 
     // Look for the call instruction (call r11 = 41 FF D3)
@@ -1287,32 +1321,21 @@ test "CallBuilder 6-arg call puts args 5-6 on stack" {
     }
     try std.testing.expect(found_call);
 
-    if (builtin.os.tag == .windows) {
-        // Windows x64: 4 register args (RCX, RDX, R8, R9) + 2 stack args
-        // Stack args go at [RSP+32] and [RSP+40] (after shadow space)
-        // Total stack space = 32 (shadow) + 16 (2 args) = 48, rounded to 48
-        // Look for sub rsp, 48 = 48 81 EC 30 00 00 00
-        var found_sub = false;
-        for (0..emit.buf.items.len - 6) |i| {
-            if (emit.buf.items[i] == 0x48 and emit.buf.items[i + 1] == 0x81 and
-                emit.buf.items[i + 2] == 0xEC and emit.buf.items[i + 3] == 0x30)
-            {
-                found_sub = true;
-                break;
-            }
+    // Look for sub rsp, 48 = 48 81 EC 30 00 00 00
+    var found_sub = false;
+    for (0..emit.buf.items.len - 6) |i| {
+        if (emit.buf.items[i] == 0x48 and emit.buf.items[i + 1] == 0x81 and
+            emit.buf.items[i + 2] == 0xEC and emit.buf.items[i + 3] == 0x30)
+        {
+            found_sub = true;
+            break;
         }
-        try std.testing.expect(found_sub);
-    } else {
-        // System V: 6 register args (RDI, RSI, RDX, RCX, R8, R9) - no stack args
-        // No shadow space needed
-        // Should just have movabs for args + call
     }
+    try std.testing.expect(found_sub);
 }
 
-test "CallBuilder with register argument" {
-    if (builtin.cpu.arch != .x86_64) return;
-
-    const Emit = x86_64.NativeEmit;
+test "CallBuilder with register argument System V" {
+    const Emit = x86_64.LinuxEmit;
     const Builder = CallBuilder(Emit);
 
     var emit = Emit.init(std.testing.allocator);
@@ -1321,7 +1344,7 @@ test "CallBuilder with register argument" {
     var stack_offset: i32 = 0;
     var builder = try Builder.init(&emit, &stack_offset);
 
-    // Add a register argument (RAX -> first param reg)
+    // Add a register argument (RAX -> first param reg RDI on System V)
     try builder.addRegArg(.RAX);
 
     try builder.call(0x12345678);
@@ -1329,25 +1352,48 @@ test "CallBuilder with register argument" {
     // Verify code was emitted
     try std.testing.expect(emit.buf.items.len > 0);
 
-    if (builtin.os.tag == .windows) {
-        // Should have: sub rsp, 32; mov rcx, rax; movabs r11, addr; call r11; add rsp, 32
-        // The mov rcx, rax is only emitted if RAX != RCX
-        // Since RAX != RCX, we should see: 48 89 C1 (mov rcx, rax)
-        var found_mov = false;
-        for (0..emit.buf.items.len - 2) |i| {
-            if (emit.buf.items[i] == 0x48 and emit.buf.items[i + 1] == 0x89 and emit.buf.items[i + 2] == 0xC1) {
-                found_mov = true;
-                break;
-            }
+    // System V: Should have mov rdi, rax (48 89 C7)
+    var found_mov = false;
+    for (0..emit.buf.items.len - 2) |i| {
+        if (emit.buf.items[i] == 0x48 and emit.buf.items[i + 1] == 0x89 and emit.buf.items[i + 2] == 0xC7) {
+            found_mov = true;
+            break;
         }
-        try std.testing.expect(found_mov);
     }
+    try std.testing.expect(found_mov);
 }
 
-test "CallBuilder with LEA argument" {
-    if (builtin.cpu.arch != .x86_64) return;
+test "CallBuilder with register argument Windows" {
+    const Emit = x86_64.WinEmit;
+    const Builder = CallBuilder(Emit);
 
-    const Emit = x86_64.NativeEmit;
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var stack_offset: i32 = 0;
+    var builder = try Builder.init(&emit, &stack_offset);
+
+    // Add a register argument (RAX -> first param reg RCX on Windows)
+    try builder.addRegArg(.RAX);
+
+    try builder.call(0x12345678);
+
+    // Verify code was emitted
+    try std.testing.expect(emit.buf.items.len > 0);
+
+    // Windows: Should have mov rcx, rax (48 89 C1)
+    var found_mov = false;
+    for (0..emit.buf.items.len - 2) |i| {
+        if (emit.buf.items[i] == 0x48 and emit.buf.items[i + 1] == 0x89 and emit.buf.items[i + 2] == 0xC1) {
+            found_mov = true;
+            break;
+        }
+    }
+    try std.testing.expect(found_mov);
+}
+
+test "CallBuilder with LEA argument System V" {
+    const Emit = x86_64.LinuxEmit;
     const Builder = CallBuilder(Emit);
 
     var emit = Emit.init(std.testing.allocator);
@@ -1364,25 +1410,48 @@ test "CallBuilder with LEA argument" {
     // Verify code was emitted
     try std.testing.expect(emit.buf.items.len > 0);
 
-    if (builtin.os.tag == .windows) {
-        // Should have: sub rsp, 32; lea rcx, [rbp-32]; movabs r11, addr; call r11; add rsp, 32
-        // lea rcx, [rbp-32] = 48 8D 4D E0 (with 8-bit disp) or 48 8D 8D E0 FF FF FF (32-bit disp)
-        // Since we use 32-bit displacement: 48 8D 8D + disp32(-32 = 0xFFFFFFE0)
-        var found_lea = false;
-        for (0..emit.buf.items.len - 6) |i| {
-            if (emit.buf.items[i] == 0x48 and emit.buf.items[i + 1] == 0x8D and emit.buf.items[i + 2] == 0x8D) {
-                found_lea = true;
-                break;
-            }
+    // System V: lea rdi, [rbp-32] = 48 8D BD + disp32(-32)
+    var found_lea = false;
+    for (0..emit.buf.items.len - 6) |i| {
+        if (emit.buf.items[i] == 0x48 and emit.buf.items[i + 1] == 0x8D and emit.buf.items[i + 2] == 0xBD) {
+            found_lea = true;
+            break;
         }
-        try std.testing.expect(found_lea);
     }
+    try std.testing.expect(found_lea);
 }
 
-test "CallBuilder with memory argument" {
-    if (builtin.cpu.arch != .x86_64) return;
+test "CallBuilder with LEA argument Windows" {
+    const Emit = x86_64.WinEmit;
+    const Builder = CallBuilder(Emit);
 
-    const Emit = x86_64.NativeEmit;
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var stack_offset: i32 = 0;
+    var builder = try Builder.init(&emit, &stack_offset);
+
+    // Add a LEA argument (pointer to [RBP-32])
+    try builder.addLeaArg(.RBP, -32);
+
+    try builder.call(0x12345678);
+
+    // Verify code was emitted
+    try std.testing.expect(emit.buf.items.len > 0);
+
+    // Windows: lea rcx, [rbp-32] = 48 8D 8D + disp32(-32)
+    var found_lea = false;
+    for (0..emit.buf.items.len - 6) |i| {
+        if (emit.buf.items[i] == 0x48 and emit.buf.items[i + 1] == 0x8D and emit.buf.items[i + 2] == 0x8D) {
+            found_lea = true;
+            break;
+        }
+    }
+    try std.testing.expect(found_lea);
+}
+
+test "CallBuilder with memory argument System V" {
+    const Emit = x86_64.LinuxEmit;
     const Builder = CallBuilder(Emit);
 
     var emit = Emit.init(std.testing.allocator);
@@ -1399,24 +1468,48 @@ test "CallBuilder with memory argument" {
     // Verify code was emitted
     try std.testing.expect(emit.buf.items.len > 0);
 
-    if (builtin.os.tag == .windows) {
-        // Should have: sub rsp, 32; mov rcx, [rbp-16]; movabs r11, addr; call r11; add rsp, 32
-        // mov rcx, [rbp-16] = 48 8B 8D F0 FF FF FF (32-bit disp)
-        var found_mov = false;
-        for (0..emit.buf.items.len - 6) |i| {
-            if (emit.buf.items[i] == 0x48 and emit.buf.items[i + 1] == 0x8B and emit.buf.items[i + 2] == 0x8D) {
-                found_mov = true;
-                break;
-            }
+    // System V: mov rdi, [rbp-16] = 48 8B BD F0 FF FF FF
+    var found_mov = false;
+    for (0..emit.buf.items.len - 6) |i| {
+        if (emit.buf.items[i] == 0x48 and emit.buf.items[i + 1] == 0x8B and emit.buf.items[i + 2] == 0xBD) {
+            found_mov = true;
+            break;
         }
-        try std.testing.expect(found_mov);
     }
+    try std.testing.expect(found_mov);
 }
 
-test "CallBuilder stack alignment is 16-byte" {
-    if (builtin.cpu.arch != .x86_64) return;
+test "CallBuilder with memory argument Windows" {
+    const Emit = x86_64.WinEmit;
+    const Builder = CallBuilder(Emit);
 
-    const Emit = x86_64.NativeEmit;
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var stack_offset: i32 = 0;
+    var builder = try Builder.init(&emit, &stack_offset);
+
+    // Add a memory load argument (load from [RBP-16])
+    try builder.addMemArg(.RBP, -16);
+
+    try builder.call(0x12345678);
+
+    // Verify code was emitted
+    try std.testing.expect(emit.buf.items.len > 0);
+
+    // Windows: mov rcx, [rbp-16] = 48 8B 8D F0 FF FF FF
+    var found_mov = false;
+    for (0..emit.buf.items.len - 6) |i| {
+        if (emit.buf.items[i] == 0x48 and emit.buf.items[i + 1] == 0x8B and emit.buf.items[i + 2] == 0x8D) {
+            found_mov = true;
+            break;
+        }
+    }
+    try std.testing.expect(found_mov);
+}
+
+test "CallBuilder stack alignment is 16-byte on Windows" {
+    const Emit = x86_64.WinEmit;
     const Builder = CallBuilder(Emit);
 
     var emit = Emit.init(std.testing.allocator);
@@ -1435,26 +1528,22 @@ test "CallBuilder stack alignment is 16-byte" {
 
     try builder.call(0x12345678);
 
-    if (builtin.os.tag == .windows) {
-        // Should allocate 48 bytes (32 shadow + 8 arg + 8 padding for 16-byte alignment)
-        // Look for sub rsp, 48 = 48 81 EC 30 00 00 00
-        var found_sub = false;
-        for (0..emit.buf.items.len - 6) |i| {
-            if (emit.buf.items[i] == 0x48 and emit.buf.items[i + 1] == 0x81 and
-                emit.buf.items[i + 2] == 0xEC and emit.buf.items[i + 3] == 0x30)
-            {
-                found_sub = true;
-                break;
-            }
+    // Should allocate 48 bytes (32 shadow + 8 arg + 8 padding for 16-byte alignment)
+    // Look for sub rsp, 48 = 48 81 EC 30 00 00 00
+    var found_sub = false;
+    for (0..emit.buf.items.len - 6) |i| {
+        if (emit.buf.items[i] == 0x48 and emit.buf.items[i + 1] == 0x81 and
+            emit.buf.items[i + 2] == 0xEC and emit.buf.items[i + 3] == 0x30)
+        {
+            found_sub = true;
+            break;
         }
-        try std.testing.expect(found_sub);
     }
+    try std.testing.expect(found_sub);
 }
 
-test "CallBuilder return by pointer sets up first arg" {
-    if (builtin.cpu.arch != .x86_64) return;
-
-    const Emit = x86_64.NativeEmit;
+test "CallBuilder return by pointer sets up first arg System V" {
+    const Emit = x86_64.LinuxEmit;
     const Builder = CallBuilder(Emit);
 
     var emit = Emit.init(std.testing.allocator);
@@ -1474,25 +1563,53 @@ test "CallBuilder return by pointer sets up first arg" {
     // Verify code was emitted
     try std.testing.expect(emit.buf.items.len > 0);
 
-    if (builtin.os.tag == .windows) {
-        // First arg (RCX) should be LEA to output buffer
-        // Second arg (RDX) should be the immediate 42
-        // Look for lea rcx, [rbp-64]
-        var found_lea = false;
-        for (0..emit.buf.items.len - 6) |i| {
-            if (emit.buf.items[i] == 0x48 and emit.buf.items[i + 1] == 0x8D and emit.buf.items[i + 2] == 0x8D) {
-                found_lea = true;
-                break;
-            }
+    // System V: First arg (RDI) should be LEA to output buffer
+    // Look for lea rdi, [rbp-64] = 48 8D BD + disp32
+    var found_lea = false;
+    for (0..emit.buf.items.len - 6) |i| {
+        if (emit.buf.items[i] == 0x48 and emit.buf.items[i + 1] == 0x8D and emit.buf.items[i + 2] == 0xBD) {
+            found_lea = true;
+            break;
         }
-        try std.testing.expect(found_lea);
     }
+    try std.testing.expect(found_lea);
+}
+
+test "CallBuilder return by pointer sets up first arg Windows" {
+    const Emit = x86_64.WinEmit;
+    const Builder = CallBuilder(Emit);
+
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var stack_offset: i32 = 0;
+    var builder = try Builder.init(&emit, &stack_offset);
+
+    // Set return by pointer (output at [RBP-64])
+    try builder.setReturnByPointer(-64);
+
+    // Add one more argument
+    try builder.addImmArg(42);
+
+    try builder.call(0x12345678);
+
+    // Verify code was emitted
+    try std.testing.expect(emit.buf.items.len > 0);
+
+    // Windows: First arg (RCX) should be LEA to output buffer
+    // Look for lea rcx, [rbp-64] = 48 8D 8D + disp32
+    var found_lea = false;
+    for (0..emit.buf.items.len - 6) |i| {
+        if (emit.buf.items[i] == 0x48 and emit.buf.items[i + 1] == 0x8D and emit.buf.items[i + 2] == 0x8D) {
+            found_lea = true;
+            break;
+        }
+    }
+    try std.testing.expect(found_lea);
 }
 
 test "CallBuilder addF64RegArg uses correct XMM register" {
-    if (builtin.cpu.arch != .x86_64) return;
-
-    const Emit = x86_64.NativeEmit;
+    const Emit = x86_64.LinuxEmit;
     const Builder = CallBuilder(Emit);
 
     var emit = Emit.init(std.testing.allocator);
@@ -1523,9 +1640,7 @@ test "CallBuilder addF64RegArg uses correct XMM register" {
 }
 
 test "CallBuilder addF64MemArg loads from memory to XMM" {
-    if (builtin.cpu.arch != .x86_64) return;
-
-    const Emit = x86_64.NativeEmit;
+    const Emit = x86_64.LinuxEmit;
     const Builder = CallBuilder(Emit);
 
     var emit = Emit.init(std.testing.allocator);
@@ -1556,10 +1671,7 @@ test "CallBuilder addF64MemArg loads from memory to XMM" {
 }
 
 test "CallBuilder Windows position-based float regs" {
-    if (builtin.cpu.arch != .x86_64) return;
-    if (builtin.os.tag != .windows) return;
-
-    const Emit = x86_64.NativeEmit;
+    const Emit = x86_64.WinEmit;
     const Builder = CallBuilder(Emit);
 
     var emit = Emit.init(std.testing.allocator);
@@ -1591,9 +1703,7 @@ test "CallBuilder Windows position-based float regs" {
 }
 
 test "CallBuilder mixed int and float args" {
-    if (builtin.cpu.arch != .x86_64) return;
-
-    const Emit = x86_64.NativeEmit;
+    const Emit = x86_64.LinuxEmit;
     const Builder = CallBuilder(Emit);
 
     var emit = Emit.init(std.testing.allocator);
@@ -1602,10 +1712,10 @@ test "CallBuilder mixed int and float args" {
     var stack_offset: i32 = 0;
     var builder = try Builder.init(&emit, &stack_offset);
 
-    // Mix of int and float args
-    try builder.addImmArg(1); // int arg 0
-    try builder.addF64RegArg(.XMM5); // float arg (position 1 on Windows, separate counter on SysV)
-    try builder.addImmArg(2); // int arg 1 or 2
+    // Mix of int and float args (System V uses separate counters)
+    try builder.addImmArg(1); // int arg 0 -> RDI
+    try builder.addF64RegArg(.XMM5); // float arg -> XMM0
+    try builder.addImmArg(2); // int arg 1 -> RSI
 
     try builder.call(0x12345678);
 
@@ -1614,9 +1724,7 @@ test "CallBuilder mixed int and float args" {
 }
 
 test "CallBuilder callReg allocates shadow space on Windows" {
-    if (builtin.cpu.arch != .x86_64) return;
-
-    const Emit = x86_64.NativeEmit;
+    const Emit = x86_64.WinEmit;
     const Builder = CallBuilder(Emit);
 
     var emit = Emit.init(std.testing.allocator);
@@ -1635,36 +1743,31 @@ test "CallBuilder callReg allocates shadow space on Windows" {
     // Verify code was emitted
     try std.testing.expect(emit.buf.items.len > 0);
 
-    if (builtin.os.tag == .windows) {
-        // Should have shadow space allocation: sub rsp, 32 = 48 81 EC 20 00 00 00
-        var found_sub = false;
-        for (0..emit.buf.items.len -| 6) |i| {
-            if (emit.buf.items[i] == 0x48 and emit.buf.items[i + 1] == 0x81 and
-                emit.buf.items[i + 2] == 0xEC and emit.buf.items[i + 3] == 0x20)
-            {
-                found_sub = true;
-                break;
-            }
+    // Should have shadow space allocation: sub rsp, 32 = 48 81 EC 20 00 00 00
+    var found_sub = false;
+    for (0..emit.buf.items.len -| 6) |i| {
+        if (emit.buf.items[i] == 0x48 and emit.buf.items[i + 1] == 0x81 and
+            emit.buf.items[i + 2] == 0xEC and emit.buf.items[i + 3] == 0x20)
+        {
+            found_sub = true;
+            break;
         }
-        try std.testing.expect(found_sub);
-
-        // Should have call rax = FF D0
-        var found_call_rax = false;
-        for (0..emit.buf.items.len -| 1) |i| {
-            if (emit.buf.items[i] == 0xFF and emit.buf.items[i + 1] == 0xD0) {
-                found_call_rax = true;
-                break;
-            }
-        }
-        try std.testing.expect(found_call_rax);
     }
+    try std.testing.expect(found_sub);
+
+    // Should have call rax = FF D0
+    var found_call_rax = false;
+    for (0..emit.buf.items.len -| 1) |i| {
+        if (emit.buf.items[i] == 0xFF and emit.buf.items[i + 1] == 0xD0) {
+            found_call_rax = true;
+            break;
+        }
+    }
+    try std.testing.expect(found_call_rax);
 }
 
 test "CallBuilder R12 save emits correct MOV instruction on Windows" {
-    if (builtin.cpu.arch != .x86_64) return;
-    if (builtin.os.tag != .windows) return;
-
-    const Emit = x86_64.NativeEmit;
+    const Emit = x86_64.WinEmit;
     const Builder = CallBuilder(Emit);
 
     var emit = Emit.init(std.testing.allocator);
@@ -1693,10 +1796,7 @@ test "CallBuilder R12 save emits correct MOV instruction on Windows" {
 }
 
 test "CallBuilder R12 restore emits correct MOV instruction on Windows" {
-    if (builtin.cpu.arch != .x86_64) return;
-    if (builtin.os.tag != .windows) return;
-
-    const Emit = x86_64.NativeEmit;
+    const Emit = x86_64.WinEmit;
     const Builder = CallBuilder(Emit);
 
     var emit = Emit.init(std.testing.allocator);
@@ -1721,11 +1821,8 @@ test "CallBuilder R12 restore emits correct MOV instruction on Windows" {
     try std.testing.expect(found_r12_restore);
 }
 
-test "CallBuilder stack args at correct offsets" {
-    if (builtin.cpu.arch != .x86_64) return;
-    if (builtin.os.tag != .windows) return;
-
-    const Emit = x86_64.NativeEmit;
+test "CallBuilder stack args at correct offsets on Windows" {
+    const Emit = x86_64.WinEmit;
     const Builder = CallBuilder(Emit);
 
     var emit = Emit.init(std.testing.allocator);
@@ -1755,9 +1852,7 @@ test "CallBuilder stack args at correct offsets" {
 }
 
 test "CalleeBuilder basic prologue/epilogue x86_64" {
-    if (builtin.cpu.arch != .x86_64) return;
-
-    const Emit = x86_64.NativeEmit;
+    const Emit = x86_64.LinuxEmit;
     const Callee = CalleeBuilder(Emit);
 
     var emit = Emit.init(std.testing.allocator);
@@ -1780,9 +1875,7 @@ test "CalleeBuilder basic prologue/epilogue x86_64" {
 }
 
 test "CalleeBuilder with pushed registers x86_64" {
-    if (builtin.cpu.arch != .x86_64) return;
-
-    const Emit = x86_64.NativeEmit;
+    const Emit = x86_64.LinuxEmit;
     const Callee = CalleeBuilder(Emit);
 
     var emit = Emit.init(std.testing.allocator);
@@ -1804,9 +1897,7 @@ test "CalleeBuilder with pushed registers x86_64" {
 }
 
 test "CalleeBuilder with MOV-saved registers x86_64" {
-    if (builtin.cpu.arch != .x86_64) return;
-
-    const Emit = x86_64.NativeEmit;
+    const Emit = x86_64.LinuxEmit;
     const Callee = CalleeBuilder(Emit);
 
     var emit = Emit.init(std.testing.allocator);
@@ -1825,9 +1916,7 @@ test "CalleeBuilder with MOV-saved registers x86_64" {
 }
 
 test "CalleeBuilder stack alignment" {
-    if (builtin.cpu.arch != .x86_64) return;
-
-    const Emit = x86_64.NativeEmit;
+    const Emit = x86_64.LinuxEmit;
     const Callee = CalleeBuilder(Emit);
 
     var emit = Emit.init(std.testing.allocator);
@@ -1844,9 +1933,7 @@ test "CalleeBuilder stack alignment" {
 }
 
 test "CalleeBuilder mixed push and MOV saves x86_64" {
-    if (builtin.cpu.arch != .x86_64) return;
-
-    const Emit = x86_64.NativeEmit;
+    const Emit = x86_64.LinuxEmit;
     const Callee = CalleeBuilder(Emit);
 
     var emit = Emit.init(std.testing.allocator);
@@ -1871,4 +1958,38 @@ test "CalleeBuilder mixed push and MOV saves x86_64" {
     // Epilogue: mov R13,[rbp-8](4) + add rsp,N(7) + pop R12(2) + pop RBX(1) + pop rbp(1) + ret(1) = 16
     // Total: ~34 bytes
     try std.testing.expect(emit.buf.items.len > 30);
+}
+
+// Multi-target aarch64 calling convention tests
+
+test "aarch64 CC identical across all targets" {
+    const Arm64Linux = aarch64.LinuxEmit;
+    const Arm64Win = aarch64.WinEmit;
+    const Arm64Mac = aarch64.MacEmit;
+
+    // All aarch64 targets use AAPCS64 - verify uniform behavior
+    try std.testing.expectEqual(Arm64Linux.CC.PARAM_REGS.len, Arm64Win.CC.PARAM_REGS.len);
+    try std.testing.expectEqual(Arm64Linux.CC.PARAM_REGS.len, Arm64Mac.CC.PARAM_REGS.len);
+    try std.testing.expectEqual(@as(usize, 8), Arm64Linux.CC.PARAM_REGS.len);
+
+    try std.testing.expectEqual(Arm64Linux.CC.SHADOW_SPACE, Arm64Win.CC.SHADOW_SPACE);
+    try std.testing.expectEqual(Arm64Linux.CC.SHADOW_SPACE, Arm64Mac.CC.SHADOW_SPACE);
+    try std.testing.expectEqual(@as(u8, 0), Arm64Linux.CC.SHADOW_SPACE);
+
+    try std.testing.expectEqual(Arm64Linux.CC.FLOAT_PARAM_REGS.len, Arm64Win.CC.FLOAT_PARAM_REGS.len);
+    try std.testing.expectEqual(@as(usize, 8), Arm64Linux.CC.FLOAT_PARAM_REGS.len);
+}
+
+test "CallingConvention.forTarget for aarch64 targets" {
+    const linux_cc = CallingConvention.forTarget(.arm64linux);
+    const win_cc = CallingConvention.forTarget(.arm64win);
+    const mac_cc = CallingConvention.forTarget(.arm64mac);
+
+    // All should use AAPCS64 with same parameters
+    try std.testing.expectEqual(linux_cc.num_param_regs, win_cc.num_param_regs);
+    try std.testing.expectEqual(linux_cc.num_param_regs, mac_cc.num_param_regs);
+    try std.testing.expectEqual(@as(u8, 8), linux_cc.num_param_regs);
+
+    try std.testing.expectEqual(linux_cc.shadow_space, win_cc.shadow_space);
+    try std.testing.expectEqual(@as(u8, 0), linux_cc.shadow_space);
 }
