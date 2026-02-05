@@ -103,6 +103,172 @@ const LayoutStore = layout.Store;
 const CFStmtId = mono.CFStmtId;
 const LayoutIdxSpan = mono.LayoutIdxSpan;
 
+/// Generation mode determines how builtin function calls are emitted.
+/// This is important because the dev backend can be used in two ways:
+/// 1. In-process execution (dev evaluator): Direct function pointers work
+/// 2. Object file generation (roc build --backend=dev): Need symbol references
+pub const GenerationMode = enum {
+    /// Code runs in-process (dev evaluator), direct function pointers are valid.
+    /// The compiled code calls builtins via absolute addresses embedded in the code.
+    native_execution,
+    /// Generating relocatable object files for linking.
+    /// Builtin calls must use symbol references that the linker will resolve.
+    object_file,
+};
+
+/// Builtin function identifiers for the dev backend.
+/// These map to exported symbols in dev_wrappers.zig for object file generation.
+pub const BuiltinFn = enum {
+    // Memory/refcounting
+    allocate_with_refcount,
+    incref_data_ptr,
+    decref_data_ptr,
+    free_data_ptr,
+
+    // String operations
+    str_to_utf8,
+    str_concat,
+    str_contains,
+    str_starts_with,
+    str_ends_with,
+    str_is_empty,
+    str_equal,
+    str_count_utf8_bytes,
+    str_caseless_ascii_equals,
+    str_repeat,
+    str_trim,
+    str_trim_start,
+    str_trim_end,
+    str_split,
+    str_join_with,
+    str_reserve,
+    str_release_excess_capacity,
+    str_with_capacity,
+    str_drop_prefix,
+    str_drop_suffix,
+    str_with_ascii_lowercased,
+    str_with_ascii_uppercased,
+    str_with_prefix,
+    str_from_utf8_lossy,
+    str_escape_and_quote,
+
+    // List operations
+    list_with_capacity,
+    list_append_unsafe,
+    list_append_safe,
+    list_concat,
+    list_prepend,
+    list_sublist,
+    list_replace,
+    list_reserve,
+    list_release_excess_capacity,
+
+    // Numeric operations
+    dec_to_str,
+    dec_mul_saturated,
+    dec_div,
+    dec_div_trunc,
+    dec_to_f64,
+    i128_to_f64,
+    u128_to_f64,
+    f64_to_i128_trunc,
+    f64_to_u128_trunc,
+    i64_to_dec,
+    u64_to_dec,
+    dec_to_i64_trunc,
+    i128_try_convert,
+    u128_try_convert,
+    int_try_signed,
+    int_try_unsigned,
+    dec_to_int_try_unsafe,
+    f64_to_int_try_unsafe,
+    dec_to_f32_try_unsafe,
+    f64_to_f32_try_unsafe,
+    i128_to_dec_try_unsafe,
+    u128_to_dec_try_unsafe,
+    num_div_trunc_u128,
+    num_div_trunc_i128,
+    num_rem_trunc_u128,
+    num_rem_trunc_i128,
+
+    /// Get the exported symbol name for object file linking.
+    pub fn symbolName(self: BuiltinFn) []const u8 {
+        return switch (self) {
+            // Memory/refcounting
+            .allocate_with_refcount => "roc_builtins_allocate_with_refcount",
+            .incref_data_ptr => "roc_builtins_incref_data_ptr",
+            .decref_data_ptr => "roc_builtins_decref_data_ptr",
+            .free_data_ptr => "roc_builtins_free_data_ptr",
+
+            // String operations
+            .str_to_utf8 => "roc_builtins_str_to_utf8",
+            .str_concat => "roc_builtins_str_concat",
+            .str_contains => "roc_builtins_str_contains",
+            .str_starts_with => "roc_builtins_str_starts_with",
+            .str_ends_with => "roc_builtins_str_ends_with",
+            .str_is_empty => "roc_builtins_str_is_empty",
+            .str_equal => "roc_builtins_str_equal",
+            .str_count_utf8_bytes => "roc_builtins_str_count_utf8_bytes",
+            .str_caseless_ascii_equals => "roc_builtins_str_caseless_ascii_equals",
+            .str_repeat => "roc_builtins_str_repeat",
+            .str_trim => "roc_builtins_str_trim",
+            .str_trim_start => "roc_builtins_str_trim_start",
+            .str_trim_end => "roc_builtins_str_trim_end",
+            .str_split => "roc_builtins_str_split",
+            .str_join_with => "roc_builtins_str_join_with",
+            .str_reserve => "roc_builtins_str_reserve",
+            .str_release_excess_capacity => "roc_builtins_str_release_excess_capacity",
+            .str_with_capacity => "roc_builtins_str_with_capacity",
+            .str_drop_prefix => "roc_builtins_str_drop_prefix",
+            .str_drop_suffix => "roc_builtins_str_drop_suffix",
+            .str_with_ascii_lowercased => "roc_builtins_str_with_ascii_lowercased",
+            .str_with_ascii_uppercased => "roc_builtins_str_with_ascii_uppercased",
+            .str_with_prefix => "roc_builtins_str_with_prefix",
+            .str_from_utf8_lossy => "roc_builtins_str_from_utf8_lossy",
+            .str_escape_and_quote => "roc_builtins_str_escape_and_quote",
+
+            // List operations
+            .list_with_capacity => "roc_builtins_list_with_capacity",
+            .list_append_unsafe => "roc_builtins_list_append_unsafe",
+            .list_append_safe => "roc_builtins_list_append_safe",
+            .list_concat => "roc_builtins_list_concat",
+            .list_prepend => "roc_builtins_list_prepend",
+            .list_sublist => "roc_builtins_list_sublist",
+            .list_replace => "roc_builtins_list_replace",
+            .list_reserve => "roc_builtins_list_reserve",
+            .list_release_excess_capacity => "roc_builtins_list_release_excess_capacity",
+
+            // Numeric operations
+            .dec_to_str => "roc_builtins_dec_to_str",
+            .dec_mul_saturated => "roc_builtins_dec_mul_saturated",
+            .dec_div => "roc_builtins_dec_div",
+            .dec_div_trunc => "roc_builtins_dec_div_trunc",
+            .dec_to_f64 => "roc_builtins_dec_to_f64",
+            .i128_to_f64 => "roc_builtins_i128_to_f64",
+            .u128_to_f64 => "roc_builtins_u128_to_f64",
+            .f64_to_i128_trunc => "roc_builtins_f64_to_i128_trunc",
+            .f64_to_u128_trunc => "roc_builtins_f64_to_u128_trunc",
+            .i64_to_dec => "roc_builtins_i64_to_dec",
+            .u64_to_dec => "roc_builtins_u64_to_dec",
+            .dec_to_i64_trunc => "roc_builtins_dec_to_i64_trunc",
+            .i128_try_convert => "roc_builtins_i128_try_convert",
+            .u128_try_convert => "roc_builtins_u128_try_convert",
+            .int_try_signed => "roc_builtins_int_try_signed",
+            .int_try_unsigned => "roc_builtins_int_try_unsigned",
+            .dec_to_int_try_unsafe => "roc_builtins_dec_to_int_try_unsafe",
+            .f64_to_int_try_unsafe => "roc_builtins_f64_to_int_try_unsafe",
+            .dec_to_f32_try_unsafe => "roc_builtins_dec_to_f32_try_unsafe",
+            .f64_to_f32_try_unsafe => "roc_builtins_f64_to_f32_try_unsafe",
+            .i128_to_dec_try_unsafe => "roc_builtins_i128_to_dec_try_unsafe",
+            .u128_to_dec_try_unsafe => "roc_builtins_u128_to_dec_try_unsafe",
+            .num_div_trunc_u128 => "roc_builtins_num_div_trunc_u128",
+            .num_div_trunc_i128 => "roc_builtins_num_div_trunc_i128",
+            .num_rem_trunc_u128 => "roc_builtins_num_rem_trunc_u128",
+            .num_rem_trunc_i128 => "roc_builtins_num_rem_trunc_i128",
+        };
+    }
+};
+
 /// Special layout index for List I64 type (must match dev_evaluator.zig).
 /// Lists are (ptr, len, capacity) = 24 bytes and need special handling when returning results.
 
@@ -834,6 +1000,11 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
         /// Starts at 0x8000_0000 to avoid collision with real local variables.
         /// Used by allocTempGeneral() for temporaries that don't correspond to real locals.
         next_temp_local: u32 = 0x8000_0000,
+
+        /// Generation mode determines whether to use direct function pointers or symbol references.
+        /// - native_execution: Code runs in-process (dev evaluator), direct function pointers work
+        /// - object_file: Generating relocatable object files, use symbol references for builtins
+        generation_mode: GenerationMode = .native_execution,
 
         /// Info about a mutable variable's fixed stack slot
         pub const MutableVarInfo = struct {
@@ -3203,13 +3374,13 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     if (args.len != 1) unreachable;
                     const str_loc = try self.generateExpr(args[0]);
                     const str_off = try self.ensureOnStack(str_loc, roc_str_size);
-                    return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrToUtf8), .list);
+                    return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrToUtf8), .str_to_utf8, .list);
                 },
                 .str_is_empty => {
                     if (args.len != 1) unreachable;
                     const str_loc = try self.generateExpr(args[0]);
                     const str_off = try self.ensureOnStack(str_loc, roc_str_size);
-                    return try self.callStr1ToScalar(str_off, @intFromPtr(&wrapStrIsEmpty));
+                    return try self.callStr1ToScalar(str_off, @intFromPtr(&wrapStrIsEmpty), .str_is_empty);
                 },
                 .str_is_eq => {
                     if (args.len != 2) unreachable;
@@ -3217,7 +3388,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     const b_loc = try self.generateExpr(args[1]);
                     const a_off = try self.ensureOnStack(a_loc, roc_str_size);
                     const b_off = try self.ensureOnStack(b_loc, roc_str_size);
-                    return try self.callStr2ToScalar(a_off, b_off, @intFromPtr(&wrapStrEqual));
+                    return try self.callStr2ToScalar(a_off, b_off, @intFromPtr(&wrapStrEqual), .str_equal);
                 },
                 .str_concat => {
                     if (args.len != 2) unreachable;
@@ -3225,7 +3396,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     const b_loc = try self.generateExpr(args[1]);
                     const a_off = try self.ensureOnStack(a_loc, roc_str_size);
                     const b_off = try self.ensureOnStack(b_loc, roc_str_size);
-                    return try self.callStr2RocOpsToStr(a_off, b_off, @intFromPtr(&wrapStrConcat));
+                    return try self.callStr2RocOpsToStr(a_off, b_off, @intFromPtr(&wrapStrConcat), .str_concat);
                 },
                 .str_contains => {
                     if (args.len != 2) unreachable;
@@ -3233,7 +3404,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     const b_loc = try self.generateExpr(args[1]);
                     const a_off = try self.ensureOnStack(a_loc, roc_str_size);
                     const b_off = try self.ensureOnStack(b_loc, roc_str_size);
-                    return try self.callStr2ToScalar(a_off, b_off, @intFromPtr(&wrapStrContains));
+                    return try self.callStr2ToScalar(a_off, b_off, @intFromPtr(&wrapStrContains), .str_contains);
                 },
                 .str_starts_with => {
                     if (args.len != 2) unreachable;
@@ -3241,7 +3412,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     const b_loc = try self.generateExpr(args[1]);
                     const a_off = try self.ensureOnStack(a_loc, roc_str_size);
                     const b_off = try self.ensureOnStack(b_loc, roc_str_size);
-                    return try self.callStr2ToScalar(a_off, b_off, @intFromPtr(&wrapStrStartsWith));
+                    return try self.callStr2ToScalar(a_off, b_off, @intFromPtr(&wrapStrStartsWith), .str_starts_with);
                 },
                 .str_ends_with => {
                     if (args.len != 2) unreachable;
@@ -3249,13 +3420,13 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     const b_loc = try self.generateExpr(args[1]);
                     const a_off = try self.ensureOnStack(a_loc, roc_str_size);
                     const b_off = try self.ensureOnStack(b_loc, roc_str_size);
-                    return try self.callStr2ToScalar(a_off, b_off, @intFromPtr(&wrapStrEndsWith));
+                    return try self.callStr2ToScalar(a_off, b_off, @intFromPtr(&wrapStrEndsWith), .str_ends_with);
                 },
                 .str_count_utf8_bytes => {
                     if (args.len != 1) unreachable;
                     const str_loc = try self.generateExpr(args[0]);
                     const str_off = try self.ensureOnStack(str_loc, roc_str_size);
-                    return try self.callStr1ToScalar(str_off, @intFromPtr(&wrapStrCountUtf8Bytes));
+                    return try self.callStr1ToScalar(str_off, @intFromPtr(&wrapStrCountUtf8Bytes), .str_count_utf8_bytes);
                 },
                 .str_caseless_ascii_equals => {
                     if (args.len != 2) unreachable;
@@ -3263,7 +3434,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     const b_loc = try self.generateExpr(args[1]);
                     const a_off = try self.ensureOnStack(a_loc, roc_str_size);
                     const b_off = try self.ensureOnStack(b_loc, roc_str_size);
-                    return try self.callStr2ToScalar(a_off, b_off, @intFromPtr(&wrapStrCaselessAsciiEquals));
+                    return try self.callStr2ToScalar(a_off, b_off, @intFromPtr(&wrapStrCaselessAsciiEquals), .str_caseless_ascii_equals);
                 },
                 .str_repeat => {
                     // str_repeat(str, count) -> Str
@@ -3272,25 +3443,25 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     const count_loc = try self.generateExpr(args[1]);
                     const str_off = try self.ensureOnStack(str_loc, roc_str_size);
                     const count_off = try self.ensureOnStack(count_loc, 8);
-                    return try self.callStr1U64RocOpsToStr(str_off, count_off, @intFromPtr(&wrapStrRepeat));
+                    return try self.callStr1U64RocOpsToStr(str_off, count_off, @intFromPtr(&wrapStrRepeat), .str_repeat);
                 },
                 .str_trim => {
                     if (args.len != 1) unreachable;
                     const str_loc = try self.generateExpr(args[0]);
                     const str_off = try self.ensureOnStack(str_loc, roc_str_size);
-                    return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrTrim), .str);
+                    return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrTrim), .str_trim, .str);
                 },
                 .str_trim_start => {
                     if (args.len != 1) unreachable;
                     const str_loc = try self.generateExpr(args[0]);
                     const str_off = try self.ensureOnStack(str_loc, roc_str_size);
-                    return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrTrimStart), .str);
+                    return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrTrimStart), .str_trim_start, .str);
                 },
                 .str_trim_end => {
                     if (args.len != 1) unreachable;
                     const str_loc = try self.generateExpr(args[0]);
                     const str_off = try self.ensureOnStack(str_loc, roc_str_size);
-                    return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrTrimEnd), .str);
+                    return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrTrimEnd), .str_trim_end, .str);
                 },
                 .str_split => {
                     // str_split(str, delimiter) -> List(Str)
@@ -3299,7 +3470,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     const b_loc = try self.generateExpr(args[1]);
                     const a_off = try self.ensureOnStack(a_loc, roc_str_size);
                     const b_off = try self.ensureOnStack(b_loc, roc_str_size);
-                    return try self.callStr2RocOpsToResult(a_off, b_off, @intFromPtr(&wrapStrSplit), .list);
+                    return try self.callStr2RocOpsToResult(a_off, b_off, @intFromPtr(&wrapStrSplit), .str_split, .list);
                 },
                 .str_join_with => {
                     // str_join_with(list, separator) -> Str
@@ -3308,7 +3479,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     const sep_loc = try self.generateExpr(args[1]);
                     const list_off = try self.ensureOnStack(list_loc, roc_list_size);
                     const sep_off = try self.ensureOnStack(sep_loc, roc_str_size);
-                    return try self.callStr2RocOpsToResult(list_off, sep_off, @intFromPtr(&wrapStrJoinWith), .str);
+                    return try self.callStr2RocOpsToResult(list_off, sep_off, @intFromPtr(&wrapStrJoinWith), .str_join_with, .str);
                 },
                 .str_reserve => {
                     // str_reserve(str, spare) -> Str
@@ -3317,13 +3488,13 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     const spare_loc = try self.generateExpr(args[1]);
                     const str_off = try self.ensureOnStack(str_loc, roc_str_size);
                     const spare_off = try self.ensureOnStack(spare_loc, 8);
-                    return try self.callStr1U64RocOpsToStr(str_off, spare_off, @intFromPtr(&wrapStrReserve));
+                    return try self.callStr1U64RocOpsToStr(str_off, spare_off, @intFromPtr(&wrapStrReserve), .str_reserve);
                 },
                 .str_release_excess_capacity => {
                     if (args.len != 1) unreachable;
                     const str_loc = try self.generateExpr(args[0]);
                     const str_off = try self.ensureOnStack(str_loc, roc_str_size);
-                    return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrReleaseExcessCapacity), .str);
+                    return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrReleaseExcessCapacity), .str_release_excess_capacity, .str);
                 },
                 .str_with_capacity => {
                     // str_with_capacity(capacity) -> Str
@@ -3359,7 +3530,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     const b_loc = try self.generateExpr(args[1]);
                     const a_off = try self.ensureOnStack(a_loc, roc_str_size);
                     const b_off = try self.ensureOnStack(b_loc, roc_str_size);
-                    return try self.callStr2RocOpsToResult(a_off, b_off, @intFromPtr(&wrapStrDropPrefix), .str);
+                    return try self.callStr2RocOpsToResult(a_off, b_off, @intFromPtr(&wrapStrDropPrefix), .str_drop_prefix, .str);
                 },
                 .str_drop_suffix => {
                     if (args.len != 2) unreachable;
@@ -3367,19 +3538,19 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     const b_loc = try self.generateExpr(args[1]);
                     const a_off = try self.ensureOnStack(a_loc, roc_str_size);
                     const b_off = try self.ensureOnStack(b_loc, roc_str_size);
-                    return try self.callStr2RocOpsToResult(a_off, b_off, @intFromPtr(&wrapStrDropSuffix), .str);
+                    return try self.callStr2RocOpsToResult(a_off, b_off, @intFromPtr(&wrapStrDropSuffix), .str_drop_suffix, .str);
                 },
                 .str_with_ascii_lowercased => {
                     if (args.len != 1) unreachable;
                     const str_loc = try self.generateExpr(args[0]);
                     const str_off = try self.ensureOnStack(str_loc, roc_str_size);
-                    return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrWithAsciiLowercased), .str);
+                    return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrWithAsciiLowercased), .str_with_ascii_lowercased, .str);
                 },
                 .str_with_ascii_uppercased => {
                     if (args.len != 1) unreachable;
                     const str_loc = try self.generateExpr(args[0]);
                     const str_off = try self.ensureOnStack(str_loc, roc_str_size);
-                    return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrWithAsciiUppercased), .str);
+                    return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrWithAsciiUppercased), .str_with_ascii_uppercased, .str);
                 },
                 .str_with_prefix => {
                     // str_with_prefix(string, prefix) -> Str  (= concat(prefix, string))
@@ -3388,14 +3559,14 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     const pfx_loc = try self.generateExpr(args[1]);
                     const str_off = try self.ensureOnStack(str_loc, roc_str_size);
                     const pfx_off = try self.ensureOnStack(pfx_loc, roc_str_size);
-                    return try self.callStr2RocOpsToResult(str_off, pfx_off, @intFromPtr(&wrapStrWithPrefix), .str);
+                    return try self.callStr2RocOpsToResult(str_off, pfx_off, @intFromPtr(&wrapStrWithPrefix), .str_with_prefix, .str);
                 },
                 .str_from_utf8_lossy => {
                     // str_from_utf8_lossy(list) -> Str
                     if (args.len != 1) unreachable;
                     const list_loc = try self.generateExpr(args[0]);
                     const list_off = try self.ensureOnStack(list_loc, roc_list_size);
-                    return try self.callStr1RocOpsToResult(list_off, @intFromPtr(&wrapStrFromUtf8Lossy), .str);
+                    return try self.callStr1RocOpsToResult(list_off, @intFromPtr(&wrapStrFromUtf8Lossy), .str_from_utf8_lossy, .str);
                 },
                 .str_from_utf8 => {
                     // str_from_utf8(list) -> {Str, Bool, U64} result struct
@@ -3404,7 +3575,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     if (args.len != 1) unreachable;
                     const list_loc = try self.generateExpr(args[0]);
                     const list_off = try self.ensureOnStack(list_loc, roc_list_size);
-                    return try self.callStr1RocOpsToResult(list_off, @intFromPtr(&wrapStrFromUtf8Lossy), .str);
+                    return try self.callStr1RocOpsToResult(list_off, @intFromPtr(&wrapStrFromUtf8Lossy), .str_from_utf8_lossy, .str);
                 },
 
                 // ── Remaining list low-level operations ──
@@ -3691,7 +3862,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
         /// Call a C wrapper: fn(out, str_f0, str_f1, str_f2, roc_ops) -> void
         /// Used for str->str and str->list ops that take 1 string + roc_ops
-        fn callStr1RocOpsToResult(self: *Self, str_off: i32, fn_addr: usize, result_kind: enum { str, list }) Error!ValueLocation {
+        fn callStr1RocOpsToResult(self: *Self, str_off: i32, fn_addr: usize, builtin_fn: BuiltinFn, result_kind: enum { str, list }) Error!ValueLocation {
             const roc_ops_reg = self.roc_ops_reg orelse unreachable;
             const result_offset = self.codegen.allocStackSlot(roc_str_size);
 
@@ -3702,7 +3873,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             try builder.addMemArg(if (comptime target.toCpuArch() == .aarch64) .FP else .RBP, str_off + 8);
             try builder.addMemArg(if (comptime target.toCpuArch() == .aarch64) .FP else .RBP, str_off + 16);
             try builder.addRegArg(roc_ops_reg);
-            try builder.call(fn_addr);
+            try self.callBuiltin(&builder, fn_addr, builtin_fn);
 
             return switch (result_kind) {
                 .str => .{ .stack_str = result_offset },
@@ -3712,14 +3883,14 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
         /// Call a C wrapper: fn(str_f0, str_f1, str_f2) -> scalar (bool or u64)
         /// Used for str->bool and str->u64 ops that take 1 string
-        fn callStr1ToScalar(self: *Self, str_off: i32, fn_addr: usize) Error!ValueLocation {
+        fn callStr1ToScalar(self: *Self, str_off: i32, fn_addr: usize, builtin_fn: BuiltinFn) Error!ValueLocation {
             // fn(str_bytes, str_len, str_cap) -> scalar - 3 args
             const base_ptr = if (comptime target.toCpuArch() == .aarch64) .FP else .RBP;
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             try builder.addMemArg(base_ptr, str_off);
             try builder.addMemArg(base_ptr, str_off + 8);
             try builder.addMemArg(base_ptr, str_off + 16);
-            try builder.call(fn_addr);
+            try self.callBuiltin(&builder, fn_addr, builtin_fn);
 
             // Result is in return register (X0 or RAX)
             const result_reg = try self.allocTempGeneral();
@@ -3733,7 +3904,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
         /// Call a C wrapper: fn(a_f0, a_f1, a_f2, b_f0, b_f1, b_f2) -> scalar
         /// Used for (str, str) -> bool ops
-        fn callStr2ToScalar(self: *Self, a_off: i32, b_off: i32, fn_addr: usize) Error!ValueLocation {
+        fn callStr2ToScalar(self: *Self, a_off: i32, b_off: i32, fn_addr: usize, builtin_fn: BuiltinFn) Error!ValueLocation {
             // fn(a_bytes, a_len, a_cap, b_bytes, b_len, b_cap) -> scalar - 6 args
             const base_ptr = if (comptime target.toCpuArch() == .aarch64) .FP else .RBP;
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
@@ -3743,7 +3914,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             try builder.addMemArg(base_ptr, b_off);
             try builder.addMemArg(base_ptr, b_off + 8);
             try builder.addMemArg(base_ptr, b_off + 16);
-            try builder.call(fn_addr);
+            try self.callBuiltin(&builder, fn_addr, builtin_fn);
 
             // Result is in return register (X0 or RAX)
             const result_reg = try self.allocTempGeneral();
@@ -3757,11 +3928,11 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
         /// Call a C wrapper: fn(out, a_f0, a_f1, a_f2, b_f0, b_f1, b_f2, roc_ops) -> void
         /// Used for (str, str, roc_ops) -> str/list ops
-        fn callStr2RocOpsToStr(self: *Self, a_off: i32, b_off: i32, fn_addr: usize) Error!ValueLocation {
-            return self.callStr2RocOpsToResult(a_off, b_off, fn_addr, .str);
+        fn callStr2RocOpsToStr(self: *Self, a_off: i32, b_off: i32, fn_addr: usize, builtin_fn: BuiltinFn) Error!ValueLocation {
+            return self.callStr2RocOpsToResult(a_off, b_off, fn_addr, builtin_fn, .str);
         }
 
-        fn callStr2RocOpsToResult(self: *Self, a_off: i32, b_off: i32, fn_addr: usize, result_kind: enum { str, list }) Error!ValueLocation {
+        fn callStr2RocOpsToResult(self: *Self, a_off: i32, b_off: i32, fn_addr: usize, builtin_fn: BuiltinFn, result_kind: enum { str, list }) Error!ValueLocation {
             const roc_ops_reg = self.roc_ops_reg orelse unreachable;
             const result_offset = self.codegen.allocStackSlot(roc_str_size);
 
@@ -3776,7 +3947,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             try builder.addMemArg(base_ptr, b_off + 8);
             try builder.addMemArg(base_ptr, b_off + 16);
             try builder.addRegArg(roc_ops_reg);
-            try builder.call(fn_addr);
+            try self.callBuiltin(&builder, fn_addr, builtin_fn);
 
             return switch (result_kind) {
                 .str => .{ .stack_str = result_offset },
@@ -3786,7 +3957,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
         /// Call: fn(out, str_f0, str_f1, str_f2, u64_val, roc_ops) -> void
         /// Used for (str, u64, roc_ops) -> str ops like str_repeat, str_reserve
-        fn callStr1U64RocOpsToStr(self: *Self, str_off: i32, u64_off: i32, fn_addr: usize) Error!ValueLocation {
+        fn callStr1U64RocOpsToStr(self: *Self, str_off: i32, u64_off: i32, fn_addr: usize, builtin_fn: BuiltinFn) Error!ValueLocation {
             const roc_ops_reg = self.roc_ops_reg orelse unreachable;
             const result_offset = self.codegen.allocStackSlot(roc_str_size);
 
@@ -3799,7 +3970,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             try builder.addMemArg(base_ptr, str_off + 16);
             try builder.addMemArg(base_ptr, u64_off);
             try builder.addRegArg(roc_ops_reg);
-            try builder.call(fn_addr);
+            try self.callBuiltin(&builder, fn_addr, builtin_fn);
 
             return .{ .stack_str = result_offset };
         }
@@ -8391,7 +8562,6 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
             // Call allocateWithRefcountC(data_bytes, element_alignment, elements_refcounted, roc_ops)
             // Returns pointer to allocated memory (refcount is already initialized to 1)
-            const fn_addr: usize = @intFromPtr(&allocateWithRefcountC);
 
             // Allocate stack slot to save the heap pointer (will be clobbered during element generation)
             const heap_ptr_slot: i32 = self.codegen.allocStackSlot(8);
@@ -8402,7 +8572,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             try builder.addImmArg(@intCast(elem_alignment));
             try builder.addImmArg(if (elements_refcounted) 1 else 0);
             try builder.addRegArg(roc_ops_reg);
-            try builder.call(fn_addr);
+            try self.callBuiltin(&builder, @intFromPtr(&allocateWithRefcountC), .allocate_with_refcount);
 
             // Save heap pointer from return register to stack slot
             if (comptime target.toCpuArch() == .aarch64) {
@@ -9757,7 +9927,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             for (expr_ids[1..]) |next_expr| {
                 const next_loc = try self.generateExpr(next_expr);
                 const next_off = try self.ensureOnStack(next_loc, roc_str_size);
-                acc_loc = try self.callStr2RocOpsToStr(acc_off, next_off, @intFromPtr(&wrapStrConcat));
+                acc_loc = try self.callStr2RocOpsToStr(acc_off, next_off, @intFromPtr(&wrapStrConcat), .str_concat);
                 acc_off = try self.ensureOnStack(acc_loc, roc_str_size);
             }
 
@@ -10151,7 +10321,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
         fn generateStrEscapeAndQuote(self: *Self, expr_id: anytype) Error!ValueLocation {
             const str_loc = try self.generateExpr(expr_id);
             const str_off = try self.ensureOnStack(str_loc, roc_str_size);
-            return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrEscapeAndQuote), .str);
+            return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrEscapeAndQuote), .str_escape_and_quote, .str);
         }
 
         /// Generate code for discriminant switch
@@ -12401,6 +12571,28 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             const local_id = self.next_temp_local;
             self.next_temp_local +%= 1;
             return self.codegen.allocGeneralFor(local_id);
+        }
+
+        /// Call a builtin function using either direct function pointer (native mode)
+        /// or symbol reference (object file mode) depending on generation_mode.
+        ///
+        /// This helper abstracts the difference between:
+        /// - Native execution: Direct function pointers work because code runs in-process
+        /// - Object file generation: Need symbol references that the linker will resolve
+        ///
+        /// Arguments:
+        /// - builder: The CallBuilder with arguments already set up
+        /// - fn_addr: Direct function address for native execution mode
+        /// - symbol_name: Symbol name for object file mode (must match export in dev_wrappers.zig)
+        fn callBuiltin(self: *Self, builder: *Builder, fn_addr: usize, builtin_fn: BuiltinFn) Error!void {
+            switch (self.generation_mode) {
+                .native_execution => {
+                    try builder.call(fn_addr);
+                },
+                .object_file => {
+                    try builder.callRelocatable(builtin_fn.symbolName(), self.allocator, &self.codegen.relocations);
+                },
+            }
         }
 
         /// Ensure a value location is on the stack, spilling if needed. Returns stack offset.

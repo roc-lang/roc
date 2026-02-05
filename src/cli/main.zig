@@ -140,6 +140,61 @@ const ShimLibraries = struct {
     }
 };
 
+/// Embedded pre-compiled builtins object files for each target.
+/// These contain the wrapper functions needed by the dev backend for string/list operations.
+/// Used by `roc build --backend=dev` to link the app object with builtins.
+const BuiltinsObjects = struct {
+    /// Native builtins (for host platform builds)
+    const native = if (builtin.is_test)
+        &[_]u8{}
+    else
+        @embedFile("roc_builtins.o");
+
+    /// Cross-compilation target builtins (Linux musl targets)
+    const x64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64musl/roc_builtins.o");
+    const arm64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64musl/roc_builtins.o");
+
+    /// Cross-compilation target builtins (Linux glibc targets)
+    const x64glibc = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64glibc/roc_builtins.o");
+    const arm64glibc = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64glibc/roc_builtins.o");
+
+    /// WebAssembly target builtins (wasm32-freestanding) - not used by dev backend
+    const wasm32 = if (builtin.is_test) &[_]u8{} else @embedFile("targets/wasm32/roc_builtins.o");
+
+    /// Cross-compilation target builtins (Windows targets)
+    const x64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64win/roc_builtins.obj");
+    const arm64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64win/roc_builtins.obj");
+
+    /// Cross-compilation target builtins (macOS targets)
+    const x64mac = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64mac/roc_builtins.o");
+    const arm64mac = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64mac/roc_builtins.o");
+
+    /// Get the appropriate builtins object bytes for the given target
+    pub fn forTarget(target: roc_target.RocTarget) []const u8 {
+        return switch (target) {
+            .x64musl => x64musl,
+            .arm64musl => arm64musl,
+            .x64glibc => x64glibc,
+            .arm64glibc => arm64glibc,
+            .wasm32 => wasm32,
+            .x64win => x64win,
+            .arm64win => arm64win,
+            .x64mac => x64mac,
+            .arm64mac => arm64mac,
+            // Fallback for other targets (will use native, may not work for cross-compilation)
+            else => native,
+        };
+    }
+
+    /// Get the filename for builtins object on given target
+    pub fn filename(target: roc_target.RocTarget) []const u8 {
+        return switch (target.toOsTag()) {
+            .windows => "roc_builtins.obj",
+            else => "roc_builtins.o",
+        };
+    }
+};
+
 test "main cli tests" {
     _ = @import("libc_finder.zig");
     _ = @import("test_shared_memory_system.zig");
@@ -3880,9 +3935,25 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         }
     }
 
+    // Extract builtins object file for the target and add to link inputs
+    const builtins_bytes = BuiltinsObjects.forTarget(target);
+    const builtins_filename = BuiltinsObjects.filename(target);
+    const builtins_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, builtins_filename });
+
+    // Write builtins object to cache if not already there
+    std.fs.cwd().writeFile(.{
+        .sub_path = builtins_path,
+        .data = builtins_bytes,
+    }) catch |err| {
+        std.log.err("Failed to write builtins object file: {}", .{err});
+        return error.BuiltinsExtractionFailed;
+    };
+    std.log.debug("Builtins object file: {s}", .{builtins_path});
+
     // Link the object file with platform files
     var object_files = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 4);
     try object_files.append(obj_path);
+    try object_files.append(builtins_path);
 
     std.log.debug("Linking: {} pre-files, {} object files, {} post-files", .{
         platform_files_pre.items.len,

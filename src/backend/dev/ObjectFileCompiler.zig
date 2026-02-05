@@ -100,6 +100,9 @@ pub const ObjectFileCompiler = struct {
         );
         defer codegen.deinit();
 
+        // Set object file mode to generate relocatable symbol references instead of direct pointers
+        codegen.generation_mode = .object_file;
+
         // Compile all procedures first
         if (procs.len > 0) {
             codegen.compileAllProcs(procs) catch {

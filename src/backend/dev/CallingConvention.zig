@@ -22,6 +22,8 @@ const RocTarget = @import("roc_target").RocTarget;
 const x86_64 = @import("x86_64/mod.zig");
 const aarch64 = @import("aarch64/mod.zig");
 
+const Relocation = @import("Relocation.zig").Relocation;
+
 /// Calling convention configuration for a specific target
 pub const CallingConvention = struct {
     /// Argument registers for integer/pointer arguments
@@ -582,6 +584,98 @@ pub fn CallBuilder(comptime EmitType: type) type {
                 if (self.r12_save_offset) |offset| {
                     try self.emit.movRegMem(.w64, .R12, CC_EMIT.BASE_PTR, offset);
                 }
+            }
+        }
+
+        /// Call a function by symbol name, emitting a relocatable call instruction.
+        /// This is used for object file generation where we can't use direct function pointers.
+        /// The linker will patch the call offset during linking.
+        ///
+        /// Arguments:
+        /// - symbol_name: The symbol name to call (e.g., "roc_dev_str_concat")
+        /// - allocator: Allocator for the relocations list
+        /// - relocations: The relocations list to append the relocation entry to
+        ///
+        /// Note: On x86_64, this emits `call rel32` (E8 xx xx xx xx).
+        ///       On aarch64, this emits `bl offset` (26-bit signed offset).
+        pub fn callRelocatable(self: *Self, symbol_name: []const u8, allocator: std.mem.Allocator, relocations: *std.ArrayList(Relocation)) !void {
+            // Calculate total stack space needed (same as call/callReg)
+            const stack_args_space: u32 = @intCast(self.stack_arg_count * 8);
+            const total_unaligned: u32 = CC_EMIT.SHADOW_SPACE + stack_args_space;
+            const total_space: u32 = (total_unaligned + 15) & ~@as(u32, 15);
+
+            std.debug.assert(total_space % 16 == 0);
+            std.debug.assert(self.stack_arg_count == 0 or total_space >= CC_EMIT.SHADOW_SPACE + 8);
+
+            if (comptime is_x86_64) {
+                // Allocate all stack space at once
+                if (total_space > 0) {
+                    try self.emit.subRegImm32(.w64, CC_EMIT.STACK_PTR, @intCast(total_space));
+                }
+
+                // Store deferred stack arguments at correct offsets
+                for (self.stack_args[0..self.stack_arg_count], 0..) |arg, i| {
+                    const stack_offset: i32 = @intCast(CC_EMIT.SHADOW_SPACE + i * 8);
+                    std.debug.assert(stack_offset >= CC_EMIT.SHADOW_SPACE);
+                    switch (arg) {
+                        .from_reg => |reg| {
+                            try self.emit.movMemReg(.w64, CC_EMIT.STACK_PTR, stack_offset, reg);
+                        },
+                        .from_imm => |value| {
+                            try self.emit.movRegImm64(CC_EMIT.SCRATCH_REG, value);
+                            try self.emit.movMemReg(.w64, CC_EMIT.STACK_PTR, stack_offset, CC_EMIT.SCRATCH_REG);
+                        },
+                        .from_lea => |lea| {
+                            try self.emit.leaRegMem(CC_EMIT.SCRATCH_REG, lea.base, lea.offset);
+                            try self.emit.movMemReg(.w64, CC_EMIT.STACK_PTR, stack_offset, CC_EMIT.SCRATCH_REG);
+                        },
+                        .from_mem => |mem| {
+                            try self.emit.movRegMem(.w64, CC_EMIT.SCRATCH_REG, mem.base, mem.offset);
+                            try self.emit.movMemReg(.w64, CC_EMIT.STACK_PTR, stack_offset, CC_EMIT.SCRATCH_REG);
+                        },
+                    }
+                }
+            } else if (comptime is_aarch64) {
+                if (self.stack_arg_count > 0) {
+                    @panic("Stack args not yet implemented for aarch64 CallBuilder");
+                }
+            }
+
+            // Emit relocatable call instruction
+            const code_offset = self.emit.buf.items.len;
+            if (comptime is_aarch64) {
+                // BL instruction with 0 offset placeholder
+                try self.emit.bl(0);
+                // Relocation points to the instruction itself for ARM64
+                try relocations.append(allocator, .{
+                    .linked_function = .{
+                        .offset = @intCast(code_offset),
+                        .name = symbol_name,
+                    },
+                });
+            } else {
+                // call rel32 with 0 offset placeholder
+                try self.emit.callRel32(0);
+                // For x86_64, relocation points to the 4-byte offset after the E8 opcode
+                try relocations.append(allocator, .{
+                    .linked_function = .{
+                        .offset = @intCast(code_offset + 1),
+                        .name = symbol_name,
+                    },
+                });
+            }
+
+            // Cleanup
+            if (comptime is_x86_64) {
+                if (total_space > 0) {
+                    try self.emit.addRegImm32(.w64, CC_EMIT.STACK_PTR, @intCast(total_space));
+                }
+
+                if (self.r12_save_offset) |offset| {
+                    try self.emit.movRegMem(.w64, .R12, CC_EMIT.BASE_PTR, offset);
+                }
+            } else if (comptime is_aarch64) {
+                // aarch64: no cleanup needed for now
             }
         }
 

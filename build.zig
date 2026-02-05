@@ -3199,6 +3199,13 @@ fn addMainExe(
     copy_shim.addCopyFileToSource(shim_lib.getEmittedBin(), b.pathJoin(&.{ "src/cli", interpreter_shim_filename }));
     exe.step.dependOn(&copy_shim.step);
 
+    // Copy builtins object file for the host target for embedding into CLI
+    // This is used by `roc build --backend=dev` to link the app object with builtins
+    const copy_builtins = b.addUpdateSourceFiles();
+    const host_builtins_filename = "roc_builtins.o";
+    copy_builtins.addCopyFileToSource(builtins_obj.getEmittedBin(), b.pathJoin(&.{ "src/cli", host_builtins_filename }));
+    exe.step.dependOn(&copy_builtins.step);
+
     // Add tracy support (required by parse/can/check modules)
     add_tracy(b, roc_modules.build_options, shim_lib, b.graph.host, false, flag_enable_tracy);
 
@@ -3212,6 +3219,8 @@ fn addMainExe(
         .{ .name = "wasm32", .query = .{ .cpu_arch = .wasm32, .os_tag = .freestanding, .abi = .none } },
         .{ .name = "x64win", .query = .{ .cpu_arch = .x86_64, .os_tag = .windows, .abi = .gnu } },
         .{ .name = "arm64win", .query = .{ .cpu_arch = .aarch64, .os_tag = .windows, .abi = .gnu } },
+        .{ .name = "x64mac", .query = .{ .cpu_arch = .x86_64, .os_tag = .macos, .abi = .none } },
+        .{ .name = "arm64mac", .query = .{ .cpu_arch = .aarch64, .os_tag = .macos, .abi = .none } },
     };
 
     for (cross_compile_shim_targets) |cross_target| {
@@ -3281,6 +3290,16 @@ fn addMainExe(
             b.pathJoin(&.{ "src/cli/targets", cross_target.name, shim_ext }),
         );
         exe.step.dependOn(&copy_cross_shim.step);
+
+        // Copy builtins object file for this target for embedding into CLI
+        // Used by `roc build --backend=dev --target=X` to link the app object with builtins
+        const builtins_ext = if (cross_target.query.os_tag == .windows) "roc_builtins.obj" else "roc_builtins.o";
+        const copy_cross_builtins = b.addUpdateSourceFiles();
+        copy_cross_builtins.addCopyFileToSource(
+            cross_builtins_obj.getEmittedBin(),
+            b.pathJoin(&.{ "src/cli/targets", cross_target.name, builtins_ext }),
+        );
+        exe.step.dependOn(&copy_cross_builtins.step);
     }
 
     const config = b.addOptions();
