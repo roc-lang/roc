@@ -7091,13 +7091,35 @@ fn generateLowLevel(self: *Self, ll: anytype) Error!void {
             try self.emitStoreOp(.f32, 0);
 
             // success = !isInf(f32_val) && (!isNaN(val) || isNaN(f32_val))
-            // Simplified: just check !isInf(f32_val)
+
+            // not_inf = abs(f32_val) != inf
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, f32_val) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.f32_abs) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.f32_const) catch return error.OutOfMemory;
             self.body.appendSlice(self.allocator, &@as([4]u8, @bitCast(std.math.inf(f32)))) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.f32_ne) catch return error.OutOfMemory;
+
+            // is_not_nan = (val == val)  (NaN != NaN)
+            self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+            WasmModule.leb128WriteU32(self.allocator, &self.body, val) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+            WasmModule.leb128WriteU32(self.allocator, &self.body, val) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.f64_eq) catch return error.OutOfMemory;
+
+            // is_nan_f32 = (f32_val != f32_val)
+            self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+            WasmModule.leb128WriteU32(self.allocator, &self.body, f32_val) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+            WasmModule.leb128WriteU32(self.allocator, &self.body, f32_val) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.f32_ne) catch return error.OutOfMemory;
+
+            // is_not_nan OR is_nan_f32
+            self.body.append(self.allocator, Op.i32_or) catch return error.OutOfMemory;
+
+            // not_inf AND (is_not_nan OR is_nan_f32)
+            self.body.append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
+
             // Store success at offset 4
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, result_local) catch return error.OutOfMemory;
