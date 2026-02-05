@@ -55,9 +55,10 @@ fp_local: u32 = 0,
 compiled_lambdas: std.AutoHashMap(u32, u32),
 /// Map from MonoSymbol → wasm function index (for let-bound lambdas).
 symbol_funcs: std.AutoHashMap(u48, u32),
-/// Map from MonoSymbol → capture info (for let-bound closures).
-/// At call sites, capture values are passed as extra leading arguments.
-closure_captures: std.AutoHashMap(u48, CaptureInfo),
+/// Map from expression ID → capture info (set during compileClosure).
+closure_captures_by_expr: std.AutoHashMap(u32, CaptureInfo),
+/// Map from MonoSymbol → capture info (set during tryBindFunction, read at call sites).
+closure_captures_by_sym: std.AutoHashMap(u48, CaptureInfo),
 /// Whether the module needs heap allocation (bump allocator).
 uses_heap: bool = false,
 /// CFStmt block nesting depth (for br targets in proc compilation).
@@ -89,7 +90,8 @@ pub fn init(allocator: Allocator, store: *const MonoExprStore, layout_store: ?*c
         .fp_local = 0,
         .compiled_lambdas = std.AutoHashMap(u32, u32).init(allocator),
         .symbol_funcs = std.AutoHashMap(u48, u32).init(allocator),
-        .closure_captures = std.AutoHashMap(u48, CaptureInfo).init(allocator),
+        .closure_captures_by_expr = std.AutoHashMap(u32, CaptureInfo).init(allocator),
+        .closure_captures_by_sym = std.AutoHashMap(u48, CaptureInfo).init(allocator),
         .join_point_depths = std.AutoHashMap(u32, u32).init(allocator),
         .join_point_param_locals = std.AutoHashMap(u32, []u32).init(allocator),
     };
@@ -108,12 +110,14 @@ pub fn deinit(self: *Self) void {
         self.allocator.free(entry.value_ptr.*);
     }
     self.join_point_param_locals.deinit();
-    var it = self.closure_captures.iterator();
+    var it = self.closure_captures_by_expr.iterator();
     while (it.next()) |entry| {
         self.allocator.free(entry.value_ptr.symbols);
         self.allocator.free(entry.value_ptr.val_types);
     }
-    self.closure_captures.deinit();
+    self.closure_captures_by_expr.deinit();
+    // by_sym values alias by_expr allocations, so just deinit the map
+    self.closure_captures_by_sym.deinit();
 }
 
 /// Register host function imports. Must be called before any addFunction calls
@@ -3304,7 +3308,7 @@ fn compileClosure(self: *Self, expr_id: MonoExprId, closure: anytype) Error!u32 
     if (captures.len > 0) {
         // Store with a hash key derived from the expression key
         // The caller will associate this with the bound symbol
-        self.closure_captures.put(@intCast(expr_key), .{
+        self.closure_captures_by_expr.put(expr_key, .{
             .symbols = capture_symbols,
             .val_types = capture_val_types,
         }) catch return error.OutOfMemory;
@@ -3341,10 +3345,10 @@ fn tryBindFunction(self: *Self, expr_id: MonoExprId, expr: MonoExpr, symbol: Mon
         .closure => |closure| {
             const func_idx = try self.compileClosure(expr_id, closure);
             self.symbol_funcs.put(key, func_idx) catch return error.OutOfMemory;
-            // Copy capture info from expr key to symbol key
+            // Copy capture info from expr map to symbol map
             const expr_key: u32 = @intFromEnum(expr_id);
-            if (self.closure_captures.get(@intCast(expr_key))) |cap_info| {
-                self.closure_captures.put(key, cap_info) catch return error.OutOfMemory;
+            if (self.closure_captures_by_expr.get(expr_key)) |cap_info| {
+                self.closure_captures_by_sym.put(key, cap_info) catch return error.OutOfMemory;
             }
             return true;
         },
@@ -3361,8 +3365,8 @@ fn tryBindFunction(self: *Self, expr_id: MonoExprId, expr: MonoExpr, symbol: Mon
                     const func_idx = try self.compileClosure(nom.backing_expr, closure);
                     self.symbol_funcs.put(key, func_idx) catch return error.OutOfMemory;
                     const inner_key: u32 = @intFromEnum(nom.backing_expr);
-                    if (self.closure_captures.get(@intCast(inner_key))) |cap_info| {
-                        self.closure_captures.put(key, cap_info) catch return error.OutOfMemory;
+                    if (self.closure_captures_by_expr.get(inner_key)) |cap_info| {
+                        self.closure_captures_by_sym.put(key, cap_info) catch return error.OutOfMemory;
                     }
                     return true;
                 },
@@ -3375,8 +3379,8 @@ fn tryBindFunction(self: *Self, expr_id: MonoExprId, expr: MonoExpr, symbol: Mon
             if (self.symbol_funcs.get(src_key)) |fid| {
                 self.symbol_funcs.put(key, fid) catch return error.OutOfMemory;
                 // Also propagate capture info
-                if (self.closure_captures.get(src_key)) |cap_info| {
-                    self.closure_captures.put(key, cap_info) catch return error.OutOfMemory;
+                if (self.closure_captures_by_sym.get(src_key)) |cap_info| {
+                    self.closure_captures_by_sym.put(key, cap_info) catch return error.OutOfMemory;
                 }
                 return true;
             }
@@ -3825,7 +3829,7 @@ fn generateCall(self: *Self, c: anytype) Error!void {
             .lookup => |lookup| {
                 // Let-bound closure — look up captures by symbol
                 const key: u48 = @bitCast(lookup.symbol);
-                if (self.closure_captures.get(key)) |cap_info| {
+                if (self.closure_captures_by_sym.get(key)) |cap_info| {
                     for (cap_info.symbols) |cap_sym| {
                         const local_idx = self.storage.getLocal(cap_sym) orelse return unsupported(@src());
                         self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
