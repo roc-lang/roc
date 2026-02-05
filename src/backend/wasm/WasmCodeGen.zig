@@ -5300,19 +5300,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Error!void {
                 WasmModule.leb128WriteU32(self.allocator, &self.body, result_local) catch return error.OutOfMemory;
 
                 // Get element size from ret_layout (which is the list layout, not elem)
-                // The ret_layout is a list, so we need the element size.
-                // For simple cases, use the first arg's layout info.
-                // We can compute elem size from the list element layout if available.
-                // For now, use a fixed approach based on what list_get does.
-                const elem_size: u32 = blk: {
-                    if (self.layout_store) |ls| {
-                        const l = ls.getLayout(ll.ret_layout);
-                        if (l.tag == .list) {
-                            break :blk ls.layoutSize(ls.getLayout(l.data.list));
-                        }
-                    }
-                    break :blk 8; // fallback
-                };
+                const elem_size = try self.getListElemSize(ll.ret_layout);
 
                 // new_ptr = old_ptr + count * elem_size
                 self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
@@ -5519,15 +5507,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Error!void {
                 self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
                 WasmModule.leb128WriteU32(self.allocator, &self.body, result_local) catch return error.OutOfMemory;
 
-                const elem_size: u32 = blk: {
-                    if (self.layout_store) |ls| {
-                        const l = ls.getLayout(ll.ret_layout);
-                        if (l.tag == .list) {
-                            break :blk ls.layoutSize(ls.getLayout(l.data.list));
-                        }
-                    }
-                    break :blk 8;
-                };
+                const elem_size = try self.getListElemSize(ll.ret_layout);
 
                 // new_ptr = old_ptr + (len - actual_count) * elem_size
                 self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
@@ -8465,25 +8445,19 @@ fn emitFloatMod(self: *Self, vt: ValType) Error!void {
 }
 
 /// Get the element size for a list layout.
-fn getListElemSize(self: *const Self, list_layout: layout.Idx) u32 {
-    if (self.layout_store) |ls| {
-        const l = ls.getLayout(list_layout);
-        if (l.tag == .list) {
-            return ls.layoutSize(ls.getLayout(l.data.list));
-        }
-    }
-    return 8; // fallback
+fn getListElemSize(self: *const Self, list_layout: layout.Idx) Error!u32 {
+    const ls = self.layout_store orelse return error.UnsupportedExpr;
+    const l = ls.getLayout(list_layout);
+    if (l.tag != .list) return error.UnsupportedExpr;
+    return ls.layoutSize(ls.getLayout(l.data.list));
 }
 
 /// Get the element alignment for a list layout.
-fn getListElemAlign(self: *const Self, list_layout: layout.Idx) u32 {
-    if (self.layout_store) |ls| {
-        const l = ls.getLayout(list_layout);
-        if (l.tag == .list) {
-            return @intCast(ls.getLayout(l.data.list).alignment(ls.targetUsize()).toByteUnits());
-        }
-    }
-    return 4; // fallback
+fn getListElemAlign(self: *const Self, list_layout: layout.Idx) Error!u32 {
+    const ls = self.layout_store orelse return error.UnsupportedExpr;
+    const l = ls.getLayout(list_layout);
+    if (l.tag != .list) return error.UnsupportedExpr;
+    return @intCast(ls.getLayout(l.data.list).alignment(ls.targetUsize()).toByteUnits());
 }
 
 const StrSearchMode = enum { contains, starts_with, ends_with };
@@ -8733,8 +8707,8 @@ fn emitBytewiseCompare(self: *Self, ptr_a: u32, ptr_b: u32, len: u32, result_loc
 
 /// Generate LowLevel list_append: create new list with one element appended.
 fn generateLLListAppend(self: *Self, args: anytype, ret_layout: layout.Idx) Error!void {
-    const elem_size = self.getListElemSize(ret_layout);
-    const elem_align = self.getListElemAlign(ret_layout);
+    const elem_size = try self.getListElemSize(ret_layout);
+    const elem_align = try self.getListElemAlign(ret_layout);
 
     // Generate list arg
     try self.generateExpr(args[0]);
@@ -8826,8 +8800,8 @@ fn generateLLListAppend(self: *Self, args: anytype, ret_layout: layout.Idx) Erro
 
 /// Generate LowLevel list_prepend: create new list with one element prepended.
 fn generateLLListPrepend(self: *Self, args: anytype, ret_layout: layout.Idx) Error!void {
-    const elem_size = self.getListElemSize(ret_layout);
-    const elem_align = self.getListElemAlign(ret_layout);
+    const elem_size = try self.getListElemSize(ret_layout);
+    const elem_align = try self.getListElemAlign(ret_layout);
 
     // Generate list and element
     try self.generateExpr(args[0]);
@@ -8915,8 +8889,8 @@ fn generateLLListPrepend(self: *Self, args: anytype, ret_layout: layout.Idx) Err
 
 /// Generate LowLevel list_concat: concatenate two lists.
 fn generateLLListConcat(self: *Self, args: anytype, ret_layout: layout.Idx) Error!void {
-    const elem_size = self.getListElemSize(ret_layout);
-    const elem_align = self.getListElemAlign(ret_layout);
+    const elem_size = try self.getListElemSize(ret_layout);
+    const elem_align = try self.getListElemAlign(ret_layout);
 
     // Generate both lists
     try self.generateExpr(args[0]);
@@ -9002,8 +8976,8 @@ fn generateLLListConcat(self: *Self, args: anytype, ret_layout: layout.Idx) Erro
 
 /// Generate LowLevel list_reverse: create new list with elements in reverse order.
 fn generateLLListReverse(self: *Self, args: anytype, ret_layout: layout.Idx) Error!void {
-    const elem_size = self.getListElemSize(ret_layout);
-    const elem_align = self.getListElemAlign(ret_layout);
+    const elem_size = try self.getListElemSize(ret_layout);
+    const elem_align = try self.getListElemAlign(ret_layout);
 
     try self.generateExpr(args[0]);
     const list_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
