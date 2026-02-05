@@ -76,13 +76,6 @@ const SectionHeader = extern struct {
     characteristics: u32,
 };
 
-/// COFF Relocation (10 bytes)
-const CoffRelocation = extern struct {
-    virtual_address: u32,
-    symbol_table_index: u32,
-    type: u16,
-};
-
 /// COFF Symbol Table Entry (18 bytes)
 /// Note: We cannot use this struct directly with asBytes due to padding.
 /// Use writeSymbol() to write exactly 18 bytes.
