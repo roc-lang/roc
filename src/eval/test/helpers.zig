@@ -473,6 +473,96 @@ fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_i
             return error.WasmExecFailed;
         };
 
+        env_imports.addHostFunction(
+            "roc_i128_to_str",
+            &[_]bytebox.ValType{ .I32, .I32 },
+            &[_]bytebox.ValType{.I32},
+            hostI128ToStr,
+            null,
+        ) catch {
+            return error.WasmExecFailed;
+        };
+
+        env_imports.addHostFunction(
+            "roc_u128_to_str",
+            &[_]bytebox.ValType{ .I32, .I32 },
+            &[_]bytebox.ValType{.I32},
+            hostU128ToStr,
+            null,
+        ) catch {
+            return error.WasmExecFailed;
+        };
+
+        env_imports.addHostFunction(
+            "roc_u128_to_dec",
+            &[_]bytebox.ValType{ .I32, .I32 },
+            &[_]bytebox.ValType{.I32},
+            hostU128ToDec,
+            null,
+        ) catch {
+            return error.WasmExecFailed;
+        };
+
+        env_imports.addHostFunction(
+            "roc_i128_to_dec",
+            &[_]bytebox.ValType{ .I32, .I32 },
+            &[_]bytebox.ValType{.I32},
+            hostI128ToDec,
+            null,
+        ) catch {
+            return error.WasmExecFailed;
+        };
+
+        env_imports.addHostFunction(
+            "roc_dec_to_i128",
+            &[_]bytebox.ValType{ .I32, .I32 },
+            &[_]bytebox.ValType{.I32},
+            hostDecToI128,
+            null,
+        ) catch {
+            return error.WasmExecFailed;
+        };
+
+        env_imports.addHostFunction(
+            "roc_dec_to_u128",
+            &[_]bytebox.ValType{ .I32, .I32 },
+            &[_]bytebox.ValType{.I32},
+            hostDecToU128,
+            null,
+        ) catch {
+            return error.WasmExecFailed;
+        };
+
+        env_imports.addHostFunction(
+            "roc_dec_to_f32",
+            &[_]bytebox.ValType{.I32},
+            &[_]bytebox.ValType{.F32},
+            hostDecToF32,
+            null,
+        ) catch {
+            return error.WasmExecFailed;
+        };
+
+        env_imports.addHostFunction(
+            "roc_list_str_eq",
+            &[_]bytebox.ValType{ .I32, .I32 },
+            &[_]bytebox.ValType{.I32},
+            hostListStrEq,
+            null,
+        ) catch {
+            return error.WasmExecFailed;
+        };
+
+        env_imports.addHostFunction(
+            "roc_list_list_eq",
+            &[_]bytebox.ValType{ .I32, .I32, .I32 },
+            &[_]bytebox.ValType{.I32},
+            hostListListEq,
+            null,
+        ) catch {
+            return error.WasmExecFailed;
+        };
+
         const imports = [_]bytebox.ModuleImportPackage{env_imports};
         module_instance.instantiate(.{ .stack_size = 1024 * 64, .imports = &imports }) catch {
             return error.WasmExecFailed;
@@ -954,6 +1044,340 @@ fn hostDecDivTrunc(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]c
     const result = quotient * one_point_zero;
 
     writeI128ToMem(buffer, result_ptr, result);
+}
+
+/// Host function for roc_i128_to_str: convert signed 128-bit integer to string
+/// Signature: (i32 val_ptr, i32 buf_ptr) -> i32 str_len
+fn hostI128ToStr(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
+    const mem = module.store.getMemory(0);
+    const buffer = mem.buffer();
+
+    const val_ptr: usize = @intCast(params[0].I32);
+    const buf_ptr: usize = @intCast(params[1].I32);
+
+    if (val_ptr + 16 > buffer.len or buf_ptr + 48 > buffer.len) {
+        results[0] = bytebox.Val{ .I32 = 0 };
+        return;
+    }
+
+    const val = readI128FromMem(buffer, val_ptr);
+
+    // Format the i128 value to a string
+    var fmt_buf: [48]u8 = undefined;
+    const formatted = std.fmt.bufPrint(&fmt_buf, "{d}", .{val}) catch {
+        results[0] = bytebox.Val{ .I32 = 0 };
+        return;
+    };
+
+    // Write formatted string to wasm memory buffer
+    const len = formatted.len;
+    @memcpy(buffer[buf_ptr..][0..len], formatted);
+
+    results[0] = bytebox.Val{ .I32 = @intCast(len) };
+}
+
+/// Host function for roc_u128_to_str: convert unsigned 128-bit integer to string
+/// Signature: (i32 val_ptr, i32 buf_ptr) -> i32 str_len
+fn hostU128ToStr(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
+    const mem = module.store.getMemory(0);
+    const buffer = mem.buffer();
+
+    const val_ptr: usize = @intCast(params[0].I32);
+    const buf_ptr: usize = @intCast(params[1].I32);
+
+    if (val_ptr + 16 > buffer.len or buf_ptr + 48 > buffer.len) {
+        results[0] = bytebox.Val{ .I32 = 0 };
+        return;
+    }
+
+    const val = readU128FromMem(buffer, val_ptr);
+
+    // Format the u128 value to a string
+    var fmt_buf: [48]u8 = undefined;
+    const formatted = std.fmt.bufPrint(&fmt_buf, "{d}", .{val}) catch {
+        results[0] = bytebox.Val{ .I32 = 0 };
+        return;
+    };
+
+    // Write formatted string to wasm memory buffer
+    const len = formatted.len;
+    @memcpy(buffer[buf_ptr..][0..len], formatted);
+
+    results[0] = bytebox.Val{ .I32 = @intCast(len) };
+}
+
+/// Host function for roc_u128_to_dec: convert u128 to Dec (i128 scaled by 10^18)
+/// Signature: (i32 val_ptr, i32 result_ptr) -> i32 (success)
+fn hostU128ToDec(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
+    const mem = module.store.getMemory(0);
+    const buffer = mem.buffer();
+
+    const val_ptr: usize = @intCast(params[0].I32);
+    const result_ptr: usize = @intCast(params[1].I32);
+
+    if (val_ptr + 16 > buffer.len or result_ptr + 16 > buffer.len) {
+        results[0] = bytebox.Val{ .I32 = 0 };
+        return;
+    }
+
+    const val = readU128FromMem(buffer, val_ptr);
+
+    // Multiply by 10^18 to get Dec representation
+    const one_point_zero: u128 = 1_000_000_000_000_000_000; // 10^18
+
+    // Check for overflow: val must be <= max_i128 / 10^18
+    const max_val: u128 = @as(u128, @bitCast(@as(i128, std.math.maxInt(i128)))) / one_point_zero;
+    if (val > max_val) {
+        results[0] = bytebox.Val{ .I32 = 0 }; // overflow
+        return;
+    }
+
+    const dec_val: i128 = @intCast(val * one_point_zero);
+    writeI128ToMem(buffer, result_ptr, dec_val);
+    results[0] = bytebox.Val{ .I32 = 1 }; // success
+}
+
+/// Host function for roc_i128_to_dec: convert i128 to Dec (i128 scaled by 10^18)
+/// Signature: (i32 val_ptr, i32 result_ptr) -> i32 (success)
+fn hostI128ToDec(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
+    const mem = module.store.getMemory(0);
+    const buffer = mem.buffer();
+
+    const val_ptr: usize = @intCast(params[0].I32);
+    const result_ptr: usize = @intCast(params[1].I32);
+
+    if (val_ptr + 16 > buffer.len or result_ptr + 16 > buffer.len) {
+        results[0] = bytebox.Val{ .I32 = 0 };
+        return;
+    }
+
+    const val = readI128FromMem(buffer, val_ptr);
+
+    // Multiply by 10^18 to get Dec representation
+    const one_point_zero: i128 = 1_000_000_000_000_000_000; // 10^18
+
+    // Check for overflow using wider arithmetic
+    const wide_val: i256 = val;
+    const wide_result = wide_val * one_point_zero;
+
+    // Check if result fits in i128
+    if (wide_result > std.math.maxInt(i128) or wide_result < std.math.minInt(i128)) {
+        results[0] = bytebox.Val{ .I32 = 0 }; // overflow
+        return;
+    }
+
+    const dec_val: i128 = @intCast(wide_result);
+    writeI128ToMem(buffer, result_ptr, dec_val);
+    results[0] = bytebox.Val{ .I32 = 1 }; // success
+}
+
+/// Host function for roc_dec_to_i128: convert Dec to i128 (divide by 10^18)
+/// Signature: (i32 val_ptr, i32 result_ptr) -> i32 (success)
+fn hostDecToI128(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
+    const mem = module.store.getMemory(0);
+    const buffer = mem.buffer();
+
+    const val_ptr: usize = @intCast(params[0].I32);
+    const result_ptr: usize = @intCast(params[1].I32);
+
+    if (val_ptr + 16 > buffer.len or result_ptr + 16 > buffer.len) {
+        results[0] = bytebox.Val{ .I32 = 0 };
+        return;
+    }
+
+    const dec_val = readI128FromMem(buffer, val_ptr);
+
+    // Divide by 10^18 to get i128 representation
+    const one_point_zero: i128 = 1_000_000_000_000_000_000; // 10^18
+    const result = @divTrunc(dec_val, one_point_zero);
+
+    writeI128ToMem(buffer, result_ptr, result);
+    results[0] = bytebox.Val{ .I32 = 1 }; // always succeeds for i128
+}
+
+/// Host function for roc_dec_to_u128: convert Dec to u128 (divide by 10^18)
+/// Signature: (i32 val_ptr, i32 result_ptr) -> i32 (success)
+fn hostDecToU128(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
+    const mem = module.store.getMemory(0);
+    const buffer = mem.buffer();
+
+    const val_ptr: usize = @intCast(params[0].I32);
+    const result_ptr: usize = @intCast(params[1].I32);
+
+    if (val_ptr + 16 > buffer.len or result_ptr + 16 > buffer.len) {
+        results[0] = bytebox.Val{ .I32 = 0 };
+        return;
+    }
+
+    const dec_val = readI128FromMem(buffer, val_ptr);
+
+    // Divide by 10^18 to get the integer part
+    const one_point_zero: i128 = 1_000_000_000_000_000_000; // 10^18
+    const result = @divTrunc(dec_val, one_point_zero);
+
+    // Fail if result is negative (can't convert to u128)
+    if (result < 0) {
+        results[0] = bytebox.Val{ .I32 = 0 };
+        return;
+    }
+
+    writeU128ToMem(buffer, result_ptr, @intCast(result));
+    results[0] = bytebox.Val{ .I32 = 1 };
+}
+
+/// Host function for roc_dec_to_f32: convert Dec to f32
+/// Signature: (i32 val_ptr) -> f32
+fn hostDecToF32(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
+    const mem = module.store.getMemory(0);
+    const buffer = mem.buffer();
+
+    const val_ptr: usize = @intCast(params[0].I32);
+
+    if (val_ptr + 16 > buffer.len) {
+        results[0] = bytebox.Val{ .F32 = 0.0 };
+        return;
+    }
+
+    const dec_val = readI128FromMem(buffer, val_ptr);
+
+    // Convert to f64 first (more precision), then to f32
+    const one_point_zero: f64 = 1_000_000_000_000_000_000.0; // 10^18
+    const f64_val: f64 = @as(f64, @floatFromInt(dec_val)) / one_point_zero;
+    const f32_val: f32 = @floatCast(f64_val);
+
+    results[0] = bytebox.Val{ .F32 = f32_val };
+}
+
+/// Host function for roc_list_str_eq: compare two lists of strings for equality
+/// Signature: (list_a_ptr, list_b_ptr) -> i32 (0 or 1)
+fn hostListStrEq(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
+    const mem = module.store.getMemory(0);
+    const buffer = mem.buffer();
+
+    const a_ptr: usize = @intCast(params[0].I32);
+    const b_ptr: usize = @intCast(params[1].I32);
+
+    if (a_ptr + 12 > buffer.len or b_ptr + 12 > buffer.len) {
+        results[0] = bytebox.Val{ .I32 = 0 };
+        return;
+    }
+
+    // Read list structs (12 bytes each: ptr, len, cap)
+    const a_data_ptr: usize = @intCast(std.mem.readInt(u32, buffer[a_ptr..][0..4], .little));
+    const a_len: usize = @intCast(std.mem.readInt(u32, buffer[a_ptr + 4 ..][0..4], .little));
+    const b_data_ptr: usize = @intCast(std.mem.readInt(u32, buffer[b_ptr..][0..4], .little));
+    const b_len: usize = @intCast(std.mem.readInt(u32, buffer[b_ptr + 4 ..][0..4], .little));
+
+    // Different lengths -> not equal
+    if (a_len != b_len) {
+        results[0] = bytebox.Val{ .I32 = 0 };
+        return;
+    }
+
+    // Compare each string element (12 bytes per RocStr)
+    for (0..a_len) |i| {
+        const a_str_ptr = a_data_ptr + i * 12;
+        const b_str_ptr = b_data_ptr + i * 12;
+
+        if (a_str_ptr + 12 > buffer.len or b_str_ptr + 12 > buffer.len) {
+            results[0] = bytebox.Val{ .I32 = 0 };
+            return;
+        }
+
+        // Compare strings using the same logic as hostStrEq
+        const a_bytes = buffer[a_str_ptr..][0..12];
+        const b_bytes = buffer[b_str_ptr..][0..12];
+
+        const a_is_sso = (a_bytes[11] & 0x80) != 0;
+        const b_is_sso = (b_bytes[11] & 0x80) != 0;
+
+        const a_data: [*]const u8, const a_str_len: usize = if (a_is_sso) .{
+            a_bytes[0..11].ptr,
+            @as(usize, a_bytes[11] & 0x7F),
+        } else .{
+            buffer[@as(usize, std.mem.readInt(u32, a_bytes[0..4], .little))..].ptr,
+            @as(usize, std.mem.readInt(u32, a_bytes[4..8], .little)),
+        };
+
+        const b_data: [*]const u8, const b_str_len: usize = if (b_is_sso) .{
+            b_bytes[0..11].ptr,
+            @as(usize, b_bytes[11] & 0x7F),
+        } else .{
+            buffer[@as(usize, std.mem.readInt(u32, b_bytes[0..4], .little))..].ptr,
+            @as(usize, std.mem.readInt(u32, b_bytes[4..8], .little)),
+        };
+
+        if (a_str_len != b_str_len or !std.mem.eql(u8, a_data[0..a_str_len], b_data[0..b_str_len])) {
+            results[0] = bytebox.Val{ .I32 = 0 };
+            return;
+        }
+    }
+
+    results[0] = bytebox.Val{ .I32 = 1 };
+}
+
+/// Host function for roc_list_list_eq: compare two lists of lists for equality
+/// Signature: (list_a_ptr, list_b_ptr, inner_elem_size) -> i32 (0 or 1)
+fn hostListListEq(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
+    const mem = module.store.getMemory(0);
+    const buffer = mem.buffer();
+
+    const a_ptr: usize = @intCast(params[0].I32);
+    const b_ptr: usize = @intCast(params[1].I32);
+    const inner_elem_size: usize = @intCast(params[2].I32);
+
+    if (a_ptr + 12 > buffer.len or b_ptr + 12 > buffer.len) {
+        results[0] = bytebox.Val{ .I32 = 0 };
+        return;
+    }
+
+    // Read outer list structs
+    const a_data_ptr: usize = @intCast(std.mem.readInt(u32, buffer[a_ptr..][0..4], .little));
+    const a_len: usize = @intCast(std.mem.readInt(u32, buffer[a_ptr + 4 ..][0..4], .little));
+    const b_data_ptr: usize = @intCast(std.mem.readInt(u32, buffer[b_ptr..][0..4], .little));
+    const b_len: usize = @intCast(std.mem.readInt(u32, buffer[b_ptr + 4 ..][0..4], .little));
+
+    // Different lengths -> not equal
+    if (a_len != b_len) {
+        results[0] = bytebox.Val{ .I32 = 0 };
+        return;
+    }
+
+    // Compare each inner list element (12 bytes per RocList)
+    for (0..a_len) |i| {
+        const a_inner_ptr = a_data_ptr + i * 12;
+        const b_inner_ptr = b_data_ptr + i * 12;
+
+        if (a_inner_ptr + 12 > buffer.len or b_inner_ptr + 12 > buffer.len) {
+            results[0] = bytebox.Val{ .I32 = 0 };
+            return;
+        }
+
+        // Read inner list structs
+        const a_inner_data: usize = @intCast(std.mem.readInt(u32, buffer[a_inner_ptr..][0..4], .little));
+        const a_inner_len: usize = @intCast(std.mem.readInt(u32, buffer[a_inner_ptr + 4 ..][0..4], .little));
+        const b_inner_data: usize = @intCast(std.mem.readInt(u32, buffer[b_inner_ptr..][0..4], .little));
+        const b_inner_len: usize = @intCast(std.mem.readInt(u32, buffer[b_inner_ptr + 4 ..][0..4], .little));
+
+        if (a_inner_len != b_inner_len) {
+            results[0] = bytebox.Val{ .I32 = 0 };
+            return;
+        }
+
+        // Compare inner list data byte-by-byte
+        const inner_bytes = a_inner_len * inner_elem_size;
+        if (a_inner_data + inner_bytes > buffer.len or b_inner_data + inner_bytes > buffer.len) {
+            results[0] = bytebox.Val{ .I32 = 0 };
+            return;
+        }
+
+        if (!std.mem.eql(u8, buffer[a_inner_data..][0..inner_bytes], buffer[b_inner_data..][0..inner_bytes])) {
+            results[0] = bytebox.Val{ .I32 = 0 };
+            return;
+        }
+    }
+
+    results[0] = bytebox.Val{ .I32 = 1 };
 }
 
 /// Compare Interpreter result string with WasmEvaluator result string.
