@@ -25,7 +25,7 @@ make_glue = |types_list| {
 		}
 	}
 
-	header_content = generate_header($hosted_functions)
+	header_content = generate_c_header($hosted_functions)
 
 	Ok([{ name: "roc_platform_abi.h", content: header_content }])
 }
@@ -429,8 +429,8 @@ generate_example_impl = |func_name, struct_name, args, ret_c_type| {
 }
 
 ## Generate the complete C header file
-generate_header : List({ index : U64, name : Str, type_str : Str }) -> Str
-generate_header = |hosted_functions| {
+generate_c_header : List({ index : U64, name : Str, type_str : Str }) -> Str
+generate_c_header = |hosted_functions| {
 	# Generate defines for function indices
 	defines = generate_defines(hosted_functions)
 

@@ -4116,13 +4116,6 @@ const GlueError = error{
     OutOfMemory,
 };
 
-/// Clean up the temp directory used for glue generation.
-fn cleanupGlueTempDir(temp_dir: []const u8) void {
-    // Delete temp_dir directly - it's already the directory we want to remove.
-    // Do NOT use dirname here - temp_dir is already the correct path.
-    std.fs.cwd().deleteTree(temp_dir) catch {};
-}
-
 /// Print platform glue information for a platform's main.roc file using full compilation path.
 /// This provides resolved types via TypeWriter and discovers hosted functions via e_hosted_lambda detection.
 fn rocGlue(ctx: *CliContext, args: cli_args.GlueArgs) GlueError!void {
@@ -4152,7 +4145,6 @@ fn rocGlue(ctx: *CliContext, args: cli_args.GlueArgs) GlueError!void {
     };
 }
 
-/// Inner implementation of rocGlue that returns errors instead of printing them.
 fn rocGlueInner(ctx: *CliContext, args: cli_args.GlueArgs) GlueError!void {
     const stderr = ctx.io.stderr();
 
@@ -4183,55 +4175,52 @@ fn rocGlueInner(ctx: *CliContext, args: cli_args.GlueArgs) GlueError!void {
     const temp_dir = createUniqueTempDir(ctx) catch {
         return error.TempDirCreation;
     };
-    errdefer cleanupGlueTempDir(temp_dir);
+    defer std.fs.cwd().deleteTree(temp_dir) catch {};
 
     // Generate synthetic app source that imports the platform
     var app_source = std.ArrayList(u8).empty;
     defer app_source.deinit(ctx.gpa);
+    const w = app_source.writer(ctx.gpa);
 
     // Build requires clause: app [Alias1, Alias2, entry1, entry2, ...] { pf: platform "path" }
-    try app_source.appendSlice(ctx.gpa, "app [");
+    try w.print("app [", .{});
 
     // Add type aliases first
     for (platform_info.type_aliases, 0..) |alias, i| {
-        if (i > 0) try app_source.appendSlice(ctx.gpa, ", ");
-        try app_source.appendSlice(ctx.gpa, alias);
+        if (i > 0) try w.print(", ", .{});
+        try w.print("{s}", .{alias});
     }
 
     // Add requires entries
     for (platform_info.requires_entries, 0..) |entry, i| {
         if (platform_info.type_aliases.len > 0 or i > 0) {
-            try app_source.appendSlice(ctx.gpa, ", ");
+            try w.print(", ", .{});
         }
-        try app_source.appendSlice(ctx.gpa, entry.name);
+        try w.print("{s}", .{entry.name});
     }
 
-    try app_source.appendSlice(ctx.gpa, "] { pf: platform \"");
+    try w.print("] {{ pf: platform \"", .{});
     // Escape backslashes for the Roc string literal (Windows paths contain backslashes)
     for (platform_abs_path) |ch| {
         if (ch == '\\') {
-            try app_source.appendSlice(ctx.gpa, "\\\\");
+            try w.print("\\\\", .{});
         } else {
-            try app_source.append(ctx.gpa, ch);
+            try w.print("{c}", .{ch});
         }
     }
-    try app_source.appendSlice(ctx.gpa, "\" }\n\n");
+    try w.print("\" }}\n\n", .{});
 
     // Generate type alias definitions: Model : {}
     for (platform_info.type_aliases) |alias| {
-        try app_source.appendSlice(ctx.gpa, alias);
-        try app_source.appendSlice(ctx.gpa, " : {}\n");
+        try w.print("{s} : {{}}\n", .{alias});
     }
     if (platform_info.type_aliases.len > 0) {
-        try app_source.appendSlice(ctx.gpa, "\n");
+        try w.print("\n", .{});
     }
 
     // Generate stub implementations for each requires entry
     for (platform_info.requires_entries) |entry| {
-        try app_source.appendSlice(ctx.gpa, entry.name);
-        try app_source.appendSlice(ctx.gpa, " = ");
-        try app_source.appendSlice(ctx.gpa, entry.stub_expr);
-        try app_source.appendSlice(ctx.gpa, "\n");
+        try w.print("{s} = {s}\n", .{ entry.name, entry.stub_expr });
     }
 
     // Write synthetic app to temp file
@@ -4462,9 +4451,6 @@ fn rocGlueInner(ctx: *CliContext, args: cli_args.GlueArgs) GlueError!void {
             },
         }
     }
-
-    // Clean up temp directory (success path)
-    cleanupGlueTempDir(temp_dir);
 }
 
 /// Information extracted from a platform header for glue generation.
@@ -4937,8 +4923,6 @@ fn generateStubExprFromTypeAnno(gpa: std.mem.Allocator, env: *ModuleEnv, ast: *c
             buf.appendSlice(gpa, "{ ... }") catch {};
         },
         .record => |r| {
-            // Generate record stub with stub values for each field
-            // Use ":" syntax for record literals (not "=" which is for blocks)
             buf.appendSlice(gpa, "{ ") catch {};
             const fields = ast.store.annoRecordFieldSlice(r.fields);
             for (fields, 0..) |field_idx, i| {

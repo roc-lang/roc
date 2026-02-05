@@ -42,7 +42,6 @@ fn panicImpl(msg: []const u8, addr: ?usize) noreturn {
     std.process.abort();
 }
 
-/// Error message to display on stack overflow in a Roc program
 const STACK_OVERFLOW_MESSAGE = "\nThis Roc application overflowed its stack memory and crashed.\n\n";
 
 /// Callback for stack overflow in a Roc program
@@ -907,90 +906,78 @@ fn platform_main(args: [][*:0]u8) !c_int {
     // of all nested structures. We must NOT manually clean up after this call.
     var result: ResultListFileStr = undefined;
     roc__make_glue(&roc_ops, &result, &types_list);
+    defer cleanupResult(&result, &roc_ops);
 
     // Handle the result
     const stderr: std.fs.File = .stderr();
 
-    const exit_code: c_int = switch (result.tag) {
-        .Ok => blk: {
-            const files = result.payload.ok;
-            if (files.len() == 0) {
-                stdout.writeAll("Glue spec returned 0 files.\n") catch {};
-            } else {
-                var buf: [256]u8 = undefined;
-                const msg = std.fmt.bufPrint(&buf, "Glue spec returned {d} file(s):\n", .{files.len()}) catch "Glue spec returned files:\n";
-                stdout.writeAll(msg) catch {};
-
-                // Write files to output directory if specified
-                if (files.bytes) |file_bytes| {
-                    const file_slice: [*]const File = @ptrCast(@alignCast(file_bytes));
-
-                    if (output_dir) |out_dir| {
-                        // Create output directory if needed
-                        std.fs.cwd().makePath(out_dir) catch |err| {
-                            stderr.writeAll("Error: Could not create output directory: ") catch {};
-                            var err_buf: [256]u8 = undefined;
-                            const err_msg = std.fmt.bufPrint(&err_buf, "{}\n", .{err}) catch "unknown error\n";
-                            stderr.writeAll(err_msg) catch {};
-                            break :blk 1;
-                        };
-
-                        // Write each file
-                        for (0..files.len()) |i| {
-                            const file = file_slice[i];
-                            const file_name = file.name.asSlice();
-                            const file_path = std.fs.path.join(allocator, &.{ out_dir, file_name }) catch {
-                                stderr.writeAll("Error: Out of memory allocating file path\n") catch {};
-                                break :blk 1;
-                            };
-                            defer allocator.free(file_path);
-
-                            std.fs.cwd().writeFile(.{
-                                .sub_path = file_path,
-                                .data = file.content.asSlice(),
-                            }) catch |err| {
-                                stderr.writeAll("Error: Could not write file '") catch {};
-                                stderr.writeAll(file_path) catch {};
-                                stderr.writeAll("': ") catch {};
-                                var err_buf: [256]u8 = undefined;
-                                const err_msg = std.fmt.bufPrint(&err_buf, "{}\n", .{err}) catch "unknown error\n";
-                                stderr.writeAll(err_msg) catch {};
-                                break :blk 1;
-                            };
-
-                            stdout.writeAll("  Wrote: ") catch {};
-                            stdout.writeAll(file_path) catch {};
-                            stdout.writeAll("\n") catch {};
-                        }
-                    } else {
-                        // No output directory specified, just list file names
-                        for (0..files.len()) |i| {
-                            const file = file_slice[i];
-                            stdout.writeAll("  - ") catch {};
-                            stdout.writeAll(file.name.asSlice()) catch {};
-                            stdout.writeAll("\n") catch {};
-                        }
-                    }
-                }
-            }
-            break :blk 0;
-        },
-        .Err => blk: {
+    switch (result.tag) {
+        .Err => {
             const err_str = result.payload.err;
             stderr.writeAll("Glue spec error: ") catch {};
             stderr.writeAll(err_str.asSlice()) catch {};
             stderr.writeAll("\n") catch {};
-            break :blk 1;
+            return 1;
         },
-    };
 
-    // Note: Do NOT manually clean up types_list, entrypoints_list, or modules_list here.
-    // Roc consumed types_list (which contains entrypoints and modules) and has already
-    // freed all that memory. Attempting to clean them up again would be a double-free.
+        .Ok => {
+            const files = result.payload.ok;
+            if (files.len() == 0) {
+                stdout.writeAll("Glue spec returned 0 files.\n") catch {};
+                return 0;
+            }
 
-    // Clean up result payload (File names/contents or error string)
-    // The result is returned FROM Roc, and the host is responsible for cleaning it up.
-    cleanupResult(&result, &roc_ops);
+            var buf: [256]u8 = undefined;
+            const msg = std.fmt.bufPrint(&buf, "Glue spec returned {d} file(s):\n", .{files.len()}) catch "Glue spec returned files:\n";
+            stdout.writeAll(msg) catch {};
 
-    return exit_code;
+            // Write files to output directory if provided
+            const file_bytes = files.bytes orelse return 0;
+            const file_slice: [*]const File = @ptrCast(@alignCast(file_bytes));
+
+            const out_dir = output_dir orelse {
+                stderr.writeAll("Error: No --output-dir specified; cannot write glue files\n") catch {};
+                return 1;
+            };
+
+            // Create output directory if needed
+            std.fs.cwd().makePath(out_dir) catch |err| {
+                stderr.writeAll("Error: Could not create output directory: ") catch {};
+                var err_buf: [256]u8 = undefined;
+                const err_msg = std.fmt.bufPrint(&err_buf, "{}\n", .{err}) catch "unknown error\n";
+                stderr.writeAll(err_msg) catch {};
+                return 1;
+            };
+
+            // Write each file
+            for (0..files.len()) |i| {
+                const file = file_slice[i];
+                const file_name = file.name.asSlice();
+                const file_path = std.fs.path.join(allocator, &.{ out_dir, file_name }) catch {
+                    stderr.writeAll("Error: Out of memory allocating file path\n") catch {};
+                    return 1;
+                };
+                defer allocator.free(file_path);
+
+                std.fs.cwd().writeFile(.{
+                    .sub_path = file_path,
+                    .data = file.content.asSlice(),
+                }) catch |err| {
+                    stderr.writeAll("Error: Could not write file '") catch {};
+                    stderr.writeAll(file_path) catch {};
+                    stderr.writeAll("': ") catch {};
+                    var err_buf: [256]u8 = undefined;
+                    const err_msg = std.fmt.bufPrint(&err_buf, "{}\n", .{err}) catch "unknown error\n";
+                    stderr.writeAll(err_msg) catch {};
+                    return 1;
+                };
+
+                stdout.writeAll("  Wrote: ") catch {};
+                stdout.writeAll(file_path) catch {};
+                stdout.writeAll("\n") catch {};
+            }
+
+            return 0;
+        },
+    }
 }

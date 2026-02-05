@@ -2971,71 +2971,29 @@ pub fn build(b: *std.Build) void {
         tests_summary.addRun(&run_fx_platform_test.step);
     }
 
-    // Create glue-host step for building all musl platform host libraries.
-    // This step builds both x64musl and arm64musl targets for pre-committing.
-    // For macOS/Windows, libs are built at runtime (no valgrind issues there).
-    // Run `zig build glue-host` after modifying src/glue/platform/host.zig.
-    {
-        const glue_host_step = b.step("glue-host", "Build the glue platform host libraries (x64musl, arm64musl)");
-
-        const musl_targets = [_]struct { query: std.Target.Query, dir: []const u8 }{
-            .{ .query = .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl }, .dir = "x64musl" },
-            .{ .query = .{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .musl }, .dir = "arm64musl" },
-        };
-
-        for (musl_targets) |musl_target| {
-            const resolved_target = b.resolveTargetQuery(musl_target.query);
-
-            const glue_platform_host_lib = createTestPlatformHostLib(
-                b,
-                b.fmt("glue_platform_host_{s}", .{musl_target.dir}),
-                "src/glue/platform/host.zig",
-                resolved_target,
-                optimize,
-                roc_modules,
-                strip,
-                omit_frame_pointer,
-            );
-
-            // Add compiler modules to glue platform host for type extraction
-            glue_platform_host_lib.root_module.addImport("base", roc_modules.base);
-            glue_platform_host_lib.root_module.addImport("can", roc_modules.can);
-            glue_platform_host_lib.root_module.addImport("types", roc_modules.types);
-            glue_platform_host_lib.root_module.addImport("layout", roc_modules.layout);
-            glue_platform_host_lib.root_module.addImport("eval", roc_modules.eval);
-            glue_platform_host_lib.root_module.addImport("collections", roc_modules.collections);
-
-            // Copy to the target-specific directory
-            const copy_glue_host = b.addUpdateSourceFiles();
-            const target_path = b.pathJoin(&.{ "src/glue/platform/targets", musl_target.dir, "libhost.a" });
-            copy_glue_host.addCopyFileToSource(glue_platform_host_lib.getEmittedBin(), target_path);
-
-            // Apply archive padding fix (Zig bug workaround)
-            const fix_target = FixArchivePaddingStep.create(b, target_path);
-            fix_target.step.dependOn(&copy_glue_host.step);
-
-            glue_host_step.dependOn(&fix_target.step);
-        }
-    }
-
-    // Build glue platform host at runtime for non-musl targets (macOS/Windows).
-    // Musl targets use pre-committed libs to avoid Zig DWARF bugs that break valgrind.
+    // Build glue platform host at runtime for the native platform.
     if (run_glue_test_step) |glue_test_step| {
-        const is_musl = target.result.abi.isMusl();
-        if (!is_musl and isNativeishOrMusl(target)) {
-            // Determine the target directory for this platform
-            const glue_host_target_dir: ?[]const u8 = switch (target.result.os.tag) {
+        if (isNativeishOrMusl(target)) {
+            // Determine the appropriate target for the glue platform host library.
+            // On Linux, we need to use musl explicitly because the platform's
+            // findHostLibrary looks for targets/x64musl/libhost.a.
+            const glue_host_target, const glue_host_target_dir: ?[]const u8 = switch (target.result.os.tag) {
+                .linux => switch (target.result.cpu.arch) {
+                    .x86_64 => .{ b.resolveTargetQuery(.{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl }), "x64musl" },
+                    .aarch64 => .{ b.resolveTargetQuery(.{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .musl }), "arm64musl" },
+                    else => .{ target, null },
+                },
                 .windows => switch (target.result.cpu.arch) {
-                    .x86_64 => "x64win",
-                    .aarch64 => "arm64win",
-                    else => null,
+                    .x86_64 => .{ target, "x64win" },
+                    .aarch64 => .{ target, "arm64win" },
+                    else => .{ target, null },
                 },
                 .macos => switch (target.result.cpu.arch) {
-                    .x86_64 => "x64mac",
-                    .aarch64 => "arm64mac",
-                    else => null,
+                    .x86_64 => .{ target, "x64mac" },
+                    .aarch64 => .{ target, "arm64mac" },
+                    else => .{ target, null },
                 },
-                else => null,
+                else => .{ target, null },
             };
 
             if (glue_host_target_dir) |target_dir| {
@@ -3043,7 +3001,7 @@ pub fn build(b: *std.Build) void {
                     b,
                     "glue_platform_host_runtime",
                     "src/glue/platform/host.zig",
-                    target,
+                    glue_host_target,
                     optimize,
                     roc_modules,
                     strip,
