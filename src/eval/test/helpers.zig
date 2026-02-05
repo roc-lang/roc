@@ -401,6 +401,17 @@ fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_i
             return error.WasmExecFailed;
         };
 
+        // roc_list_eq: (i32 list_a_ptr, i32 list_b_ptr, i32 elem_size) -> i32 (0 or 1)
+        env_imports.addHostFunction(
+            "roc_list_eq",
+            &[_]bytebox.ValType{ .I32, .I32, .I32 },
+            &[_]bytebox.ValType{.I32},
+            hostListEq,
+            null,
+        ) catch {
+            return error.WasmExecFailed;
+        };
+
         const imports = [_]bytebox.ModuleImportPackage{env_imports};
         module_instance.instantiate(.{ .stack_size = 1024 * 64, .imports = &imports }) catch {
             return error.WasmExecFailed;
@@ -688,6 +699,59 @@ fn hostPanic(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const b
         const msg = buffer[msg_ptr..][0..msg_len];
         std.debug.print("Roc crashed: {s}\n", .{msg});
     }
+}
+
+/// Host function for roc_list_eq: compares two RocList structs for content equality.
+/// Signature: (i32 list_a_ptr, i32 list_b_ptr, i32 elem_size) -> i32 (0 or 1)
+/// RocList is 12 bytes: { ptr: i32, len: i32, cap: i32 }
+/// This performs byte-wise comparison of list elements.
+fn hostListEq(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
+    const mem = module.store.getMemory(0);
+    const buffer = mem.buffer();
+
+    const a_list_ptr: usize = @intCast(params[0].I32);
+    const b_list_ptr: usize = @intCast(params[1].I32);
+    const elem_size: usize = @intCast(params[2].I32);
+
+    // Bounds check for list structs
+    if (a_list_ptr + 12 > buffer.len or b_list_ptr + 12 > buffer.len) {
+        results[0] = bytebox.Val{ .I32 = 0 };
+        return;
+    }
+
+    // Read list metadata
+    const a_data_ptr: usize = @intCast(std.mem.readInt(u32, buffer[a_list_ptr..][0..4], .little));
+    const a_len: usize = @intCast(std.mem.readInt(u32, buffer[a_list_ptr + 4 ..][0..4], .little));
+
+    const b_data_ptr: usize = @intCast(std.mem.readInt(u32, buffer[b_list_ptr..][0..4], .little));
+    const b_len: usize = @intCast(std.mem.readInt(u32, buffer[b_list_ptr + 4 ..][0..4], .little));
+
+    // Compare lengths first
+    if (a_len != b_len) {
+        results[0] = bytebox.Val{ .I32 = 0 };
+        return;
+    }
+
+    // Empty lists are equal
+    if (a_len == 0) {
+        results[0] = bytebox.Val{ .I32 = 1 };
+        return;
+    }
+
+    // Calculate total byte size
+    const total_bytes = a_len * elem_size;
+
+    // Bounds check for data
+    if (a_data_ptr + total_bytes > buffer.len or b_data_ptr + total_bytes > buffer.len) {
+        results[0] = bytebox.Val{ .I32 = 0 };
+        return;
+    }
+
+    // Compare bytes
+    const a_data = buffer[a_data_ptr..][0..total_bytes];
+    const b_data = buffer[b_data_ptr..][0..total_bytes];
+    const equal = std.mem.eql(u8, a_data, b_data);
+    results[0] = bytebox.Val{ .I32 = if (equal) 1 else 0 };
 }
 
 /// Compare Interpreter result string with WasmEvaluator result string.
