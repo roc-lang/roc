@@ -73,6 +73,18 @@ str_eq_import: ?u32 = null,
 list_eq_import: ?u32 = null,
 /// Wasm function index for imported roc_panic host function.
 roc_panic_import: ?u32 = null,
+/// Wasm function index for imported roc_i128_div_s host function.
+i128_div_s_import: ?u32 = null,
+/// Wasm function index for imported roc_i128_mod_s host function.
+i128_mod_s_import: ?u32 = null,
+/// Wasm function index for imported roc_u128_div host function.
+u128_div_import: ?u32 = null,
+/// Wasm function index for imported roc_u128_mod host function.
+u128_mod_import: ?u32 = null,
+/// Wasm function index for imported roc_dec_div host function.
+dec_div_import: ?u32 = null,
+/// Wasm function index for imported roc_dec_div_trunc host function.
+dec_div_trunc_import: ?u32 = null,
 
 const CaptureInfo = struct {
     symbols: []const MonoSymbol,
@@ -166,6 +178,19 @@ fn registerHostImports(self: *Self) !void {
         &.{},
     );
     self.roc_panic_import = try self.module.addImport("env", "roc_panic", panic_type);
+
+    // i128/u128 division and modulo host functions
+    // All take (lhs_ptr, rhs_ptr, result_ptr) -> void
+    const i128_binop_type = try self.module.addFuncType(
+        &.{ .i32, .i32, .i32 },
+        &.{},
+    );
+    self.i128_div_s_import = try self.module.addImport("env", "roc_i128_div_s", i128_binop_type);
+    self.i128_mod_s_import = try self.module.addImport("env", "roc_i128_mod_s", i128_binop_type);
+    self.u128_div_import = try self.module.addImport("env", "roc_u128_div", i128_binop_type);
+    self.u128_mod_import = try self.module.addImport("env", "roc_u128_mod", i128_binop_type);
+    self.dec_div_import = try self.module.addImport("env", "roc_dec_div", i128_binop_type);
+    self.dec_div_trunc_import = try self.module.addImport("env", "roc_dec_div_trunc", i128_binop_type);
 }
 
 /// Result of generating a wasm module
@@ -1809,12 +1834,65 @@ fn generateCompositeI128BinOp(self: *Self, lhs: MonoExprId, rhs: MonoExprId, op:
             // i128 × i128 → i128 (truncating multiply, keeping lower 128 bits)
             try self.emitI128Mul(lhs_local, rhs_local);
         },
+        .div => {
+            if (result_layout == .dec) {
+                // Dec division: (lhs * 10^18) / rhs — uses special host function
+                const import_idx = self.dec_div_import orelse unreachable;
+                try self.emitI128HostBinOp(lhs_local, rhs_local, import_idx);
+            } else {
+                // i128/u128 raw division
+                const is_signed = result_layout == .i128;
+                const import_idx = if (is_signed) self.i128_div_s_import else self.u128_div_import;
+                try self.emitI128HostBinOp(lhs_local, rhs_local, import_idx orelse unreachable);
+            }
+        },
+        .div_trunc => {
+            if (result_layout == .dec) {
+                // Dec truncating division: (lhs / rhs) * 10^18 — result scaled as Dec
+                const import_idx = self.dec_div_trunc_import orelse unreachable;
+                try self.emitI128HostBinOp(lhs_local, rhs_local, import_idx);
+            } else {
+                // i128/u128 raw truncating division
+                const is_signed = result_layout == .i128;
+                const import_idx = if (is_signed) self.i128_div_s_import else self.u128_div_import;
+                try self.emitI128HostBinOp(lhs_local, rhs_local, import_idx orelse unreachable);
+            }
+        },
+        .mod => {
+            // i128/u128 modulo via host function
+            const is_signed = result_layout == .i128 or result_layout == .dec;
+            const import_idx = if (is_signed) self.i128_mod_s_import else self.u128_mod_import;
+            try self.emitI128HostBinOp(lhs_local, rhs_local, import_idx orelse unreachable);
+        },
         .lt => try self.emitI128Compare(lhs_local, rhs_local, .lt),
         .lte => try self.emitI128Compare(lhs_local, rhs_local, .lte),
         .gt => try self.emitI128Compare(lhs_local, rhs_local, .gt),
         .gte => try self.emitI128Compare(lhs_local, rhs_local, .gte),
-        else => return error.UnsupportedExpr,
+        // eq/neq are handled by generateStructuralEq before reaching here
+        .eq, .neq => unreachable,
+        // Boolean ops don't apply to i128
+        .@"and", .@"or" => unreachable,
     }
+}
+
+/// Emit an i128 binary operation via host function call.
+/// The host function takes (lhs_ptr, rhs_ptr, result_ptr) and returns void.
+/// Pushes an i32 pointer to the 16-byte result on the wasm stack.
+fn emitI128HostBinOp(self: *Self, lhs_local: u32, rhs_local: u32, import_idx: u32) Error!void {
+    const result_offset = try self.allocStackMemory(16, 8);
+    const result_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitFpOffset(result_offset);
+    try self.emitLocalSet(result_local);
+
+    // Call host function: (lhs_ptr, rhs_ptr, result_ptr) -> void
+    try self.emitLocalGet(lhs_local);
+    try self.emitLocalGet(rhs_local);
+    try self.emitLocalGet(result_local);
+    self.body.append(self.allocator, Op.call) catch return error.OutOfMemory;
+    WasmModule.leb128WriteU32(self.allocator, &self.body, import_idx) catch return error.OutOfMemory;
+
+    // Push result pointer
+    try self.emitLocalGet(result_local);
 }
 
 /// Emit i128 addition: result = lhs + rhs

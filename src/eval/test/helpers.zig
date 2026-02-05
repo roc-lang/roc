@@ -412,6 +412,67 @@ fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_i
             return error.WasmExecFailed;
         };
 
+        // i128/u128 division and modulo: (lhs_ptr, rhs_ptr, result_ptr) -> void
+        env_imports.addHostFunction(
+            "roc_i128_div_s",
+            &[_]bytebox.ValType{ .I32, .I32, .I32 },
+            &[_]bytebox.ValType{},
+            hostI128DivS,
+            null,
+        ) catch {
+            return error.WasmExecFailed;
+        };
+
+        env_imports.addHostFunction(
+            "roc_i128_mod_s",
+            &[_]bytebox.ValType{ .I32, .I32, .I32 },
+            &[_]bytebox.ValType{},
+            hostI128ModS,
+            null,
+        ) catch {
+            return error.WasmExecFailed;
+        };
+
+        env_imports.addHostFunction(
+            "roc_u128_div",
+            &[_]bytebox.ValType{ .I32, .I32, .I32 },
+            &[_]bytebox.ValType{},
+            hostU128Div,
+            null,
+        ) catch {
+            return error.WasmExecFailed;
+        };
+
+        env_imports.addHostFunction(
+            "roc_u128_mod",
+            &[_]bytebox.ValType{ .I32, .I32, .I32 },
+            &[_]bytebox.ValType{},
+            hostU128Mod,
+            null,
+        ) catch {
+            return error.WasmExecFailed;
+        };
+
+        env_imports.addHostFunction(
+            "roc_dec_div",
+            &[_]bytebox.ValType{ .I32, .I32, .I32 },
+            &[_]bytebox.ValType{},
+            hostDecDiv,
+            null,
+        ) catch {
+            return error.WasmExecFailed;
+        };
+
+        env_imports.addHostFunction(
+            "roc_dec_div_trunc",
+            &[_]bytebox.ValType{ .I32, .I32, .I32 },
+            &[_]bytebox.ValType{},
+            hostDecDivTrunc,
+            null,
+        ) catch {
+            return error.WasmExecFailed;
+        };
+
         const imports = [_]bytebox.ModuleImportPackage{env_imports};
         module_instance.instantiate(.{ .stack_size = 1024 * 64, .imports = &imports }) catch {
             return error.WasmExecFailed;
@@ -752,6 +813,147 @@ fn hostListEq(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const 
     const b_data = buffer[b_data_ptr..][0..total_bytes];
     const equal = std.mem.eql(u8, a_data, b_data);
     results[0] = bytebox.Val{ .I32 = if (equal) 1 else 0 };
+}
+
+/// Helper to read an i128 from wasm memory (little-endian: low 64 bits at offset 0, high 64 bits at offset 8)
+fn readI128FromMem(buffer: []u8, ptr: usize) i128 {
+    const low = std.mem.readInt(u64, buffer[ptr..][0..8], .little);
+    const high = std.mem.readInt(i64, buffer[ptr + 8 ..][0..8], .little);
+    return @as(i128, high) << 64 | low;
+}
+
+/// Helper to read a u128 from wasm memory
+fn readU128FromMem(buffer: []u8, ptr: usize) u128 {
+    const low = std.mem.readInt(u64, buffer[ptr..][0..8], .little);
+    const high = std.mem.readInt(u64, buffer[ptr + 8 ..][0..8], .little);
+    return @as(u128, high) << 64 | low;
+}
+
+/// Helper to write an i128 to wasm memory
+fn writeI128ToMem(buffer: []u8, ptr: usize, val: i128) void {
+    const as_u128: u128 = @bitCast(val);
+    std.mem.writeInt(u64, buffer[ptr..][0..8], @truncate(as_u128), .little);
+    std.mem.writeInt(u64, buffer[ptr + 8 ..][0..8], @truncate(as_u128 >> 64), .little);
+}
+
+/// Helper to write a u128 to wasm memory
+fn writeU128ToMem(buffer: []u8, ptr: usize, val: u128) void {
+    std.mem.writeInt(u64, buffer[ptr..][0..8], @truncate(val), .little);
+    std.mem.writeInt(u64, buffer[ptr + 8 ..][0..8], @truncate(val >> 64), .little);
+}
+
+/// Host function for roc_i128_div_s: signed 128-bit division
+/// Signature: (i32 lhs_ptr, i32 rhs_ptr, i32 result_ptr) -> void
+fn hostI128DivS(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    const mem = module.store.getMemory(0);
+    const buffer = mem.buffer();
+
+    const lhs_ptr: usize = @intCast(params[0].I32);
+    const rhs_ptr: usize = @intCast(params[1].I32);
+    const result_ptr: usize = @intCast(params[2].I32);
+
+    const lhs = readI128FromMem(buffer, lhs_ptr);
+    const rhs = readI128FromMem(buffer, rhs_ptr);
+    const result = @divTrunc(lhs, rhs);
+    writeI128ToMem(buffer, result_ptr, result);
+}
+
+/// Host function for roc_i128_mod_s: signed 128-bit modulo
+/// Signature: (i32 lhs_ptr, i32 rhs_ptr, i32 result_ptr) -> void
+fn hostI128ModS(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    const mem = module.store.getMemory(0);
+    const buffer = mem.buffer();
+
+    const lhs_ptr: usize = @intCast(params[0].I32);
+    const rhs_ptr: usize = @intCast(params[1].I32);
+    const result_ptr: usize = @intCast(params[2].I32);
+
+    const lhs = readI128FromMem(buffer, lhs_ptr);
+    const rhs = readI128FromMem(buffer, rhs_ptr);
+    // Use @rem for truncated remainder (result has same sign as dividend)
+    // This matches Roc's % operator semantics
+    const result = @rem(lhs, rhs);
+    writeI128ToMem(buffer, result_ptr, result);
+}
+
+/// Host function for roc_u128_div: unsigned 128-bit division
+/// Signature: (i32 lhs_ptr, i32 rhs_ptr, i32 result_ptr) -> void
+fn hostU128Div(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    const mem = module.store.getMemory(0);
+    const buffer = mem.buffer();
+
+    const lhs_ptr: usize = @intCast(params[0].I32);
+    const rhs_ptr: usize = @intCast(params[1].I32);
+    const result_ptr: usize = @intCast(params[2].I32);
+
+    const lhs = readU128FromMem(buffer, lhs_ptr);
+    const rhs = readU128FromMem(buffer, rhs_ptr);
+    const result = lhs / rhs;
+    writeU128ToMem(buffer, result_ptr, result);
+}
+
+/// Host function for roc_u128_mod: unsigned 128-bit modulo
+/// Signature: (i32 lhs_ptr, i32 rhs_ptr, i32 result_ptr) -> void
+fn hostU128Mod(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    const mem = module.store.getMemory(0);
+    const buffer = mem.buffer();
+
+    const lhs_ptr: usize = @intCast(params[0].I32);
+    const rhs_ptr: usize = @intCast(params[1].I32);
+    const result_ptr: usize = @intCast(params[2].I32);
+
+    const lhs = readU128FromMem(buffer, lhs_ptr);
+    const rhs = readU128FromMem(buffer, rhs_ptr);
+    const result = lhs % rhs;
+    writeU128ToMem(buffer, result_ptr, result);
+}
+
+/// Host function for roc_dec_div: Dec (decimal) division
+/// Dec is i128 scaled by 10^18. Division: result = (lhs * 10^18) / rhs
+/// Signature: (i32 lhs_ptr, i32 rhs_ptr, i32 result_ptr) -> void
+fn hostDecDiv(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    const mem = module.store.getMemory(0);
+    const buffer = mem.buffer();
+
+    const lhs_ptr: usize = @intCast(params[0].I32);
+    const rhs_ptr: usize = @intCast(params[1].I32);
+    const result_ptr: usize = @intCast(params[2].I32);
+
+    const lhs = readI128FromMem(buffer, lhs_ptr);
+    const rhs = readI128FromMem(buffer, rhs_ptr);
+
+    // Dec division: multiply lhs by 10^18 first, then divide by rhs
+    // This preserves the Dec scaling factor in the result
+    const one_point_zero: i128 = 1_000_000_000_000_000_000; // 10^18
+    // Use i256 for intermediate calculation to avoid overflow
+    const lhs_scaled: i256 = @as(i256, lhs) * one_point_zero;
+    const result: i128 = @intCast(@divTrunc(lhs_scaled, rhs));
+
+    writeI128ToMem(buffer, result_ptr, result);
+}
+
+/// Host function for roc_dec_div_trunc: Dec (decimal) truncating division
+/// Result is the integer part of the quotient, scaled as Dec.
+/// result = (lhs / rhs) * 10^18
+/// Signature: (i32 lhs_ptr, i32 rhs_ptr, i32 result_ptr) -> void
+fn hostDecDivTrunc(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    const mem = module.store.getMemory(0);
+    const buffer = mem.buffer();
+
+    const lhs_ptr: usize = @intCast(params[0].I32);
+    const rhs_ptr: usize = @intCast(params[1].I32);
+    const result_ptr: usize = @intCast(params[2].I32);
+
+    const lhs = readI128FromMem(buffer, lhs_ptr);
+    const rhs = readI128FromMem(buffer, rhs_ptr);
+
+    // Dec truncating division: divide first, then scale up by 10^18
+    // This gives the integer part of the quotient as a Dec value
+    const one_point_zero: i128 = 1_000_000_000_000_000_000; // 10^18
+    const quotient = @divTrunc(lhs, rhs);
+    const result = quotient * one_point_zero;
+
+    writeI128ToMem(buffer, result_ptr, result);
 }
 
 /// Compare Interpreter result string with WasmEvaluator result string.
