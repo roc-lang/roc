@@ -1547,9 +1547,9 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                     break :blk .{ .str_literal = mono_idx };
                 }
             }
-            // Complex string - lower all segments
+            // Complex string (interpolation) - lower all segments and concatenate
             const lowered = try self.lowerExprSpan(module_env, str.span);
-            break :blk .{ .list = .{ .elem_layout = .str, .elems = lowered } };
+            break :blk .{ .str_concat = lowered };
         },
 
         .e_empty_record => .{ .empty_record = {} },
