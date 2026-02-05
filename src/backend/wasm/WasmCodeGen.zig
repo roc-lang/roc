@@ -161,13 +161,6 @@ pub fn generateModule(self: *Self, expr_id: MonoExprId, result_layout: layout.Id
         self.compileAllProcs(procs) catch return error.OutOfMemory;
     }
 
-    // NOTE: compileSymbolDefs() is intentionally disabled.
-    // The symbolDefIterator() can return simplified lambda definitions that
-    // differ from the full versions used by the interpreter (e.g., a lambda
-    // with body=tag instead of body=block-with-early_return). Compiling these
-    // produces functions that give wrong results. Functions are instead compiled
-    // when encountered as block binds (tryBindFunction), inline calls, or procs.
-
     // Determine return type from the expression's actual wasm type.
     // We use exprValType because nominal layout indices can collide
     // with well-known sentinel values (e.g., Bool's nominal layout
