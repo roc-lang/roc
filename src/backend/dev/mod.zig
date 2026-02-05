@@ -303,6 +303,7 @@ pub fn resolveBuiltinFunction(name: []const u8) ?usize {
 test "backend module imports" {
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(@import("CallingConvention.zig"));
+    std.testing.refAllDecls(@import("FrameBuilder.zig"));
 }
 
 test "resolve builtin functions" {

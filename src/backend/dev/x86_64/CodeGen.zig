@@ -16,6 +16,7 @@ const SystemV = @import("SystemV.zig");
 const WindowsFastcall = @import("WindowsFastcall.zig");
 const Relocation = @import("../Relocation.zig").Relocation;
 const ValueStorageMod = @import("../ValueStorage.zig");
+const FrameBuilderMod = @import("../FrameBuilder.zig");
 
 const GeneralReg = Registers.GeneralReg;
 const FloatReg = Registers.FloatReg;
@@ -60,29 +61,6 @@ pub fn CodeGen(comptime target: RocTarget) type {
                 (1 << @intFromEnum(GeneralReg.R13)) |
                 (1 << @intFromEnum(GeneralReg.R14)) |
                 (1 << @intFromEnum(GeneralReg.R15));
-
-        /// Callee-saved register stack offsets (relative to RBP).
-        /// These are fixed offsets that don't depend on which registers are saved,
-        /// which simplifies the deferred prologue pattern where we generate body first.
-        /// Windows has 7 callee-saved regs (RBX, RSI, RDI, R12-R15), System V has 5 (RBX, R12-R15).
-        const CALLEE_SAVED_SLOTS = if (target.isWindows())
-            [_]struct { reg: GeneralReg, offset: i32 }{
-                .{ .reg = .RBX, .offset = -8 },
-                .{ .reg = .RSI, .offset = -16 },
-                .{ .reg = .RDI, .offset = -24 },
-                .{ .reg = .R12, .offset = -32 },
-                .{ .reg = .R13, .offset = -40 },
-                .{ .reg = .R14, .offset = -48 },
-                .{ .reg = .R15, .offset = -56 },
-            }
-        else
-            [_]struct { reg: GeneralReg, offset: i32 }{
-                .{ .reg = .RBX, .offset = -8 },
-                .{ .reg = .R12, .offset = -16 },
-                .{ .reg = .R13, .offset = -24 },
-                .{ .reg = .R14, .offset = -32 },
-                .{ .reg = .R15, .offset = -40 },
-            };
 
         /// Size of the callee-saved register area
         /// Windows: 7 registers * 8 bytes = 56 bytes
@@ -396,6 +374,9 @@ pub fn CodeGen(comptime target: RocTarget) type {
 
         // Function prologue/epilogue
 
+        /// Deferred frame builder type for this architecture (mask-based, body generated first)
+        pub const DeferredFrameBuilder = FrameBuilderMod.DeferredFrameBuilder(Emit);
+
         /// Emit function prologue with stack allocation (called at start of function)
         /// Note: Call this AFTER register allocation is complete to know which
         /// callee-saved registers need to be preserved.
@@ -405,43 +386,19 @@ pub fn CodeGen(comptime target: RocTarget) type {
         /// allocate stack space BEFORE saving callee-saved registers to [RBP-offset],
         /// otherwise those stores would be writing below RSP which is unsafe.
         pub fn emitPrologueWithAlloc(self: *Self, stack_size: u32) !void {
-            // push rbp
-            try self.emit.pushReg(.RBP);
-            // mov rbp, rsp
-            try self.emit.movRegReg(.w64, .RBP, .RSP);
-
-            // CRITICAL: Allocate stack space BEFORE saving callee-saved registers!
-            // On Windows x64, there's no red zone, so we must not write below RSP.
-            // Use Emit.CC.alignStackSize for proper platform alignment.
-            const aligned_size = Emit.CC.alignStackSize(stack_size);
-            if (aligned_size > 0) {
-                try self.emit.subRegImm32(.w64, .RSP, @intCast(aligned_size));
-            }
-
-            // Now save callee-saved registers - these writes are now within the allocated frame
-            for (CALLEE_SAVED_SLOTS) |slot| {
-                if ((self.callee_saved_used & (@as(u16, 1) << @intCast(@intFromEnum(slot.reg)))) != 0) {
-                    try self.emit.movMemReg(.w64, .RBP, slot.offset, slot.reg);
-                }
-            }
+            var builder = DeferredFrameBuilder.init();
+            builder.setCalleeSavedMask(self.callee_saved_used);
+            builder.setStackSize(stack_size);
+            _ = try builder.emitPrologue(&self.emit);
         }
 
         /// Emit function epilogue and return
         /// Restores callee-saved registers using MOV from fixed RBP-relative offsets.
         pub fn emitEpilogue(self: *Self) !void {
-            // Restore only the callee-saved registers that were used (MOV-based)
-            for (CALLEE_SAVED_SLOTS) |slot| {
-                if ((self.callee_saved_used & (@as(u16, 1) << @intCast(@intFromEnum(slot.reg)))) != 0) {
-                    try self.emit.movRegMem(.w64, slot.reg, .RBP, slot.offset);
-                }
-            }
-
-            // mov rsp, rbp (restore stack pointer)
-            try self.emit.movRegReg(.w64, .RSP, .RBP);
-            // pop rbp
-            try self.emit.popReg(.RBP);
-            // ret
-            try self.emit.ret();
+            var builder = DeferredFrameBuilder.init();
+            builder.setCalleeSavedMask(self.callee_saved_used);
+            // Note: stack_size not needed for epilogue since we use mov rsp, rbp
+            try builder.emitEpilogue(&self.emit);
         }
 
         /// Emit stack frame setup with given local size

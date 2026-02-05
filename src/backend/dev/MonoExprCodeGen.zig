@@ -27,6 +27,7 @@ const x86_64 = @import("x86_64/mod.zig");
 const aarch64 = @import("aarch64/mod.zig");
 const CallingConventionMod = @import("CallingConvention.zig");
 const CallingConvention = CallingConventionMod.CallingConvention;
+const FrameBuilderMod = @import("FrameBuilder.zig");
 const RocTarget = @import("roc_target").RocTarget;
 
 // Num builtin functions for 128-bit integer operations
@@ -753,8 +754,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
         /// CallBuilder type alias for this architecture's emit type
         const Builder = CallingConventionMod.CallBuilder(@TypeOf(@as(CodeGen, undefined).emit));
 
-        /// CalleeBuilder type alias for this architecture's emit type
-        const FrameBuilder = CallingConventionMod.CalleeBuilder(@TypeOf(@as(CodeGen, undefined).emit));
+        /// ForwardFrameBuilder for emitMainPrologue/emitMainEpilogue (push-based, prologue first)
+        const ForwardFrameBuilder = FrameBuilderMod.ForwardFrameBuilder(@TypeOf(@as(CodeGen, undefined).emit));
 
         allocator: Allocator,
 
@@ -14242,14 +14243,14 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
         }
 
         /// Emit prologue for main expression code.
-        /// Sets up frame pointer and saves callee-saved registers using CalleeBuilder.
+        /// Sets up frame pointer and saves callee-saved registers using ForwardFrameBuilder.
         /// The frame pointer is REQUIRED because emitStoreStack/emitLoadStack use FP-relative addressing.
         fn emitMainPrologue(self: *Self) Error!void {
             // Stack size for local variables. Needs to be large enough for inlined builtins
             // like List.map which can use 400+ bytes.
             const MAIN_STACK_SIZE: u32 = 1024;
 
-            var frame = FrameBuilder.init(&self.codegen.emit);
+            var frame = ForwardFrameBuilder.init(&self.codegen.emit);
 
             if (comptime target.toCpuArch() == .aarch64) {
                 // Save X19 and X20 (callee-saved) which we use for result ptr and RocOps ptr
@@ -14270,12 +14271,12 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
         }
 
         /// Emit epilogue for main expression code.
-        /// Restores callee-saved registers and frame pointer using CalleeBuilder, then returns.
+        /// Restores callee-saved registers and frame pointer using ForwardFrameBuilder, then returns.
         fn emitMainEpilogue(self: *Self) Error!void {
             // Must match configuration from emitMainPrologue
             const MAIN_STACK_SIZE: u32 = 1024;
 
-            var frame = FrameBuilder.init(&self.codegen.emit);
+            var frame = ForwardFrameBuilder.init(&self.codegen.emit);
 
             if (comptime target.toCpuArch() == .aarch64) {
                 frame.saveViaPush(.X19);

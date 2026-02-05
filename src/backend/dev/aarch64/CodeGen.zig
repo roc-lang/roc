@@ -12,6 +12,7 @@ const Registers = @import("Registers.zig");
 const Call = @import("Call.zig");
 const Relocation = @import("../Relocation.zig").Relocation;
 const ValueStorageMod = @import("../ValueStorage.zig");
+const FrameBuilderMod = @import("../FrameBuilder.zig");
 
 const GeneralReg = Registers.GeneralReg;
 const FloatReg = Registers.FloatReg;
@@ -416,15 +417,12 @@ pub fn CodeGen(comptime target: RocTarget) type {
 
         // Function prologue/epilogue
 
+        /// Deferred frame builder type for this architecture (mask-based, body generated first)
+        pub const DeferredFrameBuilder = FrameBuilderMod.DeferredFrameBuilder(Emit);
+
         /// Callee-saved registers in pairs for saving/restoring
         /// aarch64 saves registers in pairs for efficiency
-        pub const CALLEE_SAVED_PAIRS = [_][2]GeneralReg{
-            .{ .X19, .X20 },
-            .{ .X21, .X22 },
-            .{ .X23, .X24 },
-            .{ .X25, .X26 },
-            .{ .X27, .X28 },
-        };
+        pub const CALLEE_SAVED_PAIRS = DeferredFrameBuilder.CALLEE_SAVED_PAIRS;
 
         /// Check if any register in a pair is used
         pub fn isPairUsed(self: *Self, pair: [2]GeneralReg) bool {
@@ -438,13 +436,9 @@ pub fn CodeGen(comptime target: RocTarget) type {
         /// Saves to [FP + 16], [FP + 32], etc. for each used pair
         /// The offset is scaled by 8 for stp/ldp (i.e., offset=2 means 16 bytes)
         pub fn emitSaveCalleeSavedToFrame(self: *Self) !void {
-            var scaled_offset: i7 = 2; // Start after FP/LR: 2 * 8 = 16 bytes
-            for (CALLEE_SAVED_PAIRS) |pair| {
-                if (self.isPairUsed(pair)) {
-                    try self.emit.stpSignedOffset(.w64, pair[0], pair[1], .FP, scaled_offset);
-                }
-                scaled_offset += 2; // Each pair is 16 bytes = 2 * 8
-            }
+            var builder = DeferredFrameBuilder.init();
+            builder.setCalleeSavedMask(self.callee_saved_used);
+            try builder.emitSaveCalleeSaved(&self.emit);
         }
 
         /// Emit callee-saved register restores from fixed offsets from FP
@@ -452,48 +446,25 @@ pub fn CodeGen(comptime target: RocTarget) type {
         /// Restores from [FP + 16], [FP + 32], etc. for each used pair
         /// The offset is scaled by 8 for stp/ldp (i.e., offset=2 means 16 bytes)
         pub fn emitRestoreCalleeSavedFromFrame(self: *Self) !void {
-            var scaled_offset: i7 = 2; // Start after FP/LR: 2 * 8 = 16 bytes
-            for (CALLEE_SAVED_PAIRS) |pair| {
-                if (self.isPairUsed(pair)) {
-                    try self.emit.ldpSignedOffset(.w64, pair[0], pair[1], .FP, scaled_offset);
-                }
-                scaled_offset += 2; // Each pair is 16 bytes = 2 * 8
-            }
+            var builder = DeferredFrameBuilder.init();
+            builder.setCalleeSavedMask(self.callee_saved_used);
+            try builder.emitRestoreCalleeSaved(&self.emit);
         }
 
         /// Emit function prologue (called at start of function)
         /// Note: Call this AFTER register allocation is complete to know which
         /// callee-saved registers need to be preserved.
         pub fn emitPrologue(self: *Self) !void {
-            // stp x29, x30, [sp, #-16]! (pre-index: push FP and LR)
-            try self.emit.stpPreIndex(.w64, .FP, .LR, .ZRSP, -2);
-            // mov x29, sp (set frame pointer)
-            try self.emit.movRegReg(.w64, .FP, .ZRSP);
-
-            // Save any callee-saved register pairs we used
-            for (CALLEE_SAVED_PAIRS) |pair| {
-                if (self.isPairUsed(pair)) {
-                    try self.emit.stpPreIndex(.w64, pair[0], pair[1], .ZRSP, -2);
-                }
-            }
+            var builder = DeferredFrameBuilder.init();
+            builder.setCalleeSavedMask(self.callee_saved_used);
+            _ = try builder.emitPrologue(&self.emit);
         }
 
         /// Emit function epilogue and return
         pub fn emitEpilogue(self: *Self) !void {
-            // Restore callee-saved register pairs in reverse order
-            var i: usize = CALLEE_SAVED_PAIRS.len;
-            while (i > 0) {
-                i -= 1;
-                const pair = CALLEE_SAVED_PAIRS[i];
-                if (self.isPairUsed(pair)) {
-                    try self.emit.ldpPostIndex(.w64, pair[0], pair[1], .ZRSP, 2);
-                }
-            }
-
-            // ldp x29, x30, [sp], #16 (post-index: pop FP and LR)
-            try self.emit.ldpPostIndex(.w64, .FP, .LR, .ZRSP, 2);
-            // ret
-            try self.emit.ret();
+            var builder = DeferredFrameBuilder.init();
+            builder.setCalleeSavedMask(self.callee_saved_used);
+            try builder.emitEpilogue(&self.emit);
         }
 
         /// Emit stack frame setup with given local size
