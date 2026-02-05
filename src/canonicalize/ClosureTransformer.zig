@@ -1613,6 +1613,7 @@ pub fn transformExprWithLambdaSet(
     expr_idx: Expr.Idx,
     name_hint: ?base.Ident.Idx,
 ) std.mem.Allocator.Error!TransformResult {
+    std.debug.assert(self.module_env.store.scratch != null);
     const expr = self.module_env.store.getExpr(expr_idx);
 
     switch (expr) {
@@ -1898,6 +1899,7 @@ pub fn transformClosure(
     closure_expr_idx: Expr.Idx,
     binding_name_hint: ?base.Ident.Idx,
 ) !Expr.Idx {
+    std.debug.assert(self.module_env.store.scratch != null);
     const expr = self.module_env.store.getExpr(closure_expr_idx);
 
     switch (expr) {
@@ -2026,6 +2028,7 @@ pub fn transformClosure(
 /// Transform an entire expression tree, handling closures and their call sites.
 /// This is the main entry point for the transformation.
 pub fn transformExpr(self: *Self, expr_idx: Expr.Idx) std.mem.Allocator.Error!Expr.Idx {
+    std.debug.assert(self.module_env.store.scratch != null);
     const expr = self.module_env.store.getExpr(expr_idx);
 
     switch (expr) {
