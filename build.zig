@@ -3150,7 +3150,9 @@ fn addMainExe(
     }
 
     // Create builtins static library at build time with minimal dependencies
-    const builtins_obj = b.addObject(.{
+    // Using a static library instead of object so we can bundle compiler_rt
+    // (needed for 128-bit integer operations used by Dec type)
+    const builtins_obj = b.addLibrary(.{
         .name = "roc_builtins",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/builtins/static_lib.zig"),
@@ -3160,7 +3162,9 @@ fn addMainExe(
             .omit_frame_pointer = omit_frame_pointer,
             .pic = true, // Enable Position Independent Code for PIE compatibility
         }),
+        .linkage = .static,
     });
+    builtins_obj.bundle_compiler_rt = true;
     configureBackend(builtins_obj, target);
 
     // Create shim static library at build time - fully static without libc
@@ -3185,7 +3189,7 @@ fn addMainExe(
     shim_lib.root_module.addImport("compiled_builtins", compiled_builtins_module);
     shim_lib.step.dependOn(&write_compiled_builtins.step);
     // Link against the pre-built builtins library
-    shim_lib.addObject(builtins_obj);
+    shim_lib.linkLibrary(builtins_obj);
     // Bundle compiler-rt for our math symbols
     shim_lib.bundle_compiler_rt = true;
     // Install shim library to the output directory
@@ -3199,10 +3203,10 @@ fn addMainExe(
     copy_shim.addCopyFileToSource(shim_lib.getEmittedBin(), b.pathJoin(&.{ "src/cli", interpreter_shim_filename }));
     exe.step.dependOn(&copy_shim.step);
 
-    // Copy builtins object file for the host target for embedding into CLI
+    // Copy builtins library for the host target for embedding into CLI
     // This is used by `roc build --backend=dev` to link the app object with builtins
     const copy_builtins = b.addUpdateSourceFiles();
-    const host_builtins_filename = "roc_builtins.o";
+    const host_builtins_filename = if (target.result.os.tag == .windows) "roc_builtins.lib" else "libroc_builtins.a";
     copy_builtins.addCopyFileToSource(builtins_obj.getEmittedBin(), b.pathJoin(&.{ "src/cli", host_builtins_filename }));
     exe.step.dependOn(&copy_builtins.step);
 
@@ -3226,8 +3230,8 @@ fn addMainExe(
     for (cross_compile_shim_targets) |cross_target| {
         const cross_resolved_target = b.resolveTargetQuery(cross_target.query);
 
-        // Build builtins object for this target
-        const cross_builtins_obj = b.addObject(.{
+        // Build builtins library for this target (with compiler_rt for 128-bit ops)
+        const cross_builtins_obj = b.addLibrary(.{
             .name = b.fmt("roc_builtins_{s}", .{cross_target.name}),
             .root_module = b.createModule(.{
                 .root_source_file = b.path("src/builtins/static_lib.zig"),
@@ -3237,7 +3241,9 @@ fn addMainExe(
                 .omit_frame_pointer = omit_frame_pointer,
                 .pic = true,
             }),
+            .linkage = .static,
         });
+        cross_builtins_obj.bundle_compiler_rt = true;
         configureBackend(cross_builtins_obj, cross_resolved_target);
 
         // Build interpreter shim library for this target
@@ -3278,7 +3284,7 @@ fn addMainExe(
         }
         cross_shim_lib.root_module.addImport("compiled_builtins", compiled_builtins_module);
         cross_shim_lib.step.dependOn(&write_compiled_builtins.step);
-        cross_shim_lib.addObject(cross_builtins_obj);
+        cross_shim_lib.linkLibrary(cross_builtins_obj);
         cross_shim_lib.bundle_compiler_rt = true;
 
         // Copy to target-specific directory for embedding
@@ -3291,9 +3297,9 @@ fn addMainExe(
         );
         exe.step.dependOn(&copy_cross_shim.step);
 
-        // Copy builtins object file for this target for embedding into CLI
+        // Copy builtins library for this target for embedding into CLI
         // Used by `roc build --backend=dev --target=X` to link the app object with builtins
-        const builtins_ext = if (cross_target.query.os_tag == .windows) "roc_builtins.obj" else "roc_builtins.o";
+        const builtins_ext = if (cross_target.query.os_tag == .windows) "roc_builtins.lib" else "libroc_builtins.a";
         const copy_cross_builtins = b.addUpdateSourceFiles();
         copy_cross_builtins.addCopyFileToSource(
             cross_builtins_obj.getEmittedBin(),

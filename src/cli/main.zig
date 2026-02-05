@@ -143,33 +143,37 @@ const ShimLibraries = struct {
 /// Embedded pre-compiled builtins object files for each target.
 /// These contain the wrapper functions needed by the dev backend for string/list operations.
 /// Used by `roc build --backend=dev` to link the app object with builtins.
+/// Now using static libraries instead of object files to include compiler_rt
+/// (needed for 128-bit integer operations used by Dec type).
 const BuiltinsObjects = struct {
     /// Native builtins (for host platform builds)
     const native = if (builtin.is_test)
         &[_]u8{}
+    else if (builtin.os.tag == .windows)
+        @embedFile("roc_builtins.lib")
     else
-        @embedFile("roc_builtins.o");
+        @embedFile("libroc_builtins.a");
 
     /// Cross-compilation target builtins (Linux musl targets)
-    const x64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64musl/roc_builtins.o");
-    const arm64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64musl/roc_builtins.o");
+    const x64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64musl/libroc_builtins.a");
+    const arm64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64musl/libroc_builtins.a");
 
     /// Cross-compilation target builtins (Linux glibc targets)
-    const x64glibc = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64glibc/roc_builtins.o");
-    const arm64glibc = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64glibc/roc_builtins.o");
+    const x64glibc = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64glibc/libroc_builtins.a");
+    const arm64glibc = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64glibc/libroc_builtins.a");
 
     /// WebAssembly target builtins (wasm32-freestanding) - not used by dev backend
-    const wasm32 = if (builtin.is_test) &[_]u8{} else @embedFile("targets/wasm32/roc_builtins.o");
+    const wasm32 = if (builtin.is_test) &[_]u8{} else @embedFile("targets/wasm32/libroc_builtins.a");
 
     /// Cross-compilation target builtins (Windows targets)
-    const x64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64win/roc_builtins.obj");
-    const arm64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64win/roc_builtins.obj");
+    const x64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64win/roc_builtins.lib");
+    const arm64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64win/roc_builtins.lib");
 
     /// Cross-compilation target builtins (macOS targets)
-    const x64mac = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64mac/roc_builtins.o");
-    const arm64mac = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64mac/roc_builtins.o");
+    const x64mac = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64mac/libroc_builtins.a");
+    const arm64mac = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64mac/libroc_builtins.a");
 
-    /// Get the appropriate builtins object bytes for the given target
+    /// Get the appropriate builtins library bytes for the given target
     pub fn forTarget(target: roc_target.RocTarget) []const u8 {
         return switch (target) {
             .x64musl => x64musl,
@@ -186,11 +190,11 @@ const BuiltinsObjects = struct {
         };
     }
 
-    /// Get the filename for builtins object on given target
+    /// Get the filename for builtins library on given target
     pub fn filename(target: roc_target.RocTarget) []const u8 {
         return switch (target.toOsTag()) {
-            .windows => "roc_builtins.obj",
-            else => "roc_builtins.o",
+            .windows => "roc_builtins.lib",
+            else => "libroc_builtins.a",
         };
     }
 };
