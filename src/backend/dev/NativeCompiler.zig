@@ -17,7 +17,7 @@ const layout = @import("layout");
 const mono = @import("mono");
 
 const Backend = @import("Backend.zig");
-const MonoExprCodeGen = @import("MonoExprCodeGen.zig").MonoExprCodeGen;
+const NativeMonoExprCodeGen = @import("MonoExprCodeGen.zig").NativeMonoExprCodeGen;
 const Relocation = @import("Relocation.zig").Relocation;
 const StaticDataInterner = @import("StaticDataInterner.zig");
 
@@ -91,7 +91,7 @@ pub const NativeCompiler = struct {
         defer static_interner.deinit();
 
         // Initialize the code generator
-        var codegen = MonoExprCodeGen.init(
+        var codegen = NativeMonoExprCodeGen.init(
             self.allocator,
             mono_store,
             layout_store,

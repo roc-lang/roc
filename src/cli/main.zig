@@ -2743,8 +2743,12 @@ fn extractEntrypointsFromPlatformWithIdents(ctx: *CliContext, roc_file_path: []c
     try env.common.calcLineStarts(ctx.gpa);
 
     // Parse the source code as a full module
-    var parse_ast = parse.parse(&env.common, ctx.gpa) catch return error.ParseFailed;
-    defer parse_ast.deinit(ctx.gpa);
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(ctx.gpa);
+    defer allocators.deinit();
+
+    var parse_ast = parse.parse(&allocators, &env.common) catch return error.ParseFailed;
+    defer parse_ast.deinit();
 
     // Look for platform header in the AST
     const file_node = parse_ast.store.getFile();

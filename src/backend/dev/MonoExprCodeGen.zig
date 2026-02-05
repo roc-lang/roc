@@ -4276,14 +4276,10 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     const final_src: i32 = src_offset + @as(i32, @intCast(copied));
                     const final_dest: i32 = dest_offset + @as(i32, @intCast(copied));
                     if (comptime builtin.cpu.arch == .aarch64) {
-                        // Load byte by byte for remaining
-                        const bytes_left = size - copied;
-                        for (0..bytes_left) |i| {
-                            const byte_src = final_src + @as(i32, @intCast(i));
-                            const byte_dest = final_dest + @as(i32, @intCast(i));
-                            try self.codegen.emit.ldrRegMemSoff(.w8, temp, .FP, byte_src);
-                            try self.codegen.emit.strRegMemSoff(.w8, temp, .FP, byte_dest);
-                        }
+                        // Copy remaining 1-3 bytes as a single 32-bit operation
+                        // Extra bytes will be overwritten or are beyond the allocation
+                        try self.codegen.emit.ldrRegMemSoff(.w32, temp, .FP, final_src);
+                        try self.codegen.emit.strRegMemSoff(.w32, temp, .FP, final_dest);
                     } else {
                         const bytes_left = size - copied;
                         for (0..bytes_left) |i| {
