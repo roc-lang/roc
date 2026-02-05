@@ -528,9 +528,6 @@ pub fn CallBuilder(comptime EmitType: type) type {
         /// If R12 save was configured via init(), R12 is automatically
         /// restored after the call returns.
         pub fn call(self: *Self, fn_addr: usize) !void {
-            // Resolve deferred register args via parallel move algorithm
-            try self.emitDeferredRegArgs();
-
             // Calculate total stack space needed
             const stack_args_space: u32 = @intCast(self.stack_arg_count * 8);
             const total_unaligned: u32 = CC_EMIT.SHADOW_SPACE + stack_args_space;
@@ -548,8 +545,10 @@ pub fn CallBuilder(comptime EmitType: type) type {
                     try self.emit.subRegImm32(.w64, CC_EMIT.STACK_PTR, @intCast(total_space));
                 }
 
-                // Store deferred stack arguments at correct offsets
-                // Stack args go after shadow space: [RSP+32], [RSP+40], etc.
+                // Store stack arguments BEFORE resolving deferred register args,
+                // because the parallel move may clobber registers that stack args
+                // source from (e.g., rhs operand in RCX/RDX when those are also
+                // param register destinations for the first 4 args).
                 for (self.stack_args[0..self.stack_arg_count], 0..) |arg, i| {
                     const stack_offset: i32 = @intCast(CC_EMIT.SHADOW_SPACE + i * 8);
                     // Assert stack args are placed after shadow space
@@ -582,6 +581,10 @@ pub fn CallBuilder(comptime EmitType: type) type {
                     try self.emitStackArgAarch64(arg, @intCast(i));
                 }
             }
+
+            // Resolve deferred register args AFTER stack args are stored,
+            // so the parallel move doesn't clobber stack arg source registers.
+            try self.emitDeferredRegArgs();
 
             // Load function address into scratch register
             if (comptime is_aarch64) {
@@ -619,9 +622,6 @@ pub fn CallBuilder(comptime EmitType: type) type {
         /// If R12 save was configured via init(), R12 is automatically
         /// restored after the call returns.
         pub fn callReg(self: *Self, target: GeneralReg) !void {
-            // Resolve deferred register args via parallel move algorithm
-            try self.emitDeferredRegArgs();
-
             // Calculate total stack space needed
             const stack_args_space: u32 = @intCast(self.stack_arg_count * 8);
             const total_unaligned: u32 = CC_EMIT.SHADOW_SPACE + stack_args_space;
@@ -639,11 +639,9 @@ pub fn CallBuilder(comptime EmitType: type) type {
                     try self.emit.subRegImm32(.w64, CC_EMIT.STACK_PTR, @intCast(total_space));
                 }
 
-                // Store deferred stack arguments at correct offsets
-                // Stack args go after shadow space: [RSP+32], [RSP+40], etc.
+                // Store stack arguments BEFORE resolving deferred register args
                 for (self.stack_args[0..self.stack_arg_count], 0..) |arg, i| {
                     const stack_offset: i32 = @intCast(CC_EMIT.SHADOW_SPACE + i * 8);
-                    // Assert stack args are placed after shadow space
                     std.debug.assert(stack_offset >= CC_EMIT.SHADOW_SPACE);
                     switch (arg) {
                         .from_reg => |reg| {
@@ -672,6 +670,9 @@ pub fn CallBuilder(comptime EmitType: type) type {
                     try self.emitStackArgAarch64(arg, @intCast(i));
                 }
             }
+
+            // Resolve deferred register args AFTER stack args are stored
+            try self.emitDeferredRegArgs();
 
             if (comptime is_aarch64) {
                 try self.emit.blrReg(target);
@@ -709,9 +710,6 @@ pub fn CallBuilder(comptime EmitType: type) type {
         /// Note: On x86_64, this emits `call rel32` (E8 xx xx xx xx).
         ///       On aarch64, this emits `bl offset` (26-bit signed offset).
         pub fn callRelocatable(self: *Self, symbol_name: []const u8, allocator: std.mem.Allocator, relocations: *std.ArrayList(Relocation)) !void {
-            // Resolve deferred register args via parallel move algorithm
-            try self.emitDeferredRegArgs();
-
             // Calculate total stack space needed (same as call/callReg)
             const stack_args_space: u32 = @intCast(self.stack_arg_count * 8);
             const total_unaligned: u32 = CC_EMIT.SHADOW_SPACE + stack_args_space;
@@ -726,7 +724,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
                     try self.emit.subRegImm32(.w64, CC_EMIT.STACK_PTR, @intCast(total_space));
                 }
 
-                // Store deferred stack arguments at correct offsets
+                // Store stack arguments BEFORE resolving deferred register args
                 for (self.stack_args[0..self.stack_arg_count], 0..) |arg, i| {
                     const stack_offset: i32 = @intCast(CC_EMIT.SHADOW_SPACE + i * 8);
                     std.debug.assert(stack_offset >= CC_EMIT.SHADOW_SPACE);
@@ -757,6 +755,9 @@ pub fn CallBuilder(comptime EmitType: type) type {
                     try self.emitStackArgAarch64(arg, @intCast(i));
                 }
             }
+
+            // Resolve deferred register args AFTER stack args are stored
+            try self.emitDeferredRegArgs();
 
             // Emit relocatable call instruction
             const code_offset = self.emit.buf.items.len;
