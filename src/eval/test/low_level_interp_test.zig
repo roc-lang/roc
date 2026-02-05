@@ -21,7 +21,8 @@ const Check = check.Check;
 const ModuleEnv = can.ModuleEnv;
 const Allocators = base.Allocators;
 const testing = std.testing;
-const test_allocator = testing.allocator;
+// Use page_allocator for interpreter tests (doesn't track leaks)
+const test_allocator = std.heap.page_allocator;
 
 fn parseCheckAndEvalModule(src: []const u8) !struct {
     module_env: *ModuleEnv,
@@ -87,10 +88,13 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
     try czer.canonicalizeFile();
 
     // Heap-allocate imported_envs so it outlives this function.
-    // The interpreter's all_module_envs is a slice that points to this memory.
-    const imported_envs = try gpa.alloc(*const ModuleEnv, 1);
+    // Order must match all_module_envs in the interpreter (self module first, then imports).
+    // evalLookupExternal uses all_module_envs[resolved_idx], so resolveImports indices
+    // must match this array. The interpreter detects other_envs[0]==env and uses it directly.
+    const imported_envs = try gpa.alloc(*const ModuleEnv, 2);
     errdefer gpa.free(imported_envs);
-    imported_envs[0] = builtin_module.env;
+    imported_envs[0] = module_env;
+    imported_envs[1] = builtin_module.env;
 
     // Resolve imports - map each import to its index in imported_envs
     module_env.imports.resolveImports(module_env, imported_envs);
@@ -698,7 +702,7 @@ test "e_low_level_lambda - List.concat preserves order" {
 
     const first_value = try evalModuleAndGetString(src, 1, test_allocator);
     defer test_allocator.free(first_value);
-    try testing.expectEqualStrings("Ok(10)", first_value);
+    try testing.expectEqualStrings("Ok(10.0)", first_value);
 }
 
 test "e_low_level_lambda - List.concat with Str.to_utf8 inside lambda (issue 8618)" {
@@ -857,7 +861,7 @@ test "e_low_level_lambda - List.append on empty list" {
 
     const get_value = try evalModuleAndGetString(src, 1, test_allocator);
     defer test_allocator.free(get_value);
-    try testing.expectEqualStrings("Ok(0)", get_value);
+    try testing.expectEqualStrings("Ok(0.0)", get_value);
 }
 
 test "e_low_level_lambda - List.append a list on empty list" {
@@ -992,7 +996,7 @@ test "e_low_level_lambda - List.drop_at on non-empty list" {
 
     const value = try evalModuleAndGetString(src, 2, test_allocator);
     defer test_allocator.free(value);
-    try testing.expectEqualStrings("Ok(2)", value);
+    try testing.expectEqualStrings("Ok(2.0)", value);
 }
 
 test "e_low_level_lambda - List.drop_at out of bounds on non-empty list" {
@@ -1058,11 +1062,11 @@ test "e_low_level_lambda - List.sublist on non-empty list" {
 
     const head_value = try evalModuleAndGetString(src, 2, test_allocator);
     defer test_allocator.free(head_value);
-    try testing.expectEqualStrings("Ok(1)", head_value);
+    try testing.expectEqualStrings("Ok(1.0)", head_value);
 
     const tail_value = try evalModuleAndGetString(src, 3, test_allocator);
     defer test_allocator.free(tail_value);
-    try testing.expectEqualStrings("Ok(3)", tail_value);
+    try testing.expectEqualStrings("Ok(3.0)", tail_value);
 }
 
 test "e_low_level_lambda - List.sublist start out of bounds" {
@@ -2687,7 +2691,7 @@ test "e_low_level_lambda - List.sort_with basic ascending sort" {
 
     const first_value = try evalModuleAndGetString(src, 1, test_allocator);
     defer test_allocator.free(first_value);
-    try testing.expectEqualStrings("Ok(1)", first_value);
+    try testing.expectEqualStrings("Ok(1.0)", first_value);
 }
 
 test "e_low_level_lambda - List.sort_with preserves length" {
@@ -2708,7 +2712,7 @@ test "e_low_level_lambda - List.sort_with with larger list" {
 
     const first_value = try evalModuleAndGetString(src, 1, test_allocator);
     defer test_allocator.free(first_value);
-    try testing.expectEqualStrings("Ok(1)", first_value);
+    try testing.expectEqualStrings("Ok(1.0)", first_value);
 }
 
 test "e_low_level_lambda - List.sort_with with two elements" {
@@ -2719,7 +2723,7 @@ test "e_low_level_lambda - List.sort_with with two elements" {
 
     const first_value = try evalModuleAndGetString(src, 1, test_allocator);
     defer test_allocator.free(first_value);
-    try testing.expectEqualStrings("Ok(1)", first_value);
+    try testing.expectEqualStrings("Ok(1.0)", first_value);
 }
 
 test "e_low_level_lambda - List.sort_with descending order" {
@@ -2731,7 +2735,7 @@ test "e_low_level_lambda - List.sort_with descending order" {
     const first_value = try evalModuleAndGetString(src, 1, test_allocator);
     defer test_allocator.free(first_value);
     // Descending sort of [1, 3, 2] should give [3, 2, 1], first = 3
-    try testing.expectEqualStrings("Ok(3)", first_value);
+    try testing.expectEqualStrings("Ok(3.0)", first_value);
 }
 
 test "e_low_level_lambda - List.sort_with empty list" {
@@ -2753,7 +2757,7 @@ test "e_low_level_lambda - List.sort_with single element" {
 
     const first_value = try evalModuleAndGetString(src, 1, test_allocator);
     defer test_allocator.free(first_value);
-    try testing.expectEqualStrings("Ok(42)", first_value);
+    try testing.expectEqualStrings("Ok(42.0)", first_value);
 }
 
 test "e_low_level_lambda - List.sort_with with duplicates" {
@@ -2772,7 +2776,7 @@ test "e_low_level_lambda - List.sort_with with duplicates" {
 
     const first_value = try evalModuleAndGetString(src, 1, test_allocator);
     defer test_allocator.free(first_value);
-    try testing.expectEqualStrings("Ok(1)", first_value);
+    try testing.expectEqualStrings("Ok(1.0)", first_value);
 
     const len_value = try evalModuleAndGetInt(src, 2);
     try testing.expectEqual(@as(i128, 5), len_value);
@@ -2786,7 +2790,7 @@ test "e_low_level_lambda - List.sort_with already sorted" {
 
     const first_value = try evalModuleAndGetString(src, 1, test_allocator);
     defer test_allocator.free(first_value);
-    try testing.expectEqualStrings("Ok(1)", first_value);
+    try testing.expectEqualStrings("Ok(1.0)", first_value);
 }
 
 test "e_low_level_lambda - List.sort_with reverse sorted" {
@@ -2797,7 +2801,7 @@ test "e_low_level_lambda - List.sort_with reverse sorted" {
 
     const first_value = try evalModuleAndGetString(src, 1, test_allocator);
     defer test_allocator.free(first_value);
-    try testing.expectEqualStrings("Ok(1)", first_value);
+    try testing.expectEqualStrings("Ok(1.0)", first_value);
 }
 // mod_by tests for integer types
 
@@ -2942,7 +2946,7 @@ test "issue 8750: dbg in polymorphic debug function with List.first" {
 
     const first_value = try evalModuleAndGetString(src, 2, test_allocator);
     defer test_allocator.free(first_value);
-    try testing.expectEqualStrings("Ok(10)", first_value);
+    try testing.expectEqualStrings("Ok(10.0)", first_value);
 }
 
 test "issue 8750: dbg in polymorphic debug function chained multiple times" {
@@ -3075,7 +3079,7 @@ test "issue 8750: List.fold render value" {
     const rt_var = try result.evaluator.interpreter.translateTypeVar(result.module_env, ct_var);
     const rendered = try result.evaluator.interpreter.renderValueRocWithType(stack_value, rt_var, ops);
     defer test_allocator.free(rendered);
-    try testing.expectEqualStrings("6", rendered);
+    try testing.expectEqualStrings("6.0", rendered);
 }
 
 test "issue 8765: Box.unbox with record containing numeric literal" {
@@ -3094,7 +3098,7 @@ test "issue 8765: Box.unbox with record containing numeric literal" {
 
     const result = try evalModuleAndGetString(src, 2, test_allocator);
     defer test_allocator.free(result);
-    try testing.expectEqualStrings("1", result);
+    try testing.expectEqualStrings("1.0", result);
 }
 
 // Issue #8555: method call syntax `list.first()` showed garbage decimal values

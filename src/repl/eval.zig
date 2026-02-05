@@ -657,31 +657,29 @@ pub const Repl = struct {
         // Use DevEvaluator if backend is .dev and we have a DevEvaluator instance
         if (self.backend == .dev) {
             if (self.dev_evaluator) |*dev_eval| {
-                // Get the expression from the index
-                const expr = module_env.store.getExpr(final_expr_idx);
-
                 // Generate and execute native code
-                var code_result = dev_eval.generateCode(module_env, expr) catch {
+                const all_module_envs = &.{module_env};
+                var code_result = dev_eval.generateCode(module_env, final_expr_idx, all_module_envs) catch {
                     // Fall back to interpreter on unsupported expressions
                     return self.evaluateWithInterpreter(module_env, final_expr_idx, &imported_modules, &checker);
                 };
                 defer code_result.deinit();
 
-                // JIT execute
+                // Execute the compiled code
                 const backend = eval_mod;
-                var jit = backend.JitCode.init(code_result.code) catch {
+                var executable = backend.ExecutableMemory.init(code_result.code) catch {
                     return self.evaluateWithInterpreter(module_env, final_expr_idx, &imported_modules, &checker);
                 };
-                defer jit.deinit();
+                defer executable.deinit();
 
                 // Format result based on layout
                 const LayoutIdx = eval_mod.layout.Idx;
                 const output = switch (code_result.result_layout) {
-                    LayoutIdx.i64, LayoutIdx.i8, LayoutIdx.i16, LayoutIdx.i32 => try std.fmt.allocPrint(self.allocator, "{} : I64", .{jit.callReturnI64()}),
-                    LayoutIdx.u64, LayoutIdx.u8, LayoutIdx.u16, LayoutIdx.u32 => try std.fmt.allocPrint(self.allocator, "{} : U64", .{jit.callReturnU64()}),
-                    LayoutIdx.bool => if (jit.callReturnU64() != 0) try self.allocator.dupe(u8, "Bool.true : Bool") else try self.allocator.dupe(u8, "Bool.false : Bool"),
-                    LayoutIdx.f64, LayoutIdx.f32 => try std.fmt.allocPrint(self.allocator, "{d} : F64", .{jit.callReturnF64()}),
-                    LayoutIdx.dec => try std.fmt.allocPrint(self.allocator, "{} : Dec", .{jit.callReturnI64()}), // TODO: proper Dec formatting
+                    LayoutIdx.i64, LayoutIdx.i8, LayoutIdx.i16, LayoutIdx.i32 => try std.fmt.allocPrint(self.allocator, "{} : I64", .{executable.callReturnI64()}),
+                    LayoutIdx.u64, LayoutIdx.u8, LayoutIdx.u16, LayoutIdx.u32 => try std.fmt.allocPrint(self.allocator, "{} : U64", .{executable.callReturnU64()}),
+                    LayoutIdx.bool => if (executable.callReturnU64() != 0) try self.allocator.dupe(u8, "Bool.true : Bool") else try self.allocator.dupe(u8, "Bool.false : Bool"),
+                    LayoutIdx.f64, LayoutIdx.f32 => try std.fmt.allocPrint(self.allocator, "{d} : F64", .{executable.callReturnF64()}),
+                    LayoutIdx.dec => try std.fmt.allocPrint(self.allocator, "{} : Dec", .{executable.callReturnI64()}), // TODO: proper Dec formatting
                     else => return self.evaluateWithInterpreter(module_env, final_expr_idx, &imported_modules, &checker),
                 };
                 return .{ .expression = output };
@@ -719,7 +717,7 @@ pub const Repl = struct {
             try self.generateAndStoreDebugHtml(module_env, final_expr_idx);
         }
 
-        const output = try interpreter.renderValueRocWithType(result, result.rt_var, self.roc_ops);
+        const output = try interpreter.renderValueRocForRepl(result, result.rt_var, self.roc_ops);
 
         result.decref(&interpreter.runtime_layout_store, self.roc_ops);
         interpreter.cleanupBindings(self.roc_ops);

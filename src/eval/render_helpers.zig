@@ -91,6 +91,9 @@ pub const RenderCtx = struct {
     to_inspect_callback: ?ToInspectCallback = null,
     /// Opaque context pointer passed to the to_inspect callback.
     callback_ctx: ?*anyopaque = null,
+    /// When true, render whole-number Dec values without .0 if the type is an unbound numeral.
+    /// Used by the REPL for cleaner output.
+    strip_unbound_numeral_decimal: bool = false,
 };
 
 /// Render `value` using the supplied runtime type variable, following alias/nominal backing.
@@ -153,7 +156,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                         errdefer out.deinit();
                         try out.appendSlice("Box(");
 
-                        const payload_layout_idx = try ctx.layout_store.addTypeVar(payload_var, ctx.type_scope);
+                        const payload_layout_idx = try ctx.layout_store.fromTypeVar(0, payload_var, ctx.type_scope, null);
                         const payload_layout = ctx.layout_store.getLayout(payload_layout_idx);
                         const payload_size = ctx.layout_store.layoutSize(payload_layout);
 
@@ -243,8 +246,8 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                                             .is_initialized = true,
                                             .rt_var = elem_type_var,
                                         };
-                                        // Use layout-based rendering since type info may be unreliable
-                                        const rendered = try renderValueRoc(ctx, elem_val);
+                                        // Use type-aware rendering to enable unbound numeral stripping
+                                        const rendered = try renderValueRocWithType(ctx, elem_val, elem_type_var);
                                         defer gpa.free(rendered);
                                         try out.appendSlice(rendered);
                                         if (i + 1 < len) try out.appendSlice(", ");
@@ -680,6 +683,21 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
         },
         else => {},
     };
+
+    // Handle Dec values specially when stripping unbound numeral decimals in REPL mode.
+    // When enabled, whole-number Dec values (like 2.0) display without the decimal (as 2).
+    if (ctx.strip_unbound_numeral_decimal and value.layout.tag == .scalar) {
+        const scalar = value.layout.data.scalar;
+        if (scalar.tag == .frac and scalar.data.frac == .dec) {
+            const dec = @as(*const RocDec, @ptrCast(@alignCast(value.ptr.?))).*;
+            // Check if this is a whole number (no fractional part)
+            if (@rem(@abs(dec.num), RocDec.one_point_zero_i128) == 0) {
+                const whole = @divTrunc(dec.num, RocDec.one_point_zero_i128);
+                return try std.fmt.allocPrint(gpa, "{d}", .{whole});
+            }
+        }
+    }
+
     return try renderValueRoc(ctx, value);
 }
 
@@ -725,8 +743,17 @@ pub fn renderValueRoc(ctx: *RenderCtx, value: StackValue) ![]u8 {
                         return try std.fmt.allocPrint(gpa, "{d}", .{ptr.*});
                     },
                     .dec => {
-                        const ptr = @as(*const RocDec, @ptrCast(@alignCast(value.ptr.?)));
-                        return try renderDecimal(gpa, ptr.*);
+                        const dec = @as(*const RocDec, @ptrCast(@alignCast(value.ptr.?))).*;
+                        // In REPL mode, strip .0 from whole-number Dec values
+                        if (ctx.strip_unbound_numeral_decimal and
+                            @rem(@abs(dec.num), RocDec.one_point_zero_i128) == 0)
+                        {
+                            const whole = @divTrunc(dec.num, RocDec.one_point_zero_i128);
+                            return try std.fmt.allocPrint(gpa, "{d}", .{whole});
+                        }
+                        var buf: [RocDec.max_str_length]u8 = undefined;
+                        const slice = dec.format_to_buf(&buf);
+                        return try gpa.dupe(u8, slice);
                     },
                 };
             },
@@ -877,53 +904,4 @@ pub fn renderValueRoc(ctx: *RenderCtx, value: StackValue) ![]u8 {
         return out.toOwnedSlice();
     }
     return try gpa.dupe(u8, "<unsupported>");
-}
-
-fn renderDecimal(gpa: std.mem.Allocator, dec: RocDec) ![]u8 {
-    if (dec.num == 0) {
-        return try gpa.dupe(u8, "0");
-    }
-
-    var out = std.array_list.AlignedManaged(u8, null).init(gpa);
-    errdefer out.deinit();
-
-    const is_negative = dec.num < 0;
-    // Use @abs which handles i128 min correctly by returning u128
-    // (negating i128 min directly would overflow)
-    const abs_value: u128 = @abs(dec.num);
-
-    if (is_negative) {
-        try out.append('-');
-    }
-
-    const one: u128 = @intCast(RocDec.one_point_zero_i128);
-    const integer_part = @divTrunc(abs_value, one);
-    const fractional_part = @rem(abs_value, one);
-
-    try std.fmt.format(out.writer(), "{d}", .{integer_part});
-
-    if (fractional_part == 0) {
-        return out.toOwnedSlice();
-    }
-
-    try out.writer().writeByte('.');
-
-    const decimal_places: usize = @as(usize, RocDec.decimal_places);
-    var digits: [decimal_places]u8 = undefined;
-    @memset(digits[0..], '0');
-    var remaining = fractional_part;
-    var idx: usize = decimal_places;
-    while (idx > 0) : (idx -= 1) {
-        const digit: u8 = @intCast(@mod(remaining, 10));
-        digits[idx - 1] = digit + '0';
-        remaining = @divTrunc(remaining, 10);
-    }
-
-    var end: usize = decimal_places;
-    while (end > 1 and digits[end - 1] == '0') {
-        end -= 1;
-    }
-
-    try out.writer().writeAll(digits[0..end]);
-    return out.toOwnedSlice();
 }

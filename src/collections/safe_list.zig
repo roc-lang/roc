@@ -7,6 +7,104 @@ const Allocator = std.mem.Allocator;
 
 const CompactWriter = @import("CompactWriter.zig");
 
+/// Recursively zero all padding bytes in a value for deterministic serialization.
+/// Handles tagged unions (tail padding, variant overshoot), auto-layout structs
+/// (inter-field gaps), and optionals (null payload). Recurses into nested types.
+fn zeroValuePadding(comptime V: type, ptr: [*]u8) void {
+    const vinfo = @typeInfo(V);
+    const vsize = @sizeOf(V);
+    if (vsize == 0) return;
+
+    if (vinfo == .@"union") {
+        const uinfo = vinfo.@"union";
+        if (uinfo.tag_type) |TagType| {
+            const tag_size = @sizeOf(TagType);
+            const max_payload = comptime blk: {
+                var max: usize = 0;
+                for (uinfo.fields) |f| max = @max(max, @sizeOf(f.type));
+                break :blk max;
+            };
+            const meaningful = max_payload + tag_size;
+
+            // Zero tail padding (after tag + max_payload)
+            if (meaningful < vsize) {
+                @memset(ptr[meaningful..vsize], 0);
+            }
+
+            // Per-variant: zero overshoot + recurse into variant payload
+            const item = @as(*const V, @ptrCast(@alignCast(ptr)));
+            switch (item.*) {
+                inline else => |_, tag| {
+                    const VariantType = uinfo.fields[@intFromEnum(tag)].type;
+                    const active_size = @sizeOf(VariantType);
+                    // Recurse into variant payload (handles nested struct/union padding)
+                    zeroValuePadding(VariantType, ptr);
+                    // Zero overshoot (unused payload between active variant and max)
+                    if (active_size < max_payload) {
+                        @memset(ptr[active_size..max_payload], 0);
+                    }
+                },
+            }
+        }
+    } else if (vinfo == .optional) {
+        // For optionals: when null, the payload area contains garbage — zero it all.
+        // When non-null, recurse into the payload to zero its internal padding,
+        // then zero any trailing padding after payload + tag.
+        const ChildType = vinfo.optional.child;
+        const item = @as(*const V, @ptrCast(@alignCast(ptr)));
+        if (item.* == null) {
+            @memset(ptr[0..vsize], 0);
+        } else {
+            // Payload is at offset 0 (auto layout puts highest-alignment first)
+            const child_size = @sizeOf(ChildType);
+            if (child_size > 0) {
+                zeroValuePadding(ChildType, ptr);
+            }
+            // Zero padding after payload + 1-byte tag
+            const meaningful = child_size + 1;
+            if (meaningful < vsize) {
+                @memset(ptr[meaningful..vsize], 0);
+            }
+        }
+    } else if (vinfo == .@"struct" and vinfo.@"struct".layout == .auto) {
+        // Zero inter-field gaps
+        const covered = comptime blk: {
+            var mask = [_]bool{false} ** vsize;
+            for (vinfo.@"struct".fields) |field| {
+                const start = @offsetOf(V, field.name);
+                const end = start + @sizeOf(field.type);
+                for (start..end) |j| mask[j] = true;
+            }
+            break :blk mask;
+        };
+        const has_padding = comptime blk: {
+            for (covered) |c| {
+                if (!c) break :blk true;
+            }
+            break :blk false;
+        };
+        if (has_padding) {
+            inline for (0..vsize) |j| {
+                if (!covered[j]) ptr[j] = 0;
+            }
+        }
+        // Recurse into struct fields that may have internal padding
+        inline for (vinfo.@"struct".fields) |field| {
+            const FType = field.type;
+            const ftype_info = @typeInfo(FType);
+            if (@sizeOf(FType) > 0) {
+                const needs_recursion = (ftype_info == .@"union" and ftype_info.@"union".tag_type != null) or
+                    (ftype_info == .@"struct" and ftype_info.@"struct".layout == .auto) or
+                    (ftype_info == .optional);
+                if (needs_recursion) {
+                    zeroValuePadding(FType, ptr + @offsetOf(V, field.name));
+                }
+            }
+        }
+    }
+    // Primitives, enums, extern structs: no padding to zero.
+}
+
 /// Represents a type safe range in a list; [start, end)
 ///
 /// This is the conceptual equivalent of slice, but since this is based
@@ -125,6 +223,20 @@ pub fn SafeList(comptime T: type) type {
             nonempty: Range,
         };
 
+        /// Zero all padding bytes in a slice of T items for deterministic serialization.
+        /// Delegates to zeroValuePadding which recursively handles unions (tail padding,
+        /// variant overshoot) and structs (inter-field gaps, nested types).
+        fn zeroPadding(buf: []T) void {
+            const info = @typeInfo(T);
+            if (@sizeOf(T) == 0) return;
+            const needs_zeroing = (info == .@"union" and info.@"union".tag_type != null) or
+                (info == .@"struct" and info.@"struct".layout == .auto);
+            if (!needs_zeroing) return;
+            for (buf) |*item| {
+                zeroValuePadding(T, @as([*]u8, @ptrCast(item)));
+            }
+        }
+
         /// Serialized representation of a SafeList
         /// Uses extern struct to guarantee consistent field layout across optimization levels.
         pub const Serialized = extern struct {
@@ -149,8 +261,25 @@ pub fn SafeList(comptime T: type) type {
 
                 // Append the raw data without further padding.
                 if (items.len > 0) {
+                    // Ensure deterministic serialization by zeroing padding bytes.
+                    // Auto-layout structs/unions have undefined padding that varies
+                    // between runs (ASLR, stack contents). Assignment copies ALL bytes
+                    // including padding, so we must explicitly zero padding AFTER copy.
+                    const buf = try allocator.alloc(T, items.len);
+                    for (items, 0..) |item, i| {
+                        buf[i] = item;
+                    }
+                    zeroPadding(buf);
+
+                    // Track the allocated memory for cleanup by the writer
+                    try writer.allocated_memory.append(allocator, .{
+                        .ptr = @ptrCast(buf.ptr),
+                        .size = items.len * @sizeOf(T),
+                        .alignment = @alignOf(T),
+                    });
+
                     try writer.iovecs.append(allocator, .{
-                        .iov_base = @ptrCast(items.ptr),
+                        .iov_base = @ptrCast(buf.ptr),
                         .iov_len = items.len * @sizeOf(T),
                     });
                     writer.total_bytes += items.len * @sizeOf(T);
@@ -306,7 +435,26 @@ pub fn SafeList(comptime T: type) type {
 
             const offset_self = try writer.appendAlloc(allocator, SafeList(T));
 
-            const slice = try writer.appendSlice(allocator, items);
+            // Create a copy with zeroed padding for deterministic serialization.
+            // See Serialized.serialize for rationale.
+            const clean_items = if (items.len > 0 and @sizeOf(T) > 0) blk: {
+                const buf = try allocator.alloc(T, items.len);
+                for (items, 0..) |item, i| {
+                    buf[i] = item;
+                }
+                zeroPadding(buf);
+
+                // Track the allocated memory for cleanup by the writer
+                try writer.allocated_memory.append(allocator, .{
+                    .ptr = @ptrCast(buf.ptr),
+                    .size = items.len * @sizeOf(T),
+                    .alignment = @alignOf(T),
+                });
+
+                break :blk buf;
+            } else items;
+
+            const slice = try writer.appendSlice(allocator, clean_items);
 
             offset_self.* = .{
                 .items = .{
@@ -599,6 +747,9 @@ pub fn SafeMultiList(comptime T: type) type {
             allocator: Allocator,
             writer: *CompactWriter,
         ) Allocator.Error!*const SafeMultiList(T) {
+            // Zero padding bytes in used elements for deterministic serialization.
+            Serialized.zeroFieldPadding(@constCast(self));
+
             // Write only len elements, not capacity, to avoid storing garbage memory.
             const data_offset = if (self.items.len > 0) blk: {
                 const slice = self.items.slice();
@@ -676,6 +827,31 @@ pub fn SafeMultiList(comptime T: type) type {
                 }
             }
 
+            /// Zero padding bytes within used field elements for deterministic serialization.
+            /// MultiArrayList stores each struct field as a separate contiguous array.
+            /// Delegates to zeroValuePadding which recursively handles all padding.
+            fn zeroFieldPadding(list: *SafeMultiList(T)) void {
+                const list_len = list.items.len;
+                if (list_len == 0) return;
+
+                const slice = list.items.slice();
+                inline for (std.meta.fields(T), 0..) |field_info, field_index| {
+                    const FieldType = field_info.type;
+                    const field_size = @sizeOf(FieldType);
+                    if (field_size == 0) continue;
+
+                    const finfo = @typeInfo(FieldType);
+                    const needs_zeroing = (finfo == .@"union" and finfo.@"union".tag_type != null) or
+                        (finfo == .@"struct" and finfo.@"struct".layout == .auto);
+                    if (needs_zeroing) {
+                        const field_ptr = slice.ptrs[field_index];
+                        for (0..list_len) |i| {
+                            zeroValuePadding(FieldType, field_ptr + i * field_size);
+                        }
+                    }
+                }
+            }
+
             /// Serialize a SafeMultiList into this Serialized struct, appending data to the writer
             pub fn serialize(
                 self: *Serialized,
@@ -685,7 +861,9 @@ pub fn SafeMultiList(comptime T: type) type {
             ) Allocator.Error!void {
                 // MultiArrayList reorders fields by alignment internally.
                 // We need to copy the raw bytes exactly as they are laid out.
-                zeroUnusedCapacity(@constCast(safe_multi_list));
+                const mutable = @constCast(safe_multi_list);
+                zeroUnusedCapacity(mutable);
+                zeroFieldPadding(mutable);
 
                 const data_offset = if (safe_multi_list.items.len > 0) blk: {
                     const MultiArrayListType = std.MultiArrayList(T);

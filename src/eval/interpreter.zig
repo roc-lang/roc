@@ -246,7 +246,7 @@ pub const Interpreter = struct {
         TupleIndexOutOfBounds,
         TypeMismatch,
         ZeroSizedType,
-    } || std.mem.Allocator.Error || layout.LayoutError;
+    } || std.mem.Allocator.Error;
 
     /// Key for caching type translations, combining module identity with type variable.
     const ModuleVarKey = struct {
@@ -391,15 +391,18 @@ pub const Interpreter = struct {
     /// App module for resolving e_lookup_required (platform requires clause)
     /// When the primary env is the platform, this points to the app that provides required values.
     app_env: ?*can.ModuleEnv,
-    /// Array of all module environments, indexed by resolved module index
-    /// Used to resolve imports via pre-resolved indices in env.imports.resolved_modules
+    /// Array of all module environments, with env at index 0.
+    /// Used by the layout store for ident lookups (getEnv() returns [0]).
     all_module_envs: []const *const can.ModuleEnv,
+    /// The other_envs array passed to resolveImports, stored directly.
+    /// resolved_idx values from getResolvedModule index into this array.
+    resolved_module_envs: []const *const can.ModuleEnv,
     module_envs: std.AutoHashMapUnmanaged(base_pkg.Ident.Idx, *const can.ModuleEnv),
-    /// Module envs keyed by translated idents (in runtime_layout_store.env's ident space)
+    /// Module envs keyed by translated idents (in runtime_layout_store.getEnv()'s ident space)
     /// Used for method lookup on nominal types whose origin_module was translated
     translated_module_envs: std.AutoHashMapUnmanaged(base_pkg.Ident.Idx, *const can.ModuleEnv),
     /// Pre-translated module name idents for comparison in getModuleEnvForOrigin
-    /// These are in runtime_layout_store.env's ident space
+    /// These are in runtime_layout_store.getEnv()'s ident space
     translated_builtin_module: base_pkg.Ident.Idx,
     translated_env_module: base_pkg.Ident.Idx,
     translated_app_module: base_pkg.Ident.Idx,
@@ -442,6 +445,8 @@ pub const Interpreter = struct {
     /// Whether this interpreter owns (and should free) the constant_strings_arena.
     /// When an external arena is passed in, this is false and the arena is not freed on deinit.
     owns_constant_strings_arena: bool,
+    /// Whether we allocated the all_module_envs slice (needs to be freed on deinit)
+    owns_all_module_envs: bool = false,
 
     pub fn init(allocator: std.mem.Allocator, env: *can.ModuleEnv, builtin_types: BuiltinTypes, builtin_module_env: ?*const can.ModuleEnv, other_envs: []const *const can.ModuleEnv, import_mapping: *const import_mapping_mod.ImportMapping, app_env: ?*can.ModuleEnv, constant_strings_arena: ?*std.heap.ArenaAllocator, target: roc_target.RocTarget) !Interpreter {
         // Build maps from Ident.Idx to ModuleEnv and module ID
@@ -464,34 +469,29 @@ pub const Interpreter = struct {
         const app_import_count: usize = if (app_env) |a_env| a_env.imports.imports.items.items.len else 0;
         const total_import_count = import_count + app_import_count;
 
+        // Build all_module_envs with env prepended at index 0.
+        // The layout store uses all_module_envs[0] for getEnv() — this must be env.
+        // resolved_module_envs stores other_envs directly for resolved_idx lookups
+        // (getResolvedModule returns indices into the array passed to resolveImports).
+        const all_module_envs = try allocator.alloc(*const can.ModuleEnv, other_envs.len + 1);
+        all_module_envs[0] = env;
+        @memcpy(all_module_envs[1..], other_envs);
+
         if (other_envs.len > 0 and total_import_count > 0) {
-            // Allocate capacity for all imports (even if some are duplicates)
             try module_envs.ensureTotalCapacity(allocator, @intCast(other_envs.len));
             try module_ids.ensureTotalCapacity(allocator, @intCast(other_envs.len));
             try import_envs.ensureTotalCapacity(allocator, @intCast(total_import_count));
 
-            // Process ALL imports from primary env using pre-resolved module indices
-            // Note: Some imports may be unresolved (e.g., platform modules in test context).
-            // We skip unresolved imports here - errors will occur at point-of-use if the
-            // code actually tries to access an unresolved import.
+            // resolved_idx values from resolveImports index into other_envs.
             for (0..import_count) |i| {
                 const import_idx: can.CIR.Import.Idx = @enumFromInt(i);
-
-                // Use pre-resolved module index - skip if not resolved
                 const resolved_idx = env.imports.getResolvedModule(import_idx) orelse continue;
-
-                if (resolved_idx >= other_envs.len) continue;
-
+                std.debug.assert(resolved_idx < other_envs.len);
                 const module_env = other_envs[resolved_idx];
 
-                // Store in import_envs (always, for every import)
-                // This is the critical mapping that e_lookup_external needs!
                 import_envs.putAssumeCapacity(import_idx, module_env);
 
-                // Also add to module_envs/module_ids for module lookups (optional, only if ident exists)
-                // Use pre-stored ident index instead of string lookup
                 if (env.imports.getIdentIdx(import_idx)) |idx| {
-                    // Only add to module_envs/module_ids if not already present (to avoid duplicates)
                     if (!module_envs.contains(idx)) {
                         module_envs.putAssumeCapacity(idx, module_env);
                         module_ids.putAssumeCapacity(idx, next_id);
@@ -500,29 +500,22 @@ pub const Interpreter = struct {
                 }
             }
 
-            // Also process app env imports if app_env is different from primary env
-            // This is needed when the platform calls the app's main! via e_lookup_required
             if (app_env) |a_env| {
                 if (a_env != env) {
                     for (0..app_import_count) |i| {
                         const import_idx: can.CIR.Import.Idx = @enumFromInt(i);
-
-                        // Use pre-resolved module index - skip if not resolved
                         const resolved_idx = a_env.imports.getResolvedModule(import_idx) orelse continue;
-
-                        if (resolved_idx >= other_envs.len) continue;
-
+                        std.debug.assert(resolved_idx < other_envs.len);
                         const module_env = other_envs[resolved_idx];
-
-                        // Store in import_envs for app's imports
-                        // Use put instead of putAssumeCapacity since we may have overlapping indices
                         try import_envs.put(allocator, import_idx, module_env);
                     }
                 }
             }
         }
 
-        return initWithModuleEnvs(allocator, env, other_envs, module_envs, module_ids, import_envs, next_id, builtin_types, builtin_module_env, import_mapping, app_env, constant_strings_arena, target);
+        var result = try initWithModuleEnvs(allocator, env, all_module_envs, other_envs, module_envs, module_ids, import_envs, next_id, builtin_types, builtin_module_env, import_mapping, app_env, constant_strings_arena, target);
+        result.owns_all_module_envs = true;
+        return result;
     }
 
     /// Deinit the interpreter and also free the module maps if they were allocated by init()
@@ -534,6 +527,7 @@ pub const Interpreter = struct {
         allocator: std.mem.Allocator,
         env: *can.ModuleEnv,
         all_module_envs: []const *const can.ModuleEnv,
+        resolved_module_envs: []const *const can.ModuleEnv,
         module_envs: std.AutoHashMapUnmanaged(base_pkg.Ident.Idx, *const can.ModuleEnv),
         module_ids: std.AutoHashMapUnmanaged(base_pkg.Ident.Idx, u32),
         import_envs: std.AutoHashMapUnmanaged(can.CIR.Import.Idx, *const can.ModuleEnv),
@@ -570,6 +564,7 @@ pub const Interpreter = struct {
             .builtin_module_env = builtin_module_env,
             .app_env = app_env,
             .all_module_envs = all_module_envs,
+            .resolved_module_envs = resolved_module_envs,
             .module_envs = module_envs,
             .translated_module_envs = undefined, // Set after runtime_layout_store init
             .translated_builtin_module = base_pkg.Ident.Idx.NONE,
@@ -602,6 +597,8 @@ pub const Interpreter = struct {
         };
 
         // Use the pre-interned "Builtin.Str" identifier from the module env
+        // Create layout store with all_module_envs, then set override to use runtime_types
+        // NOTE: Callers must ensure all_module_envs is non-empty and contains env
         //
         // The layout store must use SHIM TARGET layout (builtin.cpu.arch), not Compilation Target.
         // See src/target/README.md for the distinction between these targets.
@@ -617,22 +614,22 @@ pub const Interpreter = struct {
             .wasm32 => .u32,
             else => .u64,
         };
-        result.runtime_layout_store = try layout.Store.init(env, result.runtime_types, env.idents.builtin_str, shim_target_usize);
+        std.debug.assert(all_module_envs.len > 0);
+        result.runtime_layout_store = try layout.Store.init(all_module_envs, env.idents.builtin_str, allocator, shim_target_usize);
+        result.runtime_layout_store.setOverrideTypesStore(result.runtime_types);
+        result.runtime_layout_store.setMutableEnv(env);
 
-        // Build translated_module_envs for runtime method lookups
-        // This maps module names in runtime_layout_store.env's ident space to their ModuleEnvs
+        // Build translated_module_envs for runtime method lookups.
+        // Translated idents are inserted into the mutable env's ident store.
         var translated_module_envs = std.AutoHashMapUnmanaged(base_pkg.Ident.Idx, *const can.ModuleEnv){};
         errdefer translated_module_envs.deinit(allocator);
-        const layout_env = result.runtime_layout_store.env;
+        const mutable_env_for_idents = result.runtime_layout_store.getMutableEnv().?;
 
         // Helper to check if a module has a valid module_name_idx
         // (handles both unset NONE and corrupted undefined values from deserialized data)
         const hasValidModuleName = struct {
             fn check(mod_env: *const can.ModuleEnv) bool {
-                // Check for NONE sentinel - deserialized modules have NONE
                 if (mod_env.module_name_idx.isNone()) return false;
-
-                // Bounds check - module_name_idx.idx must be within the ident store
                 const ident_store_size = mod_env.common.idents.interner.bytes.items.items.len;
                 const idx_val = mod_env.module_name_idx.idx;
                 return idx_val < ident_store_size;
@@ -642,7 +639,7 @@ pub const Interpreter = struct {
         // Add current/root module (skip if module_name_idx is unset, e.g., in tests)
         if (hasValidModuleName(env)) {
             const current_name_str = env.getIdent(env.module_name_idx);
-            const translated_current = try @constCast(layout_env).insertIdent(base_pkg.Ident.for_text(current_name_str));
+            const translated_current = try mutable_env_for_idents.insertIdent(base_pkg.Ident.for_text(current_name_str));
             try translated_module_envs.put(allocator, translated_current, env);
         }
 
@@ -650,7 +647,7 @@ pub const Interpreter = struct {
         if (app_env) |a_env| {
             if (a_env != env and hasValidModuleName(a_env)) {
                 const app_name_str = a_env.getIdent(a_env.module_name_idx);
-                const translated_app = try @constCast(layout_env).insertIdent(base_pkg.Ident.for_text(app_name_str));
+                const translated_app = try mutable_env_for_idents.insertIdent(base_pkg.Ident.for_text(app_name_str));
                 try translated_module_envs.put(allocator, translated_app, a_env);
             }
         }
@@ -659,7 +656,7 @@ pub const Interpreter = struct {
         if (builtin_module_env) |bme| {
             if (hasValidModuleName(bme)) {
                 const builtin_name_str = bme.getIdent(bme.module_name_idx);
-                const translated_builtin = try @constCast(layout_env).insertIdent(base_pkg.Ident.for_text(builtin_name_str));
+                const translated_builtin = try mutable_env_for_idents.insertIdent(base_pkg.Ident.for_text(builtin_name_str));
                 try translated_module_envs.put(allocator, translated_builtin, bme);
             }
         }
@@ -668,7 +665,7 @@ pub const Interpreter = struct {
         for (all_module_envs) |mod_env| {
             if (hasValidModuleName(mod_env)) {
                 const mod_name_str = mod_env.getIdent(mod_env.module_name_idx);
-                const translated_mod = try @constCast(layout_env).insertIdent(base_pkg.Ident.for_text(mod_name_str));
+                const translated_mod = try mutable_env_for_idents.insertIdent(base_pkg.Ident.for_text(mod_name_str));
                 // Use put to handle potential duplicates (same module might be in multiple places)
                 try translated_module_envs.put(allocator, translated_mod, mod_env);
             }
@@ -677,20 +674,20 @@ pub const Interpreter = struct {
         result.translated_module_envs = translated_module_envs;
 
         // Pre-translate module names for comparison in getModuleEnvForOrigin
-        // All translated idents are in runtime_layout_store.env's ident space
-        result.translated_builtin_module = try @constCast(layout_env).insertIdent(base_pkg.Ident.for_text("Builtin"));
+        // All translated idents are in the mutable env's ident space
+        result.translated_builtin_module = try mutable_env_for_idents.insertIdent(base_pkg.Ident.for_text("Builtin"));
 
         // Translate env's module name
         if (hasValidModuleName(env)) {
             const env_name_str = env.getIdent(env.module_name_idx);
-            result.translated_env_module = try @constCast(layout_env).insertIdent(base_pkg.Ident.for_text(env_name_str));
+            result.translated_env_module = try mutable_env_for_idents.insertIdent(base_pkg.Ident.for_text(env_name_str));
         }
 
         // Translate app's module name
         if (app_env) |a_env| {
             if (a_env != env and hasValidModuleName(a_env)) {
                 const app_name_str = a_env.getIdent(a_env.module_name_idx);
-                result.translated_app_module = try @constCast(layout_env).insertIdent(base_pkg.Ident.for_text(app_name_str));
+                result.translated_app_module = try mutable_env_for_idents.insertIdent(base_pkg.Ident.for_text(app_name_str));
             }
         }
 
@@ -720,7 +717,7 @@ pub const Interpreter = struct {
 
                 // Get the rigid name (e.g., "model") - insert into runtime ident store
                 const rigid_name_str = platform_env.getIdent(alias.rigid_name);
-                const rt_rigid_name = self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(rigid_name_str)) catch continue;
+                const rt_rigid_name = self.runtime_layout_store.getMutableEnv().?.insertIdent(base_pkg.Ident.for_text(rigid_name_str)) catch continue;
 
                 // Find the app's type alias definition and get its underlying type var
                 const app_type_var = findTypeAliasBodyVar(app_env, app_alias_ident) orelse continue;
@@ -1825,40 +1822,13 @@ pub const Interpreter = struct {
                 const string = string_arg.asRocStr().?;
                 const result_list = builtins.str.strToUtf8C(string.*, roc_ops);
 
-                // Get the result layout - should be List(U8).
-                // If return_rt_var is a flex that would default to a scalar,
-                // we need to ensure we get a proper list layout for correct refcounting.
-                const provided_rt_var = return_rt_var orelse {
-                    self.triggerCrash("str_to_utf8 requires return type info", false, roc_ops);
-                    return error.Crash;
-                };
-
-                // Get the result layout - should be List(U8).
-                // If the provided_rt_var leads to a non-list layout, we need to create
-                // a proper List(U8) type to ensure correct method dispatch.
+                // str_to_utf8 always returns List(U8). Build the canonical layout
+                // and type unconditionally — the provided return_rt_var may have an
+                // incorrect element type (e.g. Dec instead of U8) when the CT type
+                // store has unresolved numerals inside closures.
                 const u8_layout_idx = try self.runtime_layout_store.insertLayout(Layout.int(.u8));
-                const list_u8_layout = Layout.list(u8_layout_idx);
-
-                const maybe_layout = try self.getRuntimeLayout(provided_rt_var);
-                const result_rt_var, const result_layout = if (maybe_layout.tag == .list or maybe_layout.tag == .list_of_zst) blk: {
-                    // Layout is already a list - check if the type is also a List
-                    const resolved_rt = self.runtime_types.resolveVar(provided_rt_var);
-                    const is_list_type = switch (resolved_rt.desc.content) {
-                        .structure => |s| switch (s) {
-                            .nominal_type => true,
-                            else => false,
-                        },
-                        else => false,
-                    };
-                    if (is_list_type) {
-                        break :blk .{ provided_rt_var, maybe_layout };
-                    }
-                    // Layout is list but type is not nominal - create proper List(U8) type
-                    break :blk .{ try self.createListU8Type(), list_u8_layout };
-                } else blk: {
-                    // Layout is not a list - create both proper layout and type
-                    break :blk .{ try self.createListU8Type(), list_u8_layout };
-                };
+                const result_layout = Layout.list(u8_layout_idx);
+                const result_rt_var = try self.createListU8Type();
 
                 var out = try self.pushRaw(result_layout, 0, result_rt_var);
                 out.is_initialized = false;
@@ -3951,8 +3921,8 @@ pub const Interpreter = struct {
                 var acc = num_literal_arg.asRecord(&self.runtime_layout_store) catch debugUnreachable(roc_ops, "Numeral argument must be a record", @src());
 
                 // Get is_negative field
-                // Use runtime_layout_store.env for field lookups since the record was built with that env's idents
-                const layout_env = self.runtime_layout_store.env;
+                // Use runtime_layout_store.getEnv() for field lookups since the record was built with that env's idents
+                const layout_env = self.runtime_layout_store.getEnv();
                 // Field lookups should succeed - missing fields is a compiler bug
                 const is_neg_idx = acc.findFieldIndex(layout_env.idents.is_negative) orelse debugUnreachable(roc_ops, "is_negative field not found in Numeral record", @src());
                 const field_rt = try self.runtime_types.fresh();
@@ -5772,7 +5742,7 @@ pub const Interpreter = struct {
         if (result_layout.tag == .record) {
             var dest = try self.pushRaw(result_layout, 0, result_rt_var);
             var result_acc = try dest.asRecord(&self.runtime_layout_store);
-            const layout_env = self.runtime_layout_store.env;
+            const layout_env = self.runtime_layout_store.getEnv();
             const tag_field_idx = result_acc.findFieldIndex(layout_env.idents.tag) orelse debugUnreachable(null, "tag field not found in buildTryResultWithValue record", @src());
             const payload_field_idx = result_acc.findFieldIndex(layout_env.idents.payload) orelse debugUnreachable(null, "payload field not found in buildTryResultWithValue record", @src());
 
@@ -6943,7 +6913,7 @@ pub const Interpreter = struct {
         // of the same source type may produce different runtime type vars, and
         // rendering may use a different type var than was used during value creation.
         // Sorting here ensures both paths see tags in the same alphabetical order.
-        const sort_ident_store = self.runtime_layout_store.env.common.getIdentStore();
+        const sort_ident_store = self.runtime_layout_store.getEnv().common.getIdentStore();
         std.mem.sort(types.Tag, list.items, sort_ident_store, comptime types.Tag.sortByNameAsc);
     }
 
@@ -6965,7 +6935,7 @@ pub const Interpreter = struct {
     ) !?usize {
         // Translate the source tag name to the runtime layout store's ident store
         const source_name_str = source_env.getIdent(source_tag_ident);
-        const rt_tag_ident = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(source_name_str));
+        const rt_tag_ident = try self.runtime_layout_store.getMutableEnv().?.insertIdent(base_pkg.Ident.for_text(source_name_str));
 
         // Compare ident indices directly (O(1) per comparison instead of string comparison)
         for (runtime_tags.items(.name), 0..) |tag_name_ident, i| {
@@ -6986,7 +6956,7 @@ pub const Interpreter = struct {
     ) !?usize {
         // Translate the source tag name to the runtime layout store's ident store
         const source_name_str = source_env.getIdent(source_tag_ident);
-        const rt_tag_ident = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(source_name_str));
+        const rt_tag_ident = try self.runtime_layout_store.getMutableEnv().?.insertIdent(base_pkg.Ident.for_text(source_name_str));
 
         // Compare ident indices directly (O(1) per comparison instead of string comparison)
         for (tag_list, 0..) |tag_info, i| {
@@ -7652,6 +7622,18 @@ pub const Interpreter = struct {
         return render_helpers.renderValueRocWithType(&ctx, value, rt_var);
     }
 
+    /// Like renderValueRocWithType but with REPL-specific formatting.
+    /// Strips .0 suffix from whole-number Dec values when the type is unbound.
+    pub fn renderValueRocForRepl(self: *Interpreter, value: StackValue, rt_var: types.Var, roc_ops: *RocOps) Error![]u8 {
+        var cb_ctx = ToInspectCallbackContext{
+            .interpreter = self,
+            .roc_ops = roc_ops,
+        };
+        var ctx = self.makeRenderCtxWithCallback(&cb_ctx);
+        ctx.strip_unbound_numeral_decimal = true;
+        return render_helpers.renderValueRocWithType(&ctx, value, rt_var);
+    }
+
     fn makeListSliceValue(
         self: *Interpreter,
         list_layout: Layout,
@@ -8069,7 +8051,7 @@ pub const Interpreter = struct {
 
                     // Translate field name from pattern's ident store to runtime layout store's ident store
                     const pattern_label_str = self.env.getIdent(destruct.label);
-                    const runtime_label = self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(pattern_label_str)) catch return error.Crash;
+                    const runtime_label = self.runtime_layout_store.getMutableEnv().?.insertIdent(base_pkg.Ident.for_text(pattern_label_str)) catch return error.Crash;
                     const field_index = accessor.findFieldIndex(runtime_label) orelse {
                         self.triggerCrash("record_destructure: field not found in record", false, roc_ops);
                         return error.Crash;
@@ -8141,7 +8123,7 @@ pub const Interpreter = struct {
 
                 // Translate pattern's tag ident to runtime env for direct comparison
                 const expected_name_str = self.env.getIdent(tag_pat.name);
-                const expected_ident = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(expected_name_str));
+                const expected_ident = try self.runtime_layout_store.getMutableEnv().?.insertIdent(base_pkg.Ident.for_text(expected_name_str));
 
                 // Get the actual tag name from the value by looking up its discriminant
                 // in the appropriate tag list (value's original type if available, else expected type)
@@ -8256,6 +8238,10 @@ pub const Interpreter = struct {
         self.module_ids.deinit(self.allocator);
         self.import_envs.deinit(self.allocator);
         self.var_to_layout_slot.deinit(self.allocator);
+        // Free all_module_envs if we allocated it
+        if (self.owns_all_module_envs) {
+            self.allocator.free(self.all_module_envs);
+        }
         self.runtime_layout_store.deinit();
         self.runtime_types.deinit();
         self.allocator.destroy(self.runtime_types);
@@ -8301,6 +8287,10 @@ pub const Interpreter = struct {
         self.module_ids.deinit(self.allocator);
         self.import_envs.deinit(self.allocator);
         self.var_to_layout_slot.deinit(self.allocator);
+        // Free all_module_envs if we allocated it
+        if (self.owns_all_module_envs) {
+            self.allocator.free(self.all_module_envs);
+        }
         self.runtime_layout_store.deinit();
         self.runtime_types.deinit();
         self.allocator.destroy(self.runtime_types);
@@ -8320,7 +8310,7 @@ pub const Interpreter = struct {
 
     /// Get the module environment for a given origin module identifier.
     /// Returns the current module's env if the identifier matches, otherwise looks it up in the module map.
-    /// Note: origin_module may be in runtime_layout_store.env's ident space (after translateTypeVar),
+    /// Note: origin_module may be in runtime_layout_store.getEnv()'s ident space (after translateTypeVar),
     /// or in the original ident space (for direct lookups), so we check both maps.
     fn getModuleEnvForOrigin(self: *const Interpreter, origin_module: base_pkg.Ident.Idx) ?*const can.ModuleEnv {
         // Check if it's the Builtin module (using pre-translated ident for runtime-translated case)
@@ -8360,7 +8350,7 @@ pub const Interpreter = struct {
         }
 
         // Look up in translated module envs (for runtime-translated idents)
-        // This handles the case where origin_module comes from runtime_layout_store.env's ident space
+        // This handles the case where origin_module comes from runtime_layout_store.getEnv()'s ident space
         return self.translated_module_envs.get(origin_module);
     }
 
@@ -8428,10 +8418,10 @@ pub const Interpreter = struct {
             };
 
             // Use index-based lookup to find the qualified method ident.
-            // nominal_ident comes from runtime types - always in runtime_layout_store.env
+            // nominal_ident comes from runtime types - always in runtime_layout_store.getEnv()
             // method_name_ident comes from the CIR - in self.env
             const method_ident = origin_env.lookupMethodIdentFromTwoEnvsConst(
-                self.runtime_layout_store.env,
+                self.runtime_layout_store.getMutableEnv().?,
                 nominal_ident,
                 self.env,
                 method_name_ident,
@@ -8439,14 +8429,24 @@ pub const Interpreter = struct {
                 return error.MethodLookupFailed;
             };
 
-            const node_idx = origin_env.getExposedNodeIndexById(method_ident) orelse exposed_blk: {
+            const node_idx = node_idx_blk: {
+                // First try the exposed items lookup
+                if (origin_env.getExposedNodeIndexById(method_ident)) |exposed_idx| {
+                    // Verify it's actually a def node (not a type declaration)
+                    if (origin_env.store.isDefNode(exposed_idx)) {
+                        break :node_idx_blk exposed_idx;
+                    }
+                }
                 // Fallback: search all definitions for the method
+                // Skip entries that don't point to valid def nodes (defensive check)
                 const all_defs = origin_env.store.sliceDefs(origin_env.all_defs);
                 for (all_defs) |def_idx| {
+                    const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
+                    if (!origin_env.store.isDefNode(def_idx_u16)) continue;
                     const def = origin_env.store.getDef(def_idx);
                     const pat = origin_env.store.getPattern(def.pattern);
                     if (pat == .assign and pat.assign.ident == method_ident) {
-                        break :exposed_blk @as(u16, @intCast(@intFromEnum(def_idx)));
+                        break :node_idx_blk def_idx_u16;
                     }
                 }
                 return error.MethodLookupFailed;
@@ -8546,9 +8546,9 @@ pub const Interpreter = struct {
             };
 
             // Use index-based method lookup - the method_name_ident is in self.env's ident space,
-            // nominal_ident is in runtime_layout_store.env's ident space
+            // nominal_ident is in runtime_layout_store.getEnv()'s ident space
             const method_ident = origin_env.lookupMethodIdentFromTwoEnvsConst(
-                self.runtime_layout_store.env,
+                self.runtime_layout_store.getMutableEnv().?,
                 nominal_ident,
                 self.env,
                 method_name_ident,
@@ -8556,14 +8556,23 @@ pub const Interpreter = struct {
                 return null;
             };
 
-            const node_idx = origin_env.getExposedNodeIndexById(method_ident) orelse exposed_blk: {
+            const node_idx = node_idx_blk2: {
+                // First try the exposed items lookup
+                if (origin_env.getExposedNodeIndexById(method_ident)) |exposed_idx| {
+                    // Verify it's actually a def node (not a type declaration)
+                    if (origin_env.store.isDefNode(exposed_idx)) {
+                        break :node_idx_blk2 exposed_idx;
+                    }
+                }
                 // Fallback: search all definitions for the method
                 const all_defs = origin_env.store.sliceDefs(origin_env.all_defs);
                 for (all_defs) |def_idx| {
+                    const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
+                    if (!origin_env.store.isDefNode(def_idx_u16)) continue;
                     const def = origin_env.store.getDef(def_idx);
                     const pat = origin_env.store.getPattern(def.pattern);
                     if (pat == .assign and pat.assign.ident == method_ident) {
-                        break :exposed_blk @as(u16, @intCast(@intFromEnum(def_idx)));
+                        break :node_idx_blk2 def_idx_u16;
                     }
                 }
                 return null;
@@ -8644,7 +8653,7 @@ pub const Interpreter = struct {
 
         // Create Builtin.Str type for the element
         const str_type_name = "Builtin.Str";
-        const str_type_name_ident = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(str_type_name));
+        const str_type_name_ident = try self.runtime_layout_store.getMutableEnv().?.insertIdent(base_pkg.Ident.for_text(str_type_name));
         const str_type_ident = types.TypeIdent{ .ident_idx = str_type_name_ident };
 
         const empty_tag_union_content = types.Content{ .structure = .empty_tag_union };
@@ -8661,7 +8670,7 @@ pub const Interpreter = struct {
 
         // Create Builtin.List type with Str as element type
         const list_type_name = "Builtin.List";
-        const list_type_name_ident = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(list_type_name));
+        const list_type_name_ident = try self.runtime_layout_store.getMutableEnv().?.insertIdent(base_pkg.Ident.for_text(list_type_name));
         const list_type_ident = types.TypeIdent{ .ident_idx = list_type_name_ident };
 
         const ext_var2 = try self.runtime_types.freshFromContent(empty_tag_union_content);
@@ -8686,7 +8695,7 @@ pub const Interpreter = struct {
 
         // Create Builtin.List type with the given element type
         const list_type_name = "Builtin.List";
-        const list_type_name_ident = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(list_type_name));
+        const list_type_name_ident = try self.runtime_layout_store.getMutableEnv().?.insertIdent(base_pkg.Ident.for_text(list_type_name));
         const list_type_ident = types.TypeIdent{ .ident_idx = list_type_name_ident };
 
         const empty_tag_union_content = types.Content{ .structure = .empty_tag_union };
@@ -8771,7 +8780,7 @@ pub const Interpreter = struct {
                         // Create Str type
                         const origin_module_id = self.root_env.idents.builtin_module;
                         const str_type_name = "Builtin.Str";
-                        const str_type_name_ident = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(str_type_name));
+                        const str_type_name_ident = try self.runtime_layout_store.getMutableEnv().?.insertIdent(base_pkg.Ident.for_text(str_type_name));
                         const str_type_ident = types.TypeIdent{ .ident_idx = str_type_name_ident };
                         const empty_tag_union_content = types.Content{ .structure = .empty_tag_union };
                         const ext_var = try self.runtime_types.freshFromContent(empty_tag_union_content);
@@ -8805,10 +8814,10 @@ pub const Interpreter = struct {
 
         // Use fully-qualified type name "Builtin.Num.U8" etc.
         // This allows method lookup to work correctly.
-        // Insert into runtime_layout_store.env to be consistent with translateTypeVar's nominal handling.
+        // Insert into runtime_layout_store.getEnv() to be consistent with translateTypeVar's nominal handling.
         const qualified_type_name = try std.fmt.allocPrint(self.allocator, "Builtin.Num.{s}", .{type_name});
         defer self.allocator.free(qualified_type_name);
-        const type_name_ident = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(qualified_type_name));
+        const type_name_ident = try self.runtime_layout_store.getMutableEnv().?.insertIdent(base_pkg.Ident.for_text(qualified_type_name));
         const type_ident = types.TypeIdent{
             .ident_idx = type_name_ident,
         };
@@ -8988,10 +8997,10 @@ pub const Interpreter = struct {
         const layout_idx = switch (resolved.desc.content) {
             .structure => |st| switch (st) {
                 .empty_record => try self.runtime_layout_store.ensureEmptyRecordLayout(),
-                .nominal_type => try self.runtime_layout_store.addTypeVar(resolved.var_, &self.empty_scope),
-                else => try self.runtime_layout_store.addTypeVar(resolved.var_, &self.empty_scope),
+                .nominal_type => try self.runtime_layout_store.fromTypeVar(0, resolved.var_, &self.empty_scope, null),
+                else => try self.runtime_layout_store.fromTypeVar(0, resolved.var_, &self.empty_scope, null),
             },
-            else => try self.runtime_layout_store.addTypeVar(resolved.var_, &self.empty_scope),
+            else => try self.runtime_layout_store.fromTypeVar(0, resolved.var_, &self.empty_scope, null),
         };
         // Encode: (generation << 24) | (slot + 1)
         const gen_byte: u8 = @truncate(self.poly_context_generation);
@@ -9376,7 +9385,7 @@ pub const Interpreter = struct {
                         for (ct_tags.items(.name), ct_tags.items(.args)) |ct_tag_name, ct_tag_args| {
                             const ct_tag_name_str = module.getIdent(ct_tag_name);
                             // Translate CT ident to RT ident space for comparison
-                            const rt_ct_tag_ident = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(ct_tag_name_str));
+                            const rt_ct_tag_ident = try self.runtime_layout_store.getMutableEnv().?.insertIdent(base_pkg.Ident.for_text(ct_tag_name_str));
 
                             // Find matching tag in RT type by ident index
                             for (rt_tags.items(.name), rt_tags.items(.args)) |rt_tag_name, rt_tag_args| {
@@ -9438,7 +9447,7 @@ pub const Interpreter = struct {
             // Look up the real method in the origin module
             // constraint.fn_name is in module's ident space, nominal_ident is in runtime space
             const method_ident = origin_env.lookupMethodIdentFromTwoEnvsConst(
-                self.runtime_layout_store.env,
+                self.runtime_layout_store.getMutableEnv().?,
                 nominal_ident,
                 module,
                 constraint.fn_name,
@@ -9542,7 +9551,7 @@ pub const Interpreter = struct {
                                 const rt_args_range = try self.runtime_types.appendVars(rt_tag_args.items);
                                 // Translate tag name from source module's ident store to runtime_layout_store's ident store
                                 const source_name_str = module.getIdent(tag.name);
-                                const rt_tag_name = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(source_name_str));
+                                const rt_tag_name = try self.runtime_layout_store.getMutableEnv().?.insertIdent(base_pkg.Ident.for_text(source_name_str));
                                 tag.* = .{
                                     .name = rt_tag_name,
                                     .args = rt_args_range,
@@ -9553,7 +9562,7 @@ pub const Interpreter = struct {
                             // The initial sort (in gatherTags) was by source module ident indices,
                             // but after translation to runtime idents the order may no longer be alphabetical.
                             // This ensures discriminant indices match between tag creation and rendering.
-                            const ident_store = self.runtime_layout_store.env.common.getIdentStore();
+                            const ident_store = self.runtime_layout_store.getEnv().common.getIdentStore();
                             std.mem.sort(types.Tag, rt_tags.items, ident_store, comptime types.Tag.sortByNameAsc);
 
                             // Determine the terminal extension type (after following tag_union chain).
@@ -9623,7 +9632,7 @@ pub const Interpreter = struct {
                                 const ct_field = acc.fields.items[j];
                                 // Translate field name from source module's ident store to runtime ident store
                                 const source_field_name_str = module.getIdent(ct_field.name);
-                                const rt_field_name = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(source_field_name_str));
+                                const rt_field_name = try self.runtime_layout_store.getMutableEnv().?.insertIdent(base_pkg.Ident.for_text(source_field_name_str));
                                 runtime_fields[j] = .{
                                     .name = rt_field_name,
                                     .var_ = try self.translateTypeVar(module, ct_field.var_),
@@ -9645,7 +9654,7 @@ pub const Interpreter = struct {
                                 const f = ct_fields.get(i);
                                 // Translate field name from source module's ident store to runtime ident store
                                 const source_field_name_str = module.getIdent(f.name);
-                                const rt_field_name = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(source_field_name_str));
+                                const rt_field_name = try self.runtime_layout_store.getMutableEnv().?.insertIdent(base_pkg.Ident.for_text(source_field_name_str));
                                 runtime_fields[i] = .{
                                     .name = rt_field_name,
                                     .var_ = try self.translateTypeVar(module, f.var_),
@@ -9747,8 +9756,8 @@ pub const Interpreter = struct {
                             // This is critical because the layout store was initialized with that env,
                             // and ident comparisons in the layout store use that env's ident indices.
                             // Note: self.env may be temporarily switched during from_numeral evaluation,
-                            // so we MUST use runtime_layout_store.env which remains constant.
-                            const layout_env = self.runtime_layout_store.env;
+                            // so we MUST use runtime_layout_store.getMutableEnv() which remains constant.
+                            const layout_env = self.runtime_layout_store.getMutableEnv().?;
                             // Compare the underlying interner pointers to detect different ident stores
                             const needs_translation = @intFromPtr(&module.common.idents.interner) != @intFromPtr(&layout_env.common.idents.interner);
                             const translated_ident = if (needs_translation) ident_blk: {
@@ -9775,7 +9784,7 @@ pub const Interpreter = struct {
                     }
                     // Translate the alias's ident from source module's ident store to runtime ident store
                     const source_alias_str = module.getIdent(alias.ident.ident_idx);
-                    const rt_alias_ident_idx = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(source_alias_str));
+                    const rt_alias_ident_idx = try self.runtime_layout_store.getMutableEnv().?.insertIdent(base_pkg.Ident.for_text(source_alias_str));
                     const rt_alias_ident = types.TypeIdent{ .ident_idx = rt_alias_ident_idx };
                     const content = try self.runtime_types.mkAlias(rt_alias_ident, rt_backing, buf);
                     break :blk try self.runtime_types.freshFromContent(content);
@@ -9806,7 +9815,7 @@ pub const Interpreter = struct {
                     // Translate the flex's name from source module's ident store to runtime ident store (if present)
                     const rt_name: ?base_pkg.Ident.Idx = if (flex.name) |name| blk_name: {
                         const source_name_str = module.getIdent(name);
-                        break :blk_name try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(source_name_str));
+                        break :blk_name try self.runtime_layout_store.getMutableEnv().?.insertIdent(base_pkg.Ident.for_text(source_name_str));
                     } else null;
 
                     // Translate static dispatch constraints if present
@@ -9820,7 +9829,7 @@ pub const Interpreter = struct {
                             const rt_fn_var = try self.translateTypeVar(module, ct_constraint.fn_var);
                             // Translate the constraint's fn_name from source module's ident store
                             const ct_fn_name_str = module.getIdent(ct_constraint.fn_name);
-                            const rt_fn_name = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(ct_fn_name_str));
+                            const rt_fn_name = try self.runtime_layout_store.getMutableEnv().?.insertIdent(base_pkg.Ident.for_text(ct_fn_name_str));
                             try rt_constraints.append(self.allocator, .{
                                 .fn_name = rt_fn_name,
                                 .fn_var = rt_fn_var,
@@ -9840,6 +9849,20 @@ pub const Interpreter = struct {
 
                     const content: types.Content = .{ .flex = rt_flex };
                     const fresh_flex = try self.runtime_types.freshFromContent(content);
+
+                    // If the original flex var had a from_numeral constraint, we need to
+                    // track it in the runtime types store's from_numeral_flex_count.
+                    // This ensures the count is balanced when unification later decrements it.
+                    if (flex.constraints.len() > 0) {
+                        const ct_constraints = module.types.sliceStaticDispatchConstraints(flex.constraints);
+                        for (ct_constraints) |ct_constraint| {
+                            if (ct_constraint.origin == .from_numeral) {
+                                self.runtime_types.from_numeral_flex_count += 1;
+                                break;
+                            }
+                        }
+                    }
+
                     break :blk fresh_flex;
                 },
                 .rigid => |rigid| {
@@ -9850,7 +9873,7 @@ pub const Interpreter = struct {
                         if (sub_resolved.desc.content == .rigid) {
                             const sub_rigid = sub_resolved.desc.content.rigid;
                             const sub_name_str = module.getIdent(sub_rigid.name);
-                            const sub_rt_name = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(sub_name_str));
+                            const sub_rt_name = try self.runtime_layout_store.getMutableEnv().?.insertIdent(base_pkg.Ident.for_text(sub_name_str));
                             if (self.rigid_name_subst.get(sub_rt_name.idx)) |for_clause_var| {
                                 // Use the for-clause mapping instead
                                 break :blk for_clause_var;
@@ -9862,7 +9885,7 @@ pub const Interpreter = struct {
 
                     // Translate the rigid's name from source module's ident store to runtime ident store
                     const source_name_str = module.getIdent(rigid.name);
-                    const rt_name = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(source_name_str));
+                    const rt_name = try self.runtime_layout_store.getMutableEnv().?.insertIdent(base_pkg.Ident.for_text(source_name_str));
 
                     // Translate static dispatch constraints if present
                     const rt_rigid = if (rigid.constraints.len() > 0) blk_rigid: {
@@ -9875,7 +9898,7 @@ pub const Interpreter = struct {
                             const rt_fn_var = try self.translateTypeVar(module, ct_constraint.fn_var);
                             // Translate the constraint's fn_name from source module's ident store
                             const ct_fn_name_str = module.getIdent(ct_constraint.fn_name);
-                            const rt_fn_name = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(ct_fn_name_str));
+                            const rt_fn_name = try self.runtime_layout_store.getMutableEnv().?.insertIdent(base_pkg.Ident.for_text(ct_fn_name_str));
                             try rt_constraints.append(self.allocator, .{
                                 .fn_name = rt_fn_name,
                                 .fn_var = rt_fn_var,
@@ -9967,15 +9990,15 @@ pub const Interpreter = struct {
 
         self.instantiate_scratch.clearRetainingCapacity();
 
-        // IMPORTANT: Use runtime_layout_store.env's ident store, NOT self.env.
-        // Runtime types have their idents translated to runtime_layout_store.env's ident store
+        // IMPORTANT: Use runtime_layout_store.getEnv()'s ident store, NOT self.env.
+        // Runtime types have their idents translated to runtime_layout_store.getEnv()'s ident store
         // (see translateTypeVar). self.env may be temporarily switched during evaluation
-        // (e.g., for from_numeral), but runtime_layout_store.env remains constant.
+        // (e.g., for from_numeral), but runtime_layout_store.getEnv() remains constant.
         // Using the wrong ident store causes SmallStringInterner.getText crashes when
         // sorting tag variants by name during instantiation.
         var instantiator = types.instantiate.Instantiator{
             .store = self.runtime_types,
-            .idents = self.runtime_layout_store.env.common.getIdentStore(),
+            .idents = self.runtime_layout_store.getEnv().common.getIdentStore(),
             .var_map = &self.instantiate_scratch,
             .rigid_behavior = .fresh_flex,
             // Rank is not material to runtime types, so ignore it
@@ -10174,7 +10197,7 @@ pub const Interpreter = struct {
         var i: usize = 0;
         while (i < params.len) : (i += 1) {
             _ = try unify.unifyInContext(
-                self.runtime_layout_store.env,
+                self.runtime_layout_store.getMutableEnv().?,
                 self.runtime_types,
                 &self.problems,
                 &self.snapshots,
@@ -11501,7 +11524,7 @@ pub const Interpreter = struct {
                     dispatch_rt_var,
                 ) catch |err| switch (err) {
                     error.MethodLookupFailed => {
-                        const layout_env = self.runtime_layout_store.env;
+                        const layout_env = self.runtime_layout_store.getEnv();
                         const type_name = import_mapping_mod.getDisplayName(
                             self.import_mapping,
                             layout_env.common.getIdentStore(),
@@ -11748,7 +11771,7 @@ pub const Interpreter = struct {
                             };
                             const dec_var = target_var;
                             _ = try unify.unify(
-                                self.runtime_layout_store.env,
+                                self.runtime_layout_store.getMutableEnv().?,
                                 self.runtime_types,
                                 &self.problems,
                                 &self.snapshots,
@@ -11759,7 +11782,7 @@ pub const Interpreter = struct {
                                 dec_var,
                             );
                             _ = try unify.unify(
-                                self.runtime_layout_store.env,
+                                self.runtime_layout_store.getMutableEnv().?,
                                 self.runtime_types,
                                 &self.problems,
                                 &self.snapshots,
@@ -11772,7 +11795,7 @@ pub const Interpreter = struct {
                         } else if (lhs_is_flex and !rhs_is_flex) {
                             // LHS is flex, RHS is concrete - unify LHS with RHS
                             _ = try unify.unify(
-                                self.runtime_layout_store.env,
+                                self.runtime_layout_store.getMutableEnv().?,
                                 self.runtime_types,
                                 &self.problems,
                                 &self.snapshots,
@@ -11785,7 +11808,7 @@ pub const Interpreter = struct {
                         } else if (!lhs_is_flex and rhs_is_flex) {
                             // RHS is flex, LHS is concrete - unify RHS with LHS
                             _ = try unify.unify(
-                                self.runtime_layout_store.env,
+                                self.runtime_layout_store.getMutableEnv().?,
                                 self.runtime_types,
                                 &self.problems,
                                 &self.snapshots,
@@ -12195,7 +12218,7 @@ pub const Interpreter = struct {
                 // Schedule evaluation of the backing expression
                 try work_stack.push(.{ .eval_expr = .{
                     .expr_idx = nom.backing_expr,
-                    .expected_rt_var = backing_info.backing,
+                    .expected_rt_var = backing_info.nominal orelse backing_info.backing,
                 } });
             },
 
@@ -12357,11 +12380,13 @@ pub const Interpreter = struct {
                     self.triggerCrash(msg, true, roc_ops);
                     return error.Crash;
                 };
-                // Use the resolved (unwrapped) type's layout, not the nominal wrapper's layout.
-                // This ensures we get the actual tag union layout instead of a box wrapper.
-                // We store resolved.var_ as layout_rt_var for consistent layout calculation,
-                // while keeping rt_var for type identity and method dispatch.
-                const layout_rt_var = resolved.var_;
+                // Use rt_var for layout computation. For recursive nominals, this preserves the
+                // nominal var, which the layout store needs for its nominal-level cycle detection
+                // (in_progress_nominals). The layout store's cache maps nominal vars to their raw
+                // backing layout (not boxed), so getRuntimeLayout(nominal_var) returns the same
+                // tag union layout as getRuntimeLayout(tag_union_var) would — but without hitting
+                // the var-level cycle detection's unreachable path.
+                const layout_rt_var = rt_var;
                 const layout_val = try self.getRuntimeLayout(layout_rt_var);
 
                 if (layout_val.tag == .scalar) {
@@ -12402,6 +12427,71 @@ pub const Interpreter = struct {
                             .layout_rt_var = layout_rt_var,
                             .tag_index = tag_index,
                             .layout_type = layout_type,
+                        } } });
+                    }
+                } else if (layout_val.tag == .box) {
+                    // Boxed tag union — this happens with recursive types or types that require
+                    // heap allocation. Construct the inner value, then box it.
+                    const inner_layout_idx = layout_val.data.box;
+                    const inner_layout = self.runtime_layout_store.getLayout(inner_layout_idx);
+
+                    // For recursive types, the inner layout may be scalar(opaque_ptr).
+                    // In that case, we need to resolve the backing type to get the actual
+                    // tag union structure.
+                    const effective_inner_layout = if (inner_layout.tag == .scalar and inner_layout.data.scalar.tag == .opaque_ptr) blk: {
+                        // Resolve the type variable to find the backing tag union layout.
+                        // For nominal types, vars[0] is the backing type variable.
+                        const box_resolved = self.runtime_types.resolveVar(layout_rt_var);
+                        if (box_resolved.desc.content == .structure) {
+                            const flat = box_resolved.desc.content.structure;
+                            if (flat == .nominal_type) {
+                                const nom = flat.nominal_type;
+                                const vars = self.runtime_types.sliceVars(nom.vars.nonempty);
+                                if (vars.len > 0) {
+                                    const backing_var = vars[0];
+                                    const backing_layout = self.getRuntimeLayout(backing_var) catch break :blk inner_layout;
+                                    break :blk backing_layout;
+                                }
+                            } else if (flat == .tag_union) {
+                                // Direct tag union - try to get the non-boxed layout
+                                // by looking at the tag union's backing type
+                                const tu = flat.tag_union;
+                                const ext_var = tu.ext;
+                                const ext_resolved = self.runtime_types.resolveVar(ext_var);
+                                if (ext_resolved.desc.content == .structure and ext_resolved.desc.content.structure == .nominal_type) {
+                                    const nom = ext_resolved.desc.content.structure.nominal_type;
+                                    const vars = self.runtime_types.sliceVars(nom.vars.nonempty);
+                                    if (vars.len > 0) {
+                                        const backing_var = vars[0];
+                                        const backing_layout = self.getRuntimeLayout(backing_var) catch break :blk inner_layout;
+                                        break :blk backing_layout;
+                                    }
+                                }
+                            }
+                        }
+                        break :blk inner_layout;
+                    } else inner_layout;
+
+                    const args_exprs = self.env.store.sliceExpr(tag.args);
+
+                    if (args_exprs.len == 0) {
+                        // No payload - construct inner tag, then box it
+                        const inner_value = try self.finalizeTagNoPayload(rt_var, tag_index, effective_inner_layout, roc_ops);
+                        const boxed = try self.makeBoxValueFromLayout(layout_val, inner_value, roc_ops, rt_var);
+                        try value_stack.push(boxed);
+                    } else {
+                        // Has payload - schedule collection with layout_type = 3 (boxed)
+                        const arg_vars_range = tag_list.items[tag_index].args;
+                        const arg_rt_vars = self.runtime_types.sliceVars(arg_vars_range);
+                        try work_stack.push(.{ .apply_continuation = .{ .tag_collect = .{
+                            .collected_count = 0,
+                            .remaining_args = args_exprs,
+                            .arg_rt_vars = arg_rt_vars,
+                            .expr_idx = expr_idx,
+                            .rt_var = rt_var,
+                            .layout_rt_var = layout_rt_var,
+                            .tag_index = tag_index,
+                            .layout_type = 3,
                         } } });
                     }
                 } else {
@@ -12538,28 +12628,30 @@ pub const Interpreter = struct {
                 // that have type annotations but no implementation bodies
                 if (func_expr_check == .e_lookup_external) {
                     const lookup = func_expr_check.e_lookup_external;
-                    // Use the current module's resolved imports (not import_envs which only has primary/app imports)
-                    const resolved_idx = self.env.imports.getResolvedModule(lookup.module_idx) orelse null;
-                    traceDbg(roc_ops, "e_call e_lookup_external: module_idx={d} resolved_idx={any} all_module_envs.len={d}", .{ @intFromEnum(lookup.module_idx), resolved_idx, self.all_module_envs.len });
-                    const other_env: ?*const can.ModuleEnv = if (resolved_idx != null and resolved_idx.? < self.all_module_envs.len)
-                        self.all_module_envs[resolved_idx.?]
-                    else
-                        null;
+                    // Resolve the module for this external lookup.
+                    // IMPORTANT: import_envs only contains mappings from the primary module and app_env.
+                    // When self.env is an imported module (like Helper calling Core), we must use
+                    // resolved_module_envs directly since import_envs won't have the right mappings.
+                    const other_env: ?*const can.ModuleEnv = blk: {
+                        // Only use import_envs if self.env is the primary module or app_env
+                        if (self.env == self.root_env or (self.app_env != null and self.env == @constCast(self.app_env.?))) {
+                            if (self.import_envs.get(lookup.module_idx)) |env| {
+                                break :blk env;
+                            }
+                        }
+                        // Fall back to resolved_module_envs for all cases
+                        const resolved_idx = self.env.imports.getResolvedModule(lookup.module_idx) orelse break :blk null;
+                        std.debug.assert(resolved_idx < self.resolved_module_envs.len);
+                        break :blk self.resolved_module_envs[resolved_idx];
+                    };
                     if (other_env) |builtin_env| {
-                        traceDbg(roc_ops, "e_call: resolved to env \"{s}\"", .{builtin_env.module_name});
                         const target_def_idx: can.CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
-                        traceDbg(roc_ops, "e_call: getDef target_node_idx={} store.nodes.len={}", .{ lookup.target_node_idx, builtin_env.store.nodes.len() });
                         const target_def = builtin_env.store.getDef(target_def_idx);
                         const target_pattern = builtin_env.store.getPattern(target_def.pattern);
-                        traceDbg(roc_ops, "e_call: target_pattern tag={s}", .{@tagName(target_pattern)});
                         if (target_pattern == .assign) {
                             const method_ident = target_pattern.assign.ident;
-                            traceDbg(roc_ops, "e_call: method_ident={d} builtin_box_box={d} builtin_box_unbox={d}", .{ method_ident.idx, builtin_env.idents.builtin_box_box.idx, builtin_env.idents.builtin_box_unbox.idx });
-                            // Compare ident indices directly - both method_ident and builtin_env.idents
-                            // are in the same ident space (the builtin_env's common ident store)
                             const is_box_method = method_ident == builtin_env.idents.builtin_box_box;
                             const is_unbox_method = method_ident == builtin_env.idents.builtin_box_unbox;
-                            traceDbg(roc_ops, "e_call: is_box_method={} is_unbox_method={}", .{ is_box_method, is_unbox_method });
                             // Check if this is Box.box
                             if (is_box_method and arg_indices.len == 1) {
                                 const arg_expr = arg_indices[0];
@@ -12711,9 +12803,68 @@ pub const Interpreter = struct {
                             // behavior of downstream operations like `Str.inspect`.
                             const mapping_rt_var = try self.createTypeFromLayout(b.value.layout);
                             try self.propagateFlexMappings(self.env, arg_ct_var, mapping_rt_var);
+
+                            // If the CT type is a List nominal and the element type disagrees
+                            // with the binding's actual element layout, override the translate
+                            // cache for the CT element type variable. This corrects a CT type
+                            // store issue where numerals inside closures are not unified with
+                            // the concrete element type (e.g., Dec default instead of U8 from
+                            // Str.to_utf8). Without this, other arguments to the same call
+                            // (like list literals containing numerals) would be evaluated with
+                            // the wrong element type.
+                            if (arg_ct_resolved.desc.content == .structure and
+                                arg_ct_resolved.desc.content.structure == .nominal_type)
+                            {
+                                const seed_nom = arg_ct_resolved.desc.content.structure.nominal_type;
+                                const seed_args = self.env.types.sliceNominalArgs(seed_nom);
+                                if (seed_args.len == 1) {
+                                    const elem_ct_var = seed_args[0];
+                                    const elem_ct_resolved = self.env.types.resolveVar(elem_ct_var);
+                                    // Get the element layout from the binding's actual list layout
+                                    const elem_layout_idx = b.value.layout.data.list;
+                                    const elem_layout = self.runtime_layout_store.getLayout(elem_layout_idx);
+                                    // Check if the CT element type translates to a different layout
+                                    const ct_elem_layout = self.getRuntimeLayout(
+                                        try self.translateTypeVar(self.env, elem_ct_var),
+                                    ) catch null;
+                                    if (ct_elem_layout) |ct_el| {
+                                        if (!ct_el.eql(elem_layout)) {
+                                            // The CT type and actual layout disagree. Override the
+                                            // translate cache for the element CT variable so that
+                                            // translateTypeVar returns the correct type for other
+                                            // arguments that share this variable.
+                                            const elem_rt_var = try self.createTypeFromLayout(elem_layout);
+                                            const elem_key = ModuleVarKey{ .module = self.env, .var_ = elem_ct_resolved.var_ };
+                                            try self.translate_cache.put(elem_key, .{
+                                                .var_ = elem_rt_var,
+                                                .generation = self.poly_context_generation,
+                                            });
+                                        }
+                                    }
+                                }
+                            }
                             break;
                         }
                     }
+                }
+
+                // After seeding, invalidate stale translate_cache entries for arg
+                // and return CT vars. The seeding may have overridden a child type
+                // (e.g. the element type of a list), but parent types (e.g. the list
+                // itself) may already be cached with the old child. Removing them
+                // forces re-translation which picks up the corrected child type.
+                // This is done unconditionally since it's cheap (just hash removals)
+                // and translateTypeVar will re-translate on the next call.
+                for (arg_indices) |arg_idx| {
+                    const inv_ct_var = can.ModuleEnv.varFrom(arg_idx);
+                    const inv_resolved = self.env.types.resolveVar(inv_ct_var);
+                    const inv_key = ModuleVarKey{ .module = self.env, .var_ = inv_resolved.var_ };
+                    _ = self.translate_cache.remove(inv_key);
+                }
+                {
+                    const ret_ct_resolved = self.env.types.resolveVar(can.ModuleEnv.varFrom(expr_idx));
+                    const ret_key = ModuleVarKey{ .module = self.env, .var_ = ret_ct_resolved.var_ };
+                    _ = self.translate_cache.remove(ret_key);
                 }
 
                 // Compute argument runtime type variables
@@ -12756,7 +12907,7 @@ pub const Interpreter = struct {
                 // has concrete type args while call_ret_rt_var may have rigid type args.
                 const effective_ret_var = if (poly_entry) |entry| blk: {
                     _ = try unify.unifyInContext(
-                        self.runtime_layout_store.env,
+                        self.runtime_layout_store.getMutableEnv().?,
                         self.runtime_types,
                         &self.problems,
                         &self.snapshots,
@@ -13020,13 +13171,10 @@ pub const Interpreter = struct {
         }
         value.is_initialized = true;
 
-        // If the rt_var is still flex but we evaluated to a numeric type,
-        // update the rt_var to a concrete numeric type for method dispatch.
-        // This is needed because getRuntimeLayout defaults flex vars to Dec layout
-        // but doesn't update the rt_var itself.
+        // If the rt_var is still flex, update it to a concrete type for method dispatch.
+        // REPL rendering will still strip .0 from whole-number Dec values regardless of type.
         const rt_resolved = self.runtime_types.resolveVar(value.rt_var);
         if (rt_resolved.desc.content == .flex) {
-            // Create concrete type based on the layout we used
             const concrete_rt_var = switch (layout_val.tag) {
                 .scalar => switch (layout_val.data.scalar.tag) {
                     .int => switch (layout_val.data.scalar.data.int) {
@@ -13128,7 +13276,8 @@ pub const Interpreter = struct {
         const layout_val = try self.getRuntimeLayout(layout_rt_var);
 
         // Check if the resolved type is flex/rigid (unconstrained).
-        // If so, we need to give it a concrete Dec type for method dispatch to work.
+        // If so, give it a concrete Dec type for method dispatch to work.
+        // REPL rendering will still strip .0 from whole-number Dec values regardless of type.
         const resolved_rt = self.runtime_types.resolveVar(layout_rt_var);
         const is_flex_or_rigid = resolved_rt.desc.content == .flex or resolved_rt.desc.content == .rigid;
         const final_rt_var = if (is_flex_or_rigid) blk: {
@@ -13168,7 +13317,8 @@ pub const Interpreter = struct {
         }
 
         // Check if the resolved type is flex/rigid (unconstrained).
-        // If so, we need to give it a concrete Dec type for method dispatch to work.
+        // If so, give it a concrete Dec type for method dispatch to work.
+        // REPL rendering will still strip .0 from whole-number Dec values regardless of type.
         const resolved_rt = self.runtime_types.resolveVar(layout_rt_var);
         const is_flex_or_rigid = resolved_rt.desc.content == .flex or resolved_rt.desc.content == .rigid;
         const final_rt_var = if (is_flex_or_rigid) blk: {
@@ -13661,6 +13811,19 @@ pub const Interpreter = struct {
             tu_data.writeDiscriminantToPtr(base_ptr + disc_offset, @intCast(tag_index));
             dest.is_initialized = true;
             return dest;
+        } else if (layout_val.tag == .scalar) {
+            // Pure enum tag union (no payloads) — just set the discriminant
+            var dest = try self.pushRaw(layout_val, 0, rt_var);
+            if (layout_val.data.scalar.tag == .int) {
+                dest.is_initialized = false;
+                try dest.setInt(@intCast(tag_index));
+                dest.is_initialized = true;
+            }
+            return dest;
+        } else if (layout_val.tag == .zst) {
+            // Zero-sized tag union (single variant with no payload)
+            const dest = try self.pushRaw(layout_val, 0, rt_var);
+            return dest;
         }
         self.triggerCrash("e_tag: unexpected layout in finalizeTagNoPayload", false, roc_ops);
         return error.Crash;
@@ -13873,10 +14036,10 @@ pub const Interpreter = struct {
         // Next try ALL active closure captures in reverse order
         if (self.active_closures.items.len > 0) {
             // Pre-translate the capture name for matching against runtime_layout_store idents.
-            // Capture field names are stored using runtime_layout_store.env idents during
+            // Capture field names are stored using runtime_layout_store.getEnv() idents during
             // closure creation, so we need to translate the lookup ident to match.
             const cap_name_text = self.env.getIdent(cap.name);
-            const translated_cap_name = self.runtime_layout_store.env.common.idents.lookup(base_pkg.Ident.for_text(cap_name_text));
+            const translated_cap_name = self.runtime_layout_store.getEnv().common.idents.lookup(base_pkg.Ident.for_text(cap_name_text));
 
             var closure_idx: usize = self.active_closures.items.len;
             while (closure_idx > 0) {
@@ -14112,10 +14275,10 @@ pub const Interpreter = struct {
 
                                 if (!is_top_level_def) {
                                     // Try to find the captured value in the closure's captures record.
-                                    // Capture field names are stored using runtime_layout_store.env idents,
+                                    // Capture field names are stored using runtime_layout_store.getEnv() idents,
                                     // so we need to translate the ident to match.
                                     const var_ident_text = self.env.getIdent(var_ident);
-                                    if (self.runtime_layout_store.env.common.idents.lookup(base_pkg.Ident.for_text(var_ident_text))) |translated_ident| {
+                                    if (self.runtime_layout_store.getEnv().common.idents.lookup(base_pkg.Ident.for_text(var_ident_text))) |translated_ident| {
                                         if (accessor.findFieldIndex(translated_ident)) |fidx| {
                                             const field_rt = try self.runtime_types.fresh();
                                             const field_val = try accessor.getFieldByIndex(fidx, field_rt);
@@ -14181,21 +14344,21 @@ pub const Interpreter = struct {
         // from the primary module's imports and should only be used as a fallback for
         // backwards compatibility with unit tests that don't call resolveImports.
         //
-        // First try the current module's resolved imports (the correct path for multi-module scenarios):
         const other_env = blk: {
-            if (self.env.imports.getResolvedModule(lookup.module_idx)) |resolved_idx| {
-                if (resolved_idx >= self.all_module_envs.len) {
-                    traceDbg(roc_ops, "evalLookupExternal: OUT OF BOUNDS resolved_idx={d}, all_module_envs.len={d}", .{ resolved_idx, self.all_module_envs.len });
-                    self.triggerCrash("e_lookup_external: resolved module index out of bounds", false, roc_ops);
-                    return error.Crash;
+            // Only use import_envs if self.env is the primary module or app_env,
+            // since import_envs only contains mappings from those modules.
+            if (self.env == self.root_env or (self.app_env != null and self.env == @constCast(self.app_env.?))) {
+                if (self.import_envs.get(lookup.module_idx)) |env| {
+                    traceDbg(roc_ops, "evalLookupExternal: \"{s}\" import[{d}] -> \"{s}\"", .{ self.env.module_name, @intFromEnum(lookup.module_idx), env.module_name });
+                    break :blk env;
                 }
-                traceDbg(roc_ops, "evalLookupExternal: \"{s}\" import[{d}] -> \"{s}\"", .{ self.env.module_name, @intFromEnum(lookup.module_idx), self.all_module_envs[resolved_idx].module_name });
-                break :blk self.all_module_envs[resolved_idx];
             }
-            // Fallback to import_envs for backwards compatibility with unit tests
-            if (self.import_envs.get(lookup.module_idx)) |env| {
-                traceDbg(roc_ops, "evalLookupExternal: \"{s}\" import[{d}] -> \"{s}\" (fallback)", .{ self.env.module_name, @intFromEnum(lookup.module_idx), env.module_name });
-                break :blk env;
+            // Fall back to resolved module indices + resolved_module_envs
+            // Note: resolved_idx is an index into the other_envs array passed to resolveImports,
+            // which is stored in resolved_module_envs (NOT all_module_envs which has env at [0])
+            if (self.env.imports.getResolvedModule(lookup.module_idx)) |resolved_idx| {
+                std.debug.assert(resolved_idx < self.resolved_module_envs.len);
+                break :blk self.resolved_module_envs[resolved_idx];
             }
             traceDbg(roc_ops, "evalLookupExternal: UNRESOLVED import[{d}] in \"{s}\"", .{ @intFromEnum(lookup.module_idx), self.env.module_name });
             self.triggerCrash("e_lookup_external: unresolved import", false, roc_ops);
@@ -14204,6 +14367,7 @@ pub const Interpreter = struct {
 
         // The target_node_idx is a Def.Idx in the other module
         const target_def_idx: can.CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
+
         const target_def = other_env.store.getDef(target_def_idx);
 
         // Save both env and bindings state
@@ -15283,15 +15447,15 @@ pub const Interpreter = struct {
                     }
 
                     // Add explicit field layouts to union
-                    // Translate field names from self.env's identifier store to runtime_layout_store.env's
+                    // Translate field names from self.env's identifier store to runtime_layout_store.getEnv()'s
                     // identifier store. This is necessary because field names may come from different modules
-                    // (e.g., app module), but rendering uses root_env (same as runtime_layout_store.env).
+                    // (e.g., app module), but rendering uses root_env (same as runtime_layout_store.getEnv()).
                     for (rc.all_fields, 0..) |field_idx_enum, idx| {
                         const f = self.env.store.getRecordField(field_idx_enum);
                         const field_layout = field_values[idx].layout;
                         // Translate field name to runtime layout store's identifier space
                         const field_name_str = self.env.getIdent(f.name);
-                        const translated_name = try @constCast(self.runtime_layout_store.env).insertIdent(base_pkg.Ident.for_text(field_name_str));
+                        const translated_name = try self.runtime_layout_store.getMutableEnv().?.insertIdent(base_pkg.Ident.for_text(field_name_str));
                         const key: u32 = @bitCast(translated_name);
                         if (union_indices.get(key)) |idx_ptr| {
                             union_layouts.items[idx_ptr] = field_layout;
@@ -15303,8 +15467,8 @@ pub const Interpreter = struct {
                         }
                     }
 
-                    // Create record layout using runtime_layout_store.env for field name lookups
-                    const record_layout_idx = try self.runtime_layout_store.putRecord(self.runtime_layout_store.env, union_layouts.items, union_names.items);
+                    // Create record layout using runtime_layout_store.getEnv() for field name lookups
+                    const record_layout_idx = try self.runtime_layout_store.putRecord(self.runtime_layout_store.getMutableEnv().?, union_layouts.items, union_names.items);
                     const rec_layout = self.runtime_layout_store.getLayout(record_layout_idx);
 
                     // Cache the layout for this var with generation encoding
@@ -15337,7 +15501,7 @@ pub const Interpreter = struct {
                         const f = self.env.store.getRecordField(field_idx_enum);
                         // Translate field name to runtime layout store's identifier space for lookup
                         const field_name_str = self.env.getIdent(f.name);
-                        const translated_name = try @constCast(self.runtime_layout_store.env).insertIdent(base_pkg.Ident.for_text(field_name_str));
+                        const translated_name = try self.runtime_layout_store.getMutableEnv().?.insertIdent(base_pkg.Ident.for_text(field_name_str));
                         const dest_field_idx = accessor.findFieldIndex(translated_name) orelse return error.TypeMismatch;
                         const val = field_values[explicit_index];
 
@@ -15997,6 +16161,151 @@ pub const Interpreter = struct {
                         dest.is_initialized = true;
                         dest.rt_var = tc.rt_var;
                         try value_stack.push(dest);
+                    } else if (tc.layout_type == 3) {
+                        // Boxed tag union: construct the inner tag union value, then box it.
+                        // layout_val is .box (from getRuntimeLayout on the boxed type).
+                        // We need to resolve the actual backing layout for the inner value.
+                        const inner_layout_idx = layout_val.data.box;
+                        const raw_inner_layout = self.runtime_layout_store.getLayout(inner_layout_idx);
+
+                        // Resolve opaque_ptr to actual backing layout
+                        const backing_layout = if (raw_inner_layout.tag == .scalar and raw_inner_layout.data.scalar.tag == .opaque_ptr) blk: {
+                            const box_resolved = self.runtime_types.resolveVar(tc.layout_rt_var);
+                            if (box_resolved.desc.content == .structure) {
+                                const flat = box_resolved.desc.content.structure;
+                                if (flat == .nominal_type) {
+                                    const nom = flat.nominal_type;
+                                    const vars = self.runtime_types.sliceVars(nom.vars.nonempty);
+                                    if (vars.len > 0) {
+                                        break :blk self.getRuntimeLayout(vars[0]) catch raw_inner_layout;
+                                    }
+                                }
+                            }
+                            break :blk raw_inner_layout;
+                        } else raw_inner_layout;
+
+                        // Build the inner tag union value based on the backing layout type
+                        if (backing_layout.tag == .record or backing_layout.tag == .tuple or backing_layout.tag == .tag_union) {
+                            // Construct the inner value using the same approach as the unboxed case
+                            // For simplicity, build a record with {tag, payload}
+                            if (backing_layout.tag == .record) {
+                                var inner_dest = try self.pushRaw(backing_layout, 0, tc.rt_var);
+                                var acc = try inner_dest.asRecord(&self.runtime_layout_store);
+                                const tag_field_idx = acc.findFieldIndex(self.env.idents.tag) orelse {
+                                    for (values) |v| v.decref(&self.runtime_layout_store, roc_ops);
+                                    self.triggerCrash("boxed e_tag: tag field not found", false, roc_ops);
+                                    return error.Crash;
+                                };
+
+                                // Write tag discriminant
+                                const field_rt = try self.runtime_types.fresh();
+                                const tag_field = try acc.getFieldByIndex(tag_field_idx, field_rt);
+                                if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                                    var tmp = tag_field;
+                                    tmp.is_initialized = false;
+                                    try tmp.setInt(@intCast(tc.tag_index));
+                                }
+
+                                // Write payload
+                                if (acc.findFieldIndex(self.env.idents.payload)) |payload_field_idx| {
+                                    const field_rt2 = try self.runtime_types.fresh();
+                                    const payload_field = try acc.getFieldByIndex(payload_field_idx, field_rt2);
+                                    if (payload_field.ptr) |payload_ptr| {
+                                        if (total_count == 1) {
+                                            try values[0].copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
+                                        }
+                                    }
+                                }
+
+                                // Box the inner value
+                                const boxed = try self.makeBoxValueFromLayout(layout_val, inner_dest, roc_ops, tc.rt_var);
+                                for (values) |val| {
+                                    val.decref(&self.runtime_layout_store, roc_ops);
+                                }
+                                try value_stack.push(boxed);
+                            } else if (backing_layout.tag == .tag_union) {
+                                // Construct inner tag_union, then box
+                                const tu_idx = backing_layout.data.tag_union.idx;
+                                const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
+                                const disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(tu_idx);
+
+                                var inner_dest = try self.pushRaw(backing_layout, 0, tc.rt_var);
+                                const base_ptr: [*]u8 = @ptrCast(inner_dest.ptr.?);
+                                const payload_ptr: *anyopaque = @ptrCast(base_ptr);
+
+                                if (total_count == 1) {
+                                    const variants = self.runtime_layout_store.getTagUnionVariants(tu_data);
+                                    const expected_payload_layout = self.runtime_layout_store.getLayout(variants.get(tc.tag_index).payload_layout);
+
+                                    if (expected_payload_layout.tag == .box and values[0].layout.tag != .box and values[0].layout.tag != .box_of_zst) {
+                                        // Auto-box the payload for recursive types
+                                        const elem_layout = self.runtime_layout_store.getLayout(expected_payload_layout.data.box);
+                                        const elem_size = self.runtime_layout_store.layoutSize(elem_layout);
+                                        const target_usize = self.runtime_layout_store.targetUsize();
+                                        const elem_align: u32 = @intCast(elem_layout.alignment(target_usize).toByteUnits());
+                                        const data_ptr = builtins.utils.allocateWithRefcount(elem_size, elem_align, false, roc_ops);
+                                        if (elem_size > 0 and values[0].ptr != null) {
+                                            try values[0].copyToPtr(&self.runtime_layout_store, data_ptr, roc_ops);
+                                        }
+                                        const slot: *usize = @ptrCast(@alignCast(payload_ptr));
+                                        slot.* = @intFromPtr(data_ptr);
+                                    } else {
+                                        try values[0].copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
+                                    }
+                                }
+
+                                tu_data.writeDiscriminantToPtr(base_ptr + disc_offset, @intCast(tc.tag_index));
+
+                                inner_dest.is_initialized = true;
+                                const boxed = try self.makeBoxValueFromLayout(layout_val, inner_dest, roc_ops, tc.rt_var);
+                                for (values) |val| {
+                                    val.decref(&self.runtime_layout_store, roc_ops);
+                                }
+                                try value_stack.push(boxed);
+                            } else {
+                                // Tuple - similar to tag_union but uses tuple access
+                                var inner_dest = try self.pushRaw(backing_layout, 0, tc.rt_var);
+                                var tup_acc = try inner_dest.asTuple(&self.runtime_layout_store);
+                                const discriminant_rt_var = try self.runtime_types.fresh();
+                                const tag_field = try tup_acc.getElement(1, discriminant_rt_var);
+                                if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                                    var tmp = tag_field;
+                                    tmp.is_initialized = false;
+                                    try tmp.setInt(@intCast(tc.tag_index));
+                                }
+                                if (total_count == 1) {
+                                    const payload_field = try tup_acc.getElement(0, values[0].rt_var);
+                                    if (payload_field.ptr) |ptr| {
+                                        try values[0].copyToPtr(&self.runtime_layout_store, ptr, roc_ops);
+                                    }
+                                }
+                                inner_dest.is_initialized = true;
+                                const boxed = try self.makeBoxValueFromLayout(layout_val, inner_dest, roc_ops, tc.rt_var);
+                                for (values) |val| {
+                                    val.decref(&self.runtime_layout_store, roc_ops);
+                                }
+                                try value_stack.push(boxed);
+                            }
+                        } else if (backing_layout.tag == .scalar) {
+                            // Scalar backing layout (no payload variants, just discriminant)
+                            var inner_dest = try self.pushRaw(backing_layout, 0, tc.rt_var);
+                            if (backing_layout.data.scalar.tag == .int) {
+                                inner_dest.is_initialized = false;
+                                try inner_dest.setInt(@intCast(tc.tag_index));
+                                inner_dest.is_initialized = true;
+                            }
+                            const boxed = try self.makeBoxValueFromLayout(layout_val, inner_dest, roc_ops, tc.rt_var);
+                            for (values) |val| {
+                                val.decref(&self.runtime_layout_store, roc_ops);
+                            }
+                            try value_stack.push(boxed);
+                        } else {
+                            for (values) |val| {
+                                val.decref(&self.runtime_layout_store, roc_ops);
+                            }
+                            self.triggerCrash("boxed e_tag: unsupported backing layout", false, roc_ops);
+                            return error.Crash;
+                        }
                     }
                 }
                 return true;
@@ -17541,7 +17850,7 @@ pub const Interpreter = struct {
                     // The field name in da.field_name is from self.env's ident store, but the
                     // record layout was built with runtime ident store field names.
                     const ct_field_name_str = self.env.getIdent(da.field_name);
-                    const rt_field_name = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(ct_field_name_str));
+                    const rt_field_name = try self.runtime_layout_store.getMutableEnv().?.insertIdent(base_pkg.Ident.for_text(ct_field_name_str));
 
                     var accessor = try receiver_value.asRecord(&self.runtime_layout_store);
                     const field_idx = accessor.findFieldIndex(rt_field_name) orelse {
@@ -17695,7 +18004,7 @@ pub const Interpreter = struct {
                             if (receiver_value.layout.tag == .record) {
                                 // Translate field name from compile-time to runtime ident store
                                 const ct_field_name_str = self.env.getIdent(da.field_name);
-                                const rt_field_name = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(ct_field_name_str));
+                                const rt_field_name = try self.runtime_layout_store.getMutableEnv().?.insertIdent(base_pkg.Ident.for_text(ct_field_name_str));
 
                                 var accessor = try receiver_value.asRecord(&self.runtime_layout_store);
                                 if (accessor.findFieldIndex(rt_field_name)) |field_idx| {
@@ -18020,7 +18329,7 @@ pub const Interpreter = struct {
                     receiver_value.decref(&self.runtime_layout_store, roc_ops);
                     switch (err) {
                         error.MethodLookupFailed => {
-                            const layout_env = self.runtime_layout_store.env;
+                            const layout_env = self.runtime_layout_store.getEnv();
                             const type_name = import_mapping_mod.getDisplayName(
                                 self.import_mapping,
                                 layout_env.common.getIdentStore(),
@@ -18432,7 +18741,7 @@ pub const Interpreter = struct {
                                 const arg_resolved = self.runtime_types.resolveVar(all_args[unify_idx].rt_var);
                                 const arg_copy = try self.runtime_types.freshFromContent(arg_resolved.desc.content);
                                 _ = unify.unifyInContext(
-                                    self.runtime_layout_store.env,
+                                    self.runtime_layout_store.getMutableEnv().?,
                                     self.runtime_types,
                                     &self.problems,
                                     &self.snapshots,

@@ -330,6 +330,80 @@ pub fn exportDivCeil(
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
+/// Integer division truncating towards zero.
+/// For signed integers, this rounds towards zero (not negative infinity).
+pub fn exportDivTrunc(
+    comptime T: type,
+    comptime name: []const u8,
+) void {
+    const f = struct {
+        fn func(
+            a: T,
+            b: T,
+            roc_ops: *RocOps,
+        ) callconv(.c) T {
+            if (b == 0) {
+                roc_ops.crash("Integer division by 0!");
+            }
+            return @divTrunc(a, b);
+        }
+    }.func;
+    @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
+}
+
+/// Integer remainder after truncating division.
+/// The result has the same sign as the dividend.
+pub fn exportRemTrunc(
+    comptime T: type,
+    comptime name: []const u8,
+) void {
+    const f = struct {
+        fn func(
+            a: T,
+            b: T,
+            roc_ops: *RocOps,
+        ) callconv(.c) T {
+            if (b == 0) {
+                roc_ops.crash("Integer remainder by 0!");
+            }
+            return @rem(a, b);
+        }
+    }.func;
+    @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
+}
+
+/// i128 division truncating towards zero - callable from generated code.
+pub fn divTruncI128(a: i128, b: i128, roc_ops: *RocOps) callconv(.c) i128 {
+    if (b == 0) {
+        roc_ops.crash("Integer division by 0!");
+    }
+    return @divTrunc(a, b);
+}
+
+/// u128 division truncating towards zero - callable from generated code.
+pub fn divTruncU128(a: u128, b: u128, roc_ops: *RocOps) callconv(.c) u128 {
+    if (b == 0) {
+        roc_ops.crash("Integer division by 0!");
+    }
+    return @divTrunc(a, b);
+}
+
+/// i128 remainder after truncating division - callable from generated code.
+pub fn remTruncI128(a: i128, b: i128, roc_ops: *RocOps) callconv(.c) i128 {
+    if (b == 0) {
+        roc_ops.crash("Integer remainder by 0!");
+    }
+    return @rem(a, b);
+}
+
+/// u128 remainder after truncating division - callable from generated code.
+pub fn remTruncU128(a: u128, b: u128, roc_ops: *RocOps) callconv(.c) u128 {
+    if (b == 0) {
+        roc_ops.crash("Integer remainder by 0!");
+    }
+    return @rem(a, b);
+}
+
 /// Result type for checked integer conversions.
 pub fn ToIntCheckedResult(comptime T: type) type {
     // On the Roc side we sort by alignment; putting the errorcode last

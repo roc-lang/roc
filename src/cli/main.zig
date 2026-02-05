@@ -114,6 +114,10 @@ const ShimLibraries = struct {
     /// WebAssembly target shim (wasm32-freestanding)
     const wasm32 = if (builtin.is_test) &[_]u8{} else @embedFile("targets/wasm32/libroc_interpreter_shim.a");
 
+    /// Cross-compilation target shims (Windows targets)
+    const x64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64win/roc_interpreter_shim.lib");
+    const arm64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64win/roc_interpreter_shim.lib");
+
     /// Get the appropriate shim library bytes for the given target
     pub fn forTarget(target: roc_target.RocTarget) []const u8 {
         return switch (target) {
@@ -122,8 +126,10 @@ const ShimLibraries = struct {
             .x64glibc => x64glibc,
             .arm64glibc => arm64glibc,
             .wasm32 => wasm32,
+            .x64win => x64win,
+            .arm64win => arm64win,
             // Native/host targets use the native shim
-            .x64mac, .arm64mac, .x64win, .arm64win => native,
+            .x64mac, .arm64mac => native,
             // Fallback for other targets (will use native, may not work for cross-compilation)
             else => native,
         };
@@ -1308,6 +1314,11 @@ fn runWithWindowsHandleInheritance(ctx: *CliContext, exe_path: []const u8, shm_h
     );
 
     if (success == 0) {
+        const last_error = std.os.windows.kernel32.GetLastError();
+        std.log.err("CreateProcessW failed with Windows error code: {}", .{last_error});
+        std.log.err("exe_path: {s}", .{exe_path});
+        std.log.err("cmd_line: {s}", .{cmd_builder.items[0 .. cmd_builder.items.len - 1]});
+        std.log.err("cwd: {s}", .{cwd});
         return ctx.fail(.{ .child_process_spawn_failed = .{
             .command = exe_path,
             .err = error.ProcessCreationFailed,
@@ -2230,6 +2241,11 @@ fn checkPlatformRequirementsFromCoordinator(
     // Check platform requirements against app exports
     try checker.checkPlatformRequirements(pf_root_env, &platform_to_app_idents);
 
+    // Now finalize numeric defaults for the app module. This must happen AFTER
+    // checkPlatformRequirements so that numeric literals can be constrained by
+    // platform types (e.g., I64) before defaulting to Dec.
+    try checker.finalizeNumericDefaults();
+
     // If there are type problems, convert them to reports and add to app module
     if (checker.problems.problems.items.len > 0) {
         const app_module = &app_pkg.modules.items[app_root_id];
@@ -2244,6 +2260,7 @@ fn checkPlatformRequirementsFromCoordinator(
             app_path,
             &.{},
             &checker.import_mapping,
+            &checker.regions,
         );
         defer rb.deinit();
 

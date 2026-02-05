@@ -305,7 +305,6 @@ pub const Payload = extern union {
     expr_anno_only: ExprAnnoOnly,
     expr_return: ExprReturn,
     expr_type_var_dispatch: ExprTypeVarDispatch,
-
     // === Pattern payloads ===
     pattern_identifier: PatternIdentifier,
     pattern_as: PatternAs,

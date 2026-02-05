@@ -103,13 +103,25 @@ pub const Idx = enum(@Type(.{
     f64 = 14,
     dec = 15,
 
+    // zero-sized type
+    zst = 16,
+
     // Regular indices start from here.
-    // num_scalars in store.zig must refer to how many variants we had up to this point.
+    // num_primitives in store.zig must refer to how many variants we had up to this point.
     _,
 
     /// Sentinel value representing "not present" / "no layout".
     /// Used by ArrayListMap as the empty slot marker.
     pub const none: Idx = @enumFromInt(std.math.maxInt(@typeInfo(Idx).@"enum".tag_type));
+
+    /// Sentinel for call expressions where the function is resolved by name
+    /// (e.g., external method calls like `List.map`), not by closure dispatch.
+    /// The dev backend resolves these via symbol lookup, so no closure layout is needed.
+    pub const named_fn: Idx = @enumFromInt(std.math.maxInt(@typeInfo(Idx).@"enum".tag_type) - 1);
+
+    /// Default numeric type for unbound/polymorphic numbers.
+    /// Dec is the default in the new Roc compiler.
+    pub const default_num: Idx = .dec;
 };
 
 /// Represents a closure with its captured environment

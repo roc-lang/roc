@@ -168,9 +168,9 @@ EndOfFile,
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, b -> a]"))
-		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, _arg -> a]")))
+		(patt (type "Dec -> Dec"))
+		(patt (type "Dec")))
 	(expressions
-		(expr (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, b -> a]"))
-		(expr (type "_a where [_b.plus : c, d -> c, _e.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))))
+		(expr (type "Dec -> Dec"))
+		(expr (type "Dec"))))
 ~~~

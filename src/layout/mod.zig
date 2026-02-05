@@ -48,7 +48,7 @@ pub const ScalarInfo = @import("layout.zig").ScalarInfo;
 
 // Re-export store functionality
 pub const Store = @import("store.zig").Store;
-pub const LayoutError = @import("store.zig").LayoutError;
+pub const ModuleVarKey = @import("store.zig").ModuleVarKey;
 
 // Re-export work queue functionality
 pub const Work = @import("work.zig").Work;

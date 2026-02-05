@@ -69,9 +69,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "{ age: a, name: Str } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(patt (type "{ age: a, name: Str } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")))
+		(patt (type "{ age: Dec, name: Str }"))
+		(patt (type "{ age: Dec, name: Str }")))
 	(expressions
-		(expr (type "{ age: a, name: Str } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(expr (type "{ age: a, name: Str } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))))
+		(expr (type "{ age: Dec, name: Str }"))
+		(expr (type "{ age: Dec, name: Str }"))))
 ~~~

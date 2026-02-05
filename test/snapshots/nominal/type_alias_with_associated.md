@@ -90,10 +90,10 @@ Foo : [A, B, C].{
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")))
+		(patt (type "Dec")))
 	(type_decls
 		(alias (type "Foo")
 			(ty-header (name "Foo"))))
 	(expressions
-		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))))
+		(expr (type "Dec"))))
 ~~~

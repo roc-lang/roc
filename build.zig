@@ -3210,6 +3210,8 @@ fn addMainExe(
         .{ .name = "x64glibc", .query = .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .gnu } },
         .{ .name = "arm64glibc", .query = .{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .gnu } },
         .{ .name = "wasm32", .query = .{ .cpu_arch = .wasm32, .os_tag = .freestanding, .abi = .none } },
+        .{ .name = "x64win", .query = .{ .cpu_arch = .x86_64, .os_tag = .windows, .abi = .gnu } },
+        .{ .name = "arm64win", .query = .{ .cpu_arch = .aarch64, .os_tag = .windows, .abi = .gnu } },
     };
 
     for (cross_compile_shim_targets) |cross_target| {
@@ -3271,10 +3273,12 @@ fn addMainExe(
         cross_shim_lib.bundle_compiler_rt = true;
 
         // Copy to target-specific directory for embedding
+        // Use .lib extension for Windows targets, .a for others
+        const shim_ext = if (cross_target.query.os_tag == .windows) "roc_interpreter_shim.lib" else "libroc_interpreter_shim.a";
         const copy_cross_shim = b.addUpdateSourceFiles();
         copy_cross_shim.addCopyFileToSource(
             cross_shim_lib.getEmittedBin(),
-            b.pathJoin(&.{ "src/cli/targets", cross_target.name, "libroc_interpreter_shim.a" }),
+            b.pathJoin(&.{ "src/cli/targets", cross_target.name, shim_ext }),
         );
         exe.step.dependOn(&copy_cross_shim.step);
     }

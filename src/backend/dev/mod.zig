@@ -10,16 +10,17 @@
 const std = @import("std");
 const base = @import("base");
 const layout = @import("layout");
+const builtins = @import("builtins");
 
 /// Backend selection for code evaluation
 pub const EvalBackend = enum {
-    interpreter,
     dev,
+    interpreter,
     // llvm, // Future: LLVM backend
 
     pub fn fromString(s: []const u8) ?EvalBackend {
-        if (std.mem.eql(u8, s, "interpreter")) return .interpreter;
         if (std.mem.eql(u8, s, "dev")) return .dev;
+        if (std.mem.eql(u8, s, "interpreter")) return .interpreter;
         // if (std.mem.eql(u8, s, "llvm")) return .llvm;
         return null;
     }
@@ -28,11 +29,42 @@ pub const EvalBackend = enum {
 pub const x86_64 = @import("x86_64/mod.zig");
 pub const aarch64 = @import("aarch64/mod.zig");
 pub const object = @import("object/mod.zig");
-pub const Relocation = @import("Relocation.zig").Relocation;
+const relocation_mod = @import("Relocation.zig");
+pub const Relocation = relocation_mod.Relocation;
+pub const applyRelocations = relocation_mod.applyRelocations;
+pub const SymbolResolver = relocation_mod.SymbolResolver;
 pub const CodeGen = @import("CodeGen.zig");
 pub const Backend = @import("Backend.zig");
-pub const jit = @import("jit.zig");
-pub const JitCode = jit.JitCode;
+pub const ExecutableMemory = @import("ExecutableMemory.zig").ExecutableMemory;
+
+// Static data interner for string literals and other static data
+pub const StaticDataInterner = @import("StaticDataInterner.zig");
+
+// MonoExprCodeGen - parameterized by RocTarget for cross-compilation support
+const MonoExprCodeGenMod = @import("MonoExprCodeGen.zig");
+
+/// Mono IR code generator parameterized by target (use MonoExprCodeGen(target) to instantiate)
+pub const MonoExprCodeGen = MonoExprCodeGenMod.MonoExprCodeGen;
+
+/// Pre-instantiated MonoExprCodeGen for native host target
+pub const NativeMonoExprCodeGen = MonoExprCodeGenMod.NativeMonoExprCodeGen;
+
+/// x86_64 Linux with glibc
+pub const X64GlibcMonoExprCodeGen = MonoExprCodeGenMod.X64GlibcMonoExprCodeGen;
+/// x86_64 Linux with musl
+pub const X64MuslMonoExprCodeGen = MonoExprCodeGenMod.X64MuslMonoExprCodeGen;
+/// x86_64 Windows
+pub const X64WinMonoExprCodeGen = MonoExprCodeGenMod.X64WinMonoExprCodeGen;
+/// x86_64 macOS
+pub const X64MacMonoExprCodeGen = MonoExprCodeGenMod.X64MacMonoExprCodeGen;
+/// ARM64 Linux with glibc
+pub const Arm64GlibcMonoExprCodeGen = MonoExprCodeGenMod.Arm64GlibcMonoExprCodeGen;
+/// ARM64 Linux with musl
+pub const Arm64MuslMonoExprCodeGen = MonoExprCodeGenMod.Arm64MuslMonoExprCodeGen;
+/// ARM64 Windows
+pub const Arm64WinMonoExprCodeGen = MonoExprCodeGenMod.Arm64WinMonoExprCodeGen;
+/// ARM64 macOS
+pub const Arm64MacMonoExprCodeGen = MonoExprCodeGenMod.Arm64MacMonoExprCodeGen;
 
 /// Generic development backend parameterized by architecture-specific types.
 ///
@@ -187,6 +219,7 @@ pub fn Storage(
                 switch (entry.value) {
                     .general_reg => |reg| try self.general_free.append(self.allocator, reg),
                     .float_reg => |reg| try self.float_free.append(self.allocator, reg),
+                    // Stack slots are reclaimed on function return; no_data has nothing to free
                     .stack, .no_data => {},
                 }
             }
@@ -224,6 +257,49 @@ pub const AArch64Backend = DevBackend(
     aarch64.FloatReg,
 );
 
+/// Resolve builtin function names to their addresses.
+/// This is used by ExecutableMemory to patch function call relocations.
+///
+/// Supported function names:
+/// - "incref_data_ptr" -> increfDataPtrC
+/// - "decref_data_ptr" -> decrefDataPtrC
+/// - "free_data_ptr" -> freeDataPtrC
+pub fn resolveBuiltinFunction(name: []const u8) ?usize {
+    const utils = builtins.utils;
+
+    if (std.mem.eql(u8, name, "incref_data_ptr")) {
+        return @intFromPtr(&utils.increfDataPtrC);
+    }
+    if (std.mem.eql(u8, name, "decref_data_ptr")) {
+        return @intFromPtr(&utils.decrefDataPtrC);
+    }
+    if (std.mem.eql(u8, name, "free_data_ptr")) {
+        return @intFromPtr(&utils.freeDataPtrC);
+    }
+    // RC pointer functions (for direct refcount manipulation)
+    if (std.mem.eql(u8, name, "incref_rc_ptr")) {
+        return @intFromPtr(&utils.increfRcPtrC);
+    }
+    if (std.mem.eql(u8, name, "decref_rc_ptr")) {
+        return @intFromPtr(&utils.decrefRcPtrC);
+    }
+
+    return null;
+}
+
 test "backend module imports" {
     std.testing.refAllDecls(@This());
+    std.testing.refAllDecls(@import("CallBuilder.zig"));
+}
+
+test "resolve builtin functions" {
+    // Test that all RC functions resolve
+    try std.testing.expect(resolveBuiltinFunction("incref_data_ptr") != null);
+    try std.testing.expect(resolveBuiltinFunction("decref_data_ptr") != null);
+    try std.testing.expect(resolveBuiltinFunction("free_data_ptr") != null);
+    try std.testing.expect(resolveBuiltinFunction("incref_rc_ptr") != null);
+    try std.testing.expect(resolveBuiltinFunction("decref_rc_ptr") != null);
+
+    // Test unknown function returns null
+    try std.testing.expect(resolveBuiltinFunction("unknown_func") == null);
 }

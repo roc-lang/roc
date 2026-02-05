@@ -1917,6 +1917,9 @@ pub fn canonicalizeFile(
         },
         .app => |h| {
             self.env.module_kind = .app;
+            // App modules may have platform requirements that should constrain numeric literals
+            // before defaulting to Dec, so defer numeric defaults until after platform checking
+            self.env.defer_numeric_defaults = true;
             // App headers have 'provides' instead of 'exposes'
             // but we need to track the provided functions for export
             try self.createExposedScope(h.provides);
@@ -1930,6 +1933,9 @@ pub fn canonicalizeFile(
         },
         .default_app => {
             self.env.module_kind = .default_app;
+            // Default app modules may have platform requirements that should constrain numeric literals
+            // before defaulting to Dec, so defer numeric defaults until after platform checking
+            self.env.defer_numeric_defaults = true;
             // Default app modules don't have an exposes list
             // They have a main! function that will be validated
         },
@@ -9390,7 +9396,8 @@ fn canonicalizeTypeAnnoBasicType(
     if (qualifier_toks.len == 0) {
         // First, check if the type is a builtin type
         // There are always automatically in-scope
-        if (TypeAnno.Builtin.fromBytes(self.env.getIdentText(type_name_ident))) |builtin_type| {
+        const type_text = self.env.getIdentText(type_name_ident);
+        if (TypeAnno.Builtin.fromBytes(type_text)) |builtin_type| {
             return try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
                 .name = type_name_ident,
                 .base = .{ .builtin = builtin_type },

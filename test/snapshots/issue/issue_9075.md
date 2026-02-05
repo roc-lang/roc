@@ -167,10 +167,10 @@ main = "${y}"
 (inferred-types
 	(defs
 		(patt (type "a, (a -> b) -> b"))
-		(patt (type "b where [b.from_numeral : Numeral -> Error, b.plus : b, c -> b, c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
+		(patt (type "Dec"))
 		(patt (type "Str")))
 	(expressions
 		(expr (type "a, (a -> b) -> b"))
-		(expr (type "b where [b.from_numeral : Numeral -> Error, b.plus : b, c -> b, c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
+		(expr (type "Dec"))
 		(expr (type "Str"))))
 ~~~

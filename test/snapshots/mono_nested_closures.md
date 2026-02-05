@@ -122,7 +122,7 @@ EndOfFile,
 	(defs
 		(patt (type "a -> [#1_make_adder({ .., y: a }), ..]"))
 		(patt (type "a -> (a -> (a -> [#1_make_adder({ .., y: a }), ..]))"))
-		(patt (type "a -> (b -> [#1_make_adder({ ..c, y: b }), ..d]) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral([#1_make_adder({ ..c, y: b }), ..d])])]"))
+		(patt (type "Dec -> (a -> [#1_make_adder({ .., y: a }), ..])"))
 		(patt (type "a -> [#1_make_adder({ .., y: a }), ..]")))
 	(expressions
 		(expr (type "a -> [#1_make_adder({ .., y: a }), ..]"))

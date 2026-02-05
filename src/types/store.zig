@@ -89,6 +89,10 @@ pub const Store = struct {
     tags: TagSafeMultiList,
     static_dispatch_constraints: StaticDispatchConstraint.SafeList,
 
+    /// Count of flex vars that currently have a from_numeral constraint.
+    /// Used to skip the finalization walk when no numeric defaults need resolving.
+    from_numeral_flex_count: u32,
+
     /// Init the unification table with default capacity.
     /// For production use with source files, prefer initFromSourceLen() which
     /// computes capacity based on source file size.
@@ -122,6 +126,7 @@ pub const Store = struct {
             .record_fields = try RecordFieldSafeMultiList.initCapacity(gpa, child_capacity),
             .tags = try TagSafeMultiList.initCapacity(gpa, child_capacity),
             .static_dispatch_constraints = try StaticDispatchConstraint.SafeList.initCapacity(gpa, child_capacity),
+            .from_numeral_flex_count = 0,
         };
     }
 
@@ -129,6 +134,14 @@ pub const Store = struct {
     pub fn ensureTotalCapacity(self: *Self, capacity: usize) Allocator.Error!void {
         try self.descs.backing.ensureTotalCapacity(self.gpa, capacity);
         try self.slots.backing.items.ensureTotalCapacity(self.gpa, capacity);
+    }
+
+    pub fn extendToVar(self: *Self, var_: Var) Allocator.Error!void {
+        const needed_len = @intFromEnum(var_) + 1;
+        while (self.slots.backing.len() < needed_len) {
+            // Create a placeholder flex variable for each new slot
+            _ = try self.fresh();
+        }
     }
 
     /// Deinit the unification table
@@ -870,6 +883,7 @@ pub const Store = struct {
                 .record_fields = self.record_fields.deserializeInto(base_addr),
                 .tags = self.tags.deserializeInto(base_addr),
                 .static_dispatch_constraints = self.static_dispatch_constraints.deserializeInto(base_addr),
+                .from_numeral_flex_count = 0,
             };
         }
 
@@ -884,6 +898,7 @@ pub const Store = struct {
                 .record_fields = try self.record_fields.deserializeWithCopy(base_addr, gpa),
                 .tags = try self.tags.deserializeWithCopy(base_addr, gpa),
                 .static_dispatch_constraints = try self.static_dispatch_constraints.deserializeWithCopy(base_addr, gpa),
+                .from_numeral_flex_count = 0,
             };
         }
     };
@@ -906,6 +921,7 @@ pub const Store = struct {
             .record_fields = (try self.record_fields.serialize(allocator, writer)).*,
             .tags = (try self.tags.serialize(allocator, writer)).*,
             .static_dispatch_constraints = (try self.static_dispatch_constraints.serialize(allocator, writer)).*,
+            .from_numeral_flex_count = 0,
         };
 
         return @constCast(offset_self);

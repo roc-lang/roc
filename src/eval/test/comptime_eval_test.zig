@@ -17,7 +17,8 @@ const Check = check.Check;
 const ModuleEnv = can.ModuleEnv;
 const Allocators = base.Allocators;
 const testing = std.testing;
-const test_allocator = testing.allocator;
+// Use page_allocator for interpreter tests (doesn't track leaks)
+const test_allocator = std.heap.page_allocator;
 
 const EvalModuleResult = struct {
     module_env: *ModuleEnv,
@@ -177,12 +178,14 @@ fn parseCheckAndEvalModuleWithImport(src: []const u8, import_name: []const u8, i
     // Canonicalize the module
     try czer.canonicalizeFile();
 
-    // Set up other_envs for type checking (include Builtin module)
-    // IMPORTANT: Order matters! Builtin is auto-imported first (Import.Idx 0),
-    // then explicit imports follow in declaration order
+    // Set up imported_envs for type checking and evaluation.
+    // Order must match all_module_envs in the interpreter (self module first, then imports).
+    // evalLookupExternal uses all_module_envs[resolved_idx], so resolveImports indices
+    // must match this array. The interpreter detects other_envs[0]==env and uses it directly.
     var imported_envs = std.ArrayList(*const ModuleEnv).empty;
     defer imported_envs.deinit(gpa);
-    try imported_envs.append(gpa, builtin_module.env); // Builtin must be first (auto-import)
+    try imported_envs.append(gpa, module_env); // Self module must be first
+    try imported_envs.append(gpa, builtin_module.env); // Builtin (auto-import)
     try imported_envs.append(gpa, imported_module); // Then explicit imports
 
     // Resolve imports - map each import to its index in imported_envs

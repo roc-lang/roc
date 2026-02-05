@@ -199,6 +199,10 @@ in_progress: std.AutoHashMap(SpecializationKey, void),
 /// Counter for generating unique specialization names
 specialization_counter: u32,
 
+/// Counter for generating unique synthetic argument names (e.g., #arg0, #arg1)
+/// Used during argument normalization to convert complex call arguments into let-bindings
+synthetic_arg_counter: u32,
+
 /// Current phase
 phase: Phase,
 
@@ -245,6 +249,7 @@ pub fn init(
         .specialization_names = std.AutoHashMap(SpecializationKey, base.Ident.Idx).init(allocator),
         .in_progress = std.AutoHashMap(SpecializationKey, void).init(allocator),
         .specialization_counter = 0,
+        .synthetic_arg_counter = 0,
         .phase = .finding,
         .recursion_depth = 0,
         .max_recursion_depth = DEFAULT_MAX_RECURSION_DEPTH,
@@ -491,15 +496,17 @@ pub fn resolveUnspecializedClosuresWithSubstitutions(
 ///
 /// Note: For static dispatch implementations that are simple functions (not closures with
 /// captures), this creates a "pure lambda" closure info with no captures.
+///
+/// INVARIANT: This function requires closure_transformer to be set. All call sites
+/// are guarded by `if (self.closure_transformer) |transformer|`, so this is always true.
 pub fn addResolvedToLambdaSet(
     self: *Self,
     lambda_set: *ClosureTransformer.LambdaSet,
     resolved: ResolvedClosure,
 ) !void {
-    // Create a ClosureInfo for the resolved static dispatch implementation.
-    // Static dispatch implementations are typically top-level functions without captures,
-    // so we create a simple closure with the method ident as the tag name.
-    //
+    // closure_transformer must be set - callers are guarded by if (self.closure_transformer)
+    const transformer = self.closure_transformer orelse unreachable;
+
     // Get the actual method's expression instead of the e_type_var_dispatch expression.
     // If we have a node_idx, use it to get the method definition's expression.
     // Otherwise, fall back to the member_expr from the unspecialized closure.
@@ -509,16 +516,52 @@ pub fn addResolvedToLambdaSet(
         break :blk def.expr;
     } else resolved.unspecialized.member_expr;
 
+    // Check if the implementation has captures
+    const has_captures = self.checkExpressionHasCaptures(lambda_body);
+
+    // Create lifted function patterns - always required for dispatch generation
+    const lifted_patterns = try transformer.createLiftedFunctionPatterns(
+        resolved.impl_lookup.method_ident,
+        has_captures,
+    );
+
+    // Extract lambda args if available
+    const lambda_args = blk: {
+        const expr = self.module_env.store.getExpr(lambda_body);
+        switch (expr) {
+            .e_lambda => |lambda| break :blk lambda.args,
+            .e_closure => |closure| {
+                const lambda_expr = self.module_env.store.getExpr(closure.lambda_idx);
+                switch (lambda_expr) {
+                    .e_lambda => |lambda| break :blk lambda.args,
+                    else => break :blk CIR.Pattern.Span{ .span = base.DataSpan.empty() },
+                }
+            },
+            else => break :blk CIR.Pattern.Span{ .span = base.DataSpan.empty() },
+        }
+    };
+
     const closure_info = ClosureTransformer.ClosureInfo{
         .tag_name = resolved.impl_lookup.method_ident,
+        .source_module = self.module_env.module_name_idx,
         .lambda_body = lambda_body,
-        .lambda_args = CIR.Pattern.Span{ .span = base.DataSpan.empty() },
+        .lambda_args = lambda_args,
         .capture_names = std.ArrayList(base.Ident.Idx).empty,
-        .lifted_fn_pattern = null, // Will be set during further processing if needed
-        .lifted_captures_pattern = null, // No captures for top-level static dispatch impls
+        .lifted_fn_pattern = lifted_patterns.fn_pattern,
+        .lifted_captures_pattern = lifted_patterns.captures_pattern,
     };
 
     try lambda_set.addClosure(self.allocator, closure_info);
+}
+
+/// Check if an expression has captures (is a closure with non-empty captures span).
+/// Static dispatch implementations are typically pure lambdas without captures.
+fn checkExpressionHasCaptures(self: *const Self, expr_idx: Expr.Idx) bool {
+    const expr = self.module_env.store.getExpr(expr_idx);
+    return switch (expr) {
+        .e_closure => |closure| closure.captures.span.len > 0,
+        else => false,
+    };
 }
 
 /// Process all resolved closures and add them to the lambda set.
@@ -1346,24 +1389,98 @@ fn duplicateExpr(
             // Use the specialized function if available, otherwise duplicate the original
             const new_func = specialized_func orelse try self.duplicateExpr(call.func, type_subs);
 
-            // Duplicate arguments
+            // Normalize arguments: complex expressions become let-bindings, simple lookups stay as-is.
+            // This ensures all call arguments are simple symbol references,
+            // matching the architecture of crates/compiler/mono/src/inc_dec.rs.
             const args = self.module_env.store.sliceExpr(call.args);
             const args_start = self.module_env.store.scratch.?.exprs.top();
+            const stmts_start = self.module_env.store.scratchTop("statements");
+            var needs_block = false;
 
             for (args) |arg_idx| {
                 const new_arg = try self.duplicateExpr(arg_idx, type_subs);
-                try self.module_env.store.scratch.?.exprs.append(new_arg);
+                const arg_expr = self.module_env.store.getExpr(new_arg);
+
+                // Check if this argument needs normalization (is not a simple lookup)
+                const is_simple = switch (arg_expr) {
+                    .e_lookup_local => true,
+                    // Literals and other non-refcounted values don't need normalization
+                    .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_zero_argument_tag, .e_empty_record => true,
+                    else => false,
+                };
+
+                if (is_simple) {
+                    try self.module_env.store.scratch.?.exprs.append(new_arg);
+                } else {
+                    // Create a synthetic let-binding for this complex argument
+                    // Use # prefix which is invalid in Roc syntax (starts a comment)
+                    var name_buf: [32]u8 = undefined;
+                    const name = std.fmt.bufPrint(&name_buf, "#arg{d}", .{self.synthetic_arg_counter}) catch "#arg";
+                    self.synthetic_arg_counter += 1;
+
+                    // Create the synthetic identifier and pattern
+                    const ident = base.Ident.for_text(name);
+                    const ident_idx = try self.module_env.insertIdent(ident);
+                    const pattern_idx = try self.module_env.store.addPattern(
+                        Pattern{ .assign = .{ .ident = ident_idx } },
+                        base.Region.zero(),
+                    );
+
+                    // Set the synthetic pattern's type to match the ORIGINAL expression's type.
+                    // We use arg_idx (original) not new_arg (duplicated) because the original
+                    // has valid type info from type checking, while the duplicate may not.
+                    // Later stages (lambda set specialization) need valid type info.
+                    const pattern_var = ModuleEnv.varFrom(pattern_idx);
+                    const expr_var = ModuleEnv.varFrom(arg_idx);
+                    // Extend type store to cover the new pattern index (created after type checking)
+                    try self.module_env.types.extendToVar(pattern_var);
+                    try self.module_env.types.dangerousSetVarRedirect(pattern_var, expr_var);
+
+                    // Create the let-binding statement: #argN = complex_expr
+                    const decl_stmt = try self.module_env.store.addStatement(
+                        .{ .s_decl = .{
+                            .pattern = pattern_idx,
+                            .expr = new_arg,
+                            .anno = null,
+                        } },
+                        base.Region.zero(),
+                    );
+                    try self.module_env.store.addScratchStatement(decl_stmt);
+                    needs_block = true;
+
+                    // Replace the argument with a lookup to the synthetic binding
+                    const lookup_expr = try self.module_env.store.addExpr(
+                        Expr{ .e_lookup_local = .{ .pattern_idx = pattern_idx } },
+                        base.Region.zero(),
+                    );
+                    try self.module_env.store.scratch.?.exprs.append(lookup_expr);
+                }
             }
 
             const new_args_span = try self.module_env.store.exprSpanFrom(args_start);
 
-            return try self.module_env.store.addExpr(Expr{
+            // Create the call expression
+            const call_expr = try self.module_env.store.addExpr(Expr{
                 .e_call = .{
                     .func = new_func,
                     .args = new_args_span,
                     .called_via = call.called_via,
                 },
             }, base.Region.zero());
+
+            // If we created synthetic bindings, wrap the call in a block
+            if (needs_block) {
+                const stmts_span = try self.module_env.store.statementSpanFrom(stmts_start);
+                return try self.module_env.store.addExpr(
+                    Expr{ .e_block = .{
+                        .stmts = stmts_span,
+                        .final_expr = call_expr,
+                    } },
+                    base.Region.zero(),
+                );
+            }
+
+            return call_expr;
         },
 
         .e_lambda => |lambda| {
@@ -1734,6 +1851,10 @@ fn duplicateExpr(
             }, base.Region.zero());
         },
 
+        .e_type_var_dispatch => |dispatch| {
+            return try self.resolveTypeVarDispatch(dispatch, type_subs);
+        },
+
         // Pass through simple expressions unchanged
         .e_num,
         .e_frac_f32,
@@ -1754,11 +1875,89 @@ fn duplicateExpr(
         .e_ellipsis,
         .e_anno_only,
         .e_lookup_required,
-        .e_type_var_dispatch,
         .e_hosted_lambda,
         .e_low_level_lambda,
         .e_crash,
         => return expr_idx,
+    }
+}
+
+/// Resolve a type variable dispatch expression to a concrete method call.
+///
+/// This function is called during monomorphization when we have concrete type
+/// information available. It:
+/// 1. Gets the type variable from the s_type_var_alias statement
+/// 2. Looks up the concrete type using type substitutions
+/// 3. Finds the method implementation for that concrete type
+/// 4. Creates an e_call expression to the resolved method
+fn resolveTypeVarDispatch(
+    self: *Self,
+    dispatch: std.meta.fieldInfo(Expr, .e_type_var_dispatch).type,
+    type_subs: *const types.VarMap,
+) std.mem.Allocator.Error!Expr.Idx {
+    // 1. Get the type var alias statement
+    const stmt = self.module_env.store.getStatement(dispatch.type_var_alias_stmt);
+    const alias_data = stmt.s_type_var_alias;
+
+    // 2. Get the type variable and look up its concrete type
+    const type_var_anno = alias_data.type_var_anno;
+    const ct_var = ModuleEnv.varFrom(type_var_anno);
+
+    // Look up the concrete type in the substitution map
+    const concrete_type = type_subs.get(ct_var) orelse ct_var;
+
+    // 3. Look up the method implementation for the concrete type
+    if (self.lookupStaticDispatch(concrete_type, dispatch.method_name)) |impl| {
+        // 4. Get the method's expression from its definition
+        // Use node_idx to look up the def and get the method's expression
+        const method_expr: Expr.Idx = if (impl.node_idx) |node_idx| blk: {
+            const def_idx: CIR.Def.Idx = @enumFromInt(node_idx);
+            const def = self.module_env.store.getDef(def_idx);
+            break :blk def.expr;
+        } else blk: {
+            // Fallback: create a lookup if we don't have the node_idx
+            const method_pattern = try self.module_env.store.addPattern(
+                Pattern{ .assign = .{ .ident = impl.method_ident } },
+                base.Region.zero(),
+            );
+            break :blk try self.module_env.store.addExpr(
+                Expr{ .e_lookup_local = .{ .pattern_idx = method_pattern } },
+                base.Region.zero(),
+            );
+        };
+
+        // Duplicate the arguments
+        const args = self.module_env.store.sliceExpr(dispatch.args);
+        const args_start = self.module_env.store.scratch.?.exprs.top();
+
+        for (args) |arg_idx| {
+            const new_arg = try self.duplicateExpr(arg_idx, type_subs);
+            try self.module_env.store.scratch.?.exprs.append(new_arg);
+        }
+
+        const new_args_span = try self.module_env.store.exprSpanFrom(args_start);
+
+        // Create the call expression with the resolved method
+        return try self.module_env.store.addExpr(
+            Expr{ .e_call = .{
+                .func = method_expr,
+                .args = new_args_span,
+                .called_via = .apply,
+            } },
+            base.Region.zero(),
+        );
+    } else {
+        // Method not found - create a diagnostic for this error
+        // TODO: Create a more specific diagnostic for method resolution failures
+        const diagnostic_idx = try self.module_env.addDiagnostic(.{
+            .expr_not_canonicalized = .{ .region = base.Region.zero() },
+        });
+        return try self.module_env.store.addExpr(
+            Expr{ .e_runtime_error = .{
+                .diagnostic = diagnostic_idx,
+            } },
+            base.Region.zero(),
+        );
     }
 }
 

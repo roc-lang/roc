@@ -68,6 +68,7 @@ const CIR = @import("CIR.zig");
 const Expr = CIR.Expr;
 const Pattern = @import("Pattern.zig").Pattern;
 const RecordField = CIR.RecordField;
+const LambdaSetInference = @import("LambdaSetInference.zig");
 
 const Self = @This();
 
@@ -129,8 +130,10 @@ pub const EnumDispatchInfo = struct {
 
 /// Information about a transformed closure
 pub const ClosureInfo = struct {
-    /// The tag name for this closure (e.g., `#1_addX`)
+    /// The tag name for this closure (e.g., `#1_addX` or globally unique `UserModule.#1_addX`)
     tag_name: base.Ident.Idx,
+    /// Source module name (for cross-module dispatch identification)
+    source_module: base.Ident.Idx,
     /// The lambda body expression
     lambda_body: Expr.Idx,
     /// The lambda arguments
@@ -722,8 +725,17 @@ current_region: u8,
 /// becomes concrete - we can quickly find all entries that need resolution.
 unspec_by_type_var: UnspecializedByTypeVar,
 
+/// Optional reference to cross-module lambda set inference results.
+/// When provided, used for generating globally unique closure names.
+inference: ?*LambdaSetInference,
+
 /// Initialize the transformer
 pub fn init(allocator: std.mem.Allocator, module_env: *ModuleEnv) Self {
+    return initWithInference(allocator, module_env, null);
+}
+
+/// Initialize the transformer with optional cross-module inference results
+pub fn initWithInference(allocator: std.mem.Allocator, module_env: *ModuleEnv, inference: ?*LambdaSetInference) Self {
     return .{
         .allocator = allocator,
         .module_env = module_env,
@@ -735,6 +747,7 @@ pub fn init(allocator: std.mem.Allocator, module_env: *ModuleEnv) Self {
         .top_level_patterns = std.AutoHashMap(CIR.Pattern.Idx, void).init(allocator),
         .current_region = 0,
         .unspec_by_type_var = UnspecializedByTypeVar.init(allocator),
+        .inference = inference,
     };
 }
 
@@ -1261,41 +1274,58 @@ pub fn deinit(self: *Self) void {
 
 /// Generate a unique tag name for a closure.
 ///
-/// This generates names like "#1_addX", "#2_addX" when a hint is provided,
-/// or "#1", "#2" when no hint is available. The `#` prefix is used because
-/// it's reserved for comments in Roc source code, so these names cannot
+/// When cross-module inference is available, generates globally unique names
+/// like "UserModule.#1_addX" that are valid across module boundaries.
+///
+/// Without inference, generates local names like "#1_addX", "#2_addX" when a hint
+/// is provided, or "#1", "#2" when no hint is available. The `#` prefix is used
+/// because it's reserved for comments in Roc source code, so these names cannot
 /// collide with user-defined tags. RocEmitter transforms `#` to `C` when
 /// printing, so `#1_foo` becomes `C1_foo` in emitted code.
 pub fn generateClosureTagName(self: *Self, hint: ?base.Ident.Idx) !base.Ident.Idx {
     self.closure_counter += 1;
 
-    // If we have a hint (e.g., from the variable name), use it with counter for uniqueness
+    // Build the local part of the name
+    var local_name: []const u8 = undefined;
+    var local_name_allocated: bool = false;
+    defer if (local_name_allocated) self.allocator.free(local_name);
+
     if (hint) |h| {
         const hint_name = self.module_env.getIdent(h);
-        // Use # prefix which can't appear in user code (reserved for comments)
-        // Format: #N_hint where N is the counter
-        const tag_name = try std.fmt.allocPrint(
+        local_name = try std.fmt.allocPrint(
             self.allocator,
             "#{d}_{s}",
             .{ self.closure_counter, hint_name },
         );
-        defer self.allocator.free(tag_name);
-        return try self.module_env.insertIdent(base.Ident.for_text(tag_name));
+        local_name_allocated = true;
+    } else {
+        local_name = try std.fmt.allocPrint(
+            self.allocator,
+            "#{d}",
+            .{self.closure_counter},
+        );
+        local_name_allocated = true;
     }
 
-    // Otherwise generate a numeric name
-    const tag_name = try std.fmt.allocPrint(
-        self.allocator,
-        "#{d}",
-        .{self.closure_counter},
-    );
-    defer self.allocator.free(tag_name);
-    return try self.module_env.insertIdent(base.Ident.for_text(tag_name));
+    // If we have cross-module inference, generate a globally unique name
+    if (self.inference != null) {
+        const module_name = self.module_env.module_name;
+        const global_name = try std.fmt.allocPrint(
+            self.allocator,
+            "{s}.{s}",
+            .{ module_name, local_name },
+        );
+        defer self.allocator.free(global_name);
+        return try self.module_env.insertIdent(base.Ident.for_text(global_name));
+    }
+
+    // Without inference, use local name
+    return try self.module_env.insertIdent(base.Ident.for_text(local_name));
 }
 
 /// Generate the lowercase function name from a closure tag name.
 /// E.g., "#1_foo" -> "c1_foo" (replaces # with lowercase c)
-fn generateLiftedFunctionName(self: *Self, tag_name: base.Ident.Idx) !base.Ident.Idx {
+pub fn generateLiftedFunctionName(self: *Self, tag_name: base.Ident.Idx) !base.Ident.Idx {
     const tag_str = self.module_env.getIdent(tag_name);
 
     // Allocate a copy with # replaced by lowercase 'c'
@@ -1314,7 +1344,7 @@ fn generateLiftedFunctionName(self: *Self, tag_name: base.Ident.Idx) !base.Ident
 /// Create patterns for calling a lifted function in dispatch.
 /// Returns the pattern for the lifted function name and the captures pattern.
 /// The actual lifted function body is created by LambdaLifter.
-fn createLiftedFunctionPatterns(
+pub fn createLiftedFunctionPatterns(
     self: *Self,
     tag_name: base.Ident.Idx,
     has_captures: bool,
@@ -1419,11 +1449,7 @@ fn generateDispatchMatch(
                 .called_via = .apply,
             },
         }, base.Region.zero());
-    } else blk: {
-        // Fallback: no lifted function pattern (shouldn't happen)
-        // Transform the lambda body to handle nested closures (old behavior)
-        break :blk try self.transformExpr(closure_info.lambda_body);
-    };
+    } else unreachable; // lifted_fn_pattern must always be set
 
     // Step 4: Create the match branch
     const branch_pattern_start = self.module_env.store.scratchMatchBranchPatternTop();
@@ -1557,10 +1583,7 @@ fn generateLambdaSetDispatchMatch(
                     .called_via = .apply,
                 },
             }, base.Region.zero());
-        } else blk: {
-            // Fallback: no lifted function pattern (shouldn't happen)
-            break :blk try self.transformExpr(closure_info.lambda_body);
-        };
+        } else unreachable; // lifted_fn_pattern must always be set
 
         // Step 4: Create match branch pattern
         const branch_pattern_start = self.module_env.store.scratchMatchBranchPatternTop();
@@ -1736,6 +1759,7 @@ pub fn transformExprWithLambdaSet(
                             // Add to lambda set with the lambda's info
                             try lambda_set.addClosure(self.allocator, ClosureInfo{
                                 .tag_name = tag_name,
+                                .source_module = self.module_env.module_name_idx,
                                 .lambda_body = lambda.body,
                                 .lambda_args = lambda.args,
                                 .capture_names = std.ArrayList(base.Ident.Idx).empty,
@@ -1781,6 +1805,7 @@ pub fn transformExprWithLambdaSet(
                         // Add to lambda set with the lambda's info
                         try lambda_set.addClosure(self.allocator, ClosureInfo{
                             .tag_name = tag_name,
+                            .source_module = self.module_env.module_name_idx,
                             .lambda_body = lambda.body,
                             .lambda_args = lambda.args,
                             .capture_names = std.ArrayList(base.Ident.Idx).empty,
@@ -2008,6 +2033,7 @@ pub fn transformClosure(
             // Store closure info for dispatch function generation
             try self.closures.put(closure_expr_idx, ClosureInfo{
                 .tag_name = tag_name,
+                .source_module = self.module_env.module_name_idx,
                 .lambda_body = lambda.body,
                 .lambda_args = lambda.args,
                 .capture_names = capture_names,

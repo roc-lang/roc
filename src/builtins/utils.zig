@@ -9,7 +9,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-const RocOps = @import("host_abi.zig").RocOps;
+pub const RocOps = @import("host_abi.zig").RocOps;
 const RocDealloc = @import("host_abi.zig").RocDealloc;
 const RocAlloc = @import("host_abi.zig").RocAlloc;
 const RocRealloc = @import("host_abi.zig").RocRealloc;

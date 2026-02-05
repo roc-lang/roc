@@ -270,8 +270,8 @@ TYPE MISMATCH - syntax_grab_bag.md:167:3:167:3
 TYPE MISMATCH - syntax_grab_bag.md:146:15:146:18
 MISSING METHOD - syntax_grab_bag.md:176:12:176:22
 + - :0:0:0:0
-TYPE MISMATCH - syntax_grab_bag.md:144:9:196:2
 TYPE MISMATCH - syntax_grab_bag.md:150:3:150:6
+TYPE MISMATCH - syntax_grab_bag.md:144:9:196:2
 # PROBLEMS
 **UNDECLARED TYPE**
 The type _Bar_ is not declared in this scope.
@@ -990,6 +990,24 @@ The value's type, which does not have a method named**plus**, is:
 **Hint:** The **+** operator calls a method named **plus** on the value preceding it, passing the value after the operator as the one argument.
 
 **TYPE MISMATCH**
+This `return` does not match the function's return type:
+**syntax_grab_bag.md:150:3:150:6:**
+```roc
+		tag # Comment after return statement
+```
+		^^^
+
+It has the type:
+
+    [Blue, ..]
+
+But the function's return type is:
+
+    Try({  }, _d)
+
+**Hint:** All `return` statements and the final expression in a function must have the same type.
+
+**TYPE MISMATCH**
 This expression is used in an unexpected way:
 **syntax_grab_bag.md:144:9:196:2:**
 ```roc
@@ -1050,31 +1068,13 @@ main! = |_| { # Yeah I can leave a comment here
 
 It has the type:
 
-    List(Error) => Try({  }, _d)
+    List(Error) => Error
 
 But the annotation say it should be:
 
-    List(Error) -> Try({  }, _d)
+    List(Error) -> Error
 
 **Hint:** This function is effectful, but a pure function is expected.
-
-**TYPE MISMATCH**
-This `return` does not match the function's return type:
-**syntax_grab_bag.md:150:3:150:6:**
-```roc
-		tag # Comment after return statement
-```
-		^^^
-
-It has the type:
-
-    [Blue, ..]
-
-But the function's return type is:
-
-    Try({  }, _d)
-
-**Hint:** All `return` statements and the final expression in a function must have the same type.
 
 # TOKENS
 ~~~zig
@@ -2765,7 +2765,7 @@ expect {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(patt (type "Bool -> Dec"))
 		(patt (type "Error -> U64"))
 		(patt (type "[Red, ..[Blue, Green, ..]], _arg -> Error"))
 		(patt (type "List(Error) -> Try({  }, _d)"))
@@ -2811,7 +2811,7 @@ expect {
 				(ty-args
 					(ty-rigid-var (name "a"))))))
 	(expressions
-		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(expr (type "Bool -> Dec"))
 		(expr (type "Error -> U64"))
 		(expr (type "[Red, ..[Blue, Green, ..]], _arg -> Error"))
 		(expr (type "List(Error) -> Try({  }, _d)"))
