@@ -713,7 +713,8 @@ pub const DevEvaluator = struct {
             1;
 
         // Create the code generator with the layout store
-        var codegen = backend.MonoExprCodeGen.init(
+        // Use NativeMonoExprCodeGen since we're executing on the host machine
+        var codegen = backend.NativeMonoExprCodeGen.init(
             self.allocator,
             &mono_store,
             layout_store_ptr,
