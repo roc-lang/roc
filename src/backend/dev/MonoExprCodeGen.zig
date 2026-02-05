@@ -13263,16 +13263,32 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 .not_self_recursive => {},
             }
 
+            // Save early return state (return_stmt uses jump-to-epilogue mechanism)
+            const saved_early_return_patches_len = self.early_return_patches.items.len;
+
             // Bind parameters to argument registers
             try self.bindProcParams(proc.args, proc.arg_layouts);
 
             // Generate the body (control flow statements)
-            // Note: .ret statements in the body will emit epilogue+ret
+            // Note: .return_stmt emits jumps that are patched to the shared epilogue below
             try self.generateStmt(proc.body);
 
             // Restore recursive context
             self.current_recursive_symbol = old_recursive_symbol;
             self.current_recursive_join_point = old_recursive_join_point;
+
+            // Emit shared epilogue using DeferredFrameBuilder with actual stack usage
+            const body_epilogue_offset = self.codegen.currentOffset();
+            {
+                const actual_locals: u32 = if (comptime target.toCpuArch() == .aarch64)
+                    @intCast(self.codegen.stack_offset - 16 - CodeGen.CALLEE_SAVED_AREA_SIZE)
+                else
+                    @intCast(-self.codegen.stack_offset - CodeGen.CALLEE_SAVED_AREA_SIZE);
+                var builder = CodeGen.DeferredFrameBuilder.init();
+                builder.setCalleeSavedMask(self.codegen.callee_saved_used);
+                builder.setStackSize(actual_locals);
+                try builder.emitEpilogue(&self.codegen.emit);
+            }
 
             const body_end = self.codegen.currentOffset();
 
@@ -13285,12 +13301,11 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 // Truncate buffer back to body_start
                 self.codegen.emit.buf.shrinkRetainingCapacity(body_start);
 
-                // Emit prologue using CodeGen (now knows callee_saved_used)
-                // CRITICAL: Use emitPrologueWithAlloc which allocates stack BEFORE saving
-                // callee-saved registers. On Windows x64, there's no red zone, so we must
-                // not write to [RBP-offset] until after sub rsp, N.
+                // Emit prologue using DeferredFrameBuilder (now knows callee_saved_used).
+                // Pass only the actual locals size — the builder adds callee-saved space internally.
                 const prologue_start = self.codegen.currentOffset();
-                try self.codegen.emitPrologueWithAlloc(@intCast(-self.codegen.stack_offset));
+                const actual_locals_x86: u32 = @intCast(-self.codegen.stack_offset - CodeGen.CALLEE_SAVED_AREA_SIZE);
+                try self.codegen.emitPrologueWithAlloc(actual_locals_x86);
                 const prologue_size = self.codegen.currentOffset() - prologue_start;
 
                 // PHASE 2.5: Patch self-calls in body_bytes
@@ -13332,6 +13347,16 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     reloc.adjustOffset(prologue_size);
                 }
 
+                // Patch return-stmt jumps to the shared epilogue
+                for (self.early_return_patches.items[saved_early_return_patches_len..]) |*patch| {
+                    patch.* += prologue_size;
+                }
+                const final_epilogue = body_epilogue_offset - body_start + prologue_size + prologue_start;
+                for (self.early_return_patches.items[saved_early_return_patches_len..]) |patch| {
+                    self.codegen.patchJump(patch, final_epilogue);
+                }
+                self.early_return_patches.shrinkRetainingCapacity(saved_early_return_patches_len);
+
                 // Update procedure registry with correct code_start (prologue_start)
                 if (self.proc_registry.getPtr(key)) |entry| {
                     entry.code_start = prologue_start;
@@ -13346,15 +13371,13 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 // Truncate buffer back to body_start
                 self.codegen.emit.buf.shrinkRetainingCapacity(body_start);
 
-                // Emit aarch64 prologue
+                // Emit aarch64 prologue using DeferredFrameBuilder with actual stack usage
                 const prologue_start = self.codegen.currentOffset();
-                // Total frame = FP/LR (16) + callee-saved area (80) + locals (PROC_STACK_SIZE)
-                const total_frame = 16 + CodeGen.CALLEE_SAVED_AREA_SIZE + PROC_STACK_SIZE;
-                const scaled_offset: i7 = @intCast(@divExact(-total_frame, 8));
-                try self.codegen.emit.stpPreIndex(.w64, .FP, .LR, .ZRSP, scaled_offset);
-                try self.codegen.emit.movRegReg(.w64, .FP, .ZRSP);
-                // Save callee-saved registers at fixed offsets [FP+16], [FP+32], etc.
-                try self.codegen.emitSaveCalleeSavedToFrame();
+                const actual_locals: u32 = @intCast(self.codegen.stack_offset - 16 - CodeGen.CALLEE_SAVED_AREA_SIZE);
+                var frame_builder = CodeGen.DeferredFrameBuilder.init();
+                frame_builder.setCalleeSavedMask(self.codegen.callee_saved_used);
+                frame_builder.setStackSize(actual_locals);
+                _ = try frame_builder.emitPrologue(&self.codegen.emit);
                 const prologue_size = self.codegen.currentOffset() - prologue_start;
 
                 // PHASE 2.5: Patch self-calls in body_bytes
@@ -13399,6 +13422,16 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 for (self.codegen.relocations.items[relocs_before..]) |*reloc| {
                     reloc.adjustOffset(prologue_size);
                 }
+
+                // Patch return-stmt jumps to the shared epilogue
+                for (self.early_return_patches.items[saved_early_return_patches_len..]) |*patch| {
+                    patch.* += prologue_size;
+                }
+                const final_epilogue = body_epilogue_offset - body_start + prologue_size + prologue_start;
+                for (self.early_return_patches.items[saved_early_return_patches_len..]) |patch| {
+                    self.codegen.patchJump(patch, final_epilogue);
+                }
+                self.early_return_patches.shrinkRetainingCapacity(saved_early_return_patches_len);
 
                 // Update procedure registry
                 if (self.proc_registry.getPtr(key)) |entry| {
@@ -13528,8 +13561,17 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             // Record epilogue location (relative to body, will adjust after prepending prologue)
             const body_epilogue_offset = self.codegen.currentOffset();
 
-            // Emit epilogue and return
-            try self.emitEpilogue();
+            // Emit epilogue using DeferredFrameBuilder with actual stack usage
+            {
+                const actual_locals: u32 = if (comptime target.toCpuArch() == .aarch64)
+                    @intCast(self.codegen.stack_offset - 16 - CodeGen.CALLEE_SAVED_AREA_SIZE)
+                else
+                    @intCast(-self.codegen.stack_offset - CodeGen.CALLEE_SAVED_AREA_SIZE);
+                var builder = CodeGen.DeferredFrameBuilder.init();
+                builder.setCalleeSavedMask(self.codegen.callee_saved_used);
+                builder.setStackSize(actual_locals);
+                try builder.emitEpilogue(&self.codegen.emit);
+            }
 
             const body_end = self.codegen.currentOffset();
 
@@ -13542,14 +13584,11 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 // Truncate buffer back to body_start
                 self.codegen.emit.buf.shrinkRetainingCapacity(body_start);
 
-                // Emit prologue using CodeGen (now knows callee_saved_used)
-                // CRITICAL: Use emitPrologueWithAlloc which allocates stack BEFORE saving
-                // callee-saved registers. On Windows x64, there's no red zone, so we must
-                // not write to [RBP-offset] until after sub rsp, N.
-                // emitPrologueWithAlloc handles 16-byte alignment internally.
+                // Emit prologue using DeferredFrameBuilder (now knows callee_saved_used).
+                // Pass only the actual locals size — the builder adds callee-saved space internally.
                 const prologue_start = self.codegen.currentOffset();
-                const stack_alloc_size: u32 = @intCast(-self.codegen.stack_offset);
-                try self.codegen.emitPrologueWithAlloc(stack_alloc_size);
+                const actual_locals_x86: u32 = @intCast(-self.codegen.stack_offset - CodeGen.CALLEE_SAVED_AREA_SIZE);
+                try self.codegen.emitPrologueWithAlloc(actual_locals_x86);
                 const prologue_size = self.codegen.currentOffset() - prologue_start;
 
                 // Re-append body
@@ -13601,15 +13640,13 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 // Truncate buffer back to body_start
                 self.codegen.emit.buf.shrinkRetainingCapacity(body_start);
 
-                // Emit aarch64 prologue
+                // Emit aarch64 prologue using DeferredFrameBuilder with actual stack usage
                 const prologue_start = self.codegen.currentOffset();
-                // Total frame = FP/LR (16) + callee-saved area (80) + locals (PROC_STACK_SIZE)
-                const total_frame = 16 + CodeGen.CALLEE_SAVED_AREA_SIZE + PROC_STACK_SIZE;
-                const scaled_offset: i7 = @intCast(@divExact(-total_frame, 8));
-                try self.codegen.emit.stpPreIndex(.w64, .FP, .LR, .ZRSP, scaled_offset);
-                try self.codegen.emit.movRegReg(.w64, .FP, .ZRSP);
-                // Save callee-saved registers at fixed offsets [FP+16], [FP+32], etc.
-                try self.codegen.emitSaveCalleeSavedToFrame();
+                const actual_locals: u32 = @intCast(self.codegen.stack_offset - 16 - CodeGen.CALLEE_SAVED_AREA_SIZE);
+                var frame_builder = CodeGen.DeferredFrameBuilder.init();
+                frame_builder.setCalleeSavedMask(self.codegen.callee_saved_used);
+                frame_builder.setStackSize(actual_locals);
+                _ = try frame_builder.emitPrologue(&self.codegen.emit);
                 const prologue_size = self.codegen.currentOffset() - prologue_start;
 
                 // Re-append body
@@ -14380,75 +14417,14 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             return .{ .stack = stack_offset };
         }
 
-        /// Fixed stack frame size for procedures (includes space for spills)
-        /// Note: On aarch64, stp/ldp use 7-bit signed scaled offsets.
-        /// Max frame size is 63 * 8 = 504 bytes. We use 256 bytes for locals
-        /// to handle records with multiple fields (16 bytes each) and nested
-        /// structures without stack overflow.
-        const PROC_STACK_SIZE: i32 = 256;
+        /// Stack size for main expression locals. Needs to be large enough for inlined builtins
+        /// like List.map which can use 400+ bytes.
+        const MAIN_STACK_SIZE: u32 = 1024;
 
-        /// Emit function prologue (architecture-specific).
-        /// Sets up the stack frame for the function, including space for local variables.
-        fn emitPrologue(self: *Self) Error!void {
-            if (comptime target.toCpuArch() == .aarch64) {
-                // AArch64 prologue:
-                // stp x29, x30, [sp, #-(16+CALLEE_SAVED+STACK_SIZE)]!  ; Save FP/LR and allocate stack
-                // mov x29, sp                                          ; Set up new frame pointer
-                // Save callee-saved registers at fixed offsets
-                // Total frame = 16 (FP/LR) + CALLEE_SAVED_AREA (80) + PROC_STACK_SIZE (locals)
-                // stp offset is in units of 8 bytes (scaled)
-                const total_frame = 16 + CodeGen.CALLEE_SAVED_AREA_SIZE + PROC_STACK_SIZE;
-                const scaled_offset: i7 = @intCast(@divExact(-total_frame, 8));
-                try self.codegen.emit.stpPreIndex(.w64, .FP, .LR, .ZRSP, scaled_offset);
-                try self.codegen.emit.movRegReg(.w64, .FP, .ZRSP);
-                // Save callee-saved registers at fixed offsets [FP+16], [FP+32], etc.
-                try self.codegen.emitSaveCalleeSavedToFrame();
-                // Reset stack_offset to account for the pre-allocated space
-                // Stack slots start at FP+16+80 (above saved FP/LR and callee-saved) and go up
-                self.codegen.stack_offset = 16 + CodeGen.CALLEE_SAVED_AREA_SIZE;
-            } else {
-                // x86_64 prologue:
-                // push rbp                    ; Save frame pointer
-                // mov rbp, rsp                ; Set up new frame pointer
-                // sub rsp, PROC_STACK_SIZE   ; Allocate stack space
-                try self.codegen.emit.push(.RBP);
-                try self.codegen.emit.movRegReg(.w64, .RBP, .RSP);
-                try self.codegen.emit.subRegImm32(.w64, .RSP, PROC_STACK_SIZE);
-                // Stack slots are at negative offsets from RBP
-                self.codegen.stack_offset = 0; // Will go negative
-            }
-        }
-
-        /// Emit function epilogue (architecture-specific).
-        /// Tears down the stack frame and returns.
-        fn emitEpilogue(self: *Self) Error!void {
-            if (comptime target.toCpuArch() == .aarch64) {
-                // AArch64 epilogue:
-                // First restore callee-saved registers from fixed offsets [FP+16], [FP+32], etc.
-                try self.codegen.emitRestoreCalleeSavedFromFrame();
-                // ldp x29, x30, [sp], #(16+CALLEE_SAVED+STACK_SIZE)  ; Restore FP/LR and deallocate
-                // ret                                                 ; Return to caller
-                // ldp offset is in units of 8 bytes (scaled)
-                const total_frame = 16 + CodeGen.CALLEE_SAVED_AREA_SIZE + PROC_STACK_SIZE;
-                const scaled_offset: i7 = @intCast(@divExact(total_frame, 8));
-                try self.codegen.emit.ldpPostIndex(.w64, .FP, .LR, .ZRSP, scaled_offset);
-                try self.codegen.emit.ret();
-            } else {
-                // x86_64 epilogue: Use CodeGen's epilogue which handles callee-saved restore
-                try self.codegen.emitEpilogue();
-            }
-        }
-
-        /// Emit prologue for main expression code.
-        /// Sets up frame pointer and saves callee-saved registers using ForwardFrameBuilder.
-        /// The frame pointer is REQUIRED because emitStoreStack/emitLoadStack use FP-relative addressing.
-        fn emitMainPrologue(self: *Self) Error!void {
-            // Stack size for local variables. Needs to be large enough for inlined builtins
-            // like List.map which can use 400+ bytes.
-            const MAIN_STACK_SIZE: u32 = 1024;
-
+        /// Create a ForwardFrameBuilder configured for the main expression frame.
+        /// Shared between prologue and epilogue to ensure they always match.
+        fn initMainFrameBuilder(self: *Self) ForwardFrameBuilder {
             var frame = ForwardFrameBuilder.init(&self.codegen.emit);
-
             if (comptime target.toCpuArch() == .aarch64) {
                 // Save X19 and X20 (callee-saved) which we use for result ptr and RocOps ptr
                 frame.saveViaPush(.X19);
@@ -14458,35 +14434,43 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 frame.saveViaPush(.RBX);
                 frame.saveViaPush(.R12);
             }
-
             frame.setStackSize(MAIN_STACK_SIZE);
+            return frame;
+        }
 
-            // emitPrologue returns the initial stack_offset for allocStackSlot
-            // With 2 pushed registers, this will be -16 (first allocation at -32)
-            const initial_offset = try frame.emitPrologue();
-            self.codegen.stack_offset = initial_offset;
+        /// Emit prologue for main expression code.
+        /// Sets up frame pointer and saves callee-saved registers using ForwardFrameBuilder.
+        fn emitMainPrologue(self: *Self) Error!void {
+            var frame = self.initMainFrameBuilder();
+            self.codegen.stack_offset = try frame.emitPrologue();
         }
 
         /// Emit epilogue for main expression code.
         /// Restores callee-saved registers and frame pointer using ForwardFrameBuilder, then returns.
         fn emitMainEpilogue(self: *Self) Error!void {
-            // Must match configuration from emitMainPrologue
-            const MAIN_STACK_SIZE: u32 = 1024;
-
-            var frame = ForwardFrameBuilder.init(&self.codegen.emit);
-
-            if (comptime target.toCpuArch() == .aarch64) {
-                frame.saveViaPush(.X19);
-                frame.saveViaPush(.X20);
-            } else {
-                frame.saveViaPush(.RBX);
-                frame.saveViaPush(.R12);
-            }
-
-            frame.setStackSize(MAIN_STACK_SIZE);
-
-            // emitEpilogue will compute actual_stack_alloc from the configuration
+            var frame = self.initMainFrameBuilder();
             try frame.emitEpilogue();
+        }
+
+        /// Stack size for entrypoint wrapper locals.
+        const ENTRYPOINT_STACK_SIZE: u32 = 64;
+
+        /// Create a ForwardFrameBuilder configured for the entrypoint wrapper frame.
+        /// Shared between prologue and epilogue to ensure they always match.
+        /// Saves: roc_ops, ret_ptr, args_ptr into callee-saved registers.
+        fn initEntrypointFrameBuilder(self: *Self) ForwardFrameBuilder {
+            var frame = ForwardFrameBuilder.init(&self.codegen.emit);
+            if (comptime target.toCpuArch() == .aarch64) {
+                frame.saveViaPush(.X19); // roc_ops
+                frame.saveViaPush(.X20); // ret_ptr
+                frame.saveViaPush(.X21); // args_ptr
+            } else {
+                frame.saveViaPush(.RBX); // ret_ptr
+                frame.saveViaPush(.R12); // roc_ops
+                frame.saveViaPush(.R13); // args_ptr
+            }
+            frame.setStackSize(ENTRYPOINT_STACK_SIZE);
+            return frame;
         }
 
         /// Bind procedure parameters to argument registers.
@@ -14805,8 +14789,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             try self.emitMovRegReg(return_reg, value_reg);
                         }
                     }
-                    // Emit epilogue (restores frame and returns)
-                    try self.emitEpilogue();
+                    // Emit jump to shared epilogue (patched after body gen knows actual frame size)
+                    const patch = try self.codegen.emitJump();
+                    try self.early_return_patches.append(self.allocator, patch);
                 },
 
                 .expr_stmt => |e| {
@@ -15694,17 +15679,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             // aarch64 AAPCS64: X0=roc_ops, X1=ret_ptr, X2=args_ptr
 
             if (arch == .aarch64 or arch == .aarch64_be) {
-                // Reserve space for: FP/LR (16) + callee-saved x19/x20 (16) + x21 with padding (16) + locals (64)
-                // Total: 112 bytes
-                const frame_size: i32 = 112;
-                const scaled_offset: i7 = @intCast(@divExact(-frame_size, 8));
-                try self.codegen.emit.stpPreIndex(.w64, .FP, .LR, .ZRSP, scaled_offset);
-                try self.codegen.emit.movRegReg(.w64, .FP, .ZRSP);
-
-                // Save callee-saved registers at fixed offsets from FP
-                // [FP+16] = x19/x20, [FP+32] = x21 (paired with x22 for alignment)
-                try self.codegen.emit.stpSignedOffset(.w64, .X19, .X20, .FP, 2); // FP + 16
-                try self.codegen.emit.stpSignedOffset(.w64, .X21, .X22, .FP, 4); // FP + 32
+                // Emit prologue using ForwardFrameBuilder
+                var frame = self.initEntrypointFrameBuilder();
+                self.codegen.stack_offset = try frame.emitPrologue();
 
                 // Now safe to use callee-saved registers
                 // Save RocOps pointer (X0) to callee-saved register X19
@@ -15715,11 +15692,6 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 try self.codegen.emit.movRegReg(.w64, .X21, .X2);
 
                 self.roc_ops_reg = .X19;
-
-                // Initialize stack_offset to skip over saved registers
-                // Frame layout: [FP+0]=FP, [FP+8]=LR, [FP+16]=x19, [FP+24]=x20, [FP+32]=x21, [FP+40]=x22
-                // Locals start at [FP+48]
-                self.codegen.stack_offset = 48;
 
                 // Unpack arguments from args_ptr (X21) to argument registers
                 var args_offset: i32 = 0;
@@ -15782,31 +15754,17 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     try self.storeResultToSavedPtr(final_result, actual_ret_layout, .X20, 1);
                 }
 
-                // Epilogue: restore callee-saved registers first
-                try self.codegen.emit.ldpSignedOffset(.w64, .X21, .X22, .FP, 4); // FP + 32
-                try self.codegen.emit.ldpSignedOffset(.w64, .X19, .X20, .FP, 2); // FP + 16
-
-                // Restore FP/LR and return
-                try self.codegen.emit.ldpPostIndex(.w64, .FP, .LR, .ZRSP, @intCast(@divExact(frame_size, 8)));
-                try self.codegen.emit.ret();
+                // Epilogue using ForwardFrameBuilder (matches prologue)
+                var epilogue_frame = self.initEntrypointFrameBuilder();
+                try epilogue_frame.emitEpilogue();
             } else {
-                // x86_64: emit prologue
-                try self.codegen.emit.pushReg(.RBP);
-                try self.codegen.emit.movRegReg(.w64, .RBP, .RSP);
-
-                // Save callee-saved registers we'll use
-                try self.codegen.emit.pushReg(.RBX); // Will hold ret_ptr
-                try self.codegen.emit.pushReg(.R12); // Will hold RocOps
-                try self.codegen.emit.pushReg(.R13); // Will hold args_ptr
-
-                // Align stack to 16 bytes (we pushed 4 regs = 32 bytes, already aligned)
-                // Reserve space for locals
-                const local_space: i32 = 64;
-                try self.codegen.emit.subRegImm32(.w64, .RSP, @intCast(local_space));
+                // x86_64: emit prologue using ForwardFrameBuilder
+                var frame = self.initEntrypointFrameBuilder();
+                self.codegen.stack_offset = try frame.emitPrologue();
 
                 // Track prologue info for unwind tables
                 prologue_size = @intCast(self.codegen.currentOffset() - func_start);
-                stack_alloc = @intCast(local_space);
+                stack_alloc = frame.computeActualStackAlloc();
 
                 // On entry, arguments are in different registers depending on ABI:
                 // Windows x64 ABI: RCX=roc_ops, RDX=ret_ptr, R8=args_ptr
@@ -15830,9 +15788,6 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 }
 
                 self.roc_ops_reg = .R12;
-
-                // Initialize stack offset for code generation
-                self.codegen.stack_offset = -local_space;
 
                 // Unpack arguments from args_ptr (R13) to argument registers
                 // System V: RDI, RSI, RDX, RCX, R8, R9 for first 6 args
@@ -15903,13 +15858,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     try self.storeResultToSavedPtr(final_result, actual_ret_layout, .RBX, 1);
                 }
 
-                // Epilogue: deallocate locals, restore callee-saved, return
-                try self.codegen.emit.addRegImm32(.w64, .RSP, @intCast(local_space));
-                try self.codegen.emit.popReg(.R13);
-                try self.codegen.emit.popReg(.R12);
-                try self.codegen.emit.popReg(.RBX);
-                try self.codegen.emit.popReg(.RBP);
-                try self.codegen.emit.ret();
+                // Epilogue using ForwardFrameBuilder (matches prologue)
+                var epilogue_frame = self.initEntrypointFrameBuilder();
+                try epilogue_frame.emitEpilogue();
             }
 
             const func_end = self.codegen.currentOffset();

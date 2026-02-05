@@ -259,8 +259,17 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
         fn calculatePrologueSizeAarch64(self: *const Self) u32 {
             var size: u32 = 0;
 
-            // stp x29, x30, [sp, #-N]! (4 bytes)
-            size += 4;
+            const callee_saved_space: u32 = @intCast(CalleeSavedInfo.AREA_SIZE);
+            const total_frame: u32 = 16 + callee_saved_space + self.stack_size;
+            const aligned_frame = CC.alignStackSize(total_frame);
+
+            if (aligned_frame <= 504) {
+                // stp x29, x30, [sp, #-N]! (4 bytes)
+                size += 4;
+            } else {
+                // sub sp, sp, #N (4 bytes) + stp x29, x30, [sp] (4 bytes)
+                size += 8;
+            }
 
             // mov x29, sp (4 bytes)
             size += 4;
@@ -276,14 +285,23 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
         }
 
         fn emitPrologueAarch64(self: *Self, emit: *EmitType) !i32 {
-            // Calculate total frame size
-            const callee_saved_space = self.countCalleeSavedPairs() * 16;
-            const total_frame: i32 = 16 + @as(i32, @intCast(callee_saved_space)) + @as(i32, @intCast(self.stack_size));
-            const aligned_frame = @as(i32, @intCast(CC.alignStackSize(@intCast(total_frame))));
+            // Calculate total frame size.
+            // Use the FULL callee-saved area size (not just used pairs) because
+            // saves are at fixed offsets: pair 0 at [FP+16], pair 4 at [FP+80], etc.
+            const callee_saved_space: u32 = @intCast(CalleeSavedInfo.AREA_SIZE);
+            const total_frame: u32 = 16 + callee_saved_space + self.stack_size;
+            const aligned_frame = CC.alignStackSize(total_frame);
 
-            // 1. stp x29, x30, [sp, #-frame_size]! (pre-index: allocate and save FP/LR)
-            const scaled_offset: i7 = @intCast(@divExact(-aligned_frame, 8));
-            try emit.stpPreIndex(.w64, .FP, .LR, .ZRSP, scaled_offset);
+            // 1. Allocate frame and save FP/LR
+            if (aligned_frame <= 504) {
+                // Small frame: stp pre-index (scaled offset fits in i7)
+                const scaled_offset: i7 = @intCast(@divExact(-@as(i32, @intCast(aligned_frame)), 8));
+                try emit.stpPreIndex(.w64, .FP, .LR, .ZRSP, scaled_offset);
+            } else {
+                // Large frame: sub sp first, then store FP/LR at [sp]
+                try emit.subRegRegImm12(.w64, .ZRSP, .ZRSP, @intCast(aligned_frame));
+                try emit.stpSignedOffset(.w64, .FP, .LR, .ZRSP, 0);
+            }
 
             // 2. mov x29, sp (set frame pointer)
             try emit.movRegReg(.w64, .FP, .ZRSP);
@@ -291,7 +309,7 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
             // 3. Save callee-saved register pairs at fixed FP offsets
             try self.emitSaveCalleeSavedAarch64(emit);
 
-            self.actual_stack_alloc = @intCast(aligned_frame);
+            self.actual_stack_alloc = aligned_frame;
 
             // Return initial stack offset (positive from FP for aarch64)
             // Locals start after FP/LR (16) + callee-saved area
@@ -299,19 +317,26 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
         }
 
         fn emitEpilogueAarch64(self: *Self, emit: *EmitType) !void {
-            // Recompute if needed
+            // Recompute if needed (use full callee-saved area size for fixed offsets)
             if (self.actual_stack_alloc == 0) {
-                const callee_saved_space = self.countCalleeSavedPairs() * 16;
-                const total_frame: i32 = 16 + @as(i32, @intCast(callee_saved_space)) + @as(i32, @intCast(self.stack_size));
-                self.actual_stack_alloc = CC.alignStackSize(@intCast(total_frame));
+                const callee_saved_space: u32 = @intCast(CalleeSavedInfo.AREA_SIZE);
+                const total_frame: u32 = 16 + callee_saved_space + self.stack_size;
+                self.actual_stack_alloc = CC.alignStackSize(total_frame);
             }
 
             // 1. Restore callee-saved register pairs
             try self.emitRestoreCalleeSavedAarch64(emit);
 
-            // 2. ldp x29, x30, [sp], #frame_size (post-index: restore FP/LR and deallocate)
-            const scaled_offset: i7 = @intCast(@divExact(@as(i32, @intCast(self.actual_stack_alloc)), 8));
-            try emit.ldpPostIndex(.w64, .FP, .LR, .ZRSP, scaled_offset);
+            // 2. Restore FP/LR and deallocate frame
+            if (self.actual_stack_alloc <= 504) {
+                // Small frame: ldp post-index (scaled offset fits in i7)
+                const scaled_offset: i7 = @intCast(@divExact(@as(i32, @intCast(self.actual_stack_alloc)), 8));
+                try emit.ldpPostIndex(.w64, .FP, .LR, .ZRSP, scaled_offset);
+            } else {
+                // Large frame: ldp without writeback, then add sp
+                try emit.ldpSignedOffset(.w64, .FP, .LR, .ZRSP, 0);
+                try emit.addRegRegImm12(.w64, .ZRSP, .ZRSP, @intCast(self.actual_stack_alloc));
+            }
 
             // 3. ret
             try emit.ret();
@@ -343,16 +368,6 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
             const mask1 = @as(u32, 1) << @intFromEnum(pair[0]);
             const mask2 = @as(u32, 1) << @intFromEnum(pair[1]);
             return (self.callee_saved_mask & (mask1 | mask2)) != 0;
-        }
-
-        fn countCalleeSavedPairs(self: *const Self) u32 {
-            var count: u32 = 0;
-            for (CalleeSavedInfo.PAIRS) |pair| {
-                if (self.isPairUsed(pair)) {
-                    count += 1;
-                }
-            }
-            return count;
         }
 
         /// Callee-saved register slots (for direct access if needed)
