@@ -15,7 +15,7 @@ const Registers = @import("Registers.zig");
 const SystemV = @import("SystemV.zig");
 const WindowsFastcall = @import("WindowsFastcall.zig");
 const Relocation = @import("../Relocation.zig").Relocation;
-const GenericCodeGen = @import("../CodeGen.zig");
+const ValueStorageMod = @import("../ValueStorage.zig");
 
 const GeneralReg = Registers.GeneralReg;
 const FloatReg = Registers.FloatReg;
@@ -93,7 +93,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
         allocator: Allocator,
         stack_offset: i32,
         relocations: std.ArrayList(Relocation),
-        locals: std.AutoHashMap(u32, GenericCodeGen.ValueLoc),
+        locals: std.AutoHashMap(u32, ValueStorageMod.ValueLoc),
         free_general: u32,
         free_float: u32,
         callee_saved_used: u16, // Bitmask of callee-saved regs we used
@@ -111,7 +111,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
                 .allocator = allocator,
                 .stack_offset = 0,
                 .relocations = .{},
-                .locals = std.AutoHashMap(u32, GenericCodeGen.ValueLoc).init(allocator),
+                .locals = std.AutoHashMap(u32, ValueStorageMod.ValueLoc).init(allocator),
                 .free_general = CC.CALLER_SAVED_GENERAL_MASK,
                 .free_float = CC.CALLER_SAVED_FLOAT_MASK,
                 .callee_saved_used = 0,
@@ -1017,7 +1017,7 @@ test "reload spilled value" {
     // Local 0 should now be in a register again
     const loc0_after = cg.locals.get(0);
     try std.testing.expect(loc0_after != null);
-    try std.testing.expectEqual(GenericCodeGen.ValueLoc{ .general_reg = @intFromEnum(reloaded_reg) }, loc0_after.?);
+    try std.testing.expectEqual(ValueStorageMod.ValueLoc{ .general_reg = @intFromEnum(reloaded_reg) }, loc0_after.?);
 }
 
 test "Linux x64 prologue saves callee-saved registers with MOV" {

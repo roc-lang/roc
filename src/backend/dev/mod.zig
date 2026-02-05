@@ -34,8 +34,8 @@ const relocation_mod = @import("Relocation.zig");
 pub const Relocation = relocation_mod.Relocation;
 pub const applyRelocations = relocation_mod.applyRelocations;
 pub const SymbolResolver = relocation_mod.SymbolResolver;
-pub const CodeGen = @import("CodeGen.zig");
-pub const Backend = @import("Backend.zig");
+pub const ValueStorage = @import("ValueStorage.zig");
+pub const ObjectWriter = @import("ObjectWriter.zig");
 
 /// Executable memory for running generated code. Uses OS-specific APIs not available on freestanding.
 pub const ExecutableMemory = if (builtin.os.tag == .freestanding)
@@ -52,8 +52,8 @@ const MonoExprCodeGenMod = @import("MonoExprCodeGen.zig");
 /// Mono IR code generator parameterized by target (use MonoExprCodeGen(target) to instantiate)
 pub const MonoExprCodeGen = MonoExprCodeGenMod.MonoExprCodeGen;
 
-/// Pre-instantiated MonoExprCodeGen for native host target
-pub const NativeMonoExprCodeGen = MonoExprCodeGenMod.NativeMonoExprCodeGen;
+/// Pre-instantiated MonoExprCodeGen for the host platform (the machine running the compiler)
+pub const HostMonoExprCodeGen = MonoExprCodeGenMod.HostMonoExprCodeGen;
 
 /// x86_64 Linux with glibc
 pub const X64GlibcMonoExprCodeGen = MonoExprCodeGenMod.X64GlibcMonoExprCodeGen;
@@ -72,11 +72,12 @@ pub const Arm64WinMonoExprCodeGen = MonoExprCodeGenMod.Arm64WinMonoExprCodeGen;
 /// ARM64 macOS
 pub const Arm64MacMonoExprCodeGen = MonoExprCodeGenMod.Arm64MacMonoExprCodeGen;
 
-/// Native compiler for generating object files from Mono IR
+/// Object file compiler for generating object files from Mono IR.
+/// Supports cross-compilation to any RocTarget.
 /// Only available on non-freestanding targets (uses std.fs)
-pub const NativeCompiler = if (builtin.os.tag == .freestanding) void else @import("NativeCompiler.zig").NativeCompiler;
-pub const Entrypoint = if (builtin.os.tag == .freestanding) void else @import("NativeCompiler.zig").Entrypoint;
-pub const CompilationResult = if (builtin.os.tag == .freestanding) void else @import("NativeCompiler.zig").CompilationResult;
+pub const ObjectFileCompiler = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").ObjectFileCompiler;
+pub const Entrypoint = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").Entrypoint;
+pub const CompilationResult = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").CompilationResult;
 
 /// Generic development backend parameterized by architecture-specific types.
 ///
@@ -301,7 +302,7 @@ pub fn resolveBuiltinFunction(name: []const u8) ?usize {
 
 test "backend module imports" {
     std.testing.refAllDecls(@This());
-    std.testing.refAllDecls(@import("CallBuilder.zig"));
+    std.testing.refAllDecls(@import("CallingConvention.zig"));
 }
 
 test "resolve builtin functions" {

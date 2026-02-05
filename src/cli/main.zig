@@ -3808,12 +3808,12 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
 
     // Compile to object file
     std.log.debug("Generating native code...", .{});
-    var native_compiler = backend.NativeCompiler.init(ctx.gpa);
+    var object_compiler = backend.ObjectFileCompiler.init(ctx.gpa);
 
     const obj_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_{s}.o", .{@tagName(target)});
     const obj_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, obj_filename });
 
-    native_compiler.compileToObjectFileAndWrite(
+    object_compiler.compileToObjectFileAndWrite(
         &mono_store,
         &layout_store,
         entrypoints.items,

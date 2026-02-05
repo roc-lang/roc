@@ -11,7 +11,7 @@ const EmitMod = @import("Emit.zig");
 const Registers = @import("Registers.zig");
 const Call = @import("Call.zig");
 const Relocation = @import("../Relocation.zig").Relocation;
-const GenericCodeGen = @import("../CodeGen.zig");
+const ValueStorageMod = @import("../ValueStorage.zig");
 
 const GeneralReg = Registers.GeneralReg;
 const FloatReg = Registers.FloatReg;
@@ -58,7 +58,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
         allocator: Allocator,
         stack_offset: i32,
         relocations: std.ArrayList(Relocation),
-        locals: std.AutoHashMap(u32, GenericCodeGen.ValueLoc),
+        locals: std.AutoHashMap(u32, ValueStorageMod.ValueLoc),
         free_general: u32,
         free_float: u32,
         callee_saved_used: u32, // Bitmask of callee-saved regs we used
@@ -76,7 +76,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
                 .allocator = allocator,
                 .stack_offset = 0,
                 .relocations = .{},
-                .locals = std.AutoHashMap(u32, GenericCodeGen.ValueLoc).init(allocator),
+                .locals = std.AutoHashMap(u32, ValueStorageMod.ValueLoc).init(allocator),
                 .free_general = CC.CALLER_SAVED_GENERAL_MASK,
                 .free_float = CC.CALLER_SAVED_FLOAT_MASK,
                 .callee_saved_used = 0,

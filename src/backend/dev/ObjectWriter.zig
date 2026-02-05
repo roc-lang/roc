@@ -1,7 +1,7 @@
-//! Unified dev backend for generating native object files.
+//! Object file writer for the dev backend.
 //!
-//! This module integrates code generation with object file writing
-//! to produce complete relocatable object files from CIR.
+//! This module takes generated machine code and produces relocatable
+//! object files in platform-specific formats (ELF, Mach-O, COFF).
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;

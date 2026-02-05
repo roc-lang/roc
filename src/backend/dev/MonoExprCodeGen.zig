@@ -2,7 +2,7 @@
 //!
 //! This module generates native machine code from Mono IR expressions.
 //! It uses the Emit.zig infrastructure for instruction encoding and
-//! CodeGen.zig for register allocation.
+//! ValueStorage.zig for register allocation.
 //!
 //! Pipeline position:
 //! ```
@@ -25,8 +25,8 @@ const builtins = @import("builtins");
 
 const x86_64 = @import("x86_64/mod.zig");
 const aarch64 = @import("aarch64/mod.zig");
-const CallBuilder = @import("CallBuilder.zig");
-const CallingConvention = CallBuilder.CallingConvention;
+const CallingConventionMod = @import("CallingConvention.zig");
+const CallingConvention = CallingConventionMod.CallingConvention;
 const RocTarget = @import("roc_target").RocTarget;
 
 // Num builtin functions for 128-bit integer operations
@@ -734,10 +734,10 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
         pub const roc_target = target;
 
         /// CallBuilder type alias for this architecture's emit type
-        const Builder = CallBuilder.CallBuilder(@TypeOf(@as(CodeGen, undefined).emit));
+        const Builder = CallingConventionMod.CallBuilder(@TypeOf(@as(CodeGen, undefined).emit));
 
         /// CalleeBuilder type alias for this architecture's emit type
-        const FrameBuilder = CallBuilder.CalleeBuilder(@TypeOf(@as(CodeGen, undefined).emit));
+        const FrameBuilder = CallingConventionMod.CalleeBuilder(@TypeOf(@as(CodeGen, undefined).emit));
 
         allocator: Allocator,
 
@@ -15573,10 +15573,10 @@ pub const Arm64WinMonoExprCodeGen = MonoExprCodeGen(.arm64win);
 /// ARM64 macOS
 pub const Arm64MacMonoExprCodeGen = MonoExprCodeGen(.arm64mac);
 
-/// Native MonoExprCodeGen for the host platform.
+/// Host MonoExprCodeGen for the host platform (the machine running the compiler).
 /// Falls back to UnsupportedArchCodeGen for architectures that don't support native code generation
 /// (e.g., wasm32 when compiling the playground).
-pub const NativeMonoExprCodeGen = blk: {
+pub const HostMonoExprCodeGen = blk: {
     const native_target = RocTarget.detectNative();
     const arch = native_target.toCpuArch();
     if (arch == .x86_64 or arch == .aarch64 or arch == .aarch64_be) {
@@ -15669,7 +15669,7 @@ test "code generator initialization" {
     var store = MonoExprStore.init(allocator);
     defer store.deinit();
 
-    var codegen = NativeMonoExprCodeGen.init(allocator, &store, null, null);
+    var codegen = HostMonoExprCodeGen.init(allocator, &store, null, null);
     defer codegen.deinit();
 }
 
@@ -15685,7 +15685,7 @@ test "generate i64 literal" {
     // Add an i64 literal
     const expr_id = try store.addExpr(.{ .i64_literal = 42 }, base.Region.zero());
 
-    var codegen = NativeMonoExprCodeGen.init(allocator, &store, null, null);
+    var codegen = HostMonoExprCodeGen.init(allocator, &store, null, null);
     defer codegen.deinit();
 
     const result = try codegen.generateCode(expr_id, .i64, 1);
@@ -15706,7 +15706,7 @@ test "generate bool literal" {
 
     const expr_id = try store.addExpr(.{ .bool_literal = true }, base.Region.zero());
 
-    var codegen = NativeMonoExprCodeGen.init(allocator, &store, null, null);
+    var codegen = HostMonoExprCodeGen.init(allocator, &store, null, null);
     defer codegen.deinit();
 
     const result = try codegen.generateCode(expr_id, .bool, 1);
@@ -15734,7 +15734,7 @@ test "generate addition" {
         .result_layout = .i64,
     } }, base.Region.zero());
 
-    var codegen = NativeMonoExprCodeGen.init(allocator, &store, null, null);
+    var codegen = HostMonoExprCodeGen.init(allocator, &store, null, null);
     defer codegen.deinit();
 
     const result = try codegen.generateCode(add_id, .i64, 1);

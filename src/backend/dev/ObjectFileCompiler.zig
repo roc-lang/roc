@@ -1,10 +1,12 @@
-//! Native Compiler for Roc Dev Backend
+//! Object File Compiler for Roc Dev Backend
 //!
 //! This module orchestrates the compilation of Roc code to native object files
 //! using the dev backend. It generates ABI-compliant entrypoint wrappers that
 //! can be linked with platform hosts.
 //!
-//! The native compilation pipeline:
+//! Supports cross-compilation to any supported RocTarget, not just the host.
+//!
+//! The compilation pipeline:
 //! ```
 //! Roc Source → CIR → Mono IR → Machine Code → Object File
 //! ```
@@ -15,8 +17,8 @@ const Allocator = std.mem.Allocator;
 const layout = @import("layout");
 const mono = @import("mono");
 
-const Backend = @import("Backend.zig");
-const NativeMonoExprCodeGen = @import("MonoExprCodeGen.zig").NativeMonoExprCodeGen;
+const ObjectWriter = @import("ObjectWriter.zig");
+const HostMonoExprCodeGen = @import("MonoExprCodeGen.zig").HostMonoExprCodeGen;
 const StaticDataInterner = @import("StaticDataInterner.zig");
 
 /// Information about an entrypoint to compile
@@ -52,11 +54,12 @@ pub const CompilationError = error{
     UnsupportedTarget,
 };
 
-/// Native compiler that generates object files from Mono IR.
-pub const NativeCompiler = struct {
+/// Object file compiler that generates object files from Mono IR.
+/// Supports cross-compilation to any RocTarget.
+pub const ObjectFileCompiler = struct {
     allocator: Allocator,
 
-    pub fn init(allocator: Allocator) NativeCompiler {
+    pub fn init(allocator: Allocator) ObjectFileCompiler {
         return .{ .allocator = allocator };
     }
 
@@ -68,7 +71,7 @@ pub const NativeCompiler = struct {
     /// 3. Generates entrypoint wrappers following RocCall ABI
     /// 4. Produces an object file with proper symbols and relocations
     pub fn compileToObjectFile(
-        self: *NativeCompiler,
+        self: *ObjectFileCompiler,
         mono_store: *const mono.MonoExprStore,
         layout_store: *const layout.Store,
         entrypoints: []const Entrypoint,
@@ -89,7 +92,7 @@ pub const NativeCompiler = struct {
         defer static_interner.deinit();
 
         // Initialize the code generator
-        var codegen = NativeMonoExprCodeGen.init(
+        var codegen = HostMonoExprCodeGen.init(
             self.allocator,
             mono_store,
             layout_store,
@@ -105,7 +108,7 @@ pub const NativeCompiler = struct {
         }
 
         // Track symbols for object file generation
-        var symbols = std.ArrayList(Backend.Symbol).empty;
+        var symbols = std.ArrayList(ObjectWriter.Symbol).empty;
         defer symbols.deinit(self.allocator);
 
         // Generate entrypoint wrappers
@@ -190,19 +193,19 @@ pub const NativeCompiler = struct {
         errdefer output.deinit(self.allocator);
 
         const arch = switch (target_arch) {
-            .x86_64 => Backend.Architecture.x86_64,
-            .aarch64 => Backend.Architecture.aarch64,
+            .x86_64 => ObjectWriter.Architecture.x86_64,
+            .aarch64 => ObjectWriter.Architecture.aarch64,
             else => return CompilationError.UnsupportedTarget,
         };
 
         const os = switch (target_os) {
-            .linux => Backend.OperatingSystem.linux,
-            .macos => Backend.OperatingSystem.macos,
-            .windows => Backend.OperatingSystem.windows,
-            else => Backend.OperatingSystem.linux, // Default to Linux for other Unix-like
+            .linux => ObjectWriter.OperatingSystem.linux,
+            .macos => ObjectWriter.OperatingSystem.macos,
+            .windows => ObjectWriter.OperatingSystem.windows,
+            else => ObjectWriter.OperatingSystem.linux, // Default to Linux for other Unix-like
         };
 
-        Backend.generateObjectFile(
+        ObjectWriter.generateObjectFile(
             self.allocator,
             arch,
             os,
@@ -224,7 +227,7 @@ pub const NativeCompiler = struct {
 
     /// Compile to an object file and write it to a path.
     pub fn compileToObjectFileAndWrite(
-        self: *NativeCompiler,
+        self: *ObjectFileCompiler,
         mono_store: *const mono.MonoExprStore,
         layout_store: *const layout.Store,
         entrypoints: []const Entrypoint,
@@ -255,9 +258,9 @@ pub const NativeCompiler = struct {
 
 // Tests
 
-test "NativeCompiler initialization" {
+test "ObjectFileCompiler initialization" {
     const allocator = std.testing.allocator;
-    const compiler = NativeCompiler.init(allocator);
+    const compiler = ObjectFileCompiler.init(allocator);
     try std.testing.expectEqual(allocator, compiler.allocator);
 }
 
