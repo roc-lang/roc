@@ -22,6 +22,7 @@ pub const Backend = dev.Backend;
 pub const ExecutableMemory = dev.ExecutableMemory;
 pub const StaticDataInterner = dev.StaticDataInterner;
 pub const MonoExprCodeGen = dev.MonoExprCodeGen;
+pub const NativeMonoExprCodeGen = dev.NativeMonoExprCodeGen;
 pub const DevBackend = dev.DevBackend;
 pub const Storage = dev.Storage;
 pub const X86_64LinuxBackend = dev.X86_64LinuxBackend;

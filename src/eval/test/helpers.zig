@@ -1708,12 +1708,7 @@ fn hostRocCrashed(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]co
 /// If the wasm evaluator can't handle the expression (unsupported expr type),
 /// we skip silently since not all expressions are supported yet.
 fn compareWithWasmEvaluator(allocator: std.mem.Allocator, interpreter_str: []const u8, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) !void {
-    const wasm_str = wasmEvaluatorStr(allocator, module_env, expr_idx, builtin_module_env) catch |err| {
-        switch (err) {
-            error.WasmGenerateCodeFailed, error.UnsupportedLayout, error.WasmExecFailed => return,
-            else => return err,
-        }
-    };
+    const wasm_str = try wasmEvaluatorStr(allocator, module_env, expr_idx, builtin_module_env);
     defer allocator.free(wasm_str);
 
     if (!numericStringsEqual(interpreter_str, wasm_str)) {
