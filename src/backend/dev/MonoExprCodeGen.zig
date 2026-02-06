@@ -8871,11 +8871,18 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 // the value itself IS the discriminant.
                 break :blk try self.ensureInGeneralReg(value_loc);
             } else if (union_layout.tag == .box) blk: {
-                // Boxed tag union: dereference the box pointer, then read the discriminant
-                // from the underlying tag union in heap memory.
-                const box_ptr_reg = try self.ensureInGeneralReg(value_loc);
+                // Boxed nominal type: check the inner layout to determine how to read
+                // the discriminant.
                 const inner_layout = ls.getLayout(union_layout.data.box);
-                if (inner_layout.tag == .tag_union) {
+                if (inner_layout.tag == .scalar or inner_layout.tag == .zst) {
+                    // Box of scalar/ZST (e.g., Color := [Red, Green, Blue]):
+                    // The value IS the discriminant directly — not a heap pointer.
+                    // No-payload tag unions are never actually heap-allocated.
+                    break :blk try self.ensureInGeneralReg(value_loc);
+                } else if (inner_layout.tag == .tag_union) {
+                    // Box of tag union with payloads: dereference the box pointer,
+                    // then read the discriminant from heap memory.
+                    const box_ptr_reg = try self.ensureInGeneralReg(value_loc);
                     const tu_data = ls.getTagUnionData(inner_layout.data.tag_union.idx);
                     const disc_offset = tu_data.discriminant_offset;
                     const disc_reg = try self.allocTempGeneral();
@@ -8883,16 +8890,6 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         try self.codegen.emit.ldrRegMemSoff(.w64, disc_reg, box_ptr_reg, @intCast(disc_offset));
                     } else {
                         try self.codegen.emit.movRegMem(.w64, disc_reg, box_ptr_reg, @intCast(disc_offset));
-                    }
-                    self.codegen.freeGeneral(box_ptr_reg);
-                    break :blk disc_reg;
-                } else if (inner_layout.tag == .scalar or inner_layout.tag == .zst) {
-                    // Boxed scalar/ZST: dereference box to get the discriminant value
-                    const disc_reg = try self.allocTempGeneral();
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.ldrRegMemSoff(.w64, disc_reg, box_ptr_reg, 0);
-                    } else {
-                        try self.codegen.emit.movRegMem(.w64, disc_reg, box_ptr_reg, 0);
                     }
                     self.codegen.freeGeneral(box_ptr_reg);
                     break :blk disc_reg;
