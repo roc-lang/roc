@@ -128,7 +128,7 @@ jobs:
         uses: ./.github/actions/flaky-retry
         with:
           # -Dstrip=false preserves debug info for valgrind suppressions to match function names
-          command: "zig build -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast -Dstrip=false ${{ matrix.cpu_flag }} ${{ matrix.target_flag }}"
+          command: "zig build -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast -Dstrip=false -Domit-frame-pointer=false ${{ matrix.cpu_flag }} ${{ matrix.target_flag }}"
           error_string_contains: "build.zig.zon"
           retry_count: 3
 

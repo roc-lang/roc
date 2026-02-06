@@ -8,6 +8,5 @@ valgrind \
   --leak-check=full \
   --error-exitcode=1 \
   --errors-for-leak-kinds=definite,possible \
-  --track-origins=yes \
   "$@" 2>&1 | grep -v "Warning: DWARF2 reader: Badly formed extended line op encountered"
 exit ${PIPESTATUS[0]}

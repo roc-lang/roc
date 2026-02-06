@@ -56,6 +56,26 @@
    fun:*llvm*MCRegisterInfo*
 }
 
+# enframe via operator new (covers LLVM codegen paths like MCRegisterInfo)
+{
+   musl-mallocng-enframe-operator-new
+   Memcheck:Cond
+   fun:enframe
+   fun:__libc_malloc_impl
+   fun:_Znwm
+   ...
+}
+
+# enframe via realloc (covers LLD linker paths like SmallVector growth)
+{
+   musl-mallocng-enframe-realloc
+   Memcheck:Cond
+   fun:enframe
+   fun:__libc_malloc_impl
+   fun:__libc_realloc
+   ...
+}
+
 # Suppress uninitialised value errors in musl's malloc enframe function
 # when called from Zig's standard library allocator
 {
