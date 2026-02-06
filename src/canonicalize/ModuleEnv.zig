@@ -453,6 +453,17 @@ import_mapping: types_mod.import_mapping.ImportMapping,
 /// Populated during canonicalization when methods are defined in associated blocks.
 method_idents: MethodIdents,
 
+/// Whether lambda lifting has been run on this module
+is_lambda_lifted: bool = false,
+
+/// Whether closures have been defunctionalized in this module
+is_defunctionalized: bool = false,
+
+/// Whether to defer finalizing numeric defaults until after platform requirements are checked.
+/// Set to true for app modules that have platform imports, so that numeric literals can be
+/// constrained by platform types (e.g., I64) before defaulting to Dec.
+defer_numeric_defaults: bool = false,
+
 /// Deferred numeric literal for compile-time validation
 pub const DeferredNumericLiteral = struct {
     expr_idx: CIR.Expr.Idx,
@@ -569,6 +580,8 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .deferred_numeric_literals = try DeferredNumericLiteral.SafeList.initCapacity(gpa, 32),
         .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
         .method_idents = MethodIdents.init(),
+        .is_lambda_lifted = false,
+        .is_defunctionalized = false,
     };
 }
 
@@ -2302,6 +2315,11 @@ pub const Serialized = extern struct {
     deferred_numeric_literals: DeferredNumericLiteral.SafeList.Serialized,
     import_mapping_reserved: [6]u64, // Reserved space for import_mapping (AutoHashMap is ~40 bytes), initialized at runtime
     method_idents: MethodIdents.Serialized,
+    // Reserved space for is_lambda_lifted and is_defunctionalized booleans
+    // (2 bytes of data + 6 bytes padding to maintain alignment)
+    is_lambda_lifted_reserved: u8,
+    is_defunctionalized_reserved: u8,
+    _padding: [6]u8 = .{ 0, 0, 0, 0, 0, 0 },
 
     /// Serialize a ModuleEnv into this Serialized struct, appending data to the writer
     pub fn serialize(
@@ -2348,6 +2366,10 @@ pub const Serialized = extern struct {
         self.import_mapping_reserved = .{ 0, 0, 0, 0, 0, 0 };
         // Serialize method_idents map
         try self.method_idents.serialize(&env.method_idents, allocator, writer);
+
+        // Set lambda lifting status flags (these are runtime-only and initialized during deserialization)
+        self.is_lambda_lifted_reserved = 0;
+        self.is_defunctionalized_reserved = 0;
     }
 
     /// Deserialize into a freshly allocated ModuleEnv (no in-place modification of cache buffer).
@@ -2433,6 +2455,8 @@ pub const Serialized = extern struct {
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
             .method_idents = self.method_idents.deserializeInto(base_addr),
             .rigid_vars = std.AutoHashMapUnmanaged(Ident.Idx, TypeVar){},
+            .is_lambda_lifted = false,
+            .is_defunctionalized = false,
         };
 
         return env;

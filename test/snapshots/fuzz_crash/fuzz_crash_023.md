@@ -1173,11 +1173,11 @@ main! = |_| { # Yeah I can leave a comment here
 
 It has the type:
 
-    List(Error) => Try({  }, _d)
+    List(Error) => Error
 
 But the annotation say it should be:
 
-    List(Error) -> Try({  }, _d)
+    List(Error) -> Error
 
 **Hint:** This function is effectful, but a pure function is expected.
 
@@ -2864,7 +2864,7 @@ expect {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(patt (type "Bool -> Dec"))
 		(patt (type "Error -> U64"))
 		(patt (type "[Red, ..[Blue, Green, ..]], _arg -> Error"))
 		(patt (type "Error"))
@@ -2911,7 +2911,7 @@ expect {
 				(ty-args
 					(ty-rigid-var (name "a"))))))
 	(expressions
-		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(expr (type "Bool -> Dec"))
 		(expr (type "Error -> U64"))
 		(expr (type "[Red, ..[Blue, Green, ..]], _arg -> Error"))
 		(expr (type "Error"))

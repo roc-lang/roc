@@ -125,7 +125,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a -> Str where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.is_eq : a, a -> Bool, a.is_gt : a, a -> Bool, a.is_lt : a, a -> Bool]")))
+		(patt (type "Dec -> Str")))
 	(expressions
-		(expr (type "a -> Str where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.is_eq : a, a -> Bool, a.is_gt : a, a -> Bool, a.is_lt : a, a -> Bool]"))))
+		(expr (type "Dec -> Str"))))
 ~~~

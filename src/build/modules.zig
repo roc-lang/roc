@@ -269,7 +269,7 @@ pub const ModuleTest = struct {
 /// unnamed wrappers) so callers can correct the reported totals.
 pub const ModuleTestsResult = struct {
     /// Compile/run steps for each module's tests, in creation order.
-    tests: [21]ModuleTest,
+    tests: [23]ModuleTest,
     /// Number of synthetic passes the summary must subtract when filters were injected.
     /// Includes aggregator ensures and unconditional wrapper tests.
     forced_passes: usize,
@@ -301,7 +301,9 @@ pub const ModuleType = enum {
     base58,
     lsp,
     backend,
+    mono,
     roc_target,
+    sljmp,
 
     /// Returns the dependencies for this module type
     pub fn getDependencies(self: ModuleType) []const ModuleType {
@@ -319,7 +321,7 @@ pub const ModuleType = enum {
             .can => &.{ .tracy, .builtins, .collections, .types, .base, .parse, .reporting, .build_options },
             .check => &.{ .tracy, .builtins, .collections, .base, .parse, .types, .can, .reporting },
             .layout => &.{ .tracy, .collections, .base, .types, .builtins, .can },
-            .eval => &.{ .tracy, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .build_options, .reporting, .backend, .roc_target },
+            .eval => &.{ .tracy, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .build_options, .reporting, .backend, .mono, .roc_target, .sljmp },
             .compile => &.{ .tracy, .build_options, .fs, .builtins, .collections, .base, .types, .parse, .can, .check, .reporting, .layout, .eval, .unbundle, .roc_target },
             .ipc => &.{},
             .repl => &.{ .base, .collections, .compile, .parse, .types, .can, .check, .builtins, .layout, .eval, .backend, .roc_target },
@@ -329,8 +331,10 @@ pub const ModuleType = enum {
             .unbundle => &.{ .base, .collections, .base58 },
             .base58 => &.{},
             .lsp => &.{ .compile, .reporting, .build_options, .fs, .base, .parse, .can, .types, .fmt, .roc_target },
-            .backend => &.{ .base, .layout },
+            .backend => &.{ .base, .layout, .builtins, .can, .mono, .roc_target },
+            .mono => &.{ .base, .layout, .can, .types },
             .roc_target => &.{.base},
+            .sljmp => &.{},
         };
     }
 };
@@ -361,7 +365,9 @@ pub const RocModules = struct {
     base58: *Module,
     lsp: *Module,
     backend: *Module,
+    mono: *Module,
     roc_target: *Module,
+    sljmp: *Module,
 
     pub fn create(b: *Build, build_options_step: *Step.Options, zstd: ?*Dependency) RocModules {
         const self = RocModules{
@@ -395,7 +401,9 @@ pub const RocModules = struct {
             .base58 = b.addModule("base58", .{ .root_source_file = b.path("src/base58/mod.zig") }),
             .lsp = b.addModule("lsp", .{ .root_source_file = b.path("src/lsp/mod.zig") }),
             .backend = b.addModule("backend", .{ .root_source_file = b.path("src/backend/dev/mod.zig") }),
+            .mono = b.addModule("mono", .{ .root_source_file = b.path("src/mono/mod.zig") }),
             .roc_target = b.addModule("roc_target", .{ .root_source_file = b.path("src/target/mod.zig") }),
+            .sljmp = b.addModule("sljmp", .{ .root_source_file = b.path("src/sljmp/mod.zig") }),
         };
 
         // Link zstd to bundle module if available (it's unsupported on wasm32, so don't link it)
@@ -435,7 +443,9 @@ pub const RocModules = struct {
             .base58,
             .lsp,
             .backend,
+            .mono,
             .roc_target,
+            .sljmp,
         };
 
         // Setup dependencies for each module
@@ -451,10 +461,11 @@ pub const RocModules = struct {
     }
 
     pub fn addAll(self: RocModules, step: *Step.Compile) void {
+        const is_wasm = step.rootModuleTarget().cpu.arch == .wasm32;
+
         step.root_module.addImport("base", self.base);
         step.root_module.addImport("collections", self.collections);
         step.root_module.addImport("types", self.types);
-        step.root_module.addImport("compile", self.compile);
         step.root_module.addImport("reporting", self.reporting);
         step.root_module.addImport("parse", self.parse);
         step.root_module.addImport("can", self.can);
@@ -465,21 +476,23 @@ pub const RocModules = struct {
         step.root_module.addImport("build_options", self.build_options);
         step.root_module.addImport("layout", self.layout);
         step.root_module.addImport("eval", self.eval);
-        step.root_module.addImport("ipc", self.ipc);
         step.root_module.addImport("repl", self.repl);
         step.root_module.addImport("fmt", self.fmt);
-        step.root_module.addImport("watch", self.watch);
-        step.root_module.addImport("lsp", self.lsp);
-
-        // Don't add bundle module for WASM targets (zstd C library not available)
-        if (step.rootModuleTarget().cpu.arch != .wasm32) {
-            step.root_module.addImport("bundle", self.bundle);
-        }
-
         step.root_module.addImport("unbundle", self.unbundle);
         step.root_module.addImport("base58", self.base58);
         step.root_module.addImport("roc_target", self.roc_target);
         step.root_module.addImport("backend", self.backend);
+        step.root_module.addImport("mono", self.mono);
+
+        // Don't add thread-dependent modules for WASM targets (threads not supported)
+        if (!is_wasm) {
+            step.root_module.addImport("compile", self.compile);
+            step.root_module.addImport("ipc", self.ipc);
+            step.root_module.addImport("watch", self.watch);
+            step.root_module.addImport("lsp", self.lsp);
+            // Don't add bundle module for WASM targets (zstd C library not available)
+            step.root_module.addImport("bundle", self.bundle);
+        }
     }
 
     pub fn addAllToTest(self: RocModules, step: *Step.Compile) void {
@@ -513,7 +526,9 @@ pub const RocModules = struct {
             .base58 => self.base58,
             .lsp => self.lsp,
             .backend => self.backend,
+            .mono => self.mono,
             .roc_target => self.roc_target,
+            .sljmp => self.sljmp,
         };
     }
 
@@ -556,6 +571,8 @@ pub const RocModules = struct {
             .base58,
             .lsp,
             .backend,
+            .mono,
+            .sljmp,
         };
 
         var tests: [test_configs.len]ModuleTest = undefined;
@@ -577,7 +594,9 @@ pub const RocModules = struct {
                     .optimize = optimize,
                     // IPC module needs libc for mmap, munmap, close on POSIX systems
                     // Bundle module needs libc for C zstd (unbundle uses stdlib zstd)
-                    .link_libc = (module_type == .ipc or module_type == .bundle),
+                    // Eval/repl modules need libc for setjmp/longjmp crash protection
+                    // sljmp module needs libc for setjmp/longjmp functions
+                    .link_libc = (module_type == .ipc or module_type == .bundle or module_type == .eval or module_type == .repl or module_type == .sljmp),
                 }),
                 .filters = filter_injection.filters,
             });

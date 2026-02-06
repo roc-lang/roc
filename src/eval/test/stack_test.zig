@@ -4,8 +4,11 @@ const collections = @import("collections");
 const Stack = @import("../stack.zig").Stack;
 const StackOverflow = @import("../stack.zig").StackOverflow;
 
+// Use page_allocator for interpreter tests (doesn't track leaks)
+const test_allocator = std.heap.page_allocator;
+
 test "Stack.initCapacity and deinit" {
-    var stack = try Stack.initCapacity(std.testing.allocator, 1024);
+    var stack = try Stack.initCapacity(test_allocator, 1024);
     defer stack.deinit();
 
     try std.testing.expectEqual(@as(u32, 1024), stack.capacity);
@@ -14,7 +17,7 @@ test "Stack.initCapacity and deinit" {
 }
 
 test "Stack.alloca basic allocation" {
-    var stack = try Stack.initCapacity(std.testing.allocator, 1024);
+    var stack = try Stack.initCapacity(test_allocator, 1024);
     defer stack.deinit();
 
     const ptr1 = try stack.alloca(10, .@"1");
@@ -29,7 +32,7 @@ test "Stack.alloca basic allocation" {
 }
 
 test "Stack.alloca with alignment" {
-    var stack = try Stack.initCapacity(std.testing.allocator, 4096);
+    var stack = try Stack.initCapacity(test_allocator, 4096);
     defer stack.deinit();
 
     // Test alignments from 1 to 16
@@ -84,7 +87,7 @@ test "Stack.alloca with alignment" {
 }
 
 test "Stack.alloca overflow" {
-    var stack = try Stack.initCapacity(std.testing.allocator, 100);
+    var stack = try Stack.initCapacity(test_allocator, 100);
     defer stack.deinit();
 
     // This should succeed
@@ -98,7 +101,7 @@ test "Stack.alloca overflow" {
 }
 
 test "Stack.restore" {
-    var stack = try Stack.initCapacity(std.testing.allocator, 1024);
+    var stack = try Stack.initCapacity(test_allocator, 1024);
     defer stack.deinit();
 
     const checkpoint = stack.next();
@@ -114,7 +117,7 @@ test "Stack.restore" {
 }
 
 test "Stack.isEmpty" {
-    var stack = try Stack.initCapacity(std.testing.allocator, 100);
+    var stack = try Stack.initCapacity(test_allocator, 100);
     defer stack.deinit();
 
     try std.testing.expect(stack.isEmpty());
@@ -126,7 +129,7 @@ test "Stack.isEmpty" {
 }
 
 test "Stack zero-size allocation" {
-    var stack = try Stack.initCapacity(std.testing.allocator, 100);
+    var stack = try Stack.initCapacity(test_allocator, 100);
     defer stack.deinit();
 
     const ptr1 = try stack.alloca(0, .@"1");
@@ -138,7 +141,7 @@ test "Stack zero-size allocation" {
 }
 
 test "Stack memory is aligned to max_roc_alignment" {
-    var stack = try Stack.initCapacity(std.testing.allocator, 1024);
+    var stack = try Stack.initCapacity(test_allocator, 1024);
     defer stack.deinit();
 
     // Check that the start pointer is aligned to max_roc_alignment

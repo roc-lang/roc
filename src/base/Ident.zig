@@ -89,6 +89,18 @@ pub const Idx = packed struct(u32) {
     pub fn isNone(self: Idx) bool {
         return self.idx == NONE.idx and @as(u3, @bitCast(self.attributes)) == @as(u3, @bitCast(NONE.attributes));
     }
+
+    /// Custom formatter for std.fmt - allows printing with `{}`
+    pub fn format(
+        self: Idx,
+        comptime _: []const u8,
+        _: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        // Extract from packed struct to avoid formatting issues
+        const idx_val: u32 = @intCast(self.idx);
+        try writer.print("Ident({?})", .{idx_val});
+    }
 };
 
 /// Identifier attributes such as if it is effectful, ignored, or reassignable.

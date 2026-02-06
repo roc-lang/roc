@@ -1108,7 +1108,14 @@ pub const PackageEnv = struct {
         );
         errdefer checker.deinit();
 
-        try checker.checkFile();
+        // For app modules with platform requirements, defer finalizing numeric defaults
+        // until after platform requirements are checked, so numeric literals can be
+        // constrained by platform types (e.g., I64) before defaulting to Dec.
+        if (env.defer_numeric_defaults) {
+            try checker.checkFileSkipNumericDefaults();
+        } else {
+            try checker.checkFile();
+        }
 
         return checker;
     }
@@ -1300,7 +1307,14 @@ pub const PackageEnv = struct {
         );
         errdefer checker.deinit();
 
-        try checker.checkFile();
+        // For app modules with platform requirements, defer finalizing numeric defaults
+        // until after platform requirements are checked, so numeric literals can be
+        // constrained by platform types (e.g., I64) before defaulting to Dec.
+        if (env.defer_numeric_defaults) {
+            try checker.checkFileSkipNumericDefaults();
+        } else {
+            try checker.checkFile();
+        }
 
         // After type checking, evaluate top-level declarations at compile time
         const builtin_types_for_eval = BuiltinTypes.init(builtin_indices, builtin_module_env, builtin_module_env, builtin_module_env);
@@ -1379,7 +1393,7 @@ pub const PackageEnv = struct {
 
         // Build reports from problems
         const check_diag_start = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
-        var rb = try ReportBuilder.init(self.gpa, env, env, &checker.snapshots, &checker.problems, st.path, imported_envs.items, &checker.import_mapping);
+        var rb = try ReportBuilder.init(self.gpa, env, env, &checker.snapshots, &checker.problems, st.path, imported_envs.items, &checker.import_mapping, &checker.regions);
         defer rb.deinit();
         for (checker.problems.problems.items) |prob| {
             const rep = rb.build(prob) catch continue;

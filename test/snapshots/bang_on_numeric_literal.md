@@ -8,26 +8,9 @@ type=expr
 !3
 ~~~
 # EXPECTED
-MISSING METHOD - bang_on_numeric_literal.md:1:1:1:3
+NIL
 # PROBLEMS
-**MISSING METHOD**
-This **not** method is being called on a value whose type doesn't have that method:
-**bang_on_numeric_literal.md:1:1:1:3:**
-```roc
-!3
-```
-^^
-
-The value's type, which does not have a method named**not**, is:
-
-    a
-      where [
-        a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        a.not : a -> a,
-      ]
-
-**Hint:** For this to work, the type would need to have a method named **not** associated with it in the type's declaration.
-
+NIL
 # TOKENS
 ~~~zig
 OpBang,Int,
@@ -49,5 +32,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Error"))
+(expr (type "Dec"))
 ~~~

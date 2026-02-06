@@ -345,8 +345,8 @@ multipleTypes = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_arg -> c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
-		(patt (type "_arg -> c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
+		(patt (type "_arg -> Dec"))
+		(patt (type "_arg -> Dec"))
 		(patt (type "c -> c"))
 		(patt (type "c -> c"))
 		(patt (type "_arg -> Str")))
@@ -370,8 +370,8 @@ multipleTypes = |_| {
 		(alias (type "Error")
 			(ty-header (name "Third"))))
 	(expressions
-		(expr (type "_arg -> c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
-		(expr (type "_arg -> c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
+		(expr (type "_arg -> Dec"))
+		(expr (type "_arg -> Dec"))
 		(expr (type "c -> c"))
 		(expr (type "c -> c"))
 		(expr (type "_arg -> Str"))))

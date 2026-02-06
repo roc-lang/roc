@@ -88,7 +88,6 @@ pub const LlvmEmitter = struct {
     /// Error type for emission failures
     pub const Error = error{
         OutOfMemory,
-        UnsupportedExpression,
         UnsupportedType,
         TypeMismatch,
         InvalidNumKind,

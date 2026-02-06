@@ -68,6 +68,7 @@ const CIR = @import("CIR.zig");
 const Expr = CIR.Expr;
 const Pattern = @import("Pattern.zig").Pattern;
 const RecordField = CIR.RecordField;
+const LambdaSetInference = @import("LambdaSetInference.zig");
 
 const Self = @This();
 
@@ -129,8 +130,10 @@ pub const EnumDispatchInfo = struct {
 
 /// Information about a transformed closure
 pub const ClosureInfo = struct {
-    /// The tag name for this closure (e.g., `#1_addX`)
+    /// The tag name for this closure (e.g., `#1_addX` or globally unique `UserModule.#1_addX`)
     tag_name: base.Ident.Idx,
+    /// Source module name (for cross-module dispatch identification)
+    source_module: base.Ident.Idx,
     /// The lambda body expression
     lambda_body: Expr.Idx,
     /// The lambda arguments
@@ -722,8 +725,17 @@ current_region: u8,
 /// becomes concrete - we can quickly find all entries that need resolution.
 unspec_by_type_var: UnspecializedByTypeVar,
 
+/// Optional reference to cross-module lambda set inference results.
+/// When provided, used for generating globally unique closure names.
+inference: ?*LambdaSetInference,
+
 /// Initialize the transformer
 pub fn init(allocator: std.mem.Allocator, module_env: *ModuleEnv) Self {
+    return initWithInference(allocator, module_env, null);
+}
+
+/// Initialize the transformer with optional cross-module inference results
+pub fn initWithInference(allocator: std.mem.Allocator, module_env: *ModuleEnv, inference: ?*LambdaSetInference) Self {
     return .{
         .allocator = allocator,
         .module_env = module_env,
@@ -735,6 +747,7 @@ pub fn init(allocator: std.mem.Allocator, module_env: *ModuleEnv) Self {
         .top_level_patterns = std.AutoHashMap(CIR.Pattern.Idx, void).init(allocator),
         .current_region = 0,
         .unspec_by_type_var = UnspecializedByTypeVar.init(allocator),
+        .inference = inference,
     };
 }
 
@@ -1261,41 +1274,58 @@ pub fn deinit(self: *Self) void {
 
 /// Generate a unique tag name for a closure.
 ///
-/// This generates names like "#1_addX", "#2_addX" when a hint is provided,
-/// or "#1", "#2" when no hint is available. The `#` prefix is used because
-/// it's reserved for comments in Roc source code, so these names cannot
+/// When cross-module inference is available, generates globally unique names
+/// like "UserModule.#1_addX" that are valid across module boundaries.
+///
+/// Without inference, generates local names like "#1_addX", "#2_addX" when a hint
+/// is provided, or "#1", "#2" when no hint is available. The `#` prefix is used
+/// because it's reserved for comments in Roc source code, so these names cannot
 /// collide with user-defined tags. RocEmitter transforms `#` to `C` when
 /// printing, so `#1_foo` becomes `C1_foo` in emitted code.
 pub fn generateClosureTagName(self: *Self, hint: ?base.Ident.Idx) !base.Ident.Idx {
     self.closure_counter += 1;
 
-    // If we have a hint (e.g., from the variable name), use it with counter for uniqueness
+    // Build the local part of the name
+    var local_name: []const u8 = undefined;
+    var local_name_allocated: bool = false;
+    defer if (local_name_allocated) self.allocator.free(local_name);
+
     if (hint) |h| {
         const hint_name = self.module_env.getIdent(h);
-        // Use # prefix which can't appear in user code (reserved for comments)
-        // Format: #N_hint where N is the counter
-        const tag_name = try std.fmt.allocPrint(
+        local_name = try std.fmt.allocPrint(
             self.allocator,
             "#{d}_{s}",
             .{ self.closure_counter, hint_name },
         );
-        defer self.allocator.free(tag_name);
-        return try self.module_env.insertIdent(base.Ident.for_text(tag_name));
+        local_name_allocated = true;
+    } else {
+        local_name = try std.fmt.allocPrint(
+            self.allocator,
+            "#{d}",
+            .{self.closure_counter},
+        );
+        local_name_allocated = true;
     }
 
-    // Otherwise generate a numeric name
-    const tag_name = try std.fmt.allocPrint(
-        self.allocator,
-        "#{d}",
-        .{self.closure_counter},
-    );
-    defer self.allocator.free(tag_name);
-    return try self.module_env.insertIdent(base.Ident.for_text(tag_name));
+    // If we have cross-module inference, generate a globally unique name
+    if (self.inference != null) {
+        const module_name = self.module_env.module_name;
+        const global_name = try std.fmt.allocPrint(
+            self.allocator,
+            "{s}.{s}",
+            .{ module_name, local_name },
+        );
+        defer self.allocator.free(global_name);
+        return try self.module_env.insertIdent(base.Ident.for_text(global_name));
+    }
+
+    // Without inference, use local name
+    return try self.module_env.insertIdent(base.Ident.for_text(local_name));
 }
 
 /// Generate the lowercase function name from a closure tag name.
 /// E.g., "#1_foo" -> "c1_foo" (replaces # with lowercase c)
-fn generateLiftedFunctionName(self: *Self, tag_name: base.Ident.Idx) !base.Ident.Idx {
+pub fn generateLiftedFunctionName(self: *Self, tag_name: base.Ident.Idx) !base.Ident.Idx {
     const tag_str = self.module_env.getIdent(tag_name);
 
     // Allocate a copy with # replaced by lowercase 'c'
@@ -1314,7 +1344,7 @@ fn generateLiftedFunctionName(self: *Self, tag_name: base.Ident.Idx) !base.Ident
 /// Create patterns for calling a lifted function in dispatch.
 /// Returns the pattern for the lifted function name and the captures pattern.
 /// The actual lifted function body is created by LambdaLifter.
-fn createLiftedFunctionPatterns(
+pub fn createLiftedFunctionPatterns(
     self: *Self,
     tag_name: base.Ident.Idx,
     has_captures: bool,
@@ -1419,11 +1449,7 @@ fn generateDispatchMatch(
                 .called_via = .apply,
             },
         }, base.Region.zero());
-    } else blk: {
-        // Fallback: no lifted function pattern (shouldn't happen)
-        // Transform the lambda body to handle nested closures (old behavior)
-        break :blk try self.transformExpr(closure_info.lambda_body);
-    };
+    } else unreachable; // lifted_fn_pattern must always be set
 
     // Step 4: Create the match branch
     const branch_pattern_start = self.module_env.store.scratchMatchBranchPatternTop();
@@ -1557,10 +1583,7 @@ fn generateLambdaSetDispatchMatch(
                     .called_via = .apply,
                 },
             }, base.Region.zero());
-        } else blk: {
-            // Fallback: no lifted function pattern (shouldn't happen)
-            break :blk try self.transformExpr(closure_info.lambda_body);
-        };
+        } else unreachable; // lifted_fn_pattern must always be set
 
         // Step 4: Create match branch pattern
         const branch_pattern_start = self.module_env.store.scratchMatchBranchPatternTop();
@@ -1613,6 +1636,7 @@ pub fn transformExprWithLambdaSet(
     expr_idx: Expr.Idx,
     name_hint: ?base.Ident.Idx,
 ) std.mem.Allocator.Error!TransformResult {
+    std.debug.assert(self.module_env.store.scratch != null);
     const expr = self.module_env.store.getExpr(expr_idx);
 
     switch (expr) {
@@ -1735,6 +1759,7 @@ pub fn transformExprWithLambdaSet(
                             // Add to lambda set with the lambda's info
                             try lambda_set.addClosure(self.allocator, ClosureInfo{
                                 .tag_name = tag_name,
+                                .source_module = self.module_env.module_name_idx,
                                 .lambda_body = lambda.body,
                                 .lambda_args = lambda.args,
                                 .capture_names = std.ArrayList(base.Ident.Idx).empty,
@@ -1780,6 +1805,7 @@ pub fn transformExprWithLambdaSet(
                         // Add to lambda set with the lambda's info
                         try lambda_set.addClosure(self.allocator, ClosureInfo{
                             .tag_name = tag_name,
+                            .source_module = self.module_env.module_name_idx,
                             .lambda_body = lambda.body,
                             .lambda_args = lambda.args,
                             .capture_names = std.ArrayList(base.Ident.Idx).empty,
@@ -1898,6 +1924,7 @@ pub fn transformClosure(
     closure_expr_idx: Expr.Idx,
     binding_name_hint: ?base.Ident.Idx,
 ) !Expr.Idx {
+    std.debug.assert(self.module_env.store.scratch != null);
     const expr = self.module_env.store.getExpr(closure_expr_idx);
 
     switch (expr) {
@@ -2006,6 +2033,7 @@ pub fn transformClosure(
             // Store closure info for dispatch function generation
             try self.closures.put(closure_expr_idx, ClosureInfo{
                 .tag_name = tag_name,
+                .source_module = self.module_env.module_name_idx,
                 .lambda_body = lambda.body,
                 .lambda_args = lambda.args,
                 .capture_names = capture_names,
@@ -2026,6 +2054,7 @@ pub fn transformClosure(
 /// Transform an entire expression tree, handling closures and their call sites.
 /// This is the main entry point for the transformation.
 pub fn transformExpr(self: *Self, expr_idx: Expr.Idx) std.mem.Allocator.Error!Expr.Idx {
+    std.debug.assert(self.module_env.store.scratch != null);
     const expr = self.module_env.store.getExpr(expr_idx);
 
     switch (expr) {
@@ -2166,10 +2195,15 @@ pub fn transformExpr(self: *Self, expr_idx: Expr.Idx) std.mem.Allocator.Error!Ex
             const branches = self.module_env.store.sliceIfBranches(if_expr.branches);
             const branch_start = self.module_env.store.scratch.?.if_branches.top();
 
+            var any_changed = false;
             for (branches) |branch_idx| {
                 const branch = self.module_env.store.getIfBranch(branch_idx);
                 const new_cond = try self.transformExpr(branch.cond);
                 const new_body = try self.transformExpr(branch.body);
+
+                if (new_cond != branch.cond or new_body != branch.body) {
+                    any_changed = true;
+                }
 
                 const new_branch_idx = try self.module_env.store.addIfBranch(
                     Expr.IfBranch{ .cond = new_cond, .body = new_body },
@@ -2178,8 +2212,18 @@ pub fn transformExpr(self: *Self, expr_idx: Expr.Idx) std.mem.Allocator.Error!Ex
                 try self.module_env.store.scratch.?.if_branches.append(new_branch_idx);
             }
 
-            const new_branches_span = try self.module_env.store.ifBranchSpanFrom(branch_start);
             const new_else = try self.transformExpr(if_expr.final_else);
+            if (new_else != if_expr.final_else) {
+                any_changed = true;
+            }
+
+            // Return original expression if nothing changed to preserve type information
+            if (!any_changed) {
+                self.module_env.store.scratch.?.if_branches.clearFrom(branch_start);
+                return expr_idx;
+            }
+
+            const new_branches_span = try self.module_env.store.ifBranchSpanFrom(branch_start);
 
             return try self.module_env.store.addExpr(Expr{
                 .e_if = .{
@@ -2266,9 +2310,20 @@ pub fn transformExpr(self: *Self, expr_idx: Expr.Idx) std.mem.Allocator.Error!Ex
             const elems = self.module_env.store.sliceExpr(list.elems);
             const elems_start = self.module_env.store.scratch.?.exprs.top();
 
+            var any_changed = false;
             for (elems) |elem_idx| {
                 const new_elem = try self.transformExpr(elem_idx);
+                if (new_elem != elem_idx) {
+                    any_changed = true;
+                }
                 try self.module_env.store.scratch.?.exprs.append(new_elem);
+            }
+
+            // Return original expression if nothing changed to preserve type information
+            if (!any_changed) {
+                // Clear scratch space since we're not using it
+                self.module_env.store.scratch.?.exprs.clearFrom(elems_start);
+                return expr_idx;
             }
 
             const new_elems_span = try self.module_env.store.exprSpanFrom(elems_start);
@@ -2281,9 +2336,20 @@ pub fn transformExpr(self: *Self, expr_idx: Expr.Idx) std.mem.Allocator.Error!Ex
             const elems = self.module_env.store.sliceExpr(tuple.elems);
             const elems_start = self.module_env.store.scratch.?.exprs.top();
 
+            var any_changed = false;
             for (elems) |elem_idx| {
                 const new_elem = try self.transformExpr(elem_idx);
+                if (new_elem != elem_idx) {
+                    any_changed = true;
+                }
                 try self.module_env.store.scratch.?.exprs.append(new_elem);
+            }
+
+            // Return original expression if nothing changed to preserve type information
+            if (!any_changed) {
+                // Clear scratch space since we're not using it
+                self.module_env.store.scratch.?.exprs.clearFrom(elems_start);
+                return expr_idx;
             }
 
             const new_elems_span = try self.module_env.store.exprSpanFrom(elems_start);
@@ -2353,29 +2419,52 @@ pub fn transformExpr(self: *Self, expr_idx: Expr.Idx) std.mem.Allocator.Error!Ex
         },
         .e_unary_minus => |unary| {
             const new_expr = try self.transformExpr(unary.expr);
+            if (new_expr == unary.expr) {
+                return expr_idx;
+            }
             return try self.module_env.store.addExpr(Expr{
                 .e_unary_minus = .{ .expr = new_expr },
             }, base.Region.zero());
         },
         .e_unary_not => |unary| {
             const new_expr = try self.transformExpr(unary.expr);
+            if (new_expr == unary.expr) {
+                return expr_idx;
+            }
             return try self.module_env.store.addExpr(Expr{
                 .e_unary_not = .{ .expr = new_expr },
             }, base.Region.zero());
         },
         .e_dot_access => |dot| {
             const new_receiver = try self.transformExpr(dot.receiver);
+
+            var any_args_changed = false;
             const new_args = if (dot.args) |args_span| blk: {
                 const args = self.module_env.store.sliceExpr(args_span);
                 const args_start = self.module_env.store.scratch.?.exprs.top();
 
                 for (args) |arg_idx| {
                     const new_arg = try self.transformExpr(arg_idx);
+                    if (new_arg != arg_idx) {
+                        any_args_changed = true;
+                    }
                     try self.module_env.store.scratch.?.exprs.append(new_arg);
                 }
 
+                // If nothing changed, clear scratch and use original span
+                if (!any_args_changed and new_receiver == dot.receiver) {
+                    self.module_env.store.scratch.?.exprs.clearFrom(args_start);
+                    return expr_idx;
+                }
+
                 break :blk try self.module_env.store.exprSpanFrom(args_start);
-            } else null;
+            } else blk: {
+                // No args - just check receiver
+                if (new_receiver == dot.receiver) {
+                    return expr_idx;
+                }
+                break :blk null;
+            };
 
             return try self.module_env.store.addExpr(Expr{
                 .e_dot_access = .{
@@ -2389,6 +2478,9 @@ pub fn transformExpr(self: *Self, expr_idx: Expr.Idx) std.mem.Allocator.Error!Ex
         .e_crash => return expr_idx,
         .e_dbg => |dbg| {
             const new_expr = try self.transformExpr(dbg.expr);
+            if (new_expr == dbg.expr) {
+                return expr_idx;
+            }
             return try self.module_env.store.addExpr(Expr{
                 .e_dbg = .{
                     .expr = new_expr,
@@ -2397,6 +2489,9 @@ pub fn transformExpr(self: *Self, expr_idx: Expr.Idx) std.mem.Allocator.Error!Ex
         },
         .e_expect => |expect| {
             const new_body = try self.transformExpr(expect.body);
+            if (new_body == expect.body) {
+                return expr_idx;
+            }
             return try self.module_env.store.addExpr(Expr{
                 .e_expect = .{
                     .body = new_body,
@@ -2405,6 +2500,9 @@ pub fn transformExpr(self: *Self, expr_idx: Expr.Idx) std.mem.Allocator.Error!Ex
         },
         .e_return => |ret| {
             const new_expr = try self.transformExpr(ret.expr);
+            if (new_expr == ret.expr) {
+                return expr_idx;
+            }
             return try self.module_env.store.addExpr(Expr{
                 .e_return = .{ .expr = new_expr, .lambda = ret.lambda, .context = ret.context },
             }, base.Region.zero());
@@ -2452,6 +2550,9 @@ pub fn transformExpr(self: *Self, expr_idx: Expr.Idx) std.mem.Allocator.Error!Ex
         },
         .e_nominal => |nominal| {
             const new_backing = try self.transformExpr(nominal.backing_expr);
+            if (new_backing == nominal.backing_expr) {
+                return expr_idx;
+            }
             return try self.module_env.store.addExpr(Expr{
                 .e_nominal = .{
                     .nominal_type_decl = nominal.nominal_type_decl,

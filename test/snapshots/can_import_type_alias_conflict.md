@@ -77,10 +77,10 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")))
+		(patt (type "Dec")))
 	(type_decls
 		(alias (type "JsonValue")
 			(ty-header (name "JsonValue"))))
 	(expressions
-		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))))
+		(expr (type "Dec"))))
 ~~~

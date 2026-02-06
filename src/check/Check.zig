@@ -61,8 +61,8 @@ gpa: std.mem.Allocator,
 types: *types_mod.Store,
 /// This module's env
 cir: *ModuleEnv,
-/// A list of regions. Parallel with type vars & CIR nodes
-regions: *Region.List,
+/// A list of regions. Owned copy, cloned from NodeStore at init time.
+regions: Region.List,
 /// List of directly imported  module. Import indexes in CIR refer to this list
 imported_modules: []const *const ModuleEnv,
 /// Map of auto-imported type names (like "Str", "List", "Bool") to their defining modules.
@@ -175,7 +175,7 @@ pub fn init(
     cir: *const ModuleEnv,
     imported_modules: []const *const ModuleEnv,
     auto_imported_types: ?*const std.AutoHashMap(Ident.Idx, can.Can.AutoImportedType),
-    regions: *Region.List,
+    regions: *const Region.List,
     builtin_ctx: BuiltinContext,
 ) std.mem.Allocator.Error!Self {
     const mutable_cir = @constCast(cir);
@@ -195,7 +195,11 @@ pub fn init(
         .cir = mutable_cir,
         .imported_modules = imported_modules,
         .auto_imported_types = auto_imported_types,
-        .regions = regions,
+        .regions = blk: {
+            var owned = Region.List{};
+            _ = try owned.appendSlice(gpa, regions.items.items);
+            break :blk owned;
+        },
         .builtin_ctx = builtin_ctx,
         .snapshots = try SnapshotStore.initCapacity(gpa, 512),
         .problems = try ProblemStore.initCapacity(gpa, 64),
@@ -234,6 +238,7 @@ pub fn fixupTypeWriter(self: *Self) void {
 
 /// Deinit owned fields
 pub fn deinit(self: *Self) void {
+    self.regions.deinit(self.gpa);
     self.problems.deinit(self.gpa);
     self.snapshots.deinit();
     self.import_mapping.deinit();
@@ -276,6 +281,7 @@ pub inline fn debugAssertArraysInSync(self: *const Self) void {
 inline fn ensureTypeStoreIsFilled(self: *Self) Allocator.Error!void {
     const region_nodes: usize = @intCast(self.regions.len());
     const type_nodes: usize = @intCast(self.types.len());
+    if (type_nodes >= region_nodes) return;
     try self.types.ensureTotalCapacity(region_nodes);
     for (type_nodes..region_nodes) |_| {
         _ = self.types.appendFromContentAssumeCapacity(.{ .flex = Flex.init() }, undefined);
@@ -402,7 +408,7 @@ fn unifyInContext(self: *Self, a: Var, b: Var, env: *Env, ctx: problem.Context) 
     // A more precise solution would track the origin of each fresh variable during
     // unification and propagate that back, but the current approach is sufficient for
     // typical error reporting scenarios.
-    const region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(b));
+    const region = self.getRegionAt(b);
     for (self.unify_scratch.fresh_vars.items.items) |fresh_var| {
         // Set the rank
         const fresh_rank = self.types.resolveVar(fresh_var).desc.rank;
@@ -598,6 +604,21 @@ fn instantiateVarHelp(
 
             const fresh_resolved = self.types.resolveVar(fresh_var);
 
+            // Track newly instantiated from_numeral flex vars so
+            // finalizeNumericDefaults knows about them.
+            if (fresh_resolved.desc.content == .flex) {
+                const flex = fresh_resolved.desc.content.flex;
+                if (flex.constraints.len() > 0) {
+                    const constraints = self.types.sliceStaticDispatchConstraints(flex.constraints);
+                    for (constraints) |c| {
+                        if (c.origin == .from_numeral) {
+                            self.types.from_numeral_flex_count += 1;
+                            break;
+                        }
+                    }
+                }
+            }
+
             // Add to pool
             try env.var_pool.addVarToRank(fresh_var, fresh_resolved.desc.rank);
 
@@ -636,8 +657,8 @@ fn fillInRegionsThrough(self: *Self, target_var: Var) Allocator.Error!void {
     const idx = @intFromEnum(target_var);
 
     if (idx >= self.regions.len()) {
-        // Use the store's allocator since regions was allocated by the store
-        try self.regions.items.ensureTotalCapacity(self.cir.store.gpa, idx + 1);
+        // Use Check's allocator since regions is owned by Check
+        try self.regions.items.ensureTotalCapacity(self.gpa, idx + 1);
 
         const empty_region = Region.zero();
         while (self.regions.len() <= idx) {
@@ -770,6 +791,38 @@ fn mkNumberTypeContent(self: *Self, type_name: []const u8, env: *Env) Allocator.
     );
 }
 
+/// Create a Dec nominal type content using the stored ident index rather than
+/// constructing the qualified name from a string literal.
+fn mkDecContent(self: *Self, env: *Env) Allocator.Error!Content {
+    const origin_module_id = if (self.builtin_ctx.builtin_module) |_|
+        self.cir.idents.builtin_module
+    else
+        self.builtin_ctx.module_name;
+
+    const type_ident = types_mod.TypeIdent{
+        .ident_idx = self.cir.idents.dec_type,
+    };
+
+    const empty_tag_union_content = Content{ .structure = .empty_tag_union };
+    const ext_var = try self.freshFromContent(empty_tag_union_content, env, Region.zero());
+    const empty_tag_union = types_mod.TagUnion{
+        .tags = types_mod.Tag.SafeMultiList.Range.empty(),
+        .ext = ext_var,
+    };
+    const backing_content = Content{ .structure = .{ .tag_union = empty_tag_union } };
+    const backing_var = try self.freshFromContent(backing_content, env, Region.zero());
+
+    const no_type_args: []const Var = &.{};
+
+    return try self.types.mkNominal(
+        type_ident,
+        backing_var,
+        no_type_args,
+        origin_module_id,
+        true,
+    );
+}
+
 /// Create a flex variable with a from_numeral constraint for numeric literals.
 /// This constraint will be checked during deferred constraint checking to validate
 /// that the numeric literal can be converted to the unified type.
@@ -842,6 +895,7 @@ fn mkFlexWithFromNumeralConstraint(
         },
     };
     try self.unifyWith(flex_var, flex_content, env);
+    self.types.from_numeral_flex_count += 1;
 
     return flex_var;
 }
@@ -1031,8 +1085,22 @@ fn copyBuiltinTypes(self: *Self) !void {
     // Try type is accessed via external references, no need to copy it here
 }
 
-/// Check the types for all defs in a file
+/// Check the types for all defs in a file.
+/// Set `skip_numeric_defaults` to true for app modules that have platform requirements -
+/// in that case, `finalizeNumericDefaults()` should be called AFTER `checkPlatformRequirements()`
+/// so that numeric literals can be constrained by platform types first.
 pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
+    return self.checkFileInternal(false);
+}
+
+/// Check the types for all defs in a file, optionally skipping numeric defaults finalization.
+/// Use this for app modules with platform requirements, then call `finalizeNumericDefaults()`
+/// after `checkPlatformRequirements()`.
+pub fn checkFileSkipNumericDefaults(self: *Self) std.mem.Allocator.Error!void {
+    return self.checkFileInternal(true);
+}
+
+fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -1145,6 +1213,14 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
 
     // Check any accumulated constraints
     try self.checkAllConstraints(&env);
+    try self.resolveNumericLiteralsFromContext(&env);
+
+    // Finalize numeric defaults unless skipped (for app modules with platform requirements,
+    // this should be called after checkPlatformRequirements() so platform types can
+    // constrain numeric literals first)
+    if (!skip_numeric_defaults) {
+        try self.finalizeNumericDefaultsInternal(&env);
+    }
 
     // After solving all deferred constraints, check for infinite types
     for (defs_slice) |def_idx| {
@@ -1545,6 +1621,8 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
 
     // Check any accumulated constraints
     try self.checkAllConstraints(&env);
+    try self.resolveNumericLiteralsFromContext(&env);
+    try self.finalizeNumericDefaultsInternal(&env);
 
     // Check if the expression's type has incompatible constraints (e.g., !3)
     const expr_var = ModuleEnv.varFrom(expr_idx);
@@ -1605,6 +1683,19 @@ pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Alloca
 
     // Check any accumulated constraints
     try self.checkAllConstraints(&env);
+    try self.resolveNumericLiteralsFromContext(&env);
+    try self.finalizeNumericDefaultsInternal(&env);
+
+    // After finalizing numeric defaults, resolve any remaining deferred
+    // static dispatch constraints. finalizeNumericDefaults unifies from_numeral
+    // flex vars with Dec, which may make deferred method_call constraints
+    // resolvable (e.g., Dec.to_str returns Str). Without this step, the
+    // return type of methods on defaulted numerics remains an unconstrained
+    // flex var, causing incorrect .zst layouts.
+    if (env.deferred_static_dispatch_constraints.items.items.len > 0) {
+        try self.checkStaticDispatchConstraints(&env);
+        try self.checkAllConstraints(&env);
+    }
 
     // After solving all deferred constraints, check for infinite types
     for (defs_slice) |def_idx| {
@@ -3768,6 +3859,15 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 does_fx = try self.checkExpr(lambda.body, env, .no_expectation) or does_fx;
             }
 
+            // Process any pending return constraints (from early returns / ? operator) before
+            // creating the function type. This must happen after the body is fully checked
+            // (for correct error reporting) but before the function type is generalized
+            // (so instantiated copies at call sites have the complete type, including
+            // both Ok and Err variants from the ? operator).
+            // Only processes early_return/try_suffix_return constraints; anonymous
+            // constraints (e.g. from recursive lookups) are left for later.
+            try self.processReturnConstraints(env);
+
             // Create the function type
             if (does_fx) {
                 _ = try self.unifyWith(expr_var, try self.types.mkFuncEffectful(arg_vars, body_var), env);
@@ -4171,8 +4271,11 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             does_fx = try self.checkExpr(ret.expr, env, .no_expectation) or does_fx;
             const ret_var = ModuleEnv.varFrom(ret.expr);
 
-            // Write down this constraint for later validation
-            // We assert the lambda's type and the return type are equiv
+            // Write down this constraint for later validation.
+            // We assert the lambda's body type and the return value type are equivalent.
+            // This constraint is processed at the end of e_lambda (after the body is
+            // fully checked) to ensure proper error reporting while also running before
+            // generalization to prevent layout mismatches at instantiated call sites.
             const lambda_expr = self.cir.store.getExpr(ret.lambda);
             std.debug.assert(lambda_expr == .e_lambda);
             _ = try self.constraints.append(self.gpa, Constraint{ .eql = .{
@@ -4205,6 +4308,48 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             // For low-level lambda expressions, treat like a lambda with a crash body.
             // Check the body (which will be e_runtime_error or similar)
             does_fx = try self.checkExpr(ll.body, env, .no_expectation) or does_fx;
+
+            // Check the argument patterns and unify them with the annotation's
+            // function parameter types. Without this, pattern type variables remain
+            // as bare flex vars, which resolve to ZST layouts during lowering.
+            // This mirrors what e_lambda does at its pattern-checking step.
+            const arg_pattern_idxs = self.cir.store.slicePatterns(ll.args);
+            for (arg_pattern_idxs) |pattern_idx| {
+                try self.checkPattern(pattern_idx, env);
+            }
+
+            if (mb_anno_vars) |anno_vars| {
+                const mb_anno_func: ?types_mod.Func = func_blk: {
+                    var var_ = anno_vars.anno_var;
+                    var guard = types_mod.debug.IterationGuard.init("checkExpr.ll_lambda.unwrapExpectedFunc");
+                    while (true) {
+                        guard.tick();
+                        switch (self.types.resolveVar(var_).desc.content) {
+                            .structure => |flat_type| {
+                                switch (flat_type) {
+                                    .fn_pure => |func| break :func_blk func,
+                                    .fn_unbound => |func| break :func_blk func,
+                                    .fn_effectful => |func| break :func_blk func,
+                                    else => break :func_blk null,
+                                }
+                            },
+                            .alias => |alias| {
+                                var_ = self.types.getAliasBackingVar(alias);
+                            },
+                            else => break :func_blk null,
+                        }
+                    }
+                };
+
+                if (mb_anno_func) |anno_func| {
+                    const anno_func_args = self.types.sliceVars(anno_func.args);
+                    if (anno_func_args.len == arg_pattern_idxs.len) {
+                        for (anno_func_args, arg_pattern_idxs) |expected_arg_var, pattern_idx| {
+                            _ = try self.unifyInContext(expected_arg_var, ModuleEnv.varFrom(pattern_idx), env, .type_annotation);
+                        }
+                    }
+                }
+            }
 
             // For low level lambda expressions, the type comes from the annotation.
             // This is similar to e_anno_only - the implementation is provided by the host.
@@ -5436,6 +5581,146 @@ fn checkAllConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     }
 }
 
+/// After type checking, resolve remaining from_numeral flex vars: first by inferring
+/// the type from peer arguments in dispatch constraints (e.g., U64 from List.len),
+/// then defaulting to Dec if no concrete peer is found.
+/// Resolve from_numeral flex vars using type information from their dispatch
+/// constraints, before falling back to Dec defaulting.
+///
+/// When a numeric literal appears in an arithmetic expression like
+/// `0 + List.len(tail)`, the binop creates a dispatch constraint
+/// `plus(F, U64) -> F` on the from_numeral flex var F. The normal dispatch
+/// resolution can't process this because F (the dispatcher) is still flex.
+/// But the constraint already contains the answer: the peer argument U64
+/// tells us F must be U64, since all built-in numeric arithmetic is
+/// homogeneous ((T, T) -> T) and from_numeral vars can only be numeric.
+///
+/// This pass walks from_numeral flex vars, finds concrete peer arguments
+/// in their desugared_binop constraints, and unifies — letting the normal
+/// dispatch resolution complete in the subsequent checkAllConstraints call.
+fn resolveNumericLiteralsFromContext(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+    if (self.types.from_numeral_flex_count == 0) return;
+
+    const num_vars: u32 = @intCast(self.types.len());
+    var i: u32 = 0;
+    while (i < num_vars) : (i += 1) {
+        const var_: types_mod.Var = @enumFromInt(i);
+        const resolved = self.types.resolveVar(var_);
+        if (resolved.desc.content != .flex) continue;
+
+        const flex = resolved.desc.content.flex;
+        if (flex.constraints.len() == 0) continue;
+
+        const constraints = self.types.sliceStaticDispatchConstraints(flex.constraints);
+
+        // Only process from_numeral flex vars.
+        var has_from_numeral = false;
+        for (constraints) |c| {
+            if (c.origin == .from_numeral) {
+                has_from_numeral = true;
+                break;
+            }
+        }
+        if (!has_from_numeral) continue;
+
+        // Look for a desugared_binop constraint with a concrete peer argument.
+        for (constraints) |c| {
+            if (c.origin != .desugared_binop) continue;
+            const fn_content = self.types.resolveVar(c.fn_var).desc.content;
+            const func = fn_content.unwrapFunc() orelse continue;
+            var found_peer = false;
+            for (self.types.sliceVars(func.args)) |arg| {
+                const resolved_arg = self.types.resolveVar(arg);
+                if (resolved_arg.var_ == resolved.var_) continue; // skip self
+                if (resolved_arg.desc.content.unwrapNominalType() == null) continue;
+                _ = try self.unify(resolved.var_, resolved_arg.var_, env);
+                found_peer = true;
+                break;
+            }
+            if (found_peer) break;
+        }
+    }
+
+    // Process constraints generated by the unifications above.
+    // The from_numeral flex vars that were unified with concrete peers
+    // now have their dispatch constraints deferred, and checkAllConstraints
+    // will resolve them through the normal dispatch machinery.
+    try self.checkAllConstraints(env);
+}
+
+/// Default any remaining from_numeral flex vars to Dec.
+///
+/// By the time this runs, resolveNumericLiteralsFromContext has already
+/// unified from_numeral vars that had concrete peers in their binop
+/// constraints (e.g., U64 from List.len). The only vars still flex here
+/// are those with genuinely no numeric context, so Dec is correct.
+///
+/// For app modules with platform requirements, this should be called AFTER
+/// `checkPlatformRequirements()` so that platform types can constrain
+/// numeric literals first. Use `checkFileSkipNumericDefaults()` in that case.
+pub fn finalizeNumericDefaults(self: *Self) std.mem.Allocator.Error!void {
+    var env = try self.env_pool.acquire();
+    defer self.env_pool.release(env);
+    try self.finalizeNumericDefaultsInternal(&env);
+}
+
+fn finalizeNumericDefaultsInternal(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+    if (self.types.from_numeral_flex_count == 0) return;
+
+    const num_vars: u32 = @intCast(self.types.len());
+    var i: u32 = 0;
+    while (i < num_vars) : (i += 1) {
+        const var_: types_mod.Var = @enumFromInt(i);
+        const resolved = self.types.resolveVar(var_);
+        if (resolved.desc.content != .flex) continue;
+
+        const flex = resolved.desc.content.flex;
+        const constraints = self.types.sliceStaticDispatchConstraints(flex.constraints);
+        var has_from_numeral = false;
+        for (constraints) |c| {
+            if (c.origin == .from_numeral) {
+                has_from_numeral = true;
+                break;
+            }
+        }
+        if (!has_from_numeral) continue;
+
+        const dec_var = try self.freshFromContent(try self.mkDecContent(env), env, Region.zero());
+        _ = try self.unify(resolved.var_, dec_var, env);
+    }
+
+    // Process the newly created constraints from the unification
+    try self.checkAllConstraints(env);
+}
+
+/// Process only early_return and try_operator constraints, keeping other
+/// constraints for later processing. Called at the end of e_lambda to ensure return type
+/// information is unified with the body type before the function type is generalized,
+/// without prematurely processing other constraints from recursive lookups.
+fn processReturnConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+    const original_len = self.constraints.items.items.len;
+    var write_idx: usize = 0;
+    for (0..original_len) |read_idx| {
+        const constraint = self.constraints.items.items[read_idx];
+        switch (constraint) {
+            .eql => |eql| switch (eql.ctx) {
+                .early_return => {
+                    _ = try self.unifyInContext(eql.expected, eql.actual, env, .early_return);
+                },
+                .try_operator => {
+                    _ = try self.unifyInContext(eql.expected, eql.actual, env, .try_operator);
+                },
+                else => {
+                    self.constraints.items.items[write_idx] = constraint;
+                    write_idx += 1;
+                },
+            },
+        }
+    }
+    std.debug.assert(self.constraints.items.items.len == original_len);
+    self.constraints.items.shrinkRetainingCapacity(write_idx);
+}
+
 /// Check any accumulated constraints
 fn checkConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
@@ -5687,8 +5972,9 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Erro
                 // to all args and return types.
                 if (fn_result.isProblem()) {
                     for (self.types.sliceVars(constraint_fn.args)) |arg| {
-                        // I don't _think_ we should need to do this, but eval
-                        // tests fail if we don't,
+                        // Propagate the error to args — necessary because constraint fn args
+                        // are shared with actual expression vars (e.g., binop lhs/rhs), and
+                        // leaving them non-err after a dispatch failure causes type confusion.
                         try self.unifyWith(arg, .err, env);
                     }
                     try self.unifyWith(deferred_constraint.var_, .err, env);

@@ -154,11 +154,11 @@ NO CHANGE
 	(defs
 		(patt (type "a, b -> a where [a.times : a, b -> a]"))
 		(patt (type "_arg -> Error"))
-		(patt (type "a -> Error where [a.times : a, b -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
+		(patt (type "a -> Error where [a.times : a, Dec -> a]"))
 		(patt (type "Error")))
 	(expressions
 		(expr (type "a, b -> a where [a.times : a, b -> a]"))
 		(expr (type "_arg -> Error"))
-		(expr (type "a -> Error where [a.times : a, b -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
+		(expr (type "a -> Error where [a.times : a, Dec -> a]"))
 		(expr (type "Error"))))
 ~~~
