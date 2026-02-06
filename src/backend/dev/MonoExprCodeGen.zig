@@ -11145,6 +11145,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             return switch (loc) {
                 .stack, .stack_i128, .stack_str => |off| off,
                 .list_stack => |info| info.struct_offset,
+                .closure_value => |cv| cv.stack_offset,
                 .general_reg => |reg| blk: {
                     const slot = self.codegen.allocStackSlot(@intCast(size));
                     if (comptime target.toCpuArch() == .aarch64) {
