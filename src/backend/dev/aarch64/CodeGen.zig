@@ -676,6 +676,38 @@ pub fn CodeGen(comptime target: RocTarget) type {
             }
         }
 
+        /// Load byte (zero-extended) from stack slot
+        pub fn emitLoadStackByte(self: *Self, dst: GeneralReg, offset: i32) !void {
+            if (offset >= -256 and offset <= 255) {
+                try self.emit.ldurbRegMem(dst, .FP, @intCast(offset));
+            } else if (offset > 0) {
+                // Positive offset - use scaled unsigned form (byte: no shift needed)
+                const uoffset: u12 = @intCast(@as(u32, @intCast(offset)));
+                try self.emit.ldrbRegMem(dst, .FP, uoffset);
+            } else {
+                // Large negative offset - add offset to FP, then load
+                try self.emit.movRegImm64(.IP0, @bitCast(@as(i64, offset)));
+                try self.emit.addRegRegReg(.w64, .IP0, .FP, .IP0);
+                try self.emit.ldrbRegMem(dst, .IP0, 0);
+            }
+        }
+
+        /// Load halfword (zero-extended) from stack slot
+        pub fn emitLoadStackHalfword(self: *Self, dst: GeneralReg, offset: i32) !void {
+            if (offset >= -256 and offset <= 255) {
+                try self.emit.ldurhRegMem(dst, .FP, @intCast(offset));
+            } else if (offset > 0) {
+                // Positive offset - use scaled unsigned form (halfword: shift by 1)
+                const uoffset: u12 = @intCast(@as(u32, @intCast(offset)) >> 1);
+                try self.emit.ldrhRegMem(dst, .FP, uoffset);
+            } else {
+                // Large negative offset - add offset to FP, then load
+                try self.emit.movRegImm64(.IP0, @bitCast(@as(i64, offset)));
+                try self.emit.addRegRegReg(.w64, .IP0, .FP, .IP0);
+                try self.emit.ldrhRegMem(dst, .IP0, 0);
+            }
+        }
+
         /// Load float64 from stack slot
         pub fn emitLoadStackF64(self: *Self, dst: FloatReg, offset: i32) !void {
             if (offset >= 0) {

@@ -3088,3 +3088,11 @@ test "Bool in record with mixed alignment fields - bug confirmation" {
     try runExpectBool("{ key: 42u64, count: 1u32, flag: Bool.True }.flag", true, .no_trace);
     try runExpectBool("{ key: 42u64, count: 1u32, flag: Bool.False }.flag", false, .no_trace);
 }
+
+test "U8 in record field access" {
+    try runExpectI64("{ x: 42u8 }.x", 42, .no_trace);
+}
+
+test "U16 in record field access" {
+    try runExpectI64("{ x: 1000u16 }.x", 1000, .no_trace);
+}

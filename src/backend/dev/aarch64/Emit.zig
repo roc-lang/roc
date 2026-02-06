@@ -845,6 +845,51 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.emit32(inst);
         }
 
+        /// LDURB (load register byte unscaled, zero-extend) with signed offset
+        pub fn ldurbRegMem(self: *Self, dst: GeneralReg, base: GeneralReg, offset: i9) !void {
+            // LDURB <Wt>, [<Xn|SP>, #<simm>]
+            // 00 111 0 00 01 0 imm9 00 Rn Rt
+            const imm9: u9 = @bitCast(offset);
+            const inst: u32 = (0b00 << 30) | // size = 00 for byte
+                (0b111000 << 24) |
+                (0b01 << 22) | // opc = 01 for load
+                (0 << 21) |
+                (@as(u32, imm9) << 12) |
+                (0b00 << 10) |
+                (@as(u32, base.enc()) << 5) |
+                dst.enc();
+            try self.emit32(inst);
+        }
+
+        /// LDURH (load register halfword unscaled, zero-extend) with signed offset
+        pub fn ldurhRegMem(self: *Self, dst: GeneralReg, base: GeneralReg, offset: i9) !void {
+            // LDURH <Wt>, [<Xn|SP>, #<simm>]
+            // 01 111 0 00 01 0 imm9 00 Rn Rt
+            const imm9: u9 = @bitCast(offset);
+            const inst: u32 = (0b01 << 30) | // size = 01 for halfword
+                (0b111000 << 24) |
+                (0b01 << 22) | // opc = 01 for load
+                (0 << 21) |
+                (@as(u32, imm9) << 12) |
+                (0b00 << 10) |
+                (@as(u32, base.enc()) << 5) |
+                dst.enc();
+            try self.emit32(inst);
+        }
+
+        /// LDRH (load register halfword, zero-extend) with unsigned offset
+        pub fn ldrhRegMem(self: *Self, dst: GeneralReg, base: GeneralReg, uoffset: u12) !void {
+            // LDRH <Wt>, [<Xn|SP>, #<pimm>]
+            // 01 111 0 01 01 imm12 Rn Rt
+            const inst: u32 = (0b01 << 30) |
+                (0b111001 << 24) |
+                (0b01 << 22) |
+                (@as(u32, uoffset) << 10) |
+                (@as(u32, base.enc()) << 5) |
+                dst.enc();
+            try self.emit32(inst);
+        }
+
         /// LDR with signed offset (i32)
         /// Handles arbitrary signed offsets by choosing appropriate encoding:
         /// - Small offsets (-256 to 255): use LDUR (unscaled)
