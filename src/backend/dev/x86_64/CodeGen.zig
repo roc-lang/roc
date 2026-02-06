@@ -799,14 +799,14 @@ test "prologue and epilogue" {
     // With no callee-saved registers used and 0 stack allocation:
     // push rbp: 55 (1 byte)
     // mov rbp, rsp: 48 89 E5 (3 bytes)
-    // (no sub rsp since size is 0)
+    // sub rsp, <callee_saved_area>: 48 81 EC xx xx xx xx (7 bytes) — always reserves callee-saved area
     // (no MOV saves since callee_saved_used = 0)
     // (no MOV restores since callee_saved_used = 0)
     // mov rsp, rbp: 48 89 EC (3 bytes)
     // pop rbp: 5D (1 byte)
     // ret: C3 (1 byte)
-    // Total: 9 bytes
-    try std.testing.expectEqual(@as(usize, 9), code.len);
+    // Total: 16 bytes
+    try std.testing.expectEqual(@as(usize, 16), code.len);
     try std.testing.expectEqual(@as(u8, 0x55), code[0]); // push rbp
     try std.testing.expectEqual(@as(u8, 0xC3), code[code.len - 1]); // ret
 }

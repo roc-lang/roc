@@ -249,16 +249,6 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
             }
         }
 
-        fn countCalleeSavedBytes(self: *const Self) u32 {
-            var count: u32 = 0;
-            for (CalleeSavedInfo.SLOTS) |slot| {
-                if ((self.callee_saved_mask & (@as(u32, 1) << @intFromEnum(slot.reg))) != 0) {
-                    count += 8;
-                }
-            }
-            return count;
-        }
-
         // ==================== aarch64 Implementation ====================
 
         fn calculatePrologueSizeAarch64(self: *const Self) u32 {

@@ -602,8 +602,8 @@ pub fn main() !void {
                 \\  --trace-eval    Enable interpreter trace output (only works with single REPL snapshot)
                 \\  --linecol       Include line/column information in output
                 \\  --threads <n>   Number of threads to use (0 = auto-detect, 1 = single-threaded). Default: 0.
-                \\  --check-expected     Validate that EXPECTED sections match PROBLEMS sections
-                \\  --update-expected    Update EXPECTED sections based on PROBLEMS sections
+                \\  --check-expected     Validate that EXPECTED/DEV OUTPUT sections match actual output
+                \\  --update-expected    Update EXPECTED/DEV OUTPUT sections with actual output
                 \\  --fuzz-corpus <path>  Specify the path to the fuzz corpus
                 \\
                 \\Arguments:
@@ -1465,6 +1465,7 @@ fn processRocFileAsSnapshotWithExpected(
         .expected = expected_content,
         .output = null,
         .formatted = null,
+        .dev_output = null,
         .has_canonicalize = true,
     };
 
@@ -1867,6 +1868,7 @@ pub const Content = struct {
     expected: ?[]const u8,
     output: ?[]const u8,
     formatted: ?[]const u8,
+    dev_output: ?[]const u8,
     has_canonicalize: bool,
 
     fn from_ranges(ranges: std.AutoHashMap(Section, Section.Range), content: []const u8) Error!Content {
@@ -1874,6 +1876,7 @@ pub const Content = struct {
         var expected: ?[]const u8 = undefined;
         var output: ?[]const u8 = undefined;
         var formatted: ?[]const u8 = undefined;
+        var dev_output: ?[]const u8 = undefined;
         var has_canonicalize: bool = false;
 
         if (ranges.get(.source)) |value| {
@@ -1901,6 +1904,12 @@ pub const Content = struct {
             formatted = null;
         }
 
+        if (ranges.get(.dev_output)) |value| {
+            dev_output = value.extract(content);
+        } else {
+            dev_output = null;
+        }
+
         if (ranges.get(.canonicalize)) |_| {
             has_canonicalize = true;
         }
@@ -1914,6 +1923,7 @@ pub const Content = struct {
                 .expected = expected,
                 .output = output,
                 .formatted = formatted,
+                .dev_output = dev_output,
                 .has_canonicalize = has_canonicalize,
             };
         } else {
@@ -3577,6 +3587,51 @@ const TargetHashResult = struct {
     supported: bool,
 };
 
+/// Compare two hash text blocks (target=hash lines) for equality,
+/// ignoring trailing whitespace differences.
+fn hashTextMatches(existing: []const u8, new: []const u8) bool {
+    const existing_trimmed = std.mem.trimRight(u8, existing, " \t\r\n");
+    const new_trimmed = std.mem.trimRight(u8, new, " \t\r\n");
+    return std.mem.eql(u8, existing_trimmed, new_trimmed);
+}
+
+/// Print a table showing which targets have hash mismatches.
+fn printHashMismatchTable(existing: []const u8, new: []const u8) void {
+    std.debug.print("  {s:<18} | {s:<64} | {s}\n", .{ "target", "expected", "actual" });
+    std.debug.print("  {s:-<18} | {s:-<64} | {s:-<64}\n", .{ "", "", "" });
+
+    // Parse existing hashes into a map-like iteration
+    var new_lines = std.mem.splitScalar(u8, std.mem.trimRight(u8, new, " \t\r\n"), '\n');
+    var existing_lines = std.mem.splitScalar(u8, std.mem.trimRight(u8, existing, " \t\r\n"), '\n');
+
+    while (new_lines.next()) |new_line| {
+        const new_eq = std.mem.indexOfScalar(u8, new_line, '=') orelse continue;
+        const target = new_line[0..new_eq];
+        const new_hash = new_line[new_eq + 1 ..];
+
+        // Find matching target in existing
+        existing_lines.reset();
+        var old_hash: ?[]const u8 = null;
+        while (existing_lines.next()) |existing_line| {
+            const ex_eq = std.mem.indexOfScalar(u8, existing_line, '=') orelse continue;
+            if (std.mem.eql(u8, existing_line[0..ex_eq], target)) {
+                old_hash = existing_line[ex_eq + 1 ..];
+                break;
+            }
+        }
+
+        if (old_hash) |oh| {
+            if (std.mem.eql(u8, oh, new_hash)) {
+                std.debug.print("  {s:<18} | (matches)\n", .{target});
+            } else {
+                std.debug.print("  {s:<18} | {s:<64} | {s}\n", .{ target, oh, new_hash });
+            }
+        } else {
+            std.debug.print("  {s:<18} | (new)                                                            | {s}\n", .{ target, new_hash });
+        }
+    }
+}
+
 /// Process a dev_object snapshot: parse multi-file source, compile with BuildEnv,
 /// lower to Mono IR, cross-compile for all targets, and record blake3 hashes.
 fn processDevObjectSnapshot(
@@ -3585,7 +3640,6 @@ fn processDevObjectSnapshot(
     output_path: []const u8,
     config: *const Config,
 ) !bool {
-    _ = config;
     log("Processing dev_object snapshot: {s}", .{output_path});
 
     // 1. Parse multi-file source
@@ -3612,8 +3666,10 @@ fn processDevObjectSnapshot(
     // Find the app file (first .roc file, or explicitly "app.roc")
     var app_filename: ?[]const u8 = null;
     for (source_files) |sf| {
+        const sub_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ tmp_dir_name, sf.filename });
+        defer allocator.free(sub_path);
         std.fs.cwd().writeFile(.{
-            .sub_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ tmp_dir_name, sf.filename }),
+            .sub_path = sub_path,
             .data = sf.content,
         }) catch |err| {
             std.log.err("Failed to write {s}: {}", .{ sf.filename, err });
@@ -3638,7 +3694,7 @@ fn processDevObjectSnapshot(
     defer build_env.deinit();
 
     build_env.build(app_path) catch |err| {
-        std.log.err("BuildEnv.build failed for {s}: {}", .{app_path, err});
+        std.log.err("BuildEnv.build failed for {s}: {}", .{ app_path, err });
         return false;
     };
 
@@ -3852,7 +3908,12 @@ fn processDevObjectSnapshot(
     // Use provides entries from build pipeline (centralized in CompiledModuleInfo)
     const backend = @import("backend");
     var entrypoints = std.ArrayList(backend.Entrypoint).empty;
-    defer entrypoints.deinit(allocator);
+    defer {
+        for (entrypoints.items) |ep| {
+            allocator.free(ep.symbol_name);
+        }
+        entrypoints.deinit(allocator);
+    }
 
     const provides_entries = platform_module.provides_entries;
     if (provides_entries.len == 0) {
@@ -4002,17 +4063,59 @@ fn processDevObjectSnapshot(
     }
     try md_writer.writer.writeAll(Section.SECTION_END);
 
-    // DEV OUTPUT section
-    try md_writer.writer.writeAll(Section.DEV_OUTPUT);
+    // DEV OUTPUT section - build new hash text
+    var new_hash_buf = std.ArrayList(u8).empty;
+    defer new_hash_buf.deinit(allocator);
     for (&hash_results) |result| {
-        try md_writer.writer.writeAll(result.target_name);
-        try md_writer.writer.writeByte('=');
+        new_hash_buf.appendSlice(allocator, result.target_name) catch return false;
+        new_hash_buf.append(allocator, '=') catch return false;
         if (result.supported) {
-            try md_writer.writer.writeAll(&result.hash_hex);
+            new_hash_buf.appendSlice(allocator, &result.hash_hex) catch return false;
         } else {
-            try md_writer.writer.writeAll("NOT_IMPLEMENTED");
+            new_hash_buf.appendSlice(allocator, "NOT_IMPLEMENTED") catch return false;
         }
-        try md_writer.writer.writeByte('\n');
+        new_hash_buf.append(allocator, '\n') catch return false;
+    }
+    const new_hash_text = new_hash_buf.items;
+
+    // Compare against existing DEV OUTPUT and decide what to write
+    var success = true;
+    const write_new_hashes = blk: {
+        if (content.dev_output == null) {
+            // First run - always write new hashes
+            break :blk true;
+        }
+        switch (config.expected_section_command) {
+            .update => break :blk true,
+            .check => {
+                if (!hashTextMatches(content.dev_output.?, new_hash_text)) {
+                    std.debug.print("\nDEV OUTPUT mismatch in {s}\n\n", .{output_path});
+                    printHashMismatchTable(content.dev_output.?, new_hash_text);
+                    std.debug.print("\nHint: use `zig build snapshot -- --update-expected` to update DEV OUTPUT hashes.\n\n", .{});
+                    success = false;
+                }
+                break :blk false;
+            },
+            .none => {
+                if (!hashTextMatches(content.dev_output.?, new_hash_text)) {
+                    std.debug.print("\nDEV OUTPUT warning: hashes changed in {s}\n", .{output_path});
+                    std.debug.print("Hint: use `zig build snapshot -- --check-expected` to see details, or `--update-expected` to update.\n\n", .{});
+                }
+                break :blk false;
+            },
+        }
+    };
+
+    try md_writer.writer.writeAll(Section.DEV_OUTPUT);
+    if (write_new_hashes) {
+        try md_writer.writer.writeAll(new_hash_text);
+    } else {
+        // Preserve existing DEV OUTPUT content
+        try md_writer.writer.writeAll(content.dev_output.?);
+        // Ensure trailing newline
+        if (content.dev_output.?.len > 0 and content.dev_output.?[content.dev_output.?.len - 1] != '\n') {
+            try md_writer.writer.writeByte('\n');
+        }
     }
     try md_writer.writer.writeAll(Section.SECTION_END);
 
@@ -4027,7 +4130,7 @@ fn processDevObjectSnapshot(
     defer md_file.close();
 
     try md_file.writeAll(md_buffer.items);
-    return true;
+    return success;
 }
 
 // ── REPL Snapshot Processing ───────────────────────────────────────────────
