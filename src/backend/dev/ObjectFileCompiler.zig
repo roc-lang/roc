@@ -19,7 +19,7 @@ const mono = @import("mono");
 const RocTarget = @import("roc_target").RocTarget;
 
 const ObjectWriter = @import("ObjectWriter.zig");
-const HostMonoExprCodeGen = @import("MonoExprCodeGen.zig").HostMonoExprCodeGen;
+const MonoExprCodeGenMod = @import("MonoExprCodeGen.zig");
 const StaticDataInterner = @import("StaticDataInterner.zig");
 
 /// Information about an entrypoint to compile
@@ -34,7 +34,7 @@ pub const Entrypoint = struct {
     ret_layout: layout.Idx,
 };
 
-/// Result of native compilation
+/// Result of compilation
 pub const CompilationResult = struct {
     /// The generated object file bytes
     object_bytes: []const u8,
@@ -46,7 +46,7 @@ pub const CompilationResult = struct {
     }
 };
 
-/// Errors that can occur during native compilation
+/// Errors that can occur during compilation
 pub const CompilationError = error{
     OutOfMemory,
     NoEntrypoints,
@@ -56,7 +56,7 @@ pub const CompilationError = error{
 };
 
 /// Object file compiler that generates object files from Mono IR.
-/// Supports cross-compilation to any RocTarget.
+/// Supports compilation to any RocTarget via runtime-to-comptime dispatch.
 pub const ObjectFileCompiler = struct {
     allocator: Allocator,
 
@@ -64,13 +64,13 @@ pub const ObjectFileCompiler = struct {
         return .{ .allocator = allocator };
     }
 
-    /// Compile Mono IR to a native object file.
+    /// Compile Mono IR to a native object file for the given RocTarget.
     ///
-    /// This is the main entry point for native compilation. It:
-    /// 1. Creates a code generator
-    /// 2. Compiles all procedures (if any)
-    /// 3. Generates entrypoint wrappers following RocCall ABI
-    /// 4. Produces an object file with proper symbols and relocations
+    /// Dispatches at runtime to the correct compile-time MonoExprCodeGen
+    /// instantiation for the requested target. Works for both native and
+    /// cross-compilation — the caller just passes the desired target.
+    ///
+    /// Returns CompilationError.UnsupportedTarget for arm32 and wasm32 targets.
     pub fn compileToObjectFile(
         self: *ObjectFileCompiler,
         mono_store: *const mono.MonoExprStore,
@@ -79,143 +79,7 @@ pub const ObjectFileCompiler = struct {
         procs: []const mono.MonoProc,
         target: RocTarget,
     ) CompilationError!CompilationResult {
-        if (entrypoints.len == 0) {
-            return CompilationError.NoEntrypoints;
-        }
-
-        // Create memory backend for static data allocation
-        var memory_backend = StaticDataInterner.MemoryBackend.init(self.allocator);
-        defer memory_backend.deinit();
-
-        // Create static data interner for string literals
-        var static_interner = StaticDataInterner.init(self.allocator, memory_backend.backend());
-        defer static_interner.deinit();
-
-        // Initialize the code generator
-        var codegen = HostMonoExprCodeGen.init(
-            self.allocator,
-            mono_store,
-            layout_store,
-            &static_interner,
-        );
-        defer codegen.deinit();
-
-        // Set object file mode to generate relocatable symbol references instead of direct pointers
-        codegen.generation_mode = .object_file;
-
-        // Compile all procedures first
-        if (procs.len > 0) {
-            codegen.compileAllProcs(procs) catch {
-                return CompilationError.CodeGenerationFailed;
-            };
-        }
-
-        // Track symbols for object file generation
-        var symbols = std.ArrayList(ObjectWriter.Symbol).empty;
-        defer symbols.deinit(self.allocator);
-
-        // Generate entrypoint wrappers
-        for (entrypoints) |entrypoint| {
-            const export_info = codegen.generateEntrypointWrapper(
-                entrypoint.symbol_name,
-                entrypoint.body_expr,
-                entrypoint.arg_layouts,
-                entrypoint.ret_layout,
-            ) catch {
-                return CompilationError.CodeGenerationFailed;
-            };
-
-            symbols.append(self.allocator, .{
-                .name = entrypoint.symbol_name,
-                .offset = export_info.offset,
-                .size = export_info.size,
-                .is_global = true,
-                .is_function = true,
-                .is_external = false,
-                // Unwind info for Windows x64
-                .prologue_size = export_info.prologue_size,
-                .stack_alloc = export_info.stack_alloc,
-                .uses_frame_pointer = export_info.uses_frame_pointer,
-            }) catch {
-                return CompilationError.OutOfMemory;
-            };
-        }
-
-        // Get generated code and relocations
-        const code = codegen.getGeneratedCode();
-        const relocations = codegen.getRelocations();
-
-        // Collect external symbol references from relocations
-        for (relocations) |reloc| {
-            switch (reloc) {
-                .linked_function => |f| {
-                    // Check if this is already in our symbols list
-                    var found = false;
-                    for (symbols.items) |sym| {
-                        if (std.mem.eql(u8, sym.name, f.name)) {
-                            found = true;
-                            break;
-                        }
-                    }
-                    if (!found) {
-                        symbols.append(self.allocator, .{
-                            .name = f.name,
-                            .offset = 0,
-                            .size = 0,
-                            .is_global = false,
-                            .is_function = true,
-                            .is_external = true,
-                        }) catch {
-                            return CompilationError.OutOfMemory;
-                        };
-                    }
-                },
-                .linked_data => |d| {
-                    var found = false;
-                    for (symbols.items) |sym| {
-                        if (std.mem.eql(u8, sym.name, d.name)) {
-                            found = true;
-                            break;
-                        }
-                    }
-                    if (!found) {
-                        symbols.append(self.allocator, .{
-                            .name = d.name,
-                            .offset = 0,
-                            .size = 0,
-                            .is_global = false,
-                            .is_function = false,
-                            .is_external = true,
-                        }) catch {
-                            return CompilationError.OutOfMemory;
-                        };
-                    }
-                },
-                else => {},
-            }
-        }
-
-        // Generate object file
-        var output = std.ArrayList(u8).empty;
-        errdefer output.deinit(self.allocator);
-
-        ObjectWriter.generateObjectFile(
-            self.allocator,
-            target,
-            code,
-            symbols.items,
-            relocations,
-            &output,
-        ) catch {
-            return CompilationError.ObjectGenerationFailed;
-        };
-
-        return CompilationResult{
-            .object_bytes = output.toOwnedSlice(self.allocator) catch {
-                return CompilationError.OutOfMemory;
-            },
-            .allocator = self.allocator,
-        };
+        return crossCompileDispatch(self.allocator, mono_store, layout_store, entrypoints, procs, target);
     }
 
     /// Compile to an object file and write it to a path.
@@ -246,6 +110,188 @@ pub const ObjectFileCompiler = struct {
         };
     }
 };
+
+/// Generic compilation function parameterized by code generator type.
+fn compileWithCodeGen(
+    comptime CodeGen: type,
+    allocator: Allocator,
+    mono_store: *const mono.MonoExprStore,
+    layout_store: *const layout.Store,
+    entrypoints: []const Entrypoint,
+    procs: []const mono.MonoProc,
+    target: RocTarget,
+) CompilationError!CompilationResult {
+    if (entrypoints.len == 0) {
+        return CompilationError.NoEntrypoints;
+    }
+
+    // Create memory backend for static data allocation
+    var memory_backend = StaticDataInterner.MemoryBackend.init(allocator);
+    defer memory_backend.deinit();
+
+    // Create static data interner for string literals
+    var static_interner = StaticDataInterner.init(allocator, memory_backend.backend());
+    defer static_interner.deinit();
+
+    // Initialize the code generator
+    var codegen = CodeGen.init(
+        allocator,
+        mono_store,
+        layout_store,
+        &static_interner,
+    );
+    defer codegen.deinit();
+
+    // Set object file mode to generate relocatable symbol references instead of direct pointers
+    codegen.generation_mode = .object_file;
+
+    // Compile all procedures first
+    if (procs.len > 0) {
+        codegen.compileAllProcs(procs) catch {
+            return CompilationError.CodeGenerationFailed;
+        };
+    }
+
+    // Track symbols for object file generation
+    var symbols = std.ArrayList(ObjectWriter.Symbol).empty;
+    defer symbols.deinit(allocator);
+
+    // Generate entrypoint wrappers
+    for (entrypoints) |entrypoint| {
+        const export_info = codegen.generateEntrypointWrapper(
+            entrypoint.symbol_name,
+            entrypoint.body_expr,
+            entrypoint.arg_layouts,
+            entrypoint.ret_layout,
+        ) catch {
+            return CompilationError.CodeGenerationFailed;
+        };
+
+        symbols.append(allocator, .{
+            .name = entrypoint.symbol_name,
+            .offset = export_info.offset,
+            .size = export_info.size,
+            .is_global = true,
+            .is_function = true,
+            .is_external = false,
+            // Unwind info for Windows x64
+            .prologue_size = export_info.prologue_size,
+            .stack_alloc = export_info.stack_alloc,
+            .uses_frame_pointer = export_info.uses_frame_pointer,
+        }) catch {
+            return CompilationError.OutOfMemory;
+        };
+    }
+
+    // Get generated code and relocations
+    const code = codegen.getGeneratedCode();
+    const relocations = codegen.getRelocations();
+
+    // Collect external symbol references from relocations
+    for (relocations) |reloc| {
+        switch (reloc) {
+            .linked_function => |f| {
+                // Check if this is already in our symbols list
+                var found = false;
+                for (symbols.items) |sym| {
+                    if (std.mem.eql(u8, sym.name, f.name)) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    symbols.append(allocator, .{
+                        .name = f.name,
+                        .offset = 0,
+                        .size = 0,
+                        .is_global = false,
+                        .is_function = true,
+                        .is_external = true,
+                    }) catch {
+                        return CompilationError.OutOfMemory;
+                    };
+                }
+            },
+            .linked_data => |d| {
+                var found = false;
+                for (symbols.items) |sym| {
+                    if (std.mem.eql(u8, sym.name, d.name)) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    symbols.append(allocator, .{
+                        .name = d.name,
+                        .offset = 0,
+                        .size = 0,
+                        .is_global = false,
+                        .is_function = false,
+                        .is_external = true,
+                    }) catch {
+                        return CompilationError.OutOfMemory;
+                    };
+                }
+            },
+            else => {},
+        }
+    }
+
+    // Generate object file
+    var output = std.ArrayList(u8).empty;
+    errdefer output.deinit(allocator);
+
+    ObjectWriter.generateObjectFile(
+        allocator,
+        target,
+        code,
+        symbols.items,
+        relocations,
+        &output,
+    ) catch {
+        return CompilationError.ObjectGenerationFailed;
+    };
+
+    return CompilationResult{
+        .object_bytes = output.toOwnedSlice(allocator) catch {
+            return CompilationError.OutOfMemory;
+        },
+        .allocator = allocator,
+    };
+}
+
+/// Runtime-to-comptime dispatch for compilation.
+/// Uses inline for over RocTarget enum fields to select the correct MonoExprCodeGen instantiation.
+fn crossCompileDispatch(
+    allocator: Allocator,
+    mono_store: *const mono.MonoExprStore,
+    layout_store: *const layout.Store,
+    entrypoints: []const Entrypoint,
+    procs: []const mono.MonoProc,
+    target: RocTarget,
+) CompilationError!CompilationResult {
+    const enum_info = @typeInfo(RocTarget).@"enum";
+    inline for (enum_info.fields) |field| {
+        const comptime_target: RocTarget = @enumFromInt(field.value);
+        if (target == comptime_target) {
+            const arch = comptime comptime_target.toCpuArch();
+            if (comptime (arch == .x86_64 or arch == .aarch64 or arch == .aarch64_be)) {
+                return compileWithCodeGen(
+                    MonoExprCodeGenMod.MonoExprCodeGen(comptime_target),
+                    allocator,
+                    mono_store,
+                    layout_store,
+                    entrypoints,
+                    procs,
+                    comptime_target,
+                );
+            } else {
+                return CompilationError.UnsupportedTarget;
+            }
+        }
+    }
+    return CompilationError.UnsupportedTarget;
+}
 
 // Tests
 

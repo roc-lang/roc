@@ -15925,6 +15925,19 @@ pub const Arm64MuslMonoExprCodeGen = MonoExprCodeGen(.arm64musl);
 pub const Arm64WinMonoExprCodeGen = MonoExprCodeGen(.arm64win);
 /// ARM64 macOS
 pub const Arm64MacMonoExprCodeGen = MonoExprCodeGen(.arm64mac);
+/// ARM64 Linux (generic)
+pub const Arm64LinuxMonoExprCodeGen = MonoExprCodeGen(.arm64linux);
+
+/// x86_64 FreeBSD
+pub const X64FreebsdMonoExprCodeGen = MonoExprCodeGen(.x64freebsd);
+/// x86_64 OpenBSD
+pub const X64OpenbsdMonoExprCodeGen = MonoExprCodeGen(.x64openbsd);
+/// x86_64 NetBSD
+pub const X64NetbsdMonoExprCodeGen = MonoExprCodeGen(.x64netbsd);
+/// x86_64 Linux (generic)
+pub const X64LinuxMonoExprCodeGen = MonoExprCodeGen(.x64linux);
+/// x86_64 ELF (generic)
+pub const X64ElfMonoExprCodeGen = MonoExprCodeGen(.x64elf);
 
 /// Host MonoExprCodeGen for the host platform (the machine running the compiler).
 /// Falls back to UnsupportedArchCodeGen for architectures that don't support native code generation

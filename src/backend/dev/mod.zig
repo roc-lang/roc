@@ -71,6 +71,18 @@ pub const Arm64MuslMonoExprCodeGen = MonoExprCodeGenMod.Arm64MuslMonoExprCodeGen
 pub const Arm64WinMonoExprCodeGen = MonoExprCodeGenMod.Arm64WinMonoExprCodeGen;
 /// ARM64 macOS
 pub const Arm64MacMonoExprCodeGen = MonoExprCodeGenMod.Arm64MacMonoExprCodeGen;
+/// ARM64 Linux (generic)
+pub const Arm64LinuxMonoExprCodeGen = MonoExprCodeGenMod.Arm64LinuxMonoExprCodeGen;
+/// x86_64 FreeBSD
+pub const X64FreebsdMonoExprCodeGen = MonoExprCodeGenMod.X64FreebsdMonoExprCodeGen;
+/// x86_64 OpenBSD
+pub const X64OpenbsdMonoExprCodeGen = MonoExprCodeGenMod.X64OpenbsdMonoExprCodeGen;
+/// x86_64 NetBSD
+pub const X64NetbsdMonoExprCodeGen = MonoExprCodeGenMod.X64NetbsdMonoExprCodeGen;
+/// x86_64 Linux (generic)
+pub const X64LinuxMonoExprCodeGen = MonoExprCodeGenMod.X64LinuxMonoExprCodeGen;
+/// x86_64 ELF (generic)
+pub const X64ElfMonoExprCodeGen = MonoExprCodeGenMod.X64ElfMonoExprCodeGen;
 
 /// Object file compiler for generating object files from Mono IR.
 /// Supports cross-compilation to any RocTarget.
