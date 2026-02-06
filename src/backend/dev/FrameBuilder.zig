@@ -158,7 +158,10 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
 
             // sub rsp, imm (7 bytes for 32-bit imm: 48 81 EC xx xx xx xx)
             // Only if stack_alloc > 0
-            const callee_saved_space = self.countCalleeSavedBytes();
+            // Use full AREA_SIZE (not just actual callee-saved bytes) because
+            // stack_offset is initialized to -CALLEE_SAVED_AREA_SIZE, so locals
+            // are allocated after the full reserved area.
+            const callee_saved_space: u32 = @intCast(CalleeSavedInfo.AREA_SIZE);
             const total_needed = self.stack_size + callee_saved_space;
             const aligned_size = CC.alignStackSize(total_needed);
             if (aligned_size > 0) {
@@ -191,7 +194,9 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
             // 3. Calculate and allocate stack space
             // CRITICAL: On Windows x64, there's no red zone. We must allocate
             // stack space BEFORE saving callee-saved registers to [RBP-offset].
-            const callee_saved_space = self.countCalleeSavedBytes();
+            // Use full AREA_SIZE because stack_offset is initialized to
+            // -CALLEE_SAVED_AREA_SIZE, so locals start after the full reserved area.
+            const callee_saved_space: u32 = @intCast(CalleeSavedInfo.AREA_SIZE);
             const total_needed = self.stack_size + callee_saved_space;
             self.actual_stack_alloc = CC.alignStackSize(total_needed);
 
@@ -210,7 +215,7 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
         fn emitEpilogueX86_64(self: *Self, emit: *EmitType) !void {
             // Recompute if needed (for separate epilogue instances)
             if (self.actual_stack_alloc == 0 and self.stack_size > 0) {
-                const callee_saved_space = self.countCalleeSavedBytes();
+                const callee_saved_space: u32 = @intCast(CalleeSavedInfo.AREA_SIZE);
                 const total_needed = self.stack_size + callee_saved_space;
                 self.actual_stack_alloc = CC.alignStackSize(total_needed);
             }
