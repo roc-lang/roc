@@ -6,8 +6,10 @@
 //! - Native execution (dev evaluator) via direct function pointers
 //! - Object file generation (roc build --backend=dev) via symbol references
 
+const std = @import("std");
 const str = @import("str.zig");
 const list = @import("list.zig");
+const num = @import("num.zig");
 const utils = @import("utils.zig");
 const dec = @import("dec.zig");
 
@@ -58,6 +60,7 @@ const listReserve = list.listReserve;
 const listReleaseExcessCapacity = list.listReleaseExcessCapacity;
 const listWithCapacity = list.listWithCapacity;
 const listAppendUnsafe = list.listAppendUnsafe;
+const listAppendSafeC = list.listAppendSafeC;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // String Wrappers
@@ -350,4 +353,408 @@ pub fn roc_builtins_dec_to_str(out: *RocStr, value_low: u64, value_high: u64, ro
     var buf: [dec.RocDec.max_str_length]u8 = undefined;
     const slice = d.format_to_buf(&buf);
     out.* = RocStr.init(&buf, slice.len, roc_ops);
+}
+
+// ── Numeric conversion wrappers ──
+
+/// Dec (i128) → i64 by truncating division
+pub fn roc_builtins_dec_to_i64_trunc(low: u64, high: u64) callconv(.c) i64 {
+    const val: i128 = @bitCast(@as(u128, high) << 64 | @as(u128, low));
+    return @intCast(@divTrunc(val, dec.RocDec.one_point_zero_i128));
+}
+
+/// i64 → Dec (i128) via output pointers
+pub fn roc_builtins_i64_to_dec(out_low: *u64, out_high: *u64, val: i64) callconv(.c) void {
+    const result: i128 = if (dec.RocDec.fromWholeInt(@as(i128, val))) |d|
+        d.num
+    else if (val < 0)
+        std.math.minInt(i128)
+    else
+        std.math.maxInt(i128);
+    out_low.* = @truncate(@as(u128, @bitCast(result)));
+    out_high.* = @truncate(@as(u128, @bitCast(result)) >> 64);
+}
+
+/// u64 → Dec (i128) via output pointers
+pub fn roc_builtins_u64_to_dec(out_low: *u64, out_high: *u64, val: u64) callconv(.c) void {
+    const result: i128 = dec.fromU64C(val);
+    out_low.* = @truncate(@as(u128, @bitCast(result)));
+    out_high.* = @truncate(@as(u128, @bitCast(result)) >> 64);
+}
+
+/// Dec (i128) → f64
+pub fn roc_builtins_dec_to_f64(low: u64, high: u64) callconv(.c) f64 {
+    const val: i128 = @bitCast(@as(u128, high) << 64 | @as(u128, low));
+    return dec.toF64(dec.RocDec{ .num = val });
+}
+
+/// i128 → f64
+pub fn roc_builtins_i128_to_f64(low: u64, high: u64) callconv(.c) f64 {
+    const val: i128 = @bitCast(@as(u128, high) << 64 | @as(u128, low));
+    return @floatFromInt(val);
+}
+
+/// u128 → f64
+pub fn roc_builtins_u128_to_f64(low: u64, high: u64) callconv(.c) f64 {
+    const val: u128 = @as(u128, high) << 64 | @as(u128, low);
+    return @floatFromInt(val);
+}
+
+/// f64 → i128 (saturating) via output pointers
+pub fn roc_builtins_f64_to_i128_trunc(out_low: *u64, out_high: *u64, val: f64) callconv(.c) void {
+    const result: i128 = blk: {
+        if (std.math.isNan(val)) break :blk 0;
+        const min_val: f64 = @floatFromInt(@as(i128, std.math.minInt(i128)));
+        const max_val: f64 = @floatFromInt(@as(i128, std.math.maxInt(i128)));
+        if (val <= min_val) break :blk std.math.minInt(i128);
+        if (val >= max_val) break :blk std.math.maxInt(i128);
+        break :blk @intFromFloat(val);
+    };
+    out_low.* = @truncate(@as(u128, @bitCast(result)));
+    out_high.* = @truncate(@as(u128, @bitCast(result)) >> 64);
+}
+
+/// f64 → u128 (saturating) via output pointers
+pub fn roc_builtins_f64_to_u128_trunc(out_low: *u64, out_high: *u64, val: f64) callconv(.c) void {
+    const result: u128 = blk: {
+        if (std.math.isNan(val)) break :blk 0;
+        if (val <= 0) break :blk 0;
+        const max_val: f64 = @floatFromInt(@as(u128, std.math.maxInt(u128)));
+        if (val >= max_val) break :blk std.math.maxInt(u128);
+        break :blk @intFromFloat(val);
+    };
+    out_low.* = @truncate(result);
+    out_high.* = @truncate(result >> 64);
+}
+
+// ── Try-conversion wrappers ──
+
+fn i128InTargetRange(val: i128, target_bits: u32, target_signed: bool) bool {
+    if (target_bits >= 128) {
+        return if (target_signed) true else val >= 0;
+    }
+    if (target_signed) {
+        const shift: u7 = @intCast(target_bits - 1);
+        const min_val: i128 = -(@as(i128, 1) << shift);
+        const max_val: i128 = (@as(i128, 1) << shift) - 1;
+        return val >= min_val and val <= max_val;
+    } else {
+        if (val < 0) return false;
+        const shift: u7 = @intCast(target_bits);
+        const max_val: i128 = (@as(i128, 1) << shift) - 1;
+        return val <= max_val;
+    }
+}
+
+fn u128InTargetRange(val: u128, target_bits: u32, target_signed: bool) bool {
+    if (target_bits >= 128) {
+        return if (target_signed) val <= @as(u128, @bitCast(@as(i128, std.math.maxInt(i128)))) else true;
+    }
+    if (target_signed) {
+        const shift: u7 = @intCast(target_bits - 1);
+        const max_val: u128 = (@as(u128, 1) << shift) - 1;
+        return val <= max_val;
+    } else {
+        const shift: u7 = @intCast(target_bits);
+        const max_val: u128 = (@as(u128, 1) << shift) - 1;
+        return val <= max_val;
+    }
+}
+
+/// i128 try convert
+pub fn roc_builtins_i128_try_convert(out: [*]u8, val_low: u64, val_high: u64, target_bits: u32, target_is_signed: u32, payload_size: u32, disc_offset: u32) callconv(.c) void {
+    const val: i128 = @bitCast(@as(u128, val_high) << 64 | @as(u128, val_low));
+    if (i128InTargetRange(val, target_bits, target_is_signed != 0)) {
+        const payload_bytes: [16]u8 = @bitCast(@as(u128, @bitCast(val)));
+        @memcpy(out[0..payload_size], payload_bytes[0..payload_size]);
+        out[disc_offset] = 1;
+    } else {
+        out[disc_offset] = 0;
+    }
+}
+
+/// u128 try convert
+pub fn roc_builtins_u128_try_convert(out: [*]u8, val_low: u64, val_high: u64, target_bits: u32, target_is_signed: u32, payload_size: u32, disc_offset: u32) callconv(.c) void {
+    const val: u128 = @as(u128, val_high) << 64 | @as(u128, val_low);
+    if (u128InTargetRange(val, target_bits, target_is_signed != 0)) {
+        const payload_bytes: [16]u8 = @bitCast(val);
+        @memcpy(out[0..payload_size], payload_bytes[0..payload_size]);
+        out[disc_offset] = 1;
+    } else {
+        out[disc_offset] = 0;
+    }
+}
+
+/// Signed integer try convert
+pub fn roc_builtins_int_try_signed(out: [*]u8, val: i64, min_val: i64, max_val: i64, payload_size: u32, disc_offset: u32) callconv(.c) void {
+    if (val >= min_val and val <= max_val) {
+        const payload_bytes: [8]u8 = @bitCast(val);
+        if (payload_size <= 8) {
+            @memcpy(out[0..payload_size], payload_bytes[0..payload_size]);
+        } else {
+            @memcpy(out[0..8], &payload_bytes);
+            @memset(out[8..payload_size], 0);
+        }
+        out[disc_offset] = 1;
+    } else {
+        out[disc_offset] = 0;
+    }
+}
+
+/// Unsigned integer try convert
+pub fn roc_builtins_int_try_unsigned(out: [*]u8, val: u64, max_val: u64, payload_size: u32, disc_offset: u32) callconv(.c) void {
+    if (val <= max_val) {
+        const payload_bytes: [8]u8 = @bitCast(@as(i64, @bitCast(val)));
+        @memcpy(out[0..payload_size], payload_bytes[0..payload_size]);
+        out[disc_offset] = 1;
+    } else {
+        out[disc_offset] = 0;
+    }
+}
+
+/// Dec → integer try unsafe
+pub fn roc_builtins_dec_to_int_try_unsafe(out: [*]u8, dec_low: u64, dec_high: u64, target_bits: u32, target_is_signed: u32, val_size: u32) callconv(.c) void {
+    const dec_val: i128 = @bitCast(@as(u128, dec_high) << 64 | @as(u128, dec_low));
+    const one = dec.RocDec.one_point_zero_i128;
+
+    const remainder = @rem(dec_val, one);
+    const is_int: bool = remainder == 0;
+    const int_val: i128 = @divTrunc(dec_val, one);
+
+    const in_range: bool = blk: {
+        if (target_is_signed != 0) {
+            break :blk i128InTargetRange(int_val, target_bits, true);
+        } else {
+            if (int_val < 0) break :blk false;
+            break :blk u128InTargetRange(@as(u128, @bitCast(int_val)), target_bits, false);
+        }
+    };
+
+    if (is_int and in_range) {
+        const v_bytes: [16]u8 = @bitCast(@as(u128, @bitCast(int_val)));
+        @memcpy(out[0..val_size], v_bytes[0..val_size]);
+    }
+
+    out[val_size] = @intFromBool(is_int);
+    out[val_size + 1] = @intFromBool(in_range);
+}
+
+/// f64 → integer try unsafe
+pub fn roc_builtins_f64_to_int_try_unsafe(out: [*]u8, val: f64, target_bits: u32, target_is_signed: u32, val_size: u32) callconv(.c) void {
+    const is_int: bool = !std.math.isNan(val) and !std.math.isInf(val) and @trunc(val) == val;
+
+    const in_range: bool = blk: {
+        if (target_is_signed != 0) {
+            if (target_bits >= 128) {
+                const min_f: f64 = @floatFromInt(@as(i128, std.math.minInt(i128)));
+                const max_f: f64 = @floatFromInt(@as(i128, std.math.maxInt(i128)));
+                break :blk val >= min_f and val <= max_f;
+            }
+            const shift: u6 = @intCast(target_bits - 1);
+            const min_i: i64 = -(@as(i64, 1) << shift);
+            const max_i: i64 = (@as(i64, 1) << shift) - 1;
+            break :blk val >= @as(f64, @floatFromInt(min_i)) and val <= @as(f64, @floatFromInt(max_i));
+        } else {
+            if (val < 0) break :blk false;
+            if (target_bits >= 128) {
+                const max_f: f64 = @floatFromInt(@as(u128, std.math.maxInt(u128)));
+                break :blk val <= max_f;
+            }
+            if (target_bits >= 64) {
+                const max_f: f64 = @floatFromInt(@as(u64, std.math.maxInt(u64)));
+                break :blk val <= max_f;
+            }
+            const shift: u6 = @intCast(target_bits);
+            const max_u: u64 = (@as(u64, 1) << shift) - 1;
+            break :blk val <= @as(f64, @floatFromInt(max_u));
+        }
+    };
+
+    if (is_int and in_range) {
+        if (target_is_signed != 0) {
+            if (val_size <= 8) {
+                const v: i64 = @intFromFloat(val);
+                const v_bytes: [8]u8 = @bitCast(v);
+                @memcpy(out[0..val_size], v_bytes[0..val_size]);
+            } else {
+                const v: i128 = @intFromFloat(val);
+                const v_bytes: [16]u8 = @bitCast(v);
+                @memcpy(out[0..val_size], v_bytes[0..val_size]);
+            }
+        } else {
+            if (val_size <= 8) {
+                const v: u64 = @intFromFloat(val);
+                const v_bytes: [8]u8 = @bitCast(v);
+                @memcpy(out[0..val_size], v_bytes[0..val_size]);
+            } else {
+                const v: u128 = @intFromFloat(val);
+                const v_bytes: [16]u8 = @bitCast(v);
+                @memcpy(out[0..val_size], v_bytes[0..val_size]);
+            }
+        }
+    }
+
+    out[val_size] = @intFromBool(is_int);
+    out[val_size + 1] = @intFromBool(in_range);
+}
+
+/// Dec → f32 try unsafe
+pub fn roc_builtins_dec_to_f32_try_unsafe(out: [*]u8, dec_low: u64, dec_high: u64) callconv(.c) void {
+    const dec_val: i128 = @bitCast(@as(u128, dec_high) << 64 | @as(u128, dec_low));
+    const f64_val: f64 = dec.toF64(dec.RocDec{ .num = dec_val });
+    const f32_val: f32 = @floatCast(f64_val);
+    const success: bool = !std.math.isInf(f32_val) and (!std.math.isNan(f64_val) or std.math.isNan(f32_val));
+    const f32_bytes: [4]u8 = @bitCast(f32_val);
+    @memcpy(out[0..4], &f32_bytes);
+    out[4] = @intFromBool(success);
+}
+
+/// f64 → f32 try unsafe
+pub fn roc_builtins_f64_to_f32_try_unsafe(out: [*]u8, val: f64) callconv(.c) void {
+    const f32_val: f32 = @floatCast(val);
+    const success: bool = !std.math.isInf(f32_val) and (!std.math.isNan(val) or std.math.isNan(f32_val));
+    const f32_bytes: [4]u8 = @bitCast(f32_val);
+    @memcpy(out[0..4], &f32_bytes);
+    out[4] = @intFromBool(success);
+}
+
+/// i128 → Dec try unsafe
+pub fn roc_builtins_i128_to_dec_try_unsafe(out: [*]u8, val_low: u64, val_high: u64) callconv(.c) void {
+    const val: i128 = @bitCast(@as(u128, val_high) << 64 | @as(u128, val_low));
+    const result = dec.RocDec.fromWholeInt(val);
+    const success = result != null;
+    const dec_val: i128 = if (result) |d| d.num else 0;
+    const dec_bytes: [16]u8 = @bitCast(@as(u128, @bitCast(dec_val)));
+    @memcpy(out[0..16], &dec_bytes);
+    out[16] = @intFromBool(success);
+}
+
+/// u128 → Dec try unsafe
+pub fn roc_builtins_u128_to_dec_try_unsafe(out: [*]u8, val_low: u64, val_high: u64) callconv(.c) void {
+    const val: u128 = @as(u128, val_high) << 64 | @as(u128, val_low);
+    const fits_i128 = val <= @as(u128, @bitCast(@as(i128, std.math.maxInt(i128))));
+    const result: ?dec.RocDec = if (fits_i128) dec.RocDec.fromWholeInt(@as(i128, @bitCast(val))) else null;
+    const success = result != null;
+    const dec_val: i128 = if (result) |d| d.num else 0;
+    const dec_bytes: [16]u8 = @bitCast(@as(u128, @bitCast(dec_val)));
+    @memcpy(out[0..16], &dec_bytes);
+    out[16] = @intFromBool(success);
+}
+
+// ── Dec arithmetic wrappers (decomposed i128) ──
+
+/// Dec multiply saturated (decomposed)
+pub fn roc_builtins_dec_mul_saturated(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, b_low: u64, b_high: u64) callconv(.c) void {
+    const a: i128 = @bitCast(@as(u128, a_high) << 64 | @as(u128, a_low));
+    const b: i128 = @bitCast(@as(u128, b_high) << 64 | @as(u128, b_low));
+    const result = dec.mulSaturatedC(dec.RocDec{ .num = a }, dec.RocDec{ .num = b });
+    out_low.* = @truncate(@as(u128, @bitCast(result.num)));
+    out_high.* = @truncate(@as(u128, @bitCast(result.num)) >> 64);
+}
+
+/// Dec divide (decomposed)
+pub fn roc_builtins_dec_div(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, b_low: u64, b_high: u64, roc_ops: *RocOps) callconv(.c) void {
+    const a: i128 = @bitCast(@as(u128, a_high) << 64 | @as(u128, a_low));
+    const b: i128 = @bitCast(@as(u128, b_high) << 64 | @as(u128, b_low));
+    const result = dec.divC(dec.RocDec{ .num = a }, dec.RocDec{ .num = b }, roc_ops);
+    out_low.* = @truncate(@as(u128, @bitCast(result)));
+    out_high.* = @truncate(@as(u128, @bitCast(result)) >> 64);
+}
+
+/// Dec divide truncating (decomposed)
+pub fn roc_builtins_dec_div_trunc(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, b_low: u64, b_high: u64, roc_ops: *RocOps) callconv(.c) void {
+    const a: i128 = @bitCast(@as(u128, a_high) << 64 | @as(u128, a_low));
+    const b: i128 = @bitCast(@as(u128, b_high) << 64 | @as(u128, b_low));
+    const result = dec.divTruncC(dec.RocDec{ .num = a }, dec.RocDec{ .num = b }, roc_ops);
+    out_low.* = @truncate(@as(u128, @bitCast(result)));
+    out_high.* = @truncate(@as(u128, @bitCast(result)) >> 64);
+}
+
+// ── i128 div/rem wrappers (decomposed) ──
+
+/// u128 div trunc (decomposed)
+pub fn roc_builtins_num_div_trunc_u128(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, b_low: u64, b_high: u64, roc_ops: *RocOps) callconv(.c) void {
+    const a: u128 = @as(u128, a_high) << 64 | @as(u128, a_low);
+    const b: u128 = @as(u128, b_high) << 64 | @as(u128, b_low);
+    const result = num.divTruncU128(a, b, roc_ops);
+    out_low.* = @truncate(@as(u128, @bitCast(result)));
+    out_high.* = @truncate(@as(u128, @bitCast(result)) >> 64);
+}
+
+/// i128 div trunc (decomposed)
+pub fn roc_builtins_num_div_trunc_i128(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, b_low: u64, b_high: u64, roc_ops: *RocOps) callconv(.c) void {
+    const a: i128 = @bitCast(@as(u128, a_high) << 64 | @as(u128, a_low));
+    const b: i128 = @bitCast(@as(u128, b_high) << 64 | @as(u128, b_low));
+    const result = num.divTruncI128(a, b, roc_ops);
+    out_low.* = @truncate(@as(u128, @bitCast(result)));
+    out_high.* = @truncate(@as(u128, @bitCast(result)) >> 64);
+}
+
+/// u128 rem trunc (decomposed)
+pub fn roc_builtins_num_rem_trunc_u128(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, b_low: u64, b_high: u64, roc_ops: *RocOps) callconv(.c) void {
+    const a: u128 = @as(u128, a_high) << 64 | @as(u128, a_low);
+    const b: u128 = @as(u128, b_high) << 64 | @as(u128, b_low);
+    const result = num.remTruncU128(a, b, roc_ops);
+    out_low.* = @truncate(@as(u128, @bitCast(result)));
+    out_high.* = @truncate(@as(u128, @bitCast(result)) >> 64);
+}
+
+/// i128 rem trunc (decomposed)
+pub fn roc_builtins_num_rem_trunc_i128(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, b_low: u64, b_high: u64, roc_ops: *RocOps) callconv(.c) void {
+    const a: i128 = @bitCast(@as(u128, a_high) << 64 | @as(u128, a_low));
+    const b: i128 = @bitCast(@as(u128, b_high) << 64 | @as(u128, b_low));
+    const result = num.remTruncI128(a, b, roc_ops);
+    out_low.* = @truncate(@as(u128, @bitCast(result)));
+    out_high.* = @truncate(@as(u128, @bitCast(result)) >> 64);
+}
+
+// ── List append safe wrapper ──
+
+/// List append safe (simplified - hardcodes elements_refcounted=false, copy=copy_fallback)
+pub fn roc_builtins_list_append_safe(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, element: ?[*]const u8, alignment: u32, element_width: usize, roc_ops: *RocOps) callconv(.c) void {
+    listAppendSafeC(out, list_bytes, list_len, list_cap, @constCast(element), alignment, element_width, false, @ptrCast(&copy_fallback), roc_ops);
+}
+
+// ── Numeric-to-string wrappers ──
+
+/// Unified integer-to-string wrapper: dispatches on int_width/is_signed
+pub fn roc_builtins_int_to_str(out: *RocStr, val_low: u64, val_high: u64, int_width: u8, is_signed: bool, roc_ops: *RocOps) callconv(.c) void {
+    var buf: [40]u8 = undefined;
+    const result = switch (int_width) {
+        1 => if (is_signed)
+            std.fmt.bufPrint(&buf, "{}", .{@as(i8, @bitCast(@as(u8, @truncate(val_low))))}) catch unreachable
+        else
+            std.fmt.bufPrint(&buf, "{}", .{@as(u8, @truncate(val_low))}) catch unreachable,
+        2 => if (is_signed)
+            std.fmt.bufPrint(&buf, "{}", .{@as(i16, @bitCast(@as(u16, @truncate(val_low))))}) catch unreachable
+        else
+            std.fmt.bufPrint(&buf, "{}", .{@as(u16, @truncate(val_low))}) catch unreachable,
+        4 => if (is_signed)
+            std.fmt.bufPrint(&buf, "{}", .{@as(i32, @bitCast(@as(u32, @truncate(val_low))))}) catch unreachable
+        else
+            std.fmt.bufPrint(&buf, "{}", .{@as(u32, @truncate(val_low))}) catch unreachable,
+        8 => if (is_signed)
+            std.fmt.bufPrint(&buf, "{}", .{@as(i64, @bitCast(val_low))}) catch unreachable
+        else
+            std.fmt.bufPrint(&buf, "{}", .{val_low}) catch unreachable,
+        16 => blk: {
+            const val128: u128 = @as(u128, val_high) << 64 | @as(u128, val_low);
+            break :blk if (is_signed)
+                std.fmt.bufPrint(&buf, "{}", .{@as(i128, @bitCast(val128))}) catch unreachable
+            else
+                std.fmt.bufPrint(&buf, "{}", .{val128}) catch unreachable;
+        },
+        else => unreachable,
+    };
+    out.* = RocStr.init(&buf, result.len, roc_ops);
+}
+
+/// Unified float-to-string wrapper: dispatches on is_f32
+pub fn roc_builtins_float_to_str(out: *RocStr, val_bits: u64, is_f32: bool, roc_ops: *RocOps) callconv(.c) void {
+    var buf: [400]u8 = undefined;
+    const result = if (is_f32)
+        std.fmt.bufPrint(&buf, "{d}", .{@as(f32, @bitCast(@as(u32, @truncate(val_bits))))}) catch unreachable
+    else
+        std.fmt.bufPrint(&buf, "{d}", .{@as(f64, @bitCast(val_bits))}) catch unreachable;
+    out.* = RocStr.init(&buf, result.len, roc_ops);
 }

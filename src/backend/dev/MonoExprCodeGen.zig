@@ -22,6 +22,7 @@ const base = @import("base");
 const layout = @import("layout");
 const mono = @import("mono");
 const builtins = @import("builtins");
+const dev_wrappers = builtins.dev_wrappers;
 
 const x86_64 = @import("x86_64/mod.zig");
 const aarch64 = @import("aarch64/mod.zig");
@@ -31,10 +32,6 @@ const FrameBuilderMod = @import("FrameBuilder.zig");
 const RocTarget = @import("roc_target").RocTarget;
 
 // Num builtin functions for 128-bit integer operations
-const num_divTruncI128 = builtins.num.divTruncI128;
-const num_divTruncU128 = builtins.num.divTruncU128;
-const num_remTruncI128 = builtins.num.remTruncI128;
-const num_remTruncU128 = builtins.num.remTruncU128;
 
 // Utils builtin functions for memory allocation and reference counting
 const allocateWithRefcountC = builtins.utils.allocateWithRefcountC;
@@ -45,9 +42,6 @@ const rcNone = builtins.utils.rcNone;
 
 // List builtin functions - using C-compatible wrappers to avoid ABI issues
 // with 24-byte RocList struct returns on aarch64
-const listWithCapacityC = builtins.list.listWithCapacityC;
-const listAppendUnsafeC = builtins.list.listAppendUnsafeC;
-const listAppendSafeC = builtins.list.listAppendSafeC;
 const copy_fallback = builtins.list.copy_fallback;
 const RocList = builtins.list.RocList;
 
@@ -190,6 +184,8 @@ pub const BuiltinFn = enum {
     num_div_trunc_i128,
     num_rem_trunc_u128,
     num_rem_trunc_i128,
+    int_to_str,
+    float_to_str,
 
     /// Get the exported symbol name for object file linking.
     pub fn symbolName(self: BuiltinFn) []const u8 {
@@ -265,6 +261,8 @@ pub const BuiltinFn = enum {
             .num_div_trunc_i128 => "roc_builtins_num_div_trunc_i128",
             .num_rem_trunc_u128 => "roc_builtins_num_rem_trunc_u128",
             .num_rem_trunc_i128 => "roc_builtins_num_rem_trunc_i128",
+            .int_to_str => "roc_builtins_int_to_str",
+            .float_to_str => "roc_builtins_float_to_str",
         };
     }
 };
@@ -275,34 +273,6 @@ pub const BuiltinFn = enum {
 // Number-to-string C wrapper functions (explicit output pointer to avoid struct return ABI issues)
 const RocStr = builtins.str.RocStr;
 const RocOps = builtins.host_abi.RocOps;
-
-fn intToStrC(comptime T: type) *const fn (*RocStr, T, *RocOps) callconv(.c) void {
-    const S = struct {
-        fn func(out: *RocStr, value: T, roc_ops: *RocOps) callconv(.c) void {
-            const max_len = comptime blk: {
-                var buf: [40]u8 = undefined;
-                const min_str = std.fmt.bufPrint(&buf, "{}", .{std.math.minInt(T)}) catch unreachable;
-                const max_str = std.fmt.bufPrint(&buf, "{}", .{std.math.maxInt(T)}) catch unreachable;
-                break :blk @max(min_str.len, max_str.len);
-            };
-            var buf: [max_len]u8 = undefined;
-            const result = std.fmt.bufPrint(&buf, "{}", .{value}) catch unreachable;
-            out.* = RocStr.init(&buf, result.len, roc_ops);
-        }
-    };
-    return &S.func;
-}
-
-fn floatToStrC(comptime T: type) *const fn (*RocStr, T, *RocOps) callconv(.c) void {
-    const S = struct {
-        fn func(out: *RocStr, value: T, roc_ops: *RocOps) callconv(.c) void {
-            var buf: [400]u8 = undefined;
-            const result = std.fmt.bufPrint(&buf, "{d}", .{value}) catch unreachable;
-            out.* = RocStr.init(&buf, result.len, roc_ops);
-        }
-    };
-    return &S.func;
-}
 
 fn decToStrC(out: *RocStr, value: i128, roc_ops: *RocOps) callconv(.c) void {
     const dec = builtins.dec.RocDec{ .num = value };
@@ -566,299 +536,6 @@ fn wrapListReserve(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap:
 fn wrapListReleaseExcessCapacity(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, element_width: usize, roc_ops: *RocOps) callconv(.c) void {
     const list = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
     out.* = listReleaseExcessCapacity(list, alignment, element_width, false, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), .Immutable, roc_ops);
-}
-
-/// Try integer conversion: checks if a signed 64-bit value is in [min, max] range.
-/// Writes to a tag union buffer: payload at offset 0, discriminant (0=Err, 1=Ok) at disc_offset.
-fn wrapIntTrySigned(out: [*]u8, val: i64, min_val: i64, max_val: i64, payload_size: u32, disc_offset: u32) callconv(.c) void {
-    if (val >= min_val and val <= max_val) {
-        // Ok: write payload then discriminant
-        const payload_bytes: [8]u8 = @bitCast(val);
-        if (payload_size <= 8) {
-            @memcpy(out[0..payload_size], payload_bytes[0..payload_size]);
-        } else {
-            // For 128-bit targets: write 8 bytes then zero-extend.
-            // When we get here for signed-to-u128, val >= 0, so zero-extension is correct.
-            @memcpy(out[0..8], &payload_bytes);
-            @memset(out[8..payload_size], 0);
-        }
-        out[disc_offset] = 1; // Ok
-    } else {
-        out[disc_offset] = 0; // Err
-    }
-}
-
-/// Try integer conversion for unsigned source: checks if a u64 value is in [0, max] range.
-fn wrapIntTryUnsigned(out: [*]u8, val: u64, max_val: u64, payload_size: u32, disc_offset: u32) callconv(.c) void {
-    if (val <= max_val) {
-        const payload_bytes: [8]u8 = @bitCast(@as(i64, @bitCast(val)));
-        @memcpy(out[0..payload_size], payload_bytes[0..payload_size]);
-        out[disc_offset] = 1; // Ok
-    } else {
-        out[disc_offset] = 0; // Err
-    }
-}
-
-/// Try conversion for i128 source: checks if an i128 value fits in the target integer type.
-fn wrapI128TryConvert(out: [*]u8, val_low: u64, val_high: u64, target_bits: u32, target_is_signed: u32, payload_size: u32, disc_offset: u32) callconv(.c) void {
-    const val: i128 = @bitCast(@as(u128, val_high) << 64 | @as(u128, val_low));
-    if (i128InTargetRange(val, target_bits, target_is_signed != 0)) {
-        const payload_bytes: [16]u8 = @bitCast(@as(u128, @bitCast(val)));
-        @memcpy(out[0..payload_size], payload_bytes[0..payload_size]);
-        out[disc_offset] = 1; // Ok
-    } else {
-        out[disc_offset] = 0; // Err
-    }
-}
-
-/// Try conversion for u128 source: checks if a u128 value fits in the target integer type.
-fn wrapU128TryConvert(out: [*]u8, val_low: u64, val_high: u64, target_bits: u32, target_is_signed: u32, payload_size: u32, disc_offset: u32) callconv(.c) void {
-    const val: u128 = @as(u128, val_high) << 64 | @as(u128, val_low);
-    if (u128InTargetRange(val, target_bits, target_is_signed != 0)) {
-        const payload_bytes: [16]u8 = @bitCast(val);
-        @memcpy(out[0..payload_size], payload_bytes[0..payload_size]);
-        out[disc_offset] = 1; // Ok
-    } else {
-        out[disc_offset] = 0; // Err
-    }
-}
-
-fn i128InTargetRange(val: i128, target_bits: u32, target_signed: bool) bool {
-    if (target_bits >= 128) {
-        return if (target_signed) true else val >= 0;
-    }
-    if (target_signed) {
-        const shift: u7 = @intCast(target_bits - 1);
-        const min_val: i128 = -(@as(i128, 1) << shift);
-        const max_val: i128 = (@as(i128, 1) << shift) - 1;
-        return val >= min_val and val <= max_val;
-    } else {
-        if (val < 0) return false;
-        const shift: u7 = @intCast(target_bits);
-        const max_val: i128 = (@as(i128, 1) << shift) - 1;
-        return val <= max_val;
-    }
-}
-
-fn u128InTargetRange(val: u128, target_bits: u32, target_signed: bool) bool {
-    if (target_bits >= 128) {
-        return if (target_signed) val <= @as(u128, @bitCast(@as(i128, std.math.maxInt(i128)))) else true;
-    }
-    if (target_signed) {
-        const shift: u7 = @intCast(target_bits - 1);
-        const max_val: u128 = (@as(u128, 1) << shift) - 1;
-        return val <= max_val;
-    } else {
-        const shift: u7 = @intCast(target_bits);
-        const max_val: u128 = (@as(u128, 1) << shift) - 1;
-        return val <= max_val;
-    }
-}
-
-/// Float-to-integer try_unsafe: returns {val, is_int, in_range} record.
-/// val is at offset 0 (val_size bytes), is_int at val_size, in_range at val_size+1.
-fn wrapF64ToIntTryUnsafe(out: [*]u8, val: f64, target_bits: u32, target_is_signed: u32, val_size: u32) callconv(.c) void {
-    const is_int: bool = !std.math.isNan(val) and !std.math.isInf(val) and @trunc(val) == val;
-
-    const in_range: bool = blk: {
-        if (target_is_signed != 0) {
-            if (target_bits >= 128) {
-                const min_f: f64 = @floatFromInt(@as(i128, std.math.minInt(i128)));
-                const max_f: f64 = @floatFromInt(@as(i128, std.math.maxInt(i128)));
-                break :blk val >= min_f and val <= max_f;
-            }
-            const shift: u6 = @intCast(target_bits - 1);
-            const min_i: i64 = -(@as(i64, 1) << shift);
-            const max_i: i64 = (@as(i64, 1) << shift) - 1;
-            break :blk val >= @as(f64, @floatFromInt(min_i)) and val <= @as(f64, @floatFromInt(max_i));
-        } else {
-            if (val < 0) break :blk false;
-            if (target_bits >= 128) {
-                const max_f: f64 = @floatFromInt(@as(u128, std.math.maxInt(u128)));
-                break :blk val <= max_f;
-            }
-            if (target_bits >= 64) {
-                const max_f: f64 = @floatFromInt(@as(u64, std.math.maxInt(u64)));
-                break :blk val <= max_f;
-            }
-            const shift: u6 = @intCast(target_bits);
-            const max_u: u64 = (@as(u64, 1) << shift) - 1;
-            break :blk val <= @as(f64, @floatFromInt(max_u));
-        }
-    };
-
-    if (is_int and in_range) {
-        if (target_is_signed != 0) {
-            if (val_size <= 8) {
-                const v: i64 = @intFromFloat(val);
-                const v_bytes: [8]u8 = @bitCast(v);
-                @memcpy(out[0..val_size], v_bytes[0..val_size]);
-            } else {
-                const v: i128 = @intFromFloat(val);
-                const v_bytes: [16]u8 = @bitCast(v);
-                @memcpy(out[0..val_size], v_bytes[0..val_size]);
-            }
-        } else {
-            if (val_size <= 8) {
-                const v: u64 = @intFromFloat(val);
-                const v_bytes: [8]u8 = @bitCast(v);
-                @memcpy(out[0..val_size], v_bytes[0..val_size]);
-            } else {
-                const v: u128 = @intFromFloat(val);
-                const v_bytes: [16]u8 = @bitCast(v);
-                @memcpy(out[0..val_size], v_bytes[0..val_size]);
-            }
-        }
-    }
-
-    out[val_size] = @intFromBool(is_int);
-    out[val_size + 1] = @intFromBool(in_range);
-}
-
-/// Float narrowing try_unsafe (f64 -> f32): returns {val: F32, success: Bool} record.
-fn wrapF64ToF32TryUnsafe(out: [*]u8, val: f64) callconv(.c) void {
-    const f32_val: f32 = @floatCast(val);
-    const success: bool = !std.math.isInf(f32_val) and (!std.math.isNan(val) or std.math.isNan(f32_val));
-    const f32_bytes: [4]u8 = @bitCast(f32_val);
-    @memcpy(out[0..4], &f32_bytes);
-    out[4] = @intFromBool(success);
-}
-
-/// Dec-to-integer try_unsafe: returns {val, is_int, in_range} record.
-fn wrapDecToIntTryUnsafe(out: [*]u8, dec_low: u64, dec_high: u64, target_bits: u32, target_is_signed: u32, val_size: u32) callconv(.c) void {
-    const dec_val: i128 = @bitCast(@as(u128, dec_high) << 64 | @as(u128, dec_low));
-    const RocDec = builtins.dec.RocDec;
-    const one = RocDec.one_point_zero_i128;
-
-    const remainder = @rem(dec_val, one);
-    const is_int: bool = remainder == 0;
-    const int_val: i128 = @divTrunc(dec_val, one);
-
-    const in_range: bool = blk: {
-        if (target_is_signed != 0) {
-            break :blk i128InTargetRange(int_val, target_bits, true);
-        } else {
-            if (int_val < 0) break :blk false;
-            break :blk u128InTargetRange(@as(u128, @bitCast(int_val)), target_bits, false);
-        }
-    };
-
-    if (is_int and in_range) {
-        const v_bytes: [16]u8 = @bitCast(@as(u128, @bitCast(int_val)));
-        @memcpy(out[0..val_size], v_bytes[0..val_size]);
-    }
-
-    out[val_size] = @intFromBool(is_int);
-    out[val_size + 1] = @intFromBool(in_range);
-}
-
-/// Dec-to-f32 try_unsafe: returns {val: F32, success: Bool} record.
-fn wrapDecToF32TryUnsafe(out: [*]u8, dec_low: u64, dec_high: u64) callconv(.c) void {
-    const dec_val: i128 = @bitCast(@as(u128, dec_high) << 64 | @as(u128, dec_low));
-    const RocDec = builtins.dec.RocDec;
-    const f64_val: f64 = builtins.dec.toF64(RocDec{ .num = dec_val });
-    const f32_val: f32 = @floatCast(f64_val);
-    const success: bool = !std.math.isInf(f32_val) and (!std.math.isNan(f64_val) or std.math.isNan(f32_val));
-    const f32_bytes: [4]u8 = @bitCast(f32_val);
-    @memcpy(out[0..4], &f32_bytes);
-    out[4] = @intFromBool(success);
-}
-
-/// i128-to-Dec try_unsafe: returns {val: Dec(i128), is_int: Bool} record.
-/// Checks if the integer can be represented as Dec without overflow.
-fn wrapI128ToDecTryUnsafe(out: [*]u8, val_low: u64, val_high: u64) callconv(.c) void {
-    const val: i128 = @bitCast(@as(u128, val_high) << 64 | @as(u128, val_low));
-    const RocDec = builtins.dec.RocDec;
-    const result = RocDec.fromWholeInt(val);
-    const success = result != null;
-    const dec_val: i128 = if (result) |d| d.num else 0;
-    const dec_bytes: [16]u8 = @bitCast(@as(u128, @bitCast(dec_val)));
-    @memcpy(out[0..16], &dec_bytes);
-    out[16] = @intFromBool(success);
-}
-
-/// u128-to-Dec try_unsafe: returns {val: Dec(i128), is_int: Bool} record.
-fn wrapU128ToDecTryUnsafe(out: [*]u8, val_low: u64, val_high: u64) callconv(.c) void {
-    const val: u128 = @as(u128, val_high) << 64 | @as(u128, val_low);
-    const RocDec = builtins.dec.RocDec;
-    // u128 values > maxInt(i128) cannot be represented as Dec (which is i128-based).
-    const fits_i128 = val <= @as(u128, @bitCast(@as(i128, std.math.maxInt(i128))));
-    const result: ?RocDec = if (fits_i128) RocDec.fromWholeInt(@as(i128, @bitCast(val))) else null;
-    const success = result != null;
-    const dec_val: i128 = if (result) |d| d.num else 0;
-    const dec_bytes: [16]u8 = @bitCast(@as(u128, @bitCast(dec_val)));
-    @memcpy(out[0..16], &dec_bytes);
-    out[16] = @intFromBool(success);
-}
-
-/// Convert signed i64 to Dec (i128). Multiplies by one_point_zero (10^18).
-/// Uses output pointer to avoid platform-specific i128 return value ABI issues.
-fn wrapI64ToDecOut(out_low: *u64, out_high: *u64, val: i64) callconv(.c) void {
-    const RocDec = builtins.dec.RocDec;
-    const result: i128 = if (RocDec.fromWholeInt(@as(i128, val))) |dec|
-        dec.num
-    else if (val < 0)
-        std.math.minInt(i128)
-    else
-        std.math.maxInt(i128);
-    out_low.* = @truncate(@as(u128, @bitCast(result)));
-    out_high.* = @truncate(@as(u128, @bitCast(result)) >> 64);
-}
-
-/// Convert unsigned u64 to Dec (i128). Wrapper for builtins.dec.fromU64C.
-/// Uses output pointer to avoid platform-specific i128 return value ABI issues.
-fn wrapU64ToDecOut(out_low: *u64, out_high: *u64, val: u64) callconv(.c) void {
-    const result: i128 = builtins.dec.fromU64C(val);
-    out_low.* = @truncate(@as(u128, @bitCast(result)));
-    out_high.* = @truncate(@as(u128, @bitCast(result)) >> 64);
-}
-
-/// Convert Dec (i128) to i64 by truncating division by one_point_zero (10^18).
-fn wrapDecToI64Trunc(low: u64, high: u64) callconv(.c) i64 {
-    const val: i128 = @bitCast(@as(u128, high) << 64 | @as(u128, low));
-    const RocDec = builtins.dec.RocDec;
-    return @intCast(@divTrunc(val, RocDec.one_point_zero_i128));
-}
-
-/// Convert i128 to f64.
-fn wrapI128ToF64(low: u64, high: u64) callconv(.c) f64 {
-    const val: i128 = @bitCast(@as(u128, high) << 64 | @as(u128, low));
-    return @floatFromInt(val);
-}
-
-/// Convert u128 to f64.
-fn wrapU128ToF64(low: u64, high: u64) callconv(.c) f64 {
-    const val: u128 = @as(u128, high) << 64 | @as(u128, low);
-    return @floatFromInt(val);
-}
-
-/// Convert f64 to i128 (saturating).
-/// Uses output pointer to avoid platform-specific i128 return value ABI issues.
-fn wrapF64ToI128TruncOut(out_low: *u64, out_high: *u64, val: f64) callconv(.c) void {
-    const result: i128 = blk: {
-        if (std.math.isNan(val)) break :blk 0;
-        const min_val: f64 = @floatFromInt(@as(i128, std.math.minInt(i128)));
-        const max_val: f64 = @floatFromInt(@as(i128, std.math.maxInt(i128)));
-        if (val <= min_val) break :blk std.math.minInt(i128);
-        if (val >= max_val) break :blk std.math.maxInt(i128);
-        break :blk @intFromFloat(val);
-    };
-    out_low.* = @truncate(@as(u128, @bitCast(result)));
-    out_high.* = @truncate(@as(u128, @bitCast(result)) >> 64);
-}
-
-/// Convert f64 to u128 (saturating).
-/// Uses output pointer to avoid platform-specific u128 return value ABI issues.
-fn wrapF64ToU128TruncOut(out_low: *u64, out_high: *u64, val: f64) callconv(.c) void {
-    const result: u128 = blk: {
-        if (std.math.isNan(val)) break :blk 0;
-        if (val <= 0) break :blk 0;
-        const max_val: f64 = @floatFromInt(@as(u128, std.math.maxInt(u128)));
-        if (val >= max_val) break :blk std.math.maxInt(u128);
-        break :blk @intFromFloat(val);
-    };
-    out_low.* = @truncate(result);
-    out_high.* = @truncate(result >> 64);
 }
 
 const MonoProc = mono.MonoProc;
@@ -1685,8 +1362,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         else => unreachable, // list_with_capacity must return a list
                     };
 
-                    const fn_addr: usize = @intFromPtr(&listWithCapacityC);
-                    const rc_none_addr: usize = @intFromPtr(&rcNone);
+                    const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_with_capacity);
 
                     // Convert RocAlignment enum to actual byte alignment
                     const alignment_bytes = elem_size_align.alignment.toByteUnits();
@@ -1694,65 +1370,18 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     // Allocate stack space for result (RocList = 24 bytes)
                     const result_offset = self.codegen.allocStackSlot(roc_str_size);
 
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        // aarch64 calling convention: X0-X7 for args
-                        // listWithCapacityC(out, capacity, alignment, elem_width, elements_refcounted,
-                        //                   inc_context, inc, roc_ops) -> void
-                        // Using C wrapper to avoid ABI issues with 24-byte struct return
+                    const cap_reg = try self.ensureInGeneralReg(capacity_loc);
+                    const base_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .FP else .RBP;
 
-                        // IMPORTANT: First save capacity to X1 before we clobber any argument registers.
-                        // capacity_loc might be in X0-X7, and we need to preserve it.
-                        const cap_reg = try self.ensureInGeneralReg(capacity_loc);
-                        try self.codegen.emit.movRegReg(.w64, .X1, cap_reg);
-                        self.codegen.freeGeneral(cap_reg);
-
-                        // Now set the other argument registers (X2-X7)
-                        try self.codegen.emitLoadImm(.X2, @intCast(alignment_bytes));
-                        try self.codegen.emitLoadImm(.X3, @intCast(elem_size_align.size));
-                        try self.codegen.emitLoadImm(.X4, 0); // elements_refcounted = false
-                        try self.codegen.emitLoadImm(.X5, 0); // inc_context = null
-                        try self.codegen.emitLoadImm(.X6, @intCast(rc_none_addr));
-                        try self.codegen.emit.movRegReg(.w64, .X7, roc_ops_reg);
-
-                        // X0 = output pointer (FP + result_offset)
-                        try self.codegen.emit.movRegImm64(.X0, @bitCast(@as(i64, result_offset)));
-                        try self.codegen.emit.addRegRegReg(.w64, .X0, .FP, .X0);
-
-                        // Load function address into X9 right before the call
-                        // (after all register allocations to avoid X9 being clobbered)
-                        try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
-
-                        // Call
-                        try self.codegen.emit.blrReg(.X9);
-
-                        // No result storage needed - function writes directly to output pointer
-                    } else if (comptime target.toCpuArch() == .x86_64) {
-                        // listWithCapacityC(out, capacity, alignment, elem_width, elements_refcounted,
-                        //                   inc_context, inc, roc_ops) -> void
-                        const cap_reg = try self.ensureInGeneralReg(capacity_loc);
-
-                        // Use CallBuilder with automatic R12 handling for cross-platform calls
-                        var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-
-                        // Args 1-4: out, capacity, alignment, elem_width (registers)
-                        try builder.addLeaArg(.RBP, result_offset);
-                        try builder.addRegArg(cap_reg);
-                        self.codegen.freeGeneral(cap_reg);
-                        try builder.addImmArg(@intCast(alignment_bytes));
-                        try builder.addImmArg(@intCast(elem_size_align.size));
-
-                        // Args 5-8: elements_refcounted, inc_context, inc, roc_ops (stack args)
-                        try builder.addImmArg(0); // elements_refcounted = 0
-                        try builder.addImmArg(0); // inc_context = 0
-                        try builder.addImmArg(@intCast(rc_none_addr));
-                        try builder.addRegArg(roc_ops_reg);
-
-                        try builder.call(fn_addr);
-
-                        // No result storage needed - function writes directly to output pointer
-                    } else {
-                        unreachable;
-                    }
+                    // roc_builtins_list_with_capacity(out, capacity, alignment, element_width, roc_ops)
+                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    try builder.addLeaArg(base_reg, result_offset);
+                    try builder.addRegArg(cap_reg);
+                    self.codegen.freeGeneral(cap_reg);
+                    try builder.addImmArg(@intCast(alignment_bytes));
+                    try builder.addImmArg(@intCast(elem_size_align.size));
+                    try builder.addRegArg(roc_ops_reg);
+                    try self.callBuiltin(&builder, fn_addr, .list_with_capacity);
 
                     // Return as .list_stack so recursive calls properly detect this as a list argument
                     return .{
@@ -1849,139 +1478,40 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     // Allocate result slot (24 bytes for RocList)
                     const result_offset = self.codegen.allocStackSlot(roc_str_size);
 
-                    const copy_fallback_addr: usize = @intFromPtr(&copy_fallback);
-
                     // For ZST (zero-sized types), use the unsafe version since no capacity is needed.
                     // For regular elements, use the safe version that reserves capacity.
+                    const base_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .FP else .RBP;
+
                     if (is_zst) {
                         // ZST: use listAppendUnsafeC (fewer args, doesn't need capacity reservation)
-                        const fn_addr: usize = @intFromPtr(&listAppendUnsafeC);
+                        const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_append_unsafe);
 
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            // listAppendUnsafeC(out, list_bytes, list_len, list_cap, element, elem_width, copy_fn) -> void
-
-                            // X0 = output pointer (FP + result_offset)
-                            try self.codegen.emit.movRegImm64(.X0, @bitCast(@as(i64, result_offset)));
-                            try self.codegen.emit.addRegRegReg(.w64, .X0, .FP, .X0);
-
-                            // X1-X3 = list fields (bytes, length, capacity)
-                            try self.codegen.emit.ldrRegMemSoff(.w64, .X1, .FP, list_offset);
-                            try self.codegen.emit.ldrRegMemSoff(.w64, .X2, .FP, list_offset + 8);
-                            try self.codegen.emit.ldrRegMemSoff(.w64, .X3, .FP, list_offset + 16);
-
-                            // X4 = element pointer (FP + elem_offset)
-                            try self.codegen.emit.movRegImm64(.X4, @bitCast(@as(i64, elem_offset)));
-                            try self.codegen.emit.addRegRegReg(.w64, .X4, .FP, .X4);
-
-                            // X5 = element width (0 for ZST)
-                            try self.codegen.emitLoadImm(.X5, 0);
-
-                            // X6 = copy_fallback
-                            try self.codegen.emitLoadImm(.X6, @intCast(copy_fallback_addr));
-
-                            // Load function address into X9 right before the call
-                            try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
-
-                            // Call
-                            try self.codegen.emit.blrReg(.X9);
-                        } else if (comptime target.toCpuArch() == .x86_64) {
-                            // listAppendUnsafeC(out, list_bytes, list_len, list_cap, element, elem_width, copy_fn) -> void
-                            // 7 args - Use CallBuilder for cross-platform calls
-                            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-
-                            // Args 1-4: out, list_bytes, list_len, list_cap (registers on both ABIs)
-                            try builder.addLeaArg(.RBP, result_offset);
-                            try builder.addMemArg(.RBP, list_offset);
-                            try builder.addMemArg(.RBP, list_offset + 8);
-                            try builder.addMemArg(.RBP, list_offset + 16);
-
-                            // Args 5-6: element, elem_width (registers on System V, stack on Windows)
-                            try builder.addLeaArg(.RBP, elem_offset);
-                            try builder.addImmArg(0); // elem_width = 0 for ZST
-
-                            // Arg 7: copy_fn (stack on both)
-                            try builder.addImmArg(@intCast(copy_fallback_addr));
-
-                            try builder.call(fn_addr);
-                        } else {
-                            unreachable;
-                        }
+                        // roc_builtins_list_append_unsafe(out, list_bytes, list_len, list_cap, element, element_width, roc_ops)
+                        var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                        try builder.addLeaArg(base_reg, result_offset);
+                        try builder.addMemArg(base_reg, list_offset);
+                        try builder.addMemArg(base_reg, list_offset + 8);
+                        try builder.addMemArg(base_reg, list_offset + 16);
+                        try builder.addLeaArg(base_reg, elem_offset);
+                        try builder.addImmArg(0); // elem_width = 0 for ZST
+                        try builder.addRegArg(roc_ops_reg);
+                        try self.callBuiltin(&builder, fn_addr, .list_append_unsafe);
                     } else {
                         // Non-ZST: use listAppendSafeC which reserves capacity
-                        const fn_addr: usize = @intFromPtr(&listAppendSafeC);
+                        const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_append_safe);
                         const alignment_bytes = elem_size_align.alignment.toByteUnits();
 
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            // listAppendSafeC(out, list_bytes, list_len, list_cap, element,
-                            //                 alignment, elem_width, elements_refcounted, copy_fn, roc_ops) -> void
-                            // 10 args: X0-X7 + 2 on stack
-
-                            // Allocate stack space for 2 args (16 bytes, aligned)
-                            try self.codegen.emit.subRegRegImm12(.w64, .ZRSP, .ZRSP, 16);
-
-                            // Store stack args: copy_fn at [SP+0], roc_ops at [SP+8]
-                            const temp = try self.allocTempGeneral();
-                            try self.codegen.emitLoadImm(temp, @intCast(copy_fallback_addr));
-                            try self.codegen.emit.strRegMemUoff(.w64, temp, .ZRSP, 0); // copy_fn at SP+0
-                            try self.codegen.emit.strRegMemUoff(.w64, roc_ops_reg, .ZRSP, 1); // roc_ops at SP+8 (scaled by 8)
-                            self.codegen.freeGeneral(temp);
-
-                            // X0 = output pointer (FP + result_offset)
-                            try self.codegen.emit.movRegImm64(.X0, @bitCast(@as(i64, result_offset)));
-                            try self.codegen.emit.addRegRegReg(.w64, .X0, .FP, .X0);
-
-                            // X1-X3 = list fields (bytes, length, capacity)
-                            try self.codegen.emit.ldrRegMemSoff(.w64, .X1, .FP, list_offset);
-                            try self.codegen.emit.ldrRegMemSoff(.w64, .X2, .FP, list_offset + 8);
-                            try self.codegen.emit.ldrRegMemSoff(.w64, .X3, .FP, list_offset + 16);
-
-                            // X4 = element pointer (FP + elem_offset)
-                            try self.codegen.emit.movRegImm64(.X4, @bitCast(@as(i64, elem_offset)));
-                            try self.codegen.emit.addRegRegReg(.w64, .X4, .FP, .X4);
-
-                            // X5 = alignment
-                            try self.codegen.emitLoadImm(.X5, @intCast(alignment_bytes));
-
-                            // X6 = element width
-                            try self.codegen.emitLoadImm(.X6, @intCast(elem_size_align.size));
-
-                            // X7 = elements_refcounted (false = 0)
-                            try self.codegen.emitLoadImm(.X7, 0);
-
-                            // Load function address into X9 right before the call
-                            try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
-
-                            // Call
-                            try self.codegen.emit.blrReg(.X9);
-
-                            // Clean up stack (16 bytes)
-                            try self.codegen.emit.addRegRegImm12(.w64, .ZRSP, .ZRSP, 16);
-                        } else if (comptime target.toCpuArch() == .x86_64) {
-                            // listAppendSafeC(out, list_bytes, list_len, list_cap, element,
-                            //                 alignment, elem_width, elements_refcounted, copy_fn, roc_ops) -> void
-                            // 10 args - Use CallBuilder for cross-platform calls
-                            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-
-                            // Args 1-4: out, list_bytes, list_len, list_cap (registers on both ABIs)
-                            try builder.addLeaArg(.RBP, result_offset);
-                            try builder.addMemArg(.RBP, list_offset);
-                            try builder.addMemArg(.RBP, list_offset + 8);
-                            try builder.addMemArg(.RBP, list_offset + 16);
-
-                            // Args 5-6: element, alignment (registers on System V, stack on Windows)
-                            try builder.addLeaArg(.RBP, elem_offset);
-                            try builder.addImmArg(@intCast(alignment_bytes));
-
-                            // Args 7-10: elem_width, elements_refcounted, copy_fn, roc_ops (stack on both)
-                            try builder.addImmArg(@intCast(elem_size_align.size));
-                            try builder.addImmArg(0); // elements_refcounted = 0
-                            try builder.addImmArg(@intCast(copy_fallback_addr));
-                            try builder.addRegArg(roc_ops_reg);
-
-                            try builder.call(fn_addr);
-                        } else {
-                            unreachable;
-                        }
+                        // roc_builtins_list_append_safe(out, list_bytes, list_len, list_cap, element, alignment, element_width, roc_ops)
+                        var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                        try builder.addLeaArg(base_reg, result_offset);
+                        try builder.addMemArg(base_reg, list_offset);
+                        try builder.addMemArg(base_reg, list_offset + 8);
+                        try builder.addMemArg(base_reg, list_offset + 16);
+                        try builder.addLeaArg(base_reg, elem_offset);
+                        try builder.addImmArg(@intCast(alignment_bytes));
+                        try builder.addImmArg(@intCast(elem_size_align.size));
+                        try builder.addRegArg(roc_ops_reg);
+                        try self.callBuiltin(&builder, fn_addr, .list_append_safe);
                     }
 
                     // Return as .list_stack so recursive calls properly detect this as a list argument
@@ -2438,42 +1968,18 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     // First: allocate list with capacity
                     const alignment_bytes = elem_size_align.alignment.toByteUnits();
                     const result_offset = self.codegen.allocStackSlot(roc_str_size);
-                    const cap_fn_addr: usize = @intFromPtr(&listWithCapacityC);
-                    const rc_none_addr: usize = @intFromPtr(&rcNone);
+                    const cap_fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_with_capacity);
+                    const base_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .FP else .RBP;
 
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.movRegImm64(.X0, @bitCast(@as(i64, result_offset)));
-                        try self.codegen.emit.addRegRegReg(.w64, .X0, .FP, .X0);
-                        try self.codegen.emit.ldrRegMemSoff(.w64, .X1, .FP, count_slot);
-                        try self.codegen.emitLoadImm(.X2, @intCast(alignment_bytes));
-                        try self.codegen.emitLoadImm(.X3, @intCast(elem_size_align.size));
-                        try self.codegen.emitLoadImm(.X4, 0);
-                        try self.codegen.emitLoadImm(.X5, 0);
-                        try self.codegen.emitLoadImm(.X6, @intCast(rc_none_addr));
-                        try self.codegen.emit.movRegReg(.w64, .X7, roc_ops_reg);
-                        try self.codegen.emitLoadImm(.X9, @intCast(cap_fn_addr));
-                        try self.codegen.emit.blrReg(.X9);
-                    } else {
-                        // x86_64: listWithCapacityC(out, capacity, alignment, elem_width, elements_refcounted,
-                        //                          inc_context, inc, roc_ops) -> void
-                        // 8 args
-
-                        // Use CallBuilder with automatic R12 handling for cross-platform calls
+                    {
+                        // roc_builtins_list_with_capacity(out, capacity, alignment, element_width, roc_ops)
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-
-                        // Args 1-4: out, capacity, alignment, elem_width (registers)
-                        try builder.addLeaArg(.RBP, result_offset);
-                        try builder.addMemArg(.RBP, count_slot);
+                        try builder.addLeaArg(base_reg, result_offset);
+                        try builder.addMemArg(base_reg, count_slot);
                         try builder.addImmArg(@intCast(alignment_bytes));
                         try builder.addImmArg(@intCast(elem_size_align.size));
-
-                        // Args 5-8: elements_refcounted, inc_context, inc, roc_ops (stack args)
-                        try builder.addImmArg(0); // elements_refcounted = 0
-                        try builder.addImmArg(0); // inc_context = 0
-                        try builder.addImmArg(@intCast(rc_none_addr));
                         try builder.addRegArg(roc_ops_reg);
-
-                        try builder.call(cap_fn_addr);
+                        try self.callBuiltin(&builder, cap_fn_addr, .list_with_capacity);
                     }
 
                     // Now loop: append element count times using counter on stack
@@ -2517,40 +2023,19 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
                     // Call listAppendUnsafeC (capacity is already reserved)
                     const tmp_result = self.codegen.allocStackSlot(roc_str_size);
-                    const append_fn_addr: usize = @intFromPtr(&listAppendUnsafeC);
-                    const copy_fallback_addr: usize = @intFromPtr(&copy_fallback);
+                    const append_fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_append_unsafe);
 
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.movRegImm64(.X0, @bitCast(@as(i64, tmp_result)));
-                        try self.codegen.emit.addRegRegReg(.w64, .X0, .FP, .X0);
-                        try self.codegen.emit.ldrRegMemSoff(.w64, .X1, .FP, result_offset);
-                        try self.codegen.emit.ldrRegMemSoff(.w64, .X2, .FP, result_offset + 8);
-                        try self.codegen.emit.ldrRegMemSoff(.w64, .X3, .FP, result_offset + 16);
-                        try self.codegen.emit.movRegImm64(.X4, @bitCast(@as(i64, elem_off)));
-                        try self.codegen.emit.addRegRegReg(.w64, .X4, .FP, .X4);
-                        try self.codegen.emitLoadImm(.X5, @intCast(elem_size_align.size));
-                        try self.codegen.emitLoadImm(.X6, @intCast(copy_fallback_addr));
-                        try self.codegen.emitLoadImm(.X9, @intCast(append_fn_addr));
-                        try self.codegen.emit.blrReg(.X9);
-                    } else {
-                        // x86_64: listAppendUnsafeC(out, list_bytes, list_len, list_cap, element, elem_width, copy_fn)
-                        // 7 args
-
-                        // Use CallBuilder with automatic R12 handling for cross-platform calls
+                    {
+                        // roc_builtins_list_append_unsafe(out, list_bytes, list_len, list_cap, element, element_width, roc_ops)
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-
-                        // Args 1-4: out, list_bytes, list_len, list_cap (registers)
-                        try builder.addLeaArg(.RBP, tmp_result);
-                        try builder.addMemArg(.RBP, result_offset);
-                        try builder.addMemArg(.RBP, result_offset + 8);
-                        try builder.addMemArg(.RBP, result_offset + 16);
-
-                        // Args 5-7: element, elem_width, copy_fn (stack args)
-                        try builder.addLeaArg(.RBP, elem_off);
+                        try builder.addLeaArg(base_reg, tmp_result);
+                        try builder.addMemArg(base_reg, result_offset);
+                        try builder.addMemArg(base_reg, result_offset + 8);
+                        try builder.addMemArg(base_reg, result_offset + 16);
+                        try builder.addLeaArg(base_reg, elem_off);
                         try builder.addImmArg(@intCast(elem_size_align.size));
-                        try builder.addImmArg(@intCast(copy_fallback_addr));
-
-                        try builder.call(append_fn_addr);
+                        try builder.addRegArg(roc_ops_reg);
+                        try self.callBuiltin(&builder, append_fn_addr, .list_append_unsafe);
                     }
 
                     // Copy tmp_result back to result_offset
@@ -3155,8 +2640,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         }
                     }
 
-                    // Call wrapU64ToDecOut(out_low, out_high, u64) -> void
-                    return try self.callScalarToI128(src_reg, @intFromPtr(&wrapU64ToDecOut));
+                    // Call roc_builtins_u64_to_dec(out_low, out_high, u64) -> void
+                    return try self.callScalarToI128(src_reg, @intFromPtr(&dev_wrappers.roc_builtins_u64_to_dec), .u64_to_dec);
                 },
 
                 .i8_to_dec,
@@ -3187,8 +2672,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         }
                     }
 
-                    // Call wrapI64ToDecOut(out_low, out_high, i64) -> void
-                    return try self.callScalarToI128(src_reg, @intFromPtr(&wrapI64ToDecOut));
+                    // Call roc_builtins_i64_to_dec(out_low, out_high, i64) -> void
+                    return try self.callScalarToI128(src_reg, @intFromPtr(&dev_wrappers.roc_builtins_i64_to_dec), .i64_to_dec);
                 },
 
                 // ── Dec to integer truncating conversions ──
@@ -3206,24 +2691,16 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     const src_loc = try self.generateExpr(args[0]);
                     const parts = try self.getI128Parts(src_loc);
 
-                    // Call wrapDecToI64Trunc(low, high) -> i64
+                    // Call roc_builtins_dec_to_i64_trunc(low, high) -> i64
                     const result_reg = self.codegen.allocGeneral() orelse return Error.NoRegisterToSpill;
-                    const fn_addr = @intFromPtr(&wrapDecToI64Trunc);
+                    const fn_addr = @intFromPtr(&dev_wrappers.roc_builtins_dec_to_i64_trunc);
 
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.movRegReg(.w64, .X0, parts.low);
-                        try self.codegen.emit.movRegReg(.w64, .X1, parts.high);
-                        try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
-                        try self.codegen.emit.blrReg(.X9);
-                        try self.codegen.emit.movRegReg(.w64, result_reg, .X0);
-                    } else {
-                        // Use CallBuilder for consistent handling
-                        var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                        try builder.addRegArg(parts.low);
-                        try builder.addRegArg(parts.high);
-                        try builder.call(fn_addr);
-                        try self.codegen.emit.movRegReg(.w64, result_reg, .RAX);
-                    }
+                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    try builder.addRegArg(parts.low);
+                    try builder.addRegArg(parts.high);
+                    try self.callBuiltin(&builder, fn_addr, .dec_to_i64_trunc);
+                    const ret_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X0 else .RAX;
+                    try self.codegen.emit.movRegReg(.w64, result_reg, ret_reg);
                     self.codegen.freeGeneral(parts.low);
                     self.codegen.freeGeneral(parts.high);
 
@@ -3253,21 +2730,11 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     if (args.len < 1) unreachable;
                     const src_loc = try self.generateExpr(args[0]);
                     const parts = try self.getI128Parts(src_loc);
-                    // Call wrapDecToI64Trunc to get the integer part as i64
-                    // then sign-extend to i128
-                    const fn_addr = @intFromPtr(&wrapDecToI64Trunc);
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.movRegReg(.w64, .X0, parts.low);
-                        try self.codegen.emit.movRegReg(.w64, .X1, parts.high);
-                        try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
-                        try self.codegen.emit.blrReg(.X9);
-                    } else {
-                        // Use CallBuilder for consistent handling
-                        var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                        try builder.addRegArg(parts.low);
-                        try builder.addRegArg(parts.high);
-                        try builder.call(fn_addr);
-                    }
+                    const fn_addr = @intFromPtr(&dev_wrappers.roc_builtins_dec_to_i64_trunc);
+                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    try builder.addRegArg(parts.low);
+                    try builder.addRegArg(parts.high);
+                    try self.callBuiltin(&builder, fn_addr, .dec_to_i64_trunc);
                     self.codegen.freeGeneral(parts.low);
                     self.codegen.freeGeneral(parts.high);
 
@@ -3290,20 +2757,11 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     if (args.len < 1) unreachable;
                     const src_loc = try self.generateExpr(args[0]);
                     const parts = try self.getI128Parts(src_loc);
-                    // Divide by one_point_zero to get the integer part, zero-extend to u128
-                    const fn_addr = @intFromPtr(&wrapDecToI64Trunc);
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.movRegReg(.w64, .X0, parts.low);
-                        try self.codegen.emit.movRegReg(.w64, .X1, parts.high);
-                        try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
-                        try self.codegen.emit.blrReg(.X9);
-                    } else {
-                        // Use CallBuilder for consistent handling
-                        var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                        try builder.addRegArg(parts.low);
-                        try builder.addRegArg(parts.high);
-                        try builder.call(fn_addr);
-                    }
+                    const fn_addr = @intFromPtr(&dev_wrappers.roc_builtins_dec_to_i64_trunc);
+                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    try builder.addRegArg(parts.low);
+                    try builder.addRegArg(parts.high);
+                    try self.callBuiltin(&builder, fn_addr, .dec_to_i64_trunc);
                     self.codegen.freeGeneral(parts.low);
                     self.codegen.freeGeneral(parts.high);
 
@@ -3325,14 +2783,14 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     if (args.len < 1) unreachable;
                     const src_loc = try self.generateExpr(args[0]);
                     const parts = try self.getI128Parts(src_loc);
-                    return try self.callI128PartsToF64(parts, @intFromPtr(&builtins.dec.toF64));
+                    return try self.callI128PartsToF64(parts, @intFromPtr(&dev_wrappers.roc_builtins_dec_to_f64), .dec_to_f64);
                 },
                 .dec_to_f32_wrap => {
                     // Dec to f32: convert to f64 first (f32 narrowing happens at store)
                     if (args.len < 1) unreachable;
                     const src_loc = try self.generateExpr(args[0]);
                     const parts = try self.getI128Parts(src_loc);
-                    return try self.callI128PartsToF64(parts, @intFromPtr(&builtins.dec.toF64));
+                    return try self.callI128PartsToF64(parts, @intFromPtr(&dev_wrappers.roc_builtins_dec_to_f64), .dec_to_f64);
                 },
 
                 // ── 128-bit integer to float conversions ──
@@ -3342,7 +2800,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     if (args.len < 1) unreachable;
                     const src_loc = try self.generateExpr(args[0]);
                     const parts = try self.getI128Parts(src_loc);
-                    return try self.callI128PartsToF64(parts, @intFromPtr(&wrapI128ToF64));
+                    return try self.callI128PartsToF64(parts, @intFromPtr(&dev_wrappers.roc_builtins_i128_to_f64), .i128_to_f64);
                 },
                 .u128_to_f32,
                 .u128_to_f64,
@@ -3350,7 +2808,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     if (args.len < 1) unreachable;
                     const src_loc = try self.generateExpr(args[0]);
                     const parts = try self.getI128Parts(src_loc);
-                    return try self.callI128PartsToF64(parts, @intFromPtr(&wrapU128ToF64));
+                    return try self.callI128PartsToF64(parts, @intFromPtr(&dev_wrappers.roc_builtins_u128_to_f64), .u128_to_f64);
                 },
 
                 // ── Float to 128-bit integer truncating conversions ──
@@ -3360,7 +2818,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     if (args.len < 1) unreachable;
                     const src_loc = try self.generateExpr(args[0]);
                     const freg = try self.ensureInFloatReg(src_loc);
-                    return try self.callF64ToI128(freg, @intFromPtr(&wrapF64ToI128TruncOut));
+                    return try self.callF64ToI128(freg, @intFromPtr(&dev_wrappers.roc_builtins_f64_to_i128_trunc), .f64_to_i128_trunc);
                 },
                 .f32_to_u128_trunc,
                 .f64_to_u128_trunc,
@@ -3368,8 +2826,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     if (args.len < 1) unreachable;
                     const src_loc = try self.generateExpr(args[0]);
                     const freg = try self.ensureInFloatReg(src_loc);
-                    // wrapF64ToU128TruncOut outputs u128, but we store as stack_i128 (same layout)
-                    return try self.callF64ToI128(freg, @intFromPtr(&wrapF64ToU128TruncOut));
+                    return try self.callF64ToI128(freg, @intFromPtr(&dev_wrappers.roc_builtins_f64_to_u128_trunc), .f64_to_u128_trunc);
                 },
 
                 // ── String low-level operations ──
@@ -4706,40 +4163,18 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             const alignment_bytes = elem_size_align.alignment.toByteUnits();
 
             // Allocate list with same capacity as input length
-            const cap_fn_addr: usize = @intFromPtr(&listWithCapacityC);
-            const rc_none_addr: usize = @intFromPtr(&rcNone);
+            const cap_fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_with_capacity);
+            const base_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .FP else .RBP;
 
-            if (comptime target.toCpuArch() == .aarch64) {
-                try self.codegen.emit.movRegImm64(.X0, @bitCast(@as(i64, result_offset)));
-                try self.codegen.emit.addRegRegReg(.w64, .X0, .FP, .X0);
-                try self.codegen.emit.ldrRegMemSoff(.w64, .X1, .FP, list_off + 8); // capacity = input length
-                try self.codegen.emitLoadImm(.X2, @intCast(alignment_bytes));
-                try self.codegen.emitLoadImm(.X3, @intCast(elem_size_align.size));
-                try self.codegen.emitLoadImm(.X4, 0);
-                try self.codegen.emitLoadImm(.X5, 0);
-                try self.codegen.emitLoadImm(.X6, @intCast(rc_none_addr));
-                try self.codegen.emit.movRegReg(.w64, .X7, roc_ops_reg);
-                try self.codegen.emitLoadImm(.X9, @intCast(cap_fn_addr));
-                try self.codegen.emit.blrReg(.X9);
-            } else {
-                // x86_64: listWithCapacityC(out, capacity, alignment, elem_width, elements_refcounted,
-                //                           inc_context, inc, roc_ops) -> void
-                // 8 args - Use CallBuilder for cross-platform calls
+            {
+                // roc_builtins_list_with_capacity(out, capacity, alignment, element_width, roc_ops)
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-
-                // Args 1-4: out, capacity, alignment, elem_width (registers)
-                try builder.addLeaArg(.RBP, result_offset);
-                try builder.addMemArg(.RBP, list_off + 8); // capacity = input length
+                try builder.addLeaArg(base_reg, result_offset);
+                try builder.addMemArg(base_reg, list_off + 8); // capacity = input length
                 try builder.addImmArg(@intCast(alignment_bytes));
                 try builder.addImmArg(@intCast(elem_size_align.size));
-
-                // Args 5-8: elements_refcounted, inc_context, inc, roc_ops
-                try builder.addImmArg(0); // elements_refcounted = 0
-                try builder.addImmArg(0); // inc_context = 0
-                try builder.addImmArg(@intCast(rc_none_addr));
                 try builder.addRegArg(roc_ops_reg);
-
-                try builder.call(cap_fn_addr);
+                try self.callBuiltin(&builder, cap_fn_addr, .list_with_capacity);
             }
 
             // Now copy elements in reverse. For each i from 0..len-1, copy src[len-1-i] to dst[i]
@@ -5463,88 +4898,33 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
         /// Call a C function: fn(out_low: *u64, out_high: *u64, val: T) -> void.
         /// Takes a scalar value in a general register, returns i128 on stack via output pointers.
-        /// This avoids platform-specific i128 return value ABI issues.
-        fn callScalarToI128(self: *Self, src_reg: GeneralReg, fn_addr: usize) Error!ValueLocation {
-            // Allocate stack space for the output i128
+        fn callScalarToI128(self: *Self, src_reg: GeneralReg, fn_addr: usize, builtin_fn: BuiltinFn) Error!ValueLocation {
             const stack_offset = self.codegen.allocStackSlot(16);
-
-            if (comptime target.toCpuArch() == .aarch64) {
-                // aarch64: fn(out_low: *u64, out_high: *u64, val: T)
-                // X0 = out_low, X1 = out_high, X2 = val
-
-                // X2 = val
-                try self.codegen.emit.movRegReg(.w64, .X2, src_reg);
-                self.codegen.freeGeneral(src_reg);
-
-                // X0 = &out_low (FP + stack_offset)
-                try self.codegen.emit.movRegImm64(.X0, @bitCast(@as(i64, stack_offset)));
-                try self.codegen.emit.addRegRegReg(.w64, .X0, .FP, .X0);
-
-                // X1 = &out_high (FP + stack_offset + 8)
-                try self.codegen.emit.movRegImm64(.X1, @bitCast(@as(i64, stack_offset + 8)));
-                try self.codegen.emit.addRegRegReg(.w64, .X1, .FP, .X1);
-
-                // Call
-                try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
-                try self.codegen.emit.blrReg(.X9);
-            } else {
-                // x86_64
-                if (self.cc.is_windows) {
-                    // Windows x64: fn(out_low: *u64, out_high: *u64, val: T)
-                    // RCX = out_low, RDX = out_high, R8 = val
-                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                    try builder.addLeaArg(.RBP, stack_offset); // out_low
-                    try builder.addLeaArg(.RBP, stack_offset + 8); // out_high
-                    try builder.addRegArg(src_reg); // val
-                    try builder.call(fn_addr);
-                } else {
-                    // System V: fn(out_low: *u64, out_high: *u64, val: T)
-                    // RDI = out_low, RSI = out_high, RDX = val
-
-                    // RDX = val
-                    try self.codegen.emit.movRegReg(.w64, .RDX, src_reg);
-
-                    // RDI = &out_low (RBP + stack_offset)
-                    try self.codegen.emit.leaRegMem(.RDI, .RBP, stack_offset);
-
-                    // RSI = &out_high (RBP + stack_offset + 8)
-                    try self.codegen.emit.leaRegMem(.RSI, .RBP, stack_offset + 8);
-
-                    // Call
-                    try self.codegen.emitLoadImm(.R11, @intCast(fn_addr));
-                    try self.codegen.emit.callReg(.R11);
-                }
-                self.codegen.freeGeneral(src_reg);
-            }
-
+            const base_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .FP else .RBP;
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addLeaArg(base_reg, stack_offset); // out_low
+            try builder.addLeaArg(base_reg, stack_offset + 8); // out_high
+            try builder.addRegArg(src_reg); // val
+            try self.callBuiltin(&builder, fn_addr, builtin_fn);
+            self.codegen.freeGeneral(src_reg);
             return .{ .stack_i128 = stack_offset };
         }
 
         /// Call a C function: fn(low: u64, high: u64) -> f64.
         /// Takes i128 as two registers, returns f64 in float register.
-        fn callI128PartsToF64(self: *Self, parts: I128Parts, fn_addr: usize) Error!ValueLocation {
-            if (comptime target.toCpuArch() == .aarch64) {
-                try self.codegen.emit.movRegReg(.w64, .X0, parts.low);
-                try self.codegen.emit.movRegReg(.w64, .X1, parts.high);
-                try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
-                try self.codegen.emit.blrReg(.X9);
-            } else {
-                // Use CallBuilder for consistent handling
-                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                try builder.addRegArg(parts.low);
-                try builder.addRegArg(parts.high);
-                try builder.call(fn_addr);
-            }
+        fn callI128PartsToF64(self: *Self, parts: I128Parts, fn_addr: usize, builtin_fn: BuiltinFn) Error!ValueLocation {
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addRegArg(parts.low);
+            try builder.addRegArg(parts.high);
+            try self.callBuiltin(&builder, fn_addr, builtin_fn);
             self.codegen.freeGeneral(parts.low);
             self.codegen.freeGeneral(parts.high);
 
             // f64 return value is in the float return register
             const freg = self.codegen.allocFloat() orelse return Error.NoRegisterToSpill;
             if (comptime target.toCpuArch() == .aarch64) {
-                // aarch64: f64 returned in D0
                 try self.codegen.emit.fmovRegReg(.double, freg, .V0);
             } else {
-                // x86_64: f64 returned in XMM0
                 if (freg != .XMM0) {
                     try self.codegen.emit.movsdRegReg(freg, .XMM0);
                 }
@@ -5554,71 +4934,36 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
         /// Call a C function: fn(out_low: *u64, out_high: *u64, val: f64) -> void.
         /// Takes f64 in float register, returns 128-bit value on stack via output pointers.
-        /// This avoids platform-specific i128 return value ABI issues.
-        fn callF64ToI128(self: *Self, freg: FloatReg, fn_addr: usize) Error!ValueLocation {
-            // Allocate stack space for the output i128
+        fn callF64ToI128(self: *Self, freg: FloatReg, fn_addr: usize, builtin_fn: BuiltinFn) Error!ValueLocation {
             const stack_offset = self.codegen.allocStackSlot(16);
+            const base_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .FP else .RBP;
 
+            // Move f64 to the float arg position before CallBuilder setup.
+            // CallBuilder handles int args; float args need manual placement.
             if (comptime target.toCpuArch() == .aarch64) {
-                // aarch64: fn(out_low: *u64, out_high: *u64, val: f64)
-                // X0 = out_low, X1 = out_high, D0 = val
-
-                // D0 = val (float register)
                 if (freg != .V0) {
                     try self.codegen.emit.fmovRegReg(.double, .V0, freg);
                 }
-                self.codegen.freeFloat(freg);
-
-                // X0 = &out_low (FP + stack_offset)
-                try self.codegen.emit.movRegImm64(.X0, @bitCast(@as(i64, stack_offset)));
-                try self.codegen.emit.addRegRegReg(.w64, .X0, .FP, .X0);
-
-                // X1 = &out_high (FP + stack_offset + 8)
-                try self.codegen.emit.movRegImm64(.X1, @bitCast(@as(i64, stack_offset + 8)));
-                try self.codegen.emit.addRegRegReg(.w64, .X1, .FP, .X1);
-
-                // Call
-                try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
-                try self.codegen.emit.blrReg(.X9);
             } else {
-                // x86_64
                 if (self.cc.is_windows) {
-                    // Windows x64: fn(out_low: *u64, out_high: *u64, val: f64)
-                    // RCX = out_low, RDX = out_high, XMM2 = val (float args in XMM0-3 parallel to int args)
-                    // Actually on Windows, floats go in XMM0-3 at the SAME positions as int args
-                    // So with 2 int args first, the float goes in the 3rd position = XMM2
+                    // Windows: float at position 2 (after 2 int args) goes in XMM2
                     if (freg != .XMM2) {
                         try self.codegen.emit.movsdRegReg(.XMM2, freg);
                     }
-                    self.codegen.freeFloat(freg);
-
-                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                    try builder.addLeaArg(.RBP, stack_offset); // out_low -> RCX
-                    try builder.addLeaArg(.RBP, stack_offset + 8); // out_high -> RDX
-                    // Float arg is already in XMM2 (position 2, 0-indexed)
-                    try builder.call(fn_addr);
                 } else {
-                    // System V: fn(out_low: *u64, out_high: *u64, val: f64)
-                    // RDI = out_low, RSI = out_high, XMM0 = val
-                    // Note: System V uses separate pools for int/float args
-
-                    // XMM0 = val (float register)
+                    // System V: floats use separate pool, first float arg is XMM0
                     if (freg != .XMM0) {
                         try self.codegen.emit.movsdRegReg(.XMM0, freg);
                     }
-                    self.codegen.freeFloat(freg);
-
-                    // RDI = &out_low (RBP + stack_offset)
-                    try self.codegen.emit.leaRegMem(.RDI, .RBP, stack_offset);
-
-                    // RSI = &out_high (RBP + stack_offset + 8)
-                    try self.codegen.emit.leaRegMem(.RSI, .RBP, stack_offset + 8);
-
-                    // Call
-                    try self.codegen.emitLoadImm(.R11, @intCast(fn_addr));
-                    try self.codegen.emit.callReg(.R11);
                 }
             }
+            self.codegen.freeFloat(freg);
+
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addLeaArg(base_reg, stack_offset); // out_low
+            try builder.addLeaArg(base_reg, stack_offset + 8); // out_high
+            // Float arg already positioned above; CallBuilder only tracks int args
+            try self.callBuiltin(&builder, fn_addr, builtin_fn);
 
             return .{ .stack_i128 = stack_offset };
         }
@@ -5721,39 +5066,25 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 // 128-bit source: load as two registers, call 128-bit C wrapper
                 const parts = try self.getI128Parts(src_loc);
 
+                const builtin_fn: BuiltinFn = if (info.src_signed) .i128_try_convert else .u128_try_convert;
                 const fn_addr: usize = if (info.src_signed)
-                    @intFromPtr(&wrapI128TryConvert)
+                    @intFromPtr(&dev_wrappers.roc_builtins_i128_try_convert)
                 else
-                    @intFromPtr(&wrapU128TryConvert);
+                    @intFromPtr(&dev_wrappers.roc_builtins_u128_try_convert);
 
                 const target_bits: u32 = info.tgt_bits;
                 const target_is_signed: u32 = if (info.tgt_signed) 1 else 0;
+                const base_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .FP else .RBP;
 
-                // fn(out, val_low, val_high, target_bits, target_is_signed, payload_size, disc_offset) -> void
-                // 7 args: aarch64 fits in X0-X6, x86_64 uses CallBuilder for stack args
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emit.movRegImm64(.X0, @bitCast(@as(i64, result_offset)));
-                    try self.codegen.emit.addRegRegReg(.w64, .X0, .FP, .X0);
-                    try self.codegen.emit.movRegReg(.w64, .X1, parts.low);
-                    try self.codegen.emit.movRegReg(.w64, .X2, parts.high);
-                    try self.codegen.emitLoadImm(.X3, @intCast(target_bits));
-                    try self.codegen.emitLoadImm(.X4, @intCast(target_is_signed));
-                    try self.codegen.emitLoadImm(.X5, @intCast(payload_size));
-                    try self.codegen.emitLoadImm(.X6, @intCast(disc_offset));
-                    try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
-                    try self.codegen.emit.blrReg(.X9);
-                } else {
-                    // Use CallBuilder for consistent handling (handles shadow space, stack args)
-                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                    try builder.addLeaArg(.RBP, result_offset);
-                    try builder.addRegArg(parts.low);
-                    try builder.addRegArg(parts.high);
-                    try builder.addImmArg(@intCast(target_bits));
-                    try builder.addImmArg(@intCast(target_is_signed));
-                    try builder.addImmArg(@intCast(payload_size));
-                    try builder.addImmArg(@intCast(disc_offset));
-                    try builder.call(fn_addr);
-                }
+                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                try builder.addLeaArg(base_reg, result_offset);
+                try builder.addRegArg(parts.low);
+                try builder.addRegArg(parts.high);
+                try builder.addImmArg(@intCast(target_bits));
+                try builder.addImmArg(@intCast(target_is_signed));
+                try builder.addImmArg(@intCast(payload_size));
+                try builder.addImmArg(@intCast(disc_offset));
+                try self.callBuiltin(&builder, fn_addr, builtin_fn);
 
                 self.codegen.freeGeneral(parts.low);
                 self.codegen.freeGeneral(parts.high);
@@ -5804,29 +5135,16 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         break :blk (@as(i64, 1) << shift) - 1;
                     };
 
-                    const fn_addr: usize = @intFromPtr(&wrapIntTrySigned);
-                    // 6 args — fits in registers on both architectures
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.movRegImm64(.X0, @bitCast(@as(i64, result_offset)));
-                        try self.codegen.emit.addRegRegReg(.w64, .X0, .FP, .X0);
-                        try self.codegen.emit.movRegReg(.w64, .X1, src_reg);
-                        try self.codegen.emit.movRegImm64(.X2, @bitCast(min_val));
-                        try self.codegen.emit.movRegImm64(.X3, @bitCast(max_val));
-                        try self.codegen.emitLoadImm(.X4, @intCast(payload_size));
-                        try self.codegen.emitLoadImm(.X5, @intCast(disc_offset));
-                        try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
-                        try self.codegen.emit.blrReg(.X9);
-                    } else {
-                        // Use CallBuilder for consistent handling
-                        var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                        try builder.addLeaArg(.RBP, result_offset);
-                        try builder.addRegArg(src_reg);
-                        try builder.addImmArg(@bitCast(min_val));
-                        try builder.addImmArg(@bitCast(max_val));
-                        try builder.addImmArg(@intCast(payload_size));
-                        try builder.addImmArg(@intCast(disc_offset));
-                        try builder.call(fn_addr);
-                    }
+                    const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_int_try_signed);
+                    const base_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .FP else .RBP;
+                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    try builder.addLeaArg(base_reg, result_offset);
+                    try builder.addRegArg(src_reg);
+                    try builder.addImmArg(@bitCast(min_val));
+                    try builder.addImmArg(@bitCast(max_val));
+                    try builder.addImmArg(@intCast(payload_size));
+                    try builder.addImmArg(@intCast(disc_offset));
+                    try self.callBuiltin(&builder, fn_addr, .int_try_signed);
                 } else {
                     // Unsigned source: call wrapIntTryUnsigned(out, val, max_val, payload_size, disc_offset)
                     const max_val: u64 = if (info.tgt_signed) blk: {
@@ -5839,27 +5157,15 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         break :blk (@as(u64, 1) << shift) - 1;
                     };
 
-                    const fn_addr: usize = @intFromPtr(&wrapIntTryUnsigned);
-                    // 5 args — fits in registers on both architectures
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.movRegImm64(.X0, @bitCast(@as(i64, result_offset)));
-                        try self.codegen.emit.addRegRegReg(.w64, .X0, .FP, .X0);
-                        try self.codegen.emit.movRegReg(.w64, .X1, src_reg);
-                        try self.codegen.emit.movRegImm64(.X2, @bitCast(@as(i64, @bitCast(max_val))));
-                        try self.codegen.emitLoadImm(.X3, @intCast(payload_size));
-                        try self.codegen.emitLoadImm(.X4, @intCast(disc_offset));
-                        try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
-                        try self.codegen.emit.blrReg(.X9);
-                    } else {
-                        // Use CallBuilder for consistent handling
-                        var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                        try builder.addLeaArg(.RBP, result_offset);
-                        try builder.addRegArg(src_reg);
-                        try builder.addImmArg(@bitCast(@as(i64, @bitCast(max_val))));
-                        try builder.addImmArg(@intCast(payload_size));
-                        try builder.addImmArg(@intCast(disc_offset));
-                        try builder.call(fn_addr);
-                    }
+                    const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_int_try_unsigned);
+                    const base_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .FP else .RBP;
+                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    try builder.addLeaArg(base_reg, result_offset);
+                    try builder.addRegArg(src_reg);
+                    try builder.addImmArg(@bitCast(@as(i64, @bitCast(max_val))));
+                    try builder.addImmArg(@intCast(payload_size));
+                    try builder.addImmArg(@intCast(disc_offset));
+                    try self.callBuiltin(&builder, fn_addr, .int_try_unsigned);
                 }
 
                 self.codegen.freeGeneral(src_reg);
@@ -5940,65 +5246,39 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     if (info.src_kind == .dec) {
                         // Dec source: get i128 parts, call Dec-to-int wrapper
                         const parts = try self.getI128Parts(src_loc);
-                        const fn_addr: usize = @intFromPtr(&wrapDecToIntTryUnsafe);
-
-                        // fn(out, dec_low, dec_high, target_bits, target_is_signed, val_size) — 6 args
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emit.movRegImm64(.X0, @bitCast(@as(i64, result_offset)));
-                            try self.codegen.emit.addRegRegReg(.w64, .X0, .FP, .X0);
-                            try self.codegen.emit.movRegReg(.w64, .X1, parts.low);
-                            try self.codegen.emit.movRegReg(.w64, .X2, parts.high);
-                            try self.codegen.emitLoadImm(.X3, @intCast(target_bits));
-                            try self.codegen.emitLoadImm(.X4, @intCast(target_is_signed));
-                            try self.codegen.emitLoadImm(.X5, @intCast(val_size));
-                            try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
-                            try self.codegen.emit.blrReg(.X9);
-                        } else {
-                            // Use CallBuilder for consistent handling
-                            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                            try builder.addLeaArg(.RBP, result_offset);
-                            try builder.addRegArg(parts.low);
-                            try builder.addRegArg(parts.high);
-                            try builder.addImmArg(@intCast(target_bits));
-                            try builder.addImmArg(@intCast(target_is_signed));
-                            try builder.addImmArg(@intCast(val_size));
-                            try builder.call(fn_addr);
-                        }
+                        const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_dec_to_int_try_unsafe);
+                        const base_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .FP else .RBP;
+                        var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                        try builder.addLeaArg(base_reg, result_offset);
+                        try builder.addRegArg(parts.low);
+                        try builder.addRegArg(parts.high);
+                        try builder.addImmArg(@intCast(target_bits));
+                        try builder.addImmArg(@intCast(target_is_signed));
+                        try builder.addImmArg(@intCast(val_size));
+                        try self.callBuiltin(&builder, fn_addr, .dec_to_int_try_unsafe);
 
                         self.codegen.freeGeneral(parts.low);
                         self.codegen.freeGeneral(parts.high);
                     } else {
                         // Float source (f32 or f64): all floats stored as f64 internally
                         const freg = try self.ensureInFloatReg(src_loc);
-                        const fn_addr: usize = @intFromPtr(&wrapF64ToIntTryUnsafe);
+                        const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_f64_to_int_try_unsafe);
+                        const base_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .FP else .RBP;
 
-                        // fn(out, val, target_bits, target_is_signed, val_size) — 5 args
-                        // val is f64 passed in float register (D0/XMM0)
-                        // Note: On System V, floats use separate register bank from integers
+                        // Position float arg before CallBuilder setup
                         if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emit.movRegImm64(.X0, @bitCast(@as(i64, result_offset)));
-                            try self.codegen.emit.addRegRegReg(.w64, .X0, .FP, .X0);
-                            if (freg != .V0) {
-                                try self.codegen.emit.fmovRegReg(.double, .V0, freg);
-                            }
-                            try self.codegen.emitLoadImm(.X1, @intCast(target_bits));
-                            try self.codegen.emitLoadImm(.X2, @intCast(target_is_signed));
-                            try self.codegen.emitLoadImm(.X3, @intCast(val_size));
-                            try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
-                            try self.codegen.emit.blrReg(.X9);
+                            if (freg != .V0) try self.codegen.emit.fmovRegReg(.double, .V0, freg);
                         } else {
-                            // Set up f64 in XMM0 (System V uses separate float regs)
-                            if (freg != .XMM0) {
-                                try self.codegen.emit.movsdRegReg(.XMM0, freg);
-                            }
-                            // Use CallBuilder for integer args and call mechanics
-                            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                            try builder.addLeaArg(.RBP, result_offset);
-                            try builder.addImmArg(@intCast(target_bits));
-                            try builder.addImmArg(@intCast(target_is_signed));
-                            try builder.addImmArg(@intCast(val_size));
-                            try builder.call(fn_addr);
+                            if (freg != .XMM0) try self.codegen.emit.movsdRegReg(.XMM0, freg);
                         }
+
+                        var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                        try builder.addLeaArg(base_reg, result_offset);
+                        // Float arg already in position; int args follow
+                        try builder.addImmArg(@intCast(target_bits));
+                        try builder.addImmArg(@intCast(target_is_signed));
+                        try builder.addImmArg(@intCast(val_size));
+                        try self.callBuiltin(&builder, fn_addr, .f64_to_int_try_unsafe);
 
                         self.codegen.freeFloat(freg);
                     }
@@ -6008,51 +5288,33 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     if (info.src_kind == .dec) {
                         // Dec to f32
                         const parts = try self.getI128Parts(src_loc);
-                        const fn_addr: usize = @intFromPtr(&wrapDecToF32TryUnsafe);
-
-                        // fn(out, dec_low, dec_high) — 3 args
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emit.movRegImm64(.X0, @bitCast(@as(i64, result_offset)));
-                            try self.codegen.emit.addRegRegReg(.w64, .X0, .FP, .X0);
-                            try self.codegen.emit.movRegReg(.w64, .X1, parts.low);
-                            try self.codegen.emit.movRegReg(.w64, .X2, parts.high);
-                            try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
-                            try self.codegen.emit.blrReg(.X9);
-                        } else {
-                            // Use CallBuilder for consistent handling
-                            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                            try builder.addLeaArg(.RBP, result_offset);
-                            try builder.addRegArg(parts.low);
-                            try builder.addRegArg(parts.high);
-                            try builder.call(fn_addr);
-                        }
+                        const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_dec_to_f32_try_unsafe);
+                        const base_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .FP else .RBP;
+                        var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                        try builder.addLeaArg(base_reg, result_offset);
+                        try builder.addRegArg(parts.low);
+                        try builder.addRegArg(parts.high);
+                        try self.callBuiltin(&builder, fn_addr, .dec_to_f32_try_unsafe);
 
                         self.codegen.freeGeneral(parts.low);
                         self.codegen.freeGeneral(parts.high);
                     } else {
                         // f64 to f32
                         const freg = try self.ensureInFloatReg(src_loc);
-                        const fn_addr: usize = @intFromPtr(&wrapF64ToF32TryUnsafe);
+                        const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_f64_to_f32_try_unsafe);
+                        const base_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .FP else .RBP;
 
-                        // fn(out, val) — 2 args (out: ptr, val: f64)
+                        // Position float arg before CallBuilder
                         if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emit.movRegImm64(.X0, @bitCast(@as(i64, result_offset)));
-                            try self.codegen.emit.addRegRegReg(.w64, .X0, .FP, .X0);
-                            if (freg != .V0) {
-                                try self.codegen.emit.fmovRegReg(.double, .V0, freg);
-                            }
-                            try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
-                            try self.codegen.emit.blrReg(.X9);
+                            if (freg != .V0) try self.codegen.emit.fmovRegReg(.double, .V0, freg);
                         } else {
-                            // Set up f64 in XMM0
-                            if (freg != .XMM0) {
-                                try self.codegen.emit.movsdRegReg(.XMM0, freg);
-                            }
-                            // Use CallBuilder for ptr arg and call mechanics
-                            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                            try builder.addLeaArg(.RBP, result_offset);
-                            try builder.call(fn_addr);
+                            if (freg != .XMM0) try self.codegen.emit.movsdRegReg(.XMM0, freg);
                         }
+
+                        var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                        try builder.addLeaArg(base_reg, result_offset);
+                        // Float arg already in position
+                        try self.callBuiltin(&builder, fn_addr, .f64_to_f32_try_unsafe);
 
                         self.codegen.freeFloat(freg);
                     }
@@ -6060,27 +5322,18 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 .dec => {
                     // Integer to Dec: result is {val: Dec(i128), is_int: Bool}
                     const parts = try self.getI128Parts(src_loc);
+                    const builtin_fn: BuiltinFn = if (info.tgt_signed) .i128_to_dec_try_unsafe else .u128_to_dec_try_unsafe;
                     const fn_addr: usize = if (info.tgt_signed)
-                        @intFromPtr(&wrapI128ToDecTryUnsafe)
+                        @intFromPtr(&dev_wrappers.roc_builtins_i128_to_dec_try_unsafe)
                     else
-                        @intFromPtr(&wrapU128ToDecTryUnsafe);
+                        @intFromPtr(&dev_wrappers.roc_builtins_u128_to_dec_try_unsafe);
+                    const base_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .FP else .RBP;
 
-                    // fn(out, val_low, val_high) — 3 args
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.movRegImm64(.X0, @bitCast(@as(i64, result_offset)));
-                        try self.codegen.emit.addRegRegReg(.w64, .X0, .FP, .X0);
-                        try self.codegen.emit.movRegReg(.w64, .X1, parts.low);
-                        try self.codegen.emit.movRegReg(.w64, .X2, parts.high);
-                        try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
-                        try self.codegen.emit.blrReg(.X9);
-                    } else {
-                        // Use CallBuilder for consistent handling
-                        var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                        try builder.addLeaArg(.RBP, result_offset);
-                        try builder.addRegArg(parts.low);
-                        try builder.addRegArg(parts.high);
-                        try builder.call(fn_addr);
-                    }
+                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    try builder.addLeaArg(base_reg, result_offset);
+                    try builder.addRegArg(parts.low);
+                    try builder.addRegArg(parts.high);
+                    try self.callBuiltin(&builder, fn_addr, builtin_fn);
 
                     self.codegen.freeGeneral(parts.low);
                     self.codegen.freeGeneral(parts.high);
@@ -6090,411 +5343,75 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             return .{ .stack = result_offset };
         }
 
-        /// Call Dec multiplication builtin: mulSaturatedC(RocDec, RocDec) -> RocDec
-        /// RocDec is extern struct { num: i128 }, so passed/returned as i128
-        ///
-        /// Windows x64: Uses CallBuilder for R12 save/restore and shadow space.
-        ///              i128 args are copied to stack slots (RBP-relative) and passed by pointer.
-        /// System V: i128 uses register pairs (RDI:RSI, RDX:RCX) with complex conflict resolution.
+        /// Call Dec multiplication builtin via decomposed wrapper.
+        /// Wrapper signature: (out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, b_low: u64, b_high: u64) -> void
         fn callDecMul(self: *Self, lhs_parts: I128Parts, rhs_parts: I128Parts, result_low: GeneralReg, result_high: GeneralReg) Error!void {
-            // Get the address of the Dec multiply function
-            const fn_addr = @intFromPtr(&builtins.dec.mulSaturatedC);
+            const fn_addr = @intFromPtr(&dev_wrappers.roc_builtins_dec_mul_saturated);
+            const result_slot = self.codegen.allocStackSlot(16);
+            const base_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .FP else .RBP;
 
-            if (comptime target.toCpuArch() == .aarch64) {
-                // aarch64 calling convention for i128:
-                // arg1: X0 (low), X1 (high)
-                // arg2: X2 (low), X3 (high)
-                // return: X0 (low), X1 (high)
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addLeaArg(base_reg, result_slot); // out_low
+            try builder.addLeaArg(base_reg, result_slot + 8); // out_high
+            try builder.addRegArg(lhs_parts.low);
+            try builder.addRegArg(lhs_parts.high);
+            try builder.addRegArg(rhs_parts.low);
+            try builder.addRegArg(rhs_parts.high);
+            try self.callBuiltin(&builder, fn_addr, .dec_mul_saturated);
 
-                // Move arguments to correct registers
-                try self.codegen.emit.movRegReg(.w64, .X0, lhs_parts.low);
-                try self.codegen.emit.movRegReg(.w64, .X1, lhs_parts.high);
-                try self.codegen.emit.movRegReg(.w64, .X2, rhs_parts.low);
-                try self.codegen.emit.movRegReg(.w64, .X3, rhs_parts.high);
-
-                // Load function address into X9 (caller-saved, not an arg register) and call
-                try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
-                try self.codegen.emit.blrReg(.X9);
-
-                // Get result from X0, X1
-                try self.codegen.emit.movRegReg(.w64, result_low, .X0);
-                try self.codegen.emit.movRegReg(.w64, result_high, .X1);
-            } else {
-                // x86_64 calling convention for i128:
-                // System V: arg1: RDI (low), RSI (high), arg2: RDX (low), RCX (high)
-                //           return: RAX (low), RDX (high)
-                // Windows:  i128 values > 8 bytes are passed BY POINTER (not in registers)
-                //           arg1_ptr: RCX, arg2_ptr: RDX
-                //           return: i128 returned via hidden first arg (RCX = return ptr)
-
-                if (self.cc.is_windows) {
-                    // Windows x64: i128 values are passed by pointer, not in registers
-                    // RCX = return ptr, RDX = arg1 ptr, R8 = arg2 ptr
-                    // Uses CallBuilder for automatic R12 save/restore and shadow space handling
-
-                    // Allocate stack slots (RBP-relative)
-                    const return_slot = self.codegen.allocStackSlot(16);
-                    const arg1_slot = self.codegen.allocStackSlot(16);
-                    const arg2_slot = self.codegen.allocStackSlot(16);
-
-                    // Store arg1 (lhs) BEFORE any CallBuilder operations (in case lhs is in R11)
-                    try self.codegen.emit.movMemReg(.w64, .RBP, arg1_slot, lhs_parts.low);
-                    try self.codegen.emit.movMemReg(.w64, .RBP, arg1_slot + 8, lhs_parts.high);
-
-                    // Store arg2 (rhs) BEFORE any CallBuilder operations (in case rhs is in R11)
-                    try self.codegen.emit.movMemReg(.w64, .RBP, arg2_slot, rhs_parts.low);
-                    try self.codegen.emit.movMemReg(.w64, .RBP, arg2_slot + 8, rhs_parts.high);
-
-                    // Use CallBuilder for the call (handles shadow space + R12 save/restore)
-                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                    try builder.addLeaArg(.RBP, return_slot); // RCX = return ptr
-                    try builder.addLeaArg(.RBP, arg1_slot); // RDX = arg1 ptr
-                    try builder.addLeaArg(.RBP, arg2_slot); // R8 = arg2 ptr
-                    try builder.call(fn_addr);
-
-                    // Get result from return space
-                    try self.codegen.emit.movRegMem(.w64, result_low, .RBP, return_slot);
-                    try self.codegen.emit.movRegMem(.w64, result_high, .RBP, return_slot + 8);
-                } else {
-                    // System V: i128 passed in register pairs
-                    // arg1: RDI (low), RSI (high), arg2: RDX (low), RCX (high)
-                    // return: RAX (low), RDX (high)
-
-                    // Get argument registers from calling convention
-                    const arg_regs = [_]GeneralReg{
-                        self.cc.getParamReg(0), // RDI
-                        self.cc.getParamReg(1), // RSI
-                        self.cc.getParamReg(2), // RDX
-                        self.cc.getParamReg(3), // RCX
-                    };
-                    const sources = [_]GeneralReg{ lhs_parts.low, lhs_parts.high, rhs_parts.low, rhs_parts.high };
-
-                    // Save sources that would be clobbered before use
-                    var saved: [4]?GeneralReg = .{ null, null, null, null };
-                    var next_temp: GeneralReg = .R9;
-
-                    for (0..4) |i| {
-                        const src = sources[i];
-                        for (0..i) |j| {
-                            if (src == arg_regs[j]) {
-                                var found: ?GeneralReg = null;
-                                for (0..i) |k| {
-                                    if (sources[k] == src and saved[k] != null) {
-                                        found = saved[k];
-                                        break;
-                                    }
-                                }
-                                if (found) |s| {
-                                    saved[i] = s;
-                                } else {
-                                    try self.codegen.emit.movRegReg(.w64, next_temp, src);
-                                    saved[i] = next_temp;
-                                    next_temp = if (next_temp == .R9) .R10 else .RAX;
-                                }
-                                break;
-                            }
-                        }
-                    }
-
-                    // Move to argument registers
-                    for (0..4) |i| {
-                        const src = saved[i] orelse sources[i];
-                        try self.codegen.emit.movRegReg(.w64, arg_regs[i], src);
-                    }
-
-                    // Load function address into R11 AFTER all register moves (in case source was R11)
-                    try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
-
-                    // Call through R11
-                    try self.codegen.emit.callReg(.R11);
-
-                    // Get result from RAX, RDX (handle conflicts)
-                    if (result_low == .RDX) {
-                        try self.codegen.emit.movRegReg(.w64, .R9, .RDX);
-                        try self.codegen.emit.movRegReg(.w64, result_low, .RAX);
-                        try self.codegen.emit.movRegReg(.w64, result_high, .R9);
-                    } else if (result_high == .RAX) {
-                        try self.codegen.emit.movRegReg(.w64, .R9, .RAX);
-                        try self.codegen.emit.movRegReg(.w64, result_high, .RDX);
-                        try self.codegen.emit.movRegReg(.w64, result_low, .R9);
-                    } else {
-                        try self.codegen.emit.movRegReg(.w64, result_low, .RAX);
-                        try self.codegen.emit.movRegReg(.w64, result_high, .RDX);
-                    }
-                }
-            }
+            // Load results from stack slot
+            try self.codegen.emitLoadStack(.w64, result_low, result_slot);
+            try self.codegen.emitLoadStack(.w64, result_high, result_slot + 8);
         }
 
-        /// Call Dec division builtin: divC(RocDec, RocDec, *RocOps) -> i128
-        ///
-        /// Windows x64: Uses CallBuilder for R12 save/restore and shadow space.
-        ///              i128 args copied to stack slots (RBP-relative), passed by pointer; return via XMM0.
-        /// System V: i128 uses register pairs with complex conflict resolution.
+        /// Call Dec division builtin via decomposed wrapper.
+        /// Wrapper signature: (out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, b_low: u64, b_high: u64, roc_ops: *RocOps) -> void
         fn callDecDiv(self: *Self, lhs_parts: I128Parts, rhs_parts: I128Parts, result_low: GeneralReg, result_high: GeneralReg) Error!void {
-            // Get the address of the Dec divide function
-            const fn_addr = @intFromPtr(&builtins.dec.divC);
-
-            // Get the saved RocOps register
+            const fn_addr = @intFromPtr(&dev_wrappers.roc_builtins_dec_div);
             const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+            const result_slot = self.codegen.allocStackSlot(16);
+            const base_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .FP else .RBP;
 
-            if (comptime target.toCpuArch() == .aarch64) {
-                // aarch64 calling convention for divC(RocDec, RocDec, *RocOps) -> i128:
-                // arg1 (RocDec): X0 (low), X1 (high)
-                // arg2 (RocDec): X2 (low), X3 (high)
-                // arg3 (*RocOps): X4
-                // return: X0 (low), X1 (high)
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addLeaArg(base_reg, result_slot); // out_low
+            try builder.addLeaArg(base_reg, result_slot + 8); // out_high
+            try builder.addRegArg(lhs_parts.low);
+            try builder.addRegArg(lhs_parts.high);
+            try builder.addRegArg(rhs_parts.low);
+            try builder.addRegArg(rhs_parts.high);
+            try builder.addRegArg(roc_ops_reg);
+            try self.callBuiltin(&builder, fn_addr, .dec_div);
 
-                // Move arguments to correct registers
-                try self.codegen.emit.movRegReg(.w64, .X0, lhs_parts.low);
-                try self.codegen.emit.movRegReg(.w64, .X1, lhs_parts.high);
-                try self.codegen.emit.movRegReg(.w64, .X2, rhs_parts.low);
-                try self.codegen.emit.movRegReg(.w64, .X3, rhs_parts.high);
-                try self.codegen.emit.movRegReg(.w64, .X4, roc_ops_reg);
-
-                // Load function address into X9 (caller-saved, not an arg register) and call
-                try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
-                try self.codegen.emit.blrReg(.X9);
-
-                // Get result from X0, X1
-                try self.codegen.emit.movRegReg(.w64, result_low, .X0);
-                try self.codegen.emit.movRegReg(.w64, result_high, .X1);
-            } else {
-                if (self.cc.is_windows) {
-                    // Windows x64 calling convention for divC(RocDec, RocDec, *RocOps) -> i128:
-                    // Arguments: RCX = arg1_ptr, RDX = arg2_ptr, R8 = roc_ops
-                    // Return: XMM0 (128-bit value)
-                    // Uses CallBuilder for automatic R12 save/restore and shadow space handling
-
-                    // Allocate stack slots (RBP-relative)
-                    const arg1_slot = self.codegen.allocStackSlot(16);
-                    const arg2_slot = self.codegen.allocStackSlot(16);
-                    const result_slot = self.codegen.allocStackSlot(16);
-
-                    // Store arg1 (lhs) BEFORE any CallBuilder operations (in case lhs is in R11)
-                    try self.codegen.emit.movMemReg(.w64, .RBP, arg1_slot, lhs_parts.low);
-                    try self.codegen.emit.movMemReg(.w64, .RBP, arg1_slot + 8, lhs_parts.high);
-
-                    // Store arg2 (rhs) BEFORE any CallBuilder operations (in case rhs is in R11)
-                    try self.codegen.emit.movMemReg(.w64, .RBP, arg2_slot, rhs_parts.low);
-                    try self.codegen.emit.movMemReg(.w64, .RBP, arg2_slot + 8, rhs_parts.high);
-
-                    // Use CallBuilder for the call (handles shadow space + R12 save/restore)
-                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                    try builder.addLeaArg(.RBP, arg1_slot); // RCX = arg1 ptr
-                    try builder.addLeaArg(.RBP, arg2_slot); // RDX = arg2 ptr
-                    try builder.addRegArg(roc_ops_reg); // R8 = roc_ops
-                    try builder.call(fn_addr);
-
-                    // Result is in XMM0. Store to stack then load to GP registers.
-                    try self.codegen.emit.movdquMemReg(.RBP, result_slot, .XMM0);
-                    try self.codegen.emit.movRegMem(.w64, result_low, .RBP, result_slot);
-                    try self.codegen.emit.movRegMem(.w64, result_high, .RBP, result_slot + 8);
-                } else {
-                    // System V: All 5 args in registers
-                    // arg1 (lhs_low): RDI, arg2 (lhs_high): RSI, arg3 (rhs_low): RDX, arg4 (rhs_high): RCX, arg5 (roc_ops): R8
-                    const arg_regs = [_]GeneralReg{
-                        self.cc.getParamReg(0),
-                        self.cc.getParamReg(1),
-                        self.cc.getParamReg(2),
-                        self.cc.getParamReg(3),
-                        self.cc.getParamReg(4),
-                    };
-                    const sources = [_]GeneralReg{ lhs_parts.low, lhs_parts.high, rhs_parts.low, rhs_parts.high, roc_ops_reg };
-
-                    // Save sources that would be clobbered before use
-                    var saved: [5]?GeneralReg = .{ null, null, null, null, null };
-                    var next_temp: GeneralReg = .R9;
-
-                    for (0..5) |i| {
-                        const src = sources[i];
-                        for (0..i) |j| {
-                            if (src == arg_regs[j]) {
-                                var found: ?GeneralReg = null;
-                                for (0..i) |k| {
-                                    if (sources[k] == src and saved[k] != null) {
-                                        found = saved[k];
-                                        break;
-                                    }
-                                }
-                                if (found) |s| {
-                                    saved[i] = s;
-                                } else {
-                                    try self.codegen.emit.movRegReg(.w64, next_temp, src);
-                                    saved[i] = next_temp;
-                                    next_temp = if (next_temp == .R9) .R10 else .RAX;
-                                }
-                                break;
-                            }
-                        }
-                    }
-
-                    // Move to argument registers
-                    for (0..5) |i| {
-                        const src = saved[i] orelse sources[i];
-                        try self.codegen.emit.movRegReg(.w64, arg_regs[i], src);
-                    }
-
-                    // Load function address into R11 AFTER all register moves (in case source was R11)
-                    try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
-
-                    // Call through R11
-                    try self.codegen.emit.callReg(.R11);
-
-                    // Get result from RAX, RDX (handle conflicts)
-                    if (result_low == .RDX) {
-                        try self.codegen.emit.movRegReg(.w64, .R9, .RDX);
-                        try self.codegen.emit.movRegReg(.w64, result_low, .RAX);
-                        try self.codegen.emit.movRegReg(.w64, result_high, .R9);
-                    } else if (result_high == .RAX) {
-                        try self.codegen.emit.movRegReg(.w64, .R9, .RAX);
-                        try self.codegen.emit.movRegReg(.w64, result_high, .RDX);
-                        try self.codegen.emit.movRegReg(.w64, result_low, .R9);
-                    } else {
-                        try self.codegen.emit.movRegReg(.w64, result_low, .RAX);
-                        try self.codegen.emit.movRegReg(.w64, result_high, .RDX);
-                    }
-                }
-            }
+            // Load results from stack slot
+            try self.codegen.emitLoadStack(.w64, result_low, result_slot);
+            try self.codegen.emitLoadStack(.w64, result_high, result_slot + 8);
         }
 
-        /// Call Dec truncating division builtin: divTruncC(RocDec, RocDec, *RocOps) -> i128
-        ///
-        /// Windows x64: Uses CallBuilder for R12 save/restore and shadow space.
-        ///              i128 args copied to stack slots (RBP-relative), passed by pointer; return via XMM0.
-        /// System V: i128 uses register pairs with complex conflict resolution.
+        /// Call Dec truncating division builtin via decomposed wrapper.
+        /// Wrapper signature: (out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, b_low: u64, b_high: u64, roc_ops: *RocOps) -> void
         fn callDecDivTrunc(self: *Self, lhs_parts: I128Parts, rhs_parts: I128Parts, result_low: GeneralReg, result_high: GeneralReg) Error!void {
-            // Get the address of the Dec truncating divide function
-            const fn_addr = @intFromPtr(&builtins.dec.divTruncC);
-
-            // Get the saved RocOps register
+            const fn_addr = @intFromPtr(&dev_wrappers.roc_builtins_dec_div_trunc);
             const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+            const result_slot = self.codegen.allocStackSlot(16);
+            const base_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .FP else .RBP;
 
-            if (comptime target.toCpuArch() == .aarch64) {
-                // aarch64 calling convention for divTruncC(RocDec, RocDec, *RocOps) -> i128:
-                // arg1 (RocDec): X0 (low), X1 (high)
-                // arg2 (RocDec): X2 (low), X3 (high)
-                // arg3 (*RocOps): X4
-                // return: X0 (low), X1 (high)
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addLeaArg(base_reg, result_slot); // out_low
+            try builder.addLeaArg(base_reg, result_slot + 8); // out_high
+            try builder.addRegArg(lhs_parts.low);
+            try builder.addRegArg(lhs_parts.high);
+            try builder.addRegArg(rhs_parts.low);
+            try builder.addRegArg(rhs_parts.high);
+            try builder.addRegArg(roc_ops_reg);
+            try self.callBuiltin(&builder, fn_addr, .dec_div_trunc);
 
-                // Move arguments to correct registers
-                try self.codegen.emit.movRegReg(.w64, .X0, lhs_parts.low);
-                try self.codegen.emit.movRegReg(.w64, .X1, lhs_parts.high);
-                try self.codegen.emit.movRegReg(.w64, .X2, rhs_parts.low);
-                try self.codegen.emit.movRegReg(.w64, .X3, rhs_parts.high);
-                try self.codegen.emit.movRegReg(.w64, .X4, roc_ops_reg);
-
-                // Load function address into X9 (caller-saved, not an arg register) and call
-                try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
-                try self.codegen.emit.blrReg(.X9);
-
-                // Get result from X0, X1
-                try self.codegen.emit.movRegReg(.w64, result_low, .X0);
-                try self.codegen.emit.movRegReg(.w64, result_high, .X1);
-            } else {
-                if (self.cc.is_windows) {
-                    // Windows x64 calling convention for divTruncC(RocDec, RocDec, *RocOps) -> i128:
-                    // Arguments: RCX = arg1_ptr, RDX = arg2_ptr, R8 = roc_ops
-                    // Return: XMM0 (128-bit value)
-                    // Uses CallBuilder for automatic R12 save/restore and shadow space handling
-
-                    // Allocate stack slots (RBP-relative)
-                    const arg1_slot = self.codegen.allocStackSlot(16);
-                    const arg2_slot = self.codegen.allocStackSlot(16);
-                    const result_slot = self.codegen.allocStackSlot(16);
-
-                    // Store arg1 (lhs) BEFORE any CallBuilder operations (in case lhs is in R11)
-                    try self.codegen.emit.movMemReg(.w64, .RBP, arg1_slot, lhs_parts.low);
-                    try self.codegen.emit.movMemReg(.w64, .RBP, arg1_slot + 8, lhs_parts.high);
-
-                    // Store arg2 (rhs) BEFORE any CallBuilder operations (in case rhs is in R11)
-                    try self.codegen.emit.movMemReg(.w64, .RBP, arg2_slot, rhs_parts.low);
-                    try self.codegen.emit.movMemReg(.w64, .RBP, arg2_slot + 8, rhs_parts.high);
-
-                    // Use CallBuilder for the call (handles shadow space + R12 save/restore)
-                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                    try builder.addLeaArg(.RBP, arg1_slot); // RCX = arg1 ptr
-                    try builder.addLeaArg(.RBP, arg2_slot); // RDX = arg2 ptr
-                    try builder.addRegArg(roc_ops_reg); // R8 = roc_ops
-                    try builder.call(fn_addr);
-
-                    // Result is in XMM0. Store to stack then load to GP registers.
-                    try self.codegen.emit.movdquMemReg(.RBP, result_slot, .XMM0);
-                    try self.codegen.emit.movRegMem(.w64, result_low, .RBP, result_slot);
-                    try self.codegen.emit.movRegMem(.w64, result_high, .RBP, result_slot + 8);
-                } else {
-                    // System V: All 5 args in registers
-                    // arg1 (lhs_low): RDI, arg2 (lhs_high): RSI, arg3 (rhs_low): RDX, arg4 (rhs_high): RCX, arg5 (roc_ops): R8
-                    const arg_regs = [_]GeneralReg{
-                        self.cc.getParamReg(0),
-                        self.cc.getParamReg(1),
-                        self.cc.getParamReg(2),
-                        self.cc.getParamReg(3),
-                        self.cc.getParamReg(4),
-                    };
-                    const sources = [_]GeneralReg{ lhs_parts.low, lhs_parts.high, rhs_parts.low, rhs_parts.high, roc_ops_reg };
-
-                    // Save sources that would be clobbered before use
-                    var saved: [5]?GeneralReg = .{ null, null, null, null, null };
-                    var next_temp: GeneralReg = .R9;
-
-                    for (0..5) |i| {
-                        const src = sources[i];
-                        for (0..i) |j| {
-                            if (src == arg_regs[j]) {
-                                var found: ?GeneralReg = null;
-                                for (0..i) |k| {
-                                    if (sources[k] == src and saved[k] != null) {
-                                        found = saved[k];
-                                        break;
-                                    }
-                                }
-                                if (found) |s| {
-                                    saved[i] = s;
-                                } else {
-                                    try self.codegen.emit.movRegReg(.w64, next_temp, src);
-                                    saved[i] = next_temp;
-                                    next_temp = if (next_temp == .R9) .R10 else .RAX;
-                                }
-                                break;
-                            }
-                        }
-                    }
-
-                    // Move to argument registers
-                    for (0..5) |i| {
-                        const src = saved[i] orelse sources[i];
-                        try self.codegen.emit.movRegReg(.w64, arg_regs[i], src);
-                    }
-
-                    // Load function address into R11 AFTER all register moves (in case source was R11)
-                    try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
-
-                    // Call through R11
-                    try self.codegen.emit.callReg(.R11);
-
-                    // Get result from RAX, RDX (handle conflicts)
-                    if (result_low == .RDX) {
-                        try self.codegen.emit.movRegReg(.w64, .R9, .RDX);
-                        try self.codegen.emit.movRegReg(.w64, result_low, .RAX);
-                        try self.codegen.emit.movRegReg(.w64, result_high, .R9);
-                    } else if (result_high == .RAX) {
-                        try self.codegen.emit.movRegReg(.w64, .R9, .RAX);
-                        try self.codegen.emit.movRegReg(.w64, result_high, .RDX);
-                        try self.codegen.emit.movRegReg(.w64, result_low, .R9);
-                    } else {
-                        try self.codegen.emit.movRegReg(.w64, result_low, .RAX);
-                        try self.codegen.emit.movRegReg(.w64, result_high, .RDX);
-                    }
-                }
-            }
+            // Load results from stack slot
+            try self.codegen.emitLoadStack(.w64, result_low, result_slot);
+            try self.codegen.emitLoadStack(.w64, result_high, result_slot + 8);
         }
 
-        /// Call i128/u128 division or remainder builtin
-        /// Signature: (i128/u128, i128/u128, *RocOps) -> i128/u128
-        ///
-        /// Windows x64: Uses CallBuilder for R12 save/restore and shadow space.
-        ///              i128 args copied to stack slots (RBP-relative), passed by pointer; return via XMM0.
-        /// System V: i128 uses register pairs with complex conflict resolution.
+        /// Call i128/u128 division or remainder builtin via decomposed wrapper.
+        /// Wrapper signature: (out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, b_low: u64, b_high: u64, roc_ops: *RocOps) -> void
         fn callI128DivRem(
             self: *Self,
             lhs_parts: I128Parts,
@@ -6504,142 +5421,31 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             is_unsigned: bool,
             is_rem: bool,
         ) Error!void {
-            // Get the address of the appropriate builtin function
             const fn_addr: usize = if (is_unsigned)
-                if (is_rem) @intFromPtr(&num_remTruncU128) else @intFromPtr(&num_divTruncU128)
-            else if (is_rem) @intFromPtr(&num_remTruncI128) else @intFromPtr(&num_divTruncI128);
+                if (is_rem) @intFromPtr(&dev_wrappers.roc_builtins_num_rem_trunc_u128) else @intFromPtr(&dev_wrappers.roc_builtins_num_div_trunc_u128)
+            else if (is_rem) @intFromPtr(&dev_wrappers.roc_builtins_num_rem_trunc_i128) else @intFromPtr(&dev_wrappers.roc_builtins_num_div_trunc_i128);
 
-            // Get the saved RocOps register
+            const builtin_fn: BuiltinFn = if (is_unsigned)
+                if (is_rem) .num_rem_trunc_u128 else .num_div_trunc_u128
+            else if (is_rem) .num_rem_trunc_i128 else .num_div_trunc_i128;
+
             const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+            const result_slot = self.codegen.allocStackSlot(16);
+            const base_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .FP else .RBP;
 
-            if (comptime target.toCpuArch() == .aarch64) {
-                // aarch64 calling convention for (i128, i128, *RocOps) -> i128:
-                // arg1: X0 (low), X1 (high)
-                // arg2: X2 (low), X3 (high)
-                // arg3: X4
-                // return: X0 (low), X1 (high)
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addLeaArg(base_reg, result_slot); // out_low
+            try builder.addLeaArg(base_reg, result_slot + 8); // out_high
+            try builder.addRegArg(lhs_parts.low);
+            try builder.addRegArg(lhs_parts.high);
+            try builder.addRegArg(rhs_parts.low);
+            try builder.addRegArg(rhs_parts.high);
+            try builder.addRegArg(roc_ops_reg);
+            try self.callBuiltin(&builder, fn_addr, builtin_fn);
 
-                // Move arguments to correct registers
-                try self.codegen.emit.movRegReg(.w64, .X0, lhs_parts.low);
-                try self.codegen.emit.movRegReg(.w64, .X1, lhs_parts.high);
-                try self.codegen.emit.movRegReg(.w64, .X2, rhs_parts.low);
-                try self.codegen.emit.movRegReg(.w64, .X3, rhs_parts.high);
-                try self.codegen.emit.movRegReg(.w64, .X4, roc_ops_reg);
-
-                // Load function address into X9 (caller-saved, not an arg register) and call
-                try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
-                try self.codegen.emit.blrReg(.X9);
-
-                // Get result from X0, X1
-                try self.codegen.emit.movRegReg(.w64, result_low, .X0);
-                try self.codegen.emit.movRegReg(.w64, result_high, .X1);
-            } else {
-                // x86_64 calling convention for (i128, i128, *RocOps) -> i128:
-                // System V: i128 passed as register pairs
-                //           args: RDI (lhs_low), RSI (lhs_high), RDX (rhs_low), RCX (rhs_high), R8 (roc_ops)
-                //           return: RAX (low), RDX (high)
-                // Windows:  i128 values are passed BY POINTER (not in registers)
-                //           args: RCX (return_ptr), RDX (arg1_ptr), R8 (arg2_ptr), R9 (roc_ops)
-                //           return: via hidden first arg pointer
-                //
-                // IMPORTANT: Must handle register conflicts when moving to arg registers.
-
-                if (self.cc.is_windows) {
-                    // Windows x64 calling convention for divTruncI128(i128, i128, *RocOps) -> i128:
-                    // Arguments: RCX = arg1_ptr, RDX = arg2_ptr, R8 = roc_ops
-                    // Return: XMM0 (128-bit value)
-                    // Uses CallBuilder for automatic R12 save/restore and shadow space handling
-
-                    // Allocate stack slots (RBP-relative)
-                    const arg1_slot = self.codegen.allocStackSlot(16);
-                    const arg2_slot = self.codegen.allocStackSlot(16);
-                    const result_slot = self.codegen.allocStackSlot(16);
-
-                    // Store arg1 (lhs) BEFORE any CallBuilder operations (in case lhs is in R11)
-                    try self.codegen.emit.movMemReg(.w64, .RBP, arg1_slot, lhs_parts.low);
-                    try self.codegen.emit.movMemReg(.w64, .RBP, arg1_slot + 8, lhs_parts.high);
-
-                    // Store arg2 (rhs) BEFORE any CallBuilder operations (in case rhs is in R11)
-                    try self.codegen.emit.movMemReg(.w64, .RBP, arg2_slot, rhs_parts.low);
-                    try self.codegen.emit.movMemReg(.w64, .RBP, arg2_slot + 8, rhs_parts.high);
-
-                    // Use CallBuilder for the call (handles shadow space + R12 save/restore)
-                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                    try builder.addLeaArg(.RBP, arg1_slot); // RCX = arg1 ptr
-                    try builder.addLeaArg(.RBP, arg2_slot); // RDX = arg2 ptr
-                    try builder.addRegArg(roc_ops_reg); // R8 = roc_ops
-                    try builder.call(fn_addr);
-
-                    // Result is in XMM0. Store to stack then load to GP registers.
-                    try self.codegen.emit.movdquMemReg(.RBP, result_slot, .XMM0);
-                    try self.codegen.emit.movRegMem(.w64, result_low, .RBP, result_slot);
-                    try self.codegen.emit.movRegMem(.w64, result_high, .RBP, result_slot + 8);
-                } else {
-                    const sources = [_]GeneralReg{ lhs_parts.low, lhs_parts.high, rhs_parts.low, rhs_parts.high, roc_ops_reg };
-                    // System V: All 5 args in registers
-                    const arg_regs = [_]GeneralReg{
-                        self.cc.getParamReg(0),
-                        self.cc.getParamReg(1),
-                        self.cc.getParamReg(2),
-                        self.cc.getParamReg(3),
-                        self.cc.getParamReg(4),
-                    };
-
-                    // For each source, check if it would be clobbered before use.
-                    var saved: [5]?GeneralReg = .{ null, null, null, null, null };
-                    var next_temp: GeneralReg = .R9;
-
-                    for (0..5) |i| {
-                        const src = sources[i];
-                        for (0..i) |j| {
-                            if (src == arg_regs[j]) {
-                                var found_saved: ?GeneralReg = null;
-                                for (0..i) |k| {
-                                    if (sources[k] == src and saved[k] != null) {
-                                        found_saved = saved[k];
-                                        break;
-                                    }
-                                }
-                                if (found_saved) |s| {
-                                    saved[i] = s;
-                                } else {
-                                    try self.codegen.emit.movRegReg(.w64, next_temp, src);
-                                    saved[i] = next_temp;
-                                    next_temp = if (next_temp == .R9) .R10 else .RAX;
-                                }
-                                break;
-                            }
-                        }
-                    }
-
-                    // Now move to argument registers
-                    for (0..5) |i| {
-                        const src = saved[i] orelse sources[i];
-                        try self.codegen.emit.movRegReg(.w64, arg_regs[i], src);
-                    }
-
-                    // Load function address into R11 AFTER all register moves (in case source was R11)
-                    try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
-
-                    // Call through R11
-                    try self.codegen.emit.callReg(.R11);
-
-                    // Get result from RAX, RDX
-                    // Handle conflict: if result_low is RDX, we'd clobber return high
-                    if (result_low == .RDX) {
-                        try self.codegen.emit.movRegReg(.w64, .R9, .RDX);
-                        try self.codegen.emit.movRegReg(.w64, result_low, .RAX);
-                        try self.codegen.emit.movRegReg(.w64, result_high, .R9);
-                    } else if (result_high == .RAX) {
-                        try self.codegen.emit.movRegReg(.w64, .R9, .RAX);
-                        try self.codegen.emit.movRegReg(.w64, result_high, .RDX);
-                        try self.codegen.emit.movRegReg(.w64, result_low, .R9);
-                    } else {
-                        try self.codegen.emit.movRegReg(.w64, result_low, .RAX);
-                        try self.codegen.emit.movRegReg(.w64, result_high, .RDX);
-                    }
-                }
-            }
+            // Load results from stack slot
+            try self.codegen.emitLoadStack(.w64, result_low, result_slot);
+            try self.codegen.emitLoadStack(.w64, result_high, result_slot + 8);
         }
 
         /// Get low and high 64-bit parts of a 128-bit value
@@ -9969,25 +8775,61 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             return .{ .stack_str = str_slot };
         }
 
-        /// Generate code for int_to_str by calling the appropriate C wrapper
+        /// Generate code for int_to_str by calling the unified wrapper
         fn generateIntToStr(self: *Self, its: anytype) Error!ValueLocation {
             const val_loc = try self.generateExpr(its.value);
-            const fn_addr: usize = switch (its.int_precision) {
-                .u8 => @intFromPtr(intToStrC(u8)),
-                .i8 => @intFromPtr(intToStrC(i8)),
-                .u16 => @intFromPtr(intToStrC(u16)),
-                .i16 => @intFromPtr(intToStrC(i16)),
-                .u32 => @intFromPtr(intToStrC(u32)),
-                .i32 => @intFromPtr(intToStrC(i32)),
-                .u64 => @intFromPtr(intToStrC(u64)),
-                .i64 => @intFromPtr(intToStrC(i64)),
-                .u128 => @intFromPtr(intToStrC(u128)),
-                .i128 => @intFromPtr(intToStrC(i128)),
+            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+            const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_int_to_str);
+            const result_offset = self.codegen.allocStackSlot(roc_str_size);
+            const base_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .FP else .RBP;
+
+            const int_width: u8 = @intCast(its.int_precision.size());
+            const is_signed: bool = switch (its.int_precision) {
+                .i8, .i16, .i32, .i64, .i128 => true,
+                .u8, .u16, .u32, .u64, .u128 => false,
             };
-            return try self.callToStrC(fn_addr, val_loc, its.int_precision.size() <= 8);
+
+            // Get low and high u64 parts of the value
+            var val_low: GeneralReg = undefined;
+            var val_high: GeneralReg = undefined;
+            if (int_width <= 8) {
+                val_low = try self.ensureInGeneralReg(val_loc);
+                val_high = try self.allocTempGeneral();
+                if (is_signed) {
+                    // Sign-extend: arithmetic shift right by 63
+                    try self.emitMovRegReg(val_high, val_low);
+                    if (comptime target.toCpuArch() == .aarch64) {
+                        try self.codegen.emit.asrRegRegImm(.w64, val_high, val_high, 63);
+                    } else {
+                        try self.codegen.emit.sarRegImm8(.w64, val_high, 63);
+                    }
+                } else {
+                    try self.codegen.emitLoadImm(val_high, 0);
+                }
+            } else {
+                // 128-bit value
+                const parts = try self.getI128Parts(val_loc);
+                val_low = parts.low;
+                val_high = parts.high;
+            }
+
+            // roc_builtins_int_to_str(out, val_low, val_high, int_width, is_signed, roc_ops)
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addLeaArg(base_reg, result_offset);
+            try builder.addRegArg(val_low);
+            try builder.addRegArg(val_high);
+            try builder.addImmArg(int_width);
+            try builder.addImmArg(@intFromBool(is_signed));
+            try builder.addRegArg(roc_ops_reg);
+            try self.callBuiltin(&builder, fn_addr, .int_to_str);
+
+            self.codegen.freeGeneral(val_low);
+            self.codegen.freeGeneral(val_high);
+
+            return .{ .stack_str = result_offset };
         }
 
-        /// Generate code for float_to_str by calling the appropriate C wrapper
+        /// Generate code for float_to_str by calling the unified wrapper
         fn generateFloatToStr(self: *Self, fts: anytype) Error!ValueLocation {
             const val_loc = try self.generateExpr(fts.value);
             // Dec uses a dedicated helper with explicit u64 decomposition to avoid
@@ -9995,170 +8837,31 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             if (fts.float_precision == .dec) {
                 return try self.callDecToStrWrapped(val_loc);
             }
-            const fn_addr: usize = switch (fts.float_precision) {
-                .f32 => @intFromPtr(floatToStrC(f32)),
-                .f64 => @intFromPtr(floatToStrC(f64)),
-                .dec => unreachable, // handled above
-            };
-            return try self.callToStrC(fn_addr, val_loc, true);
+            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+            const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_float_to_str);
+            const result_offset = self.codegen.allocStackSlot(roc_str_size);
+            const base_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .FP else .RBP;
+
+            // Get float value as u64 bits
+            const val_bits_reg = try self.ensureInGeneralReg(val_loc);
+            const is_f32: bool = (fts.float_precision == .f32);
+
+            // roc_builtins_float_to_str(out, val_bits, is_f32, roc_ops)
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addLeaArg(base_reg, result_offset);
+            try builder.addRegArg(val_bits_reg);
+            self.codegen.freeGeneral(val_bits_reg);
+            try builder.addImmArg(@intFromBool(is_f32));
+            try builder.addRegArg(roc_ops_reg);
+            try self.callBuiltin(&builder, fn_addr, .float_to_str);
+
+            return .{ .stack_str = result_offset };
         }
 
         /// Generate code for dec_to_str by calling the wrapper with decomposed i128
         fn generateDecToStr(self: *Self, expr_id: anytype) Error!ValueLocation {
             const val_loc = try self.generateExpr(expr_id);
             return try self.callDecToStrWrapped(val_loc);
-        }
-
-        /// Common helper: call a C wrapper fn(out: *RocStr, value: T, roc_ops: *RocOps)
-        /// is_small_value: true if value fits in one register (≤8 bytes), false for 16-byte values
-        ///
-        /// Windows (x64 and ARM64): 16-byte values passed by pointer.
-        /// Unix (System V / AAPCS64): 16-byte values passed as register pairs.
-        fn callToStrC(self: *Self, fn_addr: usize, val_loc: ValueLocation, is_small_value: bool) Error!ValueLocation {
-            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
-
-            // Allocate stack space for result (RocStr = 24 bytes)
-            const result_offset = self.codegen.allocStackSlot(roc_str_size);
-
-            if (comptime target.toCpuArch() == .aarch64) {
-                // aarch64 (AAPCS64): X0=out, X1=value (X1+X2 for 16-byte), X2/X3=roc_ops
-                // Zig uses AAPCS64 for callconv(.c) on all aarch64 targets including Windows.
-                // Save value to a temp register first since ensureInGeneralReg might return X0
-                if (is_small_value) {
-                    const val_reg = try self.ensureInGeneralReg(val_loc);
-                    try self.codegen.emit.movRegReg(.w64, .X1, val_reg);
-                    self.codegen.freeGeneral(val_reg);
-                    // X2 = roc_ops
-                    try self.codegen.emit.movRegReg(.w64, .X2, roc_ops_reg);
-                } else {
-                    // 16-byte value (Dec/i128): needs X1 and X2, roc_ops goes in X3
-                    switch (val_loc) {
-                        .stack_i128, .stack => |offset| {
-                            try self.codegen.emitLoadStack(.w64, .X1, offset);
-                            try self.codegen.emitLoadStack(.w64, .X2, offset + 8);
-                        },
-                        .immediate_i128 => |val| {
-                            const low: u64 = @truncate(@as(u128, @bitCast(val)));
-                            const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
-                            try self.codegen.emitLoadImm(.X1, @bitCast(low));
-                            try self.codegen.emitLoadImm(.X2, @bitCast(high));
-                        },
-                        else => {
-                            const val_reg = try self.ensureInGeneralReg(val_loc);
-                            try self.codegen.emit.movRegReg(.w64, .X1, val_reg);
-                            self.codegen.freeGeneral(val_reg);
-                            try self.codegen.emitLoadImm(.X2, 0);
-                        },
-                    }
-                    // X3 = roc_ops
-                    try self.codegen.emit.movRegReg(.w64, .X3, roc_ops_reg);
-                }
-
-                // X0 = output pointer (FP + result_offset)
-                try self.codegen.emit.movRegImm64(.X0, @bitCast(@as(i64, result_offset)));
-                try self.codegen.emit.addRegRegReg(.w64, .X0, .FP, .X0);
-
-                // Call
-                try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
-                try self.codegen.emit.blrReg(.X9);
-            } else {
-                // x86_64 C calling convention
-                if (self.cc.is_windows) {
-                    // Windows x64 calling convention:
-                    // - Small values (≤8 bytes): fn(out: *RocStr, value: T, roc_ops: *RocOps)
-                    //   RCX = out, RDX = value, R8 = roc_ops
-                    // - Large values (i128/Dec): fn(out: *RocStr, value_ptr: *i128, roc_ops: *RocOps)
-                    //   RCX = out, RDX = value_ptr, R8 = roc_ops
-
-                    // Use CallBuilder for automatic R12 save/restore
-                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-
-                    // Arg 0 (RCX): output pointer
-                    try builder.addLeaArg(.RBP, result_offset);
-
-                    // Arg 1 (RDX): value or value pointer
-                    if (is_small_value) {
-                        // Small value (≤8 bytes) - pass directly
-                        const val_reg = try self.ensureInGeneralReg(val_loc);
-                        try builder.addRegArg(val_reg);
-                        self.codegen.freeGeneral(val_reg);
-                    } else {
-                        // 16-byte value - ensure on stack and pass pointer
-                        switch (val_loc) {
-                            .stack_i128, .stack => |offset| {
-                                try builder.addLeaArg(.RBP, offset);
-                            },
-                            .immediate_i128 => |val| {
-                                const low: u64 = @truncate(@as(u128, @bitCast(val)));
-                                const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
-                                const val_slot = self.codegen.allocStackSlot(16);
-                                try self.codegen.emitLoadImm(.R11, @bitCast(low));
-                                try self.codegen.emit.movMemReg(.w64, .RBP, val_slot, .R11);
-                                try self.codegen.emitLoadImm(.R11, @bitCast(high));
-                                try self.codegen.emit.movMemReg(.w64, .RBP, val_slot + 8, .R11);
-                                try builder.addLeaArg(.RBP, val_slot);
-                            },
-                            else => {
-                                const val_reg = try self.ensureInGeneralReg(val_loc);
-                                const val_slot = self.codegen.allocStackSlot(16);
-                                try self.codegen.emit.movMemReg(.w64, .RBP, val_slot, val_reg);
-                                try self.codegen.emitLoadImm(.R11, 0);
-                                try self.codegen.emit.movMemReg(.w64, .RBP, val_slot + 8, .R11);
-                                self.codegen.freeGeneral(val_reg);
-                                try builder.addLeaArg(.RBP, val_slot);
-                            },
-                        }
-                    }
-
-                    // Arg 2 (R8): roc_ops
-                    try builder.addRegArg(roc_ops_reg);
-
-                    // Call (handles shadow space and R12 restore automatically)
-                    try builder.call(fn_addr);
-                } else {
-                    // System V x86_64: i128 passed as register pair
-                    // fn(out: *RocStr, value_low: u64, value_high: u64, roc_ops: *RocOps)
-                    // RDI = out, RSI = value_low, RDX = value_high, RCX = roc_ops
-                    if (is_small_value) {
-                        const val_reg = try self.ensureInGeneralReg(val_loc);
-                        try self.codegen.emit.movRegReg(.w64, .RSI, val_reg);
-                        self.codegen.freeGeneral(val_reg);
-                        // RDX = roc_ops for small values
-                        try self.codegen.emit.movRegReg(.w64, .RDX, roc_ops_reg);
-                    } else {
-                        // 16-byte value: RSI + RDX, roc_ops goes in RCX
-                        switch (val_loc) {
-                            .stack_i128, .stack => |offset| {
-                                try self.codegen.emitLoadStack(.w64, .RSI, offset);
-                                try self.codegen.emitLoadStack(.w64, .RDX, offset + 8);
-                            },
-                            .immediate_i128 => |val| {
-                                const low: u64 = @truncate(@as(u128, @bitCast(val)));
-                                const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
-                                try self.codegen.emitLoadImm(.RSI, @bitCast(low));
-                                try self.codegen.emitLoadImm(.RDX, @bitCast(high));
-                            },
-                            else => {
-                                const val_reg = try self.ensureInGeneralReg(val_loc);
-                                try self.codegen.emit.movRegReg(.w64, .RSI, val_reg);
-                                self.codegen.freeGeneral(val_reg);
-                                try self.codegen.emitLoadImm(.RDX, 0);
-                            },
-                        }
-                        // RCX = roc_ops
-                        try self.codegen.emit.movRegReg(.w64, .RCX, roc_ops_reg);
-                    }
-
-                    // RDI = output pointer
-                    try self.codegen.emit.leaRegMem(.RDI, .RBP, result_offset);
-
-                    // Call
-                    try self.codegen.emitLoadImm(.R11, @intCast(fn_addr));
-                    try self.codegen.emit.callReg(.R11);
-                }
-            }
-
-            return .{ .stack_str = result_offset };
         }
 
         /// Decomposed i128 value for passing to wrapDecToStr.

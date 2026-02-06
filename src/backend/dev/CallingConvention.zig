@@ -137,8 +137,8 @@ pub fn CallBuilder(comptime EmitType: type) type {
     const is_aarch64 = roc_target.toCpuArch() == .aarch64 or roc_target.toCpuArch() == .aarch64_be;
     const is_windows = roc_target.isWindows();
 
-    // Represents a deferred stack argument to be stored after stack allocation
-    const StackArg = union(enum) {
+    // Represents a deferred argument source (used for both stack and register args)
+    const ArgSource = union(enum) {
         // Store from a register: mov [RSP+offset], reg
         from_reg: GeneralReg,
         // Store an immediate value: mov [RSP+offset], imm
@@ -148,6 +148,14 @@ pub fn CallBuilder(comptime EmitType: type) type {
         // Store memory value: mov scratch, [base+offset]; mov [RSP+stack_offset], scratch
         from_mem: struct { base: GeneralReg, offset: i32 },
     };
+
+    // A deferred register argument, resolved later via parallel move algorithm
+    const DeferredRegArg = struct {
+        dst_index: u8, // index into CC_EMIT.PARAM_REGS
+        src: ArgSource,
+    };
+
+    const MoveStatus = enum { to_move, being_moved, moved };
 
     // Maximum stack arguments we support (should be plenty for any real call)
     const MAX_STACK_ARGS = 16;
@@ -160,11 +168,14 @@ pub fn CallBuilder(comptime EmitType: type) type {
         /// Float argument index (separate from int_arg_index on System V, same on Windows)
         float_arg_index: usize = 0,
         stack_arg_count: usize = 0,
-        stack_args: [MAX_STACK_ARGS]StackArg = undefined,
+        stack_args: [MAX_STACK_ARGS]ArgSource = undefined,
         return_by_ptr: bool = false,
         /// RBP-relative offset where R12 is saved (only used on Windows x64)
         /// Set via saveR12 before adding arguments that might clobber R12
         r12_save_offset: ?i32 = null,
+        /// Deferred register arguments, resolved via parallel move before call
+        reg_args: [CC_EMIT.PARAM_REGS.len]DeferredRegArg = undefined,
+        reg_arg_count: u8 = 0,
 
         /// Initialize CallBuilder with automatic R12 handling for C function calls.
         ///
@@ -213,14 +224,11 @@ pub fn CallBuilder(comptime EmitType: type) type {
         /// Add argument from a general register
         pub fn addRegArg(self: *Self, src_reg: GeneralReg) !void {
             if (self.int_arg_index < CC_EMIT.PARAM_REGS.len) {
-                const dst = CC_EMIT.PARAM_REGS[self.int_arg_index];
-                if (dst != src_reg) {
-                    if (comptime is_aarch64) {
-                        try self.emit.movRegReg(.w64, dst, src_reg);
-                    } else {
-                        try self.emit.movRegReg(.w64, dst, src_reg);
-                    }
-                }
+                self.reg_args[self.reg_arg_count] = .{
+                    .dst_index = @intCast(self.int_arg_index),
+                    .src = .{ .from_reg = src_reg },
+                };
+                self.reg_arg_count += 1;
                 self.int_arg_index += 1;
             } else {
                 if (comptime is_aarch64) {
@@ -238,17 +246,11 @@ pub fn CallBuilder(comptime EmitType: type) type {
         /// Add argument by loading a pointer (LEA) to a stack location
         pub fn addLeaArg(self: *Self, base_reg: GeneralReg, offset: i32) !void {
             if (self.int_arg_index < CC_EMIT.PARAM_REGS.len) {
-                const dst = CC_EMIT.PARAM_REGS[self.int_arg_index];
-                if (comptime is_aarch64) {
-                    // aarch64: ADD dst, base, #offset (or SUB for negative offsets)
-                    if (offset >= 0) {
-                        try self.emit.addRegRegImm12(.w64, dst, base_reg, @intCast(offset));
-                    } else {
-                        try self.emit.subRegRegImm12(.w64, dst, base_reg, @intCast(-offset));
-                    }
-                } else {
-                    try self.emit.leaRegMem(dst, base_reg, offset);
-                }
+                self.reg_args[self.reg_arg_count] = .{
+                    .dst_index = @intCast(self.int_arg_index),
+                    .src = .{ .from_lea = .{ .base = base_reg, .offset = offset } },
+                };
+                self.reg_arg_count += 1;
                 self.int_arg_index += 1;
             } else {
                 if (comptime is_aarch64) {
@@ -265,12 +267,11 @@ pub fn CallBuilder(comptime EmitType: type) type {
         /// Add argument by loading from stack memory
         pub fn addMemArg(self: *Self, base_reg: GeneralReg, offset: i32) !void {
             if (self.int_arg_index < CC_EMIT.PARAM_REGS.len) {
-                const dst = CC_EMIT.PARAM_REGS[self.int_arg_index];
-                if (comptime is_aarch64) {
-                    try self.emit.ldrRegMemSoff(.w64, dst, base_reg, offset);
-                } else {
-                    try self.emit.movRegMem(.w64, dst, base_reg, offset);
-                }
+                self.reg_args[self.reg_arg_count] = .{
+                    .dst_index = @intCast(self.int_arg_index),
+                    .src = .{ .from_mem = .{ .base = base_reg, .offset = offset } },
+                };
+                self.reg_arg_count += 1;
                 self.int_arg_index += 1;
             } else {
                 if (comptime is_aarch64) {
@@ -287,12 +288,11 @@ pub fn CallBuilder(comptime EmitType: type) type {
         /// Add immediate value argument
         pub fn addImmArg(self: *Self, value: i64) !void {
             if (self.int_arg_index < CC_EMIT.PARAM_REGS.len) {
-                const dst = CC_EMIT.PARAM_REGS[self.int_arg_index];
-                if (comptime is_aarch64) {
-                    try self.emit.movRegImm64(dst, @bitCast(value));
-                } else {
-                    try self.emit.movRegImm64(dst, value);
-                }
+                self.reg_args[self.reg_arg_count] = .{
+                    .dst_index = @intCast(self.int_arg_index),
+                    .src = .{ .from_imm = value },
+                };
+                self.reg_arg_count += 1;
                 self.int_arg_index += 1;
             } else {
                 if (comptime is_aarch64) {
@@ -434,10 +434,95 @@ pub fn CallBuilder(comptime EmitType: type) type {
             return CC_EMIT.FLOAT_PARAM_REGS[0];
         }
 
+        /// Emit a single argument instruction: move source to destination register.
+        fn emitArgInst(self: *Self, dst: GeneralReg, src: ArgSource) !void {
+            switch (src) {
+                .from_reg => |reg| {
+                    if (dst != reg) try self.emit.movRegReg(.w64, dst, reg);
+                },
+                .from_lea => |lea| {
+                    if (comptime is_aarch64) {
+                        if (lea.offset >= 0)
+                            try self.emit.addRegRegImm12(.w64, dst, lea.base, @intCast(lea.offset))
+                        else
+                            try self.emit.subRegRegImm12(.w64, dst, lea.base, @intCast(-lea.offset));
+                    } else {
+                        try self.emit.leaRegMem(dst, lea.base, lea.offset);
+                    }
+                },
+                .from_mem => |mem| {
+                    if (comptime is_aarch64)
+                        try self.emit.ldrRegMemSoff(.w64, dst, mem.base, mem.offset)
+                    else
+                        try self.emit.movRegMem(.w64, dst, mem.base, mem.offset);
+                },
+                .from_imm => |value| {
+                    if (comptime is_aarch64)
+                        try self.emit.movRegImm64(dst, @bitCast(value))
+                    else
+                        try self.emit.movRegImm64(dst, value);
+                },
+            }
+        }
+
+        /// Resolve deferred register arguments using Rideau-Serpette-Leroy parallel move algorithm.
+        /// This handles arbitrary permutations of param registers without clobbering,
+        /// using SCRATCH_REG to break cycles. At most one scratch save per cycle.
+        fn emitDeferredRegArgs(self: *Self) !void {
+            if (self.reg_arg_count == 0) return;
+
+            var statuses = [_]MoveStatus{.to_move} ** CC_EMIT.PARAM_REGS.len;
+            // Mutable copy of sources — cycle breaking redirects sources to SCRATCH_REG
+            var sources: [CC_EMIT.PARAM_REGS.len]ArgSource = undefined;
+            for (self.reg_args[0..self.reg_arg_count], 0..) |arg, i| {
+                sources[i] = arg.src;
+            }
+
+            for (0..self.reg_arg_count) |i| {
+                if (statuses[i] == .to_move) {
+                    try self.moveOne(i, &statuses, &sources);
+                }
+            }
+        }
+
+        /// Process a single deferred register arg, recursing to resolve dependencies first.
+        fn moveOne(self: *Self, i: usize, statuses: *[CC_EMIT.PARAM_REGS.len]MoveStatus, sources: *[CC_EMIT.PARAM_REGS.len]ArgSource) !void {
+            statuses[i] = .being_moved;
+            const dst = CC_EMIT.PARAM_REGS[self.reg_args[i].dst_index];
+
+            // Check if any other arg j reads from our destination register
+            for (0..self.reg_arg_count) |j| {
+                if (j == i) continue;
+                const src_reg = switch (sources[j]) {
+                    .from_reg => |reg| reg,
+                    else => continue, // only reg sources can form conflicts
+                };
+                if (src_reg != dst) continue;
+
+                // Arg j reads from dst — we'd clobber it
+                switch (statuses[j]) {
+                    .to_move => try self.moveOne(j, statuses, sources),
+                    .being_moved => {
+                        // CYCLE: save j's source to SCRATCH_REG
+                        try self.emit.movRegReg(.w64, CC_EMIT.SCRATCH_REG, src_reg);
+                        sources[j] = .{ .from_reg = CC_EMIT.SCRATCH_REG };
+                    },
+                    .moved => {}, // already handled
+                }
+            }
+
+            // Now safe to emit our instruction
+            try self.emitArgInst(dst, sources[i]);
+            statuses[i] = .moved;
+        }
+
         /// Emit call instruction and handle cleanup.
         /// If R12 save was configured via init(), R12 is automatically
         /// restored after the call returns.
         pub fn call(self: *Self, fn_addr: usize) !void {
+            // Resolve deferred register args via parallel move algorithm
+            try self.emitDeferredRegArgs();
+
             // Calculate total stack space needed
             const stack_args_space: u32 = @intCast(self.stack_arg_count * 8);
             const total_unaligned: u32 = CC_EMIT.SHADOW_SPACE + stack_args_space;
@@ -520,6 +605,9 @@ pub fn CallBuilder(comptime EmitType: type) type {
         /// If R12 save was configured via init(), R12 is automatically
         /// restored after the call returns.
         pub fn callReg(self: *Self, target: GeneralReg) !void {
+            // Resolve deferred register args via parallel move algorithm
+            try self.emitDeferredRegArgs();
+
             // Calculate total stack space needed
             const stack_args_space: u32 = @intCast(self.stack_arg_count * 8);
             const total_unaligned: u32 = CC_EMIT.SHADOW_SPACE + stack_args_space;
@@ -599,6 +687,9 @@ pub fn CallBuilder(comptime EmitType: type) type {
         /// Note: On x86_64, this emits `call rel32` (E8 xx xx xx xx).
         ///       On aarch64, this emits `bl offset` (26-bit signed offset).
         pub fn callRelocatable(self: *Self, symbol_name: []const u8, allocator: std.mem.Allocator, relocations: *std.ArrayList(Relocation)) !void {
+            // Resolve deferred register args via parallel move algorithm
+            try self.emitDeferredRegArgs();
+
             // Calculate total stack space needed (same as call/callReg)
             const stack_args_space: u32 = @intCast(self.stack_arg_count * 8);
             const total_unaligned: u32 = CC_EMIT.SHADOW_SPACE + stack_args_space;
@@ -1765,4 +1856,438 @@ test "CallBuilder macOS 6-arg call - all args in registers (System V)" {
     try linux_builder.call(0x12345678);
 
     try std.testing.expectEqualSlices(u8, linux_emit.buf.items, mac_code);
+}
+
+// Helper: search for a 3-byte pattern in a buffer, returning its position or null
+fn findPattern3(buf: []const u8, b0: u8, b1: u8, b2: u8) ?usize {
+    if (buf.len < 3) return null;
+    for (0..buf.len - 2) |i| {
+        if (buf[i] == b0 and buf[i + 1] == b1 and buf[i + 2] == b2) return i;
+    }
+    return null;
+}
+
+// x86_64 MOV reg,reg encoding reference (opcode 0x89, MOV r/m64, r64):
+// REX = 0x40 | (W<<3) | (R<<2) | B, where R=src.rexR, B=dst.rexB
+// ModRM = 0xC0 | (src.enc()<<3) | dst.enc()
+//
+// Common encodings:
+//   mov rdi, rax  = 48 89 C7     mov rsi, rax  = 48 89 C6
+//   mov rdi, rsi  = 48 89 F7     mov rsi, rdi  = 48 89 FE
+//   mov rdi, rdx  = 48 89 D7     mov rsi, rdx  = 48 89 D6
+//   mov rdi, rbx  = 48 89 DE     mov rdx, rdi  = 48 89 FA
+//   mov rdi, r11  = 4C 89 DF     mov r11, rsi  = 49 89 F3
+//   mov rsi, rbx  = 48 89 DE     mov rdx, r11  = 4C 89 DA
+
+test "parallel move: non-conflicting reg args" {
+    // Sources are non-param regs — no conflicts, no scratch needed
+    const Emit = x86_64.LinuxEmit;
+    const Builder = CallBuilder(Emit);
+
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var stack_offset: i32 = 0;
+    var builder = try Builder.init(&emit, &stack_offset);
+
+    try builder.addRegArg(.RAX); // RDI ← RAX
+    try builder.addRegArg(.RBX); // RSI ← RBX
+
+    try builder.call(0x12345678);
+
+    // mov rdi, rax = 48 89 C7
+    try std.testing.expect(findPattern3(emit.buf.items, 0x48, 0x89, 0xC7) != null);
+    // mov rsi, rbx = 48 89 DE
+    try std.testing.expect(findPattern3(emit.buf.items, 0x48, 0x89, 0xDE) != null);
+    // No scratch register involvement (no mov r11, ... = 49 89 F3 pattern)
+    try std.testing.expect(findPattern3(emit.buf.items, 0x49, 0x89, 0xF3) == null);
+}
+
+test "parallel move: 2-element swap cycle uses scratch" {
+    // RDI ← RSI, RSI ← RDI — a 2-cycle requiring SCRATCH_REG (R11)
+    const Emit = x86_64.LinuxEmit;
+    const Builder = CallBuilder(Emit);
+
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var stack_offset: i32 = 0;
+    var builder = try Builder.init(&emit, &stack_offset);
+
+    try builder.addRegArg(.RSI); // dst=RDI, src=RSI
+    try builder.addRegArg(.RDI); // dst=RSI, src=RDI
+
+    try builder.call(0x12345678);
+
+    // Algorithm breaks cycle: save RSI to R11, move RDI→RSI, move R11→RDI
+    // mov r11, rsi = 49 89 F3
+    const scratch_pos = findPattern3(emit.buf.items, 0x49, 0x89, 0xF3);
+    try std.testing.expect(scratch_pos != null);
+    // mov rsi, rdi = 48 89 FE
+    const mov_rsi_pos = findPattern3(emit.buf.items, 0x48, 0x89, 0xFE);
+    try std.testing.expect(mov_rsi_pos != null);
+    // mov rdi, r11 = 4C 89 DF
+    const mov_rdi_pos = findPattern3(emit.buf.items, 0x4C, 0x89, 0xDF);
+    try std.testing.expect(mov_rdi_pos != null);
+
+    // Verify ordering: scratch save < mov rsi < mov rdi (from scratch)
+    try std.testing.expect(scratch_pos.? < mov_rsi_pos.?);
+    try std.testing.expect(mov_rsi_pos.? < mov_rdi_pos.?);
+}
+
+test "parallel move: 3-element rotation cycle" {
+    // RDI ← RSI, RSI ← RDX, RDX ← RDI — 3-way rotation, one scratch save
+    const Emit = x86_64.LinuxEmit;
+    const Builder = CallBuilder(Emit);
+
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var stack_offset: i32 = 0;
+    var builder = try Builder.init(&emit, &stack_offset);
+
+    try builder.addRegArg(.RSI); // dst=RDI, src=RSI
+    try builder.addRegArg(.RDX); // dst=RSI, src=RDX
+    try builder.addRegArg(.RDI); // dst=RDX, src=RDI
+
+    try builder.call(0x12345678);
+
+    // Algorithm: save RSI→R11, RSI←RDX, RDX←RDI, RDI←R11
+    // mov r11, rsi = 49 89 F3
+    const p0 = findPattern3(emit.buf.items, 0x49, 0x89, 0xF3);
+    try std.testing.expect(p0 != null);
+    // mov rsi, rdx = 48 89 D6
+    const p1 = findPattern3(emit.buf.items, 0x48, 0x89, 0xD6);
+    try std.testing.expect(p1 != null);
+    // mov rdx, rdi = 48 89 FA
+    const p2 = findPattern3(emit.buf.items, 0x48, 0x89, 0xFA);
+    try std.testing.expect(p2 != null);
+    // mov rdi, r11 = 4C 89 DF
+    const p3 = findPattern3(emit.buf.items, 0x4C, 0x89, 0xDF);
+    try std.testing.expect(p3 != null);
+
+    // N+1 instructions for N-element cycle: 4 movs for 3 args
+    try std.testing.expect(p0.? < p1.?);
+    try std.testing.expect(p1.? < p2.?);
+    try std.testing.expect(p2.? < p3.?);
+}
+
+test "parallel move: LEA then REG reading same dest — reordered" {
+    // addLeaArg writes RDI, addRegArg reads RDI — old code would clobber
+    // The algorithm must emit mov RSI,RDI BEFORE lea RDI,[rbp-32]
+    const Emit = x86_64.LinuxEmit;
+    const Builder = CallBuilder(Emit);
+
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var stack_offset: i32 = 0;
+    var builder = try Builder.init(&emit, &stack_offset);
+
+    try builder.addLeaArg(.RBP, -32); // dst=RDI, lea [RBP-32]
+    try builder.addRegArg(.RDI); // dst=RSI, src=RDI
+
+    try builder.call(0x12345678);
+
+    // mov rsi, rdi = 48 89 FE (must come first — preserves original RDI)
+    const mov_pos = findPattern3(emit.buf.items, 0x48, 0x89, 0xFE);
+    try std.testing.expect(mov_pos != null);
+    // lea rdi, [rbp-32] = 48 8D BD ...
+    const lea_pos = findPattern3(emit.buf.items, 0x48, 0x8D, 0xBD);
+    try std.testing.expect(lea_pos != null);
+
+    // Critical: mov must precede lea (otherwise RDI is clobbered before read)
+    try std.testing.expect(mov_pos.? < lea_pos.?);
+
+    // No scratch needed (LEA source isn't a register, can't form cycle)
+    try std.testing.expect(findPattern3(emit.buf.items, 0x49, 0x89, 0xF3) == null);
+}
+
+test "parallel move: self-move eliminated" {
+    // addRegArg(RDI) on System V: dst=RDI, src=RDI → no mov emitted
+    const Emit = x86_64.LinuxEmit;
+    const Builder = CallBuilder(Emit);
+
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var stack_offset: i32 = 0;
+    var builder = try Builder.init(&emit, &stack_offset);
+
+    try builder.addRegArg(.RDI); // dst=RDI, src=RDI → self-move, elided
+
+    try builder.call(0x12345678);
+
+    // mov rdi, rdi would be 48 89 FF — should NOT appear
+    try std.testing.expect(findPattern3(emit.buf.items, 0x48, 0x89, 0xFF) == null);
+
+    // Verify the code is shorter than a call with an actual move
+    const self_move_len = emit.buf.items.len;
+
+    var emit2 = Emit.init(std.testing.allocator);
+    defer emit2.deinit();
+    var stack2: i32 = 0;
+    var builder2 = try Builder.init(&emit2, &stack2);
+    try builder2.addRegArg(.RAX); // dst=RDI, src=RAX → real move needed
+    try builder2.call(0x12345678);
+
+    try std.testing.expect(self_move_len < emit2.buf.items.len);
+}
+
+test "parallel move: chain dependency without cycle" {
+    // RDI ← RSI, RSI ← RDX: chain, not cycle (no arg reads from RDI or RSI as written)
+    const Emit = x86_64.LinuxEmit;
+    const Builder = CallBuilder(Emit);
+
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var stack_offset: i32 = 0;
+    var builder = try Builder.init(&emit, &stack_offset);
+
+    try builder.addRegArg(.RSI); // dst=RDI, src=RSI
+    try builder.addRegArg(.RDX); // dst=RSI, src=RDX
+
+    try builder.call(0x12345678);
+
+    // mov rdi, rsi = 48 89 F7
+    try std.testing.expect(findPattern3(emit.buf.items, 0x48, 0x89, 0xF7) != null);
+    // mov rsi, rdx = 48 89 D6
+    try std.testing.expect(findPattern3(emit.buf.items, 0x48, 0x89, 0xD6) != null);
+    // No scratch needed — no cycle
+    try std.testing.expect(findPattern3(emit.buf.items, 0x49, 0x89, 0xF3) == null);
+}
+
+test "parallel move: same source register for multiple args" {
+    // Both args read from RAX — no conflict (RAX isn't a param reg destination)
+    const Emit = x86_64.LinuxEmit;
+    const Builder = CallBuilder(Emit);
+
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var stack_offset: i32 = 0;
+    var builder = try Builder.init(&emit, &stack_offset);
+
+    try builder.addRegArg(.RAX); // dst=RDI, src=RAX
+    try builder.addRegArg(.RAX); // dst=RSI, src=RAX
+
+    try builder.call(0x12345678);
+
+    // mov rdi, rax = 48 89 C7
+    try std.testing.expect(findPattern3(emit.buf.items, 0x48, 0x89, 0xC7) != null);
+    // mov rsi, rax = 48 89 C6
+    try std.testing.expect(findPattern3(emit.buf.items, 0x48, 0x89, 0xC6) != null);
+    // No scratch
+    try std.testing.expect(findPattern3(emit.buf.items, 0x49, 0x89, 0xF3) == null);
+}
+
+test "parallel move: SCRATCH_REG (R11) as source without cycle" {
+    // R11 as source is valid when no cycle involves it (R11 is never a param reg)
+    const Emit = x86_64.LinuxEmit;
+    const Builder = CallBuilder(Emit);
+
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var stack_offset: i32 = 0;
+    var builder = try Builder.init(&emit, &stack_offset);
+
+    try builder.addRegArg(.R11); // dst=RDI, src=R11
+
+    try builder.call(0x12345678);
+
+    // mov rdi, r11 = 4C 89 DF
+    try std.testing.expect(findPattern3(emit.buf.items, 0x4C, 0x89, 0xDF) != null);
+}
+
+test "parallel move: all six System V param regs filled" {
+    // Fill all 6 System V register slots with non-conflicting sources
+    const Emit = x86_64.LinuxEmit;
+    const Builder = CallBuilder(Emit);
+
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var stack_offset: i32 = 0;
+    var builder = try Builder.init(&emit, &stack_offset);
+
+    try builder.addRegArg(.RAX); // RDI ← RAX
+    try builder.addRegArg(.RBX); // RSI ← RBX
+    try builder.addRegArg(.RAX); // RDX ← RAX
+    try builder.addRegArg(.RBX); // RCX ← RBX
+    try builder.addRegArg(.RAX); // R8  ← RAX
+    try builder.addRegArg(.RBX); // R9  ← RBX
+
+    try builder.call(0x12345678);
+
+    // Should have 6 mov instructions (3 bytes each = 18) + call sequence (~13)
+    try std.testing.expect(emit.buf.items.len > 25);
+
+    // Verify call instruction present (call r11 = 41 FF D3)
+    try std.testing.expect(findPattern3(emit.buf.items, 0x41, 0xFF, 0xD3) != null);
+    // No scratch needed (sources are non-param regs)
+    try std.testing.expect(findPattern3(emit.buf.items, 0x49, 0x89, 0xF3) == null);
+}
+
+test "parallel move: reg args + stack overflow args" {
+    // 8 args on System V: 6 in registers + 2 on stack
+    const Emit = x86_64.LinuxEmit;
+    const Builder = CallBuilder(Emit);
+
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var stack_offset: i32 = 0;
+    var builder = try Builder.init(&emit, &stack_offset);
+
+    // 6 register args
+    try builder.addRegArg(.RAX);
+    try builder.addRegArg(.RBX);
+    try builder.addImmArg(3);
+    try builder.addImmArg(4);
+    try builder.addImmArg(5);
+    try builder.addImmArg(6);
+    // 2 stack overflow args
+    try builder.addImmArg(7);
+    try builder.addImmArg(8);
+
+    try builder.call(0x12345678);
+
+    // Verify call instruction
+    try std.testing.expect(findPattern3(emit.buf.items, 0x41, 0xFF, 0xD3) != null);
+    // Verify stack allocation for 2 args: sub rsp, 16 = 48 81 EC 10 00 00 00
+    // (2 * 8 = 16 bytes, already 16-byte aligned)
+    var found_sub = false;
+    for (0..emit.buf.items.len -| 6) |i| {
+        if (emit.buf.items[i] == 0x48 and emit.buf.items[i + 1] == 0x81 and
+            emit.buf.items[i + 2] == 0xEC and emit.buf.items[i + 3] == 0x10)
+        {
+            found_sub = true;
+            break;
+        }
+    }
+    try std.testing.expect(found_sub);
+}
+
+test "parallel move: zero reg args call" {
+    // No register args, just a bare call — emitDeferredRegArgs should be a no-op
+    const Emit = x86_64.LinuxEmit;
+    const Builder = CallBuilder(Emit);
+
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var stack_offset: i32 = 0;
+    var builder = try Builder.init(&emit, &stack_offset);
+
+    // No args at all
+    try builder.call(0x12345678);
+
+    // Just the call sequence: mov r11, imm64 + call r11
+    // Should be quite short (10 bytes for movabs + 3 bytes for call = 13)
+    try std.testing.expect(emit.buf.items.len > 0);
+    try std.testing.expect(emit.buf.items.len < 20);
+    // Verify call instruction
+    try std.testing.expect(findPattern3(emit.buf.items, 0x41, 0xFF, 0xD3) != null);
+}
+
+test "parallel move: mixed LEA, MEM, IMM, REG without conflicts" {
+    // All four arg types in one call, no register conflicts
+    const Emit = x86_64.LinuxEmit;
+    const Builder = CallBuilder(Emit);
+
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var stack_offset: i32 = 0;
+    var builder = try Builder.init(&emit, &stack_offset);
+
+    try builder.addLeaArg(.RBP, -64); // RDI ← lea [RBP-64]
+    try builder.addMemArg(.RBP, -32); // RSI ← [RBP-32]
+    try builder.addImmArg(42); // RDX ← 42
+    try builder.addRegArg(.RAX); // RCX ← RAX
+
+    try builder.call(0x12345678);
+
+    // Verify all instructions emitted
+    // lea rdi, [rbp-64] = 48 8D BD
+    try std.testing.expect(findPattern3(emit.buf.items, 0x48, 0x8D, 0xBD) != null);
+    // mov rsi, [rbp-32] = 48 8B B5
+    try std.testing.expect(findPattern3(emit.buf.items, 0x48, 0x8B, 0xB5) != null);
+    // call r11 = 41 FF D3
+    try std.testing.expect(findPattern3(emit.buf.items, 0x41, 0xFF, 0xD3) != null);
+    // No scratch needed
+    try std.testing.expect(findPattern3(emit.buf.items, 0x49, 0x89, 0xF3) == null);
+}
+
+test "parallel move: swap cycle on Windows x64 (RCX/RDX)" {
+    // Windows uses RCX, RDX, R8, R9 — verify swap works with different param regs
+    const Emit = x86_64.WinEmit;
+    const Builder = CallBuilder(Emit);
+
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var stack_offset: i32 = 0;
+    var builder = try Builder.init(&emit, &stack_offset);
+
+    // Swap: RCX ← RDX, RDX ← RCX
+    try builder.addRegArg(.RDX); // dst=RCX, src=RDX
+    try builder.addRegArg(.RCX); // dst=RDX, src=RCX
+
+    try builder.call(0x12345678);
+
+    // mov r11, rdx = 49 89 D3 (scratch save)
+    // RDX: src in reg field, enc=2; R11: dst in r/m field, enc=3, rexB=1
+    // REX=0x49, ModRM = 11 010 011 = 0xD3
+    const scratch_pos = findPattern3(emit.buf.items, 0x49, 0x89, 0xD3);
+    try std.testing.expect(scratch_pos != null);
+
+    // mov rdx, rcx = 48 89 CA
+    // RCX: reg enc=1; RDX: r/m enc=2; ModRM = 11 001 010 = 0xCA
+    const mov_rdx_pos = findPattern3(emit.buf.items, 0x48, 0x89, 0xCA);
+    try std.testing.expect(mov_rdx_pos != null);
+
+    // mov rcx, r11 = 4C 89 D9
+    // R11: reg enc=3, rexR=1; RCX: r/m enc=1; REX=0x4C, ModRM = 11 011 001 = 0xD9
+    const mov_rcx_pos = findPattern3(emit.buf.items, 0x4C, 0x89, 0xD9);
+    try std.testing.expect(mov_rcx_pos != null);
+
+    // Correct ordering
+    try std.testing.expect(scratch_pos.? < mov_rdx_pos.?);
+    try std.testing.expect(mov_rdx_pos.? < mov_rcx_pos.?);
+}
+
+test "parallel move: callReg also resolves deferred args" {
+    // Verify callReg (indirect call) also runs the parallel move resolution
+    const Emit = x86_64.LinuxEmit;
+    const Builder = CallBuilder(Emit);
+
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var stack_offset: i32 = 0;
+    var builder = try Builder.init(&emit, &stack_offset);
+
+    // Simple swap to verify deferred resolution happens
+    try builder.addRegArg(.RSI); // dst=RDI, src=RSI
+    try builder.addRegArg(.RDI); // dst=RSI, src=RDI
+
+    try builder.callReg(.RAX);
+
+    // Scratch must be used for the swap
+    try std.testing.expect(findPattern3(emit.buf.items, 0x49, 0x89, 0xF3) != null); // mov r11, rsi
+    try std.testing.expect(findPattern3(emit.buf.items, 0x48, 0x89, 0xFE) != null); // mov rsi, rdi
+    try std.testing.expect(findPattern3(emit.buf.items, 0x4C, 0x89, 0xDF) != null); // mov rdi, r11
+
+    // call rax = FF D0
+    var found_call_rax = false;
+    for (0..emit.buf.items.len -| 1) |i| {
+        if (emit.buf.items[i] == 0xFF and emit.buf.items[i + 1] == 0xD0) {
+            found_call_rax = true;
+            break;
+        }
+    }
+    try std.testing.expect(found_call_rax);
 }
