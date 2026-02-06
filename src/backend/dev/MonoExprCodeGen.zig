@@ -6808,8 +6808,34 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                         }
                                     },
                                     .wildcard => {},
-                                    // Other patterns (nested tags, records, tuples, lists, literals)
-                                    // should have been simplified during lowering
+                                    .tag => |inner_tag| {
+                                        // Nested tag pattern (e.g., Err(ListWasEmpty) where ListWasEmpty is a zero-arg tag)
+                                        // The outer tag has already matched, so if the inner tag union
+                                        // has only one variant, no check is needed. For multi-variant
+                                        // inner unions, the discriminant was already matched at a higher level.
+                                        // Just recursively bind any nested tag args.
+                                        const inner_args = self.store.getPatternSpan(inner_tag.args);
+                                        for (inner_args) |inner_arg_id| {
+                                            const inner_arg = self.store.getPattern(inner_arg_id);
+                                            switch (inner_arg) {
+                                                .bind => |inner_bind| {
+                                                    const inner_key: u48 = @bitCast(inner_bind.symbol);
+                                                    // The inner tag's payload is at the same location as the outer arg
+                                                    const inner_loc: ValueLocation = if (variant_payload_layout) |pl| inner_blk: {
+                                                        const pl_val = ls.getLayout(pl);
+                                                        if (pl_val.tag == .tag_union) {
+                                                            // Inner tag union - payload is at the base
+                                                            break :inner_blk value_loc;
+                                                        }
+                                                        break :inner_blk value_loc;
+                                                    } else value_loc;
+                                                    try self.symbol_locations.put(inner_key, inner_loc);
+                                                },
+                                                .wildcard => {},
+                                                else => {},
+                                            }
+                                        }
+                                    },
                                     else => unreachable,
                                 }
                             }
@@ -8844,6 +8870,35 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 // For scalar layouts (e.g., Bool, enums with no payloads),
                 // the value itself IS the discriminant.
                 break :blk try self.ensureInGeneralReg(value_loc);
+            } else if (union_layout.tag == .box) blk: {
+                // Boxed tag union: dereference the box pointer, then read the discriminant
+                // from the underlying tag union in heap memory.
+                const box_ptr_reg = try self.ensureInGeneralReg(value_loc);
+                const inner_layout = ls.getLayout(union_layout.data.box);
+                if (inner_layout.tag == .tag_union) {
+                    const tu_data = ls.getTagUnionData(inner_layout.data.tag_union.idx);
+                    const disc_offset = tu_data.discriminant_offset;
+                    const disc_reg = try self.allocTempGeneral();
+                    if (comptime target.toCpuArch() == .aarch64) {
+                        try self.codegen.emit.ldrRegMemSoff(.w64, disc_reg, box_ptr_reg, @intCast(disc_offset));
+                    } else {
+                        try self.codegen.emit.movRegMem(.w64, disc_reg, box_ptr_reg, @intCast(disc_offset));
+                    }
+                    self.codegen.freeGeneral(box_ptr_reg);
+                    break :blk disc_reg;
+                } else if (inner_layout.tag == .scalar or inner_layout.tag == .zst) {
+                    // Boxed scalar/ZST: dereference box to get the discriminant value
+                    const disc_reg = try self.allocTempGeneral();
+                    if (comptime target.toCpuArch() == .aarch64) {
+                        try self.codegen.emit.ldrRegMemSoff(.w64, disc_reg, box_ptr_reg, 0);
+                    } else {
+                        try self.codegen.emit.movRegMem(.w64, disc_reg, box_ptr_reg, 0);
+                    }
+                    self.codegen.freeGeneral(box_ptr_reg);
+                    break :blk disc_reg;
+                } else {
+                    unreachable;
+                }
             } else {
                 unreachable;
             };
