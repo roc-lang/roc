@@ -2247,6 +2247,28 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                         };
                     }
 
+                    if (method_expr == .e_hosted_lambda) {
+                        // Hosted effect method called via dot access (e.g., builder.print_value!())
+                        const hosted_fns = self.hosted_functions orelse unreachable;
+                        if (hosted_fns.get(hostedFunctionKey(@intCast(origin_module_idx), node_idx))) |hosted_index| {
+                            const extra_args = if (dot.args) |a| module_env.store.sliceExpr(a) else &[_]CIR.Expr.Idx{};
+                            var all_args = std.ArrayList(ir.MonoExprId).empty;
+                            defer all_args.deinit(self.allocator);
+                            try all_args.append(self.allocator, receiver);
+                            for (extra_args) |arg_idx| {
+                                try all_args.append(self.allocator, try self.lowerExprFromIdx(module_env, arg_idx));
+                            }
+                            const args_span = try self.store.addExprSpan(all_args.items);
+                            break :blk .{
+                                .hosted_call = .{
+                                    .index = hosted_index,
+                                    .args = args_span,
+                                    .ret_layout = self.getExprLayoutFromIdx(module_env, expr_idx),
+                                },
+                            };
+                        }
+                    }
+
                     // Regular function method - lower as external definition + call
                     const method_symbol = MonoSymbol{
                         .module_idx = origin_module_idx,
