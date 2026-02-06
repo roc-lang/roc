@@ -2307,7 +2307,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         try builder.addImmArg(@intCast(elem_size_align.size));
                         try builder.addRegArg(roc_ops_reg);
 
-                        try builder.call(fn_addr);
+                        try self.callBuiltin(&builder, fn_addr, .list_concat);
                     }
 
                     return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
@@ -2370,7 +2370,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         try builder.addImmArg(@intCast(elem_size_align.size));
                         try builder.addRegArg(roc_ops_reg);
 
-                        try builder.call(fn_addr);
+                        try self.callBuiltin(&builder, fn_addr, .list_prepend);
                     }
 
                     return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
@@ -3525,7 +3525,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         try builder.addRegArg(cap_reg);
                         self.codegen.freeGeneral(cap_reg);
                         try builder.addRegArg(roc_ops_reg);
-                        try builder.call(fn_addr);
+                        try self.callBuiltin(&builder, fn_addr, .str_with_capacity);
                     }
                     return .{ .stack_str = result_offset };
                 },
@@ -3658,7 +3658,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         try builder.addLeaArg(.RBP, old_elem_slot);
                         try builder.addRegArg(roc_ops_reg);
 
-                        try builder.call(fn_addr);
+                        try self.callBuiltin(&builder, fn_addr, .list_replace);
                     }
 
                     return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
@@ -4137,7 +4137,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 try builder.addMemArg(.RBP, len_slot);
                 try builder.addRegArg(roc_ops_reg);
 
-                try builder.call(fn_addr);
+                try self.callBuiltin(&builder, fn_addr, .list_sublist);
             }
 
             return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
@@ -4952,7 +4952,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 try builder.addImmArg(@intCast(elem_size_align.size));
                 try builder.addRegArg(roc_ops_reg);
 
-                try builder.call(fn_addr);
+                try self.callBuiltin(&builder, fn_addr, .list_reserve);
             }
 
             return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
@@ -5005,7 +5005,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 try builder.addImmArg(@intCast(elem_size_align.size));
                 try builder.addRegArg(roc_ops_reg);
 
-                try builder.call(fn_addr);
+                try self.callBuiltin(&builder, fn_addr, .list_release_excess_capacity);
             }
 
             return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
@@ -9430,7 +9430,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 try builder.addImmArg(1); // byte alignment
                 try builder.addImmArg(0); // elements_refcounted = false
                 try builder.addRegArg(roc_ops_reg);
-                try builder.call(fn_addr);
+                try self.callBuiltin(&builder, fn_addr, .allocate_with_refcount);
 
                 // Save heap pointer from return register to stack slot
                 if (comptime target.toCpuArch() == .aarch64) {
@@ -10227,97 +10227,30 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
         /// Call wrapDecToStr with explicitly decomposed i128 arguments.
         /// This avoids platform-specific i128 calling conventions by passing
         /// (out: *RocStr, low: u64, high: u64, roc_ops: *RocOps) uniformly.
+        /// Uses CallBuilder for cross-platform argument setup and callBuiltin
+        /// to support both native execution and object file generation modes.
         fn callDecToStrWrapped(self: *Self, val_loc: ValueLocation) Error!ValueLocation {
             const roc_ops_reg = self.roc_ops_reg orelse unreachable;
-
-            // Allocate stack space for result (RocStr = 24 bytes)
             const result_offset = self.codegen.allocStackSlot(roc_str_size);
-
-            // Decompose the i128 value into low and high halves
             const decomposed = try self.decomposeI128Value(val_loc);
+            const base_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .FP else .RBP;
 
-            if (comptime target.toCpuArch() == .aarch64) {
-                // aarch64: wrapDecToStr(out, low, high, roc_ops)
-                // X0 = out, X1 = low, X2 = high, X3 = roc_ops
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addLeaArg(base_reg, result_offset);
 
-                switch (decomposed) {
-                    .on_stack => |offset| {
-                        try self.codegen.emitLoadStack(.w64, .X1, offset);
-                        try self.codegen.emitLoadStack(.w64, .X2, offset + 8);
-                    },
-                    .immediate => |imm| {
-                        try self.codegen.emitLoadImm(.X1, @bitCast(imm.low));
-                        try self.codegen.emitLoadImm(.X2, @bitCast(imm.high));
-                    },
-                }
-
-                // X3 = roc_ops
-                try self.codegen.emit.movRegReg(.w64, .X3, roc_ops_reg);
-
-                // X0 = output pointer (FP + result_offset)
-                try self.codegen.emit.movRegImm64(.X0, @bitCast(@as(i64, result_offset)));
-                try self.codegen.emit.addRegRegReg(.w64, .X0, .FP, .X0);
-
-                // Call wrapDecToStr
-                try self.codegen.emitLoadImm(.X9, @intCast(@intFromPtr(&wrapDecToStr)));
-                try self.codegen.emit.blrReg(.X9);
-            } else {
-                // x86_64
-                if (self.cc.is_windows) {
-                    // Windows x64: wrapDecToStr(out, low, high, roc_ops)
-                    // RCX = out, RDX = low, R8 = high, R9 = roc_ops
-                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-
-                    // Arg 0 (RCX): output pointer
-                    try builder.addLeaArg(.RBP, result_offset);
-
-                    // Arg 1 (RDX): low, Arg 2 (R8): high
-                    switch (decomposed) {
-                        .on_stack => |offset| {
-                            try self.codegen.emitLoadStack(.w64, .R11, offset);
-                            try builder.addRegArg(.R11);
-                            try self.codegen.emitLoadStack(.w64, .R11, offset + 8);
-                            try builder.addRegArg(.R11);
-                        },
-                        .immediate => |imm| {
-                            try self.codegen.emitLoadImm(.R11, @bitCast(imm.low));
-                            try builder.addRegArg(.R11);
-                            try self.codegen.emitLoadImm(.R11, @bitCast(imm.high));
-                            try builder.addRegArg(.R11);
-                        },
-                    }
-
-                    // Arg 3 (R9): roc_ops
-                    try builder.addRegArg(roc_ops_reg);
-
-                    // Call
-                    try builder.call(@intFromPtr(&wrapDecToStr));
-                } else {
-                    // System V x86_64: wrapDecToStr(out, low, high, roc_ops)
-                    // RDI = out, RSI = low, RDX = high, RCX = roc_ops
-
-                    switch (decomposed) {
-                        .on_stack => |offset| {
-                            try self.codegen.emitLoadStack(.w64, .RSI, offset);
-                            try self.codegen.emitLoadStack(.w64, .RDX, offset + 8);
-                        },
-                        .immediate => |imm| {
-                            try self.codegen.emitLoadImm(.RSI, @bitCast(imm.low));
-                            try self.codegen.emitLoadImm(.RDX, @bitCast(imm.high));
-                        },
-                    }
-
-                    // RCX = roc_ops
-                    try self.codegen.emit.movRegReg(.w64, .RCX, roc_ops_reg);
-
-                    // RDI = output pointer
-                    try self.codegen.emit.leaRegMem(.RDI, .RBP, result_offset);
-
-                    // Call wrapDecToStr
-                    try self.codegen.emitLoadImm(.R11, @intCast(@intFromPtr(&wrapDecToStr)));
-                    try self.codegen.emit.callReg(.R11);
-                }
+            switch (decomposed) {
+                .on_stack => |offset| {
+                    try builder.addMemArg(base_reg, offset);
+                    try builder.addMemArg(base_reg, offset + 8);
+                },
+                .immediate => |imm| {
+                    try builder.addImmArg(@bitCast(imm.low));
+                    try builder.addImmArg(@bitCast(imm.high));
+                },
             }
+
+            try builder.addRegArg(roc_ops_reg);
+            try self.callBuiltin(&builder, @intFromPtr(&wrapDecToStr), .dec_to_str);
 
             return .{ .stack_str = result_offset };
         }
@@ -15256,7 +15189,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             try builder.addRegArg(ptr_reg);
             try builder.addImmArg(@intCast(count));
             try builder.addRegArg(roc_ops_reg);
-            try builder.call(fn_addr);
+            try self.callBuiltin(&builder, fn_addr, .incref_data_ptr);
         }
 
         /// Emit decref for a list value
@@ -15293,7 +15226,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             try builder.addImmArg(8); // alignment
             try builder.addImmArg(0); // elements_refcounted = false
             try builder.addRegArg(roc_ops_reg);
-            try builder.call(fn_addr);
+            try self.callBuiltin(&builder, fn_addr, .decref_data_ptr);
         }
 
         /// Emit free for a list value
@@ -15328,7 +15261,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             try builder.addImmArg(8); // alignment
             try builder.addImmArg(0); // elements_refcounted = false
             try builder.addRegArg(roc_ops_reg);
-            try builder.call(fn_addr);
+            try self.callBuiltin(&builder, fn_addr, .free_data_ptr);
         }
 
         /// Emit incref for a string value
@@ -15387,7 +15320,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             try builder.addRegArg(ptr_reg);
             try builder.addImmArg(@intCast(count));
             try builder.addRegArg(roc_ops_reg);
-            try builder.call(fn_addr);
+            try self.callBuiltin(&builder, fn_addr, .incref_data_ptr);
 
             // Patch the skip jump to here
             self.codegen.patchJump(skip_patch, self.codegen.currentOffset());
@@ -15444,7 +15377,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             try builder.addImmArg(1); // alignment
             try builder.addImmArg(0); // elements_refcounted = false
             try builder.addRegArg(roc_ops_reg);
-            try builder.call(fn_addr);
+            try self.callBuiltin(&builder, fn_addr, .decref_data_ptr);
 
             // Patch the skip jump to here
             self.codegen.patchJump(skip_patch, self.codegen.currentOffset());
@@ -15500,7 +15433,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             try builder.addImmArg(1); // alignment
             try builder.addImmArg(0); // elements_refcounted = false
             try builder.addRegArg(roc_ops_reg);
-            try builder.call(fn_addr);
+            try self.callBuiltin(&builder, fn_addr, .free_data_ptr);
 
             // Patch the skip jump to here
             self.codegen.patchJump(skip_patch, self.codegen.currentOffset());
@@ -15538,7 +15471,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             try builder.addRegArg(ptr_reg);
             try builder.addImmArg(@intCast(count));
             try builder.addRegArg(roc_ops_reg);
-            try builder.call(fn_addr);
+            try self.callBuiltin(&builder, fn_addr, .incref_data_ptr);
         }
 
         /// Emit decref for a box value
@@ -15574,7 +15507,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             try builder.addImmArg(8); // alignment
             try builder.addImmArg(0); // elements_refcounted = false
             try builder.addRegArg(roc_ops_reg);
-            try builder.call(fn_addr);
+            try self.callBuiltin(&builder, fn_addr, .decref_data_ptr);
         }
 
         /// Emit free for a box value
@@ -15609,7 +15542,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             try builder.addImmArg(8); // alignment
             try builder.addImmArg(0); // elements_refcounted = false
             try builder.addRegArg(roc_ops_reg);
-            try builder.call(fn_addr);
+            try self.callBuiltin(&builder, fn_addr, .free_data_ptr);
         }
 
         pub fn patchPendingCalls(self: *Self) Error!void {
