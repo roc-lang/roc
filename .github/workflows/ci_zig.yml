@@ -7,6 +7,9 @@ name: CI New Compiler
 # Do not add permissions here! Configure them at the job level!
 permissions: {}
 
+env:
+  VALGRIND_VERSION: "3.26.0"
+
 jobs:
   # Checks that don't need to run on every OS
   check-once:
@@ -207,22 +210,36 @@ jobs:
             exit 1;
           }
 
+      - name: Cache valgrind
+        if: ${{ matrix.os == 'ubuntu-22.04' }}
+        id: cache-valgrind
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # ratchet:actions/cache@v4
+        with:
+          path: ~/valgrind
+          key: valgrind-${{ env.VALGRIND_VERSION }}-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Build valgrind from source
+        if: ${{ matrix.os == 'ubuntu-22.04' && steps.cache-valgrind.outputs.cache-hit != 'true' }}
+        run: |
+          curl -sSL "https://sourceware.org/pub/valgrind/valgrind-${VALGRIND_VERSION}.tar.bz2" -o valgrind.tar.bz2
+          tar -xjf valgrind.tar.bz2
+          cd "valgrind-${VALGRIND_VERSION}"
+          ./configure --prefix="$HOME/valgrind"
+          make -j"$(nproc)"
+          make install
+
+      - name: Add valgrind to PATH
+        if: ${{ matrix.os == 'ubuntu-22.04' }}
+        run: echo "$HOME/valgrind/bin" >> $GITHUB_PATH
+
       - name: test with valgrind (ubuntu)
-        # Sadly, with zig 0.14.1, this had to be disabled on arm.
-        # Valgrind as of 3.25.1 does not support some arm instructions zig generates.
-        # So valgrind only works happily on x86_64 linux.
-        # We can re-evaluate as new version of zig/valgrind come out.
         if: ${{ matrix.os == 'ubuntu-22.04' }}
         run: |
-          # Install libc6-dbg which is required for Valgrind's function redirections
           sudo apt-get update && sudo apt-get install -y libc6-dbg
-          sudo apt-get install -y valgrind
           valgrind --version
           ./ci/custom_valgrind.sh ./zig-out/bin/snapshot --debug --verbose
           ./ci/custom_valgrind.sh ./zig-out/bin/roc --no-cache test/str/app.roc
           ./ci/custom_valgrind.sh ./zig-out/bin/roc --no-cache test/int/app.roc
-          # valgrind all app files in test/fx except those that read from stdin
-          # find test/fx -maxdepth 1 -name "*.roc" -type f -exec grep -l "app \[main" {} + | xargs -I {} sh -c 'grep -L "Stdin" {} || true' | xargs -I {} ./ci/custom_valgrind.sh ./zig-out/bin/roc --no-cache {}
 
       - name: check if statically linked (ubuntu)
         if: startsWith(matrix.os, 'ubuntu')
