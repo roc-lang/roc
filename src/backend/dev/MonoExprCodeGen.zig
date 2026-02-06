@@ -6623,6 +6623,46 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             }
                         }
                     },
+                    .str_literal => |str_lit_idx| {
+                        // String pattern matching: compare value with literal string
+                        // Generate the literal string on stack
+                        const lit_loc = try self.generateStrLiteral(str_lit_idx);
+                        const lit_off = try self.ensureOnStack(lit_loc, roc_str_size);
+
+                        // Ensure the value is also on stack
+                        const val_off = try self.ensureOnStack(value_loc, roc_str_size);
+
+                        // Call strEqual(value, literal) -> bool
+                        const eq_loc = try self.callStr2ToScalar(val_off, lit_off, @intFromPtr(&wrapStrEqual), .str_equal);
+                        const eq_reg = try self.ensureInGeneralReg(eq_loc);
+
+                        // Compare result with 0 (false)
+                        try self.emitCmpImm(eq_reg, 0);
+                        self.codegen.freeGeneral(eq_reg);
+
+                        // Jump to next branch if equal to 0 (strings not equal)
+                        const is_last_branch = (i == branches.len - 1);
+                        var next_patch: ?usize = null;
+                        if (!is_last_branch) {
+                            next_patch = try self.emitJumpIfEqual();
+                        }
+
+                        // Pattern matched - generate body
+                        const body_loc = try self.generateExpr(branch.body);
+                        try self.storeWhenResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
+
+                        // Jump to end (unless this is the last branch)
+                        if (!is_last_branch) {
+                            const end_patch = try self.codegen.emitJump();
+                            try end_patches.append(self.allocator, end_patch);
+
+                            // Patch the next branch jump to here
+                            if (next_patch) |patch| {
+                                const current_offset = self.codegen.currentOffset();
+                                self.codegen.patchJump(patch, current_offset);
+                            }
+                        }
+                    },
                     .tag => |tag_pattern| {
                         // Match on tag discriminant
                         // Tag unions: payload at offset 0, discriminant at discriminant_offset

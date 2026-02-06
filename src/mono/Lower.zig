@@ -3063,7 +3063,12 @@ fn lowerPattern(self: *Self, module_env: *ModuleEnv, pattern_idx: CIR.Pattern.Id
             .layout_idx = .i64,
         } },
 
-        .str_literal => |s| .{ .str_literal = s.literal },
+        .str_literal => |s| blk: {
+            // Copy the string from the module to the mono store
+            const str_text = module_env.common.getString(s.literal);
+            const mono_idx = self.store.insertString(str_text) catch return error.OutOfMemory;
+            break :blk .{ .str_literal = mono_idx };
+        },
 
         .applied_tag => |t| blk: {
             const args = try self.lowerPatternSpan(module_env, t.args);

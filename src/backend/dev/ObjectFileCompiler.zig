@@ -147,7 +147,8 @@ fn compileWithCodeGen(
 
     // Compile all procedures first
     if (procs.len > 0) {
-        codegen.compileAllProcs(procs) catch {
+        codegen.compileAllProcs(procs) catch |err| {
+            std.debug.print("ERROR in compileAllProcs: {}\n", .{err});
             return CompilationError.CodeGenerationFailed;
         };
     }
@@ -163,7 +164,8 @@ fn compileWithCodeGen(
             entrypoint.body_expr,
             entrypoint.arg_layouts,
             entrypoint.ret_layout,
-        ) catch {
+        ) catch |err| {
+            std.debug.print("ERROR in generateEntrypointWrapper: {}\n", .{err});
             return CompilationError.CodeGenerationFailed;
         };
 
