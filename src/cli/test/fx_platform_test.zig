@@ -261,6 +261,7 @@ test "fx platform all_syntax_test.roc prints expected output" {
         "Unicode escape sequence: \u{00A0}\n" ++
         "This is an effectful function!\n" ++
         "15.0\n" ++
+        "False\n" ++
         "10.0\n" ++
         "42.0\n" ++
         "NotOneTwoNotFive\n" ++
@@ -269,7 +270,7 @@ test "fx platform all_syntax_test.roc prints expected output" {
         "(\"Roc\", 1.0, 1.0, \"Roc\")\n" ++
         "10.0\n" ++
         "{ age: 31, name: \"Alice\" }\n" ++
-        "{ binary: 5, explicit_dec: 5.0, explicit_i128: 5, explicit_i16: 5, explicit_i32: 5, explicit_i64: 5, explicit_i8: 5, explicit_u128: 5, explicit_u16: 5, explicit_u32: 5, explicit_u64: 5, explicit_u8: 5, hex: 5, octal: 5, usage_based: 5.0 }\n" ++
+        "{ binary: 5.0, explicit_i128: 5, explicit_i16: 5, explicit_i32: 5, explicit_i64: 5, explicit_i8: 5, explicit_u128: 5, explicit_u16: 5, explicit_u32: 5, explicit_u64: 5, explicit_u8: 5, hex: 5.0, octal: 5.0, usage_based: 5.0 }\n" ++
         "False\n" ++
         "99\n" ++
         "\"12345.0\"\n" ++
