@@ -15762,8 +15762,14 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 var frame = self.initEntrypointFrameBuilder();
                 self.codegen.stack_offset = try frame.emitPrologue();
 
+                // Record prologue end for potential sub rsp patching.
+                // The sub rsp, imm32 instruction is the last 7 bytes of the prologue;
+                // the imm32 is at the last 4 bytes.
+                const prologue_end = self.codegen.currentOffset();
+                const initial_stack_alloc = frame.actual_stack_alloc;
+
                 // Track prologue info for unwind tables
-                prologue_size = @intCast(self.codegen.currentOffset() - func_start);
+                prologue_size = @intCast(prologue_end - func_start);
                 stack_alloc = frame.computeActualStackAlloc();
 
                 // On entry, arguments are in different registers depending on ABI:
@@ -15858,8 +15864,22 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     try self.storeResultToSavedPtr(final_result, actual_ret_layout, .RBX, 1);
                 }
 
-                // Epilogue using ForwardFrameBuilder (matches prologue)
+                // Compute actual stack usage from body generation.
+                // The body may have allocated more locals than ENTRYPOINT_STACK_SIZE.
+                const push_bytes: u32 = @as(u32, frame.push_count) * 8;
+                const actual_locals: u32 = @intCast(@as(i32, @intCast(push_bytes)) - self.codegen.stack_offset);
                 var epilogue_frame = self.initEntrypointFrameBuilder();
+                epilogue_frame.stack_size = actual_locals;
+                const actual_alloc = epilogue_frame.computeActualStackAlloc();
+
+                // Patch the prologue's sub rsp if the body needed more stack than initially allocated
+                if (actual_alloc != initial_stack_alloc and initial_stack_alloc > 0) {
+                    const patch_offset = prologue_end - 4;
+                    std.mem.writeInt(u32, self.codegen.emit.buf.items[patch_offset..][0..4], actual_alloc, .little);
+                    stack_alloc = actual_alloc;
+                }
+
+                // Epilogue using ForwardFrameBuilder (matches patched prologue)
                 try epilogue_frame.emitEpilogue();
             }
 
