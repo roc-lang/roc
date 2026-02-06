@@ -44,7 +44,7 @@ pub fn generateObjectFile(
                     .section = if (sym.is_external) .undef else .text,
                     .offset = sym.offset,
                     .size = sym.size,
-                    .is_global = sym.is_global,
+                    .is_global = sym.is_global or sym.is_external,
                     .is_function = sym.is_function,
                 });
 

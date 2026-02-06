@@ -3513,7 +3513,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     // Re-resolve imports against all_module_envs so resolved indices match this array.
     // During type-checking, imports were resolved against a per-module imported_envs array
     // (with Builtin at index 0). Now we re-resolve against the unified all_module_envs.
-    for (all_module_envs[1..]) |module| {
+    for (all_module_envs) |module| {
         module.imports.resolveImports(module, all_module_envs);
     }
 

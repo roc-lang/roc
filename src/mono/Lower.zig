@@ -206,7 +206,7 @@ fn findModuleForOrigin(self: *Self, source_env: *const ModuleEnv, origin_module:
         }
     }
 
-    // Fallback: compare origin name against resolved module names
+    // Fallback: compare origin name against resolved module names via imports
     const origin_name = source_env.getIdent(origin_module);
     for (0..import_count) |i| {
         const import_idx: CIR.Import.Idx = @enumFromInt(i);
@@ -2132,6 +2132,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                 };
 
                 if (recv_nominal) |rn| {
+                    // Origin must be resolvable — resolveImports must have run for all modules
                     const origin_module_idx = self.findModuleForOrigin(recv_type_source_env, rn.origin) orelse {
                         unreachable;
                     };
@@ -2876,6 +2877,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             };
 
             // Step 4: Find origin module index via imports
+            // Origin must be resolvable — resolveImports must have run for all modules
             const origin_module_idx = self.findModuleForOrigin(type_source_env, info.origin) orelse {
                 unreachable;
             };
