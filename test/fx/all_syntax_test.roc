@@ -224,7 +224,7 @@ record_update_2 = |person| {
 
 number_literals = {
 	usage_based: 5, # defaults to Dec
-	explicit_u8: 5.U8, # Note that most of the time you will want to specify the type in the type signature.
+	explicit_u8: 5.U8, # Note that most of the time you will want to specify the type in the type signature instead.
 	explicit_i8: 5.I8,
 	explicit_u16: 5.U16,
 	explicit_i16: 5.I16,
