@@ -507,7 +507,9 @@ pub fn ForwardFrameBuilder(comptime EmitType: type) type {
             if (self.push_count % 2 == 1) {
                 if (self.push_regs[self.push_count - 1]) |reg| {
                     // STR to a fixed offset within allocated space
-                    const odd_offset: u12 = @intCast(self.actual_stack_alloc - 8);
+                    // strRegMemUoff uses scaled unsigned offset (imm12 * 8 for .w64)
+                    const odd_byte_offset: u32 = self.actual_stack_alloc - 8;
+                    const odd_offset: u12 = @intCast(odd_byte_offset >> 3);
                     try self.emit.strRegMemUoff(.w64, reg, .ZRSP, odd_offset);
                 }
             }
@@ -564,7 +566,9 @@ pub fn ForwardFrameBuilder(comptime EmitType: type) type {
             // Restore odd register first (stored at [SP + actual_stack_alloc - 8])
             if (self.push_count % 2 == 1) {
                 if (self.push_regs[self.push_count - 1]) |reg| {
-                    const odd_offset: u12 = @intCast(self.actual_stack_alloc - 8);
+                    // ldrRegMemUoff uses scaled unsigned offset (imm12 * 8 for .w64)
+                    const odd_byte_offset: u32 = self.actual_stack_alloc - 8;
+                    const odd_offset: u12 = @intCast(odd_byte_offset >> 3);
                     try self.emit.ldrRegMemUoff(.w64, reg, .ZRSP, odd_offset);
                 }
             }

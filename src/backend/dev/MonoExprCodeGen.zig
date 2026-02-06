@@ -14430,6 +14430,12 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             break :blk param_layout == .i128 or param_layout == .u128 or param_layout == .dec;
                         } else false;
 
+                        // Check if this is a string type (24 bytes)
+                        const is_str = if (param_idx < layouts.len)
+                            layouts[param_idx] == .str
+                        else
+                            false;
+
                         // Check if this is a list type (24 bytes)
                         const is_list = if (param_idx < layouts.len) blk: {
                             const param_layout = layouts[param_idx];
@@ -14444,7 +14450,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         } else false;
 
                         // Determine number of registers needed
-                        const num_regs: u8 = if (is_128bit) 2 else if (is_list) 3 else 1;
+                        const num_regs: u8 = if (is_128bit) 2 else if (is_str or is_list) 3 else 1;
 
                         if (reg_idx + num_regs <= max_arg_regs) {
                             // Fits in registers - use register-based loading
@@ -14462,6 +14468,25 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                 try self.codegen.emitStoreStack(.w64, stack_offset + 8, high_reg);
                                 try self.symbol_locations.put(symbol_key, .{ .stack_i128 = stack_offset });
                                 reg_idx += 2;
+                            } else if (is_str) {
+                                const stack_offset = self.codegen.allocStackSlot(roc_str_size);
+                                if (comptime target.toCpuArch() == .aarch64) {
+                                    const reg0 = self.getArgumentRegister(reg_idx);
+                                    const reg1 = self.getArgumentRegister(reg_idx + 1);
+                                    const reg2 = self.getArgumentRegister(reg_idx + 2);
+                                    try self.codegen.emit.strRegMemSoff(.w64, reg0, .FP, stack_offset);
+                                    try self.codegen.emit.strRegMemSoff(.w64, reg1, .FP, stack_offset + 8);
+                                    try self.codegen.emit.strRegMemSoff(.w64, reg2, .FP, stack_offset + 16);
+                                } else {
+                                    const reg0 = self.getArgumentRegister(reg_idx);
+                                    const reg1 = self.getArgumentRegister(reg_idx + 1);
+                                    const reg2 = self.getArgumentRegister(reg_idx + 2);
+                                    try self.codegen.emit.movMemReg(.w64, .RBP, stack_offset, reg0);
+                                    try self.codegen.emit.movMemReg(.w64, .RBP, stack_offset + 8, reg1);
+                                    try self.codegen.emit.movMemReg(.w64, .RBP, stack_offset + 16, reg2);
+                                }
+                                try self.symbol_locations.put(symbol_key, .{ .stack_str = stack_offset });
+                                reg_idx += 3;
                             } else if (is_list) {
                                 const stack_offset = self.codegen.allocStackSlot(roc_str_size);
                                 if (comptime target.toCpuArch() == .aarch64) {
@@ -14502,6 +14527,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             // Set up symbol location based on type
                             if (is_128bit) {
                                 try self.symbol_locations.put(symbol_key, .{ .stack_i128 = local_stack_offset });
+                            } else if (is_str) {
+                                try self.symbol_locations.put(symbol_key, .{ .stack_str = local_stack_offset });
                             } else if (is_list) {
                                 try self.symbol_locations.put(symbol_key, .{ .list_stack = .{
                                     .struct_offset = local_stack_offset,
@@ -14635,6 +14662,18 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                 else => unreachable,
                             }
                         }
+                    } else if (value_loc == .stack_str) {
+                        // String return (24 bytes) - return in X0, X1, X2 (aarch64) or RAX, RDX, RCX (x86_64)
+                        const offset = value_loc.stack_str;
+                        if (comptime target.toCpuArch() == .aarch64) {
+                            try self.codegen.emitLoadStack(.w64, .X0, offset);
+                            try self.codegen.emitLoadStack(.w64, .X1, offset + 8);
+                            try self.codegen.emitLoadStack(.w64, .X2, offset + 16);
+                        } else {
+                            try self.codegen.emitLoadStack(.w64, .RAX, offset);
+                            try self.codegen.emitLoadStack(.w64, .RDX, offset + 8);
+                            try self.codegen.emitLoadStack(.w64, .RCX, offset + 16);
+                        }
                     } else if (value_loc == .list_stack) {
                         // List return (24 bytes) - return in X0, X1, X2 (aarch64) or RAX, RDX, RCX (x86_64)
                         const offset = value_loc.list_stack.struct_offset;
@@ -14649,11 +14688,15 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         }
                     } else if (value_loc == .stack) {
                         // Check expression layout for multi-register returns
+                        var is_str = false;
                         var is_list = false;
                         var is_i128 = false;
                         var is_large_record = false;
                         var record_size: u32 = 0;
                         const expr_layout_opt = self.getExprLayout(r.value);
+                        if (expr_layout_opt) |ret_layout| {
+                            is_str = ret_layout == .str;
+                        }
                         if (self.layout_store) |ls| {
                             if (expr_layout_opt) |ret_layout| {
                                 const layout_val = ls.getLayout(ret_layout);
@@ -14669,8 +14712,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             }
                         }
 
-                        if (is_list) {
-                            // List return (24 bytes) from .stack location
+                        if (is_str or is_list) {
+                            // String/List return (24 bytes) from .stack location
                             const offset = value_loc.stack;
                             if (comptime target.toCpuArch() == .aarch64) {
                                 try self.codegen.emitLoadStack(.w64, .X0, offset);
@@ -14776,6 +14819,12 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             try self.symbol_locations.put(symbol_key, .{ .stack_i128 = stack_offset });
                             reg_idx += 2;
                         } else {
+                            // Check if this is a string type (24 bytes)
+                            const is_str = if (param_idx < layouts.len)
+                                layouts[param_idx] == .str
+                            else
+                                false;
+
                             // Check if this is a list type (24 bytes)
                             const is_list = if (param_idx < layouts.len) blk: {
                                 const param_layout = layouts[param_idx];
@@ -14790,7 +14839,31 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                 break :blk false;
                             } else false;
 
-                            if (is_list) {
+                            if (is_str) {
+                                // String types need 3 consecutive registers (24 bytes)
+                                const stack_offset = self.codegen.allocStackSlot(roc_str_size);
+
+                                if (comptime target.toCpuArch() == .aarch64) {
+                                    const reg0 = self.getArgumentRegister(reg_idx);
+                                    const reg1 = self.getArgumentRegister(reg_idx + 1);
+                                    const reg2 = self.getArgumentRegister(reg_idx + 2);
+
+                                    try self.codegen.emit.strRegMemSoff(.w64, reg0, .FP, stack_offset);
+                                    try self.codegen.emit.strRegMemSoff(.w64, reg1, .FP, stack_offset + 8);
+                                    try self.codegen.emit.strRegMemSoff(.w64, reg2, .FP, stack_offset + 16);
+                                } else {
+                                    const reg0 = self.getArgumentRegister(reg_idx);
+                                    const reg1 = self.getArgumentRegister(reg_idx + 1);
+                                    const reg2 = self.getArgumentRegister(reg_idx + 2);
+
+                                    try self.codegen.emit.movMemReg(.w64, .RBP, stack_offset, reg0);
+                                    try self.codegen.emit.movMemReg(.w64, .RBP, stack_offset + 8, reg1);
+                                    try self.codegen.emit.movMemReg(.w64, .RBP, stack_offset + 16, reg2);
+                                }
+
+                                try self.symbol_locations.put(symbol_key, .{ .stack_str = stack_offset });
+                                reg_idx += 3;
+                            } else if (is_list) {
                                 // List types need 3 consecutive registers
                                 const stack_offset = self.codegen.allocStackSlot(roc_str_size);
 
@@ -15612,16 +15685,35 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             // aarch64 AAPCS64: X0=roc_ops, X1=ret_ptr, X2=args_ptr
 
             if (arch == .aarch64 or arch == .aarch64_be) {
-                // Emit prologue using ForwardFrameBuilder
-                var frame = self.initEntrypointFrameBuilder();
-                self.codegen.stack_offset = try frame.emitPrologue();
+                // Use DeferredFrameBuilder pattern: generate body first, then prepend prologue.
+                // This ensures the stack frame is correctly sized for the actual body code,
+                // which may include inlined lambda bodies that allocate many stack slots.
 
-                // Now safe to use callee-saved registers
-                // Save RocOps pointer (X0) to callee-saved register X19
+                // Save state that the body generation will modify
+                const saved_callee_saved_used = self.codegen.callee_saved_used;
+                const saved_callee_saved_available = self.codegen.callee_saved_available;
+                const saved_roc_ops_reg = self.roc_ops_reg;
+                const saved_early_return_patches_len = self.early_return_patches.items.len;
+
+                // Mark X19/X20/X21 as used callee-saved registers (roc_ops, ret_ptr, args_ptr)
+                const x19_bit = @as(u32, 1) << @intFromEnum(aarch64.GeneralReg.X19);
+                const x20_bit = @as(u32, 1) << @intFromEnum(aarch64.GeneralReg.X20);
+                const x21_bit = @as(u32, 1) << @intFromEnum(aarch64.GeneralReg.X21);
+                self.codegen.callee_saved_used = x19_bit | x20_bit | x21_bit;
+                // Remove from available pool so body code can't use them as temps
+                self.codegen.callee_saved_available &= ~(x19_bit | x20_bit | x21_bit);
+
+                // PHASE 1: Generate body first (to determine actual stack usage)
+                // Initialize stack_offset for procedure-style frame (positive, grows upward from FP)
+                // Layout: [FP/LR (16)] [callee-saved area (80)] [locals...]
+                self.codegen.stack_offset = 16 + CodeGen.CALLEE_SAVED_AREA_SIZE;
+
+                const body_start = self.codegen.currentOffset();
+                const relocs_before = self.codegen.relocations.items.len;
+
+                // Save args to callee-saved registers (safe because prologue will save them)
                 try self.codegen.emit.movRegReg(.w64, .X19, .X0);
-                // Save ret_ptr (X1) to callee-saved register X20
                 try self.codegen.emit.movRegReg(.w64, .X20, .X1);
-                // Save args_ptr (X2) to callee-saved register X21
                 try self.codegen.emit.movRegReg(.w64, .X21, .X2);
 
                 self.roc_ops_reg = .X19;
@@ -15687,9 +15779,57 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     try self.storeResultToSavedPtr(final_result, actual_ret_layout, .X20, 1);
                 }
 
-                // Epilogue using ForwardFrameBuilder (matches prologue)
-                var epilogue_frame = self.initEntrypointFrameBuilder();
-                try epilogue_frame.emitEpilogue();
+                // Emit epilogue using DeferredFrameBuilder with actual stack usage
+                const body_epilogue_offset = self.codegen.currentOffset();
+                const actual_locals: u32 = @intCast(self.codegen.stack_offset - 16 - CodeGen.CALLEE_SAVED_AREA_SIZE);
+                {
+                    var builder = CodeGen.DeferredFrameBuilder.init();
+                    builder.setCalleeSavedMask(self.codegen.callee_saved_used);
+                    builder.setStackSize(actual_locals);
+                    try builder.emitEpilogue(&self.codegen.emit);
+                }
+
+                const body_end = self.codegen.currentOffset();
+
+                // PHASE 2: Extract body and prepend prologue
+                const body_bytes = self.allocator.dupe(u8, self.codegen.emit.buf.items[body_start..body_end]) catch return Error.OutOfMemory;
+                defer self.allocator.free(body_bytes);
+
+                // Truncate buffer back to body_start
+                self.codegen.emit.buf.shrinkRetainingCapacity(body_start);
+
+                // Emit prologue with actual stack usage
+                const prologue_start = self.codegen.currentOffset();
+                {
+                    var frame_builder = CodeGen.DeferredFrameBuilder.init();
+                    frame_builder.setCalleeSavedMask(self.codegen.callee_saved_used);
+                    frame_builder.setStackSize(actual_locals);
+                    _ = try frame_builder.emitPrologue(&self.codegen.emit);
+                }
+                const prologue_size_val = self.codegen.currentOffset() - prologue_start;
+
+                // Re-append body
+                self.codegen.emit.buf.appendSlice(self.allocator, body_bytes) catch return Error.OutOfMemory;
+
+                // Adjust relocation offsets
+                for (self.codegen.relocations.items[relocs_before..]) |*reloc| {
+                    reloc.adjustOffset(prologue_size_val);
+                }
+
+                // Patch early return jumps to the epilogue (shifted by prologue_size)
+                for (self.early_return_patches.items[saved_early_return_patches_len..]) |*patch| {
+                    patch.* += prologue_size_val;
+                }
+                const final_epilogue = body_epilogue_offset - body_start + prologue_size_val + prologue_start;
+                for (self.early_return_patches.items[saved_early_return_patches_len..]) |patch| {
+                    self.codegen.patchJump(patch, final_epilogue);
+                }
+                self.early_return_patches.shrinkRetainingCapacity(saved_early_return_patches_len);
+
+                // Restore state
+                self.codegen.callee_saved_used = saved_callee_saved_used;
+                self.codegen.callee_saved_available = saved_callee_saved_available;
+                self.roc_ops_reg = saved_roc_ops_reg;
             } else {
                 // x86_64: emit prologue using ForwardFrameBuilder
                 var frame = self.initEntrypointFrameBuilder();
