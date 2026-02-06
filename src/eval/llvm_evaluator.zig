@@ -23,6 +23,7 @@ const eval_mod = @import("mod.zig");
 const LlvmBuilder = std.zig.llvm.Builder;
 
 const Allocator = std.mem.Allocator;
+const Allocators = base.Allocators;
 const ModuleEnv = can.ModuleEnv;
 const CIR = can.CIR;
 const Can = can.Can;
@@ -230,10 +231,14 @@ pub const LlvmEvaluator = struct {
         var module_env = ModuleEnv.init(self.allocator, source) catch return error.OutOfMemory;
         defer module_env.deinit();
 
-        var parse_ast = parse.parseExpr(&module_env.common, self.allocator) catch {
+        var allocators: Allocators = undefined;
+        allocators.initInPlace(self.allocator);
+        defer allocators.deinit();
+
+        const parse_ast = parse.parseExpr(&allocators, &module_env.common) catch {
             return error.ParseError;
         };
-        defer parse_ast.deinit(self.allocator);
+        defer parse_ast.deinit();
 
         if (parse_ast.hasErrors()) {
             return error.ParseError;
@@ -253,7 +258,7 @@ pub const LlvmEvaluator = struct {
             self.builtin_indices,
         ) catch return error.OutOfMemory;
 
-        var czer = Can.init(&module_env, &parse_ast, &module_envs_map) catch {
+        var czer = Can.init(&allocators, &module_env, parse_ast, &module_envs_map) catch {
             return error.CanonicalizeError;
         };
         defer czer.deinit();

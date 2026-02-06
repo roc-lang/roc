@@ -1,5 +1,6 @@
 //! Tests for the expression evaluator
 const std = @import("std");
+const builtin = @import("builtin");
 const parse = @import("parse");
 const types = @import("types");
 const base = @import("base");
@@ -24,10 +25,18 @@ const backend = @import("backend");
 const bytebox = @import("bytebox");
 const WasmEvaluator = eval_mod.WasmEvaluator;
 
+const posix = std.posix;
+
+const has_fork = switch (builtin.os.tag) {
+    .macos, .linux, .freebsd, .openbsd, .netbsd => true,
+    else => false,
+};
+
 const Check = check.Check;
 const Can = can.Can;
 const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
+const Allocators = base.Allocators;
 
 // Use std.testing.allocator for dev backend tests (tracks leaks)
 const test_allocator = std.testing.allocator;
@@ -55,14 +64,54 @@ const TraceWriter = struct {
     }
 };
 
+/// Dump bytes as hex with address and ASCII view
+fn dumpHex(data: []const u8) void {
+    var offset: usize = 0;
+    while (offset < data.len) {
+        // Print address
+        std.debug.print("{X:0>4}: ", .{offset});
+
+        // Print hex bytes (16 per line)
+        var i: usize = 0;
+        while (i < 16) : (i += 1) {
+            if (offset + i < data.len) {
+                std.debug.print("{X:0>2} ", .{data[offset + i]});
+            } else {
+                std.debug.print("   ", .{});
+            }
+            if (i == 7) std.debug.print(" ", .{});
+        }
+
+        // Print ASCII
+        std.debug.print(" |", .{});
+        i = 0;
+        while (i < 16 and offset + i < data.len) : (i += 1) {
+            const c = data[offset + i];
+            if (c >= 0x20 and c < 0x7F) {
+                std.debug.print("{c}", .{c});
+            } else {
+                std.debug.print(".", .{});
+            }
+        }
+        std.debug.print("|\n", .{});
+
+        offset += 16;
+    }
+}
+
 /// Errors that can occur during DevEvaluator string generation
 const DevEvalError = error{
     DevEvaluatorInitFailed,
     GenerateCodeFailed,
     ExecInitFailed,
     RocCrashed,
+    Segfault, // Windows SEH-caught segfault (access violation)
     UnsupportedLayout,
     OutOfMemory,
+    ChildSegfaulted, // Unix fork-based segfault detection
+    ChildExecFailed,
+    ForkFailed,
+    PipeCreationFailed,
 };
 
 /// Evaluate an expression using the DevEvaluator and return the result as a string.
@@ -83,21 +132,55 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
     };
     defer code_result.deinit();
 
+    // Debug hex dump of generated machine code.
+    // Set to true to see the raw bytes for disassembly analysis.
+    // Useful for debugging calling convention issues, register allocation, etc.
+    // See src/backend/README.md for instructions on running filtered tests with hex dump.
+    const dump_generated_code_hex = false;
+    if (dump_generated_code_hex and code_result.code.len > 0) {
+        std.debug.print("\n=== Generated Code ({} bytes, entry_offset={}) ===\n", .{ code_result.code.len, code_result.entry_offset });
+        dumpHex(code_result.code);
+        std.debug.print("=== End Generated Code ===\n\n", .{});
+    }
+
     // Execute the compiled code (with entry_offset for compiled procedures)
     var executable = backend.ExecutableMemory.initWithEntryOffset(code_result.code, code_result.entry_offset) catch {
         return error.ExecInitFailed;
     };
     defer executable.deinit();
 
+    if (has_fork) {
+        return forkAndExecute(allocator, &dev_eval, &executable, &code_result);
+    } else {
+        return executeAndFormat(allocator, &dev_eval, &executable, &code_result);
+    }
+}
+
+/// Execute compiled code and format the result as a string.
+/// This is the core execution + formatting logic extracted from devEvaluatorStr.
+/// Marked noinline to prevent optimizer from inlining across fork() boundary,
+/// which can cause register state issues in the child process.
+noinline fn executeAndFormat(
+    alloc: std.mem.Allocator,
+    dev_eval: *DevEvaluator,
+    executable: *backend.ExecutableMemory,
+    code_result: *DevEvaluator.CodeResult,
+) DevEvalError![]const u8 {
+    // Compiler barrier: std.debug.print with empty string acts as a full
+    // memory barrier, ensuring all struct fields are properly materialized
+    // from memory rather than potentially kept in registers across fork().
+    // This is necessary for fork-based test isolation in ReleaseFast builds.
+    std.debug.print("", .{});
+
     // Check if this is a tuple
     if (code_result.tuple_len > 1) {
         // Allocate buffer for tuple elements
         // Unsuffixed numeric literals default to Dec (i128 = 16 bytes each)
         var result_buf: [32]i128 align(16) = @splat(0);
-        try dev_eval.callWithCrashProtection(&executable, @ptrCast(&result_buf));
+        try dev_eval.callWithCrashProtection(executable, @ptrCast(&result_buf));
 
         // Format as "(elem1, elem2, ...)"
-        var output = std.array_list.Managed(u8).initCapacity(allocator, 64) catch
+        var output = std.array_list.Managed(u8).initCapacity(alloc, 64) catch
             return error.OutOfMemory;
         errdefer output.deinit();
         output.append('(') catch return error.OutOfMemory;
@@ -115,8 +198,8 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
 
             if (abs_val < one_point_zero / 10) {
                 // This is a raw integer, not Dec-scaled - format as "N.0"
-                const elem_str = try std.fmt.allocPrint(allocator, "{d}.0", .{raw_val});
-                defer allocator.free(elem_str);
+                const elem_str = try std.fmt.allocPrint(alloc, "{d}.0", .{raw_val});
+                defer alloc.free(elem_str);
                 try output.appendSlice(elem_str);
             } else {
                 // This is a Dec-scaled value - format as Dec
@@ -136,37 +219,37 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
     return switch (code_result.result_layout) {
         layout_mod.Idx.i64, layout_mod.Idx.i8, layout_mod.Idx.i16, layout_mod.Idx.i32 => blk: {
             var result: i64 = 0;
-            try dev_eval.callWithCrashProtection(&executable, @ptrCast(&result));
-            break :blk std.fmt.allocPrint(allocator, "{}", .{result});
+            try dev_eval.callWithCrashProtection(executable, @ptrCast(&result));
+            break :blk std.fmt.allocPrint(alloc, "{}", .{result});
         },
         layout_mod.Idx.u64, layout_mod.Idx.u8, layout_mod.Idx.u16, layout_mod.Idx.u32, layout_mod.Idx.bool => blk: {
             var result: u64 = 0;
-            try dev_eval.callWithCrashProtection(&executable, @ptrCast(&result));
-            break :blk std.fmt.allocPrint(allocator, "{}", .{result});
+            try dev_eval.callWithCrashProtection(executable, @ptrCast(&result));
+            break :blk std.fmt.allocPrint(alloc, "{}", .{result});
         },
         layout_mod.Idx.f64 => blk: {
             var result: f64 = 0;
-            try dev_eval.callWithCrashProtection(&executable, @ptrCast(&result));
-            break :blk std.fmt.allocPrint(allocator, "{d}", .{result});
+            try dev_eval.callWithCrashProtection(executable, @ptrCast(&result));
+            break :blk std.fmt.allocPrint(alloc, "{d}", .{result});
         },
         layout_mod.Idx.f32 => blk: {
             // F32 stores 4 bytes, use f32 buffer and print at f32 precision
             var result: f32 = 0;
-            try dev_eval.callWithCrashProtection(&executable, @ptrCast(&result));
-            break :blk std.fmt.allocPrint(allocator, "{d}", .{result});
+            try dev_eval.callWithCrashProtection(executable, @ptrCast(&result));
+            break :blk std.fmt.allocPrint(alloc, "{d}", .{result});
         },
         layout_mod.Idx.i128, layout_mod.Idx.u128 => blk: {
             var result: i128 align(16) = 0; // Initialize to 0 and ensure 16-byte alignment
-            try dev_eval.callWithCrashProtection(&executable, @ptrCast(&result));
-            break :blk std.fmt.allocPrint(allocator, "{}", .{result});
+            try dev_eval.callWithCrashProtection(executable, @ptrCast(&result));
+            break :blk std.fmt.allocPrint(alloc, "{}", .{result});
         },
         layout_mod.Idx.dec => blk: {
             var result: i128 align(16) = 0; // Initialize to 0 and ensure 16-byte alignment
-            try dev_eval.callWithCrashProtection(&executable, @ptrCast(&result));
+            try dev_eval.callWithCrashProtection(executable, @ptrCast(&result));
             const dec = builtins.dec.RocDec{ .num = result };
             var buf: [builtins.dec.RocDec.max_str_length]u8 = undefined;
             const slice = dec.format_to_buf(&buf);
-            break :blk allocator.dupe(u8, slice);
+            break :blk alloc.dupe(u8, slice);
         },
         layout_mod.Idx.str => blk: {
             // RocStr is 24 bytes - use a properly aligned struct
@@ -180,19 +263,19 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
                 .length = 0,
                 .capacity_or_alloc_ptr = 0,
             };
-            try dev_eval.callWithCrashProtection(&executable, @ptrCast(&result));
+            try dev_eval.callWithCrashProtection(executable, @ptrCast(&result));
 
             // Check if small string (capacity_or_alloc_ptr is negative when cast to signed)
             if (@as(isize, @bitCast(result.capacity_or_alloc_ptr)) < 0) {
                 // Small string: length is in the last byte of the struct XOR'd with 0x80
-                const result_bytes: *const [24]u8 = @ptrCast(&result);
-                const len = result_bytes[23] ^ 0x80;
+                const result_bytes: *const [@sizeOf(builtins.str.RocStr)]u8 = @ptrCast(&result);
+                const len = result_bytes[@sizeOf(builtins.str.RocStr) - 1] ^ 0x80;
                 // Return the string content directly (no quotes in result)
-                break :blk std.fmt.allocPrint(allocator, "{s}", .{result_bytes[0..len]});
+                break :blk std.fmt.allocPrint(alloc, "{s}", .{result_bytes[0..len]});
             } else {
                 // Large string (heap allocated)
                 const str_bytes = result.bytes.?[0..result.length];
-                const formatted = std.fmt.allocPrint(allocator, "{s}", .{str_bytes});
+                const formatted = std.fmt.allocPrint(alloc, "{s}", .{str_bytes});
 
                 // Decref the heap-allocated string data after copying
                 // This will free the memory when refcount reaches 0
@@ -220,10 +303,10 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
                         .len = 0,
                         .capacity = 0,
                     };
-                    try dev_eval.callWithCrashProtection(&executable, @ptrCast(&result));
+                    try dev_eval.callWithCrashProtection(executable, @ptrCast(&result));
 
                     // Format as [(), (), ...] based on the length
-                    var output = std.array_list.Managed(u8).initCapacity(allocator, 64) catch
+                    var output = std.array_list.Managed(u8).initCapacity(alloc, 64) catch
                         return error.OutOfMemory;
                     errdefer output.deinit();
                     output.append('[') catch return error.OutOfMemory;
@@ -249,9 +332,9 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
                         .len = 0,
                         .capacity = 0,
                     };
-                    try dev_eval.callWithCrashProtection(&executable, @ptrCast(&result));
+                    try dev_eval.callWithCrashProtection(executable, @ptrCast(&result));
 
-                    var output = std.array_list.Managed(u8).initCapacity(allocator, 64) catch
+                    var output = std.array_list.Managed(u8).initCapacity(alloc, 64) catch
                         return error.OutOfMemory;
                     errdefer output.deinit();
                     output.append('[') catch return error.OutOfMemory;
@@ -262,8 +345,8 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
                             if (i > 0) {
                                 try output.appendSlice(", ");
                             }
-                            const elem_str = try std.fmt.allocPrint(allocator, "{}", .{elem});
-                            defer allocator.free(elem_str);
+                            const elem_str = try std.fmt.allocPrint(alloc, "{}", .{elem});
+                            defer alloc.free(elem_str);
                             try output.appendSlice(elem_str);
                         }
                     }
@@ -280,12 +363,112 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
                     const record_idx = stored_layout.data.record.idx.int_idx;
                     const record_data = ls.record_data.items.items[record_idx];
                     const field_count = record_data.fields.count;
-                    break :blk std.fmt.allocPrint(allocator, "{{record with {d} fields}}", .{field_count});
+                    break :blk std.fmt.allocPrint(alloc, "{{record with {d} fields}}", .{field_count});
                 },
                 else => @panic("TODO: devEvaluatorStr for unsupported layout tag"),
             }
         },
     };
+}
+
+/// Fork a child process to execute compiled code, isolating segfaults from the test process.
+/// The child executes the code and writes the formatted result string back through a pipe.
+/// If the child segfaults, the parent reports it as a failed test instead of crashing.
+fn forkAndExecute(
+    allocator: std.mem.Allocator,
+    dev_eval: *DevEvaluator,
+    executable: *backend.ExecutableMemory,
+    code_result: *DevEvaluator.CodeResult,
+) DevEvalError![]const u8 {
+    const pipe_fds = posix.pipe() catch {
+        return error.PipeCreationFailed;
+    };
+    const pipe_read = pipe_fds[0];
+    const pipe_write = pipe_fds[1];
+
+    const fork_result = posix.fork() catch {
+        posix.close(pipe_read);
+        posix.close(pipe_write);
+        return error.ForkFailed;
+    };
+
+    if (fork_result == 0) {
+        // Child process
+        posix.close(pipe_read);
+
+        // Use page_allocator in child — testing.allocator's leak tracking is
+        // meaningless since we exit via _exit and no defers run.
+        const child_alloc = std.heap.page_allocator;
+
+        const result_str = executeAndFormat(child_alloc, dev_eval, executable, code_result) catch {
+            posix.close(pipe_write);
+            posix.exit(1);
+        };
+
+        // Write the result string to the pipe
+        var written: usize = 0;
+        while (written < result_str.len) {
+            written += posix.write(pipe_write, result_str[written..]) catch {
+                posix.close(pipe_write);
+                posix.exit(1);
+            };
+        }
+
+        posix.close(pipe_write);
+        posix.exit(0);
+    } else {
+        // Parent process
+        posix.close(pipe_write);
+
+        // Wait for child to exit
+        const wait_result = posix.waitpid(fork_result, 0);
+        const status = wait_result.status;
+
+        // Parse the wait status (Unix encoding)
+        const termination_signal: u8 = @truncate(status & 0x7f);
+
+        if (termination_signal != 0) {
+            // Child was killed by a signal (e.g. SIGSEGV)
+            posix.close(pipe_read);
+            std.debug.print("\nChild process killed by signal {d} (", .{termination_signal});
+            switch (termination_signal) {
+                11 => std.debug.print("SIGSEGV", .{}),
+                6 => std.debug.print("SIGABRT", .{}),
+                8 => std.debug.print("SIGFPE", .{}),
+                4 => std.debug.print("SIGILL", .{}),
+                7 => std.debug.print("SIGBUS", .{}),
+                else => std.debug.print("unknown", .{}),
+            }
+            std.debug.print(") during dev backend execution\n", .{});
+            return error.ChildSegfaulted;
+        }
+
+        const exit_code: u8 = @truncate((status >> 8) & 0xff);
+        if (exit_code != 0) {
+            posix.close(pipe_read);
+            return error.ChildExecFailed;
+        }
+
+        // Read result string from pipe
+        var result_buf: std.ArrayList(u8) = .empty;
+        errdefer result_buf.deinit(allocator);
+
+        var read_buf: [4096]u8 = undefined;
+        while (true) {
+            const bytes_read = posix.read(pipe_read, &read_buf) catch {
+                posix.close(pipe_read);
+                return error.ChildExecFailed;
+            };
+            if (bytes_read == 0) break;
+            result_buf.appendSlice(allocator, read_buf[0..bytes_read]) catch {
+                posix.close(pipe_read);
+                return error.OutOfMemory;
+            };
+        }
+
+        posix.close(pipe_read);
+        return result_buf.toOwnedSlice(allocator) catch return error.OutOfMemory;
+    }
 }
 
 /// Compare Interpreter result string with DevEvaluator result string.
@@ -2439,8 +2622,10 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     try module_env.common.calcLineStarts(module_env.gpa);
 
     // Parse the source code as an expression (following REPL pattern)
-    const parse_ast = try allocator.create(parse.AST);
-    parse_ast.* = try parse.parseExpr(&module_env.common, module_env.gpa);
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(allocator);
+    // NOTE: allocators is not freed here - caller handles cleanup via cleanupTestResources
+    const parse_ast = try parse.parseExpr(&allocators, &module_env.common);
 
     // Check for parse errors in test code
     // NOTE: This is TEST-ONLY behavior! In production, the parser continues and collects
@@ -2489,7 +2674,7 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
 
     // Create czer with module_envs_map for qualified name resolution (following REPL pattern)
     const czer = try allocator.create(Can);
-    czer.* = try Can.init(module_env, parse_ast, &module_envs_map);
+    czer.* = try Can.init(&allocators, module_env, parse_ast, &module_envs_map);
 
     // Canonicalize the expression (following REPL pattern)
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
@@ -2573,12 +2758,11 @@ pub fn cleanupParseAndCanonical(allocator: std.mem.Allocator, resources: anytype
     builtin_module_copy.deinit();
     resources.checker.deinit();
     resources.can.deinit();
-    resources.parse_ast.deinit(allocator);
+    resources.parse_ast.deinit();
     // module_env.source is not owned by module_env - don't free it
     resources.module_env.deinit();
     allocator.destroy(resources.checker);
     allocator.destroy(resources.can);
-    allocator.destroy(resources.parse_ast);
     allocator.destroy(resources.module_env);
 }
 

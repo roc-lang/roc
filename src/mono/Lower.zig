@@ -1871,9 +1871,11 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             const params = try self.lowerPatternSpan(module_env, lambda.args);
             const body = try self.lowerExprFromIdx(module_env, lambda.body);
             const ret_layout = self.getExprLayoutFromIdx(module_env, lambda.body);
+            const fn_layout = self.getExprLayoutFromIdx(module_env, expr_idx);
+
             break :blk .{
                 .lambda = .{
-                    .fn_layout = self.getExprLayoutFromIdx(module_env, expr_idx),
+                    .fn_layout = fn_layout,
                     .params = params,
                     .body = body,
                     .ret_layout = ret_layout,
@@ -2985,7 +2987,7 @@ fn lowerPattern(self: *Self, module_env: *ModuleEnv, pattern_idx: CIR.Pattern.Id
             },
         },
 
-        .underscore => .{ .wildcard = {} },
+        .underscore => .{ .wildcard = .{ .layout_idx = self.getPatternLayout(pattern_idx) } },
 
         .num_literal => |n| .{ .int_literal = .{
             .value = n.value.toI128(),
@@ -3074,7 +3076,7 @@ fn lowerPattern(self: *Self, module_env: *ModuleEnv, pattern_idx: CIR.Pattern.Id
                 if (rest_info.pattern) |rest_pattern|
                     try self.lowerPattern(module_env, rest_pattern)
                 else
-                    try self.store.addPattern(.{ .wildcard = {} }, region)
+                    try self.store.addPattern(.{ .wildcard = .{ .layout_idx = .zst } }, region)
             else
                 MonoPatternId.none;
 
@@ -3130,7 +3132,7 @@ fn lowerPattern(self: *Self, module_env: *ModuleEnv, pattern_idx: CIR.Pattern.Id
             return self.lowerPattern(module_env, n.backing_pattern);
         },
 
-        else => .{ .wildcard = {} }, // Fallback for unsupported patterns
+        else => .{ .wildcard = .{ .layout_idx = self.getPatternLayout(pattern_idx) } }, // Fallback for unsupported patterns
     };
 
     return self.store.addPattern(mono_pattern, region);
@@ -3779,7 +3781,8 @@ fn lowerStmts(self: *Self, module_env: *ModuleEnv, stmts: CIR.Statement.Span) Al
                 // Expression statement - evaluate for side effects
                 // Create a wildcard pattern to discard the result
                 const value = try self.lowerExprFromIdx(module_env, expr_stmt.expr);
-                const wildcard_pattern = try self.store.addPattern(.{ .wildcard = {} }, Region.zero());
+                const expr_layout = self.getExprLayoutFromIdx(module_env, expr_stmt.expr);
+                const wildcard_pattern = try self.store.addPattern(.{ .wildcard = .{ .layout_idx = expr_layout } }, Region.zero());
 
                 try lowered.append(self.allocator, .{
                     .pattern = wildcard_pattern,
@@ -3811,7 +3814,7 @@ fn lowerStmts(self: *Self, module_env: *ModuleEnv, stmts: CIR.Statement.Span) Al
                 }, Region.zero());
 
                 // Create a wildcard pattern to discard the result (for loops return unit)
-                const wildcard_pattern = try self.store.addPattern(.{ .wildcard = {} }, Region.zero());
+                const wildcard_pattern = try self.store.addPattern(.{ .wildcard = .{ .layout_idx = .zst } }, Region.zero());
 
                 try lowered.append(self.allocator, .{
                     .pattern = wildcard_pattern,
@@ -3831,7 +3834,7 @@ fn lowerStmts(self: *Self, module_env: *ModuleEnv, stmts: CIR.Statement.Span) Al
                 }, Region.zero());
 
                 // Create a wildcard pattern to discard the result (while loops return unit)
-                const wildcard_pattern = try self.store.addPattern(.{ .wildcard = {} }, Region.zero());
+                const wildcard_pattern = try self.store.addPattern(.{ .wildcard = .{ .layout_idx = .zst } }, Region.zero());
 
                 try lowered.append(self.allocator, .{
                     .pattern = wildcard_pattern,
@@ -4502,10 +4505,7 @@ fn extractParamLayouts(self: *Self, params: MonoPatternSpan) Allocator.Error!Lay
             .as_pattern => |a| a.layout_idx,
             .list => |l| l.elem_layout,
             .str_literal => .str, // String literals have string layout
-            // Wildcard patterns don't carry layout information in MonoPattern.
-            // This is a design gap - wildcard should have a layout field.
-            // For now, surface this as an error rather than silently defaulting.
-            .wildcard => unreachable,
+            .wildcard => |wc| wc.layout_idx,
         };
         try layouts.append(self.allocator, layout_idx);
     }

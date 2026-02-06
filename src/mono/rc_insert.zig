@@ -502,7 +502,7 @@ pub const RcInsertPass = struct {
             .count = count,
         } }, region);
 
-        const wildcard = try self.store.addPattern(.{ .wildcard = {} }, region);
+        const wildcard = try self.store.addPattern(.{ .wildcard = .{ .layout_idx = layout_idx } }, region);
         try self.stmt_buf.append(self.allocator, .{
             .pattern = wildcard,
             .expr = incref_id,
@@ -521,7 +521,7 @@ pub const RcInsertPass = struct {
             .layout_idx = layout_idx,
         } }, region);
 
-        const wildcard = try self.store.addPattern(.{ .wildcard = {} }, region);
+        const wildcard = try self.store.addPattern(.{ .wildcard = .{ .layout_idx = layout_idx } }, region);
         try self.stmt_buf.append(self.allocator, .{
             .pattern = wildcard,
             .expr = decref_id,

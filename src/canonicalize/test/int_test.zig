@@ -14,6 +14,7 @@ const Can = @import("../Can.zig");
 const CIR = @import("../CIR.zig");
 const TestEnv = @import("TestEnv.zig").TestEnv;
 const ModuleEnv = @import("../ModuleEnv.zig");
+const Allocators = base.Allocators;
 const parseIntWithUnderscores = Can.parseIntWithUnderscores;
 const RocDec = builtins.dec.RocDec;
 
@@ -476,10 +477,14 @@ test "hexadecimal integer literals" {
 
         try env.initCIRFields("test");
 
-        var ast = try parse.parseExpr(&env.common, env.gpa);
-        defer ast.deinit(gpa);
+        var allocators: Allocators = undefined;
+        allocators.initInPlace(gpa);
+        defer allocators.deinit();
 
-        var czer = try Can.init(&env, &ast, null);
+        const ast = try parse.parseExpr(&allocators, &env.common);
+        defer ast.deinit();
+
+        var czer = try Can.init(&allocators, &env, ast, null);
         defer czer.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -535,10 +540,14 @@ test "binary integer literals" {
 
         try env.initCIRFields("test");
 
-        var ast = try parse.parseExpr(&env.common, env.gpa);
-        defer ast.deinit(gpa);
+        var allocators: Allocators = undefined;
+        allocators.initInPlace(gpa);
+        defer allocators.deinit();
 
-        var czer = try Can.init(&env, &ast, null);
+        const ast = try parse.parseExpr(&allocators, &env.common);
+        defer ast.deinit();
+
+        var czer = try Can.init(&allocators, &env, ast, null);
         defer czer.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -594,10 +603,14 @@ test "octal integer literals" {
 
         try env.initCIRFields("test");
 
-        var ast = try parse.parseExpr(&env.common, env.gpa);
-        defer ast.deinit(gpa);
+        var allocators: Allocators = undefined;
+        allocators.initInPlace(gpa);
+        defer allocators.deinit();
 
-        var czer = try Can.init(&env, &ast, null);
+        const ast = try parse.parseExpr(&allocators, &env.common);
+        defer ast.deinit();
+
+        var czer = try Can.init(&allocators, &env, ast, null);
         defer czer.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -653,10 +666,14 @@ test "integer literals with uppercase base prefixes" {
 
         try env.initCIRFields("test");
 
-        var ast = try parse.parseExpr(&env.common, gpa);
-        defer ast.deinit(gpa);
+        var allocators: Allocators = undefined;
+        allocators.initInPlace(gpa);
+        defer allocators.deinit();
 
-        var czer = try Can.init(&env, &ast, null);
+        const ast = try parse.parseExpr(&allocators, &env.common);
+        defer ast.deinit();
+
+        var czer = try Can.init(&allocators, &env, ast, null);
         defer czer.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);

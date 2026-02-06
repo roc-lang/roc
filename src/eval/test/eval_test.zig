@@ -19,6 +19,7 @@ const BuiltinTypes = @import("../builtins.zig").BuiltinTypes;
 const Can = can.Can;
 const Check = check.Check;
 const ModuleEnv = can.ModuleEnv;
+const Allocators = base.Allocators;
 const CompactWriter = collections.CompactWriter;
 const testing = std.testing;
 // Use interpreter_allocator for interpreter tests (doesn't track leaks)
@@ -95,6 +96,21 @@ test "arithmetic binops" {
     try runExpectI64("4 * 5", 20, .no_trace);
     try runExpectI64("10 // 2", 5, .no_trace);
     try runExpectI64("7 % 3", 1, .no_trace);
+}
+
+test "simple Dec division - larger numbers" {
+    // Single division with numbers similar to failing tests
+    try runExpectI64("100 // 20", 5, .no_trace);
+}
+
+test "simple Dec modulo - larger numbers" {
+    // Single modulo - does this work?
+    try runExpectI64("100 % 30", 10, .no_trace);
+}
+
+test "Dec division result used in arithmetic" {
+    // Division result used in subsequent arithmetic (addition, not another division)
+    try runExpectI64("(100 // 20) + 1", 6, .no_trace);
 }
 
 test "comparison binops" {
@@ -718,8 +734,12 @@ test "ModuleEnv serialization and interpreter evaluation" {
     try original_env.common.calcLineStarts(original_env.gpa);
 
     // Parse the source code
-    var parse_ast = try parse.parseExpr(&original_env.common, original_env.gpa);
-    defer parse_ast.deinit(gpa);
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(gpa);
+    defer allocators.deinit();
+
+    const parse_ast = try parse.parseExpr(&allocators, &original_env.common);
+    defer parse_ast.deinit();
 
     // Empty scratch space (required before canonicalization)
     parse_ast.store.emptyScratch();
@@ -749,7 +769,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
     try module_envs_map.put(builtin_ident, .{ .env = builtin_module.env, .qualified_type_ident = builtin_qualified_ident });
 
     // Create canonicalizer with module_envs_map for qualified name resolution
-    var czer = try Can.init(&original_env, &parse_ast, &module_envs_map);
+    var czer = try Can.init(&allocators, &original_env, parse_ast, &module_envs_map);
     defer czer.deinit();
 
     // Canonicalize the expression
@@ -2516,6 +2536,198 @@ test "proc with tag match returning non-tag type" {
         \\    check(Err(42i32))
         \\}
     , "was err", .no_trace);
+}
+
+test "lambda with list param calling List.len (no allocation)" {
+    // Simple lambda that takes a list and returns its length
+    // This doesn't require allocation, so it tests basic roc_ops passing
+    try runExpectI64(
+        \\{
+        \\    get_len = |l| List.len(l)
+        \\    get_len([1i64, 2i64, 3i64])
+        \\}
+    , 3, .no_trace);
+}
+
+test "lambda with list param calling List.append (requires allocation)" {
+    // Lambda that takes a list and appends to it
+    // This requires allocation, so it tests roc_ops passing for builtins
+    try runExpectI64(
+        \\{
+        \\    add_one = |l| List.len(List.append(l, 99i64))
+        \\    add_one([1i64, 2i64, 3i64])
+        \\}
+    , 4, .no_trace);
+}
+
+test "lambda with list param and var declaration" {
+    // Lambda with a mutable variable inside
+    try runExpectI64(
+        \\{
+        \\    test_fn = |l| {
+        \\        var $acc = [0i64]
+        \\        List.len($acc)
+        \\    }
+        \\    test_fn([1i64, 2i64])
+        \\}
+    , 1, .no_trace);
+}
+
+test "lambda with list param and list literal creation" {
+    // Lambda that creates a list literal inside (requires allocation)
+    try runExpectI64(
+        \\{
+        \\    test_fn = |l| {
+        \\        var $acc = [0i64]
+        \\        List.len($acc)
+        \\    }
+        \\    test_fn([10i64, 20i64])
+        \\}
+    , 1, .no_trace);
+}
+
+test "lambda with list param, var, and for loop" {
+    // Lambda with for loop that mutates a variable
+    try runExpectI64(
+        \\{
+        \\    test_fn = |l| {
+        \\        var $total = 0i64
+        \\        for e in l {
+        \\            $total = $total + e
+        \\        }
+        \\        $total
+        \\    }
+        \\    test_fn([10i64, 20i64, 30i64])
+        \\}
+    , 60, .no_trace);
+}
+
+test "lambda with list param, var, and List.append (no for loop)" {
+    // Lambda with var and List.append but NO for loop
+    try runExpectI64(
+        \\{
+        \\    test_fn = |l| {
+        \\        var $acc = [0i64]
+        \\        $acc = List.append($acc, 42i64)
+        \\        List.len($acc)
+        \\    }
+        \\    test_fn([10i64, 20i64])
+        \\}
+    , 2, .no_trace);
+}
+
+test "minimal lambda with list param and for loop (no allocation)" {
+    // Absolute minimal test: list param + for loop, no allocations inside
+    try runExpectI64(
+        \\{
+        \\    test_fn = |l| {
+        \\        var $total = 0i64
+        \\        for e in l {
+        \\            $total = $total + e
+        \\        }
+        \\        $total
+        \\    }
+        \\    test_fn([1i64, 2i64])
+        \\}
+    , 3, .no_trace);
+}
+
+test "lambda with list param, for loop, and allocation inside loop (list literal)" {
+    // List param + for loop + allocation inside loop body (not List.append)
+    try runExpectI64(
+        \\{
+        \\    test_fn = |l| {
+        \\        var $total = 0i64
+        \\        for e in l {
+        \\            var $temp = [e]
+        \\            $total = $total + e
+        \\        }
+        \\        $total
+        \\    }
+        \\    test_fn([1i64, 2i64])
+        \\}
+    , 3, .no_trace);
+}
+
+test "lambda with for loop over internal list, not param (scalar param)" {
+    // Lambda with for loop over an internal list, scalar parameter
+    try runExpectI64(
+        \\{
+        \\    test_fn = |x| {
+        \\        var $total = 0i64
+        \\        for e in [1i64, 2i64, 3i64] {
+        \\            $total = $total + e
+        \\        }
+        \\        $total
+        \\    }
+        \\    test_fn(42i64)
+        \\}
+    , 6, .no_trace);
+}
+
+test "lambda with list param, for loop over internal list, allocation inside" {
+    // Lambda with list param, but for loop over internal list, allocation inside
+    try runExpectI64(
+        \\{
+        \\    test_fn = |l| {
+        \\        var $total = 0i64
+        \\        for e in [1i64, 2i64] {
+        \\            var $temp = [e]
+        \\            $total = $total + e
+        \\        }
+        \\        $total
+        \\    }
+        \\    test_fn([10i64, 20i64])
+        \\}
+    , 3, .no_trace);
+}
+
+test "lambda with list param, for loop, but empty iteration" {
+    // Lambda with for loop that runs 0 times
+    try runExpectI64(
+        \\{
+        \\    test_fn = |l| {
+        \\        var $acc = [0i64]
+        \\        for e in l {
+        \\            $acc = List.append($acc, e)
+        \\        }
+        \\        List.len($acc)
+        \\    }
+        \\    test_fn([])
+        \\}
+    , 1, .no_trace);
+}
+
+test "lambda with list param, for loop, and List.append in loop with single iteration" {
+    // Lambda with for loop that calls List.append but with single element
+    try runExpectI64(
+        \\{
+        \\    test_fn = |l| {
+        \\        var $acc = [0i64]
+        \\        for e in l {
+        \\            $acc = List.append($acc, e)
+        \\        }
+        \\        List.len($acc)
+        \\    }
+        \\    test_fn([10i64])
+        \\}
+    , 2, .no_trace);
+}
+
+test "lambda with list param, var, for loop, and List.append" {
+    // Lambda with for loop that calls List.append
+    try runExpectI64(
+        \\{
+        \\    test_fn = |l| {
+        \\        var $acc = [0i64]
+        \\        for e in l {
+        \\            $acc = List.append($acc, e)
+        \\        }
+        \\        List.len($acc)
+        \\    }
+        \\    test_fn([10i64, 20i64, 30i64])
+        \\}
+    , 4, .no_trace);
 }
 
 test "issue 8899: closure decref index out of bounds in for loop" {

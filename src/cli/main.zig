@@ -114,6 +114,10 @@ const ShimLibraries = struct {
     /// WebAssembly target shim (wasm32-freestanding)
     const wasm32 = if (builtin.is_test) &[_]u8{} else @embedFile("targets/wasm32/libroc_interpreter_shim.a");
 
+    /// Cross-compilation target shims (Windows targets)
+    const x64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64win/roc_interpreter_shim.lib");
+    const arm64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64win/roc_interpreter_shim.lib");
+
     /// Get the appropriate shim library bytes for the given target
     pub fn forTarget(target: roc_target.RocTarget) []const u8 {
         return switch (target) {
@@ -122,8 +126,10 @@ const ShimLibraries = struct {
             .x64glibc => x64glibc,
             .arm64glibc => arm64glibc,
             .wasm32 => wasm32,
+            .x64win => x64win,
+            .arm64win => arm64win,
             // Native/host targets use the native shim
-            .x64mac, .arm64mac, .x64win, .arm64win => native,
+            .x64mac, .arm64mac => native,
             // Fallback for other targets (will use native, may not work for cross-compilation)
             else => native,
         };
@@ -1308,6 +1314,11 @@ fn runWithWindowsHandleInheritance(ctx: *CliContext, exe_path: []const u8, shm_h
     );
 
     if (success == 0) {
+        const last_error = std.os.windows.kernel32.GetLastError();
+        std.log.err("CreateProcessW failed with Windows error code: {}", .{last_error});
+        std.log.err("exe_path: {s}", .{exe_path});
+        std.log.err("cmd_line: {s}", .{cmd_builder.items[0 .. cmd_builder.items.len - 1]});
+        std.log.err("cwd: {s}", .{cwd});
         return ctx.fail(.{ .child_process_spawn_failed = .{
             .command = exe_path,
             .err = error.ProcessCreationFailed,
@@ -1953,8 +1964,12 @@ fn extractPlatformQualifier(ctx: *CliContext, roc_file_path: []const u8) !?[]con
     defer env.deinit();
     env.common.source = source;
 
-    var parse_ast = parse.parse(&env.common, ctx.gpa) catch return null;
-    defer parse_ast.deinit(ctx.gpa);
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(ctx.gpa);
+    defer allocators.deinit();
+
+    const parse_ast = parse.parse(&allocators, &env.common) catch return null;
+    defer parse_ast.deinit();
 
     const file_node = parse_ast.store.getFile();
     const header = parse_ast.store.getHeader(file_node.header);
@@ -2001,8 +2016,12 @@ fn extractNonPlatformPackages(
     defer env.deinit();
     env.common.source = source;
 
-    var parse_ast = parse.parse(&env.common, ctx.gpa) catch return packages;
-    defer parse_ast.deinit(ctx.gpa);
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(ctx.gpa);
+    defer allocators.deinit();
+
+    const parse_ast = parse.parse(&allocators, &env.common) catch return packages;
+    defer parse_ast.deinit();
 
     const file_node = parse_ast.store.getFile();
     const header = parse_ast.store.getHeader(file_node.header);
@@ -2274,8 +2293,12 @@ fn extractExposedModulesFromPlatform(ctx: *CliContext, roc_file_path: []const u8
     try env.common.calcLineStarts(ctx.gpa);
 
     // Parse the source code as a full module
-    var parse_ast = parse.parse(&env.common, ctx.gpa) catch return error.ParseFailed;
-    defer parse_ast.deinit(ctx.gpa);
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(ctx.gpa);
+    defer allocators.deinit();
+
+    const parse_ast = parse.parse(&allocators, &env.common) catch return error.ParseFailed;
+    defer parse_ast.deinit();
 
     // Look for platform header in the AST
     const file_node = parse_ast.store.getFile();
@@ -2286,7 +2309,7 @@ fn extractExposedModulesFromPlatform(ctx: *CliContext, roc_file_path: []const u8
         .platform => |platform_header| {
             // Validate platform header has targets section (non-blocking warning)
             // This helps platform authors know they need to add targets
-            _ = validatePlatformHeader(ctx, &parse_ast, roc_file_path);
+            _ = validatePlatformHeader(ctx, parse_ast, roc_file_path);
 
             // Get the exposes collection
             const exposes_coll = parse_ast.store.getCollection(platform_header.exposes);
@@ -2449,13 +2472,17 @@ fn extractPlatformSpecFromApp(ctx: *CliContext, app_file_path: []const u8) ![]co
     };
 
     // Parse the source
-    var ast = parse.parse(&env.common, ctx.gpa) catch {
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(ctx.gpa);
+    defer allocators.deinit();
+
+    const ast = parse.parse(&allocators, &env.common) catch {
         return ctx.fail(.{ .module_init_failed = .{
             .path = app_file_path,
             .err = error.OutOfMemory,
         } });
     };
-    defer ast.deinit(ctx.gpa);
+    defer ast.deinit();
 
     // Get the file header
     const file = ast.store.getFile();
@@ -2471,7 +2498,7 @@ fn extractPlatformSpecFromApp(ctx: *CliContext, app_file_path: []const u8) ![]co
             };
 
             // Extract the string value from the expression
-            const platform_spec = stringFromExpr(&ast, value_expr) catch {
+            const platform_spec = stringFromExpr(ast, value_expr) catch {
                 return ctx.fail(.{ .expected_platform_string = .{ .path = app_file_path } });
             };
             return try ctx.arena.dupe(u8, platform_spec);
@@ -2705,8 +2732,12 @@ fn extractEntrypointsFromPlatform(ctx: *CliContext, roc_file_path: []const u8, e
     try env.common.calcLineStarts(ctx.gpa);
 
     // Parse the source code as a full module
-    var parse_ast = parse.parse(&env.common, ctx.gpa) catch return error.ParseFailed;
-    defer parse_ast.deinit(ctx.gpa);
+    var allocators2: Allocators = undefined;
+    allocators2.initInPlace(ctx.gpa);
+    defer allocators2.deinit();
+
+    const parse_ast = parse.parse(&allocators2, &env.common) catch return error.ParseFailed;
+    defer parse_ast.deinit();
 
     // Look for platform header in the AST
     const file_node = parse_ast.store.getFile();

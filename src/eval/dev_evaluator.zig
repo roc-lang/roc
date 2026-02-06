@@ -22,26 +22,132 @@ const mono = @import("mono");
 const builtin_loading = @import("builtin_loading.zig");
 const builtins = @import("builtins");
 
-// Platform-specific jmp_buf for setjmp/longjmp crash recovery.
-// Used to unwind the stack when roc_crashed is called during execution.
-// On platforms without setjmp (e.g. wasm32), we use a dummy type since
-// the DevEvaluator won't be used there (the interpreter is used instead).
-const has_setjmp = switch (builtin.os.tag) {
-    .macos, .linux => true,
-    else => false,
-};
-const JmpBuf = if (has_setjmp) switch (builtin.os.tag) {
-    .macos => [48]c_int,
-    .linux => switch (builtin.cpu.arch) {
-        .aarch64 => [64]c_long,
-        .x86_64 => [25]c_long,
-        else => @compileError("Unsupported architecture for jmp_buf"),
-    },
-    else => unreachable,
-} else [1]u8;
+// Cross-platform setjmp/longjmp for crash recovery.
+const sljmp = @import("sljmp");
+const JmpBuf = sljmp.JmpBuf;
+const setjmp = sljmp.setjmp;
+const longjmp = sljmp.longjmp;
 
-extern "c" fn _setjmp(env: *JmpBuf) c_int;
-extern "c" fn _longjmp(env: *JmpBuf, val: c_int) noreturn;
+// Windows SEH (Structured Exception Handling) support for catching segfaults.
+// On Windows, we use Vectored Exception Handling (VEH) to catch access violations
+// and longjmp back to the caller, similar to how Unix uses fork() for isolation.
+const WindowsSEH = if (builtin.os.tag == .windows) struct {
+    const windows = std.os.windows;
+
+    // EXCEPTION_RECORD structure for accessing exception info
+    const EXCEPTION_RECORD = extern struct {
+        ExceptionCode: u32,
+        ExceptionFlags: u32,
+        ExceptionRecord: ?*EXCEPTION_RECORD,
+        ExceptionAddress: ?*anyopaque,
+        NumberParameters: u32,
+        ExceptionInformation: [15]usize,
+    };
+
+    // EXCEPTION_POINTERS structure passed to VEH handlers
+    const EXCEPTION_POINTERS = extern struct {
+        ExceptionRecord: *EXCEPTION_RECORD,
+        ContextRecord: *anyopaque,
+    };
+
+    // Exception codes
+    const EXCEPTION_ACCESS_VIOLATION: u32 = 0xC0000005;
+    const EXCEPTION_STACK_OVERFLOW: u32 = 0xC00000FD;
+    const EXCEPTION_ILLEGAL_INSTRUCTION: u32 = 0xC000001D;
+    const EXCEPTION_PRIV_INSTRUCTION: u32 = 0xC0000096;
+    const EXCEPTION_IN_PAGE_ERROR: u32 = 0xC0000006;
+
+    // Return values for exception handlers
+    const EXCEPTION_CONTINUE_SEARCH: c_long = 0;
+
+    // Thread-local storage for the jump buffer - allows nested/concurrent calls
+    threadlocal var current_jmp_buf: ?*JmpBuf = null;
+    threadlocal var exception_code: u32 = 0;
+
+    // VEH handler that catches access violations and longjmps back
+    fn vehHandler(exception_info: *EXCEPTION_POINTERS) callconv(.winapi) c_long {
+        const code = exception_info.ExceptionRecord.ExceptionCode;
+
+        // Check if this is a crash we want to catch
+        const is_crash = switch (code) {
+            EXCEPTION_ACCESS_VIOLATION,
+            EXCEPTION_STACK_OVERFLOW,
+            EXCEPTION_ILLEGAL_INSTRUCTION,
+            EXCEPTION_PRIV_INSTRUCTION,
+            EXCEPTION_IN_PAGE_ERROR,
+            => true,
+            else => false,
+        };
+
+        if (is_crash) {
+            if (current_jmp_buf) |jmp| {
+                exception_code = code;
+                // Clear the jump buffer before longjmp to prevent re-entry
+                current_jmp_buf = null;
+                // longjmp with value 2 to distinguish from roc_crashed (which uses 1)
+                longjmp(jmp, 2);
+            }
+        }
+
+        // Let other handlers process this exception
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+
+    // External Windows API functions
+    extern "kernel32" fn AddVectoredExceptionHandler(
+        first: c_ulong,
+        handler: *const fn (*EXCEPTION_POINTERS) callconv(.winapi) c_long,
+    ) callconv(.winapi) ?*anyopaque;
+
+    extern "kernel32" fn RemoveVectoredExceptionHandler(
+        handle: *anyopaque,
+    ) callconv(.winapi) c_ulong;
+
+    /// Install the VEH handler and set the jump buffer for crash recovery
+    pub fn install(jmp_buf: *JmpBuf) ?*anyopaque {
+        current_jmp_buf = jmp_buf;
+        exception_code = 0;
+        // Add as first handler (1) to ensure we catch exceptions before others
+        return AddVectoredExceptionHandler(1, vehHandler);
+    }
+
+    /// Remove the VEH handler
+    pub fn remove(handle: ?*anyopaque) void {
+        current_jmp_buf = null;
+        if (handle) |h| {
+            _ = RemoveVectoredExceptionHandler(h);
+        }
+    }
+
+    /// Get the exception code that triggered the crash
+    pub fn getExceptionCode() u32 {
+        return exception_code;
+    }
+
+    /// Format exception code as a human-readable string
+    pub fn formatException(code: u32) []const u8 {
+        return switch (code) {
+            EXCEPTION_ACCESS_VIOLATION => "EXCEPTION_ACCESS_VIOLATION (segfault)",
+            EXCEPTION_STACK_OVERFLOW => "EXCEPTION_STACK_OVERFLOW",
+            EXCEPTION_ILLEGAL_INSTRUCTION => "EXCEPTION_ILLEGAL_INSTRUCTION",
+            EXCEPTION_PRIV_INSTRUCTION => "EXCEPTION_PRIV_INSTRUCTION",
+            EXCEPTION_IN_PAGE_ERROR => "EXCEPTION_IN_PAGE_ERROR",
+            else => "Unknown exception",
+        };
+    }
+} else struct {
+    // Stub for non-Windows platforms
+    pub fn install(_: *JmpBuf) ?*anyopaque {
+        return null;
+    }
+    pub fn remove(_: ?*anyopaque) void {}
+    pub fn getExceptionCode() u32 {
+        return 0;
+    }
+    pub fn formatException(_: u32) []const u8 {
+        return "N/A";
+    }
+};
 
 const Allocator = std.mem.Allocator;
 const ModuleEnv = can.ModuleEnv;
@@ -158,110 +264,99 @@ const DevRocEnv = struct {
         if (self.crash_message) |msg| self.allocator.free(msg);
     }
 
-    /// Allocation function for RocOps.
-    fn rocAllocFn(roc_alloc: *RocAlloc, env: *anyopaque) callconv(.c) void {
-        const self: *DevRocEnv = @ptrCast(@alignCast(env));
+    /// Shared static allocator state for alloc/realloc functions.
+    /// WORKAROUND: Uses a static buffer instead of self.allocator.alignedAlloc.
+    /// There's a mysterious crash when using allocator vtable calls from inside
+    /// lambdas - it works the first time but crashes on subsequent calls from
+    /// inside lambda execution contexts. The root cause appears to be related
+    /// to vtable calls from C-calling-convention functions into Zig code.
+    /// Using a static buffer completely avoids the vtable call.
+    const StaticAlloc = struct {
+        var buffer: [1024 * 1024]u8 align(16) = undefined; // 1MB static buffer
+        var offset: usize = 0;
+        // Track allocation sizes for realloc (simple array of ptr -> size pairs)
+        const max_allocs = 4096;
+        var alloc_ptrs: [max_allocs]usize = [_]usize{0} ** max_allocs;
+        var alloc_sizes: [max_allocs]usize = [_]usize{0} ** max_allocs;
+        var alloc_count: usize = 0;
 
-        // Allocate memory with the requested alignment
-        const ptr = switch (roc_alloc.alignment) {
-            1 => self.allocator.alignedAlloc(u8, .@"1", roc_alloc.length),
-            2 => self.allocator.alignedAlloc(u8, .@"2", roc_alloc.length),
-            4 => self.allocator.alignedAlloc(u8, .@"4", roc_alloc.length),
-            8 => self.allocator.alignedAlloc(u8, .@"8", roc_alloc.length),
-            16 => self.allocator.alignedAlloc(u8, .@"16", roc_alloc.length),
-            else => @panic("DevRocEnv: Unsupported alignment"),
-        } catch {
-            @panic("DevRocEnv: Allocation failed");
-        };
-
-        // Track the allocation so we can free it later
-        self.allocations.put(@intFromPtr(ptr.ptr), .{
-            .len = roc_alloc.length,
-            .alignment = roc_alloc.alignment,
-        }) catch {
-            @panic("DevRocEnv: Failed to track allocation");
-        };
-
-        roc_alloc.answer = @ptrCast(ptr.ptr);
-    }
-
-    /// Deallocation function for RocOps.
-    /// Frees memory allocated by rocAllocFn.
-    fn rocDeallocFn(roc_dealloc: *RocDealloc, env: *anyopaque) callconv(.c) void {
-        const self: *DevRocEnv = @ptrCast(@alignCast(env));
-
-        // Get the pointer from the dealloc request
-        const ptr_addr = @intFromPtr(roc_dealloc.ptr);
-
-        // Look up the allocation info
-        const alloc_info = self.allocations.get(ptr_addr) orelse return;
-        _ = self.allocations.remove(ptr_addr);
-
-        // Create a slice from the pointer for freeing
-        const slice_ptr: [*]u8 = @ptrCast(roc_dealloc.ptr);
-
-        // Free with the appropriate alignment
-        switch (alloc_info.alignment) {
-            1 => self.allocator.free(@as([*]align(1) u8, @alignCast(slice_ptr))[0..alloc_info.len]),
-            2 => self.allocator.free(@as([*]align(2) u8, @alignCast(slice_ptr))[0..alloc_info.len]),
-            4 => self.allocator.free(@as([*]align(4) u8, @alignCast(slice_ptr))[0..alloc_info.len]),
-            8 => self.allocator.free(@as([*]align(8) u8, @alignCast(slice_ptr))[0..alloc_info.len]),
-            16 => self.allocator.free(@as([*]align(16) u8, @alignCast(slice_ptr))[0..alloc_info.len]),
-            else => unreachable, // allocator must support freeing with the alignment it allocated
-        }
-    }
-
-    /// Reallocation function for RocOps.
-    /// Allocates new memory, copies data, frees old memory, and tracks the new allocation.
-    fn rocReallocFn(roc_realloc: *RocRealloc, env: *anyopaque) callconv(.c) void {
-        const self: *DevRocEnv = @ptrCast(@alignCast(env));
-
-        const old_ptr_addr = @intFromPtr(roc_realloc.answer);
-
-        // Look up the old allocation to get its size for the copy
-        const old_alloc_info = self.allocations.get(old_ptr_addr);
-        const old_length = if (old_alloc_info) |info| info.len else roc_realloc.new_length;
-        const copy_length = @min(old_length, roc_realloc.new_length);
-
-        // Allocate new memory with the requested alignment
-        const new_ptr = switch (roc_realloc.alignment) {
-            1 => self.allocator.alignedAlloc(u8, .@"1", roc_realloc.new_length),
-            2 => self.allocator.alignedAlloc(u8, .@"2", roc_realloc.new_length),
-            4 => self.allocator.alignedAlloc(u8, .@"4", roc_realloc.new_length),
-            8 => self.allocator.alignedAlloc(u8, .@"8", roc_realloc.new_length),
-            16 => self.allocator.alignedAlloc(u8, .@"16", roc_realloc.new_length),
-            else => @panic("DevRocEnv: Unsupported alignment"),
-        } catch {
-            @panic("DevRocEnv: Reallocation failed");
-        };
-
-        // Copy old data from the existing allocation
-        const old_ptr: [*]u8 = @ptrCast(@alignCast(roc_realloc.answer));
-        @memcpy(new_ptr[0..copy_length], old_ptr[0..copy_length]);
-
-        // Free the old allocation if it was tracked
-        if (old_alloc_info) |info| {
-            _ = self.allocations.remove(old_ptr_addr);
-            switch (info.alignment) {
-                1 => self.allocator.free(@as([*]align(1) u8, @alignCast(old_ptr))[0..info.len]),
-                2 => self.allocator.free(@as([*]align(2) u8, @alignCast(old_ptr))[0..info.len]),
-                4 => self.allocator.free(@as([*]align(4) u8, @alignCast(old_ptr))[0..info.len]),
-                8 => self.allocator.free(@as([*]align(8) u8, @alignCast(old_ptr))[0..info.len]),
-                16 => self.allocator.free(@as([*]align(16) u8, @alignCast(old_ptr))[0..info.len]),
-                else => {},
+        fn recordAlloc(ptr: usize, size: usize) void {
+            if (alloc_count < max_allocs) {
+                alloc_ptrs[alloc_count] = ptr;
+                alloc_sizes[alloc_count] = size;
+                alloc_count += 1;
             }
         }
 
-        // Track the new allocation
-        self.allocations.put(@intFromPtr(new_ptr.ptr), .{
-            .len = roc_realloc.new_length,
-            .alignment = roc_realloc.alignment,
-        }) catch {
-            @panic("DevRocEnv: Failed to track reallocation");
-        };
+        fn getAllocSize(ptr: usize) usize {
+            // Search backwards since recent allocations are more likely to be reallocated
+            var i: usize = alloc_count;
+            while (i > 0) {
+                i -= 1;
+                if (alloc_ptrs[i] == ptr) {
+                    return alloc_sizes[i];
+                }
+            }
+            return 0;
+        }
+    };
+
+    /// Allocation function for RocOps.
+    fn rocAllocFn(roc_alloc: *RocAlloc, env: *anyopaque) callconv(.c) void {
+        _ = env; // unused with static buffer workaround
+
+        // Align the offset to the requested alignment
+        const alignment = roc_alloc.alignment;
+        const mask = alignment - 1;
+        const aligned_offset = (StaticAlloc.offset + mask) & ~mask;
+
+        if (aligned_offset + roc_alloc.length > StaticAlloc.buffer.len) {
+            @panic("DevRocEnv: static buffer overflow");
+        }
+
+        const ptr: [*]u8 = @ptrCast(&StaticAlloc.buffer[aligned_offset]);
+        StaticAlloc.offset = aligned_offset + roc_alloc.length;
+
+        // Track this allocation for realloc
+        StaticAlloc.recordAlloc(@intFromPtr(ptr), roc_alloc.length);
+
+        roc_alloc.answer = @ptrCast(ptr);
+    }
+
+    /// Deallocation function for RocOps.
+    /// Currently a no-op since we use a static buffer for allocations.
+    fn rocDeallocFn(_: *RocDealloc, _: *anyopaque) callconv(.c) void {
+        // Static buffer doesn't support deallocation - this is a no-op
+    }
+
+    /// Reallocation function for RocOps.
+    /// With static buffer, we allocate new space and copy data (old space is not reclaimed).
+    fn rocReallocFn(roc_realloc: *RocRealloc, _: *anyopaque) callconv(.c) void {
+        // Align the offset to the requested alignment
+        const alignment = roc_realloc.alignment;
+        const mask = alignment - 1;
+        const aligned_offset = (StaticAlloc.offset + mask) & ~mask;
+
+        if (aligned_offset + roc_realloc.new_length > StaticAlloc.buffer.len) {
+            @panic("DevRocEnv: static buffer overflow in realloc");
+        }
+
+        const new_ptr: [*]u8 = @ptrCast(&StaticAlloc.buffer[aligned_offset]);
+        StaticAlloc.offset = aligned_offset + roc_realloc.new_length;
+
+        // Track this new allocation
+        StaticAlloc.recordAlloc(@intFromPtr(new_ptr), roc_realloc.new_length);
+
+        // Copy old data to new location (only copy the old size, not new size)
+        const old_ptr: [*]u8 = @ptrCast(@alignCast(roc_realloc.answer));
+        const old_size = StaticAlloc.getAllocSize(@intFromPtr(old_ptr));
+        const copy_len = @min(old_size, roc_realloc.new_length);
+        if (copy_len > 0) {
+            @memcpy(new_ptr[0..copy_len], old_ptr[0..copy_len]);
+        }
 
         // Return the new pointer
-        roc_realloc.answer = @ptrCast(new_ptr.ptr);
+        roc_realloc.answer = @ptrCast(new_ptr);
     }
 
     /// Debug output function.
@@ -289,9 +384,7 @@ const DevRocEnv = struct {
         if (self.crash_message) |old| self.allocator.free(old);
         self.crash_message = self.allocator.dupe(u8, msg) catch null;
         // Unwind the stack back to the setjmp call site.
-        if (has_setjmp) {
-            _longjmp(&self.jmp_buf, 1);
-        }
+        longjmp(&self.jmp_buf, 1);
     }
 };
 
@@ -440,13 +533,29 @@ pub const DevEvaluator = struct {
     }
 
     /// Execute compiled code with crash protection.
-    /// Uses setjmp/longjmp: if roc_crashed is called during execution,
-    /// the stack unwinds back here and this returns error.RocCrashed.
-    pub fn callWithCrashProtection(self: *DevEvaluator, executable: *const backend.ExecutableMemory, result_ptr: *anyopaque) error{RocCrashed}!void {
+    ///
+    /// This function provides two levels of protection:
+    /// 1. roc_crashed calls (e.g., divide by zero) - caught via setjmp/longjmp, returns RocCrashed
+    /// 2. Segfaults (access violations) - caught via Windows VEH on Windows, returns Segfault
+    ///
+    /// On Unix, segfault protection is handled at a higher level via fork() in the test harness.
+    /// On Windows, we use Vectored Exception Handling (VEH) since fork() is not available.
+    pub fn callWithCrashProtection(self: *DevEvaluator, executable: *const backend.ExecutableMemory, result_ptr: *anyopaque) error{ RocCrashed, Segfault }!void {
         self.roc_env.crashed = false;
-        if (has_setjmp) {
-            if (_setjmp(&self.roc_env.jmp_buf) != 0) {
-                // Returned via longjmp from rocCrashedFn.
+
+        // On Windows, install the VEH handler to catch segfaults
+        const veh_handle = WindowsSEH.install(&self.roc_env.jmp_buf);
+        defer WindowsSEH.remove(veh_handle);
+
+        const jmp_result = setjmp(&self.roc_env.jmp_buf);
+        if (jmp_result != 0) {
+            if (jmp_result == 2) {
+                // Returned via longjmp from VEH handler (segfault)
+                const code = WindowsSEH.getExceptionCode();
+                std.debug.print("\nSegfault caught: {s} (code 0x{X:0>8})\n", .{ WindowsSEH.formatException(code), code });
+                return error.Segfault;
+            } else {
+                // Returned via longjmp from rocCrashedFn (value 1)
                 return error.RocCrashed;
             }
         }
@@ -604,7 +713,8 @@ pub const DevEvaluator = struct {
             1;
 
         // Create the code generator with the layout store
-        var codegen = backend.MonoExprCodeGen.init(
+        // Use NativeMonoExprCodeGen since we're executing on the host machine
+        var codegen = backend.NativeMonoExprCodeGen.init(
             self.allocator,
             &mono_store,
             layout_store_ptr,
@@ -667,7 +777,8 @@ pub const DevEvaluator = struct {
     };
 
     /// RocStr constants
-    const ROCSTR_SIZE: usize = 24;
+    const RocStr = builtins.str.RocStr;
+    const ROCSTR_SIZE: usize = @sizeOf(RocStr);
     const SMALL_STR_MASK: u8 = 0x80;
 
     /// Evaluate source code and return the result
@@ -736,15 +847,15 @@ pub const DevEvaluator = struct {
                     const str_copy = self.allocator.dupe(u8, roc_str_bytes[0..len]) catch return error.OutOfMemory;
                     break :blk EvalResult{ .str_val = str_copy };
                 } else {
-                    // Big string: first 8 bytes are pointer to data, next 8 bytes are length
+                    // Big string: first usize bytes are pointer to data, next usize bytes are length
                     const bytes_ptr: *const [*]const u8 = @ptrCast(@alignCast(&roc_str_bytes[0]));
-                    const length_ptr: *const u64 = @ptrCast(@alignCast(&roc_str_bytes[8]));
+                    const length_ptr: *const usize = @ptrCast(@alignCast(&roc_str_bytes[@sizeOf(usize)]));
 
                     const data_ptr = bytes_ptr.*;
                     const length = length_ptr.*;
 
                     // Handle the seamless slice bit (high bit of length indicates seamless slice)
-                    const SEAMLESS_SLICE_BIT: u64 = @as(u64, @bitCast(@as(i64, std.math.minInt(i64))));
+                    const SEAMLESS_SLICE_BIT: usize = @as(usize, @bitCast(@as(isize, std.math.minInt(isize))));
                     const actual_length = length & ~SEAMLESS_SLICE_BIT;
 
                     if (actual_length == 0) {

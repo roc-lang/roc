@@ -1636,6 +1636,7 @@ pub fn transformExprWithLambdaSet(
     expr_idx: Expr.Idx,
     name_hint: ?base.Ident.Idx,
 ) std.mem.Allocator.Error!TransformResult {
+    std.debug.assert(self.module_env.store.scratch != null);
     const expr = self.module_env.store.getExpr(expr_idx);
 
     switch (expr) {
@@ -1923,6 +1924,7 @@ pub fn transformClosure(
     closure_expr_idx: Expr.Idx,
     binding_name_hint: ?base.Ident.Idx,
 ) !Expr.Idx {
+    std.debug.assert(self.module_env.store.scratch != null);
     const expr = self.module_env.store.getExpr(closure_expr_idx);
 
     switch (expr) {
@@ -2052,6 +2054,7 @@ pub fn transformClosure(
 /// Transform an entire expression tree, handling closures and their call sites.
 /// This is the main entry point for the transformation.
 pub fn transformExpr(self: *Self, expr_idx: Expr.Idx) std.mem.Allocator.Error!Expr.Idx {
+    std.debug.assert(self.module_env.store.scratch != null);
     const expr = self.module_env.store.getExpr(expr_idx);
 
     switch (expr) {
@@ -2192,10 +2195,15 @@ pub fn transformExpr(self: *Self, expr_idx: Expr.Idx) std.mem.Allocator.Error!Ex
             const branches = self.module_env.store.sliceIfBranches(if_expr.branches);
             const branch_start = self.module_env.store.scratch.?.if_branches.top();
 
+            var any_changed = false;
             for (branches) |branch_idx| {
                 const branch = self.module_env.store.getIfBranch(branch_idx);
                 const new_cond = try self.transformExpr(branch.cond);
                 const new_body = try self.transformExpr(branch.body);
+
+                if (new_cond != branch.cond or new_body != branch.body) {
+                    any_changed = true;
+                }
 
                 const new_branch_idx = try self.module_env.store.addIfBranch(
                     Expr.IfBranch{ .cond = new_cond, .body = new_body },
@@ -2204,8 +2212,18 @@ pub fn transformExpr(self: *Self, expr_idx: Expr.Idx) std.mem.Allocator.Error!Ex
                 try self.module_env.store.scratch.?.if_branches.append(new_branch_idx);
             }
 
-            const new_branches_span = try self.module_env.store.ifBranchSpanFrom(branch_start);
             const new_else = try self.transformExpr(if_expr.final_else);
+            if (new_else != if_expr.final_else) {
+                any_changed = true;
+            }
+
+            // Return original expression if nothing changed to preserve type information
+            if (!any_changed) {
+                self.module_env.store.scratch.?.if_branches.clearFrom(branch_start);
+                return expr_idx;
+            }
+
+            const new_branches_span = try self.module_env.store.ifBranchSpanFrom(branch_start);
 
             return try self.module_env.store.addExpr(Expr{
                 .e_if = .{
@@ -2292,9 +2310,20 @@ pub fn transformExpr(self: *Self, expr_idx: Expr.Idx) std.mem.Allocator.Error!Ex
             const elems = self.module_env.store.sliceExpr(list.elems);
             const elems_start = self.module_env.store.scratch.?.exprs.top();
 
+            var any_changed = false;
             for (elems) |elem_idx| {
                 const new_elem = try self.transformExpr(elem_idx);
+                if (new_elem != elem_idx) {
+                    any_changed = true;
+                }
                 try self.module_env.store.scratch.?.exprs.append(new_elem);
+            }
+
+            // Return original expression if nothing changed to preserve type information
+            if (!any_changed) {
+                // Clear scratch space since we're not using it
+                self.module_env.store.scratch.?.exprs.clearFrom(elems_start);
+                return expr_idx;
             }
 
             const new_elems_span = try self.module_env.store.exprSpanFrom(elems_start);
@@ -2307,9 +2336,20 @@ pub fn transformExpr(self: *Self, expr_idx: Expr.Idx) std.mem.Allocator.Error!Ex
             const elems = self.module_env.store.sliceExpr(tuple.elems);
             const elems_start = self.module_env.store.scratch.?.exprs.top();
 
+            var any_changed = false;
             for (elems) |elem_idx| {
                 const new_elem = try self.transformExpr(elem_idx);
+                if (new_elem != elem_idx) {
+                    any_changed = true;
+                }
                 try self.module_env.store.scratch.?.exprs.append(new_elem);
+            }
+
+            // Return original expression if nothing changed to preserve type information
+            if (!any_changed) {
+                // Clear scratch space since we're not using it
+                self.module_env.store.scratch.?.exprs.clearFrom(elems_start);
+                return expr_idx;
             }
 
             const new_elems_span = try self.module_env.store.exprSpanFrom(elems_start);
@@ -2379,29 +2419,52 @@ pub fn transformExpr(self: *Self, expr_idx: Expr.Idx) std.mem.Allocator.Error!Ex
         },
         .e_unary_minus => |unary| {
             const new_expr = try self.transformExpr(unary.expr);
+            if (new_expr == unary.expr) {
+                return expr_idx;
+            }
             return try self.module_env.store.addExpr(Expr{
                 .e_unary_minus = .{ .expr = new_expr },
             }, base.Region.zero());
         },
         .e_unary_not => |unary| {
             const new_expr = try self.transformExpr(unary.expr);
+            if (new_expr == unary.expr) {
+                return expr_idx;
+            }
             return try self.module_env.store.addExpr(Expr{
                 .e_unary_not = .{ .expr = new_expr },
             }, base.Region.zero());
         },
         .e_dot_access => |dot| {
             const new_receiver = try self.transformExpr(dot.receiver);
+
+            var any_args_changed = false;
             const new_args = if (dot.args) |args_span| blk: {
                 const args = self.module_env.store.sliceExpr(args_span);
                 const args_start = self.module_env.store.scratch.?.exprs.top();
 
                 for (args) |arg_idx| {
                     const new_arg = try self.transformExpr(arg_idx);
+                    if (new_arg != arg_idx) {
+                        any_args_changed = true;
+                    }
                     try self.module_env.store.scratch.?.exprs.append(new_arg);
                 }
 
+                // If nothing changed, clear scratch and use original span
+                if (!any_args_changed and new_receiver == dot.receiver) {
+                    self.module_env.store.scratch.?.exprs.clearFrom(args_start);
+                    return expr_idx;
+                }
+
                 break :blk try self.module_env.store.exprSpanFrom(args_start);
-            } else null;
+            } else blk: {
+                // No args - just check receiver
+                if (new_receiver == dot.receiver) {
+                    return expr_idx;
+                }
+                break :blk null;
+            };
 
             return try self.module_env.store.addExpr(Expr{
                 .e_dot_access = .{
@@ -2415,6 +2478,9 @@ pub fn transformExpr(self: *Self, expr_idx: Expr.Idx) std.mem.Allocator.Error!Ex
         .e_crash => return expr_idx,
         .e_dbg => |dbg| {
             const new_expr = try self.transformExpr(dbg.expr);
+            if (new_expr == dbg.expr) {
+                return expr_idx;
+            }
             return try self.module_env.store.addExpr(Expr{
                 .e_dbg = .{
                     .expr = new_expr,
@@ -2423,6 +2489,9 @@ pub fn transformExpr(self: *Self, expr_idx: Expr.Idx) std.mem.Allocator.Error!Ex
         },
         .e_expect => |expect| {
             const new_body = try self.transformExpr(expect.body);
+            if (new_body == expect.body) {
+                return expr_idx;
+            }
             return try self.module_env.store.addExpr(Expr{
                 .e_expect = .{
                     .body = new_body,
@@ -2431,6 +2500,9 @@ pub fn transformExpr(self: *Self, expr_idx: Expr.Idx) std.mem.Allocator.Error!Ex
         },
         .e_return => |ret| {
             const new_expr = try self.transformExpr(ret.expr);
+            if (new_expr == ret.expr) {
+                return expr_idx;
+            }
             return try self.module_env.store.addExpr(Expr{
                 .e_return = .{ .expr = new_expr, .lambda = ret.lambda, .context = ret.context },
             }, base.Region.zero());
@@ -2478,6 +2550,9 @@ pub fn transformExpr(self: *Self, expr_idx: Expr.Idx) std.mem.Allocator.Error!Ex
         },
         .e_nominal => |nominal| {
             const new_backing = try self.transformExpr(nominal.backing_expr);
+            if (new_backing == nominal.backing_expr) {
+                return expr_idx;
+            }
             return try self.module_env.store.addExpr(Expr{
                 .e_nominal = .{
                     .nominal_type_decl = nominal.nominal_type_decl,
