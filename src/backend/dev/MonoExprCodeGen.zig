@@ -1793,46 +1793,18 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     const alignment_bytes = elem_size_align.alignment.toByteUnits();
                     const fn_addr: usize = @intFromPtr(&wrapListConcat);
 
-                    if (comptime target.toCpuArch() == .aarch64) {
+                    {
                         // wrapListConcat(out, a_bytes, a_len, a_cap, b_bytes, b_len, b_cap, alignment, element_width, roc_ops)
-                        // 10 args: X0-X7 + 2 on stack
-                        try self.codegen.emit.subRegRegImm12(.w64, .ZRSP, .ZRSP, 16);
-                        const temp = try self.allocTempGeneral();
-                        try self.codegen.emitLoadImm(temp, @intCast(elem_size_align.size));
-                        try self.codegen.emit.strRegMemUoff(.w64, temp, .ZRSP, 0);
-                        try self.codegen.emit.strRegMemUoff(.w64, roc_ops_reg, .ZRSP, 1);
-                        self.codegen.freeGeneral(temp);
-
-                        try self.codegen.emit.movRegImm64(.X0, @bitCast(@as(i64, result_offset)));
-                        try self.codegen.emit.addRegRegReg(.w64, .X0, .FP, .X0);
-                        try self.codegen.emit.ldrRegMemSoff(.w64, .X1, .FP, list_a_off);
-                        try self.codegen.emit.ldrRegMemSoff(.w64, .X2, .FP, list_a_off + 8);
-                        try self.codegen.emit.ldrRegMemSoff(.w64, .X3, .FP, list_a_off + 16);
-                        try self.codegen.emit.ldrRegMemSoff(.w64, .X4, .FP, list_b_off);
-                        try self.codegen.emit.ldrRegMemSoff(.w64, .X5, .FP, list_b_off + 8);
-                        try self.codegen.emit.ldrRegMemSoff(.w64, .X6, .FP, list_b_off + 16);
-                        try self.codegen.emitLoadImm(.X7, @intCast(alignment_bytes));
-
-                        try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
-                        try self.codegen.emit.blrReg(.X9);
-                        try self.codegen.emit.addRegRegImm12(.w64, .ZRSP, .ZRSP, 16);
-                    } else {
-                        // x86_64: wrapListConcat(out, a_bytes, a_len, a_cap, b_bytes, b_len, b_cap, alignment, element_width, roc_ops)
-                        // 10 args
-
-                        // Use CallBuilder with automatic R12 handling for cross-platform calls
+                        const base_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .FP else .RBP;
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
 
-                        // Args 1-4: out, a_bytes, a_len, a_cap (registers)
-                        try builder.addLeaArg(.RBP, result_offset);
-                        try builder.addMemArg(.RBP, list_a_off);
-                        try builder.addMemArg(.RBP, list_a_off + 8);
-                        try builder.addMemArg(.RBP, list_a_off + 16);
-
-                        // Args 5-10: b_bytes, b_len, b_cap, alignment, element_width, roc_ops (stack args)
-                        try builder.addMemArg(.RBP, list_b_off);
-                        try builder.addMemArg(.RBP, list_b_off + 8);
-                        try builder.addMemArg(.RBP, list_b_off + 16);
+                        try builder.addLeaArg(base_reg, result_offset);
+                        try builder.addMemArg(base_reg, list_a_off);
+                        try builder.addMemArg(base_reg, list_a_off + 8);
+                        try builder.addMemArg(base_reg, list_a_off + 16);
+                        try builder.addMemArg(base_reg, list_b_off);
+                        try builder.addMemArg(base_reg, list_b_off + 8);
+                        try builder.addMemArg(base_reg, list_b_off + 16);
                         try builder.addImmArg(@intCast(alignment_bytes));
                         try builder.addImmArg(@intCast(elem_size_align.size));
                         try builder.addRegArg(roc_ops_reg);
@@ -1866,37 +1838,17 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     const alignment_bytes = elem_size_align.alignment.toByteUnits();
                     const fn_addr: usize = @intFromPtr(&wrapListPrepend);
 
-                    if (comptime target.toCpuArch() == .aarch64) {
+                    {
                         // wrapListPrepend(out, list_bytes, list_len, list_cap, alignment, element, element_width, roc_ops)
-                        try self.codegen.emit.movRegImm64(.X0, @bitCast(@as(i64, result_offset)));
-                        try self.codegen.emit.addRegRegReg(.w64, .X0, .FP, .X0);
-                        try self.codegen.emit.ldrRegMemSoff(.w64, .X1, .FP, list_off);
-                        try self.codegen.emit.ldrRegMemSoff(.w64, .X2, .FP, list_off + 8);
-                        try self.codegen.emit.ldrRegMemSoff(.w64, .X3, .FP, list_off + 16);
-                        try self.codegen.emitLoadImm(.X4, @intCast(alignment_bytes));
-                        try self.codegen.emit.movRegImm64(.X5, @bitCast(@as(i64, elem_off)));
-                        try self.codegen.emit.addRegRegReg(.w64, .X5, .FP, .X5);
-                        try self.codegen.emitLoadImm(.X6, @intCast(elem_size_align.size));
-                        try self.codegen.emit.movRegReg(.w64, .X7, roc_ops_reg);
-
-                        try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
-                        try self.codegen.emit.blrReg(.X9);
-                    } else {
-                        // x86_64: wrapListPrepend(out, list_bytes, list_len, list_cap, alignment, element, element_width, roc_ops)
-                        // 8 args
-
-                        // Use CallBuilder with automatic R12 handling for cross-platform calls
+                        const base_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .FP else .RBP;
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
 
-                        // Args 1-4: out, list_bytes, list_len, list_cap (registers)
-                        try builder.addLeaArg(.RBP, result_offset);
-                        try builder.addMemArg(.RBP, list_off);
-                        try builder.addMemArg(.RBP, list_off + 8);
-                        try builder.addMemArg(.RBP, list_off + 16);
-
-                        // Args 5-8: alignment, element, element_width, roc_ops (stack args)
+                        try builder.addLeaArg(base_reg, result_offset);
+                        try builder.addMemArg(base_reg, list_off);
+                        try builder.addMemArg(base_reg, list_off + 8);
+                        try builder.addMemArg(base_reg, list_off + 16);
                         try builder.addImmArg(@intCast(alignment_bytes));
-                        try builder.addLeaArg(.RBP, elem_off);
+                        try builder.addLeaArg(base_reg, elem_off);
                         try builder.addImmArg(@intCast(elem_size_align.size));
                         try builder.addRegArg(roc_ops_reg);
 
@@ -2967,18 +2919,10 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     const fn_addr: usize = @intFromPtr(&wrapStrWithCapacity);
                     const cap_reg = try self.ensureInGeneralReg(cap_loc);
 
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.movRegReg(.w64, .X1, cap_reg);
-                        self.codegen.freeGeneral(cap_reg);
-                        try self.codegen.emit.movRegReg(.w64, .X2, roc_ops_reg);
-                        try self.codegen.emit.movRegImm64(.X0, @bitCast(@as(i64, result_offset)));
-                        try self.codegen.emit.addRegRegReg(.w64, .X0, .FP, .X0);
-                        try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
-                        try self.codegen.emit.blrReg(.X9);
-                    } else {
-                        // Use CallBuilder for consistent handling
+                    {
+                        const base_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .FP else .RBP;
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                        try builder.addLeaArg(.RBP, result_offset);
+                        try builder.addLeaArg(base_reg, result_offset);
                         try builder.addRegArg(cap_reg);
                         self.codegen.freeGeneral(cap_reg);
                         try builder.addRegArg(roc_ops_reg);
@@ -3070,49 +3014,20 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     const alignment_bytes = elem_size_align.alignment.toByteUnits();
                     const fn_addr: usize = @intFromPtr(&wrapListReplace);
 
-                    if (comptime target.toCpuArch() == .aarch64) {
+                    {
                         // wrapListReplace(out, list_bytes, list_len, list_cap, alignment, index, element, element_width, out_element, roc_ops)
-                        // 10 args: X0-X7 + 2 on stack
-                        try self.codegen.emit.subRegRegImm12(.w64, .ZRSP, .ZRSP, 16);
-                        const tmp2 = try self.allocTempGeneral();
-                        try self.codegen.emit.movRegImm64(tmp2, @bitCast(@as(i64, old_elem_slot)));
-                        try self.codegen.emit.addRegRegReg(.w64, tmp2, .FP, tmp2);
-                        try self.codegen.emit.strRegMemUoff(.w64, tmp2, .ZRSP, 0);
-                        try self.codegen.emit.strRegMemUoff(.w64, roc_ops_reg, .ZRSP, 1);
-                        self.codegen.freeGeneral(tmp2);
-
-                        try self.codegen.emit.movRegImm64(.X0, @bitCast(@as(i64, result_offset)));
-                        try self.codegen.emit.addRegRegReg(.w64, .X0, .FP, .X0);
-                        try self.codegen.emit.ldrRegMemSoff(.w64, .X1, .FP, list_off);
-                        try self.codegen.emit.ldrRegMemSoff(.w64, .X2, .FP, list_off + 8);
-                        try self.codegen.emit.ldrRegMemSoff(.w64, .X3, .FP, list_off + 16);
-                        try self.codegen.emitLoadImm(.X4, @intCast(alignment_bytes));
-                        try self.codegen.emit.ldrRegMemSoff(.w64, .X5, .FP, index_off);
-                        try self.codegen.emit.movRegImm64(.X6, @bitCast(@as(i64, elem_off)));
-                        try self.codegen.emit.addRegRegReg(.w64, .X6, .FP, .X6);
-                        try self.codegen.emitLoadImm(.X7, @intCast(elem_size_align.size));
-
-                        try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
-                        try self.codegen.emit.blrReg(.X9);
-                        try self.codegen.emit.addRegRegImm12(.w64, .ZRSP, .ZRSP, 16);
-                    } else {
-                        // x86_64: wrapListReplace(out, list_bytes, list_len, list_cap, alignment, index, element, element_width, out_element, roc_ops)
-                        // 10 args
-                        // Use CallBuilder with automatic R12 handling for cross-platform calls
+                        const base_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .FP else .RBP;
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
 
-                        // Args 1-4: out, list_bytes, list_len, list_cap (registers)
-                        try builder.addLeaArg(.RBP, result_offset);
-                        try builder.addMemArg(.RBP, list_off);
-                        try builder.addMemArg(.RBP, list_off + 8);
-                        try builder.addMemArg(.RBP, list_off + 16);
-
-                        // Args 5-10: alignment, index, element, element_width, out_element, roc_ops (stack args)
+                        try builder.addLeaArg(base_reg, result_offset);
+                        try builder.addMemArg(base_reg, list_off);
+                        try builder.addMemArg(base_reg, list_off + 8);
+                        try builder.addMemArg(base_reg, list_off + 16);
                         try builder.addImmArg(@intCast(alignment_bytes));
-                        try builder.addMemArg(.RBP, index_off);
-                        try builder.addLeaArg(.RBP, elem_off);
+                        try builder.addMemArg(base_reg, index_off);
+                        try builder.addLeaArg(base_reg, elem_off);
                         try builder.addImmArg(@intCast(elem_size_align.size));
-                        try builder.addLeaArg(.RBP, old_elem_slot);
+                        try builder.addLeaArg(base_reg, old_elem_slot);
                         try builder.addRegArg(roc_ops_reg);
 
                         try self.callBuiltin(&builder, fn_addr, .list_replace);
@@ -3558,40 +3473,19 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             const alignment_bytes = elem_size_align.alignment.toByteUnits();
             const fn_addr: usize = @intFromPtr(&wrapListSublist);
 
-            if (comptime target.toCpuArch() == .aarch64) {
-                // 9 args: X0-X7 + 1 on stack
-                try self.codegen.emit.subRegRegImm12(.w64, .ZRSP, .ZRSP, 16);
-                try self.codegen.emit.strRegMemUoff(.w64, roc_ops_reg, .ZRSP, 0);
-
-                try self.codegen.emit.movRegImm64(.X0, @bitCast(@as(i64, result_offset)));
-                try self.codegen.emit.addRegRegReg(.w64, .X0, .FP, .X0);
-                try self.codegen.emit.ldrRegMemSoff(.w64, .X1, .FP, list_off);
-                try self.codegen.emit.ldrRegMemSoff(.w64, .X2, .FP, list_off + 8);
-                try self.codegen.emit.ldrRegMemSoff(.w64, .X3, .FP, list_off + 16);
-                try self.codegen.emitLoadImm(.X4, @intCast(alignment_bytes));
-                try self.codegen.emitLoadImm(.X5, @intCast(elem_size_align.size));
-                try self.codegen.emit.ldrRegMemSoff(.w64, .X6, .FP, start_slot);
-                try self.codegen.emit.ldrRegMemSoff(.w64, .X7, .FP, len_slot);
-
-                try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
-                try self.codegen.emit.blrReg(.X9);
-                try self.codegen.emit.addRegRegImm12(.w64, .ZRSP, .ZRSP, 16);
-            } else {
-                // x86_64: wrapListSublist(out, list_bytes, list_len, list_cap, alignment, element_width, start, len, roc_ops)
-                // 9 args - Use CallBuilder for cross-platform calls
+            {
+                // wrapListSublist(out, list_bytes, list_len, list_cap, alignment, element_width, start, len, roc_ops)
+                const base_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .FP else .RBP;
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
 
-                // Args 1-4: out, list_bytes, list_len, list_cap (registers)
-                try builder.addLeaArg(.RBP, result_offset);
-                try builder.addMemArg(.RBP, list_off);
-                try builder.addMemArg(.RBP, list_off + 8);
-                try builder.addMemArg(.RBP, list_off + 16);
-
-                // Args 5-9: alignment, element_width, start, len, roc_ops
+                try builder.addLeaArg(base_reg, result_offset);
+                try builder.addMemArg(base_reg, list_off);
+                try builder.addMemArg(base_reg, list_off + 8);
+                try builder.addMemArg(base_reg, list_off + 16);
                 try builder.addImmArg(@intCast(alignment_bytes));
                 try builder.addImmArg(@intCast(elem_size_align.size));
-                try builder.addMemArg(.RBP, start_slot);
-                try builder.addMemArg(.RBP, len_slot);
+                try builder.addMemArg(base_reg, start_slot);
+                try builder.addMemArg(base_reg, len_slot);
                 try builder.addRegArg(roc_ops_reg);
 
                 try self.callBuiltin(&builder, fn_addr, .list_sublist);
@@ -3826,78 +3720,32 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             // HostedFunctions.fns is at offset 8 within HostedFunctions (after count u32 + padding)
             // So hosted_fns.fns is at roc_ops + 56 + 8 = roc_ops + 64
 
-            if (arch == .aarch64 or arch == .aarch64_be) {
-                // Load hosted_fns.fns pointer: [roc_ops + 64]
-                const fns_ptr_reg = try self.allocTempGeneral();
-                try self.codegen.emit.ldrRegMemSoff(.w64, fns_ptr_reg, roc_ops_reg, 64);
+            {
+                const base_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .FP else .RBP;
 
-                // Load function pointer: fns[index] = [fns_ptr + index * 8]
-                // Use X9 as scratch register for fn_ptr to avoid conflicts with argument registers X0-X2
+                // Load function pointer into a register that won't conflict with
+                // CallBuilder's SCRATCH_REG (X9/R11) or param registers
+                const fn_ptr_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X10 else .R10;
+
+                // Load hosted_fns.fns pointer, then the specific function pointer
+                const fns_ptr_reg = try self.allocTempGeneral();
                 const fn_offset: i32 = @intCast(hc.index * 8);
-                try self.codegen.emit.ldrRegMemSoff(.w64, .X9, fns_ptr_reg, fn_offset);
+
+                if (comptime target.toCpuArch() == .aarch64) {
+                    try self.codegen.emit.ldrRegMemSoff(.w64, fns_ptr_reg, roc_ops_reg, 64);
+                    try self.codegen.emit.ldrRegMemSoff(.w64, fn_ptr_reg, fns_ptr_reg, fn_offset);
+                } else {
+                    try self.codegen.emit.movRegMem(.w64, fns_ptr_reg, roc_ops_reg, 64);
+                    try self.codegen.emit.movRegMem(.w64, fn_ptr_reg, fns_ptr_reg, fn_offset);
+                }
                 self.codegen.freeGeneral(fns_ptr_reg);
 
-                // Set up arguments for the hosted function call:
-                // X0 = roc_ops pointer
-                // X1 = return pointer (FP + ret_slot)
-                // X2 = args pointer (FP + args_slot)
-
-                try self.emitMovRegReg(.X0, roc_ops_reg);
-
-                // X1 = ret_ptr
-                try self.codegen.emit.movRegImm64(.X1, @bitCast(@as(i64, ret_slot)));
-                try self.codegen.emit.addRegRegReg(.w64, .X1, .FP, .X1);
-
-                // X2 = args_ptr
-                try self.codegen.emit.movRegImm64(.X2, @bitCast(@as(i64, args_slot)));
-                try self.codegen.emit.addRegRegReg(.w64, .X2, .FP, .X2);
-
-                // Call the hosted function (fn_ptr is in X9, safe from argument setup)
-                try self.codegen.emit.blrReg(.X9);
-            } else if (arch == .x86_64) {
-                // Load hosted_fns.fns pointer: [roc_ops + 64]
-                // Use RAX as intermediate, then R10 for the function pointer
-                // R10 is a scratch register that won't be clobbered by argument setup
-                try self.codegen.emit.movRegMem(.w64, .RAX, roc_ops_reg, 64);
-
-                // Load function pointer into R10: fns[index] = [RAX + index * 8]
-                const fn_offset: i32 = @intCast(hc.index * 8);
-                try self.codegen.emit.movRegMem(.w64, .R10, .RAX, fn_offset);
-
-                // Set up arguments for the hosted function call
-                // Windows x64 ABI: RCX, RDX, R8, R9
-                // System V ABI (Linux/macOS): RDI, RSI, RDX, RCX
-                if (target.isWindows()) {
-                    // Windows x64 ABI:
-                    // RCX = roc_ops pointer
-                    // RDX = return pointer (RBP + ret_slot)
-                    // R8 = args pointer (RBP + args_slot)
-
-                    try self.emitMovRegReg(.RCX, roc_ops_reg);
-                    try self.codegen.emit.leaRegMem(.RDX, .RBP, ret_slot);
-                    try self.codegen.emit.leaRegMem(.R8, .RBP, args_slot);
-
-                    // Windows x64 ABI requires 32 bytes of shadow space for the callee
-                    try self.codegen.emit.subRegImm32(.w64, .RSP, 32);
-
-                    // Call the hosted function (R10 is safe from argument setup)
-                    try self.codegen.emit.callReg(.R10);
-
-                    // Clean up shadow space
-                    try self.codegen.emit.addRegImm32(.w64, .RSP, 32);
-                } else {
-                    // System V ABI (Linux/macOS):
-                    // RDI = roc_ops pointer
-                    // RSI = return pointer (RBP + ret_slot)
-                    // RDX = args pointer (RBP + args_slot)
-
-                    try self.emitMovRegReg(.RDI, roc_ops_reg);
-                    try self.codegen.emit.leaRegMem(.RSI, .RBP, ret_slot);
-                    try self.codegen.emit.leaRegMem(.RDX, .RBP, args_slot);
-
-                    // Call the hosted function (R10 is safe from argument setup)
-                    try self.codegen.emit.callReg(.R10);
-                }
+                // hosted_fn(roc_ops, ret_ptr, args_ptr) — 3 args via CallBuilder
+                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                try builder.addRegArg(roc_ops_reg);
+                try builder.addLeaArg(base_reg, ret_slot);
+                try builder.addLeaArg(base_reg, args_slot);
+                try builder.callReg(fn_ptr_reg);
             }
 
             // Return the result location based on return type
@@ -4357,33 +4205,17 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             const alignment_bytes = elem_size_align.alignment.toByteUnits();
             const fn_addr: usize = @intFromPtr(&wrapListReserve);
 
-            if (comptime target.toCpuArch() == .aarch64) {
+            {
                 // wrapListReserve(out, list_bytes, list_len, list_cap, alignment, spare, element_width, roc_ops)
-                try self.codegen.emit.movRegImm64(.X0, @bitCast(@as(i64, result_offset)));
-                try self.codegen.emit.addRegRegReg(.w64, .X0, .FP, .X0);
-                try self.codegen.emit.ldrRegMemSoff(.w64, .X1, .FP, list_off);
-                try self.codegen.emit.ldrRegMemSoff(.w64, .X2, .FP, list_off + 8);
-                try self.codegen.emit.ldrRegMemSoff(.w64, .X3, .FP, list_off + 16);
-                try self.codegen.emitLoadImm(.X4, @intCast(alignment_bytes));
-                try self.codegen.emit.ldrRegMemSoff(.w64, .X5, .FP, spare_off);
-                try self.codegen.emitLoadImm(.X6, @intCast(elem_size_align.size));
-                try self.codegen.emit.movRegReg(.w64, .X7, roc_ops_reg);
-                try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
-                try self.codegen.emit.blrReg(.X9);
-            } else {
-                // x86_64: wrapListReserve(out, list_bytes, list_len, list_cap, alignment, spare, element_width, roc_ops)
-                // 8 args - Use CallBuilder for cross-platform calls
+                const base_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .FP else .RBP;
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
 
-                // Args 1-4: out, list_bytes, list_len, list_cap (registers)
-                try builder.addLeaArg(.RBP, result_offset);
-                try builder.addMemArg(.RBP, list_off);
-                try builder.addMemArg(.RBP, list_off + 8);
-                try builder.addMemArg(.RBP, list_off + 16);
-
-                // Args 5-8: alignment, spare, element_width, roc_ops
+                try builder.addLeaArg(base_reg, result_offset);
+                try builder.addMemArg(base_reg, list_off);
+                try builder.addMemArg(base_reg, list_off + 8);
+                try builder.addMemArg(base_reg, list_off + 16);
                 try builder.addImmArg(@intCast(alignment_bytes));
-                try builder.addMemArg(.RBP, spare_off);
+                try builder.addMemArg(base_reg, spare_off);
                 try builder.addImmArg(@intCast(elem_size_align.size));
                 try builder.addRegArg(roc_ops_reg);
 
@@ -4412,30 +4244,15 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             const alignment_bytes = elem_size_align.alignment.toByteUnits();
             const fn_addr: usize = @intFromPtr(&wrapListReleaseExcessCapacity);
 
-            if (comptime target.toCpuArch() == .aarch64) {
+            {
                 // wrapListReleaseExcessCapacity(out, list_bytes, list_len, list_cap, alignment, element_width, roc_ops)
-                try self.codegen.emit.movRegImm64(.X0, @bitCast(@as(i64, result_offset)));
-                try self.codegen.emit.addRegRegReg(.w64, .X0, .FP, .X0);
-                try self.codegen.emit.ldrRegMemSoff(.w64, .X1, .FP, list_off);
-                try self.codegen.emit.ldrRegMemSoff(.w64, .X2, .FP, list_off + 8);
-                try self.codegen.emit.ldrRegMemSoff(.w64, .X3, .FP, list_off + 16);
-                try self.codegen.emitLoadImm(.X4, @intCast(alignment_bytes));
-                try self.codegen.emitLoadImm(.X5, @intCast(elem_size_align.size));
-                try self.codegen.emit.movRegReg(.w64, .X6, roc_ops_reg);
-                try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
-                try self.codegen.emit.blrReg(.X9);
-            } else {
-                // x86_64: wrapListReleaseExcessCapacity(out, list_bytes, list_len, list_cap, alignment, element_width, roc_ops)
-                // 7 args - Use CallBuilder for cross-platform calls
+                const base_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .FP else .RBP;
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
 
-                // Args 1-4: out, list_bytes, list_len, list_cap (registers)
-                try builder.addLeaArg(.RBP, result_offset);
-                try builder.addMemArg(.RBP, list_off);
-                try builder.addMemArg(.RBP, list_off + 8);
-                try builder.addMemArg(.RBP, list_off + 16);
-
-                // Args 5-7: alignment, element_width, roc_ops
+                try builder.addLeaArg(base_reg, result_offset);
+                try builder.addMemArg(base_reg, list_off);
+                try builder.addMemArg(base_reg, list_off + 8);
+                try builder.addMemArg(base_reg, list_off + 16);
                 try builder.addImmArg(@intCast(alignment_bytes));
                 try builder.addImmArg(@intCast(elem_size_align.size));
                 try builder.addRegArg(roc_ops_reg);
@@ -8669,50 +8486,42 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             const msg_ptr_val: i64 = @bitCast(@as(u64, @intFromPtr(msg.ptr)));
             const msg_len_val: i64 = @bitCast(@as(u64, msg.len));
 
-            if (comptime target.toCpuArch() == .aarch64) {
+            {
+                const base_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .FP else .RBP;
                 const tmp = try self.allocTempGeneral();
 
                 // Store utf8_bytes pointer at offset 0
-                try self.codegen.emitLoadImm(tmp, msg_ptr_val);
-                try self.codegen.emit.strRegMemSoff(.w64, tmp, .FP, crashed_slot);
+                if (comptime target.toCpuArch() == .aarch64) {
+                    try self.codegen.emitLoadImm(tmp, msg_ptr_val);
+                    try self.codegen.emit.strRegMemSoff(.w64, tmp, base_reg, crashed_slot);
+                } else {
+                    try self.codegen.emit.movRegImm64(tmp, @bitCast(@as(u64, @intFromPtr(msg.ptr))));
+                    try self.codegen.emit.movMemReg(.w64, base_reg, crashed_slot, tmp);
+                }
 
                 // Store len at offset 8
-                try self.codegen.emitLoadImm(tmp, msg_len_val);
-                try self.codegen.emit.strRegMemSoff(.w64, tmp, .FP, crashed_slot + 8);
+                if (comptime target.toCpuArch() == .aarch64) {
+                    try self.codegen.emitLoadImm(tmp, msg_len_val);
+                    try self.codegen.emit.strRegMemSoff(.w64, tmp, base_reg, crashed_slot + 8);
+                } else {
+                    try self.codegen.emit.movRegImm64(tmp, @bitCast(@as(u64, msg.len)));
+                    try self.codegen.emit.movMemReg(.w64, base_reg, crashed_slot + 8, tmp);
+                }
 
                 // Load roc_crashed fn pointer from RocOps offset 48
-                try self.codegen.emit.ldrRegMemSoff(.w64, .X9, roc_ops_reg, 48);
-
-                // X0 = &RocCrashed struct
-                try self.codegen.emit.movRegImm64(.X0, @bitCast(@as(i64, crashed_slot)));
-                try self.codegen.emit.addRegRegReg(.w64, .X0, .FP, .X0);
-
-                // X1 = env (from RocOps offset 0)
-                try self.codegen.emit.ldrRegMemSoff(.w64, .X1, roc_ops_reg, 0);
-
-                // Call roc_crashed
-                try self.codegen.emit.blrReg(.X9);
-
-                self.codegen.freeGeneral(tmp);
-            } else {
-                const tmp = try self.allocTempGeneral();
-
-                // Store utf8_bytes pointer at offset 0
-                try self.codegen.emit.movRegImm64(tmp, @bitCast(@as(u64, @intFromPtr(msg.ptr))));
-                try self.codegen.emit.movMemReg(.w64, .RBP, crashed_slot, tmp);
-
-                // Store len at offset 8
-                try self.codegen.emit.movRegImm64(tmp, @bitCast(@as(u64, msg.len)));
-                try self.codegen.emit.movMemReg(.w64, .RBP, crashed_slot + 8, tmp);
-
-                // Load roc_crashed fn ptr from RocOps offset 48 into RAX (not R11, CallBuilder uses R11)
-                try self.codegen.emit.movRegMem(.w64, .RAX, roc_ops_reg, 48);
+                // Use a register that won't conflict with CallBuilder's SCRATCH_REG
+                const fn_ptr_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X10 else .RAX;
+                if (comptime target.toCpuArch() == .aarch64) {
+                    try self.codegen.emit.ldrRegMemSoff(.w64, fn_ptr_reg, roc_ops_reg, 48);
+                } else {
+                    try self.codegen.emit.movRegMem(.w64, fn_ptr_reg, roc_ops_reg, 48);
+                }
 
                 // Use CallBuilder for args and call
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                try builder.addLeaArg(.RBP, crashed_slot);
+                try builder.addLeaArg(base_reg, crashed_slot);
                 try builder.addMemArg(roc_ops_reg, 0); // env from RocOps offset 0
-                try builder.callReg(.RAX);
+                try builder.callReg(fn_ptr_reg);
 
                 self.codegen.freeGeneral(tmp);
             }

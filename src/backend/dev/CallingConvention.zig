@@ -231,15 +231,10 @@ pub fn CallBuilder(comptime EmitType: type) type {
                 self.reg_arg_count += 1;
                 self.int_arg_index += 1;
             } else {
-                if (comptime is_aarch64) {
-                    // aarch64: push to stack (str with pre-decrement or stp)
-                    @panic("Stack args not yet implemented for aarch64 CallBuilder");
-                } else {
-                    // Defer stack arg - will be stored after stack allocation in call()
-                    std.debug.assert(self.stack_arg_count < MAX_STACK_ARGS);
-                    self.stack_args[self.stack_arg_count] = .{ .from_reg = src_reg };
-                    self.stack_arg_count += 1;
-                }
+                // Defer stack arg - will be stored after stack allocation in call()
+                std.debug.assert(self.stack_arg_count < MAX_STACK_ARGS);
+                self.stack_args[self.stack_arg_count] = .{ .from_reg = src_reg };
+                self.stack_arg_count += 1;
             }
         }
 
@@ -253,14 +248,10 @@ pub fn CallBuilder(comptime EmitType: type) type {
                 self.reg_arg_count += 1;
                 self.int_arg_index += 1;
             } else {
-                if (comptime is_aarch64) {
-                    @panic("Stack args not yet implemented for aarch64 CallBuilder");
-                } else {
-                    // Defer stack arg - will be stored after stack allocation in call()
-                    std.debug.assert(self.stack_arg_count < MAX_STACK_ARGS);
-                    self.stack_args[self.stack_arg_count] = .{ .from_lea = .{ .base = base_reg, .offset = offset } };
-                    self.stack_arg_count += 1;
-                }
+                // Defer stack arg - will be stored after stack allocation in call()
+                std.debug.assert(self.stack_arg_count < MAX_STACK_ARGS);
+                self.stack_args[self.stack_arg_count] = .{ .from_lea = .{ .base = base_reg, .offset = offset } };
+                self.stack_arg_count += 1;
             }
         }
 
@@ -274,14 +265,10 @@ pub fn CallBuilder(comptime EmitType: type) type {
                 self.reg_arg_count += 1;
                 self.int_arg_index += 1;
             } else {
-                if (comptime is_aarch64) {
-                    @panic("Stack args not yet implemented for aarch64 CallBuilder");
-                } else {
-                    // Defer stack arg - will be stored after stack allocation in call()
-                    std.debug.assert(self.stack_arg_count < MAX_STACK_ARGS);
-                    self.stack_args[self.stack_arg_count] = .{ .from_mem = .{ .base = base_reg, .offset = offset } };
-                    self.stack_arg_count += 1;
-                }
+                // Defer stack arg - will be stored after stack allocation in call()
+                std.debug.assert(self.stack_arg_count < MAX_STACK_ARGS);
+                self.stack_args[self.stack_arg_count] = .{ .from_mem = .{ .base = base_reg, .offset = offset } };
+                self.stack_arg_count += 1;
             }
         }
 
@@ -295,14 +282,10 @@ pub fn CallBuilder(comptime EmitType: type) type {
                 self.reg_arg_count += 1;
                 self.int_arg_index += 1;
             } else {
-                if (comptime is_aarch64) {
-                    @panic("Stack args not yet implemented for aarch64 CallBuilder");
-                } else {
-                    // Defer stack arg - will be stored after stack allocation in call()
-                    std.debug.assert(self.stack_arg_count < MAX_STACK_ARGS);
-                    self.stack_args[self.stack_arg_count] = .{ .from_imm = value };
-                    self.stack_arg_count += 1;
-                }
+                // Defer stack arg - will be stored after stack allocation in call()
+                std.debug.assert(self.stack_arg_count < MAX_STACK_ARGS);
+                self.stack_args[self.stack_arg_count] = .{ .from_imm = value };
+                self.stack_arg_count += 1;
             }
         }
 
@@ -465,6 +448,31 @@ pub fn CallBuilder(comptime EmitType: type) type {
             }
         }
 
+        /// Emit a single stack argument for aarch64.
+        /// Stores the arg value at [SP + uoffset * 8] using SCRATCH_REG as temp.
+        fn emitStackArgAarch64(self: *Self, arg: ArgSource, uoffset: u12) !void {
+            switch (arg) {
+                .from_reg => |reg| {
+                    try self.emit.strRegMemUoff(.w64, reg, CC_EMIT.STACK_PTR, uoffset);
+                },
+                .from_imm => |value| {
+                    try self.emit.movRegImm64(CC_EMIT.SCRATCH_REG, @bitCast(value));
+                    try self.emit.strRegMemUoff(.w64, CC_EMIT.SCRATCH_REG, CC_EMIT.STACK_PTR, uoffset);
+                },
+                .from_lea => |lea| {
+                    if (lea.offset >= 0)
+                        try self.emit.addRegRegImm12(.w64, CC_EMIT.SCRATCH_REG, lea.base, @intCast(lea.offset))
+                    else
+                        try self.emit.subRegRegImm12(.w64, CC_EMIT.SCRATCH_REG, lea.base, @intCast(-lea.offset));
+                    try self.emit.strRegMemUoff(.w64, CC_EMIT.SCRATCH_REG, CC_EMIT.STACK_PTR, uoffset);
+                },
+                .from_mem => |mem| {
+                    try self.emit.ldrRegMemSoff(.w64, CC_EMIT.SCRATCH_REG, mem.base, mem.offset);
+                    try self.emit.strRegMemUoff(.w64, CC_EMIT.SCRATCH_REG, CC_EMIT.STACK_PTR, uoffset);
+                },
+            }
+        }
+
         /// Resolve deferred register arguments using Rideau-Serpette-Leroy parallel move algorithm.
         /// This handles arbitrary permutations of param registers without clobbering,
         /// using SCRATCH_REG to break cycles. At most one scratch save per cycle.
@@ -565,9 +573,13 @@ pub fn CallBuilder(comptime EmitType: type) type {
                     }
                 }
             } else if (comptime is_aarch64) {
-                // aarch64 doesn't need shadow space, but may need stack args
-                if (self.stack_arg_count > 0) {
-                    @panic("Stack args not yet implemented for aarch64 CallBuilder");
+                // aarch64: allocate stack space and store stack args
+                if (total_space > 0) {
+                    try self.emit.subRegRegImm12(.w64, CC_EMIT.STACK_PTR, CC_EMIT.STACK_PTR, @intCast(total_space));
+                }
+
+                for (self.stack_args[0..self.stack_arg_count], 0..) |arg, i| {
+                    try self.emitStackArgAarch64(arg, @intCast(i));
                 }
             }
 
@@ -597,7 +609,9 @@ pub fn CallBuilder(comptime EmitType: type) type {
                     try self.emit.movRegMem(.w64, .R12, CC_EMIT.BASE_PTR, offset);
                 }
             } else if (comptime is_aarch64) {
-                // aarch64: stack cleanup would be different (restore SP)
+                if (total_space > 0) {
+                    try self.emit.addRegRegImm12(.w64, CC_EMIT.STACK_PTR, CC_EMIT.STACK_PTR, @intCast(total_space));
+                }
             }
         }
 
@@ -650,8 +664,12 @@ pub fn CallBuilder(comptime EmitType: type) type {
                     }
                 }
             } else if (comptime is_aarch64) {
-                if (self.stack_arg_count > 0) {
-                    @panic("Stack args not yet implemented for aarch64 CallBuilder");
+                if (total_space > 0) {
+                    try self.emit.subRegRegImm12(.w64, CC_EMIT.STACK_PTR, CC_EMIT.STACK_PTR, @intCast(total_space));
+                }
+
+                for (self.stack_args[0..self.stack_arg_count], 0..) |arg, i| {
+                    try self.emitStackArgAarch64(arg, @intCast(i));
                 }
             }
 
@@ -671,6 +689,10 @@ pub fn CallBuilder(comptime EmitType: type) type {
                 // Restore R12 if we saved it (Windows x64 only)
                 if (self.r12_save_offset) |offset| {
                     try self.emit.movRegMem(.w64, .R12, CC_EMIT.BASE_PTR, offset);
+                }
+            } else if (comptime is_aarch64) {
+                if (total_space > 0) {
+                    try self.emit.addRegRegImm12(.w64, CC_EMIT.STACK_PTR, CC_EMIT.STACK_PTR, @intCast(total_space));
                 }
             }
         }
@@ -727,8 +749,12 @@ pub fn CallBuilder(comptime EmitType: type) type {
                     }
                 }
             } else if (comptime is_aarch64) {
-                if (self.stack_arg_count > 0) {
-                    @panic("Stack args not yet implemented for aarch64 CallBuilder");
+                if (total_space > 0) {
+                    try self.emit.subRegRegImm12(.w64, CC_EMIT.STACK_PTR, CC_EMIT.STACK_PTR, @intCast(total_space));
+                }
+
+                for (self.stack_args[0..self.stack_arg_count], 0..) |arg, i| {
+                    try self.emitStackArgAarch64(arg, @intCast(i));
                 }
             }
 
@@ -766,7 +792,9 @@ pub fn CallBuilder(comptime EmitType: type) type {
                     try self.emit.movRegMem(.w64, .R12, CC_EMIT.BASE_PTR, offset);
                 }
             } else if (comptime is_aarch64) {
-                // aarch64: no cleanup needed for now
+                if (total_space > 0) {
+                    try self.emit.addRegRegImm12(.w64, CC_EMIT.STACK_PTR, CC_EMIT.STACK_PTR, @intCast(total_space));
+                }
             }
         }
 
