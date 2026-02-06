@@ -49,6 +49,8 @@ pub fn generateObjectFile(
                 });
 
                 // Add relocations for this symbol
+                // x86_64 R_X86_64_PLT32 needs addend -4 (PC-relative from end of 4-byte field)
+                const reloc_addend: i64 = if (cpu_arch == .x86_64) -4 else 0;
                 for (relocations) |rel| {
                     const rel_name = switch (rel) {
                         .linked_function => |f| f.name,
@@ -56,7 +58,7 @@ pub fn generateObjectFile(
                         else => continue,
                     };
                     if (std.mem.eql(u8, rel_name, sym.name)) {
-                        try elf.addTextRelocation(rel.getOffset(), sym_idx, 0);
+                        try elf.addTextRelocation(rel.getOffset(), sym_idx, reloc_addend);
                     }
                 }
             }
