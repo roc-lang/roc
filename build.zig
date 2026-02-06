@@ -2192,7 +2192,7 @@ pub fn build(b: *std.Build) void {
     };
 
     // Don't omit frame pointer when tracy callstack is enabled (needed for callstack capture)
-    const omit_frame_pointer: ?bool = if (flag_tracy_callstack) false else b.option(bool, "omit-frame-pointer", "Omit frame pointer (null = zig default per optimize mode)");
+    const omit_frame_pointer: ?bool = if (flag_tracy_callstack) false else null;
 
     const target_is_native =
         // `query.isNative()` becomes false as soon as users override CPU features (e.g. -Dcpu=x86_64_v3),
