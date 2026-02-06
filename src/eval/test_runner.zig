@@ -10,6 +10,7 @@ const types = @import("types");
 const import_mapping_mod = types.import_mapping;
 const reporting = @import("reporting");
 const Interpreter = @import("interpreter.zig").Interpreter;
+const roc_target = @import("roc_target");
 const eval_mod = @import("mod.zig");
 
 const RocOps = builtins.host_abi.RocOps;
@@ -157,7 +158,7 @@ pub const TestRunner = struct {
         return TestRunner{
             .allocator = allocator,
             .env = cir,
-            .interpreter = try Interpreter.init(allocator, cir, builtin_types_param, builtin_module_env, other_modules, import_mapping, null, null),
+            .interpreter = try Interpreter.init(allocator, cir, builtin_types_param, builtin_module_env, other_modules, import_mapping, null, null, roc_target.RocTarget.detectNative()),
             .crash = CrashContext.init(allocator),
             .roc_ops = null,
             .test_results = std.array_list.Managed(TestResult).init(allocator),

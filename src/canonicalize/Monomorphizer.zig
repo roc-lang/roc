@@ -496,15 +496,17 @@ pub fn resolveUnspecializedClosuresWithSubstitutions(
 ///
 /// Note: For static dispatch implementations that are simple functions (not closures with
 /// captures), this creates a "pure lambda" closure info with no captures.
+///
+/// INVARIANT: This function requires closure_transformer to be set. All call sites
+/// are guarded by `if (self.closure_transformer) |transformer|`, so this is always true.
 pub fn addResolvedToLambdaSet(
     self: *Self,
     lambda_set: *ClosureTransformer.LambdaSet,
     resolved: ResolvedClosure,
 ) !void {
-    // Create a ClosureInfo for the resolved static dispatch implementation.
-    // Static dispatch implementations are typically top-level functions without captures,
-    // so we create a simple closure with the method ident as the tag name.
-    //
+    // closure_transformer must be set - callers are guarded by if (self.closure_transformer)
+    const transformer = self.closure_transformer orelse unreachable;
+
     // Get the actual method's expression instead of the e_type_var_dispatch expression.
     // If we have a node_idx, use it to get the method definition's expression.
     // Otherwise, fall back to the member_expr from the unspecialized closure.
@@ -514,17 +516,52 @@ pub fn addResolvedToLambdaSet(
         break :blk def.expr;
     } else resolved.unspecialized.member_expr;
 
+    // Check if the implementation has captures
+    const has_captures = self.checkExpressionHasCaptures(lambda_body);
+
+    // Create lifted function patterns - always required for dispatch generation
+    const lifted_patterns = try transformer.createLiftedFunctionPatterns(
+        resolved.impl_lookup.method_ident,
+        has_captures,
+    );
+
+    // Extract lambda args if available
+    const lambda_args = blk: {
+        const expr = self.module_env.store.getExpr(lambda_body);
+        switch (expr) {
+            .e_lambda => |lambda| break :blk lambda.args,
+            .e_closure => |closure| {
+                const lambda_expr = self.module_env.store.getExpr(closure.lambda_idx);
+                switch (lambda_expr) {
+                    .e_lambda => |lambda| break :blk lambda.args,
+                    else => break :blk CIR.Pattern.Span{ .span = base.DataSpan.empty() },
+                }
+            },
+            else => break :blk CIR.Pattern.Span{ .span = base.DataSpan.empty() },
+        }
+    };
+
     const closure_info = ClosureTransformer.ClosureInfo{
         .tag_name = resolved.impl_lookup.method_ident,
         .source_module = self.module_env.module_name_idx,
         .lambda_body = lambda_body,
-        .lambda_args = CIR.Pattern.Span{ .span = base.DataSpan.empty() },
+        .lambda_args = lambda_args,
         .capture_names = std.ArrayList(base.Ident.Idx).empty,
-        .lifted_fn_pattern = null, // Will be set during further processing if needed
-        .lifted_captures_pattern = null, // No captures for top-level static dispatch impls
+        .lifted_fn_pattern = lifted_patterns.fn_pattern,
+        .lifted_captures_pattern = lifted_patterns.captures_pattern,
     };
 
     try lambda_set.addClosure(self.allocator, closure_info);
+}
+
+/// Check if an expression has captures (is a closure with non-empty captures span).
+/// Static dispatch implementations are typically pure lambdas without captures.
+fn checkExpressionHasCaptures(self: *const Self, expr_idx: Expr.Idx) bool {
+    const expr = self.module_env.store.getExpr(expr_idx);
+    return switch (expr) {
+        .e_closure => |closure| closure.captures.span.len > 0,
+        else => false,
+    };
 }
 
 /// Process all resolved closures and add them to the lambda set.
@@ -1353,7 +1390,7 @@ fn duplicateExpr(
             const new_func = specialized_func orelse try self.duplicateExpr(call.func, type_subs);
 
             // Normalize arguments: complex expressions become let-bindings, simple lookups stay as-is.
-            // This ensures all call arguments are simple symbol references by the time RC runs,
+            // This ensures all call arguments are simple symbol references,
             // matching the architecture of crates/compiler/mono/src/inc_dec.rs.
             const args = self.module_env.store.sliceExpr(call.args);
             const args_start = self.module_env.store.scratch.?.exprs.top();
@@ -1392,7 +1429,7 @@ fn duplicateExpr(
                     // Set the synthetic pattern's type to match the ORIGINAL expression's type.
                     // We use arg_idx (original) not new_arg (duplicated) because the original
                     // has valid type info from type checking, while the duplicate may not.
-                    // Later stages (RC pass, lambda set specialization) need valid type info.
+                    // Later stages (lambda set specialization) need valid type info.
                     const pattern_var = ModuleEnv.varFrom(pattern_idx);
                     const expr_var = ModuleEnv.varFrom(arg_idx);
                     // Extend type store to cover the new pattern index (created after type checking)
@@ -1608,6 +1645,21 @@ fn duplicateExpr(
             }, base.Region.zero());
         },
 
+        .e_tuple_access => |tuple_access| {
+            const new_tuple = try self.duplicateExpr(tuple_access.tuple, type_subs);
+
+            if (new_tuple == tuple_access.tuple) {
+                return expr_idx;
+            }
+
+            return try self.module_env.store.addExpr(Expr{
+                .e_tuple_access = .{
+                    .tuple = new_tuple,
+                    .elem_index = tuple_access.elem_index,
+                },
+            }, base.Region.zero());
+        },
+
         .e_record => |record| {
             const field_indices = self.module_env.store.sliceRecordFields(record.fields);
             const fields_start = self.module_env.store.scratch.?.record_fields.top();
@@ -1815,6 +1867,7 @@ fn duplicateExpr(
         .e_str,
         .e_lookup_local,
         .e_lookup_external,
+        .e_lookup_pending,
         .e_empty_list,
         .e_empty_record,
         .e_zero_argument_tag,
@@ -1825,10 +1878,6 @@ fn duplicateExpr(
         .e_hosted_lambda,
         .e_low_level_lambda,
         .e_crash,
-        // RC expressions are inserted after monomorphization
-        .e_incref,
-        .e_decref,
-        .e_free,
         => return expr_idx,
     }
 }

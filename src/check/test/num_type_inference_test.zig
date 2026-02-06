@@ -31,8 +31,8 @@ test "infers type for small nums" {
         var test_env = try TestEnv.initExpr("Test", source);
         defer test_env.deinit();
 
-        // Number literals produce flex variables with from_numeral constraints
-        try test_env.assertLastDefTypeContains("from_numeral");
+        // Number literals resolve to Dec after finalization
+        try test_env.assertLastDefType("Dec");
     }
 }
 
@@ -70,8 +70,8 @@ test "infers type for zero" {
         var test_env = try TestEnv.initExpr("Test", source);
         defer test_env.deinit();
 
-        // Number literals produce flex variables with from_numeral constraints
-        try test_env.assertLastDefTypeContains("from_numeral");
+        // Number literals resolve to Dec after finalization
+        try test_env.assertLastDefType("Dec");
     }
 }
 
@@ -90,8 +90,8 @@ test "infers type for hex literals" {
         var test_env = try TestEnv.initExpr("Test", source);
         defer test_env.deinit();
 
-        // Number literals produce flex variables with from_numeral constraints
-        try test_env.assertLastDefTypeContains("from_numeral");
+        // Number literals resolve to Dec after finalization
+        try test_env.assertLastDefType("Dec");
     }
 }
 
@@ -109,8 +109,8 @@ test "infers type for binary literals" {
         var test_env = try TestEnv.initExpr("Test", source);
         defer test_env.deinit();
 
-        // Number literals produce flex variables with from_numeral constraints
-        try test_env.assertLastDefTypeContains("from_numeral");
+        // Number literals resolve to Dec after finalization
+        try test_env.assertLastDefType("Dec");
     }
 }
 
@@ -128,8 +128,8 @@ test "infers type for octal literals" {
         var test_env = try TestEnv.initExpr("Test", source);
         defer test_env.deinit();
 
-        // Number literals produce flex variables with from_numeral constraints
-        try test_env.assertLastDefTypeContains("from_numeral");
+        // Number literals resolve to Dec after finalization
+        try test_env.assertLastDefType("Dec");
     }
 }
 

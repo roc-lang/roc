@@ -256,8 +256,8 @@ pub const RocDec = extern struct {
 
     pub fn to_str(self: RocDec, roc_ops: *RocOps) RocStr {
         var buf: [max_str_length]u8 = undefined;
-        const slice = self.format_to_buf(&buf);
-        return RocStr.init(slice.ptr, slice.len, roc_ops);
+        const len = self.format_to_buf(&buf).len;
+        return RocStr.init(&buf, len, roc_ops);
     }
 
     pub fn toI128(self: RocDec) i128 {
@@ -1222,6 +1222,16 @@ pub fn divC(
     roc_ops: *RocOps,
 ) callconv(.c) i128 {
     return @call(.always_inline, RocDec.div, .{ arg1, arg2, roc_ops }).num;
+}
+
+/// Truncating division: divide and truncate to the nearest integer toward zero.
+pub fn divTruncC(
+    arg1: RocDec,
+    arg2: RocDec,
+    roc_ops: *RocOps,
+) callconv(.c) i128 {
+    const quotient = @call(.always_inline, RocDec.div, .{ arg1, arg2, roc_ops });
+    return @call(.always_inline, RocDec.trunc, .{ quotient, roc_ops }).num;
 }
 
 /// TODO: Document logC.

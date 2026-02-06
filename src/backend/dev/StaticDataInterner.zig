@@ -2,11 +2,11 @@
 //!
 //! This interner lives at the compilation session level, shared across all modules.
 //! It provides deduplication of identical byte sequences and supports pluggable
-//! backends for different compilation modes (JIT vs object file generation).
+//! backends for different compilation modes (in-memory compilation vs object file generation).
 //!
 //! Design:
 //! - Global across all modules - a single giant intern table
-//! - Backend abstraction allows JIT (direct memory) or object file (.rodata section)
+//! - Backend abstraction allows in-memory (direct memory) or object file (.rodata section)
 //! - Hash-based deduplication with collision checking
 
 const std = @import("std");
@@ -16,7 +16,7 @@ const Self = @This();
 
 /// Result of interning data - contains pointer and length
 pub const InternedData = struct {
-    /// Pointer to the actual data (for JIT, this is the runtime address)
+    /// Pointer to the actual data (for in-memory compilation, this is the runtime address)
     ptr: [*]const u8,
     /// Length of the data
     len: usize,
@@ -130,9 +130,9 @@ pub fn count(self: *const Self) usize {
     return self.intern_map.count();
 }
 
-/// Simple JIT backend that allocates from an arena
-/// Data lives as long as the JIT code execution
-pub const JitStaticBackend = struct {
+/// Simple in-memory backend that allocates from an arena
+/// Data lives as long as the compiled code execution
+pub const MemoryBackend = struct {
     /// Arena for allocations - memory is freed when the backend is deinitialized
     arena: std.heap.ArenaAllocator,
 
@@ -140,17 +140,17 @@ pub const JitStaticBackend = struct {
         .alloc = alloc,
     };
 
-    pub fn init(backing_allocator: Allocator) JitStaticBackend {
+    pub fn init(backing_allocator: Allocator) MemoryBackend {
         return .{
             .arena = std.heap.ArenaAllocator.init(backing_allocator),
         };
     }
 
-    pub fn deinit(self: *JitStaticBackend) void {
+    pub fn deinit(self: *MemoryBackend) void {
         self.arena.deinit();
     }
 
-    pub fn backend(self: *JitStaticBackend) Backend {
+    pub fn backend(self: *MemoryBackend) Backend {
         return .{
             .ptr = self,
             .vtable = &vtable,
@@ -161,7 +161,7 @@ pub const JitStaticBackend = struct {
     const REFCOUNT_STATIC: isize = std.math.minInt(isize);
 
     fn alloc(ptr: *anyopaque, data: []const u8, alignment: usize) ?InternedData {
-        const self: *JitStaticBackend = @ptrCast(@alignCast(ptr));
+        const self: *MemoryBackend = @ptrCast(@alignCast(ptr));
         const allocator = self.arena.allocator();
 
         // Allocate with refcount prefix: [refcount: 8 bytes][data]
@@ -189,10 +189,10 @@ pub const JitStaticBackend = struct {
 test "basic interning" {
     const allocator = std.testing.allocator;
 
-    var jit_backend = JitStaticBackend.init(allocator);
-    defer jit_backend.deinit();
+    var memory_backend = MemoryBackend.init(allocator);
+    defer memory_backend.deinit();
 
-    var interner = init(allocator, jit_backend.backend());
+    var interner = init(allocator, memory_backend.backend());
     defer interner.deinit();
 
     // Intern a string
@@ -217,10 +217,10 @@ test "basic interning" {
 test "empty string interning" {
     const allocator = std.testing.allocator;
 
-    var jit_backend = JitStaticBackend.init(allocator);
-    defer jit_backend.deinit();
+    var memory_backend = MemoryBackend.init(allocator);
+    defer memory_backend.deinit();
 
-    var interner = init(allocator, jit_backend.backend());
+    var interner = init(allocator, memory_backend.backend());
     defer interner.deinit();
 
     const result = interner.internString("");
@@ -231,10 +231,10 @@ test "empty string interning" {
 test "deduplication of identical long strings" {
     const allocator = std.testing.allocator;
 
-    var jit_backend = JitStaticBackend.init(allocator);
-    defer jit_backend.deinit();
+    var memory_backend = MemoryBackend.init(allocator);
+    defer memory_backend.deinit();
 
-    var interner = init(allocator, jit_backend.backend());
+    var interner = init(allocator, memory_backend.backend());
     defer interner.deinit();
 
     const long_string = "this is a very long string that exceeds the small string optimization threshold of 23 bytes";

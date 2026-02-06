@@ -14,10 +14,12 @@ const compiled_builtins = @import("compiled_builtins");
 const ComptimeEvaluator = @import("../comptime_evaluator.zig").ComptimeEvaluator;
 const BuiltinTypes = @import("../builtins.zig").BuiltinTypes;
 const builtin_loading = @import("../builtin_loading.zig");
+const roc_target = @import("roc_target");
 
 const Can = can.Can;
 const Check = check.Check;
 const ModuleEnv = can.ModuleEnv;
+const Allocators = base.Allocators;
 const testing = std.testing;
 // Use page_allocator for interpreter tests (doesn't track leaks)
 const test_allocator = std.heap.page_allocator;
@@ -44,8 +46,12 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
     module_env.module_name = "TestModule";
     try module_env.common.calcLineStarts(module_env.gpa);
 
-    var parse_ast = try parse.parse(&module_env.common, module_env.gpa);
-    defer parse_ast.deinit(gpa);
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(gpa);
+    defer allocators.deinit();
+
+    const parse_ast = try parse.parse(&allocators, &module_env.common);
+    defer parse_ast.deinit();
 
     parse_ast.store.emptyScratch();
 
@@ -76,16 +82,19 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
         builtin_indices,
     );
 
-    var czer = try Can.init(module_env, &parse_ast, &module_envs_map);
+    var czer = try Can.init(&allocators, module_env, parse_ast, &module_envs_map);
     defer czer.deinit();
 
     try czer.canonicalizeFile();
 
     // Heap-allocate imported_envs so it outlives this function.
-    // The interpreter's all_module_envs is a slice that points to this memory.
-    const imported_envs = try gpa.alloc(*const ModuleEnv, 1);
+    // Order must match all_module_envs in the interpreter (self module first, then imports).
+    // evalLookupExternal uses all_module_envs[resolved_idx], so resolveImports indices
+    // must match this array. The interpreter detects other_envs[0]==env and uses it directly.
+    const imported_envs = try gpa.alloc(*const ModuleEnv, 2);
     errdefer gpa.free(imported_envs);
-    imported_envs[0] = builtin_module.env;
+    imported_envs[0] = module_env;
+    imported_envs[1] = builtin_module.env;
 
     // Resolve imports - map each import to its index in imported_envs
     module_env.imports.resolveImports(module_env, imported_envs);
@@ -102,7 +111,7 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
     problems.* = try check.problem.Store.init(gpa);
 
     const builtin_types = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
-    const evaluator = try ComptimeEvaluator.init(gpa, module_env, imported_envs, problems, builtin_types, builtin_module.env, &checker.import_mapping);
+    const evaluator = try ComptimeEvaluator.init(gpa, module_env, imported_envs, problems, builtin_types, builtin_module.env, &checker.import_mapping, roc_target.RocTarget.detectNative());
 
     return .{
         .module_env = module_env,

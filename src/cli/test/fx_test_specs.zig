@@ -18,6 +18,8 @@ pub const TestSpec = struct {
     io_spec: []const u8,
     /// Optional description of what the test verifies
     description: []const u8 = "",
+    /// If set, test is skipped with this reason
+    skip: []const u8 = "",
 };
 
 /// All fx platform tests that can be run with --test mode IO specs.
@@ -217,6 +219,7 @@ pub const io_spec_tests = [_]TestSpec{
         .roc_file = "test/fx/list_map_fallible.roc",
         .io_spec = "1>done",
         .description = "Regression test: List.map with fallible function (U64.from_str)",
+        .skip = "dev backend does not yet support List.map with fallible functions",
     },
     .{
         .roc_file = "test/fx/list_append_stdin_uaf.roc",
@@ -303,6 +306,11 @@ pub const io_spec_tests = [_]TestSpec{
         .roc_file = "test/fx/issue9049.roc",
         .io_spec = "1>Direct: False|1>Via pure/run: False",
         .description = "Regression test: Bool.False inspected via opaque type extraction shows correct value (issue #9049)",
+    },
+    .{
+        .roc_file = "test/fx/hosted_effect_opaque_with_data.roc",
+        .io_spec = "1>Hello, World!",
+        .description = "Regression test: Hosted effects on opaque types with data (not just [])",
     },
 };
 

@@ -64,7 +64,7 @@ This **not** method is being called on a value whose type doesn't have that meth
 ```
 	   ^^^
 
-The value's type, which does not have a method named **not**, is:
+The value's type, which does not have a method named**not**, is:
 
     Str
 
@@ -306,13 +306,13 @@ x = {
 		(patt (type "Str"))
 		(patt (type "Str"))
 		(patt (type "Str"))
-		(patt (type "{ a: Str, b: (Str, Str), c: List(Str), d: f, e: Error } where [f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)]), f.minus : f, Str -> f]"))
+		(patt (type "{ a: Str, b: (Str, Str), c: List(Str), d: Str, e: Error }"))
 		(patt (type "Str")))
 	(expressions
 		(expr (type "Str"))
 		(expr (type "Str"))
 		(expr (type "Str"))
 		(expr (type "Str"))
-		(expr (type "{ a: Str, b: (Str, Str), c: List(Str), d: f, e: Error } where [f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)]), f.minus : f, Str -> f]"))
+		(expr (type "{ a: Str, b: (Str, Str), c: List(Str), d: Str, e: Error }"))
 		(expr (type "Str"))))
 ~~~

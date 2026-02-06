@@ -430,9 +430,9 @@ func = {
 (inferred-types
 	(defs
 		(patt (type "Container(a), (a -> b) -> Container(b)"))
-		(patt (type "[Value(c), Empty, .._others], c -> c"))
+		(patt (type "[Value(c), Empty, ..], c -> c"))
 		(patt (type "Container(a), (a -> Container(b)) -> Container(b)"))
-		(patt (type "b where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.plus : b, c -> b, b.plus : b, d -> b, c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]")))
+		(patt (type "Dec")))
 	(type_decls
 		(nominal (type "Container(a)")
 			(ty-header (name "Container")
@@ -440,7 +440,7 @@ func = {
 					(ty-rigid-var (name "a"))))))
 	(expressions
 		(expr (type "Container(a), (a -> b) -> Container(b)"))
-		(expr (type "[Value(c), Empty, .._others], c -> c"))
+		(expr (type "[Value(c), Empty, ..], c -> c"))
 		(expr (type "Container(a), (a -> Container(b)) -> Container(b)"))
-		(expr (type "b where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.plus : b, c -> b, b.plus : b, d -> b, c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))))
+		(expr (type "Dec"))))
 ~~~

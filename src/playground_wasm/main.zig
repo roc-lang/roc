@@ -39,7 +39,6 @@ const Check = check.Check;
 const SExprTree = base.SExprTree;
 const ModuleEnv = can.ModuleEnv;
 const Allocator = std.mem.Allocator;
-const problem = check.problem;
 const AST = parse.AST;
 const Repl = repl.Repl;
 const RocOps = builtins.host_abi.RocOps;
@@ -128,7 +127,7 @@ const Diagnostic = struct {
 /// Compiler stage data
 const CompilerStageData = struct {
     module_env: *ModuleEnv,
-    parse_ast: ?parse.AST = null,
+    parse_ast: ?*parse.AST = null,
     solver: ?Check = null,
     bool_stmt: ?can.CIR.Statement.Idx = null,
     builtin_types: ?eval.BuiltinTypes = null,
@@ -200,8 +199,8 @@ const CompilerStageData = struct {
         self.type_reports.deinit();
 
         // Deinit the AST, which depends on the ModuleEnv's allocator and source
-        if (self.parse_ast) |*ast| {
-            ast.deinit(allocator);
+        if (self.parse_ast) |ast| {
+            ast.deinit();
         }
 
         // Finally, deinit the ModuleEnv and free its memory
@@ -886,7 +885,11 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
 
     // Stage 1: Parse (includes tokenization)
     logDebug("compileSource: Starting parse stage\n", .{});
-    var parse_ast = try parse.parse(&module_env.common, module_env.gpa);
+    var allocators: base.Allocators = undefined;
+    allocators.initInPlace(allocator);
+    // NOTE: allocators is not freed here - cleanup happens in CompilerStageData.deinit
+
+    const parse_ast = try parse.parse(&allocators, &module_env.common);
     result.parse_ast = parse_ast;
     logDebug("compileSource: Parse complete\n", .{});
 
@@ -899,7 +902,7 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
     // Generate Tokens HTML
     logDebug("compileSource: Generating tokens HTML\n", .{});
     var tokens_writer: std.Io.Writer.Allocating = .init(temp_alloc);
-    AST.tokensToHtml(&parse_ast, &module_env.common, &tokens_writer.writer) catch |err| {
+    AST.tokensToHtml(parse_ast, &module_env.common, &tokens_writer.writer) catch |err| {
         logDebug("compileSource: tokensToHtml failed: {}\n", .{err});
     };
     logDebug("compileSource: Tokens HTML generated, duping to main allocator\n", .{});
@@ -917,7 +920,7 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
     var tree = SExprTree.init(temp_alloc);
 
     logDebug("compileSource: Call pushToSExprTree\n", .{});
-    try file.pushToSExprTree(module_env.gpa, &module_env.common, &parse_ast, &tree);
+    try file.pushToSExprTree(module_env.gpa, &module_env.common, parse_ast, &tree);
 
     logDebug("compileSource: Call toHtml\n", .{});
     try tree.toHtml(&ast_writer.writer, .include_linecol);
@@ -933,7 +936,7 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
     logDebug("compileSource: Generating formatted code\n", .{});
     var formatted_code_buffer: std.Io.Writer.Allocating = .init(temp_alloc);
     defer formatted_code_buffer.deinit();
-    fmt.formatAst(parse_ast, &formatted_code_buffer.writer) catch |err| {
+    fmt.formatAst(parse_ast.*, &formatted_code_buffer.writer) catch |err| {
         logDebug("compileSource: formatAst failed: {}\n", .{err});
         return err;
     };
@@ -1004,31 +1007,31 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
             const base_ptr = @intFromPtr(buffer.ptr);
 
             logDebug("loadCompiledModule: About to deserialize common\n", .{});
-            const common = serialized_ptr.common.deserialize(base_ptr, module_source).*;
+            const common = serialized_ptr.common.deserializeInto(base_ptr, module_source);
 
             logDebug("loadCompiledModule: Deserializing ModuleEnv fields\n", .{});
             module_env_ptr.* = ModuleEnv{
                 .gpa = gpa,
                 .common = common,
-                .types = serialized_ptr.types.deserialize(base_ptr, gpa).*,
+                .types = serialized_ptr.types.deserializeInto(base_ptr, gpa),
                 .module_kind = serialized_ptr.module_kind.decode(),
                 .all_defs = serialized_ptr.all_defs,
                 .all_statements = serialized_ptr.all_statements,
                 .exports = serialized_ptr.exports,
-                .requires_types = serialized_ptr.requires_types.deserialize(base_ptr).*,
-                .for_clause_aliases = serialized_ptr.for_clause_aliases.deserialize(base_ptr).*,
+                .requires_types = serialized_ptr.requires_types.deserializeInto(base_ptr),
+                .for_clause_aliases = serialized_ptr.for_clause_aliases.deserializeInto(base_ptr),
                 .builtin_statements = serialized_ptr.builtin_statements,
-                .external_decls = serialized_ptr.external_decls.deserialize(base_ptr).*,
-                .imports = (try serialized_ptr.imports.deserialize(base_ptr, gpa)).*,
+                .external_decls = serialized_ptr.external_decls.deserializeInto(base_ptr),
+                .imports = try serialized_ptr.imports.deserializeInto(base_ptr, gpa),
                 .module_name = module_name_param,
                 .module_name_idx = undefined, // Not used for deserialized modules
                 .diagnostics = serialized_ptr.diagnostics,
-                .store = serialized_ptr.store.deserialize(base_ptr, gpa).*,
+                .store = serialized_ptr.store.deserializeInto(base_ptr, gpa),
                 .evaluation_order = null,
                 .idents = ModuleEnv.CommonIdents.find(&common),
                 .deferred_numeric_literals = try ModuleEnv.DeferredNumericLiteral.SafeList.initCapacity(gpa, 0),
                 .import_mapping = types.import_mapping.ImportMapping.init(gpa),
-                .method_idents = serialized_ptr.method_idents.deserialize(base_ptr).*,
+                .method_idents = serialized_ptr.method_idents.deserializeInto(base_ptr),
                 .rigid_vars = std.AutoHashMapUnmanaged(base.Ident.Idx, types.Var){},
             };
             logDebug("loadCompiledModule: ModuleEnv deserialized successfully\n", .{});
@@ -1091,7 +1094,7 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
     try Can.populateModuleEnvs(&module_envs_map, module_env, builtin_module.env, builtin_indices);
 
     logDebug("compileSource: Starting canonicalization\n", .{});
-    var czer = try Can.init(env, &result.parse_ast.?, &module_envs_map);
+    var czer = try Can.init(&allocators, env, result.parse_ast.?, &module_envs_map);
     defer czer.deinit();
 
     czer.canonicalizeFile() catch |err| {
@@ -1148,7 +1151,7 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
         logDebug("compileSource: Type checking complete\n", .{});
 
         // Collect type checking problems and convert them to reports using ReportBuilder
-        var report_builder = problem.ReportBuilder.init(
+        var report_builder = check.report.ReportBuilder.init(
             allocator,
             result.module_env,
             type_can_ir,
@@ -1157,7 +1160,12 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
             "main.roc",
             &.{}, // other_modules - empty for playground
             &solver.import_mapping,
-        );
+            &solver.regions,
+        ) catch |err| {
+            // On allocation failure, return result with current reports
+            logDebug("compileSource: ReportBuilder.init failed: {}\n", .{err});
+            return result;
+        };
         defer report_builder.deinit();
 
         for (solver.problems.problems.items) |type_problem| {

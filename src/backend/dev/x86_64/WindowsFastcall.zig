@@ -63,6 +63,13 @@ pub const CALLER_SAVED_FLOAT = [_]FloatReg{
 
 /// Callee-saved floating-point registers
 /// Windows DOES have callee-saved XMM registers (unlike System V!)
+///
+/// KNOWN LIMITATION: The CodeGen does not currently save/restore these registers
+/// in function prologues/epilogues. This is safe because:
+/// - CALLER_SAVED_FLOAT_MASK (0x3F) only includes XMM0-5
+/// - CodeGen.free_float is initialized from this mask, so allocator never gives out XMM6-15
+/// - If we ever expand the allocatable pool to include XMM6-15, we would need to add
+///   float_callee_saved_used tracking to CodeGen and emit movdqu save/restore pairs
 pub const CALLEE_SAVED_FLOAT = [_]FloatReg{
     .XMM6, .XMM7, .XMM8, .XMM9, .XMM10, .XMM11, .XMM12, .XMM13, .XMM14, .XMM15,
 };

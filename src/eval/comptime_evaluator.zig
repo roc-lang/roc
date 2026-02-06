@@ -31,6 +31,7 @@ const EvalError = Interpreter.Error;
 const CrashContext = eval_mod.CrashContext;
 const BuiltinTypes = eval_mod.BuiltinTypes;
 const layout_mod = @import("layout");
+const roc_target = @import("roc_target");
 
 fn comptimeRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.c) void {
     const evaluator: *ComptimeEvaluator = @ptrCast(@alignCast(env));
@@ -178,8 +179,9 @@ pub const ComptimeEvaluator = struct {
         builtin_types: BuiltinTypes,
         builtin_module_env: ?*const ModuleEnv,
         import_mapping: *const import_mapping_mod.ImportMapping,
+        target: roc_target.RocTarget,
     ) !ComptimeEvaluator {
-        const interp = try Interpreter.init(allocator, cir, builtin_types, builtin_module_env, other_envs, import_mapping, null, null);
+        const interp = try Interpreter.init(allocator, cir, builtin_types, builtin_module_env, other_envs, import_mapping, null, null, target);
 
         return ComptimeEvaluator{
             .allocator = allocator,
@@ -1910,7 +1912,7 @@ pub const ComptimeEvaluator = struct {
         } else if (result.layout.tag == .record) {
             var accessor = result.asRecord(&self.interpreter.runtime_layout_store) catch return true;
             // Use layout store's env for field lookups since records use that env's idents
-            const layout_env = self.interpreter.runtime_layout_store.env;
+            const layout_env = self.interpreter.runtime_layout_store.getEnv();
             const tag_idx = accessor.findFieldIndex(layout_env.idents.tag) orelse return true;
             const tag_rt_var = self.interpreter.runtime_types.fresh() catch return true;
             const tag_field = accessor.getFieldByIndex(tag_idx, tag_rt_var) catch return true;
@@ -1987,7 +1989,7 @@ pub const ComptimeEvaluator = struct {
 
         // Get the payload field from the Try record
         // Use layout store's env for field lookups
-        const layout_env = self.interpreter.runtime_layout_store.env;
+        const layout_env = self.interpreter.runtime_layout_store.getEnv();
         const payload_idx = try_accessor.findFieldIndex(layout_env.idents.payload) orelse {
             // This should never happen - Try type must have a payload field
             return try std.fmt.allocPrint(self.allocator, "Internal error: from_numeral returned malformed Try value (missing payload field)", .{});

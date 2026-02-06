@@ -1,5 +1,6 @@
 //! Tests for the expression evaluator
 const std = @import("std");
+const builtin = @import("builtin");
 const parse = @import("parse");
 const types = @import("types");
 const base = @import("base");
@@ -8,24 +9,32 @@ const check = @import("check");
 const builtins = @import("builtins");
 const compiled_builtins = @import("compiled_builtins");
 
+const layout = @import("layout");
+const roc_target = @import("roc_target");
 const eval_mod = @import("../mod.zig");
 const builtin_loading_mod = eval_mod.builtin_loading;
 const TestEnv = @import("TestEnv.zig");
 const Interpreter = eval_mod.Interpreter;
 const DevEvaluator = eval_mod.DevEvaluator;
-const LlvmEvaluator = eval_mod.LlvmEvaluator;
 const StackValue = eval_mod.StackValue;
 const BuiltinTypes = eval_mod.BuiltinTypes;
 const LoadedModule = builtin_loading_mod.LoadedModule;
 const deserializeBuiltinIndices = builtin_loading_mod.deserializeBuiltinIndices;
 const loadCompiledModule = builtin_loading_mod.loadCompiledModule;
 const backend = @import("backend");
-const layout_mod = @import("layout");
+
+const posix = std.posix;
+
+const has_fork = switch (builtin.os.tag) {
+    .macos, .linux, .freebsd, .openbsd, .netbsd => true,
+    else => false,
+};
 
 const Check = check.Check;
 const Can = can.Can;
 const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
+const Allocators = base.Allocators;
 
 // Use std.testing.allocator for dev backend tests (tracks leaks)
 const test_allocator = std.testing.allocator;
@@ -53,22 +62,54 @@ const TraceWriter = struct {
     }
 };
 
+/// Dump bytes as hex with address and ASCII view
+fn dumpHex(data: []const u8) void {
+    var offset: usize = 0;
+    while (offset < data.len) {
+        // Print address
+        std.debug.print("{X:0>4}: ", .{offset});
+
+        // Print hex bytes (16 per line)
+        var i: usize = 0;
+        while (i < 16) : (i += 1) {
+            if (offset + i < data.len) {
+                std.debug.print("{X:0>2} ", .{data[offset + i]});
+            } else {
+                std.debug.print("   ", .{});
+            }
+            if (i == 7) std.debug.print(" ", .{});
+        }
+
+        // Print ASCII
+        std.debug.print(" |", .{});
+        i = 0;
+        while (i < 16 and offset + i < data.len) : (i += 1) {
+            const c = data[offset + i];
+            if (c >= 0x20 and c < 0x7F) {
+                std.debug.print("{c}", .{c});
+            } else {
+                std.debug.print(".", .{});
+            }
+        }
+        std.debug.print("|\n", .{});
+
+        offset += 16;
+    }
+}
+
 /// Errors that can occur during DevEvaluator string generation
 const DevEvalError = error{
     DevEvaluatorInitFailed,
     GenerateCodeFailed,
-    JitInitFailed,
+    ExecInitFailed,
+    RocCrashed,
+    Segfault, // Windows SEH-caught segfault (access violation)
     UnsupportedLayout,
     OutOfMemory,
-};
-
-/// Errors that can occur during LlvmEvaluator string generation
-const LlvmEvalError = error{
-    LlvmEvaluatorInitFailed,
-    GenerateCodeFailed,
-    JitInitFailed,
-    UnsupportedLayout,
-    OutOfMemory,
+    ChildSegfaulted, // Unix fork-based segfault detection
+    ChildExecFailed,
+    ForkFailed,
+    PipeCreationFailed,
 };
 
 /// Evaluate an expression using the DevEvaluator and return the result as a string.
@@ -89,20 +130,55 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
     };
     defer code_result.deinit();
 
-    // JIT execute the code (with entry_offset for compiled procedures)
-    var jit = backend.JitCode.initWithEntryOffset(code_result.code, code_result.entry_offset) catch {
-        return error.JitInitFailed;
+    // Debug hex dump of generated machine code.
+    // Set to true to see the raw bytes for disassembly analysis.
+    // Useful for debugging calling convention issues, register allocation, etc.
+    // See src/backend/README.md for instructions on running filtered tests with hex dump.
+    const dump_generated_code_hex = false;
+    if (dump_generated_code_hex and code_result.code.len > 0) {
+        std.debug.print("\n=== Generated Code ({} bytes, entry_offset={}) ===\n", .{ code_result.code.len, code_result.entry_offset });
+        dumpHex(code_result.code);
+        std.debug.print("=== End Generated Code ===\n\n", .{});
+    }
+
+    // Execute the compiled code (with entry_offset for compiled procedures)
+    var executable = backend.ExecutableMemory.initWithEntryOffset(code_result.code, code_result.entry_offset) catch {
+        return error.ExecInitFailed;
     };
-    defer jit.deinit();
+    defer executable.deinit();
+
+    if (has_fork) {
+        return forkAndExecute(allocator, &dev_eval, &executable, &code_result);
+    } else {
+        return executeAndFormat(allocator, &dev_eval, &executable, &code_result);
+    }
+}
+
+/// Execute compiled code and format the result as a string.
+/// This is the core execution + formatting logic extracted from devEvaluatorStr.
+/// Marked noinline to prevent optimizer from inlining across fork() boundary,
+/// which can cause register state issues in the child process.
+noinline fn executeAndFormat(
+    alloc: std.mem.Allocator,
+    dev_eval: *DevEvaluator,
+    executable: *backend.ExecutableMemory,
+    code_result: *DevEvaluator.CodeResult,
+) DevEvalError![]const u8 {
+    // Compiler barrier: std.debug.print with empty string acts as a full
+    // memory barrier, ensuring all struct fields are properly materialized
+    // from memory rather than potentially kept in registers across fork().
+    // This is necessary for fork-based test isolation in ReleaseFast builds.
+    std.debug.print("", .{});
 
     // Check if this is a tuple
     if (code_result.tuple_len > 1) {
-        // Allocate buffer for tuple elements (each element is 8 bytes / i64)
-        var result_buf: [32]i64 = @splat(0);
-        jit.callWithResultPtrAndRocOps(@ptrCast(&result_buf), @constCast(&dev_eval.roc_ops));
+        // Allocate buffer for tuple elements
+        // Unsuffixed numeric literals default to Dec (i128 = 16 bytes each)
+        var result_buf: [32]i128 align(16) = @splat(0);
+        try dev_eval.callWithCrashProtection(executable, @ptrCast(&result_buf));
 
         // Format as "(elem1, elem2, ...)"
-        var output = std.array_list.Managed(u8).initCapacity(allocator, 64) catch
+        var output = std.array_list.Managed(u8).initCapacity(alloc, 64) catch
             return error.OutOfMemory;
         errdefer output.deinit();
         output.append('(') catch return error.OutOfMemory;
@@ -111,10 +187,25 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
             if (i > 0) {
                 try output.appendSlice(", ");
             }
-            // Format as decimal to match interpreter (unsuffixed numeric literals default to Dec)
-            const elem_str = try std.fmt.allocPrint(allocator, "{d}.0", .{result_buf[i]});
-            defer allocator.free(elem_str);
-            try output.appendSlice(elem_str);
+            const raw_val = result_buf[i];
+            // Detect if this is a Dec-scaled value or a raw integer
+            // Dec values for small integers like 10 would be 10 * 10^18 = 10^19
+            // Raw integers would be much smaller (< 10^17)
+            const abs_val: u128 = if (raw_val < 0) @intCast(-raw_val) else @intCast(raw_val);
+            const one_point_zero: u128 = 1_000_000_000_000_000_000;
+
+            if (abs_val < one_point_zero / 10) {
+                // This is a raw integer, not Dec-scaled - format as "N.0"
+                const elem_str = try std.fmt.allocPrint(alloc, "{d}.0", .{raw_val});
+                defer alloc.free(elem_str);
+                try output.appendSlice(elem_str);
+            } else {
+                // This is a Dec-scaled value - format as Dec
+                const dec_val = builtins.dec.RocDec{ .num = raw_val };
+                var dec_buf: [builtins.dec.RocDec.max_str_length]u8 = undefined;
+                const elem_str = dec_val.format_to_buf(&dec_buf);
+                try output.appendSlice(elem_str);
+            }
         }
 
         try output.append(')');
@@ -122,252 +213,273 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
     }
 
     // Execute with result pointer and format result as string based on layout
+    const layout_mod = @import("layout");
     return switch (code_result.result_layout) {
         layout_mod.Idx.i64, layout_mod.Idx.i8, layout_mod.Idx.i16, layout_mod.Idx.i32 => blk: {
             var result: i64 = 0;
-            jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&dev_eval.roc_ops));
-            break :blk std.fmt.allocPrint(allocator, "{}", .{result});
+            try dev_eval.callWithCrashProtection(executable, @ptrCast(&result));
+            break :blk std.fmt.allocPrint(alloc, "{}", .{result});
         },
-        layout_mod.Idx.u64, layout_mod.Idx.u8, layout_mod.Idx.u16, layout_mod.Idx.u32 => blk: {
+        layout_mod.Idx.u64, layout_mod.Idx.u8, layout_mod.Idx.u16, layout_mod.Idx.u32, layout_mod.Idx.bool => blk: {
             var result: u64 = 0;
-            jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&dev_eval.roc_ops));
-            break :blk std.fmt.allocPrint(allocator, "{}", .{result});
-        },
-        layout_mod.Idx.bool => blk: {
-            var result: u64 = undefined;
-            jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&dev_eval.roc_ops));
-            // Format as "True"/"False" for boolean representation
-            break :blk allocator.dupe(u8, if (result != 0) "True" else "False") catch @panic("dupe failed");
+            try dev_eval.callWithCrashProtection(executable, @ptrCast(&result));
+            break :blk std.fmt.allocPrint(alloc, "{}", .{result});
         },
         layout_mod.Idx.f64 => blk: {
             var result: f64 = 0;
-            jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&dev_eval.roc_ops));
-            break :blk std.fmt.allocPrint(allocator, "{d}", .{result});
+            try dev_eval.callWithCrashProtection(executable, @ptrCast(&result));
+            break :blk std.fmt.allocPrint(alloc, "{d}", .{result});
         },
         layout_mod.Idx.f32 => blk: {
             // F32 stores 4 bytes, use f32 buffer and print at f32 precision
             var result: f32 = 0;
-            jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&dev_eval.roc_ops));
-            break :blk std.fmt.allocPrint(allocator, "{d}", .{result});
+            try dev_eval.callWithCrashProtection(executable, @ptrCast(&result));
+            break :blk std.fmt.allocPrint(alloc, "{d}", .{result});
         },
         layout_mod.Idx.i128, layout_mod.Idx.u128 => blk: {
             var result: i128 align(16) = 0; // Initialize to 0 and ensure 16-byte alignment
-            jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&dev_eval.roc_ops));
-            break :blk std.fmt.allocPrint(allocator, "{}", .{result});
+            try dev_eval.callWithCrashProtection(executable, @ptrCast(&result));
+            break :blk std.fmt.allocPrint(alloc, "{}", .{result});
         },
         layout_mod.Idx.dec => blk: {
             var result: i128 align(16) = 0; // Initialize to 0 and ensure 16-byte alignment
-            jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&dev_eval.roc_ops));
+            try dev_eval.callWithCrashProtection(executable, @ptrCast(&result));
             const dec = builtins.dec.RocDec{ .num = result };
             var buf: [builtins.dec.RocDec.max_str_length]u8 = undefined;
             const slice = dec.format_to_buf(&buf);
-            break :blk allocator.dupe(u8, slice);
+            break :blk alloc.dupe(u8, slice);
         },
         layout_mod.Idx.str => blk: {
-            // RocStr is 24 bytes
-            var result: [24]u8 = @splat(0);
-            jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&dev_eval.roc_ops));
+            // RocStr is 24 bytes - use a properly aligned struct
+            const RocStrResult = extern struct {
+                bytes: ?[*]u8,
+                length: usize,
+                capacity_or_alloc_ptr: usize,
+            };
+            var result: RocStrResult align(8) = .{
+                .bytes = null,
+                .length = 0,
+                .capacity_or_alloc_ptr = 0,
+            };
+            try dev_eval.callWithCrashProtection(executable, @ptrCast(&result));
 
-            // Check if small string (last byte has high bit set)
-            if (result[23] & 0x80 != 0) {
-                const len = result[23] & 0x7F;
+            // Check if small string (capacity_or_alloc_ptr is negative when cast to signed)
+            if (@as(isize, @bitCast(result.capacity_or_alloc_ptr)) < 0) {
+                // Small string: length is in the last byte of the struct XOR'd with 0x80
+                const result_bytes: *const [@sizeOf(builtins.str.RocStr)]u8 = @ptrCast(&result);
+                const len = result_bytes[@sizeOf(builtins.str.RocStr) - 1] ^ 0x80;
                 // Return the string content directly (no quotes in result)
-                break :blk std.fmt.allocPrint(allocator, "{s}", .{result[0..len]});
+                break :blk std.fmt.allocPrint(alloc, "{s}", .{result_bytes[0..len]});
             } else {
                 // Large string (heap allocated)
-                // Layout: bytes pointer (8), length (8), capacity (8)
-                const bytes_ptr: *const [*]const u8 = @ptrCast(@alignCast(&result[0]));
-                const length_ptr: *const usize = @ptrCast(@alignCast(&result[8]));
-                const str_bytes = bytes_ptr.*[0..length_ptr.*];
-                break :blk std.fmt.allocPrint(allocator, "{s}", .{str_bytes});
-            }
-        },
-        eval_mod.list_i64_layout => blk: {
-            // List result buffer layout: [0-7] ptr, [8-15] len, [16-23] capacity
-            // With heap allocation, ptr points to heap memory that survives the call
-            const ListResultBuffer = extern struct {
-                ptr: [*]const i64,
-                len: usize,
-                capacity: usize,
-            };
-            var result: ListResultBuffer align(8) = .{
-                .ptr = undefined,
-                .len = 0,
-                .capacity = 0,
-            };
-            jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&dev_eval.roc_ops));
+                const str_bytes = result.bytes.?[0..result.length];
+                const formatted = std.fmt.allocPrint(alloc, "{s}", .{str_bytes});
 
-            // Format as "[elem1, elem2, ...]"
-            var output = std.array_list.Managed(u8).initCapacity(allocator, 64) catch
-                return error.OutOfMemory;
-            errdefer output.deinit();
-            output.append('[') catch return error.OutOfMemory;
-
-            if (result.len > 0) {
-                const elements = result.ptr[0..result.len];
-                for (elements, 0..) |elem, i| {
-                    if (i > 0) {
-                        try output.appendSlice(", ");
-                    }
-                    const elem_str = try std.fmt.allocPrint(allocator, "{}", .{elem});
-                    defer allocator.free(elem_str);
-                    try output.appendSlice(elem_str);
+                // Decref the heap-allocated string data after copying
+                // This will free the memory when refcount reaches 0
+                // Strings have 1-byte alignment, elements_refcounted = false
+                // Only decref if the pointer looks valid (non-null and reasonable address)
+                if (result.bytes != null and result.length > 0) {
+                    builtins.utils.decrefDataPtrC(result.bytes, 1, false, @constCast(&dev_eval.roc_ops));
                 }
-            }
 
-            try output.append(']');
-            break :blk output.toOwnedSlice();
+                break :blk formatted;
+            }
         },
-        eval_mod.fn_layout => allocator.dupe(u8, "<function>") catch return error.OutOfMemory,
-        else => error.UnsupportedLayout,
+        else => blk: {
+            const ls = code_result.layout_store orelse unreachable; // non-scalar layout must have layout store
+            const stored_layout = ls.getLayout(code_result.result_layout);
+            switch (stored_layout.tag) {
+                .list_of_zst => {
+                    const ListResultBuffer = extern struct {
+                        ptr: ?[*]const u8,
+                        len: usize,
+                        capacity: usize,
+                    };
+                    var result: ListResultBuffer align(8) = .{
+                        .ptr = null,
+                        .len = 0,
+                        .capacity = 0,
+                    };
+                    try dev_eval.callWithCrashProtection(executable, @ptrCast(&result));
+
+                    // Format as [(), (), ...] based on the length
+                    var output = std.array_list.Managed(u8).initCapacity(alloc, 64) catch
+                        return error.OutOfMemory;
+                    errdefer output.deinit();
+                    output.append('[') catch return error.OutOfMemory;
+
+                    for (0..result.len) |i| {
+                        if (i > 0) {
+                            try output.appendSlice(", ");
+                        }
+                        try output.appendSlice("()");
+                    }
+
+                    try output.append(']');
+                    break :blk output.toOwnedSlice();
+                },
+                .list => {
+                    const ListResultBuffer = extern struct {
+                        ptr: [*]const i64,
+                        len: usize,
+                        capacity: usize,
+                    };
+                    var result: ListResultBuffer align(8) = .{
+                        .ptr = undefined,
+                        .len = 0,
+                        .capacity = 0,
+                    };
+                    try dev_eval.callWithCrashProtection(executable, @ptrCast(&result));
+
+                    var output = std.array_list.Managed(u8).initCapacity(alloc, 64) catch
+                        return error.OutOfMemory;
+                    errdefer output.deinit();
+                    output.append('[') catch return error.OutOfMemory;
+
+                    if (result.len > 0) {
+                        const elements = result.ptr[0..result.len];
+                        for (elements, 0..) |elem, i| {
+                            if (i > 0) {
+                                try output.appendSlice(", ");
+                            }
+                            const elem_str = try std.fmt.allocPrint(alloc, "{}", .{elem});
+                            defer alloc.free(elem_str);
+                            try output.appendSlice(elem_str);
+                        }
+                    }
+
+                    try output.append(']');
+
+                    if (result.len > 0) {
+                        builtins.utils.decrefDataPtrC(@ptrCast(@constCast(result.ptr)), 8, false, @constCast(&dev_eval.roc_ops));
+                    }
+
+                    break :blk output.toOwnedSlice();
+                },
+                .record => {
+                    const record_idx = stored_layout.data.record.idx.int_idx;
+                    const record_data = ls.record_data.items.items[record_idx];
+                    const field_count = record_data.fields.count;
+                    break :blk std.fmt.allocPrint(alloc, "{{record with {d} fields}}", .{field_count});
+                },
+                else => @panic("TODO: devEvaluatorStr for unsupported layout tag"),
+            }
+        },
     };
 }
 
-/// Evaluate an expression using the LlvmEvaluator and return the result as a string.
-fn llvmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) LlvmEvalError![]const u8 {
-    // Initialize LlvmEvaluator
-    var llvm_eval = LlvmEvaluator.init(allocator) catch {
-        return error.LlvmEvaluatorInitFailed;
+/// Fork a child process to execute compiled code, isolating segfaults from the test process.
+/// The child executes the code and writes the formatted result string back through a pipe.
+/// If the child segfaults, the parent reports it as a failed test instead of crashing.
+fn forkAndExecute(
+    allocator: std.mem.Allocator,
+    dev_eval: *DevEvaluator,
+    executable: *backend.ExecutableMemory,
+    code_result: *DevEvaluator.CodeResult,
+) DevEvalError![]const u8 {
+    const pipe_fds = posix.pipe() catch {
+        return error.PipeCreationFailed;
     };
-    defer llvm_eval.deinit();
+    const pipe_read = pipe_fds[0];
+    const pipe_write = pipe_fds[1];
 
-    // Disable optimizations for test comparisons
-    llvm_eval.disable_optimizations = true;
-
-    // Create module envs array for code generation
-    const all_module_envs = [_]*ModuleEnv{ module_env, @constCast(builtin_module_env) };
-
-    // Generate code using LLVM pipeline
-    var code_result = llvm_eval.generateCode(module_env, expr_idx, &all_module_envs) catch {
-        return error.GenerateCodeFailed;
+    const fork_result = posix.fork() catch {
+        posix.close(pipe_read);
+        posix.close(pipe_write);
+        return error.ForkFailed;
     };
-    defer code_result.deinit();
 
-    // JIT execute the code (with entry_offset for compiled procedures)
-    var jit = backend.JitCode.initWithEntryOffset(code_result.code, code_result.entry_offset) catch {
-        return error.JitInitFailed;
-    };
-    defer jit.deinit();
+    if (fork_result == 0) {
+        // Child process
+        posix.close(pipe_read);
 
-    // Execute with result pointer and format result as string based on layout
-    return switch (code_result.result_layout) {
-        layout_mod.Idx.i64, layout_mod.Idx.i8, layout_mod.Idx.i16, layout_mod.Idx.i32 => blk: {
-            var result: i64 = 0;
-            jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&llvm_eval.roc_ops));
-            break :blk std.fmt.allocPrint(allocator, "{}", .{result});
-        },
-        layout_mod.Idx.u64, layout_mod.Idx.u8, layout_mod.Idx.u16, layout_mod.Idx.u32 => blk: {
-            var result: u64 = 0;
-            jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&llvm_eval.roc_ops));
-            break :blk std.fmt.allocPrint(allocator, "{}", .{result});
-        },
-        layout_mod.Idx.bool => blk: {
-            var result: u64 = undefined;
-            jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&llvm_eval.roc_ops));
-            break :blk allocator.dupe(u8, if (result != 0) "True" else "False") catch @panic("dupe failed");
-        },
-        layout_mod.Idx.f64 => blk: {
-            var result: f64 = 0;
-            jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&llvm_eval.roc_ops));
-            break :blk std.fmt.allocPrint(allocator, "{d}", .{result});
-        },
-        layout_mod.Idx.f32 => blk: {
-            var result: f32 = 0;
-            jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&llvm_eval.roc_ops));
-            break :blk std.fmt.allocPrint(allocator, "{d}", .{result});
-        },
-        layout_mod.Idx.i128, layout_mod.Idx.u128 => blk: {
-            var result: i128 align(16) = 0;
-            jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&llvm_eval.roc_ops));
-            break :blk std.fmt.allocPrint(allocator, "{}", .{result});
-        },
-        layout_mod.Idx.dec => blk: {
-            var result: i128 align(16) = 0;
-            jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&llvm_eval.roc_ops));
-            const dec = builtins.dec.RocDec{ .num = result };
-            var buf: [builtins.dec.RocDec.max_str_length]u8 = undefined;
-            const slice = dec.format_to_buf(&buf);
-            break :blk allocator.dupe(u8, slice);
-        },
-        layout_mod.Idx.str => blk: {
-            // RocStr is 24 bytes
-            var result: [24]u8 = @splat(0);
-            jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&llvm_eval.roc_ops));
+        // Use page_allocator in child — testing.allocator's leak tracking is
+        // meaningless since we exit via _exit and no defers run.
+        const child_alloc = std.heap.page_allocator;
 
-            // Check if small string (last byte has high bit set)
-            if (result[23] & 0x80 != 0) {
-                const len = result[23] & 0x7F;
-                break :blk std.fmt.allocPrint(allocator, "{s}", .{result[0..len]});
-            } else {
-                // Large string (heap allocated)
-                const bytes_ptr: *const [*]const u8 = @ptrCast(@alignCast(&result[0]));
-                const length_ptr: *const usize = @ptrCast(@alignCast(&result[8]));
-                const str_bytes = bytes_ptr.*[0..length_ptr.*];
-                break :blk std.fmt.allocPrint(allocator, "{s}", .{str_bytes});
+        const result_str = executeAndFormat(child_alloc, dev_eval, executable, code_result) catch {
+            posix.close(pipe_write);
+            posix.exit(1);
+        };
+
+        // Write the result string to the pipe
+        var written: usize = 0;
+        while (written < result_str.len) {
+            written += posix.write(pipe_write, result_str[written..]) catch {
+                posix.close(pipe_write);
+                posix.exit(1);
+            };
+        }
+
+        posix.close(pipe_write);
+        posix.exit(0);
+    } else {
+        // Parent process
+        posix.close(pipe_write);
+
+        // Wait for child to exit
+        const wait_result = posix.waitpid(fork_result, 0);
+        const status = wait_result.status;
+
+        // Parse the wait status (Unix encoding)
+        const termination_signal: u8 = @truncate(status & 0x7f);
+
+        if (termination_signal != 0) {
+            // Child was killed by a signal (e.g. SIGSEGV)
+            posix.close(pipe_read);
+            std.debug.print("\nChild process killed by signal {d} (", .{termination_signal});
+            switch (termination_signal) {
+                11 => std.debug.print("SIGSEGV", .{}),
+                6 => std.debug.print("SIGABRT", .{}),
+                8 => std.debug.print("SIGFPE", .{}),
+                4 => std.debug.print("SIGILL", .{}),
+                7 => std.debug.print("SIGBUS", .{}),
+                else => std.debug.print("unknown", .{}),
             }
-        },
-        eval_mod.list_i64_layout => blk: {
-            const ListResultBuffer = extern struct {
-                ptr: [*]const i64,
-                len: usize,
-                capacity: usize,
-            };
-            var result: ListResultBuffer align(8) = .{
-                .ptr = undefined,
-                .len = 0,
-                .capacity = 0,
-            };
-            jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&llvm_eval.roc_ops));
+            std.debug.print(") during dev backend execution\n", .{});
+            return error.ChildSegfaulted;
+        }
 
-            var output = std.array_list.Managed(u8).initCapacity(allocator, 64) catch
+        const exit_code: u8 = @truncate((status >> 8) & 0xff);
+        if (exit_code != 0) {
+            posix.close(pipe_read);
+            return error.ChildExecFailed;
+        }
+
+        // Read result string from pipe
+        var result_buf: std.ArrayList(u8) = .empty;
+        errdefer result_buf.deinit(allocator);
+
+        var read_buf: [4096]u8 = undefined;
+        while (true) {
+            const bytes_read = posix.read(pipe_read, &read_buf) catch {
+                posix.close(pipe_read);
+                return error.ChildExecFailed;
+            };
+            if (bytes_read == 0) break;
+            result_buf.appendSlice(allocator, read_buf[0..bytes_read]) catch {
+                posix.close(pipe_read);
                 return error.OutOfMemory;
-            errdefer output.deinit();
-            output.append('[') catch return error.OutOfMemory;
+            };
+        }
 
-            if (result.len > 0) {
-                const elements = result.ptr[0..result.len];
-                for (elements, 0..) |elem, i| {
-                    if (i > 0) {
-                        try output.appendSlice(", ");
-                    }
-                    const elem_str = try std.fmt.allocPrint(allocator, "{}", .{elem});
-                    defer allocator.free(elem_str);
-                    try output.appendSlice(elem_str);
-                }
-            }
-
-            try output.append(']');
-            break :blk output.toOwnedSlice();
-        },
-        eval_mod.fn_layout => allocator.dupe(u8, "<function>") catch return error.OutOfMemory,
-        else => error.UnsupportedLayout,
-    };
-}
-
-/// Normalize boolean string representation for comparison.
-/// Treats "1"/"True" as equivalent and "0"/"False" as equivalent.
-fn normalizeBoolStr(s: []const u8) []const u8 {
-    if (std.mem.eql(u8, s, "1") or std.mem.eql(u8, s, "True")) return "True";
-    if (std.mem.eql(u8, s, "0") or std.mem.eql(u8, s, "False")) return "False";
-    return s;
+        posix.close(pipe_read);
+        return result_buf.toOwnedSlice(allocator) catch return error.OutOfMemory;
+    }
 }
 
 /// Compare Interpreter result string with DevEvaluator result string.
 /// Compares ALL expressions - no exceptions. If DevEvaluator can't handle
 /// an expression, the test will fail (which is the desired behavior to
 /// track what still needs to be implemented).
-pub fn compareWithDevEvaluator(allocator: std.mem.Allocator, interpreter_str: []const u8, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) !void {
-    // REVERT ME: Skip tests when dev backend doesn't support an expression yet
-    const dev_str = devEvaluatorStr(allocator, module_env, expr_idx, builtin_module_env) catch {
-        return error.SkipZigTest;
-    };
+fn compareWithDevEvaluator(allocator: std.mem.Allocator, interpreter_str: []const u8, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) !void {
+    const dev_str = try devEvaluatorStr(allocator, module_env, expr_idx, builtin_module_env);
     defer allocator.free(dev_str);
 
-    // Normalize boolean representations for comparison
-    const norm_interp = normalizeBoolStr(interpreter_str);
-    const norm_dev = normalizeBoolStr(dev_str);
-
-    if (!std.mem.eql(u8, norm_interp, norm_dev)) {
+    // Compare strings, handling numeric formatting differences
+    // e.g., "42" vs "42.0" should be considered equal
+    if (!numericStringsEqual(interpreter_str, dev_str)) {
         std.debug.print(
             "\nEvaluator mismatch! Interpreter: {s}, DevEvaluator: {s}\n",
             .{ interpreter_str, dev_str },
@@ -376,25 +488,21 @@ pub fn compareWithDevEvaluator(allocator: std.mem.Allocator, interpreter_str: []
     }
 }
 
-/// Compare Interpreter result string with LlvmEvaluator result string.
-/// If the LLVM backend can't handle an expression, the comparison is skipped.
-pub fn compareWithLlvmEvaluator(allocator: std.mem.Allocator, interpreter_str: []const u8, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) !void {
-    const llvm_str = llvmEvaluatorStr(allocator, module_env, expr_idx, builtin_module_env) catch {
-        return error.SkipZigTest;
-    };
-    defer allocator.free(llvm_str);
+/// Check if two strings represent the same numeric value.
+/// Handles cases like "42" vs "42.0" or "-5" vs "-5.0".
+fn numericStringsEqual(a: []const u8, b: []const u8) bool {
+    // Fast path: exact match
+    if (std.mem.eql(u8, a, b)) return true;
 
-    // Normalize boolean representations for comparison
-    const norm_interp = normalizeBoolStr(interpreter_str);
-    const norm_llvm = normalizeBoolStr(llvm_str);
-
-    if (!std.mem.eql(u8, norm_interp, norm_llvm)) {
-        std.debug.print(
-            "\nEvaluator mismatch! Interpreter: {s}, LlvmEvaluator: {s}\n",
-            .{ interpreter_str, llvm_str },
-        );
-        return error.EvaluatorMismatch;
+    // Check if one is the other with ".0" suffix (integer vs Dec format)
+    if (a.len + 2 == b.len and std.mem.endsWith(u8, b, ".0") and std.mem.startsWith(u8, b, a)) {
+        return true;
     }
+    if (b.len + 2 == a.len and std.mem.endsWith(u8, a, ".0") and std.mem.startsWith(u8, a, b)) {
+        return true;
+    }
+
+    return false;
 }
 
 /// Helper function to run an expression and expect a specific error.
@@ -406,8 +514,8 @@ pub fn runExpectError(src: []const u8, expected_error: anyerror, should_trace: e
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
-    var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
+    var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -456,17 +564,17 @@ pub fn runExpectTypeMismatchAndCrash(src: []const u8) !void {
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
-    var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
+    var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interpreter.deinit();
 
     const ops = test_env_instance.get_ops();
     _ = interpreter.eval(resources.expr_idx, ops) catch |err| {
         // Expected: a crash or type mismatch error at runtime
         switch (err) {
-            error.Crash, error.TypeMismatch, error.TypeContainedMismatch => return, // Success - we expected a crash
+            error.Crash, error.TypeMismatch => return, // Success - we expected a crash
             else => {
-                std.debug.print("Expected Crash, TypeMismatch, or TypeContainedMismatch error, got: {}\n", .{err});
+                std.debug.print("Expected Crash or TypeMismatch error, got: {}\n", .{err});
                 return error.UnexpectedError;
             },
         }
@@ -487,8 +595,8 @@ pub fn runExpectI64(src: []const u8, expected_int: i128, should_trace: enum { tr
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
-    var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
+    var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -515,11 +623,11 @@ pub fn runExpectI64(src: []const u8, expected_int: i128, should_trace: enum { tr
         break :blk @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
     };
 
-    // Compare with DevEvaluator using string representation
+    // Compare with DevEvaluator using integer string representation
+    // DevEvaluator uses integer layouts, so we compare as integers
     const int_str = try std.fmt.allocPrint(test_allocator, "{}", .{int_value});
     defer test_allocator.free(int_str);
     try compareWithDevEvaluator(test_allocator, int_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
-    try compareWithLlvmEvaluator(test_allocator, int_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     try std.testing.expectEqual(expected_int, int_value);
 }
@@ -533,8 +641,8 @@ pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: enum { 
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
-    var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
+    var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -562,10 +670,9 @@ pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: enum { 
     };
 
     // Compare with DevEvaluator using string representation
-    // Format as "True"/"False" for boolean representation
-    const bool_str = if (int_val != 0) "True" else "False";
-    try compareWithDevEvaluator(test_allocator, bool_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
-    try compareWithLlvmEvaluator(test_allocator, bool_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    const int_str = try std.fmt.allocPrint(test_allocator, "{}", .{int_val});
+    defer test_allocator.free(int_str);
+    try compareWithDevEvaluator(test_allocator, int_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     const bool_val = int_val != 0;
     try std.testing.expectEqual(expected_bool, bool_val);
@@ -580,8 +687,8 @@ pub fn runExpectF32(src: []const u8, expected_f32: f32, should_trace: enum { tra
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
-    var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
+    var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -602,7 +709,6 @@ pub fn runExpectF32(src: []const u8, expected_f32: f32, should_trace: enum { tra
     const float_str = try std.fmt.allocPrint(test_allocator, "{d}", .{actual});
     defer test_allocator.free(float_str);
     try compareWithDevEvaluator(test_allocator, float_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
-    try compareWithLlvmEvaluator(test_allocator, float_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     const epsilon: f32 = 0.0001;
     const diff = @abs(actual - expected_f32);
@@ -621,8 +727,8 @@ pub fn runExpectF64(src: []const u8, expected_f64: f64, should_trace: enum { tra
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
-    var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
+    var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -643,7 +749,6 @@ pub fn runExpectF64(src: []const u8, expected_f64: f64, should_trace: enum { tra
     const float_str = try std.fmt.allocPrint(test_allocator, "{d}", .{actual});
     defer test_allocator.free(float_str);
     try compareWithDevEvaluator(test_allocator, float_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
-    try compareWithLlvmEvaluator(test_allocator, float_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     const epsilon: f64 = 0.000000001;
     const diff = @abs(actual - expected_f64);
@@ -666,8 +771,8 @@ pub fn runExpectIntDec(src: []const u8, expected_int: i128, should_trace: enum {
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
-    var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
+    var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -690,7 +795,6 @@ pub fn runExpectIntDec(src: []const u8, expected_int: i128, should_trace: enum {
     const dec_str = try test_allocator.dupe(u8, dec_slice);
     defer test_allocator.free(dec_str);
     try compareWithDevEvaluator(test_allocator, dec_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
-    try compareWithLlvmEvaluator(test_allocator, dec_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     const expected_dec = expected_int * dec_scale;
     if (actual_dec.num != expected_dec) {
@@ -710,8 +814,8 @@ pub fn runExpectDec(src: []const u8, expected_dec_num: i128, should_trace: enum 
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
-    var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
+    var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -734,7 +838,6 @@ pub fn runExpectDec(src: []const u8, expected_dec_num: i128, should_trace: enum 
     const dec_str = try test_allocator.dupe(u8, dec_slice);
     defer test_allocator.free(dec_str);
     try compareWithDevEvaluator(test_allocator, dec_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
-    try compareWithLlvmEvaluator(test_allocator, dec_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     if (actual_dec.num != expected_dec_num) {
         std.debug.print("Expected Dec({d}), got Dec({d})\n", .{ expected_dec_num, actual_dec.num });
@@ -751,8 +854,8 @@ pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: enu
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
-    var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
+    var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -774,7 +877,6 @@ pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: enu
 
     // Compare with DevEvaluator
     try compareWithDevEvaluator(test_allocator, str_slice, resources.module_env, resources.expr_idx, resources.builtin_module.env);
-    try compareWithLlvmEvaluator(test_allocator, str_slice, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     try std.testing.expectEqualStrings(expected_str, str_slice);
 
@@ -807,8 +909,8 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
-    var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
+    var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -883,7 +985,6 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
 
     // Compare with DevEvaluator
     try compareWithDevEvaluator(test_allocator, tuple_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
-    try compareWithLlvmEvaluator(test_allocator, tuple_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 }
 
 /// Helpers to setup and run an interpreter expecting a record result.
@@ -895,8 +996,8 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
-    var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
+    var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -970,7 +1071,6 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
 
     // Compare with DevEvaluator
     try compareWithDevEvaluator(test_allocator, record_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
-    try compareWithLlvmEvaluator(test_allocator, record_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 }
 
 /// Helpers to setup and run an interpreter expecting a list of zst result.
@@ -982,8 +1082,8 @@ pub fn runExpectListZst(src: []const u8, expected_element_count: usize, should_t
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
-    var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
+    var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -1025,7 +1125,6 @@ pub fn runExpectListZst(src: []const u8, expected_element_count: usize, should_t
 
     // Compare with DevEvaluator
     try compareWithDevEvaluator(test_allocator, list_str.items, resources.module_env, resources.expr_idx, resources.builtin_module.env);
-    try compareWithLlvmEvaluator(test_allocator, list_str.items, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 }
 
 /// Helpers to setup and run an interpreter expecting a list of i64 result.
@@ -1037,8 +1136,8 @@ pub fn runExpectListI64(src: []const u8, expected_elements: []const i64, should_
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
-    var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
+    var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -1093,7 +1192,6 @@ pub fn runExpectListI64(src: []const u8, expected_elements: []const i64, should_
 
     // Compare with DevEvaluator
     try compareWithDevEvaluator(test_allocator, list_str.items, resources.module_env, resources.expr_idx, resources.builtin_module.env);
-    try compareWithLlvmEvaluator(test_allocator, list_str.items, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 }
 
 /// Like runExpectListI64 but expects an empty list with .list_of_zst layout.
@@ -1106,8 +1204,8 @@ pub fn runExpectEmptyListI64(src: []const u8, should_trace: enum { trace, no_tra
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
-    var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
+    var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -1140,7 +1238,6 @@ pub fn runExpectEmptyListI64(src: []const u8, should_trace: enum { trace, no_tra
 
     // Compare with DevEvaluator - empty list is "[]"
     try compareWithDevEvaluator(test_allocator, "[]", resources.module_env, resources.expr_idx, resources.builtin_module.env);
-    try compareWithLlvmEvaluator(test_allocator, "[]", resources.module_env, resources.expr_idx, resources.builtin_module.env);
 }
 
 /// Parse and canonicalize an expression.
@@ -1281,8 +1378,10 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     try module_env.common.calcLineStarts(module_env.gpa);
 
     // Parse the source code as an expression (following REPL pattern)
-    const parse_ast = try allocator.create(parse.AST);
-    parse_ast.* = try parse.parseExpr(&module_env.common, module_env.gpa);
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(allocator);
+    // NOTE: allocators is not freed here - caller handles cleanup via cleanupTestResources
+    const parse_ast = try parse.parseExpr(&allocators, &module_env.common);
 
     // Check for parse errors in test code
     // NOTE: This is TEST-ONLY behavior! In production, the parser continues and collects
@@ -1331,7 +1430,7 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
 
     // Create czer with module_envs_map for qualified name resolution (following REPL pattern)
     const czer = try allocator.create(Can);
-    czer.* = try Can.init(module_env, parse_ast, &module_envs_map);
+    czer.* = try Can.init(&allocators, module_env, parse_ast, &module_envs_map);
 
     // Canonicalize the expression (following REPL pattern)
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
@@ -1342,8 +1441,9 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
             .region = base.Region.zero(),
         } });
         const checker = try allocator.create(Check);
-        // Pass Bool and Try as imported modules
-        const imported_envs = [_]*const ModuleEnv{builtin_module.env};
+        // Pass user module and Builtin as imported modules
+        // Order must match all_module_envs in devEvaluatorStr
+        const imported_envs = [_]*const ModuleEnv{ module_env, builtin_module.env };
         // Resolve imports - map each import to its index in imported_envs
         module_env.imports.resolveImports(module_env, &imported_envs);
         checker.* = try Check.init(allocator, &module_env.types, module_env, &imported_envs, &module_envs_map, &module_env.store.regions, builtin_ctx);
@@ -1370,7 +1470,10 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     module_env.all_defs = try module_env.store.defSpanFrom(0);
 
     // Create type checker - pass Builtin as imported module
-    const imported_envs = [_]*const ModuleEnv{builtin_module.env};
+    // IMPORTANT: The order here MUST match all_module_envs in devEvaluatorStr:
+    // index 0 = user module, index 1 = builtin module
+    // This ensures external lookups resolve to the correct module index.
+    const imported_envs = [_]*const ModuleEnv{ module_env, builtin_module.env };
 
     // Resolve imports - map each import to its index in imported_envs
     module_env.imports.resolveImports(module_env, &imported_envs);
@@ -1411,12 +1514,11 @@ pub fn cleanupParseAndCanonical(allocator: std.mem.Allocator, resources: anytype
     builtin_module_copy.deinit();
     resources.checker.deinit();
     resources.can.deinit();
-    resources.parse_ast.deinit(allocator);
+    resources.parse_ast.deinit();
     // module_env.source is not owned by module_env - don't free it
     resources.module_env.deinit();
     allocator.destroy(resources.checker);
     allocator.destroy(resources.can);
-    allocator.destroy(resources.parse_ast);
     allocator.destroy(resources.module_env);
 }
 
@@ -1432,8 +1534,8 @@ test "eval tag - already primitive" {
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
-    var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
+    var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interpreter.deinit();
 
     const ops = test_env_instance.get_ops();
@@ -1463,7 +1565,7 @@ test "interpreter reuse across multiple evaluations" {
         var test_env_instance = TestEnv.init(interpreter_allocator);
         defer test_env_instance.deinit();
 
-        var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+        var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
         defer interpreter.deinit();
 
         const ops = test_env_instance.get_ops();

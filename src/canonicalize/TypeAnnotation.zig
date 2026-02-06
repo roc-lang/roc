@@ -131,6 +131,13 @@ pub const TypeAnno = union(enum) {
                             try tree.pushStringPair("external-module", module_name);
                         }
                     },
+                    .pending => |pending| {
+                        const module_idx_int = @intFromEnum(pending.module_idx);
+                        std.debug.assert(module_idx_int < ir.imports.imports.items.items.len);
+                        const string_lit_idx = ir.imports.imports.items.items[module_idx_int];
+                        const module_name = ir.common.strings.get(string_lit_idx);
+                        try tree.pushStringPair("pending-module", module_name);
+                    },
                 }
 
                 const attrs = tree.beginNode();
@@ -199,6 +206,13 @@ pub const TypeAnno = union(enum) {
                         } else {
                             try tree.pushStringPair("external-module", module_name);
                         }
+                    },
+                    .pending => |pending| {
+                        const module_idx_int = @intFromEnum(pending.module_idx);
+                        std.debug.assert(module_idx_int < ir.imports.imports.items.items.len);
+                        const string_lit_idx = ir.imports.imports.items.items[module_idx_int];
+                        const module_name = ir.common.strings.get(string_lit_idx);
+                        try tree.pushStringPair("pending-module", module_name);
                     },
                 }
 
@@ -332,6 +346,11 @@ pub const TypeAnno = union(enum) {
         external: struct {
             module_idx: CIR.Import.Idx,
             target_node_idx: u16,
+        },
+        /// Pending external lookup - deferred until dependencies are canonicalized
+        pending: struct {
+            module_idx: CIR.Import.Idx,
+            type_name: Ident.Idx,
         },
 
         // Just the tag of this union enum

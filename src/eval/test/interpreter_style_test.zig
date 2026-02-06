@@ -11,6 +11,7 @@ const layout = @import("layout");
 const builtins = @import("builtins");
 const eval_mod = @import("../mod.zig");
 const Interpreter = @import("../interpreter.zig").Interpreter;
+const roc_target = @import("roc_target");
 const RocOps = @import("builtins").host_abi.RocOps;
 const RocAlloc = @import("builtins").host_abi.RocAlloc;
 const RocDealloc = @import("builtins").host_abi.RocDealloc;
@@ -139,7 +140,7 @@ test "interpreter: (|x| x)(\"Hello\") yields \"Hello\"" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -157,7 +158,7 @@ test "interpreter: (|n| n + 1)(41) yields 42" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -175,7 +176,7 @@ test "interpreter: (|a, b| a + b)(40, 2) yields 42" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -195,7 +196,7 @@ test "interpreter: 6 / 3 yields 2" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -215,7 +216,7 @@ test "interpreter: 7 % 3 yields 1" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -233,7 +234,7 @@ test "interpreter: 0.2 + 0.3 yields 0.5" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -251,7 +252,7 @@ test "interpreter: 0.5 / 2 yields 0.25" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -307,7 +308,7 @@ test "interpreter: literal tag renders as tag name" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -326,7 +327,7 @@ test "interpreter: True == False yields False" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    //     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    //     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(helpers.interpreter_allocator);
@@ -347,7 +348,7 @@ test "interpreter: \"hi\" == \"hi\" yields True" {
     //
     //     try helpers.runExpectBool(roc_src, true, .no_trace);
     //
-    //     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    //     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     //     defer interp2.deinit();
     //
     //     var host = TestHost.init(helpers.interpreter_allocator);
@@ -366,7 +367,7 @@ test "interpreter: (1, 2) == (1, 2) yields True" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    //     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    //     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(helpers.interpreter_allocator);
@@ -385,7 +386,7 @@ test "interpreter: (1, 2) == (2, 1) yields False" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    //     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    //     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(helpers.interpreter_allocator);
@@ -404,7 +405,7 @@ test "interpreter: { x: 1, y: 2 } == { y: 2, x: 1 } yields True" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    //     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    //     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(helpers.interpreter_allocator);
@@ -423,7 +424,7 @@ test "interpreter: { x: 1, y: 2 } == { x: 1, y: 3 } yields False" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    //     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    //     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(helpers.interpreter_allocator);
@@ -442,7 +443,7 @@ test "interpreter: record update copies base fields" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -460,7 +461,7 @@ test "interpreter: record update overrides field" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -478,7 +479,7 @@ test "interpreter: record update expression can reference base" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -497,7 +498,7 @@ test "interpreter: record update expression can reference base" {
 //     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
 //     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-//     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+//     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
 //     defer interp2.deinit();
 
 //     var host = TestHost.init(helpers.interpreter_allocator);
@@ -516,7 +517,7 @@ test "interpreter: record update expression can reference base" {
 //     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
 //     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-//     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+//     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
 //     defer interp2.deinit();
 
 //     var host = TestHost.init(helpers.interpreter_allocator);
@@ -535,7 +536,7 @@ test "interpreter: record update expression can reference base" {
 //     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
 //     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-//     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+//     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
 //     defer interp2.deinit();
 
 //     var host = TestHost.init(helpers.interpreter_allocator);
@@ -553,7 +554,7 @@ test "interpreter: [1, 2, 3] == [1, 2, 3] yields True" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    //     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    //     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(helpers.interpreter_allocator);
@@ -572,7 +573,7 @@ test "interpreter: [1, 2, 3] == [1, 3, 2] yields False" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    //     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    //     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(helpers.interpreter_allocator);
@@ -591,7 +592,7 @@ test "interpreter: Ok(1) == Ok(1) yields True" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    //     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    //     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(helpers.interpreter_allocator);
@@ -610,7 +611,7 @@ test "interpreter: Ok(1) == Err(1) yields False" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    //     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    //     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(helpers.interpreter_allocator);
@@ -629,7 +630,7 @@ test "interpreter: match tuple pattern destructures" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -647,7 +648,7 @@ test "interpreter: match bool patterns" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -665,7 +666,7 @@ test "interpreter: match result tag payload" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -683,7 +684,7 @@ test "interpreter: match record destructures fields" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -701,7 +702,7 @@ test "interpreter: render Try.Ok literal" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -720,7 +721,7 @@ test "interpreter: render Try.Err string" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -739,7 +740,7 @@ test "interpreter: render Try.Ok tuple payload" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -758,7 +759,7 @@ test "interpreter: match tuple payload tag" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -776,7 +777,7 @@ test "interpreter: match record payload tag" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -794,7 +795,7 @@ test "interpreter: match list pattern destructures" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -816,7 +817,7 @@ test "interpreter: match list rest binds slice" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -834,7 +835,7 @@ test "interpreter: match empty list branch" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -853,7 +854,7 @@ test "interpreter: simple for loop sum" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -871,7 +872,7 @@ test "interpreter: List.fold sum with inline lambda" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -889,7 +890,7 @@ test "interpreter: List.fold product with inline lambda" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -907,7 +908,7 @@ test "interpreter: List.fold empty list with inline lambda" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -925,7 +926,7 @@ test "interpreter: List.fold count elements with inline lambda" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -943,8 +944,8 @@ test "interpreter: List.fold from Builtin using numbers" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
-    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
+    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -962,8 +963,8 @@ test "interpreter: List.any True on integers" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
-    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
+    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -982,8 +983,8 @@ test "interpreter: List.any False on unsigned integers" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
-    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
+    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -1002,8 +1003,8 @@ test "interpreter: List.any False on empty list" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
-    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
+    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -1022,8 +1023,8 @@ test "interpreter: List.all False when some elements are False" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
-    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
+    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -1042,8 +1043,8 @@ test "interpreter: List.all True on small integers" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
-    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
+    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -1062,8 +1063,8 @@ test "interpreter: List.all False on empty list" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
-    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
+    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -1082,8 +1083,8 @@ test "interpreter: List.contains is False for a missing element" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
-    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
+    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -1102,8 +1103,8 @@ test "interpreter: List.contains is True when element is found" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
-    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
+    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -1122,8 +1123,8 @@ test "interpreter: List.contains is False on empty list" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
-    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
+    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -1142,7 +1143,7 @@ test "interpreter: crash statement triggers crash error and message" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -1161,7 +1162,7 @@ test "interpreter: expect expression succeeds" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    //     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    //     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(helpers.interpreter_allocator);
@@ -1181,7 +1182,7 @@ test "interpreter: expect expression failure crashes with message" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    //     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    //     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(helpers.interpreter_allocator);
@@ -1200,7 +1201,7 @@ test "interpreter: empty record expression renders {}" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -1229,7 +1230,7 @@ test "interpreter: decimal literal renders 0.125" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -1247,7 +1248,7 @@ test "interpreter: f64 equality True" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    //     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    //     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(helpers.interpreter_allocator);
@@ -1266,7 +1267,7 @@ test "interpreter: decimal equality True" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    //     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    //     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(helpers.interpreter_allocator);
@@ -1285,7 +1286,7 @@ test "interpreter: int and f64 equality True" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    //     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    //     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     //     defer interp2.deinit();
 
     //     const binop_expr = resources.module_env.store.getExpr(resources.expr_idx);
@@ -1314,7 +1315,7 @@ test "interpreter: int and decimal equality True" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    //     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    //     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     //     defer interp2.deinit();
 
     //     const binop_expr = resources.module_env.store.getExpr(resources.expr_idx);
@@ -1343,7 +1344,7 @@ test "interpreter: int less-than yields True" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    //     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    //     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(helpers.interpreter_allocator);
@@ -1362,7 +1363,7 @@ test "interpreter: int greater-than yields False" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    //     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    //     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(helpers.interpreter_allocator);
@@ -1381,7 +1382,7 @@ test "interpreter: 0.1 + 0.2 yields 0.3" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -1400,7 +1401,7 @@ test "interpreter: f64 greater-than yields True" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    //     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    //     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(helpers.interpreter_allocator);
@@ -1419,7 +1420,7 @@ test "interpreter: decimal less-than-or-equal yields True" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    //     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    //     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(helpers.interpreter_allocator);
@@ -1438,7 +1439,7 @@ test "interpreter: int and f64 less-than yields True" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    //     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    //     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(helpers.interpreter_allocator);
@@ -1457,7 +1458,7 @@ test "interpreter: int and decimal greater-than yields False" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    //     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    //     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(helpers.interpreter_allocator);
@@ -1476,7 +1477,7 @@ test "interpreter: bool inequality yields True" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    //     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    //     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(helpers.interpreter_allocator);
@@ -1495,7 +1496,7 @@ test "interpreter: decimal inequality yields False" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    //     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    //     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(helpers.interpreter_allocator);
@@ -1514,7 +1515,7 @@ test "interpreter: f64 equality False" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    //     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    //     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(helpers.interpreter_allocator);
@@ -1533,7 +1534,7 @@ test "interpreter: decimal equality False" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    //     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    //     var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(helpers.interpreter_allocator);
@@ -1552,7 +1553,7 @@ test "interpreter: tuples and records" {
     const src_tuple = "(1, 2)";
     const res_t = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, src_tuple);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, res_t);
-    var it = try Interpreter.init(helpers.interpreter_allocator, res_t.module_env, res_t.builtin_types, res_t.builtin_module.env, &[_]*const can.ModuleEnv{}, &res_t.checker.import_mapping, null, null);
+    var it = try Interpreter.init(helpers.interpreter_allocator, res_t.module_env, res_t.builtin_types, res_t.builtin_module.env, &[_]*const can.ModuleEnv{}, &res_t.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer it.deinit();
     var host_t = TestHost.init(helpers.interpreter_allocator);
     defer host_t.deinit();
@@ -1566,7 +1567,7 @@ test "interpreter: tuples and records" {
     const src_rec = "{ x: 1, y: 2 }";
     const res_r = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, src_rec);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, res_r);
-    var ir = try Interpreter.init(helpers.interpreter_allocator, res_r.module_env, res_r.builtin_types, res_r.builtin_module.env, &[_]*const can.ModuleEnv{}, &res_r.checker.import_mapping, null, null);
+    var ir = try Interpreter.init(helpers.interpreter_allocator, res_r.module_env, res_r.builtin_types, res_r.builtin_module.env, &[_]*const can.ModuleEnv{}, &res_r.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer ir.deinit();
     var host_r = TestHost.init(helpers.interpreter_allocator);
     defer host_r.deinit();
@@ -1584,7 +1585,7 @@ test "interpreter: empty list [] has list_of_zst layout" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -1603,7 +1604,7 @@ test "interpreter: singleton list [1] has list of Dec layout" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -1633,7 +1634,7 @@ test "interpreter: dbg statement in block" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -1665,7 +1666,7 @@ test "interpreter: dbg statement with string" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -1697,7 +1698,7 @@ test "interpreter: simple early return from function" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -1731,7 +1732,7 @@ test "interpreter: any function with early return in for loop" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -1764,7 +1765,7 @@ test "interpreter: crash at end of block in if branch" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -1797,7 +1798,7 @@ test "interpreter: simple break inside for loop" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -1832,7 +1833,7 @@ test "interpreter: simple break inside while loop" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -1862,7 +1863,7 @@ test "dbg: integer literal" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -1892,7 +1893,7 @@ test "dbg: negative integer" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -1922,7 +1923,7 @@ test "dbg: float value" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -1947,7 +1948,7 @@ test "dbg: boolean True" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -1972,7 +1973,7 @@ test "dbg: boolean False" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -1997,7 +1998,7 @@ test "dbg: empty string" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -2023,7 +2024,7 @@ test "dbg: list of integers" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -2051,7 +2052,7 @@ test "dbg: tuple" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -2077,7 +2078,7 @@ test "dbg: record" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -2107,7 +2108,7 @@ test "dbg: empty record" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -2133,7 +2134,7 @@ test "dbg: tag without payload" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -2159,7 +2160,7 @@ test "dbg: tag with payload" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -2184,7 +2185,7 @@ test "dbg: function prints as unsupported or function marker" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -2216,7 +2217,7 @@ test "dbg: expression form returns unit" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -2250,7 +2251,7 @@ test "dbg: multiple dbg calls in sequence" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -2280,7 +2281,7 @@ test "dbg: nested dbg calls" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -2320,7 +2321,7 @@ test "dbg: in if-then-else branch" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -2352,7 +2353,7 @@ test "dbg: in match pattern" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -2381,7 +2382,7 @@ test "dbg: in for loop" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -2408,7 +2409,7 @@ test "dbg: as final expression returns unit" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -2436,7 +2437,7 @@ test "dbg: with arithmetic expression" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -2469,7 +2470,7 @@ test "dbg: inside function body" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -2500,7 +2501,7 @@ test "dbg: function called multiple times" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -2530,7 +2531,7 @@ test "dbg: with string containing special chars" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -2559,7 +2560,7 @@ test "dbg: large integer" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -2586,7 +2587,7 @@ test "dbg: variable after mutation in binding" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -2616,7 +2617,7 @@ test "dbg: list of strings" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);
@@ -2646,7 +2647,7 @@ test "issue 8729: var reassignment in tuple pattern in while loop" {
     const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp.deinit();
 
     var host = TestHost.init(helpers.interpreter_allocator);

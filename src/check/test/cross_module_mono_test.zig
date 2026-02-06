@@ -11,6 +11,7 @@ const types = @import("types");
 const parse = @import("parse");
 const can = @import("can");
 
+const Allocators = base.Allocators;
 const Can = can.Can;
 const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
@@ -56,30 +57,30 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
     errdefer gpa.destroy(env);
 
     const base_ptr = @intFromPtr(buffer.ptr);
-    const common = serialized_ptr.common.deserialize(base_ptr, source).*;
+    const common = serialized_ptr.common.deserializeInto(base_ptr, source);
 
     env.* = ModuleEnv{
         .gpa = gpa,
         .common = common,
-        .types = serialized_ptr.types.deserialize(base_ptr, gpa).*,
+        .types = serialized_ptr.types.deserializeInto(base_ptr, gpa),
         .module_kind = serialized_ptr.module_kind.decode(),
         .all_defs = serialized_ptr.all_defs,
         .all_statements = serialized_ptr.all_statements,
         .exports = serialized_ptr.exports,
-        .requires_types = serialized_ptr.requires_types.deserialize(base_ptr).*,
-        .for_clause_aliases = serialized_ptr.for_clause_aliases.deserialize(base_ptr).*,
+        .requires_types = serialized_ptr.requires_types.deserializeInto(base_ptr),
+        .for_clause_aliases = serialized_ptr.for_clause_aliases.deserializeInto(base_ptr),
         .builtin_statements = serialized_ptr.builtin_statements,
-        .external_decls = serialized_ptr.external_decls.deserialize(base_ptr).*,
-        .imports = (try serialized_ptr.imports.deserialize(base_ptr, gpa)).*,
+        .external_decls = serialized_ptr.external_decls.deserializeInto(base_ptr),
+        .imports = try serialized_ptr.imports.deserializeInto(base_ptr, gpa),
         .module_name = module_name,
         .module_name_idx = undefined,
         .diagnostics = serialized_ptr.diagnostics,
-        .store = serialized_ptr.store.deserialize(base_ptr, gpa).*,
+        .store = serialized_ptr.store.deserializeInto(base_ptr, gpa),
         .evaluation_order = null,
         .idents = ModuleEnv.CommonIdents.find(&common),
         .deferred_numeric_literals = try ModuleEnv.DeferredNumericLiteral.SafeList.initCapacity(gpa, 0),
         .import_mapping = types.import_mapping.ImportMapping.init(gpa),
-        .method_idents = serialized_ptr.method_idents.deserialize(base_ptr).*,
+        .method_idents = serialized_ptr.method_idents.deserializeInto(base_ptr),
         .rigid_vars = std.AutoHashMapUnmanaged(base.Ident.Idx, types.Var){},
     };
 
@@ -108,11 +109,12 @@ const MonoTestEnv = struct {
     pub fn init(module_name: []const u8, source: []const u8) !Self {
         const gpa = testing.allocator;
 
+        var allocators: Allocators = undefined;
+        allocators.initInPlace(gpa);
+        defer allocators.deinit();
+
         const module_env = try gpa.create(ModuleEnv);
         errdefer gpa.destroy(module_env);
-
-        const parse_ast = try gpa.create(parse.AST);
-        errdefer gpa.destroy(parse_ast);
 
         const can_instance = try gpa.create(Can);
         errdefer gpa.destroy(can_instance);
@@ -133,13 +135,13 @@ const MonoTestEnv = struct {
 
         try Can.populateModuleEnvs(&module_envs, module_env, builtin_module.env, builtin_indices);
 
-        parse_ast.* = try parse.parse(&module_env.common, gpa);
-        errdefer parse_ast.deinit(gpa);
+        const parse_ast = try parse.parse(&allocators, &module_env.common);
+        errdefer parse_ast.deinit();
         parse_ast.store.emptyScratch();
 
         try module_env.initCIRFields(module_name);
 
-        can_instance.* = try Can.init(module_env, parse_ast, &module_envs);
+        can_instance.* = try Can.init(&allocators, module_env, parse_ast, &module_envs);
         errdefer can_instance.deinit();
 
         try can_instance.canonicalizeFile();
@@ -189,11 +191,12 @@ const MonoTestEnv = struct {
     pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_name: []const u8, other_env: *const Self) !Self {
         const gpa = testing.allocator;
 
+        var allocators: Allocators = undefined;
+        allocators.initInPlace(gpa);
+        defer allocators.deinit();
+
         const module_env = try gpa.create(ModuleEnv);
         errdefer gpa.destroy(module_env);
-
-        const parse_ast = try gpa.create(parse.AST);
-        errdefer gpa.destroy(parse_ast);
 
         const can_instance = try gpa.create(Can);
         errdefer gpa.destroy(can_instance);
@@ -234,13 +237,13 @@ const MonoTestEnv = struct {
 
         try Can.populateModuleEnvs(&module_envs, module_env, builtin_env, builtin_indices);
 
-        parse_ast.* = try parse.parse(&module_env.common, gpa);
-        errdefer parse_ast.deinit(gpa);
+        const parse_ast = try parse.parse(&allocators, &module_env.common);
+        errdefer parse_ast.deinit();
         parse_ast.store.emptyScratch();
 
         try module_env.initCIRFields(module_name);
 
-        can_instance.* = try Can.init(module_env, parse_ast, &module_envs);
+        can_instance.* = try Can.init(&allocators, module_env, parse_ast, &module_envs);
         errdefer can_instance.deinit();
 
         try can_instance.canonicalizeFile();
@@ -310,8 +313,7 @@ const MonoTestEnv = struct {
         self.module_envs.deinit();
         self.can_instance.deinit();
         self.gpa.destroy(self.can_instance);
-        self.parse_ast.deinit(self.gpa);
-        self.gpa.destroy(self.parse_ast);
+        self.parse_ast.deinit();
         self.module_env.deinit();
         self.gpa.destroy(self.module_env);
         if (self.owns_builtin_module) {
@@ -626,11 +628,12 @@ test "type checker catches polymorphic recursion (infinite type)" {
     // Initialize test environment
     const gpa = testing.allocator;
 
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(gpa);
+    defer allocators.deinit();
+
     const module_env = try gpa.create(ModuleEnv);
     defer gpa.destroy(module_env);
-
-    const parse_ast = try gpa.create(parse.AST);
-    defer gpa.destroy(parse_ast);
 
     const can_instance = try gpa.create(Can);
     defer gpa.destroy(can_instance);
@@ -652,13 +655,13 @@ test "type checker catches polymorphic recursion (infinite type)" {
 
     try Can.populateModuleEnvs(&module_envs, module_env, builtin_module.env, builtin_indices);
 
-    parse_ast.* = try parse.parse(&module_env.common, gpa);
-    defer parse_ast.deinit(gpa);
+    const parse_ast = try parse.parse(&allocators, &module_env.common);
+    defer parse_ast.deinit();
     parse_ast.store.emptyScratch();
 
     try module_env.initCIRFields("Test");
 
-    can_instance.* = try Can.init(module_env, parse_ast, &module_envs);
+    can_instance.* = try Can.init(&allocators, module_env, parse_ast, &module_envs);
     defer can_instance.deinit();
 
     try can_instance.canonicalizeFile();

@@ -19,11 +19,6 @@ pub fn runRocCommand(allocator: std.mem.Allocator, args: []const []const u8) !Ro
     const roc_path = try std.fs.path.join(allocator, &.{ cwd_path, "zig-out", "bin", roc_binary_name });
     defer allocator.free(roc_path);
 
-    // Skip test if roc binary doesn't exist
-    std.fs.accessAbsolute(roc_path, .{}) catch {
-        std.debug.print("Skipping test: roc binary not found at {s}\n", .{roc_path});
-    };
-
     // Build argv: [roc_path, ...args]
     const argv = try std.mem.concat(allocator, []const u8, &.{
         &.{roc_path},
@@ -54,11 +49,6 @@ pub fn runRoc(allocator: std.mem.Allocator, args: []const []const u8, test_file_
     const roc_binary_name = if (@import("builtin").os.tag == .windows) "roc.exe" else "roc";
     const roc_path = try std.fs.path.join(allocator, &.{ cwd_path, "zig-out", "bin", roc_binary_name });
     defer allocator.free(roc_path);
-
-    // Skip test if roc binary doesn't exist
-    std.fs.accessAbsolute(roc_path, .{}) catch {
-        std.debug.print("Skipping test: roc binary not found at {s}\n", .{roc_path});
-    };
 
     const test_file = try std.fs.path.join(allocator, &.{ cwd_path, test_file_path });
     defer allocator.free(test_file);
@@ -94,11 +84,6 @@ pub fn runRocWithStdin(allocator: std.mem.Allocator, args: []const []const u8, s
     const roc_binary_name = if (@import("builtin").os.tag == .windows) "roc.exe" else "roc";
     const roc_path = try std.fs.path.join(allocator, &.{ cwd_path, "zig-out", "bin", roc_binary_name });
     defer allocator.free(roc_path);
-
-    // Skip test if roc binary doesn't exist
-    std.fs.accessAbsolute(roc_path, .{}) catch {
-        std.debug.print("Skipping test: roc binary not found at {s}\n", .{roc_path});
-    };
 
     // Build argv: [roc_path, ...args]
     const argv = try std.mem.concat(allocator, []const u8, &.{

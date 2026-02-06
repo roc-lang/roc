@@ -51,8 +51,8 @@ UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:7:7:7:8
 DOES NOT EXIST - record_different_fields_reserved_error.md:7:9:7:19
 UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:7:19:7:20
 UNUSED VARIABLE - record_different_fields_reserved_error.md:3:5:3:12
-UNUSED VALUE - record_different_fields_reserved_error.md:4:13:4:13
-UNUSED VALUE - record_different_fields_reserved_error.md:5:13:5:13
+TYPE MISMATCH - record_different_fields_reserved_error.md:4:13:4:29
+TYPE MISMATCH - record_different_fields_reserved_error.md:5:13:5:26
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **:** is not expected in an expression.
@@ -448,9 +448,9 @@ The unused variable is declared here:
     ^^^^^^^
 
 
-**UNUSED VALUE**
+**TYPE MISMATCH**
 This expression produces a value, but it's not being used:
-**record_different_fields_reserved_error.md:4:13:**
+**record_different_fields_reserved_error.md:4:13:4:29:**
 ```roc
     expect: "test assertion",
 ```
@@ -460,11 +460,12 @@ It has the type:
 
     Str
 
-Since this expression is used as a statement, it must evaluate to _{}_. If you don't need the value, you can ignore it with `_ =`.
+Since this expression is used as a statement, it must evaluate to `{}`.
+If you don't need the value, you can ignore it with `_ =`.
 
-**UNUSED VALUE**
+**TYPE MISMATCH**
 This expression produces a value, but it's not being used:
-**record_different_fields_reserved_error.md:5:13:**
+**record_different_fields_reserved_error.md:5:13:5:26:**
 ```roc
     import: "module load",
 ```
@@ -474,7 +475,8 @@ It has the type:
 
     Str
 
-Since this expression is used as a statement, it must evaluate to _{}_. If you don't need the value, you can ignore it with `_ =`.
+Since this expression is used as a statement, it must evaluate to `{}`.
+If you don't need the value, you can ignore it with `_ =`.
 
 # TOKENS
 ~~~zig

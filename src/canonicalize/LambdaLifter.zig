@@ -474,6 +474,17 @@ fn transformBodyWithCaptures(
             }, base.Region.zero());
         },
 
+        .e_tuple_access => |tuple_access| {
+            const new_tuple = try self.transformBodyWithCaptures(tuple_access.tuple);
+
+            return try self.module_env.store.addExpr(Expr{
+                .e_tuple_access = .{
+                    .tuple = new_tuple,
+                    .elem_index = tuple_access.elem_index,
+                },
+            }, base.Region.zero());
+        },
+
         .e_record => |record| {
             const field_indices = self.module_env.store.sliceRecordFields(record.fields);
             const fields_start = self.module_env.store.scratch.?.record_fields.top();
@@ -579,6 +590,7 @@ fn transformBodyWithCaptures(
         .e_str_segment,
         .e_str,
         .e_lookup_external,
+        .e_lookup_pending,
         .e_empty_list,
         .e_empty_record,
         .e_zero_argument_tag,
@@ -590,10 +602,6 @@ fn transformBodyWithCaptures(
         .e_hosted_lambda,
         .e_low_level_lambda,
         .e_crash,
-        // RC expressions are inserted after canonicalization
-        .e_incref,
-        .e_decref,
-        .e_free,
         => return body_idx,
 
         .e_match => |match| {

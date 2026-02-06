@@ -16,9 +16,7 @@ test "direct polymorphic identity usage" {
     // Note: 'c' is used because 'a' and 'b' are already identifiers in the code
     try typeCheck(
         source,
-        \\{ a: c, b: Str }
-        \\  where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]
-        ,
+        "{ a: Dec, b: Str }",
     );
 }
 
@@ -34,9 +32,7 @@ test "higher-order function with polymorphic identity" {
     ;
     try typeCheck(
         source,
-        \\{ a: c, b: Str }
-        \\  where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]
-        ,
+        "{ a: Dec, b: Str }",
     );
 }
 
@@ -51,14 +47,7 @@ test "let-polymorphism with function composition" {
     ;
     try typeCheck(
         source,
-        \\a -> a
-        \\  where [
-        \\    a.plus : a, c -> a,
-        \\    a.times : a, b -> a,
-        \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
-        \\    c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]),
-        \\  ]
-        ,
+        "a -> a where [a.plus : a, Dec -> a, a.times : a, Dec -> a]",
     );
 }
 
@@ -73,9 +62,7 @@ test "polymorphic empty list" {
     ;
     try typeCheck(
         source,
-        \\{ empty: List(_a), nums: List(b), strs: List(Str) }
-        \\  where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]
-        ,
+        "{ empty: List(_a), nums: List(Dec), strs: List(Str) }",
     );
 }
 
@@ -90,9 +77,7 @@ test "polymorphic cons function" {
     ;
     try typeCheck(
         source,
-        \\{ list1: List(item), list2: List(Str) }
-        \\  where [item.from_numeral : Numeral -> Try(item, [InvalidNumeral(Str)])]
-        ,
+        "{ list1: List(Dec), list2: List(Str) }",
     );
 }
 
@@ -108,12 +93,7 @@ test "polymorphic record constructor" {
     ;
     try typeCheck(
         source,
-        \\{ pair1: { first: a, second: Str }, pair2: { first: Str, second: b }, pair3: { first: [True, .._others], second: [False, .._others2] } }
-        \\  where [
-        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
-        \\  ]
-        ,
+        "{ pair1: { first: Dec, second: Str }, pair2: { first: Str, second: Dec }, pair3: { first: [True, ..], second: [False, ..] } }",
     );
 }
 
@@ -129,12 +109,7 @@ test "polymorphic identity with various numeric types" {
     ;
     try typeCheck(
         source,
-        \\{ bool_val: [True, .._others], float_val: a, int_val: b }
-        \\  where [
-        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
-        \\  ]
-        ,
+        "{ bool_val: [True, ..], float_val: Dec, int_val: Dec }",
     );
 }
 
@@ -150,13 +125,7 @@ test "nested polymorphic data structures" {
     ;
     try typeCheck(
         source,
-
-        \\{ box1: { value: a }, box2: { value: Str }, nested: { value: { value: b } } }
-        \\  where [
-        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
-        \\  ]
-        ,
+        "{ box1: { value: Dec }, box2: { value: Str }, nested: { value: { value: Dec } } }",
     );
 }
 
@@ -174,9 +143,7 @@ test "polymorphic function in let binding" {
     ;
     try typeCheck(
         source,
-        \\{ a: c, b: Str }
-        \\  where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]
-        ,
+        "{ a: Dec, b: Str }",
     );
 }
 
@@ -193,12 +160,7 @@ test "polymorphic swap function" {
     ;
     try typeCheck(
         source,
-        \\{ swapped1: { first: Str, second: a }, swapped2: { first: b, second: [True, .._others] } }
-        \\  where [
-        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
-        \\  ]
-        ,
+        "{ swapped1: { first: Str, second: Dec }, swapped2: { first: Dec, second: [True, ..] } }",
     );
 }
 
@@ -213,9 +175,9 @@ test "polymorphic option type simulation" {
         \\    { opt1, opt2, opt3 }
         \\}
     ;
-    try typeCheck(source,
-        \\{ opt1: { tag: Str, value: a }, opt2: { tag: Str, value: Str }, opt3: { tag: Str } }
-        \\  where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
+    try typeCheck(
+        source,
+        "{ opt1: { tag: Str, value: Dec }, opt2: { tag: Str, value: Str }, opt3: { tag: Str } }",
     );
 }
 
@@ -232,9 +194,7 @@ test "polymorphic const function" {
     ;
     try typeCheck(
         source,
-        \\{ num: a, str: Str }
-        \\  where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
-        ,
+        "{ num: Dec, str: Str }",
     );
 }
 
@@ -251,14 +211,7 @@ test "polymorphic pipe function" {
     ;
     try typeCheck(
         source,
-        \\{ num_result: a, str_result: b }
-        \\  where [
-        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        \\    a.times : a, c -> a,
-        \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
-        \\    c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]),
-        \\  ]
-        ,
+        "{ num_result: Dec, str_result: Dec }",
     );
 }
 

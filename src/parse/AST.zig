@@ -27,6 +27,10 @@ pub const tokensToHtml = @import("HTML.zig").tokensToHtml;
 
 const AST = @This();
 
+/// The allocator used for internal allocations (tokens, nodes, diagnostics).
+/// Also used to free the AST struct itself in deinit().
+gpa: Allocator,
+
 env: *CommonEnv,
 tokens: TokenizedBuffer,
 store: NodeStore,
@@ -118,11 +122,18 @@ pub fn appendRegionInfoToSexprTree(self: *const AST, env: *const CommonEnv, tree
     try tree.pushBytesRange(start.start.offset, end.end.offset, info);
 }
 
-pub fn deinit(self: *AST, gpa: std.mem.Allocator) void {
-    defer self.tokens.deinit(gpa);
-    defer self.store.deinit();
-    defer self.tokenize_diagnostics.deinit(gpa);
-    defer self.parse_diagnostics.deinit(gpa);
+/// Frees all internal allocations AND the AST struct itself.
+/// This follows the Zig std pattern (see std/Build/Watch.zig) where
+/// deinit() includes gpa.destroy(self) for always-heap-allocated types.
+pub fn deinit(self: *AST) void {
+    const gpa = self.gpa;
+
+    self.tokens.deinit(gpa);
+    self.store.deinit();
+    self.tokenize_diagnostics.deinit(gpa);
+    self.parse_diagnostics.deinit(gpa);
+
+    gpa.destroy(self);
 }
 
 /// Convert a tokenize diagnostic to a Report for rendering
@@ -2536,6 +2547,14 @@ pub const Expr = union(enum) {
         region: TokenizedRegion,
     },
     field_access: BinOp,
+    /// Tuple element access: `tuple.0`, `tuple.1`, etc.
+    tuple_access: struct {
+        /// The tuple expression being accessed
+        expr: Expr.Idx,
+        /// The token containing the element index (NoSpaceDotInt or DotInt)
+        elem_token: Token.Idx,
+        region: TokenizedRegion,
+    },
     local_dispatch: BinOp,
     bin_op: BinOp,
     suffix_single_question: Unary,
@@ -2616,6 +2635,7 @@ pub const Expr = union(enum) {
             .record => |e| e.region,
             .tuple => |e| e.region,
             .field_access => |e| e.region,
+            .tuple_access => |e| e.region,
             .local_dispatch => |e| e.region,
             .lambda => |e| e.region,
             .record_updater => |e| e.region,
@@ -2956,6 +2976,20 @@ pub const Expr = union(enum) {
 
                 // Push right expression
                 try ast.store.getExpr(a.right).pushToSExprTree(gpa, env, ast, tree);
+
+                try tree.endNode(begin, attrs);
+            },
+            .tuple_access => |a| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-tuple-access");
+                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const attrs = tree.beginNode();
+
+                // Push the tuple expression
+                try ast.store.getExpr(a.expr).pushToSExprTree(gpa, env, ast, tree);
+
+                // Push the element index
+                try tree.pushString(ast.resolve(a.elem_token));
 
                 try tree.endNode(begin, attrs);
             },

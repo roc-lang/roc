@@ -459,6 +459,11 @@ is_lambda_lifted: bool = false,
 /// Whether closures have been defunctionalized in this module
 is_defunctionalized: bool = false,
 
+/// Whether to defer finalizing numeric defaults until after platform requirements are checked.
+/// Set to true for app modules that have platform imports, so that numeric literals can be
+/// constrained by platform types (e.g., I64) before defaulting to Dec.
+defer_numeric_defaults: bool = false,
+
 /// Deferred numeric literal for compile-time validation
 pub const DeferredNumericLiteral = struct {
     expr_idx: CIR.Expr.Idx,
@@ -599,6 +604,43 @@ pub fn deinit(self: *Self) void {
         eval_order.deinit();
         self.gpa.destroy(eval_order);
     }
+}
+
+/// Deinitialize a cached module environment.
+/// This frees heap-allocated data from deserialization:
+/// - Hash maps (imports, import_mapping)
+/// - Type store arrays (when using deserializeWithMutableTypes)
+/// - NodeStore regions (when using deserializeWithMutableTypes)
+///
+/// After deserialization with deserializeWithMutableTypes, the type store
+/// arrays and NodeStore regions are heap-allocated and can be mutated.
+/// Other data (common env, nodes, etc.) still points into the cache buffer
+/// and must NOT be freed.
+///
+/// Call this instead of deinit() for modules loaded from cache.
+pub fn deinitCachedModule(self: *Self) void {
+    // Free the type store arrays (allocated by deserializeWithMutableTypes)
+    self.types.deinit();
+
+    // Free the NodeStore regions (allocated by deserializeWithMutableTypes)
+    self.store.regions.deinit(self.gpa);
+
+    // Only free the hash map that was allocated during deserialization
+    // (see CIR.Import.Store.Serialized.deserialize which calls ensureTotalCapacity)
+    self.imports.deinitMapOnly(self.gpa);
+
+    // import_mapping is initialized empty during deserialization and may have
+    // items added later, so we need to free it
+    self.import_mapping.deinit();
+
+    // rigid_vars is initialized empty during deserialization and may have
+    // items added during type checking, so we need to free it
+    self.rigid_vars.deinit(self.gpa);
+
+    // If enableRuntimeInserts was called on the interner, it allocated new memory
+    // that needs to be freed. The interner.deinit checks supports_inserts internally
+    // and will only free if memory was actually allocated (not for pure cached data).
+    self.common.idents.interner.deinit(self.gpa);
 }
 
 // Module compilation functionality
@@ -1677,33 +1719,96 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const module_name_bytes = self.getIdent(data.module_name);
             const module_name = try report.addOwnedString(module_name_bytes);
 
-            try report.document.addReflowingText("Type modules must have a type declaration matching the module name.");
+            try report.document.addReflowingText("Type modules must have a nominal type declaration matching the module name.");
             try report.document.addLineBreak();
             try report.document.addLineBreak();
 
             try report.document.addText("This file is named ");
             try report.document.addInlineCode(module_name);
-            try report.document.addReflowingText(".roc, but no top-level type declaration named ");
+            try report.document.addReflowingText(".roc, but no top-level nominal type named ");
             try report.document.addInlineCode(module_name);
             try report.document.addReflowingText(" was found.");
             try report.document.addLineBreak();
             try report.document.addLineBreak();
 
-            try report.document.addReflowingText("Add either:");
+            try report.document.addReflowingText("Add a nominal type like:");
             try report.document.addLineBreak();
             const nominal_msg = try std.fmt.allocPrint(allocator, "{s} := ...", .{module_name_bytes});
             defer allocator.free(nominal_msg);
             const owned_nominal = try report.addOwnedString(nominal_msg);
             try report.document.addInlineCode(owned_nominal);
-            try report.document.addReflowingText(" (nominal type)");
             try report.document.addLineBreak();
             try report.document.addReflowingText("or:");
             try report.document.addLineBreak();
-            const alias_msg = try std.fmt.allocPrint(allocator, "{s} : ...", .{module_name_bytes});
-            defer allocator.free(alias_msg);
-            const owned_alias = try report.addOwnedString(alias_msg);
-            try report.document.addInlineCode(owned_alias);
-            try report.document.addReflowingText(" (type alias)");
+            const opaque_msg = try std.fmt.allocPrint(allocator, "{s} :: ...", .{module_name_bytes});
+            defer allocator.free(opaque_msg);
+            const owned_opaque = try report.addOwnedString(opaque_msg);
+            try report.document.addInlineCode(owned_opaque);
+            try report.document.addReflowingText(" (opaque nominal type)");
+            try report.document.addLineBreak();
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
+        .type_module_has_alias_not_nominal => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "TYPE MODULE REQUIRES NOMINAL TYPE", .runtime_error);
+
+            const module_name_bytes = self.getIdent(data.module_name);
+            const module_name = try report.addOwnedString(module_name_bytes);
+
+            try report.document.addText("This file is named ");
+            try report.document.addInlineCode(module_name);
+            try report.document.addText(".roc, and contains a type alias ");
+            try report.document.addInlineCode(module_name);
+            try report.document.addReflowingText(".");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("Type modules must use nominal types (");
+            try report.document.addInlineCode(":=");
+            try report.document.addReflowingText(" or ");
+            try report.document.addInlineCode("::");
+            try report.document.addReflowingText("), not type aliases (");
+            try report.document.addInlineCode(":");
+            try report.document.addReflowingText(").");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("Nominal types must be records or tag unions:");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("# Record example:");
+            try report.document.addLineBreak();
+            const record_example = try std.fmt.allocPrint(allocator, "{s} := {{ data: List(U8) }}.{{}}", .{module_name_bytes});
+            defer allocator.free(record_example);
+            const owned_record = try report.addOwnedString(record_example);
+            try report.document.addInlineCode(owned_record);
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("# Tag union example:");
+            try report.document.addLineBreak();
+            const tag_example = try std.fmt.allocPrint(allocator, "{s} := [ State(List(U8)) ].{{}}", .{module_name_bytes});
+            defer allocator.free(tag_example);
+            const owned_tag = try report.addOwnedString(tag_example);
+            try report.document.addInlineCode(owned_tag);
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("Tip: Nominal types have their own identity and can have associated functions. Type aliases (");
+            try report.document.addInlineCode(":");
+            try report.document.addReflowingText(") are just shorthand for another type and cannot define modules.");
             try report.document.addLineBreak();
 
             const owned_filename = try report.addOwnedString(filename);
@@ -2267,53 +2372,88 @@ pub const Serialized = extern struct {
         self.is_defunctionalized_reserved = 0;
     }
 
-    /// Deserialize a ModuleEnv from the buffer, updating the ModuleEnv in place
+    /// Deserialize into a freshly allocated ModuleEnv (no in-place modification of cache buffer).
     /// The base_addr parameter is the base address of the serialized buffer in memory.
-    pub fn deserialize(
-        self: *Serialized,
+    /// WARNING: The returned ModuleEnv has data pointing into the cache buffer (read-only).
+    /// Use deserializeWithMutableTypes() if types/store need to be mutable.
+    pub fn deserializeInto(
+        self: *const Serialized,
         base_addr: usize,
         gpa: std.mem.Allocator,
         source: []const u8,
         module_name: []const u8,
     ) std.mem.Allocator.Error!*Self {
-        // Verify that Serialized is at least as large as the runtime struct.
-        // This is required because we're reusing the same memory location.
-        // On 32-bit platforms, Serialized may be larger due to using fixed-size types for platform-independent serialization.
-        // In Debug builds, Self may be larger due to debug-only store tracking fields, so skip this check.
-        comptime {
-            if (builtin.mode != .Debug) {
-                std.debug.assert(@sizeOf(@This()) >= @sizeOf(Self));
-            }
-        }
-
-        // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
-        const env = @as(*Self, @ptrFromInt(@intFromPtr(self)));
-
-        // Deserialize common env first so we can look up identifiers
-        const common = self.common.deserialize(base_addr, source).*;
+        // Allocate a fresh ModuleEnv on the heap
+        const env = try gpa.create(Self);
+        errdefer gpa.destroy(env);
 
         env.* = Self{
             .gpa = gpa,
-            .common = common,
-            .types = self.types.deserialize(base_addr, gpa).*,
+            .common = self.common.deserializeInto(base_addr, source),
+            .types = self.types.deserializeInto(base_addr, gpa),
             .module_kind = self.module_kind.decode(),
             .all_defs = self.all_defs,
             .all_statements = self.all_statements,
             .exports = self.exports,
-            .requires_types = self.requires_types.deserialize(base_addr).*,
-            .for_clause_aliases = self.for_clause_aliases.deserialize(base_addr).*,
+            .requires_types = self.requires_types.deserializeInto(base_addr),
+            .for_clause_aliases = self.for_clause_aliases.deserializeInto(base_addr),
             .builtin_statements = self.builtin_statements,
-            .external_decls = self.external_decls.deserialize(base_addr).*,
-            .imports = (try self.imports.deserialize(base_addr, gpa)).*,
+            .external_decls = self.external_decls.deserializeInto(base_addr),
+            .imports = try self.imports.deserializeInto(base_addr, gpa),
             .module_name = module_name,
-            .module_name_idx = Ident.Idx.NONE, // Not used for deserialized modules (only needed during fresh canonicalization)
+            .module_name_idx = Ident.Idx.NONE, // Not used for deserialized modules
             .diagnostics = self.diagnostics,
-            .store = self.store.deserialize(base_addr, gpa).*,
+            .store = self.store.deserializeInto(base_addr, gpa),
             .evaluation_order = null, // Not serialized, will be recomputed if needed
             .idents = self.idents,
-            .deferred_numeric_literals = self.deferred_numeric_literals.deserialize(base_addr).*,
+            .deferred_numeric_literals = self.deferred_numeric_literals.deserializeInto(base_addr),
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
-            .method_idents = self.method_idents.deserialize(base_addr).*,
+            .method_idents = self.method_idents.deserializeInto(base_addr),
+            .rigid_vars = std.AutoHashMapUnmanaged(Ident.Idx, TypeVar){},
+        };
+
+        return env;
+    }
+
+    /// Deserialize with mutable type store and node store for cache modules.
+    /// Allocates fresh memory for the type store and node store arrays,
+    /// allowing them to be mutated (e.g., during type checking).
+    /// Use this for disk cache modules that may need to add new types.
+    pub fn deserializeWithMutableTypes(
+        self: *const Serialized,
+        base_addr: usize,
+        gpa: std.mem.Allocator,
+        source: []const u8,
+        module_name: []const u8,
+    ) std.mem.Allocator.Error!*Self {
+        // Allocate a fresh ModuleEnv on the heap
+        const env = try gpa.create(Self);
+        errdefer gpa.destroy(env);
+
+        env.* = Self{
+            .gpa = gpa,
+            .common = self.common.deserializeInto(base_addr, source),
+            // Use deserializeWithCopy to get mutable type store
+            .types = try self.types.deserializeWithCopy(base_addr, gpa),
+            .module_kind = self.module_kind.decode(),
+            .all_defs = self.all_defs,
+            .all_statements = self.all_statements,
+            .exports = self.exports,
+            .requires_types = self.requires_types.deserializeInto(base_addr),
+            .for_clause_aliases = self.for_clause_aliases.deserializeInto(base_addr),
+            .builtin_statements = self.builtin_statements,
+            .external_decls = self.external_decls.deserializeInto(base_addr),
+            .imports = try self.imports.deserializeInto(base_addr, gpa),
+            .module_name = module_name,
+            .module_name_idx = Ident.Idx.NONE,
+            .diagnostics = self.diagnostics,
+            // Use deserializeWithCopy for NodeStore so regions can be extended
+            .store = try self.store.deserializeWithCopy(base_addr, gpa),
+            .evaluation_order = null,
+            .idents = self.idents,
+            .deferred_numeric_literals = self.deferred_numeric_literals.deserializeInto(base_addr),
+            .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
+            .method_idents = self.method_idents.deserializeInto(base_addr),
             .rigid_vars = std.AutoHashMapUnmanaged(Ident.Idx, TypeVar){},
             .is_lambda_lifted = false,
             .is_defunctionalized = false,

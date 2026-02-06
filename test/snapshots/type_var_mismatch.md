@@ -33,6 +33,13 @@ This number is being used where a non-number type is needed:
 ```
 	       ^^
 
+The type was determined to be non-numeric here:
+**type_var_mismatch.md:11:34:11:38:**
+```roc
+	result = List.first(list).ok_or(item)
+```
+	                                ^^^^
+
 Other code expects this to have the type:
 
     item

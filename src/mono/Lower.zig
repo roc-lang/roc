@@ -59,6 +59,7 @@ const TailRecursion = @import("TailRecursion.zig");
 const MonoExprStore = store_mod;
 const LayoutIdx = layout_mod.Idx;
 const LayoutStore = layout_mod.Store;
+const TypeScope = types.TypeScope;
 
 const Self = @This();
 
@@ -74,8 +75,11 @@ all_module_envs: []const *ModuleEnv,
 /// Lambda set inference results (for closure dispatch)
 lambda_inference: ?*LambdaSetInference,
 
-/// Layout store (for computing layouts from types)
+/// Global layout store shared across all modules
 layout_store: ?*LayoutStore,
+
+/// Type scope for layout computation (for polymorphic type variable resolution)
+type_scope: TypeScope,
 
 /// Track which (module_idx, pattern_idx) pairs have been lowered to avoid duplicates
 /// Maps to the MonoSymbol that was created
@@ -84,14 +88,17 @@ lowered_patterns: std.AutoHashMap(u64, MonoSymbol),
 /// Track which top-level symbols have been lowered
 lowered_symbols: std.AutoHashMap(u48, MonoExprId),
 
-/// Type environment: maps pattern_idx to layout (from type annotations)
+/// Type environment: maps pattern_idx to layout (inferred from expressions)
 type_env: std.AutoHashMap(u32, LayoutIdx),
-
-/// Pending type annotations: maps ident to layout (waiting to be matched with declarations)
-pending_type_annos: std.AutoHashMap(Ident.Idx, LayoutIdx),
 
 /// Current module index during lowering
 current_module_idx: u16 = 0,
+
+/// The module whose type variables are in the type_scope mappings.
+/// When we call an external function, we map its rigid type vars to the caller's
+/// concrete types. This tracks the caller's module so fromTypeVar can resolve
+/// the mapped vars using the correct module's types store.
+type_scope_caller_module: ?u16 = null,
 
 /// Current binding pattern (for detecting recursive closures)
 /// When lowering a statement like `f = |x| ...`, this holds the pattern for `f`
@@ -105,13 +112,17 @@ current_binding_symbol: ?MonoSymbol = null,
 /// Counter for generating unique join point IDs
 next_join_point_id: u32 = 0,
 
-/// Errors that can occur during lowering
-pub const Error = error{
-    OutOfMemory,
-    InvalidExpression,
-    ModuleNotFound,
-    LayoutError,
-};
+/// Expression-based layout hints for external rigid type vars.
+/// When an external function's rigid type var maps to a caller's flex var,
+/// but we know from the expression that it should be a list, we pre-compute
+/// the layout and store it here. This handles cases like `[[10], [20], [30]]`
+/// where the inner list's type var is flex but the expression is clearly a list.
+expr_layout_hints: std.AutoHashMap(types.Var, LayoutIdx),
+
+/// Deferred lambda/closure definitions.
+/// When a block-local s_decl binds a lambda/closure, we defer lowering the body
+/// until call time (when type_scope is populated). Maps pattern_idx → CIR expr_idx.
+deferred_defs: std.AutoHashMap(u32, CIR.Expr.Idx),
 
 /// Initialize a new Lowerer
 pub fn init(
@@ -127,10 +138,12 @@ pub fn init(
         .all_module_envs = all_module_envs,
         .lambda_inference = lambda_inference,
         .layout_store = layout_store,
+        .type_scope = TypeScope.init(allocator),
         .lowered_patterns = std.AutoHashMap(u64, MonoSymbol).init(allocator),
         .lowered_symbols = std.AutoHashMap(u48, MonoExprId).init(allocator),
         .type_env = std.AutoHashMap(u32, LayoutIdx).init(allocator),
-        .pending_type_annos = std.AutoHashMap(Ident.Idx, LayoutIdx).init(allocator),
+        .expr_layout_hints = std.AutoHashMap(types.Var, LayoutIdx).init(allocator),
+        .deferred_defs = std.AutoHashMap(u32, CIR.Expr.Idx).init(allocator),
     };
 }
 
@@ -139,13 +152,55 @@ pub fn deinit(self: *Self) void {
     self.lowered_patterns.deinit();
     self.lowered_symbols.deinit();
     self.type_env.deinit();
-    self.pending_type_annos.deinit();
+    self.type_scope.deinit();
+    self.expr_layout_hints.deinit();
+    self.deferred_defs.deinit();
 }
 
 /// Get the module environment at the given index
 fn getModuleEnv(self: *const Self, module_idx: u16) ?*ModuleEnv {
     if (module_idx >= self.all_module_envs.len) return null;
     return self.all_module_envs[module_idx];
+}
+
+/// Find the module index for a given origin_module ident (from a NominalType).
+/// Uses the import system of source_env to resolve the origin module name to a module index.
+fn findModuleForOrigin(self: *Self, source_env: *const ModuleEnv, origin_module: Ident.Idx) ?u16 {
+    // Check if origin is source_env itself
+    if (origin_module == source_env.module_name_idx) {
+        for (self.all_module_envs, 0..) |env, idx| {
+            if (env == source_env) return @intCast(idx);
+        }
+    }
+
+    // Use the import system: iterate source_env's imports
+    const import_count: usize = @intCast(source_env.imports.imports.len());
+    for (0..import_count) |i| {
+        const import_idx: CIR.Import.Idx = @enumFromInt(i);
+        if (source_env.imports.getIdentIdx(import_idx)) |import_ident| {
+            if (import_ident == origin_module) {
+                if (source_env.imports.getResolvedModule(import_idx)) |mod_idx| {
+                    return @intCast(mod_idx);
+                }
+            }
+        }
+    }
+
+    // Fallback: compare origin name against resolved module names
+    const origin_name = source_env.getIdent(origin_module);
+    for (0..import_count) |i| {
+        const import_idx: CIR.Import.Idx = @enumFromInt(i);
+        if (source_env.imports.getResolvedModule(import_idx)) |mod_idx| {
+            if (mod_idx < self.all_module_envs.len) {
+                const import_env = self.all_module_envs[mod_idx];
+                if (std.mem.eql(u8, import_env.module_name, origin_name)) {
+                    return @intCast(mod_idx);
+                }
+            }
+        }
+    }
+
+    return null;
 }
 
 /// Create a MonoSymbol from a pattern in the current module
@@ -192,173 +247,1234 @@ fn externalToSymbol(self: *Self, import_idx: CIR.Import.Idx, ident_idx: Ident.Id
     return MonoSymbol.none;
 }
 
-/// Get layout for an expression (placeholder - needs type info)
-fn getExprLayout(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr) LayoutIdx {
-    // For now, use a default layout. In full implementation, this would:
-    // 1. Get the type variable from the expression
-    // 2. Resolve it via the layout store
-    if (self.layout_store) |_| {
-        // TODO: Proper layout resolution from type variable
+/// Lower an external definition using its direct Def.Idx
+/// This is the primary path - uses the target_node_idx from e_lookup_external
+fn lowerExternalDefByIdx(self: *Self, symbol: MonoSymbol, target_def_idx: u16) Allocator.Error!void {
+    // Skip if symbol is invalid
+    if (symbol.module_idx >= self.all_module_envs.len) {
+        return;
     }
 
-    // Default fallback based on expression type
-    return switch (expr) {
-        .e_num => |num| switch (num.kind) {
-            .u8 => .u8,
-            .i8 => .i8,
-            .u16 => .u16,
-            .i16 => .i16,
-            .u32 => .u32,
-            .i32 => .i32,
-            .u64 => .u64,
-            .i64, .int_unbound, .num_unbound => .i64,
-            .u128 => .u128,
-            .i128 => .i128,
-            .f32 => .f32,
-            .f64 => .f64,
-            .dec => .dec,
-        },
-        .e_frac_f32 => .f32,
-        .e_frac_f64 => .f64,
-        .e_dec, .e_dec_small => .dec,
-        .e_str, .e_str_segment => .str,
-        .e_zero_argument_tag => .bool, // Common case for Bool tags
-        // For binary operations, propagate the type from the left operand
-        // (for arithmetic ops, result type = operand type)
-        .e_binop => |binop| self.getExprLayoutFromIdx(module_env, binop.lhs),
-        // For unary minus, propagate the type from the operand
-        .e_unary_minus => |unary| self.getExprLayoutFromIdx(module_env, unary.expr),
-        // For lookups, check if we have a type annotation in type_env
-        .e_lookup_local => |lookup| blk: {
-            const pattern_key = @intFromEnum(lookup.pattern_idx);
-            break :blk self.type_env.get(pattern_key) orelse .i64;
-        },
-        // For blocks, we need to process type annotations first
-        .e_block => |block| self.getBlockLayout(module_env, block),
-        else => .i64, // Default
+    // Get the external module environment
+    const ext_module_env = self.all_module_envs[symbol.module_idx];
+
+    // Get the definition directly using the index
+    const def_idx: CIR.Def.Idx = @enumFromInt(target_def_idx);
+    const def = ext_module_env.store.getDef(def_idx);
+
+    // Create symbol key for deduplication
+    const symbol_key: u48 = @bitCast(symbol);
+
+    // Avoid infinite recursion - check if already lowered
+    if (self.lowered_symbols.contains(symbol_key)) return;
+
+    // Lower the definition's expression in the context of the external module
+    const old_module = self.current_module_idx;
+    self.current_module_idx = symbol.module_idx;
+    defer self.current_module_idx = old_module;
+
+    // Set up binding context for recursive closure detection
+    // This is necessary for external functions like List.repeat that have recursive helpers
+    const old_binding = self.current_binding_pattern;
+    const old_symbol = self.current_binding_symbol;
+    self.current_binding_pattern = def.pattern;
+    self.current_binding_symbol = symbol;
+    defer {
+        self.current_binding_pattern = old_binding;
+        self.current_binding_symbol = old_symbol;
+    }
+
+    const expr_id = self.lowerExprFromIdx(ext_module_env, def.expr) catch {
+        // If lowering fails, don't register - the lookup will fail at codegen time
+        return;
     };
+
+    // Register the symbol definition
+    try self.store.registerSymbolDef(symbol, expr_id);
+    try self.lowered_symbols.put(symbol_key, expr_id);
 }
 
-/// Get layout for a block expression, processing type annotations
+/// Find the definition index for a given pattern (if it's a top-level def).
+/// Returns null if the pattern doesn't correspond to a top-level definition.
+fn findDefForPattern(_: *Self, module_env: *ModuleEnv, pattern_idx: CIR.Pattern.Idx) ?CIR.Def.Idx {
+    const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
+    for (defs_slice) |def_idx| {
+        const def = module_env.store.getDef(def_idx);
+        if (def.pattern == pattern_idx) {
+            return def_idx;
+        }
+    }
+    return null;
+}
+
+/// Lower a local definition using its pattern index.
+/// This handles same-module function references (like walk calling walk_help).
+fn lowerLocalDefByPattern(self: *Self, module_env: *ModuleEnv, symbol: MonoSymbol, pattern_idx: CIR.Pattern.Idx) Allocator.Error!void {
+    // Create symbol key for deduplication
+    const symbol_key: u48 = @bitCast(symbol);
+
+    // Avoid infinite recursion - check if already lowered
+    if (self.lowered_symbols.contains(symbol_key)) return;
+
+    // Find the CIR expression: check module defs first, then deferred defs
+    const pattern_key = @intFromEnum(pattern_idx);
+    const cir_expr_idx: CIR.Expr.Idx = blk: {
+        if (self.findDefForPattern(module_env, pattern_idx)) |def_idx| {
+            const def = module_env.store.getDef(def_idx);
+            if (std.debug.runtime_safety) std.debug.assert(def.pattern == pattern_idx);
+            break :blk def.expr;
+        }
+        if (self.deferred_defs.get(pattern_key)) |deferred| {
+            break :blk deferred;
+        }
+        return; // Not a top-level or deferred definition
+    };
+
+    // Remove from deferred_defs before lowering to prevent infinite recursion
+    // when the body contains a self-reference (e.g., recursive closures like factorial).
+    _ = self.deferred_defs.remove(pattern_key);
+
+    // Set up binding context for recursive closure detection
+    const old_binding = self.current_binding_pattern;
+    const old_symbol = self.current_binding_symbol;
+    self.current_binding_pattern = pattern_idx;
+    self.current_binding_symbol = symbol;
+    defer {
+        self.current_binding_pattern = old_binding;
+        self.current_binding_symbol = old_symbol;
+    }
+
+    // Lower the definition's expression
+    const expr_id = self.lowerExprFromIdx(module_env, cir_expr_idx) catch {
+        // If lowering fails, don't register - the lookup will fail at codegen time
+        // This matches the behavior of lowerExternalDefByIdx
+        return;
+    };
+
+    // Register the symbol definition
+    try self.store.registerSymbolDef(symbol, expr_id);
+    try self.lowered_symbols.put(symbol_key, expr_id);
+}
+
+/// Get layout for a block expression by inferring from the final expression
 fn getBlockLayout(self: *Self, module_env: *ModuleEnv, block: anytype) LayoutIdx {
-    // First pass: collect type annotations
+    // Process declarations to populate type_env for lookups
     const stmts = module_env.store.sliceStatements(block.stmts);
     for (stmts) |stmt_idx| {
         const stmt = module_env.store.getStatement(stmt_idx);
         switch (stmt) {
-            .s_type_anno => |ta| {
-                // Get the type annotation and convert to layout
-                const type_anno = module_env.store.getTypeAnno(ta.anno);
-                const anno_layout = self.getTypeAnnoLayout(type_anno);
-                // We need to find the pattern that matches this annotation name
-                // by looking at subsequent declarations
-                self.pending_type_annos.put(ta.name, anno_layout) catch {};
-            },
             .s_decl => |decl| {
+                // Infer layout from the expression using type variable
                 const pattern_key = @intFromEnum(decl.pattern);
-                if (decl.anno) |anno_idx| {
-                    // Declaration has an inline annotation
-                    const anno_layout = self.getAnnotationLayout(module_env, anno_idx);
-                    self.type_env.put(pattern_key, anno_layout) catch {};
-                } else {
-                    // Check if there's a pending type annotation for this pattern
-                    const pattern = module_env.store.getPattern(decl.pattern);
-                    switch (pattern) {
-                        .assign => |assign| {
-                            if (self.pending_type_annos.get(assign.ident)) |anno_layout| {
-                                self.type_env.put(pattern_key, anno_layout) catch {};
-                            } else {
-                                // Infer from the expression
-                                const decl_expr = module_env.store.getExpr(decl.expr);
-                                const inferred = self.getExprLayout(module_env, decl_expr);
-                                self.type_env.put(pattern_key, inferred) catch {};
-                            }
-                        },
-                        else => {
-                            // Infer from the expression
-                            const decl_expr = module_env.store.getExpr(decl.expr);
-                            const inferred = self.getExprLayout(module_env, decl_expr);
-                            self.type_env.put(pattern_key, inferred) catch {};
-                        },
-                    }
-                }
+                const inferred = self.getExprLayoutFromIdx(module_env, decl.expr);
+                self.type_env.put(pattern_key, inferred) catch {};
+            },
+            .s_var => |var_stmt| {
+                // Mutable variable - also populate type_env
+                const pattern_key = @intFromEnum(var_stmt.pattern_idx);
+                const inferred = self.getExprLayoutFromIdx(module_env, var_stmt.expr);
+                self.type_env.put(pattern_key, inferred) catch {};
             },
             else => {},
         }
     }
 
-    // Return the layout of the final expression
-    const final_expr = module_env.store.getExpr(block.final_expr);
-    return self.getExprLayout(module_env, final_expr);
+    // Return the layout of the final expression using type variable
+    return self.getExprLayoutFromIdx(module_env, block.final_expr);
 }
 
-/// Get layout from a type annotation
-fn getTypeAnnoLayout(_: *Self, type_anno: CIR.TypeAnno) LayoutIdx {
-    return switch (type_anno) {
-        .apply => |apply| layoutFromLocalOrExternal(apply.base),
-        .lookup => |lookup| layoutFromLocalOrExternal(lookup.base),
-        else => .i64,
+/// Get layout for an expression from its index using the global layout store.
+fn getExprLayoutFromIdx(self: *Self, _: *ModuleEnv, expr_idx: CIR.Expr.Idx) LayoutIdx {
+    const type_var = ModuleEnv.varFrom(expr_idx);
+    const ls = self.layout_store orelse unreachable;
+    return ls.fromTypeVar(self.current_module_idx, type_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
+}
+
+/// Look up the discriminant for a tag name within a tag union type.
+/// The layout store sorts tag names alphabetically to assign discriminants,
+/// so we must replicate that sorting here.
+fn resolveTagDiscriminant(self: *Self, module_env: *ModuleEnv, type_var: types.Var, tag_name: Ident.Idx) u16 {
+    const types_store = &module_env.types;
+    var resolved = types_store.resolveVar(type_var);
+
+    // Follow type scope if unresolved (flex/rigid)
+    if (resolved.desc.content == .flex or resolved.desc.content == .rigid) {
+        if (self.type_scope.lookup(resolved.var_)) |mapped| {
+            const scope_env = if (self.type_scope_caller_module) |caller_idx|
+                self.all_module_envs[caller_idx]
+            else
+                module_env;
+            resolved = scope_env.types.resolveVar(mapped);
+        }
+    }
+
+    // Unwrap nominal types (e.g., Bool := [False, True]) to their backing type
+    if (resolved.desc.content.unwrapNominalType()) |nominal| {
+        const backing_var = types_store.getNominalBackingVar(nominal);
+        resolved = types_store.resolveVar(backing_var);
+    }
+
+    const tag_union = resolved.desc.content.unwrapTagUnion() orelse return 0;
+
+    // Count how many tag names across the entire tag union (following extension
+    // variable chains) sort alphabetically before our target name. This matches
+    // the layout store's alphabetical discriminant assignment.
+    const ident_store = module_env.getIdentStoreConst();
+    const target_text = ident_store.getText(tag_name);
+    var discriminant: u16 = 0;
+
+    // Process the initial tag union row
+    const tags_slice = types_store.getTagsSlice(tag_union.tags);
+    for (tags_slice.items(.name)) |other_name| {
+        const other_text = ident_store.getText(other_name);
+        if (std.mem.order(u8, other_text, target_text) == .lt) {
+            discriminant += 1;
+        }
+    }
+
+    // Follow the extension variable chain to collect tags from all rows
+    var current_ext = tag_union.ext;
+    var guard: u32 = 0;
+    while (guard < 100) : (guard += 1) {
+        const ext_resolved = types_store.resolveVar(current_ext);
+        switch (ext_resolved.desc.content) {
+            .structure => |flat_type| switch (flat_type) {
+                .tag_union => |ext_tu| {
+                    const ext_tags = types_store.getTagsSlice(ext_tu.tags);
+                    for (ext_tags.items(.name)) |other_name| {
+                        const other_text = ident_store.getText(other_name);
+                        if (std.mem.order(u8, other_text, target_text) == .lt) {
+                            discriminant += 1;
+                        }
+                    }
+                    current_ext = ext_tu.ext;
+                },
+                .empty_tag_union => break,
+                .nominal_type => |nominal| {
+                    const backing_var = types_store.getNominalBackingVar(nominal);
+                    current_ext = backing_var;
+                },
+                else => break,
+            },
+            .alias => |alias| {
+                current_ext = types_store.getAliasBackingVar(alias);
+            },
+            .flex, .rigid => break,
+            else => break,
+        }
+    }
+
+    return discriminant;
+}
+
+/// Push a type_scope mapping from the for-loop pattern's type variable to the element
+/// type extracted from the list expression's type. Returns true if a scope was pushed.
+/// The caller must call popForLoopElementTypeScope() after lowering the body.
+fn pushForLoopElementTypeScope(self: *Self, module_env: *const ModuleEnv, list_expr_idx: CIR.Expr.Idx, patt_idx: CIR.Pattern.Idx) bool {
+    const list_type_var = ModuleEnv.varFrom(list_expr_idx);
+    var list_resolved = module_env.types.resolveVar(list_type_var);
+
+    // If the list type is a flex/rigid var, check type_scope for a concrete mapping
+    // (This handles polymorphic functions where the list parameter type is unresolved)
+    var list_type_source_env: *const ModuleEnv = module_env;
+    if (list_resolved.desc.content == .flex or list_resolved.desc.content == .rigid) {
+        if (self.type_scope.lookup(list_resolved.var_)) |mapped| {
+            if (self.type_scope_caller_module) |caller_idx| {
+                list_type_source_env = self.all_module_envs[caller_idx];
+            }
+            list_resolved = list_type_source_env.types.resolveVar(mapped);
+        }
+    }
+
+    if (list_resolved.desc.content != .structure) return false;
+    const structure = list_resolved.desc.content.structure;
+    if (structure != .nominal_type) return false;
+    const nominal = structure.nominal_type;
+    const args = list_type_source_env.types.sliceNominalArgs(nominal);
+    if (args.len == 0) return false;
+
+    const elem_type_var = args[0];
+
+    // Get the pattern's type variable
+    const patt_type_var = ModuleEnv.varFrom(patt_idx);
+    const patt_resolved = module_env.types.resolveVar(patt_type_var);
+
+    // Only add mapping if the pattern's type is unresolved (flex/rigid)
+    if (patt_resolved.desc.content != .flex and patt_resolved.desc.content != .rigid) return false;
+
+    // Push a new scope with the mapping
+    var new_scope = types.VarMap.init(self.allocator);
+    new_scope.put(patt_resolved.var_, elem_type_var) catch return false;
+    self.type_scope.scopes.append(new_scope) catch return false;
+    return true;
+}
+
+/// Pop a type scope that was pushed by pushForLoopElementTypeScope.
+fn popForLoopElementTypeScope(self: *Self) void {
+    if (self.type_scope.scopes.items.len > 0) {
+        var scope = self.type_scope.scopes.items[self.type_scope.scopes.items.len - 1];
+        self.type_scope.scopes.items.len -= 1;
+        scope.deinit();
+    }
+}
+
+/// Get the element layout from the for-loop's LIST expression, not the pattern.
+/// The list expression has type List(T) where T is the concrete element type.
+/// The pattern's type may be a flex variable with constraints that doesn't resolve correctly.
+fn getForLoopElementLayout(self: *Self, list_expr_idx: CIR.Expr.Idx) LayoutIdx {
+    const module_env = self.getModuleEnv(self.current_module_idx) orelse unreachable;
+    const ls = self.layout_store orelse unreachable;
+
+    // Get the list's type variable
+    const list_type_var = ModuleEnv.varFrom(list_expr_idx);
+    const resolved = module_env.types.resolveVar(list_type_var);
+
+    // The list type must be a nominal structure (List)
+    switch (resolved.desc.content) {
+        .structure => |structure| {
+            switch (structure) {
+                .nominal_type => |nominal| {
+                    // Get the element type (first type argument of List)
+                    const args = module_env.types.sliceNominalArgs(nominal);
+                    std.debug.assert(args.len > 0); // List must have element type arg
+                    const elem_type_var = args[0];
+                    // For local calls, setupLocalCallLayoutHints populates the type_scope
+                    // with intra-module mappings (e.g., flex_var -> concrete_type), but
+                    // type_scope_caller_module remains null. fromTypeVar only checks the
+                    // type_scope when caller_module_idx is non-null. So when the element
+                    // type is a flex/rigid var and the type_scope has a mapping for it,
+                    // pass the current module as caller so the mapping is used.
+                    const effective_caller = self.type_scope_caller_module orelse blk: {
+                        const elem_resolved = module_env.types.resolveVar(elem_type_var);
+                        if (elem_resolved.desc.content == .flex or elem_resolved.desc.content == .rigid) {
+                            if (self.type_scope.lookup(elem_resolved.var_) != null) {
+                                break :blk self.current_module_idx;
+                            }
+                        }
+                        break :blk null;
+                    };
+                    // Compute layout for the element type from the list's type arg
+                    const elem_layout = ls.fromTypeVar(self.current_module_idx, elem_type_var, &self.type_scope, effective_caller) catch unreachable;
+                    return elem_layout;
+                },
+                else => unreachable, // For loop list must be List type
+            }
+        },
+        else => unreachable, // For loop list must be structure type
+    }
+}
+
+/// Get the layout for a pattern from its type variable using the global layout store.
+fn getPatternLayout(self: *Self, pattern_idx: CIR.Pattern.Idx) LayoutIdx {
+    const type_var = ModuleEnv.varFrom(pattern_idx);
+
+    // Check if we have a pre-computed layout hint for this type variable.
+    // This handles cases where the type var maps to a flex but we know from
+    // expression analysis that it should be a list (e.g., [[10], [20], [30]] elements).
+    const module_env = self.getModuleEnv(self.current_module_idx) orelse unreachable;
+    const resolved = module_env.types.resolveVar(type_var);
+    if (self.expr_layout_hints.get(resolved.var_)) |hint_layout| {
+        return hint_layout;
+    }
+
+    const ls = self.layout_store orelse unreachable;
+    return ls.fromTypeVar(self.current_module_idx, type_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
+}
+
+/// Convert a CIR low-level op to the corresponding Mono IR low-level op.
+/// Returns null for ops that don't have a direct Mono IR equivalent (e.g. str ops).
+fn convertToMonoLowLevel(op: CIR.Expr.LowLevel) ?ir.MonoExpr.LowLevel {
+    return switch (op) {
+        .list_len => .list_len,
+        .list_is_empty => .list_is_empty,
+        .list_get_unsafe => .list_get,
+        .list_append => .list_append,
+        .list_append_unsafe => .list_append,
+        .list_concat => .list_concat,
+        .list_with_capacity => .list_with_capacity,
+        .list_drop_at => .list_drop_first,
+        .list_sublist => .list_take_first,
+
+        // String operations
+        .str_is_empty => .str_is_empty,
+        .str_is_eq => .str_is_eq,
+        .str_concat => .str_concat,
+        .str_contains => .str_contains,
+        .str_trim => .str_trim,
+        .str_trim_start => .str_trim_start,
+        .str_trim_end => .str_trim_end,
+        .str_caseless_ascii_equals => .str_caseless_ascii_equals,
+        .str_with_ascii_lowercased => .str_with_ascii_lowercased,
+        .str_with_ascii_uppercased => .str_with_ascii_uppercased,
+        .str_starts_with => .str_starts_with,
+        .str_ends_with => .str_ends_with,
+        .str_repeat => .str_repeat,
+        .str_with_prefix => .str_with_prefix,
+        .str_drop_prefix => .str_drop_prefix,
+        .str_drop_suffix => .str_drop_suffix,
+        .str_count_utf8_bytes => .str_count_utf8_bytes,
+        .str_with_capacity => .str_with_capacity,
+        .str_reserve => .str_reserve,
+        .str_release_excess_capacity => .str_release_excess_capacity,
+        .str_to_utf8 => .str_to_utf8,
+        .str_from_utf8_lossy => .str_from_utf8_lossy,
+        .str_from_utf8 => .str_from_utf8,
+        .str_split_on => .str_split,
+        .str_join_with => .str_join_with,
+
+        // Numeric conversion operations (U8)
+        .u8_to_i8_wrap => .u8_to_i8_wrap,
+        .u8_to_i8_try => .u8_to_i8_try,
+        .u8_to_i16 => .u8_to_i16,
+        .u8_to_i32 => .u8_to_i32,
+        .u8_to_i64 => .u8_to_i64,
+        .u8_to_i128 => .u8_to_i128,
+        .u8_to_u16 => .u8_to_u16,
+        .u8_to_u32 => .u8_to_u32,
+        .u8_to_u64 => .u8_to_u64,
+        .u8_to_u128 => .u8_to_u128,
+        .u8_to_f32 => .u8_to_f32,
+        .u8_to_f64 => .u8_to_f64,
+        .u8_to_dec => .u8_to_dec,
+
+        // Numeric conversion operations (I8)
+        .i8_to_i16 => .i8_to_i16,
+        .i8_to_i32 => .i8_to_i32,
+        .i8_to_i64 => .i8_to_i64,
+        .i8_to_i128 => .i8_to_i128,
+        .i8_to_u8_wrap => .i8_to_u8_wrap,
+        .i8_to_u8_try => .i8_to_u8_try,
+        .i8_to_u16_wrap => .i8_to_u16_wrap,
+        .i8_to_u16_try => .i8_to_u16_try,
+        .i8_to_u32_wrap => .i8_to_u32_wrap,
+        .i8_to_u32_try => .i8_to_u32_try,
+        .i8_to_u64_wrap => .i8_to_u64_wrap,
+        .i8_to_u64_try => .i8_to_u64_try,
+        .i8_to_u128_wrap => .i8_to_u128_wrap,
+        .i8_to_u128_try => .i8_to_u128_try,
+        .i8_to_f32 => .i8_to_f32,
+        .i8_to_f64 => .i8_to_f64,
+        .i8_to_dec => .i8_to_dec,
+
+        // Numeric conversion operations (U16)
+        .u16_to_i8_wrap => .u16_to_i8_wrap,
+        .u16_to_i8_try => .u16_to_i8_try,
+        .u16_to_i16_wrap => .u16_to_i16_wrap,
+        .u16_to_i16_try => .u16_to_i16_try,
+        .u16_to_i32 => .u16_to_i32,
+        .u16_to_i64 => .u16_to_i64,
+        .u16_to_i128 => .u16_to_i128,
+        .u16_to_u8_wrap => .u16_to_u8_wrap,
+        .u16_to_u8_try => .u16_to_u8_try,
+        .u16_to_u32 => .u16_to_u32,
+        .u16_to_u64 => .u16_to_u64,
+        .u16_to_u128 => .u16_to_u128,
+        .u16_to_f32 => .u16_to_f32,
+        .u16_to_f64 => .u16_to_f64,
+        .u16_to_dec => .u16_to_dec,
+
+        // Numeric conversion operations (I16)
+        .i16_to_i8_wrap => .i16_to_i8_wrap,
+        .i16_to_i8_try => .i16_to_i8_try,
+        .i16_to_i32 => .i16_to_i32,
+        .i16_to_i64 => .i16_to_i64,
+        .i16_to_i128 => .i16_to_i128,
+        .i16_to_u8_wrap => .i16_to_u8_wrap,
+        .i16_to_u8_try => .i16_to_u8_try,
+        .i16_to_u16_wrap => .i16_to_u16_wrap,
+        .i16_to_u16_try => .i16_to_u16_try,
+        .i16_to_u32_wrap => .i16_to_u32_wrap,
+        .i16_to_u32_try => .i16_to_u32_try,
+        .i16_to_u64_wrap => .i16_to_u64_wrap,
+        .i16_to_u64_try => .i16_to_u64_try,
+        .i16_to_u128_wrap => .i16_to_u128_wrap,
+        .i16_to_u128_try => .i16_to_u128_try,
+        .i16_to_f32 => .i16_to_f32,
+        .i16_to_f64 => .i16_to_f64,
+        .i16_to_dec => .i16_to_dec,
+
+        // Numeric conversion operations (U32)
+        .u32_to_i8_wrap => .u32_to_i8_wrap,
+        .u32_to_i8_try => .u32_to_i8_try,
+        .u32_to_i16_wrap => .u32_to_i16_wrap,
+        .u32_to_i16_try => .u32_to_i16_try,
+        .u32_to_i32_wrap => .u32_to_i32_wrap,
+        .u32_to_i32_try => .u32_to_i32_try,
+        .u32_to_i64 => .u32_to_i64,
+        .u32_to_i128 => .u32_to_i128,
+        .u32_to_u8_wrap => .u32_to_u8_wrap,
+        .u32_to_u8_try => .u32_to_u8_try,
+        .u32_to_u16_wrap => .u32_to_u16_wrap,
+        .u32_to_u16_try => .u32_to_u16_try,
+        .u32_to_u64 => .u32_to_u64,
+        .u32_to_u128 => .u32_to_u128,
+        .u32_to_f32 => .u32_to_f32,
+        .u32_to_f64 => .u32_to_f64,
+        .u32_to_dec => .u32_to_dec,
+
+        // Numeric conversion operations (I32)
+        .i32_to_i8_wrap => .i32_to_i8_wrap,
+        .i32_to_i8_try => .i32_to_i8_try,
+        .i32_to_i16_wrap => .i32_to_i16_wrap,
+        .i32_to_i16_try => .i32_to_i16_try,
+        .i32_to_i64 => .i32_to_i64,
+        .i32_to_i128 => .i32_to_i128,
+        .i32_to_u8_wrap => .i32_to_u8_wrap,
+        .i32_to_u8_try => .i32_to_u8_try,
+        .i32_to_u16_wrap => .i32_to_u16_wrap,
+        .i32_to_u16_try => .i32_to_u16_try,
+        .i32_to_u32_wrap => .i32_to_u32_wrap,
+        .i32_to_u32_try => .i32_to_u32_try,
+        .i32_to_u64_wrap => .i32_to_u64_wrap,
+        .i32_to_u64_try => .i32_to_u64_try,
+        .i32_to_u128_wrap => .i32_to_u128_wrap,
+        .i32_to_u128_try => .i32_to_u128_try,
+        .i32_to_f32 => .i32_to_f32,
+        .i32_to_f64 => .i32_to_f64,
+        .i32_to_dec => .i32_to_dec,
+
+        // Numeric conversion operations (U64)
+        .u64_to_i8_wrap => .u64_to_i8_wrap,
+        .u64_to_i8_try => .u64_to_i8_try,
+        .u64_to_i16_wrap => .u64_to_i16_wrap,
+        .u64_to_i16_try => .u64_to_i16_try,
+        .u64_to_i32_wrap => .u64_to_i32_wrap,
+        .u64_to_i32_try => .u64_to_i32_try,
+        .u64_to_i64_wrap => .u64_to_i64_wrap,
+        .u64_to_i64_try => .u64_to_i64_try,
+        .u64_to_i128 => .u64_to_i128,
+        .u64_to_u8_wrap => .u64_to_u8_wrap,
+        .u64_to_u8_try => .u64_to_u8_try,
+        .u64_to_u16_wrap => .u64_to_u16_wrap,
+        .u64_to_u16_try => .u64_to_u16_try,
+        .u64_to_u32_wrap => .u64_to_u32_wrap,
+        .u64_to_u32_try => .u64_to_u32_try,
+        .u64_to_u128 => .u64_to_u128,
+        .u64_to_f32 => .u64_to_f32,
+        .u64_to_f64 => .u64_to_f64,
+        .u64_to_dec => .u64_to_dec,
+
+        // Numeric conversion operations (I64)
+        .i64_to_i8_wrap => .i64_to_i8_wrap,
+        .i64_to_i8_try => .i64_to_i8_try,
+        .i64_to_i16_wrap => .i64_to_i16_wrap,
+        .i64_to_i16_try => .i64_to_i16_try,
+        .i64_to_i32_wrap => .i64_to_i32_wrap,
+        .i64_to_i32_try => .i64_to_i32_try,
+        .i64_to_i128 => .i64_to_i128,
+        .i64_to_u8_wrap => .i64_to_u8_wrap,
+        .i64_to_u8_try => .i64_to_u8_try,
+        .i64_to_u16_wrap => .i64_to_u16_wrap,
+        .i64_to_u16_try => .i64_to_u16_try,
+        .i64_to_u32_wrap => .i64_to_u32_wrap,
+        .i64_to_u32_try => .i64_to_u32_try,
+        .i64_to_u64_wrap => .i64_to_u64_wrap,
+        .i64_to_u64_try => .i64_to_u64_try,
+        .i64_to_u128_wrap => .i64_to_u128_wrap,
+        .i64_to_u128_try => .i64_to_u128_try,
+        .i64_to_f32 => .i64_to_f32,
+        .i64_to_f64 => .i64_to_f64,
+        .i64_to_dec => .i64_to_dec,
+
+        // Numeric conversion operations (U128)
+        .u128_to_i8_wrap => .u128_to_i8_wrap,
+        .u128_to_i8_try => .u128_to_i8_try,
+        .u128_to_i16_wrap => .u128_to_i16_wrap,
+        .u128_to_i16_try => .u128_to_i16_try,
+        .u128_to_i32_wrap => .u128_to_i32_wrap,
+        .u128_to_i32_try => .u128_to_i32_try,
+        .u128_to_i64_wrap => .u128_to_i64_wrap,
+        .u128_to_i64_try => .u128_to_i64_try,
+        .u128_to_i128_wrap => .u128_to_i128_wrap,
+        .u128_to_i128_try => .u128_to_i128_try,
+        .u128_to_u8_wrap => .u128_to_u8_wrap,
+        .u128_to_u8_try => .u128_to_u8_try,
+        .u128_to_u16_wrap => .u128_to_u16_wrap,
+        .u128_to_u16_try => .u128_to_u16_try,
+        .u128_to_u32_wrap => .u128_to_u32_wrap,
+        .u128_to_u32_try => .u128_to_u32_try,
+        .u128_to_u64_wrap => .u128_to_u64_wrap,
+        .u128_to_u64_try => .u128_to_u64_try,
+        .u128_to_f32 => .u128_to_f32,
+        .u128_to_f64 => .u128_to_f64,
+        .u128_to_dec_try_unsafe => .u128_to_dec_try_unsafe,
+
+        // Numeric conversion operations (I128)
+        .i128_to_i8_wrap => .i128_to_i8_wrap,
+        .i128_to_i8_try => .i128_to_i8_try,
+        .i128_to_i16_wrap => .i128_to_i16_wrap,
+        .i128_to_i16_try => .i128_to_i16_try,
+        .i128_to_i32_wrap => .i128_to_i32_wrap,
+        .i128_to_i32_try => .i128_to_i32_try,
+        .i128_to_i64_wrap => .i128_to_i64_wrap,
+        .i128_to_i64_try => .i128_to_i64_try,
+        .i128_to_u8_wrap => .i128_to_u8_wrap,
+        .i128_to_u8_try => .i128_to_u8_try,
+        .i128_to_u16_wrap => .i128_to_u16_wrap,
+        .i128_to_u16_try => .i128_to_u16_try,
+        .i128_to_u32_wrap => .i128_to_u32_wrap,
+        .i128_to_u32_try => .i128_to_u32_try,
+        .i128_to_u64_wrap => .i128_to_u64_wrap,
+        .i128_to_u64_try => .i128_to_u64_try,
+        .i128_to_u128_wrap => .i128_to_u128_wrap,
+        .i128_to_u128_try => .i128_to_u128_try,
+        .i128_to_f32 => .i128_to_f32,
+        .i128_to_f64 => .i128_to_f64,
+        .i128_to_dec_try_unsafe => .i128_to_dec_try_unsafe,
+
+        // Numeric conversion operations (F32)
+        .f32_to_i8_trunc => .f32_to_i8_trunc,
+        .f32_to_i8_try_unsafe => .f32_to_i8_try_unsafe,
+        .f32_to_i16_trunc => .f32_to_i16_trunc,
+        .f32_to_i16_try_unsafe => .f32_to_i16_try_unsafe,
+        .f32_to_i32_trunc => .f32_to_i32_trunc,
+        .f32_to_i32_try_unsafe => .f32_to_i32_try_unsafe,
+        .f32_to_i64_trunc => .f32_to_i64_trunc,
+        .f32_to_i64_try_unsafe => .f32_to_i64_try_unsafe,
+        .f32_to_i128_trunc => .f32_to_i128_trunc,
+        .f32_to_i128_try_unsafe => .f32_to_i128_try_unsafe,
+        .f32_to_u8_trunc => .f32_to_u8_trunc,
+        .f32_to_u8_try_unsafe => .f32_to_u8_try_unsafe,
+        .f32_to_u16_trunc => .f32_to_u16_trunc,
+        .f32_to_u16_try_unsafe => .f32_to_u16_try_unsafe,
+        .f32_to_u32_trunc => .f32_to_u32_trunc,
+        .f32_to_u32_try_unsafe => .f32_to_u32_try_unsafe,
+        .f32_to_u64_trunc => .f32_to_u64_trunc,
+        .f32_to_u64_try_unsafe => .f32_to_u64_try_unsafe,
+        .f32_to_u128_trunc => .f32_to_u128_trunc,
+        .f32_to_u128_try_unsafe => .f32_to_u128_try_unsafe,
+        .f32_to_f64 => .f32_to_f64,
+
+        // Numeric conversion operations (F64)
+        .f64_to_i8_trunc => .f64_to_i8_trunc,
+        .f64_to_i8_try_unsafe => .f64_to_i8_try_unsafe,
+        .f64_to_i16_trunc => .f64_to_i16_trunc,
+        .f64_to_i16_try_unsafe => .f64_to_i16_try_unsafe,
+        .f64_to_i32_trunc => .f64_to_i32_trunc,
+        .f64_to_i32_try_unsafe => .f64_to_i32_try_unsafe,
+        .f64_to_i64_trunc => .f64_to_i64_trunc,
+        .f64_to_i64_try_unsafe => .f64_to_i64_try_unsafe,
+        .f64_to_i128_trunc => .f64_to_i128_trunc,
+        .f64_to_i128_try_unsafe => .f64_to_i128_try_unsafe,
+        .f64_to_u8_trunc => .f64_to_u8_trunc,
+        .f64_to_u8_try_unsafe => .f64_to_u8_try_unsafe,
+        .f64_to_u16_trunc => .f64_to_u16_trunc,
+        .f64_to_u16_try_unsafe => .f64_to_u16_try_unsafe,
+        .f64_to_u32_trunc => .f64_to_u32_trunc,
+        .f64_to_u32_try_unsafe => .f64_to_u32_try_unsafe,
+        .f64_to_u64_trunc => .f64_to_u64_trunc,
+        .f64_to_u64_try_unsafe => .f64_to_u64_try_unsafe,
+        .f64_to_u128_trunc => .f64_to_u128_trunc,
+        .f64_to_u128_try_unsafe => .f64_to_u128_try_unsafe,
+        .f64_to_f32_wrap => .f64_to_f32_wrap,
+        .f64_to_f32_try_unsafe => .f64_to_f32_try_unsafe,
+
+        // Numeric conversion operations (Dec)
+        .dec_to_i8_trunc => .dec_to_i8_trunc,
+        .dec_to_i8_try_unsafe => .dec_to_i8_try_unsafe,
+        .dec_to_i16_trunc => .dec_to_i16_trunc,
+        .dec_to_i16_try_unsafe => .dec_to_i16_try_unsafe,
+        .dec_to_i32_trunc => .dec_to_i32_trunc,
+        .dec_to_i32_try_unsafe => .dec_to_i32_try_unsafe,
+        .dec_to_i64_trunc => .dec_to_i64_trunc,
+        .dec_to_i64_try_unsafe => .dec_to_i64_try_unsafe,
+        .dec_to_i128_trunc => .dec_to_i128_trunc,
+        .dec_to_i128_try_unsafe => .dec_to_i128_try_unsafe,
+        .dec_to_u8_trunc => .dec_to_u8_trunc,
+        .dec_to_u8_try_unsafe => .dec_to_u8_try_unsafe,
+        .dec_to_u16_trunc => .dec_to_u16_trunc,
+        .dec_to_u16_try_unsafe => .dec_to_u16_try_unsafe,
+        .dec_to_u32_trunc => .dec_to_u32_trunc,
+        .dec_to_u32_try_unsafe => .dec_to_u32_try_unsafe,
+        .dec_to_u64_trunc => .dec_to_u64_trunc,
+        .dec_to_u64_try_unsafe => .dec_to_u64_try_unsafe,
+        .dec_to_u128_trunc => .dec_to_u128_trunc,
+        .dec_to_u128_try_unsafe => .dec_to_u128_try_unsafe,
+        .dec_to_f32_wrap => .dec_to_f32_wrap,
+        .dec_to_f32_try_unsafe => .dec_to_f32_try_unsafe,
+        .dec_to_f64 => .dec_to_f64,
+
+        else => null,
     };
 }
 
-/// Get layout from an annotation index
-fn getAnnotationLayout(self: *Self, module_env: *ModuleEnv, anno_idx: CIR.Annotation.Idx) LayoutIdx {
-    const anno = module_env.store.getAnnotation(anno_idx);
-    const type_anno = module_env.store.getTypeAnno(anno.anno);
-    return self.getTypeAnnoLayout(type_anno);
-}
-
-/// Convert a LocalOrExternal to LayoutIdx
-fn layoutFromLocalOrExternal(loe: CIR.TypeAnno.LocalOrExternal) LayoutIdx {
-    return switch (loe) {
-        .builtin => |b| layoutFromBuiltin(b),
-        .local, .external => .i64,
+/// Convert a CIR *_to_str low-level op to the corresponding MonoExpr.
+/// These ops need type-specific MonoExprs (int_to_str, float_to_str, dec_to_str)
+/// rather than a generic low_level wrapper, because the backend needs the precision info.
+/// Returns null if the op is not a *_to_str operation.
+fn toStrMonoExpr(op: CIR.Expr.LowLevel, module_env: *ModuleEnv, args: anytype, self: *Self) ?ir.MonoExpr {
+    const arg_indices = module_env.store.sliceExpr(args);
+    if (arg_indices.len != 1) return null;
+    const arg_idx = arg_indices[0];
+    const arg_id = self.lowerExprFromIdx(module_env, arg_idx) catch return null;
+    return switch (op) {
+        .u8_to_str => .{ .int_to_str = .{ .value = arg_id, .int_precision = .u8 } },
+        .i8_to_str => .{ .int_to_str = .{ .value = arg_id, .int_precision = .i8 } },
+        .u16_to_str => .{ .int_to_str = .{ .value = arg_id, .int_precision = .u16 } },
+        .i16_to_str => .{ .int_to_str = .{ .value = arg_id, .int_precision = .i16 } },
+        .u32_to_str => .{ .int_to_str = .{ .value = arg_id, .int_precision = .u32 } },
+        .i32_to_str => .{ .int_to_str = .{ .value = arg_id, .int_precision = .i32 } },
+        .u64_to_str => .{ .int_to_str = .{ .value = arg_id, .int_precision = .u64 } },
+        .i64_to_str => .{ .int_to_str = .{ .value = arg_id, .int_precision = .i64 } },
+        .u128_to_str => .{ .int_to_str = .{ .value = arg_id, .int_precision = .u128 } },
+        .i128_to_str => .{ .int_to_str = .{ .value = arg_id, .int_precision = .i128 } },
+        .dec_to_str => .{ .dec_to_str = arg_id },
+        .f32_to_str => .{ .float_to_str = .{ .value = arg_id, .float_precision = .f32 } },
+        .f64_to_str => .{ .float_to_str = .{ .value = arg_id, .float_precision = .f64 } },
+        else => null,
     };
 }
 
-/// Convert a Builtin type enum to LayoutIdx
-fn layoutFromBuiltin(b: CIR.TypeAnno.Builtin) LayoutIdx {
-    return switch (b) {
-        .u8 => .u8,
-        .i8 => .i8,
-        .u16 => .u16,
-        .i16 => .i16,
-        .u32 => .u32,
-        .i32 => .i32,
-        .u64 => .u64,
-        .u128 => .u128,
-        .i128 => .i128,
-        .f32 => .f32,
-        .f64 => .f64,
-        .dec => .dec,
-        else => .i64,
-    };
+/// Look up whether an external definition is a low-level lambda.
+/// Returns the low-level lambda data if so, null otherwise.
+fn getExternalLowLevelLambda(self: *Self, caller_env: *ModuleEnv, lookup: anytype) ?@FieldType(CIR.Expr, "e_low_level_lambda") {
+    const ext_module_idx = caller_env.imports.getResolvedModule(lookup.module_idx) orelse return null;
+    if (ext_module_idx >= self.all_module_envs.len) return null;
+    const ext_env = self.all_module_envs[ext_module_idx];
+    const def_idx: CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
+    const def = ext_env.store.getDef(def_idx);
+    const def_expr = ext_env.store.getExpr(def.expr);
+    return if (def_expr == .e_low_level_lambda) def_expr.e_low_level_lambda else null;
 }
 
-/// Get layout for an expression from its index
-fn getExprLayoutFromIdx(self: *Self, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx) LayoutIdx {
-    const expr = module_env.store.getExpr(expr_idx);
-    return self.getExprLayout(module_env, expr);
+/// Set up layout hints for a local function call.
+/// When a generic function (like `walk`) is called from within the same module,
+/// the function's parameter type variables (rigids from its annotation) may not
+/// be in the type scope. This function pre-computes parameter layouts from the
+/// call arguments so that `getPatternLayout` returns the correct concrete layouts.
+fn setupLocalCallLayoutHints(
+    self: *Self,
+    module_env: *ModuleEnv,
+    lookup_pattern_idx: CIR.Pattern.Idx,
+    call_args: CIR.Expr.Span,
+) Allocator.Error!void {
+    // Find the CIR expression for the definition
+    const def_expr_idx: CIR.Expr.Idx = blk: {
+        if (self.findDefForPattern(module_env, lookup_pattern_idx)) |def_idx| {
+            break :blk module_env.store.getDef(def_idx).expr;
+        }
+        if (self.deferred_defs.get(@intFromEnum(lookup_pattern_idx))) |deferred| {
+            break :blk deferred;
+        }
+        return;
+    };
+
+    // Get the lambda's parameter patterns
+    const def_expr = module_env.store.getExpr(def_expr_idx);
+    const lambda_args: CIR.Pattern.Span = switch (def_expr) {
+        .e_lambda => |l| l.args,
+        .e_closure => |c| blk: {
+            const inner = module_env.store.getExpr(c.lambda_idx);
+            break :blk switch (inner) {
+                .e_lambda => |l| l.args,
+                else => return,
+            };
+        },
+        else => return,
+    };
+
+    const param_pattern_indices = module_env.store.slicePatterns(lambda_args);
+    const arg_indices = module_env.store.sliceExpr(call_args);
+
+    // Also populate the type scope by walking the function's type signature.
+    // This handles nested type variables (e.g., the element type `a` inside `List a`)
+    // that are not directly represented by the parameter patterns.
+    const func_type_var = ModuleEnv.varFrom(def_expr_idx);
+    const func_resolved = module_env.types.resolveVar(func_type_var);
+    if (func_resolved.desc.content.unwrapFunc()) |func| {
+        const param_vars = module_env.types.sliceVars(func.args);
+        const num_type_mappings = @min(param_vars.len, arg_indices.len);
+
+        // Ensure we have a scope
+        if (self.type_scope.scopes.items.len == 0) {
+            try self.type_scope.scopes.append(types.VarMap.init(self.allocator));
+        }
+        const scope = &self.type_scope.scopes.items[0];
+
+        for (0..num_type_mappings) |i| {
+            const param_var = param_vars[i];
+            const arg_idx = arg_indices[i];
+            const caller_arg_var = ModuleEnv.varFrom(arg_idx);
+            try self.collectTypeMappingsWithExpr(scope, module_env, param_var, module_env, caller_arg_var, arg_idx);
+        }
+    }
+
+    const num_mappings = @min(param_pattern_indices.len, arg_indices.len);
+    for (0..num_mappings) |i| {
+        const param_pattern_idx = param_pattern_indices[i];
+        const arg_idx = arg_indices[i];
+
+        // Get the param's type var and resolve it
+        const param_type_var = ModuleEnv.varFrom(param_pattern_idx);
+        const resolved = module_env.types.resolveVar(param_type_var);
+
+        // Only add hints for type vars that are flex or rigid (generic)
+        if (resolved.desc.content != .flex and resolved.desc.content != .rigid) continue;
+
+        // Check if already in the type scope (no need to add a hint)
+        if (self.type_scope.lookup(resolved.var_) != null) continue;
+
+        // Compute the layout from the arg's type
+        const arg_layout = self.getExprLayoutFromIdx(module_env, arg_idx);
+
+        // Store the hint: when this resolved type var is encountered,
+        // use the layout computed from the argument
+        try self.expr_layout_hints.put(resolved.var_, arg_layout);
+    }
+}
+
+/// Set up type scope mappings for an external function call.
+/// This maps the external function's rigid type variables to concrete types from the call site.
+/// The call_expr_idx is the call expression itself, used to map return type params.
+fn setupExternalCallTypeScope(
+    self: *Self,
+    caller_module_env: *ModuleEnv,
+    lookup: anytype,
+    args: CIR.Expr.Span,
+    call_expr_idx: CIR.Expr.Idx,
+) Allocator.Error!void {
+    // Get the external module
+    const ext_module_idx = caller_module_env.imports.getResolvedModule(lookup.module_idx) orelse return;
+    if (ext_module_idx >= self.all_module_envs.len) return;
+    const ext_module_env = self.all_module_envs[ext_module_idx];
+
+    // Get the external definition
+    const def_idx: CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
+    const def = ext_module_env.store.getDef(def_idx);
+
+    // Get the external function's type
+    const ext_type_var = ModuleEnv.varFrom(def.expr);
+    const ext_resolved = ext_module_env.types.resolveVar(ext_type_var);
+
+    // Check if it's a function type
+    const func = ext_resolved.desc.content.unwrapFunc() orelse return;
+
+    // Get argument expressions from call site
+    const arg_indices = caller_module_env.store.sliceExpr(args);
+
+    // Ensure we have a scope to put mappings into
+    if (self.type_scope.scopes.items.len == 0) {
+        try self.type_scope.scopes.append(types.VarMap.init(self.allocator));
+    }
+    const scope = &self.type_scope.scopes.items[0];
+
+    // Track the caller module - mapped vars in type_scope belong to this module.
+    // IMPORTANT: Only set this for the OUTERMOST external call!
+    // For nested calls (e.g., List.map calling List.with_capacity), we should preserve
+    // the original caller's module context, not overwrite it with the builtins module.
+    if (self.type_scope_caller_module == null) {
+        self.type_scope_caller_module = self.current_module_idx;
+    }
+
+    // Get the function's parameter type variables
+    const param_vars = ext_module_env.types.sliceVars(func.args);
+
+    // Map each external rigid param type to the call site's argument type
+    const num_mappings = @min(param_vars.len, arg_indices.len);
+    for (0..num_mappings) |i| {
+        const ext_param_var = param_vars[i];
+        const caller_arg_idx = arg_indices[i];
+        const caller_arg_var = ModuleEnv.varFrom(caller_arg_idx);
+
+        // Walk the external parameter type to find rigid vars
+        // and map them to corresponding parts of the caller's arg type.
+        // Pass the expression index so we can look at the actual expression
+        // when type resolution fails (e.g., for nested lists with unresolved numerics).
+        try self.collectTypeMappingsWithExpr(
+            scope,
+            ext_module_env,
+            ext_param_var,
+            caller_module_env,
+            caller_arg_var,
+            caller_arg_idx,
+        );
+    }
+
+    // Also map the return type. This is important for functions like List.map
+    // where the return type has type parameters (List b) that are used in the body.
+    // The call expression's type represents the return type after unification with the caller's context.
+    const caller_return_var = ModuleEnv.varFrom(call_expr_idx);
+    try self.collectTypeMappings(scope, ext_module_env, func.ret, caller_module_env, caller_return_var);
+}
+
+/// Recursively collect type variable mappings by walking two types in parallel.
+/// Maps rigid vars in ext_type to corresponding parts of caller_type.
+/// Collect resolved rigid type variable representatives from a type, recursing into
+/// structures like List, function types, etc.
+fn collectRigidVars(self: *Self, env: *const ModuleEnv, type_var: types.Var, out: []types.Var, count: *usize) void {
+    if (count.* >= out.len) return;
+    const resolved = env.types.resolveVar(type_var);
+    switch (resolved.desc.content) {
+        .rigid => {
+            // Add this rigid var if not already present
+            for (out[0..count.*]) |existing| {
+                if (existing == resolved.var_) return;
+            }
+            out[count.*] = resolved.var_;
+            count.* += 1;
+        },
+        .structure => |st| switch (st) {
+            .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                const param_vars = env.types.sliceVars(func.args);
+                for (param_vars) |pv| {
+                    self.collectRigidVars(env, pv, out, count);
+                }
+                self.collectRigidVars(env, func.ret, out, count);
+            },
+            .nominal_type => |nt| {
+                const type_args = env.types.sliceNominalArgs(nt);
+                for (type_args) |ta| {
+                    self.collectRigidVars(env, ta, out, count);
+                }
+            },
+            .tuple => |tup| {
+                const elems = env.types.sliceVars(tup.elems);
+                for (elems) |e| {
+                    self.collectRigidVars(env, e, out, count);
+                }
+            },
+            else => {},
+        },
+        .alias => |alias| {
+            const backing = env.types.getAliasBackingVar(alias);
+            self.collectRigidVars(env, backing, out, count);
+        },
+        else => {},
+    }
+}
+
+/// Walk two types from the same module in parallel. When the first type has a
+/// flex var where the second has a concrete type, add a scope entry mapping the
+/// flex var to the concrete var. This bridges gaps when a callback parameter's
+/// type has unresolved flex payload vars but the actual argument's type (already
+/// unified by the type checker) has concrete payloads.
+fn addIntraModuleMappings(
+    self: *Self,
+    scope: *types.VarMap,
+    env: *const ModuleEnv,
+    unresolved_var: types.Var,
+    concrete_var: types.Var,
+) Allocator.Error!void {
+    const ur = env.types.resolveVar(unresolved_var);
+    const cr = env.types.resolveVar(concrete_var);
+
+    // If they resolve to the same var, nothing to do
+    if (ur.var_ == cr.var_) return;
+
+    // If the unresolved side is flex, add a mapping — but only if the concrete side
+    // is actually concrete (a structure or alias). Mapping flex→flex is pointless.
+    if (ur.desc.content == .flex or ur.desc.content == .rigid) {
+        if (cr.desc.content == .structure or cr.desc.content == .alias) {
+            if (scope.get(ur.var_) == null) {
+                try scope.put(ur.var_, cr.var_);
+            }
+        }
+        return;
+    }
+
+    // Both must be structures to recurse
+    if (ur.desc.content != .structure or cr.desc.content != .structure) return;
+
+    const us = ur.desc.content.structure;
+    const cs = cr.desc.content.structure;
+
+    switch (us) {
+        .tag_union => |u_tu| {
+            const c_tu = if (cs == .tag_union) cs.tag_union else return;
+            const u_tags = env.types.getTagsSlice(u_tu.tags);
+            const c_tags = env.types.getTagsSlice(c_tu.tags);
+            const ident = env.getIdentStoreConst();
+
+            for (u_tags.items(.name), u_tags.items(.args)) |u_name, u_args| {
+                const u_text = ident.getText(u_name);
+                const u_pvars = env.types.sliceVars(u_args);
+
+                for (c_tags.items(.name), c_tags.items(.args)) |c_name, c_args| {
+                    const c_text = ident.getText(c_name);
+                    if (std.mem.eql(u8, u_text, c_text)) {
+                        const c_pvars = env.types.sliceVars(c_args);
+                        const num = @min(u_pvars.len, c_pvars.len);
+                        for (0..num) |j| {
+                            try self.addIntraModuleMappings(scope, env, u_pvars[j], c_pvars[j]);
+                        }
+                        break;
+                    }
+                }
+            }
+            // Don't recurse into extension vars — they represent "no more tags"
+            // for closed tag unions and mapping them can interfere with layout computation.
+        },
+        .nominal_type => |u_nt| {
+            const c_nt = if (cs == .nominal_type) cs.nominal_type else return;
+            const u_args = env.types.sliceNominalArgs(u_nt);
+            const c_args = env.types.sliceNominalArgs(c_nt);
+            const num = @min(u_args.len, c_args.len);
+            for (0..num) |i| {
+                try self.addIntraModuleMappings(scope, env, u_args[i], c_args[i]);
+            }
+        },
+        .record => |u_rec| {
+            const c_rec = if (cs == .record) cs.record else return;
+            const u_fields = env.types.getRecordFieldsSlice(u_rec.fields);
+            const c_fields = env.types.getRecordFieldsSlice(c_rec.fields);
+            const num = @min(u_fields.len, c_fields.len);
+            for (0..num) |i| {
+                try self.addIntraModuleMappings(scope, env, u_fields.get(i).var_, c_fields.get(i).var_);
+            }
+        },
+        .tuple => |u_tup| {
+            if (cs == .tuple) {
+                const c_tup = cs.tuple;
+                const u_elems = env.types.sliceVars(u_tup.elems);
+                const c_elems = env.types.sliceVars(c_tup.elems);
+                const num = @min(u_elems.len, c_elems.len);
+                for (0..num) |i| {
+                    try self.addIntraModuleMappings(scope, env, u_elems[i], c_elems[i]);
+                }
+            }
+        },
+        else => {},
+    }
+}
+
+fn collectTypeMappings(
+    self: *Self,
+    scope: *types.VarMap,
+    ext_env: *const ModuleEnv,
+    ext_var: types.Var,
+    caller_env: *ModuleEnv,
+    caller_var: types.Var,
+) Allocator.Error!void {
+    return self.collectTypeMappingsWithExpr(scope, ext_env, ext_var, caller_env, caller_var, null);
+}
+
+/// Recursively collect type variable mappings by walking two types in parallel.
+/// Maps rigid vars in ext_type to corresponding parts of caller_type.
+/// When caller_expr_idx is provided and type resolution fails (e.g., for lists with
+/// unresolved numeric elements), falls back to examining the actual expression.
+fn collectTypeMappingsWithExpr(
+    self: *Self,
+    scope: *types.VarMap,
+    ext_env: *const ModuleEnv,
+    ext_var: types.Var,
+    caller_env: *ModuleEnv,
+    caller_var: types.Var,
+    caller_expr_idx: ?CIR.Expr.Idx,
+) Allocator.Error!void {
+    const ext_resolved = ext_env.types.resolveVar(ext_var);
+    const caller_resolved = caller_env.types.resolveVar(caller_var);
+
+    switch (ext_resolved.desc.content) {
+        .rigid => {
+            // Found a rigid - map it to the caller's type variable
+            // Special handling: if we're mapping to a flex but the expression is a list,
+            // we need to pre-compute the list layout. Otherwise the layout store will see
+            // the flex and return a scalar layout (Dec) instead of List layout.
+            if (caller_resolved.desc.content == .flex) {
+                if (caller_expr_idx) |expr_idx| {
+                    const caller_expr = caller_env.store.getExpr(expr_idx);
+                    if (caller_expr == .e_list) {
+                        // The expression is a list but the type is flex.
+                        // Compute the list layout based on the expression's elements.
+                        const list = caller_expr.e_list;
+                        if (self.layout_store) |ls| {
+                            const list_layout = ls.computeListLayout(
+                                self.current_module_idx,
+                                caller_env,
+                                list.elems,
+                                &self.type_scope,
+                                self.type_scope_caller_module,
+                            ) catch {
+                                // Fall back to normal mapping if layout computation fails
+                                try scope.put(ext_resolved.var_, caller_resolved.var_);
+                                return;
+                            };
+                            self.expr_layout_hints.put(ext_resolved.var_, list_layout) catch {};
+                            // Still map the var for other lookups
+                            try scope.put(ext_resolved.var_, caller_resolved.var_);
+                            return;
+                        }
+                    }
+                }
+            }
+            // For nested calls: if the caller's type is also rigid/flex (because the
+            // intermediate function is generic), resolve transitively through the existing
+            // type scope. Otherwise fromTypeVar would try to resolve a module N var using
+            // the outermost caller's module (module 0), giving wrong results.
+            if (caller_resolved.desc.content == .rigid or caller_resolved.desc.content == .flex) {
+                if (self.type_scope.lookup(caller_resolved.var_)) |transitive_var| {
+                    try scope.put(ext_resolved.var_, transitive_var);
+                    return;
+                }
+            }
+            try scope.put(ext_resolved.var_, caller_resolved.var_);
+        },
+        .flex => {
+            // Flex vars might also need mapping if they're unresolved
+            // Same transitive resolution as rigid vars for nested calls.
+            if (caller_resolved.desc.content == .rigid or caller_resolved.desc.content == .flex) {
+                if (self.type_scope.lookup(caller_resolved.var_)) |transitive_var| {
+                    try scope.put(ext_resolved.var_, transitive_var);
+                    return;
+                }
+            }
+            try scope.put(ext_resolved.var_, caller_resolved.var_);
+        },
+        .structure => |st| {
+            // Recurse into structure to find nested rigids
+            switch (st) {
+                .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                    const ext_params = ext_env.types.sliceVars(func.args);
+                    const caller_func = caller_resolved.desc.content.unwrapFunc() orelse return;
+                    const caller_params = caller_env.types.sliceVars(caller_func.args);
+                    const num = @min(ext_params.len, caller_params.len);
+                    for (0..num) |i| {
+                        try self.collectTypeMappings(scope, ext_env, ext_params[i], caller_env, caller_params[i]);
+                    }
+                    try self.collectTypeMappings(scope, ext_env, func.ret, caller_env, caller_func.ret);
+                },
+                .record => |rec| {
+                    const caller_rec = caller_resolved.desc.content.unwrapRecord() orelse return;
+                    const ext_fields = ext_env.types.getRecordFieldsSlice(rec.fields);
+                    const caller_fields = caller_env.types.getRecordFieldsSlice(caller_rec.fields);
+                    const num = @min(ext_fields.len, caller_fields.len);
+                    for (0..num) |i| {
+                        try self.collectTypeMappings(scope, ext_env, ext_fields.get(i).var_, caller_env, caller_fields.get(i).var_);
+                    }
+                },
+                .tuple => |tup| {
+                    const ext_elems = ext_env.types.sliceVars(tup.elems);
+                    if (caller_resolved.desc.content == .structure) {
+                        if (caller_resolved.desc.content.structure == .tuple) {
+                            const caller_tup = caller_resolved.desc.content.structure.tuple;
+                            const caller_elems = caller_env.types.sliceVars(caller_tup.elems);
+                            const num = @min(ext_elems.len, caller_elems.len);
+                            for (0..num) |i| {
+                                try self.collectTypeMappings(scope, ext_env, ext_elems[i], caller_env, caller_elems[i]);
+                            }
+                        }
+                    }
+                },
+                .nominal_type => |nt| {
+                    // For nominal types, map the type arguments
+                    const ext_args = ext_env.types.sliceNominalArgs(nt);
+                    if (caller_resolved.desc.content.unwrapNominalType()) |caller_nt| {
+                        // Caller type is also nominal, recurse normally
+                        const caller_args = caller_env.types.sliceNominalArgs(caller_nt);
+                        const num = @min(ext_args.len, caller_args.len);
+                        for (0..num) |i| {
+                            // For list expressions, use the actual element's type var instead
+                            // of the type arg from the nominal. This handles cases where the
+                            // type arg is an unresolved flex but the element is a list.
+                            if (caller_expr_idx) |expr_idx| {
+                                const caller_expr = caller_env.store.getExpr(expr_idx);
+                                if (caller_expr == .e_list) {
+                                    const list = caller_expr.e_list;
+                                    const elems = caller_env.store.exprSlice(list.elems);
+                                    if (i < elems.len) {
+                                        // Use the element's type var, not the type arg from the nominal
+                                        const elem_type_var = ModuleEnv.varFrom(elems[i]);
+                                        try self.collectTypeMappingsWithExpr(scope, ext_env, ext_args[i], caller_env, elem_type_var, elems[i]);
+                                        continue;
+                                    }
+                                }
+                            }
+                            try self.collectTypeMappings(scope, ext_env, ext_args[i], caller_env, caller_args[i]);
+                        }
+                    } else if (caller_expr_idx) |expr_idx| {
+                        // Caller type is not nominal (maybe flex due to unresolved numerics).
+                        // Try to get element type from the actual expression.
+                        // This handles cases like [[10], [20], [30]] where the outer list's
+                        // element type var resolves to flex instead of List.
+                        const caller_expr = caller_env.store.getExpr(expr_idx);
+                        switch (caller_expr) {
+                            .e_list => |list| {
+                                const elems = caller_env.store.exprSlice(list.elems);
+                                if (elems.len > 0 and ext_args.len > 0) {
+                                    // Use the first element's type var and expression
+                                    const first_elem_var = ModuleEnv.varFrom(elems[0]);
+                                    try self.collectTypeMappingsWithExpr(scope, ext_env, ext_args[0], caller_env, first_elem_var, elems[0]);
+                                }
+                            },
+                            else => {},
+                        }
+                    }
+                },
+                .tag_union => |tu| {
+                    // Recurse into tag union variants to map payload type vars.
+                    // Without this, flex vars inside tag union payloads (e.g.,
+                    // the `a` in `[Ok({}), Err(a)]`) won't be mapped to their
+                    // concrete types from the caller's tag union.
+                    const caller_tu = caller_resolved.desc.content.unwrapTagUnion() orelse return;
+                    const ext_tags = ext_env.types.getTagsSlice(tu.tags);
+                    const caller_tags = caller_env.types.getTagsSlice(caller_tu.tags);
+                    const ext_ident = ext_env.getIdentStoreConst();
+                    const caller_ident = caller_env.getIdentStoreConst();
+
+                    // Match tags by name and recurse into payload vars
+                    for (ext_tags.items(.name), ext_tags.items(.args)) |ext_name, ext_args| {
+                        const ext_text = ext_ident.getText(ext_name);
+                        const ext_payload_vars = ext_env.types.sliceVars(ext_args);
+
+                        for (caller_tags.items(.name), caller_tags.items(.args)) |caller_name, caller_args| {
+                            const caller_text = caller_ident.getText(caller_name);
+                            if (std.mem.eql(u8, ext_text, caller_text)) {
+                                // Same tag name — recurse into payload vars
+                                const caller_payload_vars = caller_env.types.sliceVars(caller_args);
+                                const num = @min(ext_payload_vars.len, caller_payload_vars.len);
+                                for (0..num) |j| {
+                                    try self.collectTypeMappings(scope, ext_env, ext_payload_vars[j], caller_env, caller_payload_vars[j]);
+                                }
+                                break;
+                            }
+                        }
+                    }
+
+                    // Also recurse into extension vars
+                    try self.collectTypeMappings(scope, ext_env, tu.ext, caller_env, caller_tu.ext);
+                },
+                else => {},
+            }
+        },
+        .alias => |alias| {
+            // Follow the alias
+            const backing = ext_env.types.getAliasBackingVar(alias);
+            try self.collectTypeMappings(scope, ext_env, backing, caller_env, caller_var);
+        },
+        .err => {},
+    }
 }
 
 /// Lower a single expression
-pub fn lowerExpr(self: *Self, module_idx: u16, expr_idx: CIR.Expr.Idx) Error!MonoExprId {
+pub fn lowerExpr(self: *Self, module_idx: u16, expr_idx: CIR.Expr.Idx) Allocator.Error!MonoExprId {
     const old_module = self.current_module_idx;
     self.current_module_idx = module_idx;
     defer self.current_module_idx = old_module;
 
-    const module_env = self.getModuleEnv(module_idx) orelse return error.ModuleNotFound;
+    const module_env = self.getModuleEnv(module_idx) orelse unreachable;
     const expr = module_env.store.getExpr(expr_idx);
     const region = module_env.store.getExprRegion(expr_idx);
 
-    return self.lowerExprInner(module_env, expr, region);
+    return self.lowerExprInner(module_env, expr, region, expr_idx);
 }
 
 /// Lower an expression with its CIR representation
-fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: Region) Error!MonoExprId {
+fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: Region, expr_idx: CIR.Expr.Idx) Allocator.Error!MonoExprId {
     const mono_expr: MonoExpr = switch (expr) {
         .e_num => |num| blk: {
             const val = num.value.toI128();
+            // Use the computed layout from type inference to determine the literal type.
+            // The layout reflects the actual resolved type (e.g., U64 from function signature),
+            // not just the syntactic hint from num.kind.
+            const layout_idx = self.getExprLayoutFromIdx(module_env, expr_idx);
+            const is_dec = layout_idx == .dec;
+
+            if (is_dec) {
+                // Dec values are scaled by 10^18 (one_point_zero = 10^18)
+                const one_point_zero: i128 = 1_000_000_000_000_000_000;
+                const scaled_val = val * one_point_zero;
+                break :blk .{ .dec_literal = scaled_val };
+            }
             if (val >= std.math.minInt(i64) and val <= std.math.maxInt(i64)) {
                 break :blk .{ .i64_literal = @intCast(val) };
             }
@@ -398,23 +1514,179 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
 
         .e_lookup_local => |lookup| blk: {
             const symbol = self.patternToSymbol(lookup.pattern_idx);
+
+            // Ensure the local definition is lowered if it's a top-level def
+            const symbol_key: u48 = @bitCast(symbol);
+            if (!self.lowered_symbols.contains(symbol_key)) {
+                // Bridge the lookup expression's resolved type with the definition's type.
+                // When a lambda is passed as an argument to a polymorphic function (e.g., List.fold),
+                // the lookup expression's type has concrete payloads (e.g., [A(I64), B(I64)])
+                // resolved through unification, but the lambda definition's internal type still has
+                // flex vars (e.g., [A(*12), B(*19)]). Adding intra-module mappings ensures layout
+                // computation inside the lambda body resolves these flex vars to concrete types.
+                //
+                // Only do this when we're in the caller module (not inside an external def).
+                // Inside external defs, current_module_idx differs from type_scope_caller_module,
+                // and adding external module vars to a scope resolved via the caller's type store
+                // would cause cross-module variable resolution errors.
+                const in_caller_module = self.type_scope_caller_module == null or
+                    self.type_scope_caller_module.? == self.current_module_idx;
+                if (in_caller_module and self.type_scope.scopes.items.len > 0) {
+                    const pattern_key = @intFromEnum(lookup.pattern_idx);
+                    const def_expr_idx: ?CIR.Expr.Idx = def_blk: {
+                        if (self.findDefForPattern(module_env, lookup.pattern_idx)) |def_idx| {
+                            break :def_blk module_env.store.getDef(def_idx).expr;
+                        }
+                        if (self.deferred_defs.get(pattern_key)) |deferred| {
+                            break :def_blk deferred;
+                        }
+                        break :def_blk null;
+                    };
+                    if (def_expr_idx) |def_idx| {
+                        // Only bridge function PARAMETER types, not the entire function type.
+                        // Bridging return types can add spurious scope entries that interfere
+                        // with layout computation for other expressions.
+                        const def_type_var = ModuleEnv.varFrom(def_idx);
+                        const lookup_type_var = ModuleEnv.varFrom(expr_idx);
+                        const def_resolved = module_env.types.resolveVar(def_type_var);
+                        const lookup_resolved = module_env.types.resolveVar(lookup_type_var);
+                        if (def_resolved.desc.content.unwrapFunc()) |def_func| {
+                            if (lookup_resolved.desc.content.unwrapFunc()) |lookup_func| {
+                                const scope = &self.type_scope.scopes.items[0];
+                                const def_params = module_env.types.sliceVars(def_func.args);
+                                const lookup_params = module_env.types.sliceVars(lookup_func.args);
+                                const num = @min(def_params.len, lookup_params.len);
+                                for (0..num) |i| {
+                                    try self.addIntraModuleMappings(scope, module_env, def_params[i], lookup_params[i]);
+                                }
+                            }
+                        }
+                    }
+                }
+                try self.lowerLocalDefByPattern(module_env, symbol, lookup.pattern_idx);
+            }
+
             break :blk .{ .lookup = .{
                 .symbol = symbol,
-                .layout_idx = self.getExprLayout(module_env, expr),
+                .layout_idx = self.getExprLayoutFromIdx(module_env, expr_idx),
             } };
         },
 
         .e_lookup_external => |lookup| blk: {
             const symbol = self.externalToSymbol(lookup.module_idx, lookup.ident_idx);
+
+            // Ensure the external definition is lowered using target_node_idx
+            const symbol_key: u48 = @bitCast(symbol);
+            if (!self.lowered_symbols.contains(symbol_key)) {
+                // Lower the external definition using the direct Def.Idx
+                try self.lowerExternalDefByIdx(symbol, lookup.target_node_idx);
+            }
+
             break :blk .{ .lookup = .{
                 .symbol = symbol,
-                .layout_idx = self.getExprLayout(module_env, expr),
+                .layout_idx = self.getExprLayoutFromIdx(module_env, expr_idx),
             } };
         },
 
         .e_call => |call| blk: {
             // Check if this is a call to a low-level lambda (like str_inspekt)
             const fn_expr = module_env.store.getExpr(call.func);
+
+            // If calling an external function, set up type scope mappings before lowering.
+            // We need to clean up after the call is done to avoid polluting subsequent calls.
+            const is_external_call = fn_expr == .e_lookup_external;
+            const old_caller_module = self.type_scope_caller_module;
+            if (is_external_call) {
+                const lookup = fn_expr.e_lookup_external;
+                try self.setupExternalCallTypeScope(module_env, lookup, call.args, expr_idx);
+            }
+            // For local function calls, set up layout hints so generic parameters
+            // get the correct concrete layouts from the call arguments.
+            const is_local_call_with_hints = fn_expr == .e_lookup_local;
+            if (is_local_call_with_hints) {
+                const lookup = fn_expr.e_lookup_local;
+                try self.setupLocalCallLayoutHints(module_env, lookup.pattern_idx, call.args);
+                // Set type_scope_caller_module so that fromTypeVar checks the type
+                // scope for flex/rigid vars inside the lambda body. Without this,
+                // layout computations for parameters with unresolved types (like list
+                // elements) would return ZST instead of the concrete type.
+                if (self.type_scope_caller_module == null and self.type_scope.scopes.items.len > 0) {
+                    self.type_scope_caller_module = self.current_module_idx;
+                }
+            }
+            // Clean up type scope after this expression, whether we exit normally or break early.
+            // Only clear scope[0] if this call was the outermost one that set up the type scope
+            // (old_caller_module was null). Inner calls (where old_caller_module was already set)
+            // must not clear scope[0] because the outer call still needs those mappings.
+            defer if (is_external_call or is_local_call_with_hints) {
+                self.type_scope_caller_module = old_caller_module;
+                if (old_caller_module == null) {
+                    if (self.type_scope.scopes.items.len > 0) {
+                        self.type_scope.scopes.items[0].clearRetainingCapacity();
+                    }
+                }
+            };
+
+            // For external calls to low-level lambdas, inline the operation directly.
+            // This avoids going through lowerExternalDefByIdx which would compute
+            // ret_layout in the builtins module context with potentially unmapped rigid vars.
+            // The type scope has been set up above, so we can resolve the return type
+            // using the external function's return type variable with the scope mappings.
+            if (is_external_call) {
+                const lookup = fn_expr.e_lookup_external;
+                if (self.getExternalLowLevelLambda(module_env, lookup)) |ll| {
+                    if (convertToMonoLowLevel(ll.op)) |mono_op| {
+                        const args = try self.lowerExprSpan(module_env, call.args);
+                        // Compute ret_layout from the external function's return type
+                        // using the type scope mappings (which map rigid vars to caller types).
+                        const ret_layout = ret_layout_blk: {
+                            const ext_module_idx = module_env.imports.getResolvedModule(lookup.module_idx) orelse
+                                break :ret_layout_blk self.getExprLayoutFromIdx(module_env, expr_idx);
+                            if (ext_module_idx >= self.all_module_envs.len)
+                                break :ret_layout_blk self.getExprLayoutFromIdx(module_env, expr_idx);
+                            const ext_env = self.all_module_envs[ext_module_idx];
+                            const def_idx: CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
+                            const def = ext_env.store.getDef(def_idx);
+                            const ext_type_var = ModuleEnv.varFrom(def.expr);
+                            const ext_resolved = ext_env.types.resolveVar(ext_type_var);
+                            const func = ext_resolved.desc.content.unwrapFunc() orelse
+                                break :ret_layout_blk self.getExprLayoutFromIdx(module_env, expr_idx);
+                            const ls = self.layout_store orelse
+                                break :ret_layout_blk self.getExprLayoutFromIdx(module_env, expr_idx);
+                            break :ret_layout_blk ls.fromTypeVar(
+                                @intCast(ext_module_idx),
+                                func.ret,
+                                &self.type_scope,
+                                self.type_scope_caller_module,
+                            ) catch self.getExprLayoutFromIdx(module_env, expr_idx);
+                        };
+                        break :blk .{
+                            .low_level = .{
+                                .op = mono_op,
+                                .args = args,
+                                .ret_layout = ret_layout,
+                            },
+                        };
+                    }
+                    // Non-convertible ops: check for str_inspekt which needs
+                    // type-directed expansion rather than a simple op conversion.
+                    if (ll.op == .str_inspekt) {
+                        const arg_indices = module_env.store.sliceExpr(call.args);
+                        if (arg_indices.len == 1) {
+                            const arg_idx = arg_indices[0];
+                            const arg_id = try self.lowerExprFromIdx(module_env, arg_idx);
+                            const arg_type_var = ModuleEnv.varFrom(arg_idx);
+                            const arg_layout = self.getExprLayoutFromIdx(module_env, arg_idx);
+                            return self.lowerStrInspekt(arg_id, arg_type_var, arg_layout, module_env, region);
+                        }
+                    }
+                    // Non-convertible ops: *_to_str needs type-specific MonoExprs.
+                    if (toStrMonoExpr(ll.op, module_env, call.args, self)) |mono_expr| {
+                        return try self.store.addExpr(mono_expr, region);
+                    }
+                }
+            }
+
             if (fn_expr == .e_low_level_lambda) {
                 const ll = fn_expr.e_low_level_lambda;
                 if (ll.op == .str_inspekt) {
@@ -430,20 +1702,25 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                         return self.lowerStrInspekt(arg_id, arg_type_var, arg_layout, module_env, region);
                     }
                 }
+                // *_to_str ops need type-specific MonoExprs (int_to_str, float_to_str, dec_to_str)
+                if (toStrMonoExpr(ll.op, module_env, call.args, self)) |mono_expr| {
+                    return try self.store.addExpr(mono_expr, region);
+                }
                 // Convert CIR LowLevel ops to MonoExpr LowLevel ops
-                const mono_op: ir.MonoExpr.LowLevel = switch (ll.op) {
-                    .list_len => .list_len,
-                    .list_is_empty => .list_is_empty,
-                    else => break :blk .{ .runtime_error = {} }, // Not yet implemented
-                };
-                const args = try self.lowerExprSpan(module_env, call.args);
-                break :blk .{
-                    .low_level = .{
-                        .op = mono_op,
-                        .args = args,
-                        .ret_layout = self.getExprLayout(module_env, expr),
-                    },
-                };
+                // Using the CALL expression's type for ret_layout (not the lambda's rigid type vars)
+                // because the lambda's type vars are from the builtin definition and may not be
+                // in the type scope. The call expression's type IS resolved through the caller's context.
+                if (convertToMonoLowLevel(ll.op)) |op| {
+                    const args = try self.lowerExprSpan(module_env, call.args);
+                    break :blk .{
+                        .low_level = .{
+                            .op = op,
+                            .args = args,
+                            .ret_layout = self.getExprLayoutFromIdx(module_env, expr_idx),
+                        },
+                    };
+                }
+                // Fall through to general call handling for unhandled low-level ops
             }
 
             const fn_id = try self.lowerExprFromIdx(module_env, call.func);
@@ -451,9 +1728,9 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             break :blk .{
                 .call = .{
                     .fn_expr = fn_id,
-                    .fn_layout = .i64, // TODO: proper function layout
+                    .fn_layout = self.getExprLayoutFromIdx(module_env, call.func),
                     .args = args,
-                    .ret_layout = self.getExprLayout(module_env, expr),
+                    .ret_layout = self.getExprLayoutFromIdx(module_env, expr_idx),
                     .called_via = call.called_via,
                 },
             };
@@ -462,12 +1739,15 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
         .e_lambda => |lambda| blk: {
             const params = try self.lowerPatternSpan(module_env, lambda.args);
             const body = try self.lowerExprFromIdx(module_env, lambda.body);
+            const ret_layout = self.getExprLayoutFromIdx(module_env, lambda.body);
+            const fn_layout = self.getExprLayoutFromIdx(module_env, expr_idx);
+
             break :blk .{
                 .lambda = .{
-                    .fn_layout = .i64, // TODO
+                    .fn_layout = fn_layout,
                     .params = params,
                     .body = body,
-                    .ret_layout = .i64, // TODO
+                    .ret_layout = ret_layout,
                 },
             };
         },
@@ -517,9 +1797,39 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
 
         .e_list => |list| blk: {
             const elems = try self.lowerExprSpan(module_env, list.elems);
+
+            // Compute element layout from the list's type
+            const elem_layout = elem_blk: {
+                const ls = self.layout_store orelse break :elem_blk LayoutIdx.default_num;
+
+                // Get the list expression's type var and resolve it
+                const list_type_var = ModuleEnv.varFrom(expr_idx);
+                const resolved = module_env.types.resolveVar(list_type_var);
+
+                // Check if it's a List (nominal type)
+                switch (resolved.desc.content) {
+                    .structure => |structure| {
+                        switch (structure) {
+                            .nominal_type => |nominal| {
+                                // Get the element type (first type argument of List)
+                                const args = module_env.types.sliceNominalArgs(nominal);
+                                if (args.len > 0) {
+                                    const elem_type_var = args[0];
+                                    // Compute layout for the element type
+                                    break :elem_blk ls.fromTypeVar(self.current_module_idx, elem_type_var, &self.type_scope, self.type_scope_caller_module) catch LayoutIdx.default_num;
+                                }
+                            },
+                            else => {},
+                        }
+                    },
+                    else => {},
+                }
+                break :elem_blk LayoutIdx.default_num;
+            };
+
             break :blk .{
                 .list = .{
-                    .elem_layout = .i64, // TODO: get from type
+                    .elem_layout = elem_layout,
                     .elems = elems,
                 },
             };
@@ -527,9 +1837,10 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
 
         .e_tuple => |tuple| blk: {
             const elems = try self.lowerExprSpan(module_env, tuple.elems);
+            const tuple_layout = self.getExprLayoutFromIdx(module_env, expr_idx);
             break :blk .{
                 .tuple = .{
-                    .tuple_layout = .i64, // TODO
+                    .tuple_layout = tuple_layout,
                     .elems = elems,
                 },
             };
@@ -537,9 +1848,10 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
 
         .e_record => |rec| blk: {
             const result = try self.lowerRecordFields(module_env, rec.fields);
+            const record_layout = self.getExprLayoutFromIdx(module_env, expr_idx);
             break :blk .{
                 .record = .{
-                    .record_layout = .i64, // TODO
+                    .record_layout = record_layout,
                     .fields = result.fields,
                     .field_names = result.field_names,
                 },
@@ -551,8 +1863,346 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             const field_name = module_env.getIdent(dot.field_name);
 
             // Check if this is a list.len or list.is_empty access
-            const receiver_expr = module_env.store.getExpr(dot.receiver);
-            if (receiver_expr == .e_list) {
+            // Check based on layout, not expression type, so it works for list variables too
+            const receiver_layout = self.getExprLayoutFromIdx(module_env, dot.receiver);
+            const is_list_receiver = if (self.layout_store) |ls| is_list: {
+                const layout_val = ls.getLayout(receiver_layout);
+                break :is_list layout_val.tag == .list or layout_val.tag == .list_of_zst;
+            } else false;
+
+            // Handle method calls (dot.args != null)
+            if (dot.args) |arg_span| {
+                const arg_slice = module_env.store.sliceExpr(arg_span);
+
+                if (is_list_receiver) {
+                    // List method calls
+                    if (std.mem.eql(u8, field_name, "append")) {
+                        // list.append(elem) -> list_append(list, elem)
+                        if (arg_slice.len >= 1) {
+                            const elem = try self.lowerExprFromIdx(module_env, arg_slice[0]);
+                            const ret_layout = self.getExprLayoutFromIdx(module_env, expr_idx);
+                            const args = try self.store.addExprSpan(&[_]ir.MonoExprId{ receiver, elem });
+                            break :blk .{
+                                .low_level = .{
+                                    .op = .list_append,
+                                    .args = args,
+                                    .ret_layout = ret_layout,
+                                },
+                            };
+                        }
+                    } else if (std.mem.eql(u8, field_name, "prepend")) {
+                        // list.prepend(elem) -> list_prepend(list, elem)
+                        if (arg_slice.len >= 1) {
+                            const elem = try self.lowerExprFromIdx(module_env, arg_slice[0]);
+                            const ret_layout = self.getExprLayoutFromIdx(module_env, expr_idx);
+                            const args = try self.store.addExprSpan(&[_]ir.MonoExprId{ receiver, elem });
+                            break :blk .{
+                                .low_level = .{
+                                    .op = .list_prepend,
+                                    .args = args,
+                                    .ret_layout = ret_layout,
+                                },
+                            };
+                        }
+                    } else if (std.mem.eql(u8, field_name, "get")) {
+                        // list.get(idx) -> list_get(list, idx)
+                        // The codegen handles bounds checking and Try wrapping when
+                        // ret_layout is a tag union (Try(elem, [OutOfBounds])).
+                        if (arg_slice.len >= 1) {
+                            const idx = try self.lowerExprFromIdx(module_env, arg_slice[0]);
+                            const ret_layout = self.getExprLayoutFromIdx(module_env, expr_idx);
+                            const args = try self.store.addExprSpan(&[_]ir.MonoExprId{ receiver, idx });
+                            break :blk .{
+                                .low_level = .{
+                                    .op = .list_get,
+                                    .args = args,
+                                    .ret_layout = ret_layout,
+                                },
+                            };
+                        }
+                    } else if (std.mem.eql(u8, field_name, "concat")) {
+                        // list.concat(other) -> list_concat(list, other)
+                        if (arg_slice.len >= 1) {
+                            const other = try self.lowerExprFromIdx(module_env, arg_slice[0]);
+                            const ret_layout = self.getExprLayoutFromIdx(module_env, expr_idx);
+                            const args = try self.store.addExprSpan(&[_]ir.MonoExprId{ receiver, other });
+                            break :blk .{
+                                .low_level = .{
+                                    .op = .list_concat,
+                                    .args = args,
+                                    .ret_layout = ret_layout,
+                                },
+                            };
+                        }
+                    }
+                }
+                // Fall through to handle as external call lookup if not a known method
+            }
+
+            // Handle method calls via nominal type dispatch (e.g., n.to_str(), list.fold(...))
+            // For list receivers, only use nominal dispatch for methods NOT already handled
+            // above (append/prepend/get/concat) or below (len/is_empty).
+            const skip_nominal_for_list = is_list_receiver and (std.mem.eql(u8, field_name, "len") or
+                std.mem.eql(u8, field_name, "is_empty") or
+                std.mem.eql(u8, field_name, "isEmpty"));
+            if (dot.args != null and !skip_nominal_for_list) {
+                const receiver_type_var = ModuleEnv.varFrom(dot.receiver);
+                var recv_resolved = module_env.types.resolveVar(receiver_type_var);
+                var recv_type_source_env: *const ModuleEnv = module_env;
+
+                // Check type_scope for concrete mapping (polymorphic calls)
+                if (recv_resolved.desc.content == .flex or recv_resolved.desc.content == .rigid) {
+                    if (self.type_scope.lookup(recv_resolved.var_)) |mapped| {
+                        if (self.type_scope_caller_module) |caller_idx| {
+                            recv_type_source_env = self.all_module_envs[caller_idx];
+                        }
+                        recv_resolved = recv_type_source_env.types.resolveVar(mapped);
+                    }
+                }
+
+                // Follow aliases
+                while (recv_resolved.desc.content == .alias) {
+                    const al = recv_resolved.desc.content.alias;
+                    const backing = recv_type_source_env.types.getAliasBackingVar(al);
+                    recv_resolved = recv_type_source_env.types.resolveVar(backing);
+                }
+
+                // Determine nominal type
+                const recv_nominal: ?struct { origin: Ident.Idx, ident: Ident.Idx } = switch (recv_resolved.desc.content) {
+                    .structure => |s| switch (s) {
+                        .nominal_type => |nom| .{
+                            .origin = nom.origin_module,
+                            .ident = nom.ident.ident_idx,
+                        },
+                        else => null,
+                    },
+                    .flex => |flex| fi: {
+                        if (!flex.constraints.isEmpty()) {
+                            const constraints = recv_type_source_env.types.sliceStaticDispatchConstraints(flex.constraints);
+                            for (constraints) |constraint| {
+                                if (constraint.origin == .from_numeral) {
+                                    break :fi .{
+                                        .origin = recv_type_source_env.idents.builtin_module,
+                                        .ident = recv_type_source_env.idents.dec_type,
+                                    };
+                                }
+                            }
+                        }
+                        break :fi null;
+                    },
+                    .rigid => |rigid| ri: {
+                        if (!rigid.constraints.isEmpty()) {
+                            for (recv_type_source_env.types.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
+                                if (constraint.origin == .from_numeral) {
+                                    break :ri .{
+                                        .origin = recv_type_source_env.idents.builtin_module,
+                                        .ident = recv_type_source_env.idents.dec_type,
+                                    };
+                                }
+                            }
+                        }
+                        break :ri null;
+                    },
+                    else => null,
+                };
+
+                if (recv_nominal) |rn| {
+                    const origin_module_idx = self.findModuleForOrigin(recv_type_source_env, rn.origin) orelse {
+                        unreachable;
+                    };
+                    const origin_env = self.all_module_envs[origin_module_idx];
+
+                    const qualified_method = origin_env.lookupMethodIdentFromTwoEnvsConst(
+                        recv_type_source_env,
+                        rn.ident,
+                        module_env,
+                        dot.field_name,
+                    ) orelse {
+                        unreachable;
+                    };
+
+                    const node_idx = origin_env.getExposedNodeIndexById(qualified_method) orelse {
+                        unreachable;
+                    };
+
+                    // Check if the method definition is a low-level lambda
+                    const method_def_idx: CIR.Def.Idx = @enumFromInt(node_idx);
+                    const method_def = origin_env.store.getDef(method_def_idx);
+                    const method_expr = origin_env.store.getExpr(method_def.expr);
+
+                    if (method_expr == .e_low_level_lambda) {
+                        const ll = method_expr.e_low_level_lambda;
+                        // Emit the low-level op directly as a MonoIR expression
+                        const CIRLowLevel = CIR.Expr.LowLevel;
+                        break :blk switch (ll.op) {
+                            CIRLowLevel.u8_to_str => .{ .int_to_str = .{ .value = receiver, .int_precision = .u8 } },
+                            CIRLowLevel.i8_to_str => .{ .int_to_str = .{ .value = receiver, .int_precision = .i8 } },
+                            CIRLowLevel.u16_to_str => .{ .int_to_str = .{ .value = receiver, .int_precision = .u16 } },
+                            CIRLowLevel.i16_to_str => .{ .int_to_str = .{ .value = receiver, .int_precision = .i16 } },
+                            CIRLowLevel.u32_to_str => .{ .int_to_str = .{ .value = receiver, .int_precision = .u32 } },
+                            CIRLowLevel.i32_to_str => .{ .int_to_str = .{ .value = receiver, .int_precision = .i32 } },
+                            CIRLowLevel.u64_to_str => .{ .int_to_str = .{ .value = receiver, .int_precision = .u64 } },
+                            CIRLowLevel.i64_to_str => .{ .int_to_str = .{ .value = receiver, .int_precision = .i64 } },
+                            CIRLowLevel.u128_to_str => .{ .int_to_str = .{ .value = receiver, .int_precision = .u128 } },
+                            CIRLowLevel.i128_to_str => .{ .int_to_str = .{ .value = receiver, .int_precision = .i128 } },
+                            CIRLowLevel.dec_to_str => .{ .dec_to_str = receiver },
+                            CIRLowLevel.f32_to_str => .{ .float_to_str = .{ .value = receiver, .float_precision = .f32 } },
+                            CIRLowLevel.f64_to_str => .{ .float_to_str = .{ .value = receiver, .float_precision = .f64 } },
+                            else => low_level_dispatch: {
+                                // Inline convertible low-level ops directly at the call site.
+                                // This uses the call expression's type (resolved in the caller's module)
+                                // for ret_layout, avoiding cross-module type scope mapping issues.
+                                if (convertToMonoLowLevel(ll.op)) |mono_op| {
+                                    const ll_extra_args = module_env.store.sliceExpr(dot.args.?);
+                                    var ll_all_args = std.ArrayList(ir.MonoExprId).empty;
+                                    defer ll_all_args.deinit(self.allocator);
+                                    try ll_all_args.append(self.allocator, receiver);
+                                    for (ll_extra_args) |arg_idx| {
+                                        try ll_all_args.append(self.allocator, try self.lowerExprFromIdx(module_env, arg_idx));
+                                    }
+                                    const ll_args_span = try self.store.addExprSpan(ll_all_args.items);
+                                    break :low_level_dispatch .{
+                                        .low_level = .{
+                                            .op = mono_op,
+                                            .args = ll_args_span,
+                                            .ret_layout = self.getExprLayoutFromIdx(module_env, expr_idx),
+                                        },
+                                    };
+                                }
+                                // Non-convertible ops: fall back to general call
+                                const method_symbol = MonoSymbol{
+                                    .module_idx = origin_module_idx,
+                                    .ident_idx = qualified_method,
+                                };
+                                const method_symbol_key: u48 = @bitCast(method_symbol);
+                                if (!self.lowered_symbols.contains(method_symbol_key)) {
+                                    try self.lowerExternalDefByIdx(method_symbol, node_idx);
+                                }
+                                const ll_ret_layout = self.getExprLayoutFromIdx(module_env, expr_idx);
+                                const ll_fn_expr_id = try self.store.addExpr(.{ .lookup = .{
+                                    .symbol = method_symbol,
+                                    .layout_idx = .i64,
+                                } }, region);
+                                const ll_extra_args = module_env.store.sliceExpr(dot.args.?);
+                                var ll_all_args = std.ArrayList(ir.MonoExprId).empty;
+                                defer ll_all_args.deinit(self.allocator);
+                                try ll_all_args.append(self.allocator, receiver);
+                                for (ll_extra_args) |arg_idx| {
+                                    const lowered_arg = try self.lowerExprFromIdx(module_env, arg_idx);
+                                    try ll_all_args.append(self.allocator, lowered_arg);
+                                }
+                                const ll_args_span = try self.store.addExprSpan(ll_all_args.items);
+                                break :low_level_dispatch .{
+                                    .call = .{
+                                        .fn_expr = ll_fn_expr_id,
+                                        .fn_layout = LayoutIdx.named_fn,
+                                        .args = ll_args_span,
+                                        .ret_layout = ll_ret_layout,
+                                        .called_via = .apply,
+                                    },
+                                };
+                            },
+                        };
+                    }
+
+                    // Regular function method - lower as external definition + call
+                    const method_symbol = MonoSymbol{
+                        .module_idx = origin_module_idx,
+                        .ident_idx = qualified_method,
+                    };
+
+                    // Set up type scope for the method call so that the method's
+                    // generic type parameters are mapped to concrete types from the
+                    // call site (e.g., ok_or's `ok` type param → Str).
+                    const old_caller_module = self.type_scope_caller_module;
+                    {
+                        const ext_type_var = ModuleEnv.varFrom(method_def.expr);
+                        const ext_resolved = origin_env.types.resolveVar(ext_type_var);
+
+                        if (ext_resolved.desc.content.unwrapFunc()) |func| {
+                            if (self.type_scope.scopes.items.len == 0) {
+                                try self.type_scope.scopes.append(types.VarMap.init(self.allocator));
+                            }
+                            const scope = &self.type_scope.scopes.items[0];
+
+                            if (self.type_scope_caller_module == null) {
+                                self.type_scope_caller_module = self.current_module_idx;
+                            }
+
+                            const param_vars = origin_env.types.sliceVars(func.args);
+
+                            // Map first parameter (receiver) type
+                            if (param_vars.len > 0) {
+                                const receiver_var = ModuleEnv.varFrom(dot.receiver);
+                                try self.collectTypeMappings(scope, origin_env, param_vars[0], module_env, receiver_var);
+                            }
+
+                            // Map extra argument types
+                            if (dot.args) |extra_args_span| {
+                                const extra_arg_indices = module_env.store.sliceExpr(extra_args_span);
+                                for (extra_arg_indices, 0..) |arg_idx, i| {
+                                    if (i + 1 < param_vars.len) {
+                                        const arg_var = ModuleEnv.varFrom(arg_idx);
+                                        try self.collectTypeMappings(scope, origin_env, param_vars[i + 1], module_env, arg_var);
+                                    }
+                                }
+                            }
+
+                            // Map return type
+                            const caller_return_var = ModuleEnv.varFrom(expr_idx);
+                            try self.collectTypeMappings(scope, origin_env, func.ret, module_env, caller_return_var);
+                        }
+                    }
+
+                    const method_symbol_key: u48 = @bitCast(method_symbol);
+                    if (!self.lowered_symbols.contains(method_symbol_key)) {
+                        try self.lowerExternalDefByIdx(method_symbol, node_idx);
+                    }
+
+                    // Compute ret_layout and lower arguments BEFORE clearing the type
+                    // scope. Both need the type scope active so that generic type
+                    // parameters are properly resolved. Arguments like `List.append`
+                    // (passed as a function value) need the type scope to produce
+                    // correct layouts for their wrapper lambdas.
+                    const ret_layout = self.getExprLayoutFromIdx(module_env, expr_idx);
+
+                    const fn_expr_id = try self.store.addExpr(.{ .lookup = .{
+                        .symbol = method_symbol,
+                        .layout_idx = .i64,
+                    } }, region);
+
+                    // Build args: receiver is first arg, then any extra args
+                    const extra_args = module_env.store.sliceExpr(dot.args.?);
+                    var all_args = std.ArrayList(ir.MonoExprId).empty;
+                    defer all_args.deinit(self.allocator);
+                    try all_args.append(self.allocator, receiver);
+                    for (extra_args) |arg_idx| {
+                        const lowered_arg = try self.lowerExprFromIdx(module_env, arg_idx);
+                        try all_args.append(self.allocator, lowered_arg);
+                    }
+                    const args_span = try self.store.addExprSpan(all_args.items);
+
+                    // Clean up type scope after lowering arguments
+                    self.type_scope_caller_module = old_caller_module;
+                    if (self.type_scope.scopes.items.len > 0) {
+                        self.type_scope.scopes.items[0].clearRetainingCapacity();
+                    }
+
+                    break :blk .{
+                        .call = .{
+                            .fn_expr = fn_expr_id,
+                            .fn_layout = LayoutIdx.named_fn,
+                            .args = args_span,
+                            .ret_layout = ret_layout,
+                            .called_via = .apply,
+                        },
+                    };
+                }
+            }
+
+            // Handle field access (no args) or zero-arg method calls for list properties
+            const has_no_extra_args = dot.args == null or (if (dot.args) |as| module_env.store.sliceExpr(as).len == 0 else false);
+            if (is_list_receiver and has_no_extra_args) {
                 if (std.mem.eql(u8, field_name, "len")) {
                     // Convert list.len to low_level list_len operation
                     const args = try self.store.addExprSpan(&[_]ir.MonoExprId{receiver});
@@ -576,37 +2226,49 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                 }
             }
 
+            // Try to compute field index and layout from the record layout
+            // (receiver_layout was already computed above for list check)
+            var field_idx: u16 = 0;
+            var field_layout: LayoutIdx = LayoutIdx.default_num;
+            if (self.layout_store) |ls| {
+                const layout_val = ls.getLayout(receiver_layout);
+                if (layout_val.tag == .record) {
+                    const record_data = ls.getRecordData(layout_val.data.record.idx);
+                    const fields = ls.record_fields.sliceRange(record_data.getFields());
+                    const field_name_text = module_env.getIdent(dot.field_name);
+                    // Find field by name
+                    var i: u16 = 0;
+                    while (i < fields.len) : (i += 1) {
+                        const field = fields.get(i);
+                        if (std.mem.eql(u8, module_env.getIdent(field.name), field_name_text)) {
+                            field_idx = i;
+                            field_layout = field.layout;
+                            break;
+                        }
+                    }
+                }
+            }
             break :blk .{
                 .field_access = .{
                     .record_expr = receiver,
-                    .record_layout = .i64, // TODO
-                    .field_layout = .i64, // TODO
-                    .field_idx = 0, // TODO: resolve field index from layout
+                    .record_layout = receiver_layout,
+                    .field_layout = field_layout,
+                    .field_idx = field_idx,
                     .field_name = dot.field_name,
                 },
             };
         },
 
         .e_zero_argument_tag => |tag| blk: {
-            // Get discriminant from tag name by comparing text
-            // For Bool, True = 1, False = 0
-            // We compare by text rather than ident index to handle cross-module cases
-            const tag_name_text = module_env.getIdent(tag.name);
-            // Handle both "True"/"False" (canonical form) and potential variations
-            const discriminant: u16 = if (std.mem.eql(u8, tag_name_text, "True") or std.mem.eql(u8, tag_name_text, "true"))
-                1
-            else if (std.mem.eql(u8, tag_name_text, "False") or std.mem.eql(u8, tag_name_text, "false"))
-                0
-            else if (std.ascii.eqlIgnoreCase(tag_name_text, "true"))
-                1
-            else if (std.ascii.eqlIgnoreCase(tag_name_text, "false"))
-                0
-            else
-                0; // TODO: proper discriminant lookup
+            // Resolve discriminant by looking up the tag's position in the
+            // alphabetically-sorted variant list of the tag union type.
+            const type_var = ModuleEnv.varFrom(expr_idx);
+            const discriminant = self.resolveTagDiscriminant(module_env, type_var, tag.name);
+            const tag_layout = self.getExprLayoutFromIdx(module_env, expr_idx);
 
             break :blk .{ .zero_arg_tag = .{
                 .discriminant = discriminant,
-                .union_layout = .bool,
+                .union_layout = tag_layout,
             } };
         },
 
@@ -614,41 +2276,24 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             const args = try self.lowerExprSpan(module_env, tag.args);
             const args_slice = module_env.store.sliceExpr(tag.args);
 
-            // Get discriminant from tag name
-            // For Result type: tags are sorted alphabetically, so Err=0, Ok=1
-            // For Bool type: False=0, True=1
-            const tag_name_text = module_env.getIdent(tag.name);
-            const discriminant: u16 = if (std.mem.eql(u8, tag_name_text, "Ok") or std.ascii.eqlIgnoreCase(tag_name_text, "ok"))
-                1 // Ok comes after Err alphabetically
-            else if (std.mem.eql(u8, tag_name_text, "Err") or std.ascii.eqlIgnoreCase(tag_name_text, "err"))
-                0 // Err comes first alphabetically
-            else if (args_slice.len == 0) disc_blk: {
-                // Zero-argument tag - check for True/False
-                if (std.mem.eql(u8, tag_name_text, "True") or std.ascii.eqlIgnoreCase(tag_name_text, "true")) {
-                    break :disc_blk 1;
-                } else if (std.mem.eql(u8, tag_name_text, "False") or std.ascii.eqlIgnoreCase(tag_name_text, "false")) {
-                    break :disc_blk 0;
-                } else {
-                    break :disc_blk 0; // TODO: proper discriminant lookup
-                }
-            } else 0; // TODO: proper discriminant lookup for other tags with args
+            // Resolve discriminant by looking up the tag's position in the
+            // alphabetically-sorted variant list of the tag union type.
+            const type_var = ModuleEnv.varFrom(expr_idx);
+            const discriminant = self.resolveTagDiscriminant(module_env, type_var, tag.name);
 
-            // For zero-argument tags like True/False, use zero_arg_tag
-            if (args_slice.len == 0 and (std.mem.eql(u8, tag_name_text, "True") or
-                std.mem.eql(u8, tag_name_text, "False") or
-                std.ascii.eqlIgnoreCase(tag_name_text, "true") or
-                std.ascii.eqlIgnoreCase(tag_name_text, "false")))
-            {
+            // For zero-argument tags, use zero_arg_tag
+            if (args_slice.len == 0) {
+                const tag_layout = self.getExprLayoutFromIdx(module_env, expr_idx);
                 break :blk .{ .zero_arg_tag = .{
                     .discriminant = discriminant,
-                    .union_layout = .bool,
+                    .union_layout = tag_layout,
                 } };
             }
 
             break :blk .{
                 .tag = .{
                     .discriminant = discriminant,
-                    .union_layout = .i64, // TODO
+                    .union_layout = self.getExprLayoutFromIdx(module_env, expr_idx),
                     .args = args,
                 },
             };
@@ -657,6 +2302,9 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
         .e_if => |if_expr| blk: {
             // Check if this if-then-else returns closures (lambda set dispatch case)
             const lambda_set_result = try self.collectIfClosureLambdaSet(module_env, if_expr);
+
+            // Get result layout from the type system via the expression's type variable
+            const result_layout = self.getExprLayoutFromIdx(module_env, expr_idx);
 
             if (lambda_set_result.has_closure_branches) {
                 // Branches are closures - lower with lambda set info
@@ -674,7 +2322,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                 break :blk .{ .if_then_else = .{
                     .branches = branches,
                     .final_else = final_else,
-                    .result_layout = self.getExprLayout(module_env, expr),
+                    .result_layout = result_layout,
                 } };
             } else {
                 // Normal if-then-else (no closures)
@@ -683,7 +2331,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                 break :blk .{ .if_then_else = .{
                     .branches = branches,
                     .final_else = final_else,
-                    .result_layout = self.getExprLayout(module_env, expr),
+                    .result_layout = result_layout,
                 } };
             }
         },
@@ -694,9 +2342,9 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             break :blk .{
                 .when = .{
                     .value = cond,
-                    .value_layout = .i64, // TODO
+                    .value_layout = self.getExprLayoutFromIdx(module_env, match_expr.cond),
                     .branches = branches,
-                    .result_layout = self.getExprLayout(module_env, expr),
+                    .result_layout = self.getExprLayoutFromIdx(module_env, expr_idx),
                 },
             };
         },
@@ -717,7 +2365,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             const inner = try self.lowerExprFromIdx(module_env, ret.expr);
             break :blk .{ .early_return = .{
                 .expr = inner,
-                .ret_layout = self.getExprLayout(module_env, expr),
+                .ret_layout = self.getExprLayoutFromIdx(module_env, expr_idx),
             } };
         },
 
@@ -729,7 +2377,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                 .op = op,
                 .lhs = lhs,
                 .rhs = rhs,
-                .result_layout = self.getExprLayout(module_env, expr),
+                .result_layout = self.getExprLayoutFromIdx(module_env, expr_idx),
             } };
         },
 
@@ -737,7 +2385,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             const inner = try self.lowerExprFromIdx(module_env, unary.expr);
             break :blk .{ .unary_minus = .{
                 .expr = inner,
-                .result_layout = self.getExprLayout(module_env, expr),
+                .result_layout = self.getExprLayoutFromIdx(module_env, expr_idx),
             } };
         },
 
@@ -752,7 +2400,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                 .dbg = .{
                     .msg = @enumFromInt(std.math.maxInt(u32)), // dbg doesn't have a msg in CIR
                     .expr = inner,
-                    .result_layout = self.getExprLayout(module_env, expr),
+                    .result_layout = self.getExprLayoutFromIdx(module_env, expr_idx),
                 },
             };
         },
@@ -764,7 +2412,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                 .expect = .{
                     .cond = body, // The body is the condition
                     .body = body, // Same expression for both
-                    .result_layout = self.getExprLayout(module_env, expr),
+                    .result_layout = self.getExprLayoutFromIdx(module_env, expr_idx),
                 },
             };
         },
@@ -804,82 +2452,312 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
         .e_typed_frac => |tf| .{ .dec_literal = tf.value.toI128() },
 
         // Low-level lambda - these are compiler-generated intrinsics
-        .e_low_level_lambda => |_| blk: {
-            // Low-level lambdas are typically called, not evaluated directly
-            // When called, we intercept them in e_call handling
-            // If we encounter one directly, it's like a closure reference
-            break :blk .{ .runtime_error = {} };
-        },
+        .e_low_level_lambda => |ll| blk: {
+            // When a low-level lambda is evaluated directly (not called),
+            // we need to produce a lambda that wraps the low-level call.
+            // This happens when a low-level function is passed as a value
+            // or stored as a definition that's looked up later.
 
-        // These are inserted by the RC insertion pass after canonicalization
+            // Convert CIR LowLevel ops to MonoExpr LowLevel ops
+            const mono_op = convertToMonoLowLevel(ll.op) orelse
+                break :blk .{ .runtime_error = {} };
 
-        .e_incref => |rc_op| blk: {
-            // Convert pattern reference to a lookup expression
-            const symbol = self.patternToSymbol(rc_op.pattern_idx);
-            const lookup_id = try self.store.addExpr(.{
-                .lookup = .{
-                    .symbol = symbol,
-                    .layout_idx = .i64, // TODO: get actual layout from pattern
+            // Get the function type from the expression to extract parameter types.
+            // This is needed because the pattern type variables in builtins are generic (flex),
+            // but the function type has the proper mappings through the type scope.
+            const expr_type_var = ModuleEnv.varFrom(expr_idx);
+            const expr_resolved = module_env.types.resolveVar(expr_type_var);
+            const func_type = expr_resolved.desc.content.unwrapFunc();
+            const ls = self.layout_store orelse unreachable;
+
+            // CRITICAL: Set up type scope mappings BEFORE lowering patterns.
+            // Low-level lambdas from builtins have their own rigid type variables that
+            // may not be in the type scope (which was set up for the enclosing function).
+            // Without these mappings, lowerPatternSpan -> getPatternLayout -> fromTypeVar
+            // cannot resolve the rigid type variables and produces ZST layouts instead of
+            // the correct concrete types (e.g., List(I64) → list layout instead of zst).
+            if (func_type != null and self.type_scope.scopes.items.len > 0) {
+                const ft = func_type.?;
+                const scope = &self.type_scope.scopes.items[0];
+                // Collect rigid vars from the lambda's function type (params + return)
+                var lambda_rigids: [8]types.Var = undefined;
+                var n_rigids: usize = 0;
+                const ft_params = module_env.types.sliceVars(ft.args);
+                for (ft_params) |pv| {
+                    self.collectRigidVars(module_env, pv, &lambda_rigids, &n_rigids);
+                }
+                self.collectRigidVars(module_env, ft.ret, &lambda_rigids, &n_rigids);
+                // For each unmapped rigid, find a scope entry with the same name
+                for (lambda_rigids[0..n_rigids]) |rigid_var| {
+                    if (scope.get(rigid_var) != null) continue; // already mapped
+                    const rigid_resolved = module_env.types.resolveVar(rigid_var);
+                    const rigid_name = if (rigid_resolved.desc.content == .rigid) rigid_resolved.desc.content.rigid.name else continue;
+                    // Search existing scope entries for a rigid with the same name
+                    const rigid_name_text = module_env.getIdent(rigid_name);
+                    var it = scope.iterator();
+                    while (it.next()) |entry| {
+                        const ext_var = entry.key_ptr.*;
+                        const ext_resolved = module_env.types.resolveVar(ext_var);
+                        if (ext_resolved.desc.content == .rigid) {
+                            const ext_name_text = module_env.getIdent(ext_resolved.desc.content.rigid.name);
+                            if (std.mem.eql(u8, rigid_name_text, ext_name_text)) {
+                                // Same name - add mapping from lambda's rigid to the same caller var
+                                scope.put(rigid_var, entry.value_ptr.*) catch {};
+                                // Invalidate layout cache for this var since it may have been
+                                // cached as opaquePtr from container processing
+                                const cache_key = layout_mod.ModuleVarKey{ .module_idx = self.current_module_idx, .var_ = rigid_var };
+                                _ = ls.layouts_by_module_var.remove(cache_key);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Lower the parameter patterns (AFTER type scope setup so layouts resolve correctly)
+            const params = try self.lowerPatternSpan(module_env, ll.args);
+
+            // Create argument expressions from the parameter patterns
+            // Each parameter becomes a lookup to itself
+            const param_patterns = module_env.store.slicePatterns(ll.args);
+            var arg_list = std.ArrayList(MonoExprId).empty;
+            defer arg_list.deinit(self.allocator);
+
+            var param_idx: usize = 0;
+            for (param_patterns) |patt_idx| {
+                const symbol = self.patternToSymbol(patt_idx);
+
+                // Get the layout from the function's parameter type, not the pattern's type variable.
+                // The pattern type in builtins is generic (flex), but the function type has the
+                // concrete types through the type scope mappings.
+                const patt_layout = if (func_type) |ft| layout_blk: {
+                    const param_vars = module_env.types.sliceVars(ft.args);
+                    if (param_idx < param_vars.len) {
+                        const param_type_var = param_vars[param_idx];
+                        break :layout_blk ls.fromTypeVar(self.current_module_idx, param_type_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
+                    }
+                    unreachable; // Pattern count should match function parameter count
+                } else {
+                    unreachable; // e_low_level_lambda should always have a function type
+                };
+                param_idx += 1;
+
+                const arg_id = try self.store.addExpr(.{
+                    .lookup = .{
+                        .symbol = symbol,
+                        .layout_idx = patt_layout,
+                    },
+                }, region);
+                try arg_list.append(self.allocator, arg_id);
+            }
+            const args_span = try self.store.addExprSpan(arg_list.items);
+
+            // Use the function's RETURN type for ret_layout, not the function type itself
+            const ret_layout = if (func_type) |ft| ret_blk: {
+                break :ret_blk ls.fromTypeVar(self.current_module_idx, ft.ret, &self.type_scope, self.type_scope_caller_module) catch unreachable;
+            } else self.getExprLayoutFromIdx(module_env, expr_idx);
+
+            // Create the low-level call as the body
+            const body_id = try self.store.addExpr(.{
+                .low_level = .{
+                    .op = mono_op,
+                    .args = args_span,
+                    .ret_layout = ret_layout,
                 },
             }, region);
+
             break :blk .{
-                .incref = .{
-                    .value = lookup_id,
-                    .layout_idx = .i64, // TODO: get actual layout
-                    .count = rc_op.count,
+                .lambda = .{
+                    .fn_layout = self.getExprLayoutFromIdx(module_env, expr_idx),
+                    .params = params,
+                    .body = body_id,
+                    .ret_layout = ret_layout,
                 },
             };
         },
 
-        .e_decref => |rc_op| blk: {
-            // Convert pattern reference to a lookup expression
-            const symbol = self.patternToSymbol(rc_op.pattern_idx);
-            const lookup_id = try self.store.addExpr(.{
-                .lookup = .{
-                    .symbol = symbol,
-                    .layout_idx = .i64, // TODO: get actual layout from pattern
-                },
-            }, region);
+        .e_for => |for_expr| blk: {
+            // Lower the list expression
+            const list_expr = try self.lowerExprFromIdx(module_env, for_expr.expr);
+
+            // Lower the element pattern
+            const elem_pattern = try self.lowerPattern(module_env, for_expr.patt);
+
+            // Push a type scope mapping from the element pattern's type variable
+            // to the list's element type, so method dispatch (e.g., elem.to_str())
+            // can resolve the receiver's type.
+            const pushed_scope = self.pushForLoopElementTypeScope(module_env, for_expr.expr, for_expr.patt);
+
+            // Lower the body expression
+            const body = try self.lowerExprFromIdx(module_env, for_expr.body);
+
+            // Pop the type scope if we pushed one
+            if (pushed_scope) self.popForLoopElementTypeScope();
+
+            // Get element layout from the list expression's type (not the pattern)
+            const elem_layout = self.getForLoopElementLayout(for_expr.expr);
+
             break :blk .{
-                .decref = .{
-                    .value = lookup_id,
-                    .layout_idx = .i64, // TODO: get actual layout
+                .for_loop = .{
+                    .list_expr = list_expr,
+                    .elem_layout = elem_layout,
+                    .elem_pattern = elem_pattern,
+                    .body = body,
                 },
             };
         },
 
-        .e_free => |rc_op| blk: {
-            // Convert pattern reference to a lookup expression
-            const symbol = self.patternToSymbol(rc_op.pattern_idx);
-            const lookup_id = try self.store.addExpr(.{
-                .lookup = .{
-                    .symbol = symbol,
-                    .layout_idx = .i64, // TODO: get actual layout from pattern
+        .e_type_var_dispatch => |tvd| blk: {
+            // Type variable dispatch: Thing.method(args) where Thing is a type var alias.
+            // Resolve the type variable to find the concrete nominal type, then look up the method.
+
+            // Step 1: Get the type variable from the alias statement
+            const stmt = module_env.store.getStatement(tvd.type_var_alias_stmt);
+            const type_var_binding = stmt.s_type_var_alias;
+            const type_var = ModuleEnv.varFrom(type_var_binding.type_var_anno);
+            var resolved = module_env.types.resolveVar(type_var);
+
+            // Step 2: If flex/rigid, check type_scope for concrete mapping (polymorphic calls)
+            var type_source_env: *const ModuleEnv = module_env;
+            if (resolved.desc.content == .flex or resolved.desc.content == .rigid) {
+                if (self.type_scope.lookup(resolved.var_)) |mapped| {
+                    if (self.type_scope_caller_module) |caller_idx| {
+                        type_source_env = self.all_module_envs[caller_idx];
+                    }
+                    resolved = type_source_env.types.resolveVar(mapped);
+                }
+            }
+
+            // Follow aliases to get to the underlying type
+            while (resolved.desc.content == .alias) {
+                const alias = resolved.desc.content.alias;
+                const backing = type_source_env.types.getAliasBackingVar(alias);
+                resolved = type_source_env.types.resolveVar(backing);
+            }
+
+            // Step 3: Determine the concrete nominal type
+            const nominal_info: ?struct { origin: Ident.Idx, ident: Ident.Idx } = switch (resolved.desc.content) {
+                .structure => |s| switch (s) {
+                    .nominal_type => |nom| .{
+                        .origin = nom.origin_module,
+                        .ident = nom.ident.ident_idx,
+                    },
+                    else => null,
                 },
-            }, region);
-            break :blk .{
-                .free = .{
-                    .value = lookup_id,
-                    .layout_idx = .i64, // TODO: get actual layout
+                .flex => |flex| fi: {
+                    if (!flex.constraints.isEmpty()) {
+                        for (type_source_env.types.sliceStaticDispatchConstraints(flex.constraints)) |constraint| {
+                            if (constraint.origin == .from_numeral) {
+                                break :fi .{
+                                    .origin = type_source_env.idents.builtin_module,
+                                    .ident = type_source_env.idents.dec_type,
+                                };
+                            }
+                        }
+                    }
+                    break :fi null;
                 },
+                .rigid => |rigid| ri: {
+                    if (!rigid.constraints.isEmpty()) {
+                        for (type_source_env.types.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
+                            if (constraint.origin == .from_numeral) {
+                                break :ri .{
+                                    .origin = type_source_env.idents.builtin_module,
+                                    .ident = type_source_env.idents.dec_type,
+                                };
+                            }
+                        }
+                    }
+                    break :ri null;
+                },
+                else => null,
             };
+
+            const info = nominal_info orelse {
+                unreachable;
+            };
+
+            // Step 4: Find origin module index via imports
+            const origin_module_idx = self.findModuleForOrigin(type_source_env, info.origin) orelse {
+                unreachable;
+            };
+            const origin_env = self.all_module_envs[origin_module_idx];
+
+            // Step 5: Look up method in origin module (cross-ident-store lookup)
+            const qualified_method = origin_env.lookupMethodIdentFromTwoEnvsConst(
+                type_source_env,
+                info.ident,
+                module_env,
+                tvd.method_name,
+            ) orelse {
+                unreachable;
+            };
+
+            // Get the node index for the method definition
+            const node_idx = origin_env.getExposedNodeIndexById(qualified_method) orelse {
+                unreachable;
+            };
+
+            // Step 6: Lower as external definition + lookup/call
+            const symbol = MonoSymbol{
+                .module_idx = origin_module_idx,
+                .ident_idx = qualified_method,
+            };
+
+            const symbol_key: u48 = @bitCast(symbol);
+            if (!self.lowered_symbols.contains(symbol_key)) {
+                try self.lowerExternalDefByIdx(symbol, node_idx);
+            }
+
+            const method_layout = self.getExprLayoutFromIdx(module_env, expr_idx);
+
+            const fn_expr_id = try self.store.addExpr(.{ .lookup = .{
+                .symbol = symbol,
+                .layout_idx = .i64,
+            } }, region);
+
+            const arg_indices = module_env.store.sliceExpr(tvd.args);
+            if (arg_indices.len == 0) {
+                break :blk .{
+                    .call = .{
+                        .fn_expr = fn_expr_id,
+                        .fn_layout = LayoutIdx.named_fn,
+                        .args = MonoExprSpan.empty(),
+                        .ret_layout = method_layout,
+                        .called_via = .apply,
+                    },
+                };
+            } else {
+                const args = try self.lowerExprSpan(module_env, tvd.args);
+                break :blk .{
+                    .call = .{
+                        .fn_expr = fn_expr_id,
+                        .fn_layout = LayoutIdx.named_fn,
+                        .args = args,
+                        .ret_layout = method_layout,
+                        .called_via = .apply,
+                    },
+                };
+            }
         },
 
-        else => .{ .runtime_error = {} }, // Placeholder for unsupported expressions
+        else => {
+            unreachable;
+        },
     };
 
     return self.store.addExpr(mono_expr, region);
 }
 
 /// Lower an expression by its index in the current module
-fn lowerExprFromIdx(self: *Self, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx) Error!MonoExprId {
+fn lowerExprFromIdx(self: *Self, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx) Allocator.Error!MonoExprId {
     const expr = module_env.store.getExpr(expr_idx);
     const region = module_env.store.getExprRegion(expr_idx);
-    return self.lowerExprInner(module_env, expr, region);
+    return self.lowerExprInner(module_env, expr, region, expr_idx);
 }
 
 /// Lower a span of expressions
-fn lowerExprSpan(self: *Self, module_env: *ModuleEnv, span: CIR.Expr.Span) Error!MonoExprSpan {
+fn lowerExprSpan(self: *Self, module_env: *ModuleEnv, span: CIR.Expr.Span) Allocator.Error!MonoExprSpan {
     const expr_indices = module_env.store.sliceExpr(span);
     if (expr_indices.len == 0) return MonoExprSpan.empty();
 
@@ -901,17 +2779,18 @@ const LowerRecordFieldsResult = struct {
 };
 
 /// Lower record fields - sorted alphabetically by field name to match layout order
-fn lowerRecordFields(self: *Self, module_env: *ModuleEnv, fields: CIR.RecordField.Span) Error!LowerRecordFieldsResult {
+fn lowerRecordFields(self: *Self, module_env: *ModuleEnv, fields: CIR.RecordField.Span) Allocator.Error!LowerRecordFieldsResult {
     const field_indices = module_env.store.sliceRecordFields(fields);
     if (field_indices.len == 0) return .{
         .fields = MonoExprSpan.empty(),
         .field_names = MonoFieldNameSpan.empty(),
     };
 
-    // Collect (name, value) pairs for sorting
+    // Collect (name, value, alignment) for sorting
     const FieldPair = struct {
         name: base.Ident.Idx,
         value: CIR.Expr.Idx,
+        alignment: u32,
     };
 
     var pairs = std.ArrayList(FieldPair).empty;
@@ -919,13 +2798,25 @@ fn lowerRecordFields(self: *Self, module_env: *ModuleEnv, fields: CIR.RecordFiel
 
     for (field_indices) |field_idx| {
         const field = module_env.store.getRecordField(field_idx);
-        try pairs.append(self.allocator, .{ .name = field.name, .value = field.value });
+        // Get alignment from the field value's layout
+        const field_layout_idx = self.getExprLayoutFromIdx(module_env, field.value);
+        const alignment: u32 = if (self.layout_store) |ls| blk: {
+            const field_layout = ls.getLayout(field_layout_idx);
+            break :blk @intCast(ls.layoutSizeAlign(field_layout).alignment.toByteUnits());
+        } else 1;
+        try pairs.append(self.allocator, .{ .name = field.name, .value = field.value, .alignment = alignment });
     }
 
-    // Sort fields alphabetically by name (matches layout order for same-alignment fields)
+    // Sort fields by alignment descending, then alphabetically by name
+    // This matches the layout store's field ordering
     const SortContext = struct {
         module_env: *ModuleEnv,
         pub fn lessThan(ctx: @This(), a: FieldPair, b: FieldPair) bool {
+            // First sort by alignment descending (larger alignment first)
+            if (a.alignment != b.alignment) {
+                return a.alignment > b.alignment;
+            }
+            // Then sort alphabetically by name
             const a_str = ctx.module_env.getIdent(a.name);
             const b_str = ctx.module_env.getIdent(b.name);
             return std.mem.order(u8, a_str, b_str) == .lt;
@@ -953,7 +2844,7 @@ fn lowerRecordFields(self: *Self, module_env: *ModuleEnv, fields: CIR.RecordFiel
 }
 
 /// Lower a pattern
-fn lowerPattern(self: *Self, module_env: *ModuleEnv, pattern_idx: CIR.Pattern.Idx) Error!MonoPatternId {
+fn lowerPattern(self: *Self, module_env: *ModuleEnv, pattern_idx: CIR.Pattern.Idx) Allocator.Error!MonoPatternId {
     const pattern = module_env.store.getPattern(pattern_idx);
     const region = module_env.store.getPatternRegion(pattern_idx);
 
@@ -961,11 +2852,11 @@ fn lowerPattern(self: *Self, module_env: *ModuleEnv, pattern_idx: CIR.Pattern.Id
         .assign => |_| .{
             .bind = .{
                 .symbol = self.patternToSymbol(pattern_idx),
-                .layout_idx = .i64, // TODO: get from type
+                .layout_idx = self.getPatternLayout(pattern_idx),
             },
         },
 
-        .underscore => .{ .wildcard = {} },
+        .underscore => .{ .wildcard = .{ .layout_idx = self.getPatternLayout(pattern_idx) } },
 
         .num_literal => |n| .{ .int_literal = .{
             .value = n.value.toI128(),
@@ -976,29 +2867,16 @@ fn lowerPattern(self: *Self, module_env: *ModuleEnv, pattern_idx: CIR.Pattern.Id
 
         .applied_tag => |t| blk: {
             const args = try self.lowerPatternSpan(module_env, t.args);
-            // Compute discriminant based on tag name
-            // For Result type: tags are sorted alphabetically, so Err=0, Ok=1
-            // For Bool type: False=0, True=1
-            const tag_name_text = module_env.getIdent(t.name);
-            const discriminant: u16 = if (std.mem.eql(u8, tag_name_text, "Ok") or
-                std.ascii.eqlIgnoreCase(tag_name_text, "ok"))
-                1 // Ok comes after Err alphabetically
-            else if (std.mem.eql(u8, tag_name_text, "Err") or
-                std.ascii.eqlIgnoreCase(tag_name_text, "err"))
-                0 // Err comes first alphabetically
-            else if (std.mem.eql(u8, tag_name_text, "True") or
-                std.ascii.eqlIgnoreCase(tag_name_text, "true"))
-                1
-            else if (std.mem.eql(u8, tag_name_text, "False") or
-                std.ascii.eqlIgnoreCase(tag_name_text, "false"))
-                0
-            else
-                0; // TODO: proper discriminant lookup for other tags
+            // Resolve discriminant by looking up the tag's position in the
+            // alphabetically-sorted variant list of the tag union type.
+            const type_var = ModuleEnv.varFrom(pattern_idx);
+            const discriminant = self.resolveTagDiscriminant(module_env, type_var, t.name);
+            const union_layout = self.getPatternLayout(pattern_idx);
 
             break :blk .{
                 .tag = .{
                     .discriminant = discriminant,
-                    .union_layout = .i64, // TODO: proper layout
+                    .union_layout = union_layout,
                     .args = args,
                 },
             };
@@ -1021,9 +2899,11 @@ fn lowerPattern(self: *Self, module_env: *ModuleEnv, pattern_idx: CIR.Pattern.Id
             }
 
             const fields = try self.store.addPatternSpan(field_patterns.items);
+            // Compute the record layout from the pattern's type variable
+            const record_layout = self.getPatternLayout(pattern_idx);
             break :blk .{
                 .record = .{
-                    .record_layout = .i64, // TODO
+                    .record_layout = record_layout,
                     .fields = fields,
                 },
             };
@@ -1031,9 +2911,11 @@ fn lowerPattern(self: *Self, module_env: *ModuleEnv, pattern_idx: CIR.Pattern.Id
 
         .tuple => |t| blk: {
             const elems = try self.lowerPatternSpan(module_env, t.patterns);
+            // Compute the tuple layout from the pattern's type variable
+            const tuple_layout = self.getPatternLayout(pattern_idx);
             break :blk .{
                 .tuple = .{
-                    .tuple_layout = .i64, // TODO
+                    .tuple_layout = tuple_layout,
                     .elems = elems,
                 },
             };
@@ -1041,23 +2923,92 @@ fn lowerPattern(self: *Self, module_env: *ModuleEnv, pattern_idx: CIR.Pattern.Id
 
         .as => |a| blk: {
             const inner = try self.lowerPattern(module_env, a.pattern);
+            // Compute the layout from the pattern's type variable
+            const layout_idx = self.getPatternLayout(pattern_idx);
             break :blk .{
                 .as_pattern = .{
                     .symbol = self.patternToSymbol(pattern_idx),
-                    .layout_idx = .i64, // TODO
+                    .layout_idx = layout_idx,
                     .inner = inner,
                 },
             };
         },
 
-        else => .{ .wildcard = {} }, // Fallback for unsupported patterns
+        .list => |l| blk: {
+            // Lower prefix patterns
+            const prefix = try self.lowerPatternSpan(module_env, l.patterns);
+            // Lower rest pattern if present.
+            // When rest_info exists but has no binding pattern (bare `..`),
+            // emit a wildcard so the codegen knows this is a rest match
+            // (length >= prefix_count) rather than an exact match (length == prefix_count).
+            const rest_id = if (l.rest_info) |rest_info|
+                if (rest_info.pattern) |rest_pattern|
+                    try self.lowerPattern(module_env, rest_pattern)
+                else
+                    try self.store.addPattern(.{ .wildcard = .{ .layout_idx = .zst } }, region)
+            else
+                MonoPatternId.none;
+
+            // Compute element layout from the list pattern's type
+            const elem_layout = elem_blk: {
+                const ls = self.layout_store orelse unreachable; // Layout store must exist
+
+                // Get the type variable from the pattern
+                const pattern_type_var = ModuleEnv.varFrom(pattern_idx);
+                const resolved = module_env.types.resolveVar(pattern_type_var);
+
+                // Must be a List (nominal type)
+                switch (resolved.desc.content) {
+                    .structure => |structure| {
+                        switch (structure) {
+                            .nominal_type => |nominal| {
+                                // Get the element type (first type argument of List)
+                                const args = module_env.types.sliceNominalArgs(nominal);
+                                std.debug.assert(args.len > 0); // List must have element type
+                                const elem_type_var = args[0];
+                                // Check if we have a layout hint for this element type
+                                const elem_resolved = module_env.types.resolveVar(elem_type_var);
+
+                                if (self.expr_layout_hints.get(elem_resolved.var_)) |hint_layout| {
+                                    break :elem_blk hint_layout;
+                                }
+                                // Compute layout for the element type
+                                break :elem_blk ls.fromTypeVar(self.current_module_idx, elem_type_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
+                            },
+                            else => unreachable, // List pattern must match List type
+                        }
+                    },
+                    else => unreachable, // List pattern must match structure type
+                }
+            };
+
+            break :blk .{
+                .list = .{
+                    .elem_layout = elem_layout,
+                    .prefix = prefix,
+                    .rest = rest_id,
+                },
+            };
+        },
+
+        .nominal => |n| {
+            // Unwrap nominal pattern to its backing pattern
+            return self.lowerPattern(module_env, n.backing_pattern);
+        },
+
+        .nominal_external => |n| {
+            // Unwrap nominal_external pattern to its backing pattern
+            return self.lowerPattern(module_env, n.backing_pattern);
+        },
+
+        else => .{ .wildcard = .{ .layout_idx = self.getPatternLayout(pattern_idx) } }, // Fallback for unsupported patterns
     };
 
     return self.store.addPattern(mono_pattern, region);
 }
 
 /// Lower a span of patterns
-fn lowerPatternSpan(self: *Self, module_env: *ModuleEnv, span: CIR.Pattern.Span) Error!MonoPatternSpan {
+fn lowerPatternSpan(self: *Self, module_env: *ModuleEnv, span: CIR.Pattern.Span) Allocator.Error!MonoPatternSpan {
     const indices = module_env.store.slicePatterns(span);
     if (indices.len == 0) return MonoPatternSpan.empty();
 
@@ -1073,7 +3024,7 @@ fn lowerPatternSpan(self: *Self, module_env: *ModuleEnv, span: CIR.Pattern.Span)
 }
 
 /// Lower closure captures
-fn lowerCaptures(self: *Self, module_env: *ModuleEnv, captures: CIR.Expr.Capture.Span) Error!MonoCaptureSpan {
+fn lowerCaptures(self: *Self, module_env: *ModuleEnv, captures: CIR.Expr.Capture.Span) Allocator.Error!MonoCaptureSpan {
     const capture_indices = module_env.store.sliceCaptures(captures);
     if (capture_indices.len == 0) return MonoCaptureSpan.empty();
 
@@ -1083,9 +3034,24 @@ fn lowerCaptures(self: *Self, module_env: *ModuleEnv, captures: CIR.Expr.Capture
     for (capture_indices) |capture_idx| {
         const cap = module_env.store.getCapture(capture_idx);
         const symbol = self.patternToSymbol(cap.pattern_idx);
+
+        // Ensure the captured symbol's definition is lowered if it's a top-level def
+        // This handles cases like closures capturing local functions
+        const symbol_key: u48 = @bitCast(symbol);
+        if (!self.lowered_symbols.contains(symbol_key)) {
+            try self.lowerLocalDefByPattern(module_env, symbol, cap.pattern_idx);
+        }
+
+        // Compute layout from the capture's type variable
+        const capture_layout_idx = blk: {
+            const ls = self.layout_store orelse break :blk LayoutIdx.default_num;
+            const type_var = ModuleEnv.varFrom(cap.pattern_idx);
+            break :blk ls.fromTypeVar(self.current_module_idx, type_var, &self.type_scope, self.type_scope_caller_module) catch LayoutIdx.default_num;
+        };
+
         try lowered.append(self.allocator, .{
             .symbol = symbol,
-            .layout_idx = .i64, // TODO: get from type
+            .layout_idx = capture_layout_idx,
         });
     }
 
@@ -1144,7 +3110,8 @@ fn detectClosureRecursion(self: *Self, module_env: *ModuleEnv, lambda_idx: CIR.E
             const body_expr = lambda_expr.e_lambda.body;
 
             // Check if the body contains a reference to the binding pattern
-            if (self.exprContainsPatternRef(module_env, body_expr, binding_pattern)) {
+            const contains_ref = self.exprContainsPatternRef(module_env, body_expr, binding_pattern);
+            if (contains_ref) {
                 // Generate a unique join point ID for this recursive closure
                 const join_point_id: JoinPointId = @enumFromInt(self.next_join_point_id);
                 self.next_join_point_id += 1;
@@ -1245,13 +3212,20 @@ fn exprContainsPatternRef(
         .e_unary_not => |unary| {
             return self.exprContainsPatternRef(module_env, unary.expr, target_pattern);
         },
+        .e_type_var_dispatch => |tvd| {
+            const args = module_env.store.sliceExpr(tvd.args);
+            for (args) |arg_idx| {
+                if (self.exprContainsPatternRef(module_env, arg_idx, target_pattern)) return true;
+            }
+            return false;
+        },
         // Leaf expressions that can't contain references
         else => return false,
     }
 }
 
 /// Lower if branches
-fn lowerIfBranches(self: *Self, module_env: *ModuleEnv, branches: CIR.Expr.IfBranch.Span) Error!ir.MonoIfBranchSpan {
+fn lowerIfBranches(self: *Self, module_env: *ModuleEnv, branches: CIR.Expr.IfBranch.Span) Allocator.Error!ir.MonoIfBranchSpan {
     const branch_indices = module_env.store.sliceIfBranches(branches);
 
     var lowered = std.ArrayList(MonoIfBranch).empty;
@@ -1286,7 +3260,7 @@ fn collectIfClosureLambdaSet(
     self: *Self,
     module_env: *ModuleEnv,
     if_expr: anytype,
-) Error!IfClosureLambdaSetResult {
+) Allocator.Error!IfClosureLambdaSetResult {
     var members = std.ArrayList(ir.LambdaSetMember).empty;
     defer members.deinit(self.allocator);
 
@@ -1397,7 +3371,7 @@ fn lowerIfBranchesWithLambdaSet(
     module_env: *ModuleEnv,
     branches: CIR.Expr.IfBranch.Span,
     lambda_set_members: ir.LambdaSetMemberSpan,
-) Error!ir.MonoIfBranchSpan {
+) Allocator.Error!ir.MonoIfBranchSpan {
     const branch_indices = module_env.store.sliceIfBranches(branches);
 
     var lowered = std.ArrayList(MonoIfBranch).empty;
@@ -1428,7 +3402,7 @@ fn lowerExprWithLambdaSet(
     expr_idx: CIR.Expr.Idx,
     lambda_set_members: ir.LambdaSetMemberSpan,
     tag: u16,
-) Error!MonoExprId {
+) Allocator.Error!MonoExprId {
     const expr = module_env.store.getExpr(expr_idx);
 
     switch (expr) {
@@ -1467,10 +3441,10 @@ fn lowerExprWithLambdaSet(
 
             const lambda_expr: MonoExpr = .{
                 .lambda = .{
-                    .fn_layout = .i64, // TODO
+                    .fn_layout = self.getExprLayoutFromIdx(module_env, expr_idx),
                     .params = params,
                     .body = body,
-                    .ret_layout = .i64, // TODO
+                    .ret_layout = self.getExprLayoutFromIdx(module_env, lambda.body),
                 },
             };
             const lambda_id = try self.store.addExpr(lambda_expr, Region.zero());
@@ -1560,7 +3534,7 @@ fn selectLambdaSetRepresentation(
 }
 
 /// Lower when/match branches
-fn lowerWhenBranches(self: *Self, module_env: *ModuleEnv, branches: CIR.Expr.Match.Branch.Span) Error!ir.MonoWhenBranchSpan {
+fn lowerWhenBranches(self: *Self, module_env: *ModuleEnv, branches: CIR.Expr.Match.Branch.Span) Allocator.Error!ir.MonoWhenBranchSpan {
     const branch_indices = module_env.store.sliceMatchBranches(branches);
 
     var lowered = std.ArrayList(MonoWhenBranch).empty;
@@ -1594,7 +3568,7 @@ fn lowerWhenBranches(self: *Self, module_env: *ModuleEnv, branches: CIR.Expr.Mat
 }
 
 /// Lower statements in a block
-fn lowerStmts(self: *Self, module_env: *ModuleEnv, stmts: CIR.Statement.Span) Error!ir.MonoStmtSpan {
+fn lowerStmts(self: *Self, module_env: *ModuleEnv, stmts: CIR.Statement.Span) Allocator.Error!ir.MonoStmtSpan {
     const stmt_slice = module_env.store.sliceStatements(stmts);
     if (stmt_slice.len == 0) return ir.MonoStmtSpan.empty();
 
@@ -1605,16 +3579,49 @@ fn lowerStmts(self: *Self, module_env: *ModuleEnv, stmts: CIR.Statement.Span) Er
         const stmt = module_env.store.getStatement(stmt_idx);
         switch (stmt) {
             .s_decl => |decl| {
-                const pattern = try self.lowerPattern(module_env, decl.pattern);
-                // Set current binding pattern and symbol for recursive closure detection
-                const old_binding = self.current_binding_pattern;
-                const old_symbol = self.current_binding_symbol;
-                self.current_binding_pattern = decl.pattern;
-                const binding_symbol = self.patternToSymbol(decl.pattern);
-                self.current_binding_symbol = binding_symbol;
-                const value = try self.lowerExprFromIdx(module_env, decl.expr);
-                self.current_binding_pattern = old_binding;
-                self.current_binding_symbol = old_symbol;
+                // Check if this declaration binds a lambda/closure
+                const decl_expr = module_env.store.getExpr(decl.expr);
+                const is_lambda = decl_expr == .e_lambda or decl_expr == .e_closure;
+
+                if (is_lambda) {
+                    // Defer lowering — the body will be lowered at call time when
+                    // type_scope is populated with concrete types from the call args.
+                    const pattern_key = @intFromEnum(decl.pattern);
+                    self.deferred_defs.put(pattern_key, decl.expr) catch {};
+                } else {
+                    // Non-lambda: lower eagerly as before
+                    const pattern = try self.lowerPattern(module_env, decl.pattern);
+                    const old_binding = self.current_binding_pattern;
+                    const old_symbol = self.current_binding_symbol;
+                    self.current_binding_pattern = decl.pattern;
+                    const binding_symbol = self.patternToSymbol(decl.pattern);
+                    self.current_binding_symbol = binding_symbol;
+                    const value = try self.lowerExprFromIdx(module_env, decl.expr);
+                    self.current_binding_pattern = old_binding;
+                    self.current_binding_symbol = old_symbol;
+
+                    // Register the symbol definition for lookups
+                    try self.store.registerSymbolDef(binding_symbol, value);
+
+                    try lowered.append(self.allocator, .{
+                        .pattern = pattern,
+                        .expr = value,
+                    });
+                }
+            },
+            .s_var => |var_stmt| {
+                // Mutable variable declaration - treated like s_decl for lowering
+                // The mutation semantics are handled by s_reassign creating new bindings
+                const pattern = try self.lowerPattern(module_env, var_stmt.pattern_idx);
+                const binding_symbol = self.patternToSymbol(var_stmt.pattern_idx);
+
+                // Store the expression's layout in type_env for later lookups.
+                // This ensures lookups to this mutable variable get the correct layout.
+                const pattern_key = @intFromEnum(var_stmt.pattern_idx);
+                const expr_layout = self.getExprLayoutFromIdx(module_env, var_stmt.expr);
+                self.type_env.put(pattern_key, expr_layout) catch {};
+
+                const value = try self.lowerExprFromIdx(module_env, var_stmt.expr);
 
                 // Register the symbol definition for lookups
                 try self.store.registerSymbolDef(binding_symbol, value);
@@ -1624,7 +3631,88 @@ fn lowerStmts(self: *Self, module_env: *ModuleEnv, stmts: CIR.Statement.Span) Er
                     .expr = value,
                 });
             },
-            else => {}, // Skip non-decl statements for now
+            .s_reassign => |reassign| {
+                // Reassignment - create a new binding that shadows the old one
+                // This is functional semantics: each reassignment creates a new binding
+                const pattern = try self.lowerPattern(module_env, reassign.pattern_idx);
+                const binding_symbol = self.patternToSymbol(reassign.pattern_idx);
+                const value = try self.lowerExprFromIdx(module_env, reassign.expr);
+
+                // Update the symbol definition to point to the new value
+                try self.store.registerSymbolDef(binding_symbol, value);
+
+                try lowered.append(self.allocator, .{
+                    .pattern = pattern,
+                    .expr = value,
+                });
+            },
+            .s_expr => |expr_stmt| {
+                // Expression statement - evaluate for side effects
+                // Create a wildcard pattern to discard the result
+                const value = try self.lowerExprFromIdx(module_env, expr_stmt.expr);
+                const expr_layout = self.getExprLayoutFromIdx(module_env, expr_stmt.expr);
+                const wildcard_pattern = try self.store.addPattern(.{ .wildcard = .{ .layout_idx = expr_layout } }, Region.zero());
+
+                try lowered.append(self.allocator, .{
+                    .pattern = wildcard_pattern,
+                    .expr = value,
+                });
+            },
+            .s_for => |for_stmt| {
+                // For loop statement - lower to a for_loop expression
+                const list_expr = try self.lowerExprFromIdx(module_env, for_stmt.expr);
+                const elem_pattern = try self.lowerPattern(module_env, for_stmt.patt);
+
+                // Push a type scope mapping for the element type (see e_for comment)
+                const pushed_scope = self.pushForLoopElementTypeScope(module_env, for_stmt.expr, for_stmt.patt);
+
+                const body = try self.lowerExprFromIdx(module_env, for_stmt.body);
+
+                if (pushed_scope) self.popForLoopElementTypeScope();
+
+                // Get element layout from the list expression's type (not the pattern)
+                const elem_layout = self.getForLoopElementLayout(for_stmt.expr);
+
+                const for_loop_expr = try self.store.addExpr(.{
+                    .for_loop = .{
+                        .list_expr = list_expr,
+                        .elem_layout = elem_layout,
+                        .elem_pattern = elem_pattern,
+                        .body = body,
+                    },
+                }, Region.zero());
+
+                // Create a wildcard pattern to discard the result (for loops return unit)
+                const wildcard_pattern = try self.store.addPattern(.{ .wildcard = .{ .layout_idx = .zst } }, Region.zero());
+
+                try lowered.append(self.allocator, .{
+                    .pattern = wildcard_pattern,
+                    .expr = for_loop_expr,
+                });
+            },
+            .s_while => |while_stmt| {
+                // While loop statement - lower to a while_loop expression
+                const cond = try self.lowerExprFromIdx(module_env, while_stmt.cond);
+                const body = try self.lowerExprFromIdx(module_env, while_stmt.body);
+
+                const while_loop_expr = try self.store.addExpr(.{
+                    .while_loop = .{
+                        .cond = cond,
+                        .body = body,
+                    },
+                }, Region.zero());
+
+                // Create a wildcard pattern to discard the result (while loops return unit)
+                const wildcard_pattern = try self.store.addPattern(.{ .wildcard = .{ .layout_idx = .zst } }, Region.zero());
+
+                try lowered.append(self.allocator, .{
+                    .pattern = wildcard_pattern,
+                    .expr = while_loop_expr,
+                });
+            },
+            else => {
+                // Skip other statement types (s_import, s_alias_decl, etc.)
+            },
         }
     }
 
@@ -1647,7 +3735,7 @@ fn cirBinopToMonoBinop(op: CIR.Expr.Binop.Op) MonoExpr.BinOp {
         .ge => .gte,
         .@"and" => .@"and",
         .@"or" => .@"or",
-        .div_trunc => .div, // Truncating division maps to div for now
+        .div_trunc => .div_trunc,
     };
 }
 
@@ -1663,9 +3751,9 @@ pub fn lowerStrInspekt(
     value_layout: LayoutIdx,
     module_env: *const ModuleEnv,
     region: Region,
-) Error!MonoExprId {
+) Allocator.Error!MonoExprId {
     // Need layout store to resolve layouts
-    const layout_store = self.layout_store orelse return error.LayoutError;
+    const layout_store = self.layout_store orelse unreachable;
 
     // Resolve the type to get its structure
     const resolved = module_env.types.resolveVar(type_var);
@@ -1727,7 +3815,7 @@ fn lowerInspectByLayout(
     layout_val: layout_mod.Layout,
     _: LayoutIdx,
     region: Region,
-) Error!MonoExprId {
+) Allocator.Error!MonoExprId {
     return switch (layout_val.tag) {
         .scalar => switch (layout_val.data.scalar.tag) {
             .int => try self.store.addExpr(.{ .int_to_str = .{
@@ -1752,10 +3840,11 @@ fn lowerInspectByLayout(
 }
 
 /// Inspect a boolean value
-fn lowerInspectBool(self: *Self, value_expr: MonoExprId, region: Region) Error!MonoExprId {
+fn lowerInspectBool(self: *Self, value_expr: MonoExprId, region: Region) Allocator.Error!MonoExprId {
     // Create branches for True (discriminant 1) and False (discriminant 0)
-    const false_str = try self.addStrLiteral("Bool.false", region);
-    const true_str = try self.addStrLiteral("Bool.true", region);
+    // Bool renders without the nominal prefix, matching interpreter behavior
+    const false_str = try self.addStrLiteral("False", region);
+    const true_str = try self.addStrLiteral("True", region);
 
     const branches = try self.store.addExprSpan(&[_]MonoExprId{ false_str, true_str });
 
@@ -1774,8 +3863,8 @@ fn lowerInspectRecord(
     value_layout: LayoutIdx,
     module_env: *const ModuleEnv,
     region: Region,
-) Error!MonoExprId {
-    const layout_store = self.layout_store orelse return error.LayoutError;
+) Allocator.Error!MonoExprId {
+    const layout_store = self.layout_store orelse unreachable;
 
     // Get field info from TYPE (for names)
     const fields_slice = module_env.types.getRecordFieldsSlice(record.fields);
@@ -1847,8 +3936,8 @@ fn lowerInspectTuple(
     value_layout: LayoutIdx,
     module_env: *const ModuleEnv,
     region: Region,
-) Error!MonoExprId {
-    const layout_store = self.layout_store orelse return error.LayoutError;
+) Allocator.Error!MonoExprId {
+    const layout_store = self.layout_store orelse unreachable;
 
     const elem_vars = module_env.types.sliceVars(tuple.elems);
 
@@ -1905,7 +3994,7 @@ fn lowerInspectTagUnion(
     value_layout: LayoutIdx,
     module_env: *const ModuleEnv,
     region: Region,
-) Error!MonoExprId {
+) Allocator.Error!MonoExprId {
     // Get tag info from TYPE
     const tags_slice = module_env.types.getTagsSlice(tag_union.tags);
     const tag_names = tags_slice.items(.name);
@@ -1967,12 +4056,36 @@ fn lowerInspectNominal(
     value_layout: LayoutIdx,
     module_env: *const ModuleEnv,
     region: Region,
-) Error!MonoExprId {
+) Allocator.Error!MonoExprId {
     const type_name = module_env.getIdent(nom.ident.ident_idx);
 
     // Check for Bool type (special case: render as Bool.true/Bool.false)
     if (std.mem.eql(u8, type_name, "Bool")) {
         return try self.lowerInspectBool(value_expr, region);
+    }
+
+    // Check for numeric nominal types that should be rendered as their value.
+    // These are opaque but have well-known numeric representations.
+    const layout_store = self.layout_store orelse unreachable;
+    const lv = layout_store.getLayout(value_layout);
+    if (lv.tag == .scalar) {
+        switch (lv.data.scalar.tag) {
+            .int => return try self.store.addExpr(.{ .int_to_str = .{
+                .value = value_expr,
+                .int_precision = lv.data.scalar.data.int,
+            } }, region),
+            .frac => {
+                if (lv.data.scalar.data.frac == .dec) {
+                    return try self.store.addExpr(.{ .dec_to_str = value_expr }, region);
+                }
+                return try self.store.addExpr(.{ .float_to_str = .{
+                    .value = value_expr,
+                    .float_precision = lv.data.scalar.data.frac,
+                } }, region);
+            },
+            .str => return try self.store.addExpr(.{ .str_escape_and_quote = value_expr }, region),
+            .opaque_ptr => {},
+        }
     }
 
     if (nom.is_opaque) {
@@ -1995,7 +4108,6 @@ fn lowerInspectNominal(
     try parts.append(self.allocator, try self.addStrLiteral(type_name, region));
     try parts.append(self.allocator, try self.addStrLiteral(".", region));
     // For backing value, inspect by layout
-    const layout_store = self.layout_store orelse return error.LayoutError;
     const layout_val = layout_store.getLayout(value_layout);
     try parts.append(self.allocator, try self.lowerInspectByLayout(value_expr, layout_val, value_layout, region));
 
@@ -2003,7 +4115,7 @@ fn lowerInspectNominal(
 }
 
 /// Helper to add a string literal expression
-fn addStrLiteral(self: *Self, text: []const u8, region: Region) Error!MonoExprId {
+fn addStrLiteral(self: *Self, text: []const u8, region: Region) Allocator.Error!MonoExprId {
     // Add the string literal to the MonoExprStore's string table
     const lit_idx = self.store.insertString(text) catch return error.OutOfMemory;
     return self.store.addExpr(.{ .str_literal = lit_idx }, region);
@@ -2053,7 +4165,7 @@ fn getTupleElemLayout(
 /// The key insight: every expression either:
 /// - Returns a value (becomes a `ret` statement)
 /// - Has subexpressions that might contain returns (recursively lowered)
-fn lowerExprToStmt(self: *Self, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, ret_layout: LayoutIdx) Error!CFStmtId {
+fn lowerExprToStmt(self: *Self, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, ret_layout: LayoutIdx) Allocator.Error!CFStmtId {
     const expr = module_env.store.getExpr(expr_idx);
     const region = module_env.store.getExprRegion(expr_idx);
 
@@ -2062,7 +4174,7 @@ fn lowerExprToStmt(self: *Self, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, 
         .e_if => |ite| try self.lowerIfToSwitchStmt(module_env, ite, ret_layout),
         else => {
             // For other expressions, wrap in a return statement
-            const expr_id = try self.lowerExprInner(module_env, expr, region);
+            const expr_id = try self.lowerExprInner(module_env, expr, region, expr_idx);
             return try self.store.addCFStmt(.{
                 .ret = .{ .value = expr_id },
             });
@@ -2072,7 +4184,7 @@ fn lowerExprToStmt(self: *Self, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, 
 
 /// Lower a block to a chain of let statements.
 /// The final expression is lowered to a statement (which might be ret, switch, etc.)
-fn lowerBlockToStmt(self: *Self, module_env: *ModuleEnv, block: anytype, ret_layout: LayoutIdx) Error!CFStmtId {
+fn lowerBlockToStmt(self: *Self, module_env: *ModuleEnv, block: anytype, ret_layout: LayoutIdx) Allocator.Error!CFStmtId {
     const stmt_slice = module_env.store.sliceStatements(block.stmts);
 
     // First, lower the final expression to a statement
@@ -2118,7 +4230,7 @@ fn lowerBlockToStmt(self: *Self, module_env: *ModuleEnv, block: anytype, ret_lay
 
 /// Lower if-then-else to a switch statement.
 /// This makes branch structure explicit for tail call analysis.
-fn lowerIfToSwitchStmt(self: *Self, module_env: *ModuleEnv, ite: anytype, ret_layout: LayoutIdx) Error!CFStmtId {
+fn lowerIfToSwitchStmt(self: *Self, module_env: *ModuleEnv, ite: anytype, ret_layout: LayoutIdx) Allocator.Error!CFStmtId {
     const branch_indices = module_env.store.sliceIfBranches(ite.branches);
 
     // For a simple if-then-else with one condition:
@@ -2195,12 +4307,12 @@ fn lowerClosureToProc(
     closure: CIR.Expr.Closure,
     binding_symbol: MonoSymbol,
     join_point_id: JoinPointId,
-) Error!MonoProc {
+) Allocator.Error!MonoProc {
     // Get the lambda from the closure
     const lambda_expr = module_env.store.getExpr(closure.lambda_idx);
     const lambda = switch (lambda_expr) {
         .e_lambda => |l| l,
-        else => return error.InvalidExpression,
+        else => unreachable,
     };
 
     // Lower parameters first, then extract their layouts
@@ -2243,7 +4355,7 @@ fn lowerClosureToProc(
 
 /// Extract layouts from already-lowered parameter patterns.
 /// Returns an error if a pattern type doesn't carry layout information.
-fn extractParamLayouts(self: *Self, params: MonoPatternSpan) Error!LayoutIdxSpan {
+fn extractParamLayouts(self: *Self, params: MonoPatternSpan) Allocator.Error!LayoutIdxSpan {
     const pattern_ids = self.store.getPatternSpan(params);
     if (pattern_ids.len == 0) return LayoutIdxSpan.empty();
 
@@ -2262,10 +4374,7 @@ fn extractParamLayouts(self: *Self, params: MonoPatternSpan) Error!LayoutIdxSpan
             .as_pattern => |a| a.layout_idx,
             .list => |l| l.elem_layout,
             .str_literal => .str, // String literals have string layout
-            // Wildcard patterns don't carry layout information in MonoPattern.
-            // This is a design gap - wildcard should have a layout field.
-            // For now, surface this as an error rather than silently defaulting.
-            .wildcard => return error.InvalidExpression,
+            .wildcard => |wc| wc.layout_idx,
         };
         try layouts.append(self.allocator, layout_idx);
     }
@@ -2281,7 +4390,7 @@ pub fn lowerExpression(
     all_module_envs: []const *ModuleEnv,
     module_idx: u16,
     expr_idx: CIR.Expr.Idx,
-) Error!MonoExprId {
+) Allocator.Error!MonoExprId {
     var lowerer = init(allocator, store, all_module_envs, null, null);
     defer lowerer.deinit();
     return lowerer.lowerExpr(module_idx, expr_idx);
@@ -2334,7 +4443,7 @@ pub fn lowerConstants(
     module_idx: u16,
     sccs: []const can.DependencyGraph.SCC,
     allocator: Allocator,
-) Error!LoweredConstants {
+) Allocator.Error!LoweredConstants {
     // Count total constants across all SCCs
     var total_constants: usize = 0;
     for (sccs) |scc| {
@@ -2351,7 +4460,7 @@ pub fn lowerConstants(
     var constants = allocator.alloc(LoweredConstant, total_constants) catch return error.OutOfMemory;
     errdefer allocator.free(constants);
 
-    const module_env = lowerer.getModuleEnv(module_idx) orelse return error.ModuleNotFound;
+    const module_env = lowerer.getModuleEnv(module_idx) orelse unreachable;
 
     var i: usize = 0;
     for (sccs) |scc| {
@@ -2382,7 +4491,7 @@ pub fn lowerFromEntryPoints(
     lambda_inference: ?*LambdaSetInference,
     layout_store: ?*LayoutStore,
     entry_points: []const EntryPoint,
-) Error!void {
+) Allocator.Error!void {
     var lowerer = init(allocator, store, all_module_envs, lambda_inference, layout_store);
     defer lowerer.deinit();
 

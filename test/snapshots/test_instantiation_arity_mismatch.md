@@ -13,17 +13,17 @@ type=expr
 }
 ~~~
 # EXPECTED
-TOO MANY ARGUMENTS - test_instantiation_arity_mismatch.md:5:5:5:19
+TOO MANY ARGS - test_instantiation_arity_mismatch.md:5:5:5:19
 # PROBLEMS
-**TOO MANY ARGUMENTS**
-The function `identity` expects 1 argument, but 2 were provided:
+**TOO MANY ARGS**
+The `identity` function expects 1 argument, but it got 2 instead:
 **test_instantiation_arity_mismatch.md:5:5:5:19:**
 ```roc
     identity(1, 2)
 ```
     ^^^^^^^^^^^^^^
 
-The function has the signature:
+The `identity` function has the type:
 
     (a, b) -> (a, b)
 
@@ -86,5 +86,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Error"))
+(expr (type "_c"))
 ~~~

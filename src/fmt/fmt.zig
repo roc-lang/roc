@@ -4,12 +4,14 @@ const std = @import("std");
 const parse = @import("parse");
 const collections = @import("collections");
 const can = @import("can");
+const base = @import("base");
 
 const fs_mod = @import("fs");
 const Filesystem = fs_mod.Filesystem;
 const tracy = @import("tracy");
 const builtin = @import("builtin");
 
+const Allocators = base.Allocators;
 const ModuleEnv = can.ModuleEnv;
 const Token = tokenize.Token;
 const AST = parse.AST;
@@ -174,19 +176,20 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
     };
     defer gpa.free(contents);
 
-    var arena = std.heap.ArenaAllocator.init(gpa);
-    defer arena.deinit();
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(gpa);
+    defer allocators.deinit();
 
     var module_env = try ModuleEnv.init(gpa, contents);
     defer module_env.deinit();
 
-    var parse_ast: AST = try parse.parse(&module_env.common, gpa);
-    defer parse_ast.deinit(gpa);
+    const parse_ast = try parse.parse(&allocators, &module_env.common);
+    defer parse_ast.deinit();
 
     // If there are any parsing problems, print them to stderr
     if (parse_ast.parse_diagnostics.items.len > 0) {
         parse_ast.toSExprStr(gpa, &module_env.common, stderrWriter()) catch @panic("Failed to print SExpr");
-        try printParseErrors(gpa, module_env.common.source, parse_ast);
+        try printParseErrors(gpa, module_env.common.source, parse_ast.*);
         return error.ParsingFailed;
     }
 
@@ -194,7 +197,7 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
     if (unformatted_files != null) {
         var formatted: std.Io.Writer.Allocating = .init(gpa);
         defer formatted.deinit();
-        try formatAst(parse_ast, &formatted.writer);
+        try formatAst(parse_ast.*, &formatted.writer);
         if (!std.mem.eql(u8, formatted.written(), module_env.common.source)) {
             try unformatted_files.?.append(path);
         }
@@ -203,7 +206,7 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
         defer output_file.close();
         var output_buffer: [4096]u8 = undefined;
         var output_writer = output_file.writer(&output_buffer);
-        try formatAst(parse_ast, &output_writer.interface);
+        try formatAst(parse_ast.*, &output_writer.interface);
     }
 }
 
@@ -213,25 +216,26 @@ pub fn formatStdin(gpa: std.mem.Allocator) !void {
     defer gpa.free(contents);
 
     // ModuleEnv retains a reference to contents for diagnostics
-    var arena = std.heap.ArenaAllocator.init(gpa);
-    defer arena.deinit();
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(gpa);
+    defer allocators.deinit();
 
     var module_env = try ModuleEnv.init(gpa, contents);
     defer module_env.deinit();
 
-    var parse_ast: AST = try parse.parse(&module_env.common, gpa);
-    defer parse_ast.deinit(gpa);
+    const parse_ast = try parse.parse(&allocators, &module_env.common);
+    defer parse_ast.deinit();
 
     // If there are any parsing problems, print them to stderr
     if (parse_ast.parse_diagnostics.items.len > 0) {
         parse_ast.toSExprStr(gpa, &module_env.common, stderrWriter()) catch @panic("Failed to print SExpr");
-        try printParseErrors(gpa, module_env.common.source, parse_ast);
+        try printParseErrors(gpa, module_env.common.source, parse_ast.*);
         return error.ParsingFailed;
     }
 
     var stdout_buffer: [4096]u8 = undefined;
     var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
-    try formatAst(parse_ast, &stdout_writer.interface);
+    try formatAst(parse_ast.*, &stdout_writer.interface);
 }
 
 fn printParseErrors(gpa: std.mem.Allocator, source: []const u8, parse_ast: AST) !void {
@@ -419,7 +423,8 @@ const Formatter = struct {
                     fmt.curr_indent += 1;
                     try fmt.pushIndent();
                 }
-                const last_module_tok = try fmt.formatModulePath(i.module_name_tok, i.qualifier_tok, i.exposes);
+                const path_result = try fmt.formatModulePath(i.module_name_tok, i.qualifier_tok, i.exposes);
+                const last_module_tok = path_result.last_tok;
                 if (multiline and (i.alias_tok != null or i.exposes.span.len > 0)) {
                     flushed = try fmt.flushCommentsAfter(last_module_tok);
                 }
@@ -447,7 +452,11 @@ const Formatter = struct {
                         flushed = try fmt.flushCommentsAfter(a);
                     }
                 }
-                if (i.exposes.span.len > 0) {
+                // Output exposing clause if there are exposed items, OR if there was unusual
+                // spacing (DotUpperIdent) in the module path - in the latter case, we need
+                // to output "exposing []" to prevent auto-expose on re-format.
+                const needs_exposing = i.exposes.span.len > 0 or path_result.has_unusual_spacing;
+                if (needs_exposing) {
                     if (flushed) {
                         fmt.curr_indent += 1;
                         try fmt.pushIndent();
@@ -456,18 +465,19 @@ const Formatter = struct {
                         try fmt.pushAll(" exposing ");
                     }
                     const items = fmt.ast.store.exposedItemSlice(i.exposes);
-                    const items_region = fmt.regionInSlice(AST.ExposedItem.Idx, items);
-                    // This is a near copy of formatCollection because to make that function
-                    // work correctly, the exposed items have to be in a new Node type that
-                    // will have its own region.
-                    // Include the open and close squares.
-                    const items_multiline = fmt.ast.regionIsMultiline(.{ .start = items_region.start - 1, .end = items_region.end + 1 }) or
-                        fmt.nodesWillBeMultiline(AST.ExposedItem.Idx, items);
                     const braces = Braces.square;
                     try fmt.push(braces.start());
                     if (items.len == 0) {
+                        // Empty exposing list - just output []
                         try fmt.push(braces.end());
                     } else {
+                        const items_region = fmt.regionInSlice(AST.ExposedItem.Idx, items);
+                        // This is a near copy of formatCollection because to make that function
+                        // work correctly, the exposed items have to be in a new Node type that
+                        // will have its own region.
+                        // Include the open and close squares.
+                        const items_multiline = fmt.ast.regionIsMultiline(.{ .start = items_region.start - 1, .end = items_region.end + 1 }) or
+                            fmt.nodesWillBeMultiline(AST.ExposedItem.Idx, items);
                         if (items_multiline) {
                             fmt.curr_indent += 1;
                         }
@@ -754,31 +764,31 @@ const Formatter = struct {
     /// module_name_tok points to the second-to-last token.
     /// For explicit clause imports (like `import A.B.C as D`), module_name_tok points to
     /// the first token and we iterate through consecutive uppercase tokens.
-    fn formatModulePath(fmt: *Formatter, module_name_tok: Token.Idx, qualifier: ?Token.Idx, exposes: AST.ExposedItem.Span) !Token.Idx {
+    const ModulePathResult = struct {
+        last_tok: Token.Idx,
+        has_unusual_spacing: bool, // True if DotUpperIdent (space before dot) was encountered
+    };
+
+    fn formatModulePath(fmt: *Formatter, module_name_tok: Token.Idx, qualifier: ?Token.Idx, exposes: AST.ExposedItem.Span) !ModulePathResult {
         const curr_indent = fmt.curr_indent;
         defer {
             fmt.curr_indent = curr_indent;
         }
 
-        // Check if this is auto-expose by seeing if the first exposed item's token
-        // immediately follows module_name_tok (meaning it was auto-generated)
-        var is_auto_expose = false;
+        var has_unusual_spacing = false;
+
+        // Get the first exposed token if any (for auto-expose detection)
+        var first_exposed_tok: ?Token.Idx = null;
         if (exposes.span.len > 0) {
             const exposed_slice = fmt.ast.store.exposedItemSlice(exposes);
             if (exposed_slice.len > 0) {
                 const first_exposed = fmt.ast.store.getExposedItem(exposed_slice[0]);
-                const first_exposed_tok = switch (first_exposed) {
+                first_exposed_tok = switch (first_exposed) {
                     .lower_ident => |i| i.ident,
                     .upper_ident => |i| i.ident,
                     .upper_ident_star => |i| i.ident,
                     .malformed => null,
                 };
-                if (first_exposed_tok) |tok| {
-                    // For auto-expose, the exposed token immediately follows module_name_tok
-                    if (tok == module_name_tok + 1) {
-                        is_auto_expose = true;
-                    }
-                }
             }
         }
 
@@ -792,25 +802,37 @@ const Formatter = struct {
         try fmt.pushTokenText(module_name_tok);
         var last_tok = module_name_tok;
 
-        // For auto-expose, stop here (module_name_tok is already the last token we want)
-        // For explicit clauses, iterate through consecutive uppercase tokens
-        if (!is_auto_expose) {
-            var tok = module_name_tok + 1;
-            const tags = fmt.ast.tokens.tokens.items(.tag);
-            while (tok < tags.len) {
-                const tag = tags[tok];
-                if (tag == .NoSpaceDotUpperIdent or tag == .DotUpperIdent) {
-                    try fmt.push('.');
-                    try fmt.pushTokenText(tok);
-                    last_tok = tok;
-                    tok += 1;
-                } else {
-                    break;
-                }
+        // Iterate through consecutive uppercase tokens in the module path.
+        // For auto-expose, stop before the exposed token (which is part of the path).
+        // For explicit exposes, the exposed token is in the [] list, not the path, so we iterate fully.
+        // DotUpperIdent (space before dot) is formatted with a newline to preserve the structure
+        // and make malformed code visually obvious.
+        var tok = module_name_tok + 1;
+        const tags = fmt.ast.tokens.tokens.items(.tag);
+        while (tok < tags.len) {
+            const tag = tags[tok];
+            if (tag != .NoSpaceDotUpperIdent and tag != .DotUpperIdent) {
+                break;
             }
+            // For auto-expose, stop before the exposed token
+            if (first_exposed_tok) |exp_tok| {
+                if (tok == exp_tok) break;
+            }
+            // DotUpperIdent has space before the dot - format with newline to preserve structure
+            if (tag == .DotUpperIdent) {
+                has_unusual_spacing = true;
+                try fmt.ensureNewline();
+                fmt.curr_indent += 1;
+                try fmt.pushIndent();
+                fmt.curr_indent -= 1;
+            }
+            try fmt.push('.');
+            try fmt.pushTokenText(tok);
+            last_tok = tok;
+            tok += 1;
         }
 
-        return last_tok;
+        return .{ .last_tok = last_tok, .has_unusual_spacing = has_unusual_spacing };
     }
 
     const Braces = enum {
@@ -1068,9 +1090,24 @@ const Formatter = struct {
                 try fmt.pushTokenText(i.token);
             },
             .field_access => |fa| {
+                // Check if left side is a local_dispatch with a plain ident or tag
+                // e.g., `0->M .c` should format as multiline to avoid ambiguity with qualified ident
+                const left_expr = fmt.ast.store.getExpr(fa.left);
+                const needs_newline_before_dot = if (left_expr == .local_dispatch) blk: {
+                    const ld = left_expr.local_dispatch;
+                    const ld_right = fmt.ast.store.getExpr(ld.right);
+                    break :blk ld_right == .ident or ld_right == .tag;
+                } else false;
+
                 _ = try fmt.formatExpr(fa.left);
                 const right_region = fmt.nodeRegion(@intFromEnum(fa.right));
-                if (multiline and try fmt.flushCommentsBefore(right_region.start)) {
+                if (needs_newline_before_dot) {
+                    // Force newline to disambiguate from qualified identifier
+                    // `0->M .c` becomes `0->M\n\t.c` not `0->M.c` (which parses differently)
+                    fmt.curr_indent += 1;
+                    try fmt.ensureNewline();
+                    try fmt.pushIndent();
+                } else if (multiline and try fmt.flushCommentsBefore(right_region.start)) {
                     fmt.curr_indent += 1;
                     try fmt.pushIndent();
                 }
@@ -1124,6 +1161,14 @@ const Formatter = struct {
             },
             .tuple => |t| {
                 try fmt.formatCollection(region, .round, AST.Expr.Idx, fmt.ast.store.exprSlice(t.items), Formatter.formatExpr);
+            },
+            .tuple_access => |ta| {
+                // Format: expr.N (e.g., tuple.0, tuple.1)
+                _ = try fmt.formatExpr(ta.expr);
+                // Get the element index from the token
+                const token_text = fmt.ast.resolve(ta.elem_token);
+                // Token includes leading dot (e.g., ".0")
+                try fmt.pushAll(token_text);
             },
             .record => |r| {
                 try fmt.push('{');
@@ -2877,14 +2922,15 @@ pub fn moduleFmtsStable(gpa: std.mem.Allocator, input: []const u8, debug: bool) 
 }
 
 fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const u8 {
-    var arena = std.heap.ArenaAllocator.init(gpa);
-    defer arena.deinit();
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(gpa);
+    defer allocators.deinit();
 
     var module_env = try ModuleEnv.init(gpa, input);
     defer module_env.deinit();
 
-    var parse_ast = try parse.parse(&module_env.common, module_env.gpa);
-    defer parse_ast.deinit(gpa);
+    const parse_ast = try parse.parse(&allocators, &module_env.common);
+    defer parse_ast.deinit();
 
     // Currently disabled cause SExpr are missing a lot of IR coverage resulting in panics.
     if (debug and false) {
@@ -2902,7 +2948,7 @@ fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const 
 
     var result: std.Io.Writer.Allocating = .init(gpa);
     defer result.deinit();
-    try formatAst(parse_ast, &result.writer);
+    try formatAst(parse_ast.*, &result.writer);
 
     if (debug) {
         std.debug.print("Formatted:\n==========\n{s}\n==========\n\n", .{result.written()});
@@ -2915,10 +2961,10 @@ fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const 
 // produces the same output as formatting once.
 
 test "issue 8851: local dispatch with space before field access is idempotent" {
-    // a=0->b .c() should format stably (not progressively strip parens)
+    // a=0->b .c() should format stably with newline to disambiguate
     const result = try moduleFmtsStable(std.testing.allocator, "a=0->b .c()", false);
     defer std.testing.allocator.free(result);
-    try std.testing.expectEqualStrings("a = 0->b().c()\n", result);
+    try std.testing.expectEqualStrings("a = 0->b()\n\t.c()\n", result);
 }
 
 test "issue 8851: local dispatch with chained zero-arg applies is idempotent" {
@@ -2946,10 +2992,18 @@ test "issue 8851: tuple dispatch with chained zero-arg applies is idempotent" {
 }
 
 test "issue 8851: chained field access after local dispatch is idempotent" {
-    // 0->b .c .d() - multiple field accesses
+    // 0->b .c .d() - multiple field accesses, newline to disambiguate
     const result = try moduleFmtsStable(std.testing.allocator, "a=0->b .c .d()", false);
     defer std.testing.allocator.free(result);
-    try std.testing.expectEqualStrings("a = 0->b().c.d()\n", result);
+    try std.testing.expectEqualStrings("a = 0->b()\n\t.c.d()\n", result);
+}
+
+test "issue 8851: local dispatch with uppercase tag (module-like) is idempotent" {
+    // 0->M .c - uppercase identifier parses as tag, not ident
+    // Dispatching to a tag is invalid, newline disambiguates from qualified identifier
+    const result = try moduleFmtsStable(std.testing.allocator, "a=0->M .c", false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("a = 0->M\n\t.c\n", result);
 }
 
 test "issue 8894: typed integer literal formats correctly" {

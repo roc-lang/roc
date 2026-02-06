@@ -151,7 +151,7 @@ get_greeting = |{}| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "{  } -> Try(Str, [Impossible, ListWasEmpty, .._others])")))
+		(patt (type "{  } -> Try(Str, [Impossible, ListWasEmpty, ..])")))
 	(expressions
-		(expr (type "{  } -> Try(Str, [Impossible, ListWasEmpty, .._others])"))))
+		(expr (type "{  } -> Try(Str, [Impossible, ListWasEmpty, ..])"))))
 ~~~

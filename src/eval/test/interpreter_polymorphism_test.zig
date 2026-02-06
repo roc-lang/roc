@@ -7,6 +7,7 @@ const helpers = @import("helpers.zig");
 // Use interpreter_allocator for interpreter tests (doesn't track leaks)
 const interpreter_allocator = helpers.interpreter_allocator;
 const Interpreter = @import("../interpreter.zig").Interpreter;
+const roc_target = @import("roc_target");
 const can = @import("can");
 const RocOps = @import("builtins").host_abi.RocOps;
 const RocAlloc = @import("builtins").host_abi.RocAlloc;
@@ -91,7 +92,7 @@ test "interpreter poly: return a function then call (int)" {
     const resources = try helpers.parseAndCanonicalizeExpr(interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost{ .allocator = interpreter_allocator };
@@ -112,7 +113,7 @@ test "interpreter poly: return a function then call (string)" {
     const resources = try helpers.parseAndCanonicalizeExpr(interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost{ .allocator = interpreter_allocator };
@@ -136,7 +137,7 @@ test "interpreter captures (monomorphic): adder" {
     const resources = try helpers.parseAndCanonicalizeExpr(interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost{ .allocator = interpreter_allocator };
@@ -157,7 +158,7 @@ test "interpreter captures (monomorphic): constant function" {
     const resources = try helpers.parseAndCanonicalizeExpr(interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost{ .allocator = interpreter_allocator };
@@ -181,7 +182,7 @@ test "interpreter captures (polymorphic): capture id and apply to int" {
     const resources = try helpers.parseAndCanonicalizeExpr(interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost{ .allocator = interpreter_allocator };
@@ -202,7 +203,7 @@ test "interpreter captures (polymorphic): capture id and apply to string" {
     const resources = try helpers.parseAndCanonicalizeExpr(interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost{ .allocator = interpreter_allocator };
@@ -227,7 +228,7 @@ test "interpreter higher-order: apply f then call with 41" {
     const resources = try helpers.parseAndCanonicalizeExpr(interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost{ .allocator = interpreter_allocator };
@@ -247,7 +248,7 @@ test "interpreter higher-order: apply f twice" {
     const resources = try helpers.parseAndCanonicalizeExpr(interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost{ .allocator = interpreter_allocator };
@@ -267,7 +268,7 @@ test "interpreter higher-order: pass constructed closure and apply" {
     const resources = try helpers.parseAndCanonicalizeExpr(interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost{ .allocator = interpreter_allocator };
@@ -287,7 +288,7 @@ test "interpreter higher-order: construct then pass then call" {
     const resources = try helpers.parseAndCanonicalizeExpr(interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost{ .allocator = interpreter_allocator };
@@ -307,7 +308,7 @@ test "interpreter higher-order: compose id with +1" {
     const resources = try helpers.parseAndCanonicalizeExpr(interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost{ .allocator = interpreter_allocator };
@@ -327,7 +328,7 @@ test "interpreter higher-order: return poly fn using captured +n" {
     const resources = try helpers.parseAndCanonicalizeExpr(interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost{ .allocator = interpreter_allocator };
@@ -347,7 +348,7 @@ test "interpreter recursion: simple countdown" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(interpreter_allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(interpreter_allocator, resources);
 
-    //     var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    //     var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     //     defer interp2.deinit();
 
     //     var host = TestHost{ .allocator = interpreter_allocator };
@@ -366,7 +367,7 @@ test "interpreter if: else-if chain selects middle branch" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(interpreter_allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(interpreter_allocator, resources);
 
-    //     var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    //     var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     //     defer interp2.deinit();
 
     //     var host = TestHost{ .allocator = interpreter_allocator };
@@ -388,7 +389,7 @@ test "interpreter var and reassign" {
     const resources = try helpers.parseAndCanonicalizeExpr(interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost{ .allocator = interpreter_allocator };
@@ -407,7 +408,7 @@ test "interpreter logical or is short-circuiting" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(interpreter_allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(interpreter_allocator, resources);
 
-    //     var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    //     var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     //     defer interp2.deinit();
 
     //     var host = TestHost{ .allocator = interpreter_allocator };
@@ -429,7 +430,7 @@ test "interpreter logical and is short-circuiting" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(interpreter_allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(interpreter_allocator, resources);
 
-    //     var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    //     var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     //     defer interp2.deinit();
 
     //     var host = TestHost{ .allocator = interpreter_allocator };
@@ -451,7 +452,7 @@ test "interpreter recursion: factorial 5 -> 120" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(interpreter_allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(interpreter_allocator, resources);
 
-    //     var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    //     var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     //     defer interp2.deinit();
 
     //     var host = TestHost{ .allocator = interpreter_allocator };
@@ -474,7 +475,7 @@ test "interpreter recursion: fibonacci 5 -> 5" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(interpreter_allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(interpreter_allocator, resources);
 
-    //     var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    //     var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     //     defer interp2.deinit();
 
     //     var host = TestHost{ .allocator = interpreter_allocator };
@@ -495,7 +496,7 @@ test "interpreter tag union: one-arg tag Ok(42)" {
     const resources = try helpers.parseAndCanonicalizeExpr(interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost{ .allocator = interpreter_allocator };
@@ -519,7 +520,7 @@ test "interpreter tag union: multi-arg tag Point(1, 2)" {
     const resources = try helpers.parseAndCanonicalizeExpr(interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost{ .allocator = interpreter_allocator };
@@ -538,7 +539,7 @@ test "interpreter tag union: multi-arg tag Point(1, 2)" {
 test "interpreter tag union: nested tag in tuple in tag (issue #8750)" {
     // Regression test for https://github.com/roc-lang/roc/issues/8750
     // This previously caused a stack overflow in layout computation due to
-    // recursive addTypeVar calls for deeply nested tag union structures.
+    // recursive fromTypeVar calls for deeply nested tag union structures.
     // The key test is that this doesn't crash - the rendering format is secondary.
     const roc_src =
         \\Ok((Name("hello"), 5))
@@ -547,7 +548,7 @@ test "interpreter tag union: nested tag in tuple in tag (issue #8750)" {
     const resources = try helpers.parseAndCanonicalizeExpr(interpreter_allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interp2.deinit();
 
     var host = TestHost{ .allocator = interpreter_allocator };

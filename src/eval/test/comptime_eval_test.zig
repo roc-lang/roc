@@ -10,10 +10,12 @@ const compiled_builtins = @import("compiled_builtins");
 const ComptimeEvaluator = @import("../comptime_evaluator.zig").ComptimeEvaluator;
 const BuiltinTypes = @import("../builtins.zig").BuiltinTypes;
 const builtin_loading = @import("../builtin_loading.zig");
+const roc_target = @import("roc_target");
 
 const Can = can.Can;
 const Check = check.Check;
 const ModuleEnv = can.ModuleEnv;
+const Allocators = base.Allocators;
 const testing = std.testing;
 // Use page_allocator for interpreter tests (doesn't track leaks)
 const test_allocator = std.heap.page_allocator;
@@ -43,8 +45,12 @@ fn parseCheckAndEvalModuleWithName(src: []const u8, module_name: []const u8) !Ev
     try module_env.common.calcLineStarts(module_env.gpa);
 
     // Parse the source code
-    var parse_ast = try parse.parse(&module_env.common, module_env.gpa);
-    defer parse_ast.deinit(gpa);
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(gpa);
+    defer allocators.deinit();
+
+    const parse_ast = try parse.parse(&allocators, &module_env.common);
+    defer parse_ast.deinit();
 
     // Empty scratch space (required before canonicalization)
     parse_ast.store.emptyScratch();
@@ -67,7 +73,7 @@ fn parseCheckAndEvalModuleWithName(src: []const u8, module_name: []const u8) !Ev
     };
 
     // Create canonicalizer
-    var czer = try Can.init(module_env, &parse_ast, null);
+    var czer = try Can.init(&allocators, module_env, parse_ast, null);
     defer czer.deinit();
 
     // Canonicalize the module
@@ -91,7 +97,7 @@ fn parseCheckAndEvalModuleWithName(src: []const u8, module_name: []const u8) !Ev
 
     // Create and run comptime evaluator with real builtins
     const builtin_types = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
-    const evaluator = try ComptimeEvaluator.init(gpa, module_env, &.{}, problems, builtin_types, builtin_module.env, &checker.import_mapping);
+    const evaluator = try ComptimeEvaluator.init(gpa, module_env, &.{}, problems, builtin_types, builtin_module.env, &checker.import_mapping, roc_target.RocTarget.detectNative());
 
     return .{
         .module_env = module_env,
@@ -123,8 +129,12 @@ fn parseCheckAndEvalModuleWithImport(src: []const u8, import_name: []const u8, i
     try module_env.common.calcLineStarts(module_env.gpa);
 
     // Parse the source code
-    var parse_ast = try parse.parse(&module_env.common, module_env.gpa);
-    defer parse_ast.deinit(gpa);
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(gpa);
+    defer allocators.deinit();
+
+    const parse_ast = try parse.parse(&allocators, &module_env.common);
+    defer parse_ast.deinit();
 
     // Empty scratch space (required before canonicalization)
     parse_ast.store.emptyScratch();
@@ -162,18 +172,20 @@ fn parseCheckAndEvalModuleWithImport(src: []const u8, import_name: []const u8, i
     try module_envs.put(import_ident, .{ .env = imported_module, .qualified_type_ident = import_qualified_ident });
 
     // Create canonicalizer with imports
-    var czer = try Can.init(module_env, &parse_ast, &module_envs);
+    var czer = try Can.init(&allocators, module_env, parse_ast, &module_envs);
     defer czer.deinit();
 
     // Canonicalize the module
     try czer.canonicalizeFile();
 
-    // Set up other_envs for type checking (include Builtin module)
-    // IMPORTANT: Order matters! Builtin is auto-imported first (Import.Idx 0),
-    // then explicit imports follow in declaration order
+    // Set up imported_envs for type checking and evaluation.
+    // Order must match all_module_envs in the interpreter (self module first, then imports).
+    // evalLookupExternal uses all_module_envs[resolved_idx], so resolveImports indices
+    // must match this array. The interpreter detects other_envs[0]==env and uses it directly.
     var imported_envs = std.ArrayList(*const ModuleEnv).empty;
     defer imported_envs.deinit(gpa);
-    try imported_envs.append(gpa, builtin_module.env); // Builtin must be first (auto-import)
+    try imported_envs.append(gpa, module_env); // Self module must be first
+    try imported_envs.append(gpa, builtin_module.env); // Builtin (auto-import)
     try imported_envs.append(gpa, imported_module); // Then explicit imports
 
     // Resolve imports - map each import to its index in imported_envs
@@ -195,7 +207,7 @@ fn parseCheckAndEvalModuleWithImport(src: []const u8, import_name: []const u8, i
 
     // Create and run comptime evaluator with real builtins
     const builtin_types = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
-    const evaluator = try ComptimeEvaluator.init(gpa, module_env, other_envs_slice, problems, builtin_types, builtin_module.env, &checker.import_mapping);
+    const evaluator = try ComptimeEvaluator.init(gpa, module_env, other_envs_slice, problems, builtin_types, builtin_module.env, &checker.import_mapping, roc_target.RocTarget.detectNative());
 
     return .{
         .module_env = module_env,

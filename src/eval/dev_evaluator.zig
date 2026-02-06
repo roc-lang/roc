@@ -16,16 +16,138 @@ const builtin = @import("builtin");
 const base = @import("base");
 const can = @import("can");
 const layout = @import("layout");
+const types = @import("types");
 const backend = @import("backend");
 const mono = @import("mono");
 const builtin_loading = @import("builtin_loading.zig");
 const builtins = @import("builtins");
-const layout_resolve = @import("layout_resolve.zig");
-const getExprLayoutWithTypeEnv = layout_resolve.getExprLayoutWithTypeEnv;
-const roc_env_mod = @import("roc_env.zig");
-const RocEnv = roc_env_mod.RocEnv;
-const createRocOps = roc_env_mod.createRocOps;
-const codegen_prepare = @import("codegen_prepare.zig");
+
+// Cross-platform setjmp/longjmp for crash recovery.
+const sljmp = @import("sljmp");
+const JmpBuf = sljmp.JmpBuf;
+const setjmp = sljmp.setjmp;
+const longjmp = sljmp.longjmp;
+
+// Windows SEH (Structured Exception Handling) support for catching segfaults.
+// On Windows, we use Vectored Exception Handling (VEH) to catch access violations
+// and longjmp back to the caller, similar to how Unix uses fork() for isolation.
+const WindowsSEH = if (builtin.os.tag == .windows) struct {
+    const windows = std.os.windows;
+
+    // EXCEPTION_RECORD structure for accessing exception info
+    const EXCEPTION_RECORD = extern struct {
+        ExceptionCode: u32,
+        ExceptionFlags: u32,
+        ExceptionRecord: ?*EXCEPTION_RECORD,
+        ExceptionAddress: ?*anyopaque,
+        NumberParameters: u32,
+        ExceptionInformation: [15]usize,
+    };
+
+    // EXCEPTION_POINTERS structure passed to VEH handlers
+    const EXCEPTION_POINTERS = extern struct {
+        ExceptionRecord: *EXCEPTION_RECORD,
+        ContextRecord: *anyopaque,
+    };
+
+    // Exception codes
+    const EXCEPTION_ACCESS_VIOLATION: u32 = 0xC0000005;
+    const EXCEPTION_STACK_OVERFLOW: u32 = 0xC00000FD;
+    const EXCEPTION_ILLEGAL_INSTRUCTION: u32 = 0xC000001D;
+    const EXCEPTION_PRIV_INSTRUCTION: u32 = 0xC0000096;
+    const EXCEPTION_IN_PAGE_ERROR: u32 = 0xC0000006;
+
+    // Return values for exception handlers
+    const EXCEPTION_CONTINUE_SEARCH: c_long = 0;
+
+    // Thread-local storage for the jump buffer - allows nested/concurrent calls
+    threadlocal var current_jmp_buf: ?*JmpBuf = null;
+    threadlocal var exception_code: u32 = 0;
+
+    // VEH handler that catches access violations and longjmps back
+    fn vehHandler(exception_info: *EXCEPTION_POINTERS) callconv(.winapi) c_long {
+        const code = exception_info.ExceptionRecord.ExceptionCode;
+
+        // Check if this is a crash we want to catch
+        const is_crash = switch (code) {
+            EXCEPTION_ACCESS_VIOLATION,
+            EXCEPTION_STACK_OVERFLOW,
+            EXCEPTION_ILLEGAL_INSTRUCTION,
+            EXCEPTION_PRIV_INSTRUCTION,
+            EXCEPTION_IN_PAGE_ERROR,
+            => true,
+            else => false,
+        };
+
+        if (is_crash) {
+            if (current_jmp_buf) |jmp| {
+                exception_code = code;
+                // Clear the jump buffer before longjmp to prevent re-entry
+                current_jmp_buf = null;
+                // longjmp with value 2 to distinguish from roc_crashed (which uses 1)
+                longjmp(jmp, 2);
+            }
+        }
+
+        // Let other handlers process this exception
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+
+    // External Windows API functions
+    extern "kernel32" fn AddVectoredExceptionHandler(
+        first: c_ulong,
+        handler: *const fn (*EXCEPTION_POINTERS) callconv(.winapi) c_long,
+    ) callconv(.winapi) ?*anyopaque;
+
+    extern "kernel32" fn RemoveVectoredExceptionHandler(
+        handle: *anyopaque,
+    ) callconv(.winapi) c_ulong;
+
+    /// Install the VEH handler and set the jump buffer for crash recovery
+    pub fn install(jmp_buf: *JmpBuf) ?*anyopaque {
+        current_jmp_buf = jmp_buf;
+        exception_code = 0;
+        // Add as first handler (1) to ensure we catch exceptions before others
+        return AddVectoredExceptionHandler(1, vehHandler);
+    }
+
+    /// Remove the VEH handler
+    pub fn remove(handle: ?*anyopaque) void {
+        current_jmp_buf = null;
+        if (handle) |h| {
+            _ = RemoveVectoredExceptionHandler(h);
+        }
+    }
+
+    /// Get the exception code that triggered the crash
+    pub fn getExceptionCode() u32 {
+        return exception_code;
+    }
+
+    /// Format exception code as a human-readable string
+    pub fn formatException(code: u32) []const u8 {
+        return switch (code) {
+            EXCEPTION_ACCESS_VIOLATION => "EXCEPTION_ACCESS_VIOLATION (segfault)",
+            EXCEPTION_STACK_OVERFLOW => "EXCEPTION_STACK_OVERFLOW",
+            EXCEPTION_ILLEGAL_INSTRUCTION => "EXCEPTION_ILLEGAL_INSTRUCTION",
+            EXCEPTION_PRIV_INSTRUCTION => "EXCEPTION_PRIV_INSTRUCTION",
+            EXCEPTION_IN_PAGE_ERROR => "EXCEPTION_IN_PAGE_ERROR",
+            else => "Unknown exception",
+        };
+    }
+} else struct {
+    // Stub for non-Windows platforms
+    pub fn install(_: *JmpBuf) ?*anyopaque {
+        return null;
+    }
+    pub fn remove(_: ?*anyopaque) void {}
+    pub fn getExceptionCode() u32 {
+        return 0;
+    }
+    pub fn formatException(_: u32) []const u8 {
+        return "N/A";
+    }
+};
 
 const Allocator = std.mem.Allocator;
 const ModuleEnv = can.ModuleEnv;
@@ -34,6 +156,12 @@ const LoadedModule = builtin_loading.LoadedModule;
 
 // Host ABI types for RocOps
 const RocOps = builtins.host_abi.RocOps;
+const RocAlloc = builtins.host_abi.RocAlloc;
+const RocDealloc = builtins.host_abi.RocDealloc;
+const RocRealloc = builtins.host_abi.RocRealloc;
+const RocDbg = builtins.host_abi.RocDbg;
+const RocExpectFailed = builtins.host_abi.RocExpectFailed;
+const RocCrashed = builtins.host_abi.RocCrashed;
 
 // Mono IR types
 const MonoExprStore = mono.MonoExprStore;
@@ -41,12 +169,224 @@ const MonoLower = mono.Lower;
 
 // Static data interner for string literals
 const StaticDataInterner = backend.StaticDataInterner;
-const JitStaticBackend = StaticDataInterner.JitStaticBackend;
+const MemoryBackend = StaticDataInterner.MemoryBackend;
 
-// Re-export from shared module
-pub const list_i64_layout = layout_resolve.list_i64_layout;
+/// Extract the result layout from a Mono IR expression for use as the overall
+/// expression result layout. For blocks and other compound expressions where the
+/// lowerer may have computed the layout from a CIR type variable with Content.err,
+/// this follows through to the final/inner expression to find the true layout.
+fn monoExprResultLayout(store: *const MonoExprStore, expr_id: mono.MonoIR.MonoExprId) ?layout.Idx {
+    const MonoExpr = mono.MonoIR.MonoExpr;
+    const expr: MonoExpr = store.getExpr(expr_id);
+    return switch (expr) {
+        // For blocks, the result_layout may be wrong if derived from a CIR type variable
+        // with Content.err. Follow through to the final expression instead.
+        .block => |b| monoExprResultLayout(store, b.final_expr),
+        // Same for if/match — the result_layout may be wrong, but branch bodies
+        // should have the correct layout from their own type variables.
+        .if_then_else => |ite| ite.result_layout,
+        .when => |w| w.result_layout,
+        .dbg => |d| d.result_layout,
+        .expect => |e| e.result_layout,
+        .binop => |b| b.result_layout,
+        .unary_minus => |um| um.result_layout,
+        .call => |c| c.ret_layout,
+        .low_level => |ll| ll.ret_layout,
+        .early_return => |er| er.ret_layout,
+        .lookup => |l| l.layout_idx,
+        .record => |r| r.record_layout,
+        .tuple => |t| t.tuple_layout,
+        .tag => |t| t.union_layout,
+        .zero_arg_tag => |z| z.union_layout,
+        .field_access => |fa| fa.field_layout,
+        .tuple_access => |ta| ta.elem_layout,
+        .closure => |c| c.closure_layout,
+        .nominal => |n| n.nominal_layout,
+        // Note: .list and .empty_list store element layout, not the overall list layout.
+        // They are handled by the fromTypeVar fallback.
+        .i64_literal => .i64,
+        .f64_literal => .f64,
+        .f32_literal => .f32,
+        .bool_literal => .bool,
+        .i128_literal => .i128,
+        .dec_literal => .dec,
+        .str_literal => .str,
+        .unary_not => .bool,
+        else => null,
+    };
+}
 
-// RocEnv and createRocOps are imported from roc_env.zig
+/// Environment for RocOps in the DevEvaluator.
+/// Manages arena-backed allocation where free() is a no-op.
+/// This enables proper RC tracking for in-place mutation optimization
+/// while arenas handle actual memory deallocation.
+const DevRocEnv = struct {
+    allocator: Allocator,
+    /// Track allocations to know their sizes for deallocation
+    allocations: std.AutoHashMap(usize, AllocInfo),
+    /// Set to true when roc_crashed is called during execution.
+    crashed: bool = false,
+    /// The crash message (duped from the callback argument).
+    crash_message: ?[]const u8 = null,
+    /// Jump buffer for unwinding from roc_crashed back to the call site.
+    jmp_buf: JmpBuf = undefined,
+
+    const AllocInfo = struct {
+        len: usize,
+        alignment: usize,
+    };
+
+    fn init(allocator: Allocator) DevRocEnv {
+        return .{
+            .allocator = allocator,
+            .allocations = std.AutoHashMap(usize, AllocInfo).init(allocator),
+        };
+    }
+
+    fn deinit(self: *DevRocEnv) void {
+        // Free all tracked allocations before deiniting the map
+        var iter = self.allocations.iterator();
+        while (iter.next()) |entry| {
+            const ptr_addr = entry.key_ptr.*;
+            const alloc_info = entry.value_ptr.*;
+            const slice_ptr: [*]u8 = @ptrFromInt(ptr_addr);
+
+            switch (alloc_info.alignment) {
+                1 => self.allocator.free(@as([*]align(1) u8, @alignCast(slice_ptr))[0..alloc_info.len]),
+                2 => self.allocator.free(@as([*]align(2) u8, @alignCast(slice_ptr))[0..alloc_info.len]),
+                4 => self.allocator.free(@as([*]align(4) u8, @alignCast(slice_ptr))[0..alloc_info.len]),
+                8 => self.allocator.free(@as([*]align(8) u8, @alignCast(slice_ptr))[0..alloc_info.len]),
+                16 => self.allocator.free(@as([*]align(16) u8, @alignCast(slice_ptr))[0..alloc_info.len]),
+                else => {},
+            }
+        }
+        self.allocations.deinit();
+        if (self.crash_message) |msg| self.allocator.free(msg);
+    }
+
+    /// Shared static allocator state for alloc/realloc functions.
+    /// WORKAROUND: Uses a static buffer instead of self.allocator.alignedAlloc.
+    /// There's a mysterious crash when using allocator vtable calls from inside
+    /// lambdas - it works the first time but crashes on subsequent calls from
+    /// inside lambda execution contexts. The root cause appears to be related
+    /// to vtable calls from C-calling-convention functions into Zig code.
+    /// Using a static buffer completely avoids the vtable call.
+    const StaticAlloc = struct {
+        var buffer: [1024 * 1024]u8 align(16) = undefined; // 1MB static buffer
+        var offset: usize = 0;
+        // Track allocation sizes for realloc (simple array of ptr -> size pairs)
+        const max_allocs = 4096;
+        var alloc_ptrs: [max_allocs]usize = [_]usize{0} ** max_allocs;
+        var alloc_sizes: [max_allocs]usize = [_]usize{0} ** max_allocs;
+        var alloc_count: usize = 0;
+
+        fn recordAlloc(ptr: usize, size: usize) void {
+            if (alloc_count < max_allocs) {
+                alloc_ptrs[alloc_count] = ptr;
+                alloc_sizes[alloc_count] = size;
+                alloc_count += 1;
+            }
+        }
+
+        fn getAllocSize(ptr: usize) usize {
+            // Search backwards since recent allocations are more likely to be reallocated
+            var i: usize = alloc_count;
+            while (i > 0) {
+                i -= 1;
+                if (alloc_ptrs[i] == ptr) {
+                    return alloc_sizes[i];
+                }
+            }
+            return 0;
+        }
+    };
+
+    /// Allocation function for RocOps.
+    fn rocAllocFn(roc_alloc: *RocAlloc, env: *anyopaque) callconv(.c) void {
+        _ = env; // unused with static buffer workaround
+
+        // Align the offset to the requested alignment
+        const alignment = roc_alloc.alignment;
+        const mask = alignment - 1;
+        const aligned_offset = (StaticAlloc.offset + mask) & ~mask;
+
+        if (aligned_offset + roc_alloc.length > StaticAlloc.buffer.len) {
+            @panic("DevRocEnv: static buffer overflow");
+        }
+
+        const ptr: [*]u8 = @ptrCast(&StaticAlloc.buffer[aligned_offset]);
+        StaticAlloc.offset = aligned_offset + roc_alloc.length;
+
+        // Track this allocation for realloc
+        StaticAlloc.recordAlloc(@intFromPtr(ptr), roc_alloc.length);
+
+        roc_alloc.answer = @ptrCast(ptr);
+    }
+
+    /// Deallocation function for RocOps.
+    /// Currently a no-op since we use a static buffer for allocations.
+    fn rocDeallocFn(_: *RocDealloc, _: *anyopaque) callconv(.c) void {
+        // Static buffer doesn't support deallocation - this is a no-op
+    }
+
+    /// Reallocation function for RocOps.
+    /// With static buffer, we allocate new space and copy data (old space is not reclaimed).
+    fn rocReallocFn(roc_realloc: *RocRealloc, _: *anyopaque) callconv(.c) void {
+        // Align the offset to the requested alignment
+        const alignment = roc_realloc.alignment;
+        const mask = alignment - 1;
+        const aligned_offset = (StaticAlloc.offset + mask) & ~mask;
+
+        if (aligned_offset + roc_realloc.new_length > StaticAlloc.buffer.len) {
+            @panic("DevRocEnv: static buffer overflow in realloc");
+        }
+
+        const new_ptr: [*]u8 = @ptrCast(&StaticAlloc.buffer[aligned_offset]);
+        StaticAlloc.offset = aligned_offset + roc_realloc.new_length;
+
+        // Track this new allocation
+        StaticAlloc.recordAlloc(@intFromPtr(new_ptr), roc_realloc.new_length);
+
+        // Copy old data to new location (only copy the old size, not new size)
+        const old_ptr: [*]u8 = @ptrCast(@alignCast(roc_realloc.answer));
+        const old_size = StaticAlloc.getAllocSize(@intFromPtr(old_ptr));
+        const copy_len = @min(old_size, roc_realloc.new_length);
+        if (copy_len > 0) {
+            @memcpy(new_ptr[0..copy_len], old_ptr[0..copy_len]);
+        }
+
+        // Return the new pointer
+        roc_realloc.answer = @ptrCast(new_ptr);
+    }
+
+    /// Debug output function.
+    fn rocDbgFn(roc_dbg: *const RocDbg, _: *anyopaque) callconv(.c) void {
+        // On freestanding (WASM), skip debug output to avoid thread locking
+        if (builtin.os.tag != .freestanding) {
+            const msg = roc_dbg.utf8_bytes[0..roc_dbg.len];
+            std.debug.print("[dbg] {s}\n", .{msg});
+        }
+    }
+
+    /// Expect failed function.
+    fn rocExpectFailedFn(_: *const RocExpectFailed, _: *anyopaque) callconv(.c) void {
+        // On freestanding (WASM), skip debug output to avoid thread locking
+        if (builtin.os.tag != .freestanding) {
+            std.debug.print("[expect failed]\n", .{});
+        }
+    }
+
+    /// Crash function — records the crash and longjmps back to the call site.
+    fn rocCrashedFn(roc_crashed: *const RocCrashed, env: *anyopaque) callconv(.c) void {
+        const self: *DevRocEnv = @ptrCast(@alignCast(env));
+        self.crashed = true;
+        const msg = roc_crashed.utf8_bytes[0..roc_crashed.len];
+        if (self.crash_message) |old| self.allocator.free(old);
+        self.crash_message = self.allocator.dupe(u8, msg) catch null;
+        // Unwind the stack back to the setjmp call site.
+        longjmp(&self.jmp_buf, 1);
+    }
+};
 
 /// Layout index for result types
 pub const LayoutIdx = layout.Idx;
@@ -65,9 +405,9 @@ pub const DevEvaluator = struct {
     builtin_module: LoadedModule,
     builtin_indices: CIR.BuiltinIndices,
 
-    /// Backend for static data allocation (arena-based for JIT)
+    /// Backend for static data allocation (arena-based for in-memory compilation)
     /// Heap-allocated to ensure stable pointer for the interner's Backend reference
-    jit_backend: *JitStaticBackend,
+    memory_backend: *MemoryBackend,
 
     /// Global interner for static data (string literals, etc.)
     /// Lives for the duration of the evaluator session, enabling deduplication
@@ -76,17 +416,25 @@ pub const DevEvaluator = struct {
 
     /// RocOps environment for RC operations.
     /// Heap-allocated to ensure stable pointer for the roc_ops reference.
-    roc_env: *RocEnv,
+    roc_env: *DevRocEnv,
 
     /// RocOps instance for passing to generated code.
     /// Contains function pointers for allocation, deallocation, and error handling.
     /// Required for proper RC tracking (incref/decref operations).
     roc_ops: RocOps,
 
+    /// Global layout store shared across all modules.
+    /// Created lazily on first code generation and reused for subsequent calls.
+    /// This ensures layout indices are consistent across cross-module calls.
+    global_layout_store: ?*layout.Store = null,
+
+    /// Cached all_module_envs slice for layout store initialization.
+    /// Set during generateCode and used by ensureGlobalLayoutStore.
+    cached_module_envs: ?[]const *ModuleEnv = null,
+
     pub const Error = error{
         OutOfMemory,
         UnsupportedType,
-        UnsupportedExpression,
         Crash,
         RuntimeError,
         ParseError,
@@ -112,34 +460,119 @@ pub const DevEvaluator = struct {
             compiled_builtins.builtin_source,
         ) catch return error.OutOfMemory;
 
-        // Heap-allocate the JIT backend so the pointer remains stable
-        const jit_backend = allocator.create(JitStaticBackend) catch return error.OutOfMemory;
-        jit_backend.* = JitStaticBackend.init(allocator);
+        // Heap-allocate the memory backend so the pointer remains stable
+        const memory_backend = allocator.create(MemoryBackend) catch return error.OutOfMemory;
+        memory_backend.* = MemoryBackend.init(allocator);
 
         // Initialize the interner with a pointer to the heap-allocated backend
-        const static_interner = StaticDataInterner.init(allocator, jit_backend.backend());
+        const static_interner = StaticDataInterner.init(allocator, memory_backend.backend());
 
         // Heap-allocate the RocOps environment so the pointer remains stable
-        const roc_env = allocator.create(RocEnv) catch return error.OutOfMemory;
-        roc_env.* = RocEnv.init(allocator);
-        const roc_ops = createRocOps(roc_env);
+        const roc_env = allocator.create(DevRocEnv) catch return error.OutOfMemory;
+        roc_env.* = DevRocEnv.init(allocator);
+
+        // Create RocOps with function pointers to the DevRocEnv handlers
+        // Use a static dummy array for hosted_fns since count=0 means no hosted functions
+        // This avoids undefined behavior from using `undefined` for the pointer
+        const empty_hosted_fns = struct {
+            fn dummyHostedFn(_: *RocOps, _: *anyopaque, _: *anyopaque) callconv(.c) void {}
+            var empty: [1]builtins.host_abi.HostedFn = .{&dummyHostedFn};
+        };
+        const roc_ops = RocOps{
+            .env = @ptrCast(roc_env),
+            .roc_alloc = &DevRocEnv.rocAllocFn,
+            .roc_dealloc = &DevRocEnv.rocDeallocFn,
+            .roc_realloc = &DevRocEnv.rocReallocFn,
+            .roc_dbg = &DevRocEnv.rocDbgFn,
+            .roc_expect_failed = &DevRocEnv.rocExpectFailedFn,
+            .roc_crashed = &DevRocEnv.rocCrashedFn,
+            .hosted_fns = .{ .count = 0, .fns = &empty_hosted_fns.empty },
+        };
 
         return DevEvaluator{
             .allocator = allocator,
             .builtin_module = builtin_module,
             .builtin_indices = builtin_indices,
-            .jit_backend = jit_backend,
+            .memory_backend = memory_backend,
             .static_interner = static_interner,
             .roc_env = roc_env,
             .roc_ops = roc_ops,
+            .global_layout_store = null,
+            .cached_module_envs = null,
         };
+    }
+
+    /// Get or create the global layout store.
+    /// The global layout store uses all module type stores for cross-module layout computation.
+    fn ensureGlobalLayoutStore(self: *DevEvaluator, all_module_envs: []const *ModuleEnv) Error!*layout.Store {
+        // If we already have a global layout store, return it
+        if (self.global_layout_store) |ls| return ls;
+
+        // Get builtin_str from module 0 (should be the builtin module)
+        const builtin_str = if (all_module_envs.len > 0)
+            all_module_envs[0].idents.builtin_str
+        else
+            null;
+
+        // Create the global layout store
+        const ls = self.allocator.create(layout.Store) catch return error.OutOfMemory;
+        ls.* = layout.Store.init(all_module_envs, builtin_str, self.allocator, base.target.TargetUsize.native) catch {
+            self.allocator.destroy(ls);
+            return error.OutOfMemory;
+        };
+
+        self.global_layout_store = ls;
+        self.cached_module_envs = all_module_envs;
+        return ls;
+    }
+
+    /// Returns the crash message if roc_crashed was called during execution.
+    pub fn getCrashMessage(self: *const DevEvaluator) ?[]const u8 {
+        if (self.roc_env.crashed) return self.roc_env.crash_message orelse "roc_crashed called (no message)";
+        return null;
+    }
+
+    /// Execute compiled code with crash protection.
+    ///
+    /// This function provides two levels of protection:
+    /// 1. roc_crashed calls (e.g., divide by zero) - caught via setjmp/longjmp, returns RocCrashed
+    /// 2. Segfaults (access violations) - caught via Windows VEH on Windows, returns Segfault
+    ///
+    /// On Unix, segfault protection is handled at a higher level via fork() in the test harness.
+    /// On Windows, we use Vectored Exception Handling (VEH) since fork() is not available.
+    pub fn callWithCrashProtection(self: *DevEvaluator, executable: *const backend.ExecutableMemory, result_ptr: *anyopaque) error{ RocCrashed, Segfault }!void {
+        self.roc_env.crashed = false;
+
+        // On Windows, install the VEH handler to catch segfaults
+        const veh_handle = WindowsSEH.install(&self.roc_env.jmp_buf);
+        defer WindowsSEH.remove(veh_handle);
+
+        const jmp_result = setjmp(&self.roc_env.jmp_buf);
+        if (jmp_result != 0) {
+            if (jmp_result == 2) {
+                // Returned via longjmp from VEH handler (segfault)
+                const code = WindowsSEH.getExceptionCode();
+                std.debug.print("\nSegfault caught: {s} (code 0x{X:0>8})\n", .{ WindowsSEH.formatException(code), code });
+                return error.Segfault;
+            } else {
+                // Returned via longjmp from rocCrashedFn (value 1)
+                return error.RocCrashed;
+            }
+        }
+        executable.callWithResultPtrAndRocOps(result_ptr, @constCast(&self.roc_ops));
     }
 
     /// Clean up resources
     pub fn deinit(self: *DevEvaluator) void {
+        // Clean up the global layout store if it exists
+        if (self.global_layout_store) |ls| {
+            ls.deinit();
+            self.allocator.destroy(ls);
+        }
         self.static_interner.deinit();
-        self.jit_backend.deinit();
-        self.allocator.destroy(self.jit_backend);
+        self.memory_backend.deinit();
+        self.allocator.destroy(self.memory_backend);
+        self.roc_env.deinit();
         self.allocator.destroy(self.roc_env);
         self.builtin_module.deinit();
     }
@@ -156,7 +589,45 @@ pub const DevEvaluator = struct {
         self: *DevEvaluator,
         modules: []*ModuleEnv,
     ) Error!*can.LambdaSetInference {
-        return codegen_prepare.prepareModulesForCodegen(self.allocator, modules) catch return error.OutOfMemory;
+        // 1. Run LambdaLifter on each module (extracts closure bodies)
+        for (modules) |module| {
+            if (!module.is_lambda_lifted) {
+                var top_level_patterns = std.AutoHashMap(can.CIR.Pattern.Idx, void).init(self.allocator);
+                defer top_level_patterns.deinit();
+
+                // Mark top-level patterns from all_statements
+                const stmts = module.store.sliceStatements(module.all_statements);
+                for (stmts) |stmt_idx| {
+                    const stmt = module.store.getStatement(stmt_idx);
+                    switch (stmt) {
+                        .s_decl => |decl| {
+                            top_level_patterns.put(decl.pattern, {}) catch {};
+                        },
+                        else => {},
+                    }
+                }
+
+                var lifter = can.LambdaLifter.init(self.allocator, module, &top_level_patterns);
+                defer lifter.deinit();
+                module.is_lambda_lifted = true;
+            }
+        }
+
+        // 2. Run Lambda Set Inference across ALL modules (assigns global names)
+        const inference = self.allocator.create(can.LambdaSetInference) catch return error.OutOfMemory;
+        inference.* = can.LambdaSetInference.init(self.allocator);
+        inference.inferAll(modules) catch return error.OutOfMemory;
+
+        // 3. Run ClosureTransformer on each module (uses inference results)
+        for (modules) |module| {
+            if (!module.is_defunctionalized) {
+                var transformer = can.ClosureTransformer.initWithInference(self.allocator, module, inference);
+                defer transformer.deinit();
+                module.is_defunctionalized = true;
+            }
+        }
+
+        return inference;
     }
 
     /// Result of code generation
@@ -164,6 +635,8 @@ pub const DevEvaluator = struct {
         code: []const u8,
         allocator: Allocator,
         result_layout: LayoutIdx,
+        /// Reference to the global layout store (owned by DevEvaluator, not this struct)
+        layout_store: ?*layout.Store = null,
         tuple_len: usize = 1,
         crash_message: ?[]const u8 = null,
         /// Offset from start of code where execution should begin
@@ -174,6 +647,7 @@ pub const DevEvaluator = struct {
             if (self.code.len > 0) {
                 self.allocator.free(self.code);
             }
+            // Note: layout_store is owned by DevEvaluator, not cleaned up here
         }
     };
 
@@ -199,20 +673,38 @@ pub const DevEvaluator = struct {
             }
         }
 
-        // Create the lowerer
-        var lowerer = MonoLower.init(self.allocator, &mono_store, all_module_envs, null, null);
+        // Get or create the global layout store for resolving layouts of composite types
+        // This is a single store shared across all modules for cross-module correctness
+        const layout_store_ptr = try self.ensureGlobalLayoutStore(all_module_envs);
+
+        // Create the lowerer with the layout store
+        var lowerer = MonoLower.init(self.allocator, &mono_store, all_module_envs, null, layout_store_ptr);
         defer lowerer.deinit();
 
-        // Lower the CIR expression to Mono IR
-        const mono_expr_id = lowerer.lowerExpr(module_idx, expr_idx) catch {
-            return error.UnsupportedExpression;
+        // Lower CIR expression to Mono IR
+        const lowered_expr_id = lowerer.lowerExpr(module_idx, expr_idx) catch {
+            return error.RuntimeError;
         };
 
-        // Determine the result layout
-        var type_env = std.AutoHashMap(u32, LayoutIdx).init(self.allocator);
-        defer type_env.deinit();
+        // Run RC insertion pass on the Mono IR
+        var rc_pass = mono.RcInsert.RcInsertPass.init(self.allocator, &mono_store, layout_store_ptr);
+        defer rc_pass.deinit();
+        const mono_expr_id = rc_pass.insertRcOps(lowered_expr_id) catch lowered_expr_id;
+
+        // Determine the result layout from the Mono IR expression.
+        // We prefer the layout embedded in the Mono expression because the CIR
+        // type variable can have Content.err for expressions involving the `?`
+        // operator at top level (where the Err branch desugars to runtime_error).
         const cir_expr = module_env.store.getExpr(expr_idx);
-        const result_layout = getExprLayoutWithTypeEnv(self.allocator, module_env, cir_expr, &type_env);
+        const result_layout = monoExprResultLayout(&mono_store, mono_expr_id) orelse blk: {
+            // Fallback: resolve from the CIR type variable
+            const type_var = can.ModuleEnv.varFrom(expr_idx);
+            var type_scope = types.TypeScope.init(self.allocator);
+            defer type_scope.deinit();
+            break :blk layout_store_ptr.fromTypeVar(module_idx, type_var, &type_scope, null) catch {
+                return error.RuntimeError;
+            };
+        };
 
         // Detect tuple expressions to set tuple_len
         const tuple_len: usize = if (cir_expr == .e_tuple)
@@ -220,10 +712,12 @@ pub const DevEvaluator = struct {
         else
             1;
 
-        // Create the code generator
-        var codegen = backend.MonoExprCodeGen.init(
+        // Create the code generator with the layout store
+        // Use NativeMonoExprCodeGen since we're executing on the host machine
+        var codegen = backend.NativeMonoExprCodeGen.init(
             self.allocator,
             &mono_store,
+            layout_store_ptr,
             &self.static_interner,
         );
         defer codegen.deinit();
@@ -234,19 +728,20 @@ pub const DevEvaluator = struct {
         const procs = mono_store.getProcs();
         if (procs.len > 0) {
             codegen.compileAllProcs(procs) catch {
-                return error.UnsupportedExpression;
+                return error.RuntimeError;
             };
         }
 
         // Generate code for the expression
         const gen_result = codegen.generateCode(mono_expr_id, result_layout, tuple_len) catch {
-            return error.UnsupportedExpression;
+            return error.RuntimeError;
         };
 
         return CodeResult{
             .code = gen_result.code,
             .allocator = self.allocator,
             .result_layout = result_layout,
+            .layout_store = layout_store_ptr,
             .tuple_len = tuple_len,
             .entry_offset = gen_result.entry_offset,
         };
@@ -257,7 +752,7 @@ pub const DevEvaluator = struct {
     /// NOTE: Native code generation is not currently implemented.
     /// This function exists to maintain the API but always returns an error.
     pub fn generateCodeFromSource(_: *DevEvaluator, _: []const u8) Error!CodeResult {
-        return error.UnsupportedExpression;
+        return error.RuntimeError;
     }
 
     /// Result of evaluation
@@ -282,7 +777,8 @@ pub const DevEvaluator = struct {
     };
 
     /// RocStr constants
-    const ROCSTR_SIZE: usize = 24;
+    const RocStr = builtins.str.RocStr;
+    const ROCSTR_SIZE: usize = @sizeOf(RocStr);
     const SMALL_STR_MASK: u8 = 0x80;
 
     /// Evaluate source code and return the result
@@ -294,7 +790,7 @@ pub const DevEvaluator = struct {
             if (code_result.crash_message != null) {
                 return error.Crash;
             }
-            return error.UnsupportedExpression;
+            return error.RuntimeError;
         }
 
         var executable = backend.ExecutableMemory.initWithEntryOffset(code_result.code, code_result.entry_offset) catch return error.ExecutionError;
@@ -351,15 +847,15 @@ pub const DevEvaluator = struct {
                     const str_copy = self.allocator.dupe(u8, roc_str_bytes[0..len]) catch return error.OutOfMemory;
                     break :blk EvalResult{ .str_val = str_copy };
                 } else {
-                    // Big string: first 8 bytes are pointer to data, next 8 bytes are length
+                    // Big string: first usize bytes are pointer to data, next usize bytes are length
                     const bytes_ptr: *const [*]const u8 = @ptrCast(@alignCast(&roc_str_bytes[0]));
-                    const length_ptr: *const u64 = @ptrCast(@alignCast(&roc_str_bytes[8]));
+                    const length_ptr: *const usize = @ptrCast(@alignCast(&roc_str_bytes[@sizeOf(usize)]));
 
                     const data_ptr = bytes_ptr.*;
                     const length = length_ptr.*;
 
                     // Handle the seamless slice bit (high bit of length indicates seamless slice)
-                    const SEAMLESS_SLICE_BIT: u64 = @as(u64, @bitCast(@as(i64, std.math.minInt(i64))));
+                    const SEAMLESS_SLICE_BIT: usize = @as(usize, @bitCast(@as(isize, std.math.minInt(isize))));
                     const actual_length = length & ~SEAMLESS_SLICE_BIT;
 
                     if (actual_length == 0) {
@@ -375,8 +871,6 @@ pub const DevEvaluator = struct {
         };
     }
 };
-
-// Layout resolution functions are imported from layout_resolve.zig
 
 // Tests
 

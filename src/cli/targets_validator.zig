@@ -10,8 +10,11 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const parse = @import("parse");
+const base = @import("base");
 const target_mod = @import("target.zig");
 const reporting = @import("reporting");
+
+const Allocators = base.Allocators;
 
 const RocTarget = target_mod.RocTarget;
 const TargetsConfig = target_mod.TargetsConfig;
@@ -722,7 +725,6 @@ test "validateTargetFilesExist returns valid when no files_dir specified" {
 
 test "validatePlatformHasTargets detects missing targets section" {
     const allocator = std.testing.allocator;
-    const base = @import("base");
 
     // Platform without targets section
     const source =
@@ -740,8 +742,12 @@ test "validatePlatformHasTargets detects missing targets section" {
     var env = try base.CommonEnv.init(allocator, source_copy);
     defer env.deinit(allocator);
 
-    var ast = try parse.parse(&env, allocator);
-    defer ast.deinit(allocator);
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(allocator);
+    defer allocators.deinit();
+
+    const ast = try parse.parse(&allocators, &env);
+    defer ast.deinit();
 
     const result = validatePlatformHasTargets(ast, "test/platform/main.roc");
 
@@ -758,7 +764,6 @@ test "validatePlatformHasTargets detects missing targets section" {
 
 test "validatePlatformHasTargets accepts platform with targets section" {
     const allocator = std.testing.allocator;
-    const base = @import("base");
 
     // Platform with targets section
     const source =
@@ -782,8 +787,12 @@ test "validatePlatformHasTargets accepts platform with targets section" {
     var env = try base.CommonEnv.init(allocator, source_copy);
     defer env.deinit(allocator);
 
-    var ast = try parse.parse(&env, allocator);
-    defer ast.deinit(allocator);
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(allocator);
+    defer allocators.deinit();
+
+    const ast = try parse.parse(&allocators, &env);
+    defer ast.deinit();
 
     const result = validatePlatformHasTargets(ast, "test/platform/main.roc");
 
@@ -792,7 +801,6 @@ test "validatePlatformHasTargets accepts platform with targets section" {
 
 test "validatePlatformHasTargets skips non-platform headers" {
     const allocator = std.testing.allocator;
-    const base = @import("base");
 
     // App module (not a platform)
     const source =
@@ -808,8 +816,12 @@ test "validatePlatformHasTargets skips non-platform headers" {
     var env = try base.CommonEnv.init(allocator, source_copy);
     defer env.deinit(allocator);
 
-    var ast = try parse.parse(&env, allocator);
-    defer ast.deinit(allocator);
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(allocator);
+    defer allocators.deinit();
+
+    const ast = try parse.parse(&allocators, &env);
+    defer ast.deinit();
 
     const result = validatePlatformHasTargets(ast, "app/main.roc");
 
@@ -819,7 +831,6 @@ test "validatePlatformHasTargets skips non-platform headers" {
 
 test "validatePlatformHasTargets accepts platform with multiple target types" {
     const allocator = std.testing.allocator;
-    const base = @import("base");
 
     // Platform with exe and static_lib targets
     const source =
@@ -847,8 +858,12 @@ test "validatePlatformHasTargets accepts platform with multiple target types" {
     var env = try base.CommonEnv.init(allocator, source_copy);
     defer env.deinit(allocator);
 
-    var ast = try parse.parse(&env, allocator);
-    defer ast.deinit(allocator);
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(allocator);
+    defer allocators.deinit();
+
+    const ast = try parse.parse(&allocators, &env);
+    defer ast.deinit();
 
     const result = validatePlatformHasTargets(ast, "test/platform/main.roc");
 
@@ -857,7 +872,6 @@ test "validatePlatformHasTargets accepts platform with multiple target types" {
 
 test "validatePlatformHasTargets accepts platform with win_gui target" {
     const allocator = std.testing.allocator;
-    const base = @import("base");
 
     // Platform with win_gui special identifier
     const source =
@@ -880,8 +894,12 @@ test "validatePlatformHasTargets accepts platform with win_gui target" {
     var env = try base.CommonEnv.init(allocator, source_copy);
     defer env.deinit(allocator);
 
-    var ast = try parse.parse(&env, allocator);
-    defer ast.deinit(allocator);
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(allocator);
+    defer allocators.deinit();
+
+    const ast = try parse.parse(&allocators, &env);
+    defer ast.deinit();
 
     const result = validatePlatformHasTargets(ast, "test/platform/main.roc");
 
@@ -890,7 +908,6 @@ test "validatePlatformHasTargets accepts platform with win_gui target" {
 
 test "TargetsConfig.fromAST extracts targets configuration" {
     const allocator = std.testing.allocator;
-    const base = @import("base");
 
     // Platform with various targets
     const source =
@@ -915,8 +932,12 @@ test "TargetsConfig.fromAST extracts targets configuration" {
     var env = try base.CommonEnv.init(allocator, source_copy);
     defer env.deinit(allocator);
 
-    var ast = try parse.parse(&env, allocator);
-    defer ast.deinit(allocator);
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(allocator);
+    defer allocators.deinit();
+
+    const ast = try parse.parse(&allocators, &env);
+    defer ast.deinit();
 
     // Try to extract targets config from the AST
     const maybe_config = try TargetsConfig.fromAST(allocator, ast);

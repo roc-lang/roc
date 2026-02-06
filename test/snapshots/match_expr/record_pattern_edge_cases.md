@@ -30,7 +30,7 @@ It has the type:
 
     { c: Str }
 
-But I expected it to be:
+But you are trying to use it as:
 
     Str
 

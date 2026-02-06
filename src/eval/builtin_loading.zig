@@ -13,11 +13,14 @@ pub const LoadedModule = struct {
     gpa: std.mem.Allocator,
 
     pub fn deinit(self: *LoadedModule) void {
-        // Only free the hashmap that was allocated during deserialization
-        // Most other data (like the SafeList contents) points into the buffer
-        self.env.imports.map.deinit(self.gpa);
+        // For builtins loaded via deserializeInto (not deserializeWithMutableTypes),
+        // most data points into the buffer. Only the imports hashmap was heap-allocated.
+        self.env.imports.deinitMapOnly(self.gpa);
 
-        // Free the buffer (the env was deserialized in-place into this buffer)
+        // Free the heap-allocated ModuleEnv struct itself (Option F pattern)
+        self.gpa.destroy(self.env);
+
+        // Free the buffer that holds the serialized data
         self.gpa.free(self.buffer);
     }
 };
@@ -47,7 +50,7 @@ pub fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_n
         @ptrCast(@alignCast(buffer.ptr)),
     );
     const base_addr = @intFromPtr(buffer.ptr);
-    const env = try serialized_ptr.deserialize(base_addr, gpa, source, module_name);
+    const env = try serialized_ptr.deserializeInto(base_addr, gpa, source, module_name);
 
     return LoadedModule{
         .env = env,

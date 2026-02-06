@@ -36,14 +36,35 @@ pub const SymbolResolver = relocation_mod.SymbolResolver;
 pub const CodeGen = @import("CodeGen.zig");
 pub const Backend = @import("Backend.zig");
 pub const ExecutableMemory = @import("ExecutableMemory.zig").ExecutableMemory;
-/// Backwards compatibility alias
-pub const JitCode = ExecutableMemory;
 
 // Static data interner for string literals and other static data
 pub const StaticDataInterner = @import("StaticDataInterner.zig");
 
-/// Mono IR code generator for x86_64
-pub const MonoExprCodeGen = @import("MonoExprCodeGen.zig").MonoExprCodeGen;
+// MonoExprCodeGen - parameterized by RocTarget for cross-compilation support
+const MonoExprCodeGenMod = @import("MonoExprCodeGen.zig");
+
+/// Mono IR code generator parameterized by target (use MonoExprCodeGen(target) to instantiate)
+pub const MonoExprCodeGen = MonoExprCodeGenMod.MonoExprCodeGen;
+
+/// Pre-instantiated MonoExprCodeGen for native host target
+pub const NativeMonoExprCodeGen = MonoExprCodeGenMod.NativeMonoExprCodeGen;
+
+/// x86_64 Linux with glibc
+pub const X64GlibcMonoExprCodeGen = MonoExprCodeGenMod.X64GlibcMonoExprCodeGen;
+/// x86_64 Linux with musl
+pub const X64MuslMonoExprCodeGen = MonoExprCodeGenMod.X64MuslMonoExprCodeGen;
+/// x86_64 Windows
+pub const X64WinMonoExprCodeGen = MonoExprCodeGenMod.X64WinMonoExprCodeGen;
+/// x86_64 macOS
+pub const X64MacMonoExprCodeGen = MonoExprCodeGenMod.X64MacMonoExprCodeGen;
+/// ARM64 Linux with glibc
+pub const Arm64GlibcMonoExprCodeGen = MonoExprCodeGenMod.Arm64GlibcMonoExprCodeGen;
+/// ARM64 Linux with musl
+pub const Arm64MuslMonoExprCodeGen = MonoExprCodeGenMod.Arm64MuslMonoExprCodeGen;
+/// ARM64 Windows
+pub const Arm64WinMonoExprCodeGen = MonoExprCodeGenMod.Arm64WinMonoExprCodeGen;
+/// ARM64 macOS
+pub const Arm64MacMonoExprCodeGen = MonoExprCodeGenMod.Arm64MacMonoExprCodeGen;
 
 /// Object file reader for extracting code sections from ELF/Mach-O/COFF
 pub const object_reader = @import("object_reader.zig");
@@ -201,6 +222,7 @@ pub fn Storage(
                 switch (entry.value) {
                     .general_reg => |reg| try self.general_free.append(self.allocator, reg),
                     .float_reg => |reg| try self.float_free.append(self.allocator, reg),
+                    // Stack slots are reclaimed on function return; no_data has nothing to free
                     .stack, .no_data => {},
                 }
             }
@@ -239,7 +261,7 @@ pub const AArch64Backend = DevBackend(
 );
 
 /// Resolve builtin function names to their addresses.
-/// This is used by JitCode to patch function call relocations.
+/// This is used by ExecutableMemory to patch function call relocations.
 ///
 /// Supported function names:
 /// - "incref_data_ptr" -> increfDataPtrC
@@ -270,6 +292,7 @@ pub fn resolveBuiltinFunction(name: []const u8) ?usize {
 
 test "backend module imports" {
     std.testing.refAllDecls(@This());
+    std.testing.refAllDecls(@import("CallBuilder.zig"));
 }
 
 test "resolve builtin functions" {
