@@ -1135,6 +1135,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 .float_to_str => .str,
                 .dec_to_str => .str,
                 .str_escape_and_quote => .str,
+                .discriminant_switch => .str,
                 // For other expressions, no layout available
                 else => null,
             };
@@ -8563,6 +8564,18 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 else => unreachable,
             };
 
+            // While loop condition is Bool (1 byte). When loaded from a mutable
+            // variable's stack slot, upper bytes may contain uninitialized data.
+            // Mask to the low byte to ensure correct zero-comparison.
+            if (comptime target.toCpuArch() == .aarch64) {
+                const mask_reg = try self.allocTempGeneral();
+                try self.codegen.emitLoadImm(mask_reg, 0xFF);
+                try self.codegen.emit.andRegRegReg(.w64, cond_reg, cond_reg, mask_reg);
+                self.codegen.freeGeneral(mask_reg);
+            } else {
+                try self.codegen.emit.andRegImm32(cond_reg, 0xFF);
+            }
+
             // Compare condition with 0 (false)
             const zero_reg = try self.allocTempGeneral();
             try self.codegen.emitLoadImm(zero_reg, 0);
@@ -9931,7 +9944,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     const ls = self.layout_store orelse unreachable;
                     const capture_layout = ls.getLayout(capture.layout_idx);
                     const capture_size = ls.layoutSizeAlign(capture_layout).size;
-                    const is_i128 = (capture_size >= 16);
+                    // Number of 8-byte words to copy (rounded up)
+                    const num_words: u32 = (capture_size + 7) / 8;
 
                     // Copy value to the struct offset
                     switch (capture_loc) {
@@ -9957,22 +9971,37 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         },
                         .general_reg => |reg| {
                             try self.codegen.emitStoreStack(.w64, base_offset + offset, reg);
-                            if (is_i128) {
-                                // Zero-extend to 128 bits
+                            if (num_words > 1) {
+                                // Zero-extend remaining words
                                 const temp = try self.allocTempGeneral();
                                 try self.codegen.emitLoadImm(temp, 0);
-                                try self.codegen.emitStoreStack(.w64, base_offset + offset + 8, temp);
+                                var w: u32 = 1;
+                                while (w < num_words) : (w += 1) {
+                                    try self.codegen.emitStoreStack(.w64, base_offset + offset + @as(i32, @intCast(w * 8)), temp);
+                                }
                                 self.codegen.freeGeneral(temp);
                             }
                         },
                         .stack => |s| {
                             const src_offset = s.offset;
+                            // Copy all words from source to destination
                             const temp = try self.allocTempGeneral();
-                            try self.codegen.emitLoadStack(.w64, temp, src_offset);
-                            try self.codegen.emitStoreStack(.w64, base_offset + offset, temp);
-                            if (is_i128) {
-                                try self.codegen.emitLoadStack(.w64, temp, src_offset + 8);
-                                try self.codegen.emitStoreStack(.w64, base_offset + offset + 8, temp);
+                            var w: u32 = 0;
+                            while (w < num_words) : (w += 1) {
+                                const word_off: i32 = @intCast(w * 8);
+                                try self.codegen.emitLoadStack(.w64, temp, src_offset + word_off);
+                                try self.codegen.emitStoreStack(.w64, base_offset + offset + word_off, temp);
+                            }
+                            self.codegen.freeGeneral(temp);
+                        },
+                        .stack_str => |src_offset| {
+                            // Copy all words from source to destination
+                            const temp = try self.allocTempGeneral();
+                            var w: u32 = 0;
+                            while (w < num_words) : (w += 1) {
+                                const word_off: i32 = @intCast(w * 8);
+                                try self.codegen.emitLoadStack(.w64, temp, src_offset + word_off);
+                                try self.codegen.emitStoreStack(.w64, base_offset + offset + word_off, temp);
                             }
                             self.codegen.freeGeneral(temp);
                         },
@@ -9980,22 +10009,36 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             const temp = try self.allocTempGeneral();
                             try self.codegen.emitLoadImm(temp, @bitCast(val));
                             try self.codegen.emitStoreStack(.w64, base_offset + offset, temp);
-                            if (is_i128) {
-                                // Sign-extend to 128 bits
+                            if (num_words > 1) {
+                                // Sign-extend to remaining words
                                 const sign_ext: i64 = if (val < 0) -1 else 0;
                                 try self.codegen.emitLoadImm(temp, sign_ext);
-                                try self.codegen.emitStoreStack(.w64, base_offset + offset + 8, temp);
+                                var w: u32 = 1;
+                                while (w < num_words) : (w += 1) {
+                                    try self.codegen.emitStoreStack(.w64, base_offset + offset + @as(i32, @intCast(w * 8)), temp);
+                                }
+                            }
+                            self.codegen.freeGeneral(temp);
+                        },
+                        .list_stack => |info| {
+                            // Copy all 3 words of the list (ptr, len, capacity)
+                            const temp = try self.allocTempGeneral();
+                            var w: u32 = 0;
+                            while (w < num_words) : (w += 1) {
+                                const word_off: i32 = @intCast(w * 8);
+                                try self.codegen.emitLoadStack(.w64, temp, info.struct_offset + word_off);
+                                try self.codegen.emitStoreStack(.w64, base_offset + offset + word_off, temp);
                             }
                             self.codegen.freeGeneral(temp);
                         },
                         else => {
-                            const slot = try self.ensureOnStack(capture_loc, if (is_i128) 16 else 8);
+                            const slot = try self.ensureOnStack(capture_loc, capture_size);
                             const temp = try self.allocTempGeneral();
-                            try self.codegen.emitLoadStack(.w64, temp, slot);
-                            try self.codegen.emitStoreStack(.w64, base_offset + offset, temp);
-                            if (is_i128) {
-                                try self.codegen.emitLoadStack(.w64, temp, slot + 8);
-                                try self.codegen.emitStoreStack(.w64, base_offset + offset + 8, temp);
+                            var w: u32 = 0;
+                            while (w < num_words) : (w += 1) {
+                                const word_off: i32 = @intCast(w * 8);
+                                try self.codegen.emitLoadStack(.w64, temp, slot + word_off);
+                                try self.codegen.emitStoreStack(.w64, base_offset + offset + word_off, temp);
                             }
                             self.codegen.freeGeneral(temp);
                         },
@@ -10009,15 +10052,18 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         const ls = self.layout_store orelse unreachable;
                         const capture_layout = ls.getLayout(capture.layout_idx);
                         const capture_size = ls.layoutSizeAlign(capture_layout).size;
-                        const is_i128 = (capture_size >= 16);
+                        const num_words_r: u32 = (capture_size + 7) / 8;
 
                         switch (resolved_loc) {
                             .general_reg => |reg| {
                                 try self.codegen.emitStoreStack(.w64, base_offset + offset, reg);
-                                if (is_i128) {
+                                if (num_words_r > 1) {
                                     const temp = try self.allocTempGeneral();
                                     try self.codegen.emitLoadImm(temp, 0);
-                                    try self.codegen.emitStoreStack(.w64, base_offset + offset + 8, temp);
+                                    var w: u32 = 1;
+                                    while (w < num_words_r) : (w += 1) {
+                                        try self.codegen.emitStoreStack(.w64, base_offset + offset + @as(i32, @intCast(w * 8)), temp);
+                                    }
                                     self.codegen.freeGeneral(temp);
                                 }
                             },
@@ -10029,13 +10075,13 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                 self.codegen.freeGeneral(temp);
                             },
                             else => {
-                                const slot = try self.ensureOnStack(resolved_loc, if (is_i128) 16 else 8);
+                                const slot = try self.ensureOnStack(resolved_loc, capture_size);
                                 const temp = try self.allocTempGeneral();
-                                try self.codegen.emitLoadStack(.w64, temp, slot);
-                                try self.codegen.emitStoreStack(.w64, base_offset + offset, temp);
-                                if (is_i128) {
-                                    try self.codegen.emitLoadStack(.w64, temp, slot + 8);
-                                    try self.codegen.emitStoreStack(.w64, base_offset + offset + 8, temp);
+                                var w: u32 = 0;
+                                while (w < num_words_r) : (w += 1) {
+                                    const word_off: i32 = @intCast(w * 8);
+                                    try self.codegen.emitLoadStack(.w64, temp, slot + word_off);
+                                    try self.codegen.emitStoreStack(.w64, base_offset + offset + word_off, temp);
                                 }
                                 self.codegen.freeGeneral(temp);
                             },
@@ -10233,11 +10279,20 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 const ls = self.layout_store orelse unreachable;
                 const capture_layout = ls.getLayout(capture.layout_idx);
                 const capture_size = ls.layoutSizeAlign(capture_layout).size;
-                // Use stack_i128 for 128-bit values (Dec, i128, u128)
-                if (capture_size >= 16) {
-                    try self.symbol_locations.put(symbol_key, .{ .stack_i128 = cv.stack_offset + offset });
+                const capture_offset = cv.stack_offset + offset;
+                // Use the appropriate ValueLocation based on the layout type
+                if (capture.layout_idx == .i128 or capture.layout_idx == .u128 or capture.layout_idx == .dec) {
+                    try self.symbol_locations.put(symbol_key, .{ .stack_i128 = capture_offset });
+                } else if (capture.layout_idx == .str) {
+                    try self.symbol_locations.put(symbol_key, .{ .stack_str = capture_offset });
+                } else if (capture_layout.tag == .list or capture_layout.tag == .list_of_zst) {
+                    try self.symbol_locations.put(symbol_key, .{ .list_stack = .{
+                        .struct_offset = capture_offset,
+                        .data_offset = 0,
+                        .num_elements = 0,
+                    } });
                 } else {
-                    try self.symbol_locations.put(symbol_key, .{ .stack = .{ .offset = cv.stack_offset + offset } });
+                    try self.symbol_locations.put(symbol_key, .{ .stack = .{ .offset = capture_offset } });
                 }
                 offset += @intCast(capture_size);
             }
@@ -12632,7 +12687,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         const ls = self.layout_store orelse unreachable;
                         const record_layout = ls.getLayout(rec.record_layout);
                         const size = ls.layoutSizeAlign(record_layout).size;
-                        const num_regs: u8 = @intCast((size + 7) / 8);
+                        const num_regs: u8 = @max(1, @as(u8, @intCast((size + 7) / 8)));
 
                         if (reg_idx + num_regs <= max_arg_regs) {
                             const stack_offset = self.codegen.allocStackSlot(@intCast(size));
@@ -12678,7 +12733,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         const ls = self.layout_store orelse unreachable;
                         const tuple_layout = ls.getLayout(tup.tuple_layout);
                         const size = ls.layoutSizeAlign(tuple_layout).size;
-                        const num_regs: u8 = @intCast((size + 7) / 8);
+                        const num_regs: u8 = @max(1, @as(u8, @intCast((size + 7) / 8)));
 
                         if (reg_idx + num_regs <= max_arg_regs) {
                             const stack_offset = self.codegen.allocStackSlot(@intCast(size));
