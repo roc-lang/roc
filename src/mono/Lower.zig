@@ -100,6 +100,10 @@ lowered_patterns: std.AutoHashMap(u64, MonoSymbol),
 /// Track which top-level symbols have been lowered
 lowered_symbols: std.AutoHashMap(u48, MonoExprId),
 
+/// Track which symbols are currently being lowered (cycle detection).
+/// Prevents infinite recursion when a top-level recursive function references itself.
+in_progress_defs: std.AutoHashMap(u48, void),
+
 /// Type environment: maps pattern_idx to layout (inferred from expressions)
 type_env: std.AutoHashMap(u32, LayoutIdx),
 
@@ -160,6 +164,7 @@ pub fn init(
         .type_scope = TypeScope.init(allocator),
         .lowered_patterns = std.AutoHashMap(u64, MonoSymbol).init(allocator),
         .lowered_symbols = std.AutoHashMap(u48, MonoExprId).init(allocator),
+        .in_progress_defs = std.AutoHashMap(u48, void).init(allocator),
         .type_env = std.AutoHashMap(u32, LayoutIdx).init(allocator),
         .expr_layout_hints = std.AutoHashMap(types.Var, LayoutIdx).init(allocator),
         .deferred_defs = std.AutoHashMap(u32, CIR.Expr.Idx).init(allocator),
@@ -171,6 +176,7 @@ pub fn init(
 pub fn deinit(self: *Self) void {
     self.lowered_patterns.deinit();
     self.lowered_symbols.deinit();
+    self.in_progress_defs.deinit();
     self.type_env.deinit();
     self.type_scope.deinit();
     self.expr_layout_hints.deinit();
@@ -299,6 +305,11 @@ fn lowerExternalDefByIdx(self: *Self, symbol: MonoSymbol, target_def_idx: u16) A
     // Avoid infinite recursion - check if already lowered
     if (self.lowered_symbols.contains(symbol_key)) return;
 
+    // Prevent infinite recursion for recursive top-level functions
+    if (self.in_progress_defs.contains(symbol_key)) return;
+    try self.in_progress_defs.put(symbol_key, {});
+    defer _ = self.in_progress_defs.remove(symbol_key);
+
     // Lower the definition's expression in the context of the external module
     const old_module = self.current_module_idx;
     self.current_module_idx = symbol.module_idx;
@@ -346,6 +357,11 @@ fn lowerLocalDefByPattern(self: *Self, module_env: *ModuleEnv, symbol: MonoSymbo
 
     // Avoid infinite recursion - check if already lowered
     if (self.lowered_symbols.contains(symbol_key)) return;
+
+    // Prevent infinite recursion for recursive top-level functions
+    if (self.in_progress_defs.contains(symbol_key)) return;
+    try self.in_progress_defs.put(symbol_key, {});
+    defer _ = self.in_progress_defs.remove(symbol_key);
 
     // Find the CIR expression: check module defs first, then deferred defs
     const pattern_key = @intFromEnum(pattern_idx);
