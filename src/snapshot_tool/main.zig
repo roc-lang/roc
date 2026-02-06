@@ -902,6 +902,11 @@ fn processSnapshotContent(
         return processReplSnapshot(allocator, content, output_path, config);
     }
 
+    // Handle dev_object snapshots separately (multi-file, cross-compilation)
+    if (content.meta.node_type == .dev_object) {
+        return processDevObjectSnapshot(allocator, content, output_path, config);
+    }
+
     // Process the content through the compilation pipeline
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
@@ -927,7 +932,7 @@ fn processSnapshotContent(
         .expr => .expr,
         .statement => .statement,
         .header => .header,
-        .repl => unreachable, // Handled above
+        .repl, .dev_object => unreachable, // Handled above
     };
 
     // Create ModuleEnv (caller manages memory)
@@ -1011,7 +1016,7 @@ fn processSnapshotContent(
                 else => unreachable,
             }
         },
-        .repl => unreachable, // Handled above
+        .repl, .dev_object => unreachable, // Handled above
     }
 
     // Assert that everything is in-sync
@@ -1023,7 +1028,7 @@ fn processSnapshotContent(
     // don't call canonicalizeFile.
     const needs_evaluation_order = switch (content.meta.node_type) {
         .expr, .statement, .mono => true,
-        .file, .package, .platform, .app, .snippet, .repl, .header => false,
+        .file, .package, .platform, .app, .snippet, .repl, .header, .dev_object => false,
     };
 
     if (needs_evaluation_order and can_ir.evaluation_order == null) {
@@ -1157,7 +1162,7 @@ fn processSnapshotContent(
             module_envs_for_snippet = module_envs; // Keep alive
             break :blk checker;
         },
-        .repl => unreachable, // Should never reach here - repl is handled earlier
+        .repl, .dev_object => unreachable, // Should never reach here - handled earlier
     };
     defer solver.deinit();
 
@@ -1625,9 +1630,11 @@ const Section = union(enum) {
     problems,
     types,
     mono,
+    dev_output,
 
     pub const META = "# META\n~~~ini\n";
     pub const SOURCE = "# SOURCE\n~~~roc\n";
+    pub const SOURCE_MULTI = "# SOURCE\n";
     pub const EXPECTED = "# EXPECTED\n";
     pub const OUTPUT = "# OUTPUT\n";
     pub const FORMATTED = "# FORMATTED\n~~~roc\n";
@@ -1637,12 +1644,15 @@ const Section = union(enum) {
     pub const PROBLEMS = "# PROBLEMS\n";
     pub const TYPES = "# TYPES\n~~~clojure\n";
     pub const MONO = "# MONO\n~~~roc\n";
+    pub const DEV_OUTPUT = "# DEV OUTPUT\n~~~ini\n";
 
     pub const SECTION_END = "~~~\n";
 
     fn fromString(str: []const u8) ?Section {
         if (std.mem.startsWith(u8, str, META)) return .meta;
+        // Check for single-file SOURCE first (has ~~~roc), then multi-file SOURCE
         if (std.mem.startsWith(u8, str, SOURCE)) return .source;
+        if (std.mem.startsWith(u8, str, SOURCE_MULTI)) return .source;
         if (std.mem.startsWith(u8, str, EXPECTED)) return .expected;
         if (std.mem.startsWith(u8, str, OUTPUT)) return .output;
         if (std.mem.startsWith(u8, str, FORMATTED)) return .formatted;
@@ -1651,8 +1661,14 @@ const Section = union(enum) {
         if (std.mem.startsWith(u8, str, TYPES)) return .types;
         if (std.mem.startsWith(u8, str, TOKENS)) return .tokens;
         if (std.mem.startsWith(u8, str, PROBLEMS)) return .problems;
+        if (std.mem.startsWith(u8, str, DEV_OUTPUT)) return .dev_output;
         if (std.mem.startsWith(u8, str, MONO)) return .mono;
         return null;
+    }
+
+    /// Check if the SOURCE section at this position uses multi-file format (## sub-headings)
+    fn isMultiFileSource(str: []const u8) bool {
+        return std.mem.startsWith(u8, str, SOURCE_MULTI) and !std.mem.startsWith(u8, str, SOURCE);
     }
 
     fn asString(self: Section) []const u8 {
@@ -1668,6 +1684,7 @@ const Section = union(enum) {
             .problems => PROBLEMS,
             .types => TYPES,
             .mono => MONO,
+            .dev_output => DEV_OUTPUT,
         };
     }
 
@@ -1702,6 +1719,7 @@ pub const NodeType = enum {
     repl,
     snippet,
     mono,
+    dev_object,
 
     pub const HEADER = "header";
     pub const EXPR = "expr";
@@ -1713,6 +1731,7 @@ pub const NodeType = enum {
     pub const REPL = "repl";
     pub const SNIPPET = "snippet";
     pub const MONO = "mono";
+    pub const DEV_OBJECT = "dev_object";
 
     fn fromString(str: []const u8) !NodeType {
         if (std.mem.eql(u8, str, HEADER)) return .header;
@@ -1725,6 +1744,7 @@ pub const NodeType = enum {
         if (std.mem.eql(u8, str, REPL)) return .repl;
         if (std.mem.eql(u8, str, SNIPPET)) return .snippet;
         if (std.mem.eql(u8, str, MONO)) return .mono;
+        if (std.mem.eql(u8, str, DEV_OBJECT)) return .dev_object;
         return Error.InvalidNodeType;
     }
 
@@ -1740,6 +1760,7 @@ pub const NodeType = enum {
             .repl => "repl",
             .snippet => "snippet",
             .mono => "mono",
+            .dev_object => "dev_object",
         };
     }
 };
@@ -2252,6 +2273,7 @@ fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast:
             const file = parse_ast.store.getFile();
             try file.pushToSExprTree(output.gpa, env, parse_ast, &tree);
         },
+        .dev_object => unreachable, // Handled separately
     }
 
     // Only generate section if we have content on the stack
@@ -2321,6 +2343,7 @@ fn generateFormattedSection(output: *DualOutput, content: *const Content, parse_
         .snippet => {
             try fmt.formatAst(parse_ast.*, &formatted.writer);
         },
+        .dev_object => unreachable, // Handled separately
     }
 
     const is_changed = !std.mem.eql(u8, formatted.written(), content.source);
@@ -3431,16 +3454,19 @@ pub fn extractSections(gpa: Allocator, content: []const u8) !Content {
         // Look for section headers
         if (idx == 0 or (idx > 0 and content[idx - 1] == '\n')) {
             if (Section.fromString(content[idx..])) |section| {
-                // Only process META, SOURCE, OUTPUT, and EXPECTED sections
-                if (section == .meta or section == .source or section == .expected or section == .output) {
-                    const header_len = section.asString().len;
+                // Only process META, SOURCE, OUTPUT, EXPECTED, and DEV_OUTPUT sections
+                if (section == .meta or section == .source or section == .expected or section == .output or section == .dev_output) {
+                    // Determine header length - for multi-file SOURCE (no ~~~roc after # SOURCE),
+                    // the header is just "# SOURCE\n"
+                    const is_multi_file_source = section == .source and Section.isMultiFileSource(content[idx..]);
+                    const header_len = if (is_multi_file_source) Section.SOURCE_MULTI.len else section.asString().len;
                     const start = idx + header_len;
 
                     // Find the end of this section
                     var end = content.len;
 
-                    // For sections with ~~~ delimiters (META and SOURCE)
-                    if (section == .meta or section == .source) {
+                    // For sections with ~~~ delimiters (META, single-file SOURCE, DEV_OUTPUT)
+                    if (section == .meta or (section == .source and !is_multi_file_source) or section == .dev_output) {
                         // Find the closing ~~~
                         var search_idx = start;
                         while (search_idx < content.len - 3) {
@@ -3456,10 +3482,11 @@ pub fn extractSections(gpa: Allocator, content: []const u8) !Content {
                         }
                     } else {
                         // For sections without ~~~ delimiters (EXPECTED, OUTPUT)
-                        // Find the next section header
+                        // or multi-file SOURCE (delimited by next top-level # section)
                         var search_idx = start;
                         while (search_idx < content.len) {
                             if (search_idx == 0 or (search_idx > 0 and content[search_idx - 1] == '\n')) {
+                                // Match top-level section headers (# FOO) but NOT ## sub-headings
                                 if (content[search_idx] == '#' and
                                     search_idx + 1 < content.len and
                                     content[search_idx + 1] == ' ')
@@ -3485,6 +3512,525 @@ pub fn extractSections(gpa: Allocator, content: []const u8) !Content {
 
     return try Content.from_ranges(ranges, content);
 }
+
+// ── Dev Object Snapshot Processing ──────────────────────────────────────────
+
+/// Represents a single source file extracted from a multi-file SOURCE section
+const SourceFile = struct {
+    filename: []const u8,
+    content: []const u8,
+};
+
+/// Parse multi-file SOURCE section with ## filename.roc sub-headings.
+///
+/// Format:
+///   ## app.roc
+///   ~~~roc
+///   ...code...
+///   ~~~
+///   ## platform.roc
+///   ~~~roc
+///   ...code...
+///   ~~~
+fn parseMultiFileSource(allocator: Allocator, source_text: []const u8) ![]SourceFile {
+    var files = std.ArrayList(SourceFile).empty;
+    errdefer files.deinit(allocator);
+
+    var idx: usize = 0;
+    while (idx < source_text.len) {
+        // Look for "## " at line start
+        const is_line_start = idx == 0 or source_text[idx - 1] == '\n';
+        if (is_line_start and idx + 3 < source_text.len and
+            source_text[idx] == '#' and source_text[idx + 1] == '#' and source_text[idx + 2] == ' ')
+        {
+            // Extract filename (rest of line)
+            const name_start = idx + 3;
+            const name_end = std.mem.indexOfScalarPos(u8, source_text, name_start, '\n') orelse source_text.len;
+            const filename = std.mem.trim(u8, source_text[name_start..name_end], " \t\r");
+            idx = name_end;
+
+            // Find ~~~roc block
+            const roc_marker = "~~~roc\n";
+            if (std.mem.indexOfPos(u8, source_text, idx, roc_marker)) |roc_start| {
+                const content_start = roc_start + roc_marker.len;
+                // Find closing ~~~
+                if (std.mem.indexOfPos(u8, source_text, content_start, "~~~")) |content_end| {
+                    try files.append(allocator, .{
+                        .filename = filename,
+                        .content = source_text[content_start..content_end],
+                    });
+                    idx = content_end + 3;
+                    continue;
+                }
+            }
+        }
+        idx += 1;
+    }
+
+    return files.toOwnedSlice(allocator);
+}
+
+/// Result of cross-compiling for a single target
+const TargetHashResult = struct {
+    target_name: []const u8,
+    hash_hex: [64]u8, // Blake3 produces 256-bit (32 byte) hash = 64 hex chars
+    supported: bool,
+};
+
+/// Process a dev_object snapshot: parse multi-file source, compile with BuildEnv,
+/// lower to Mono IR, cross-compile for all targets, and record blake3 hashes.
+fn processDevObjectSnapshot(
+    allocator: Allocator,
+    content: Content,
+    output_path: []const u8,
+    config: *const Config,
+) !bool {
+    _ = config;
+    log("Processing dev_object snapshot: {s}", .{output_path});
+
+    // 1. Parse multi-file source
+    const source_files = try parseMultiFileSource(allocator, content.source);
+    defer allocator.free(source_files);
+
+    if (source_files.len == 0) {
+        std.log.err("dev_object snapshot has no source files (need ## filename.roc sub-headings)", .{});
+        return false;
+    }
+
+    // 2. Write source files to a temp directory
+    var tmp_dir_name_buf: [256]u8 = undefined;
+    const tmp_dir_name = std.fmt.bufPrint(&tmp_dir_name_buf, "/tmp/roc_snapshot_dev_{d}", .{
+        @as(u64, @intCast(@intFromPtr(output_path.ptr))),
+    }) catch return false;
+
+    std.fs.cwd().makePath(tmp_dir_name) catch |err| {
+        std.log.err("Failed to create temp directory {s}: {}", .{ tmp_dir_name, err });
+        return false;
+    };
+    defer std.fs.cwd().deleteTree(tmp_dir_name) catch {};
+
+    // Find the app file (first .roc file, or explicitly "app.roc")
+    var app_filename: ?[]const u8 = null;
+    for (source_files) |sf| {
+        std.fs.cwd().writeFile(.{
+            .sub_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ tmp_dir_name, sf.filename }),
+            .data = sf.content,
+        }) catch |err| {
+            std.log.err("Failed to write {s}: {}", .{ sf.filename, err });
+            return false;
+        };
+        if (std.mem.eql(u8, sf.filename, "app.roc") or app_filename == null) {
+            app_filename = sf.filename;
+        }
+    }
+
+    const app_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ tmp_dir_name, app_filename.? });
+    defer allocator.free(app_path);
+
+    // 3. Build with BuildEnv
+    const BuildEnv = compile.BuildEnv;
+    const native_target = roc_target.RocTarget.detectNative();
+
+    var build_env = BuildEnv.init(allocator, .single_threaded, 1, native_target) catch |err| {
+        std.log.err("Failed to init BuildEnv: {}", .{err});
+        return false;
+    };
+    defer build_env.deinit();
+
+    build_env.build(app_path) catch |err| {
+        std.log.err("BuildEnv.build failed for {s}: {}", .{app_path, err});
+        return false;
+    };
+
+    // Get compiled modules
+    const modules = build_env.getCompiledModules(allocator) catch |err| {
+        std.log.err("Failed to get compiled modules: {}", .{err});
+        return false;
+    };
+    defer allocator.free(modules);
+
+    if (modules.len == 0) {
+        std.log.err("No modules were compiled", .{});
+        return false;
+    }
+
+    // Find platform and app modules
+    const platform_idx = BuildEnv.findPrimaryModuleIndex(modules) orelse {
+        std.log.err("No platform module found", .{});
+        return false;
+    };
+    const platform_module = modules[platform_idx];
+
+    // 4. Build module envs array (Builtin first)
+    const builtin_env = build_env.builtin_modules.builtin_module.env;
+    var all_module_envs = try allocator.alloc(*ModuleEnv, modules.len + 1);
+    defer allocator.free(all_module_envs);
+    all_module_envs[0] = builtin_env;
+    for (modules, 0..) |mod, i| {
+        all_module_envs[i + 1] = mod.env;
+    }
+
+    // Re-resolve imports
+    for (all_module_envs[1..]) |module| {
+        module.imports.resolveImports(module, all_module_envs);
+    }
+
+    const compiled_module_envs = all_module_envs[1..];
+
+    // 5. Closure pipeline
+    for (compiled_module_envs) |module| {
+        if (!module.is_lambda_lifted) {
+            var top_level_patterns = std.AutoHashMap(can.CIR.Pattern.Idx, void).init(allocator);
+            defer top_level_patterns.deinit();
+
+            const stmts = module.store.sliceStatements(module.all_statements);
+            for (stmts) |stmt_idx| {
+                const stmt = module.store.getStatement(stmt_idx);
+                switch (stmt) {
+                    .s_decl => |decl| {
+                        top_level_patterns.put(decl.pattern, {}) catch {};
+                    },
+                    else => {},
+                }
+            }
+
+            var lifter = can.LambdaLifter.init(allocator, module, &top_level_patterns);
+            defer lifter.deinit();
+            module.is_lambda_lifted = true;
+        }
+    }
+
+    // Lambda set inference
+    var lambda_inference = can.LambdaSetInference.init(allocator);
+    defer lambda_inference.deinit();
+
+    var mutable_envs = try allocator.alloc(*ModuleEnv, compiled_module_envs.len);
+    defer allocator.free(mutable_envs);
+    for (compiled_module_envs, 0..) |env, i| {
+        mutable_envs[i] = env;
+    }
+    lambda_inference.inferAll(mutable_envs) catch {
+        std.log.err("Lambda set inference failed", .{});
+        return false;
+    };
+
+    // Closure transformer
+    for (mutable_envs) |module| {
+        if (!module.is_defunctionalized) {
+            var transformer = can.ClosureTransformer.initWithInference(allocator, module, &lambda_inference);
+            defer transformer.deinit();
+            module.is_defunctionalized = true;
+        }
+    }
+
+    // 6. Process hosted functions
+    const mono = @import("mono");
+    var hosted_functions = mono.Lower.HostedFunctionMap.init(allocator);
+    defer hosted_functions.deinit();
+
+    {
+        const HostedCompiler = can.HostedCompiler;
+        var all_hosted_fns = std.ArrayList(HostedCompiler.HostedFunctionInfo).empty;
+        defer all_hosted_fns.deinit(allocator);
+
+        for (modules) |mod| {
+            if (!mod.is_platform_sibling) continue;
+
+            var module_fns = HostedCompiler.collectAndSortHostedFunctions(mod.env) catch continue;
+            defer module_fns.deinit(mod.env.gpa);
+
+            for (module_fns.items) |fn_info| {
+                const name_copy = allocator.dupe(u8, fn_info.name_text) catch continue;
+                mod.env.gpa.free(fn_info.name_text);
+                all_hosted_fns.append(allocator, .{
+                    .symbol_name = fn_info.symbol_name,
+                    .expr_idx = fn_info.expr_idx,
+                    .name_text = name_copy,
+                }) catch {
+                    allocator.free(name_copy);
+                    continue;
+                };
+            }
+        }
+
+        if (all_hosted_fns.items.len > 0) {
+            const SortContext = struct {
+                pub fn lessThan(_: void, a: HostedCompiler.HostedFunctionInfo, b: HostedCompiler.HostedFunctionInfo) bool {
+                    return std.mem.order(u8, a.name_text, b.name_text) == .lt;
+                }
+            };
+            std.mem.sort(HostedCompiler.HostedFunctionInfo, all_hosted_fns.items, {}, SortContext.lessThan);
+
+            // Deduplicate
+            var write_idx: usize = 0;
+            for (all_hosted_fns.items, 0..) |fn_info, read_idx| {
+                if (write_idx == 0 or !std.mem.eql(u8, all_hosted_fns.items[write_idx - 1].name_text, fn_info.name_text)) {
+                    if (write_idx != read_idx) {
+                        all_hosted_fns.items[write_idx] = fn_info;
+                    }
+                    write_idx += 1;
+                } else {
+                    allocator.free(fn_info.name_text);
+                }
+            }
+            all_hosted_fns.shrinkRetainingCapacity(write_idx);
+
+            // Register hosted functions
+            for (modules, 0..) |mod, global_module_idx| {
+                if (!mod.is_platform_sibling) continue;
+                const plat_env = mod.env;
+
+                const mod_all_defs = plat_env.store.sliceDefs(plat_env.all_defs);
+                for (mod_all_defs) |def_idx| {
+                    const def = plat_env.store.getDef(def_idx);
+                    const expr = plat_env.store.getExpr(def.expr);
+
+                    if (expr == .e_hosted_lambda) {
+                        const hosted = expr.e_hosted_lambda;
+                        const local_name = plat_env.getIdent(hosted.symbol_name);
+                        const plat_module_name = base.module_path.getModuleName(plat_env.module_name);
+                        const qualified_name = std.fmt.allocPrint(allocator, "{s}.{s}", .{ plat_module_name, local_name }) catch continue;
+                        defer allocator.free(qualified_name);
+
+                        const stripped_name = if (std.mem.endsWith(u8, qualified_name, "!"))
+                            qualified_name[0 .. qualified_name.len - 1]
+                        else
+                            qualified_name;
+
+                        for (all_hosted_fns.items, 0..) |fn_info, idx| {
+                            if (std.mem.eql(u8, fn_info.name_text, stripped_name)) {
+                                const hosted_index: u32 = @intCast(idx);
+                                const expr_node_idx = @as(@TypeOf(plat_env.store.nodes).Idx, @enumFromInt(@intFromEnum(def.expr)));
+                                var expr_node = plat_env.store.nodes.get(expr_node_idx);
+                                var payload = expr_node.getPayload().expr_hosted_lambda;
+                                payload.index = hosted_index;
+                                expr_node.setPayload(.{ .expr_hosted_lambda = payload });
+                                plat_env.store.nodes.set(expr_node_idx, expr_node);
+
+                                const mod_idx: u16 = @intCast(global_module_idx + 1);
+                                hosted_functions.put(mono.Lower.hostedFunctionKey(mod_idx, @intFromEnum(def_idx)), hosted_index) catch {};
+                                hosted_functions.put(mono.Lower.hostedFunctionKey(mod_idx, @intFromEnum(def.pattern)), hosted_index) catch {};
+                                hosted_functions.put(mono.Lower.hostedFunctionKey(mod_idx, @intFromEnum(def.expr)), hosted_index) catch {};
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            for (all_hosted_fns.items) |fn_info| {
+                allocator.free(fn_info.name_text);
+            }
+        }
+    }
+
+    // 7. Create layout store
+    const layout_mod = @import("layout");
+    const builtin_str = if (all_module_envs.len > 0) all_module_envs[0].idents.builtin_str else null;
+
+    var layout_store = layout_mod.Store.init(all_module_envs, builtin_str, allocator, base.target.TargetUsize.native) catch {
+        std.log.err("Failed to create layout store", .{});
+        return false;
+    };
+    defer layout_store.deinit();
+
+    // 8. Find app module index and lower to Mono IR
+    var app_module_idx: ?u16 = null;
+    for (modules, 0..) |mod, i| {
+        if (mod.is_app) {
+            app_module_idx = @intCast(i + 1);
+            break;
+        }
+    }
+
+    var mono_store = mono.MonoExprStore.init(allocator);
+    defer mono_store.deinit();
+
+    var lowerer = mono.Lower.init(allocator, &mono_store, all_module_envs, &lambda_inference, &layout_store, app_module_idx, &hosted_functions);
+    defer lowerer.deinit();
+
+    // Use provides entries from build pipeline (centralized in CompiledModuleInfo)
+    const backend = @import("backend");
+    var entrypoints = std.ArrayList(backend.Entrypoint).empty;
+    defer entrypoints.deinit(allocator);
+
+    const provides_entries = platform_module.provides_entries;
+    if (provides_entries.len == 0) {
+        std.log.err("No provides entries found in platform module", .{});
+        return false;
+    }
+
+    // Match provides entries to platform defs and lower them
+    const platform_defs = platform_module.env.store.sliceDefs(platform_module.env.all_defs);
+    for (provides_entries) |entry| {
+        for (platform_defs) |def_idx| {
+            const def = platform_module.env.store.getDef(def_idx);
+            const pattern = platform_module.env.store.getPattern(def.pattern);
+            switch (pattern) {
+                .assign => |assign| {
+                    const ident_name = platform_module.env.getIdent(assign.ident);
+                    if (std.mem.eql(u8, ident_name, entry.roc_ident)) {
+                        const mono_expr_id = lowerer.lowerExpr(@intCast(platform_idx + 1), def.expr) catch continue;
+                        const type_var = can.ModuleEnv.varFrom(def.expr);
+                        var scope = types.TypeScope.init(allocator);
+                        defer scope.deinit();
+                        const ret_layout = layout_store.fromTypeVar(@intCast(platform_idx + 1), type_var, &scope, null) catch continue;
+
+                        const symbol_name = std.fmt.allocPrint(allocator, "roc__{s}", .{entry.ffi_symbol}) catch continue;
+                        entrypoints.append(allocator, .{
+                            .symbol_name = symbol_name,
+                            .body_expr = mono_expr_id,
+                            .arg_layouts = &[_]layout_mod.Idx{},
+                            .ret_layout = ret_layout,
+                        }) catch continue;
+                        break;
+                    }
+                },
+                else => {},
+            }
+        }
+    }
+
+    if (entrypoints.items.len == 0) {
+        std.log.err("No entrypoints found in platform module", .{});
+        return false;
+    }
+
+    // 9. RC insertion
+    var rc_pass = mono.RcInsert.RcInsertPass.init(allocator, &mono_store, &layout_store);
+    defer rc_pass.deinit();
+
+    for (entrypoints.items) |*ep| {
+        ep.body_expr = rc_pass.insertRcOps(ep.body_expr) catch ep.body_expr;
+    }
+
+    const procs = mono_store.getProcs();
+
+    // 10. Cross-compile for all targets and hash
+    const RocTarget = roc_target.RocTarget;
+    const Blake3 = std.crypto.hash.Blake3;
+    const roc_target_fields = @typeInfo(RocTarget).@"enum".fields;
+
+    var hash_results: [roc_target_fields.len]TargetHashResult = undefined;
+
+    var object_compiler = backend.ObjectFileCompiler.init(allocator);
+
+    inline for (roc_target_fields, 0..) |field, i| {
+        const target: RocTarget = @enumFromInt(field.value);
+        hash_results[i].target_name = field.name;
+
+        const arch = target.toCpuArch();
+        if (arch == .x86_64 or arch == .aarch64 or arch == .aarch64_be) {
+            if (object_compiler.compileToObjectFile(
+                &mono_store,
+                &layout_store,
+                entrypoints.items,
+                procs,
+                target,
+            )) |result| {
+                var hasher = Blake3.init(.{});
+                hasher.update(result.object_bytes);
+                var hash: [32]u8 = undefined;
+                hasher.final(&hash);
+                hash_results[i].hash_hex = std.fmt.bytesToHex(hash, .lower);
+                hash_results[i].supported = true;
+                result.allocator.free(result.object_bytes);
+            } else |_| {
+                hash_results[i].hash_hex = undefined;
+                hash_results[i].supported = false;
+            }
+        } else {
+            hash_results[i].hash_hex = undefined;
+            hash_results[i].supported = false;
+        }
+    }
+
+    // 11. Generate output file
+    var md_buffer = std.ArrayList(u8).empty;
+    defer md_buffer.deinit(allocator);
+    var md_writer: std.Io.Writer.Allocating = .fromArrayList(allocator, &md_buffer);
+
+    // META section
+    try md_writer.writer.writeAll(Section.META);
+    try content.meta.format(&md_writer.writer);
+    try md_writer.writer.writeAll("\n" ++ Section.SECTION_END);
+
+    // SOURCE section (preserve original multi-file format)
+    try md_writer.writer.writeAll(Section.SOURCE_MULTI);
+    try md_writer.writer.writeAll(content.source);
+    // Ensure trailing newline before next section
+    if (content.source.len > 0 and content.source[content.source.len - 1] != '\n') {
+        try md_writer.writer.writeByte('\n');
+    }
+
+    // MONO section - emit CIR representation of all module defs
+    try md_writer.writer.writeAll(Section.MONO);
+    {
+        for (modules) |mod| {
+            const mod_env = mod.env;
+            const mod_name = base.module_path.getModuleName(mod_env.module_name);
+
+            var emitter = can.RocEmitter.init(allocator, mod_env);
+            defer emitter.deinit();
+
+            const defs = mod_env.store.sliceDefs(mod_env.all_defs);
+            if (defs.len == 0) continue;
+
+            // Module header comment
+            try md_writer.writer.writeAll("# ");
+            try md_writer.writer.writeAll(mod_name);
+            try md_writer.writer.writeByte('\n');
+
+            for (defs) |def_idx| {
+                const def = mod_env.store.getDef(def_idx);
+
+                emitter.reset();
+                try emitter.emitPattern(def.pattern);
+                const pattern_str = try allocator.dupe(u8, emitter.getOutput());
+                defer allocator.free(pattern_str);
+
+                emitter.reset();
+                try emitter.emitExpr(def.expr);
+
+                try md_writer.writer.writeAll(pattern_str);
+                try md_writer.writer.writeAll(" = ");
+                try md_writer.writer.writeAll(emitter.getOutput());
+                try md_writer.writer.writeByte('\n');
+            }
+            try md_writer.writer.writeByte('\n');
+        }
+    }
+    try md_writer.writer.writeAll(Section.SECTION_END);
+
+    // DEV OUTPUT section
+    try md_writer.writer.writeAll(Section.DEV_OUTPUT);
+    for (&hash_results) |result| {
+        try md_writer.writer.writeAll(result.target_name);
+        try md_writer.writer.writeByte('=');
+        if (result.supported) {
+            try md_writer.writer.writeAll(&result.hash_hex);
+        } else {
+            try md_writer.writer.writeAll("NOT_IMPLEMENTED");
+        }
+        try md_writer.writer.writeByte('\n');
+    }
+    try md_writer.writer.writeAll(Section.SECTION_END);
+
+    // Transfer from writer to buffer
+    md_buffer = md_writer.toArrayList();
+
+    // Write the output file
+    const md_file = std.fs.cwd().createFile(output_path, .{}) catch |err| {
+        std.log.err("Failed to create {s}: {}", .{ output_path, err });
+        return false;
+    };
+    defer md_file.close();
+
+    try md_file.writeAll(md_buffer.items);
+    return true;
+}
+
+// ── REPL Snapshot Processing ───────────────────────────────────────────────
 
 fn processReplSnapshot(allocator: Allocator, content: Content, output_path: []const u8, config: *const Config) !bool {
     var success = true;

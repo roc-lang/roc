@@ -2772,103 +2772,6 @@ fn resolveUrlPlatform(ctx: *CliContext, url: []const u8) (CliError || error{OutO
     };
 }
 
-/// Information about a platform entrypoint extracted from the provides clause
-const PlatformEntrypoint = struct {
-    /// The Roc identifier name in the platform module (e.g., "main_for_host!")
-    roc_ident: []const u8,
-    /// The FFI symbol name to export (e.g., "main")
-    ffi_symbol: []const u8,
-};
-
-/// Extract all entrypoint info from platform header provides record into ArrayList
-/// Returns both the Roc identifier and FFI symbol name for each entrypoint
-fn extractEntrypointsFromPlatformWithIdents(ctx: *CliContext, roc_file_path: []const u8, entrypoints: *std.array_list.Managed(PlatformEntrypoint)) !void {
-    // Read the Roc file
-    var source = std.fs.cwd().readFileAlloc(ctx.gpa, roc_file_path, std.math.maxInt(usize)) catch return error.NoPlatformFound;
-    source = base.source_utils.normalizeLineEndingsRealloc(ctx.gpa, source) catch |err| {
-        ctx.gpa.free(source);
-        return err;
-    };
-    defer ctx.gpa.free(source);
-
-    // Extract module name from the file path (strip .roc extension)
-    const module_name = try base.module_path.getModuleNameAlloc(ctx.arena, roc_file_path);
-
-    // Create ModuleEnv
-    var env = ModuleEnv.init(ctx.gpa, source) catch return error.ParseFailed;
-    defer env.deinit();
-
-    env.common.source = source;
-    env.module_name = module_name;
-    try env.common.calcLineStarts(ctx.gpa);
-
-    // Parse the source code as a full module
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(ctx.gpa);
-    defer allocators.deinit();
-
-    var parse_ast = parse.parse(&allocators, &env.common) catch return error.ParseFailed;
-    defer parse_ast.deinit();
-
-    // Look for platform header in the AST
-    const file_node = parse_ast.store.getFile();
-    const header = parse_ast.store.getHeader(file_node.header);
-
-    // Check if this is a platform file with a platform header
-    switch (header) {
-        .platform => |platform_header| {
-            // Get the provides collection and its record fields
-            const provides_coll = parse_ast.store.getCollection(platform_header.provides);
-            const provides_fields = parse_ast.store.recordFieldSlice(.{ .span = provides_coll.span });
-
-            // Extract both Roc identifier and FFI symbol names from provides clause
-            // Format: `provides { roc_identifier: "ffi_symbol_name" }`
-            for (provides_fields) |field_idx| {
-                const field = parse_ast.store.getRecordField(field_idx);
-
-                // Get the Roc identifier name (field name)
-                const roc_ident = parse_ast.resolve(field.name);
-
-                // Require explicit string value for FFI symbol name
-                const ffi_symbol = if (field.value) |value_idx| blk: {
-                    const value_expr = parse_ast.store.getExpr(value_idx);
-                    switch (value_expr) {
-                        .string => |str_like| {
-                            const parts = parse_ast.store.exprSlice(str_like.parts);
-                            if (parts.len > 0) {
-                                const first_part = parse_ast.store.getExpr(parts[0]);
-                                switch (first_part) {
-                                    .string_part => |sp| break :blk parse_ast.resolve(sp.token),
-                                    else => {},
-                                }
-                            }
-                            return error.InvalidProvidesEntry;
-                        },
-                        .string_part => |str_part| break :blk parse_ast.resolve(str_part.token),
-                        else => {
-                            return error.InvalidProvidesEntry;
-                        },
-                    }
-                } else {
-                    return error.InvalidProvidesEntry;
-                };
-
-                try entrypoints.append(.{
-                    .roc_ident = try ctx.arena.dupe(u8, roc_ident),
-                    .ffi_symbol = try ctx.arena.dupe(u8, ffi_symbol),
-                });
-            }
-
-            if (provides_fields.len == 0) {
-                return error.NoEntrypointFound;
-            }
-        },
-        else => {
-            return error.NotPlatformFile;
-        },
-    }
-}
-
 /// Extract all entrypoint names from platform header provides record into ArrayList
 /// TODO: Replace this with proper BuildEnv solution in the future
 fn extractEntrypointsFromPlatform(ctx: *CliContext, roc_file_path: []const u8, entrypoints: *std.array_list.Managed([]const u8)) !void {
@@ -3586,19 +3489,15 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
 
     std.log.debug("Found {} modules, platform module at index {}", .{ modules.len, platform_idx });
 
-    // Extract entrypoints from platform (both Roc identifier and FFI symbol)
-    std.log.debug("Extracting entrypoints from platform...", .{});
-    var entrypoint_info = std.array_list.Managed(PlatformEntrypoint).initCapacity(ctx.arena, 16) catch {
-        return error.OutOfMemory;
-    };
-
-    extractEntrypointsFromPlatformWithIdents(ctx, platform_source.?, &entrypoint_info) catch |err| {
+    // Get provides entries from the compiled platform module
+    const provides_entries = platform_module.provides_entries;
+    if (provides_entries.len == 0) {
         return ctx.fail(.{ .entrypoint_extraction_failed = .{
             .path = platform_source.?,
-            .reason = @errorName(err),
+            .reason = "NoEntrypointFound",
         } });
-    };
-    std.log.debug("Found {} entrypoints", .{entrypoint_info.items.len});
+    }
+    std.log.debug("Found {} provides entries", .{provides_entries.len});
 
     // Build module envs array for layout store and lowering.
     // Include the Builtin module first, matching the layout used during type-checking
@@ -3813,12 +3712,12 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     // Find and lower entrypoint expressions from platform module
     // The platform's provides clause maps Roc identifiers to FFI symbols
     // e.g., provides { main_for_host!: "main" } means we look for main_for_host! in platform
-    var entrypoints = try std.ArrayList(backend.Entrypoint).initCapacity(ctx.gpa, entrypoint_info.items.len);
+    var entrypoints = try std.ArrayList(backend.Entrypoint).initCapacity(ctx.gpa, provides_entries.len);
     defer entrypoints.deinit(ctx.gpa);
 
     const platform_defs = platform_module.env.store.sliceDefs(platform_module.env.all_defs);
 
-    for (entrypoint_info.items) |ep_info| {
+    for (provides_entries) |entry| {
         // Find declaration matching the Roc identifier in the platform module's defs
         var found_expr: ?can.CIR.Expr.Idx = null;
         for (platform_defs) |def_idx| {
@@ -3827,7 +3726,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
             switch (pattern) {
                 .assign => |assign| {
                     const ident_name = platform_module.env.getIdent(assign.ident);
-                    if (std.mem.eql(u8, ident_name, ep_info.roc_ident)) {
+                    if (std.mem.eql(u8, ident_name, entry.roc_ident)) {
                         found_expr = def.expr;
                         break;
                     }
@@ -3839,7 +3738,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         if (found_expr) |expr_idx| {
             // Lower the expression from the platform module
             const mono_expr_id = lowerer.lowerExpr(@intCast(platform_idx + 1), expr_idx) catch |err| {
-                std.log.err("Failed to lower expression for entrypoint {s} ({s}): {}", .{ ep_info.roc_ident, ep_info.ffi_symbol, err });
+                std.log.err("Failed to lower expression for entrypoint {s} ({s}): {}", .{ entry.roc_ident, entry.ffi_symbol, err });
                 continue;
             };
 
@@ -3848,20 +3747,20 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
             var type_scope = @import("types").TypeScope.init(ctx.gpa);
             defer type_scope.deinit();
             const ret_layout = layout_store.fromTypeVar(@intCast(platform_idx + 1), type_var, &type_scope, null) catch {
-                std.log.err("Failed to get layout for entrypoint {s}", .{ep_info.roc_ident});
+                std.log.err("Failed to get layout for entrypoint {s}", .{entry.roc_ident});
                 continue;
             };
 
             try entrypoints.append(ctx.gpa, .{
-                .symbol_name = try std.fmt.allocPrint(ctx.arena, "roc__{s}", .{ep_info.ffi_symbol}),
+                .symbol_name = try std.fmt.allocPrint(ctx.arena, "roc__{s}", .{entry.ffi_symbol}),
                 .body_expr = mono_expr_id,
                 .arg_layouts = &[_]layout.Idx{}, // Top-level constants have no args
                 .ret_layout = ret_layout,
             });
 
-            std.log.debug("Found entrypoint: {s} -> roc__{s}", .{ ep_info.roc_ident, ep_info.ffi_symbol });
+            std.log.debug("Found entrypoint: {s} -> roc__{s}", .{ entry.roc_ident, entry.ffi_symbol });
         } else {
-            std.log.warn("Entrypoint '{s}' not found in platform module", .{ep_info.roc_ident});
+            std.log.warn("Entrypoint '{s}' not found in platform module", .{entry.roc_ident});
         }
     }
 

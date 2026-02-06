@@ -358,6 +358,14 @@ pub const BuildEnv = struct {
             .root_dir = pkg_root_dir,
         });
 
+        // Transfer provides entries from header to package for platform roots
+        if (header_info.kind == .platform) {
+            if (self.packages.getPtr(pkg_name)) |pkg| {
+                pkg.provides_entries = header_info.provides_entries;
+                header_info.provides_entries = .{}; // Prevent double-free in deinit
+            }
+        }
+
         // Populate package graph (for apps and packages with dependencies)
         if (header_info.kind == .app or header_info.kind == .package) {
             try self.populatePackageShorthands(pkg_name, &header_info);
@@ -1053,6 +1061,13 @@ pub const BuildEnv = struct {
 
     const PackageKind = enum { app, package, platform, module, hosted, type_module, default_app };
 
+    /// A mapping from a Roc identifier to an FFI symbol name, extracted from
+    /// a platform's `provides { roc_ident: "ffi_symbol" }` clause.
+    pub const ProvidesEntry = struct {
+        roc_ident: []const u8,
+        ffi_symbol: []const u8,
+    };
+
     const PackageRef = struct {
         name: []const u8, // Package name (alias in workspace)
         root_file: []const u8, // Absolute path to root module of the package
@@ -1064,8 +1079,14 @@ pub const BuildEnv = struct {
         root_file: []u8,
         root_dir: []u8,
         shorthands: std.StringHashMapUnmanaged(PackageRef) = .{},
+        provides_entries: std.ArrayListUnmanaged(ProvidesEntry) = .{},
 
         fn deinit(self: *Package, gpa: Allocator) void {
+            for (self.provides_entries.items) |entry| {
+                freeConstSlice(gpa, entry.roc_ident);
+                freeConstSlice(gpa, entry.ffi_symbol);
+            }
+            self.provides_entries.deinit(gpa);
             var it = self.shorthands.iterator();
             while (it.next()) |e| {
                 freeConstSlice(gpa, e.key_ptr.*);
@@ -1086,6 +1107,8 @@ pub const BuildEnv = struct {
         shorthands: std.StringHashMapUnmanaged([]const u8) = .{},
         /// Platform-exposed modules (e.g., Stdout, Stderr) that apps can import
         exposes: std.ArrayListUnmanaged([]const u8) = .{},
+        /// Platform provides entries (roc_ident -> ffi_symbol mapping)
+        provides_entries: std.ArrayListUnmanaged(ProvidesEntry) = .{},
 
         fn deinit(self: *HeaderInfo, gpa: Allocator) void {
             if (self.platform_alias) |a| freeSlice(gpa, a);
@@ -1100,6 +1123,11 @@ pub const BuildEnv = struct {
                 freeConstSlice(gpa, e);
             }
             self.exposes.deinit(gpa);
+            for (self.provides_entries.items) |entry| {
+                freeConstSlice(gpa, entry.roc_ident);
+                freeConstSlice(gpa, entry.ffi_symbol);
+            }
+            self.provides_entries.deinit(gpa);
         }
     };
 
@@ -1378,6 +1406,36 @@ pub const BuildEnv = struct {
                     };
                     const item_name = ast.resolve(token_idx);
                     try info.exposes.append(self.gpa, try self.gpa.dupe(u8, item_name));
+                }
+
+                // Extract provides entries (roc_ident -> ffi_symbol mapping)
+                const provides_coll = ast.store.getCollection(p.provides);
+                const provides_fields = ast.store.recordFieldSlice(.{ .span = provides_coll.span });
+                for (provides_fields) |field_idx| {
+                    const field = ast.store.getRecordField(field_idx);
+                    const roc_ident = ast.resolve(field.name);
+                    const ffi_symbol = if (field.value) |value_idx| blk: {
+                        const value_expr = ast.store.getExpr(value_idx);
+                        switch (value_expr) {
+                            .string => |str_like| {
+                                const parts = ast.store.exprSlice(str_like.parts);
+                                if (parts.len > 0) {
+                                    const first_part = ast.store.getExpr(parts[0]);
+                                    switch (first_part) {
+                                        .string_part => |sp| break :blk ast.resolve(sp.token),
+                                        else => continue,
+                                    }
+                                }
+                                continue;
+                            },
+                            .string_part => |str_part| break :blk ast.resolve(str_part.token),
+                            else => continue,
+                        }
+                    } else continue;
+                    try info.provides_entries.append(self.gpa, .{
+                        .roc_ident = try self.gpa.dupe(u8, roc_ident),
+                        .ffi_symbol = try self.gpa.dupe(u8, ffi_symbol),
+                    });
                 }
             },
             .module => {
@@ -1724,6 +1782,14 @@ pub const BuildEnv = struct {
             const dep_name = try self.gpa.dupe(u8, alias);
             try self.ensurePackage(dep_name, .platform, abs);
 
+            // Transfer provides entries from parsed header to platform package
+            if (self.packages.getPtr(alias)) |plat_pkg| {
+                if (plat_pkg.provides_entries.items.len == 0) {
+                    plat_pkg.provides_entries = child_info.provides_entries;
+                    child_info.provides_entries = .{}; // Prevent double-free in deinit
+                }
+            }
+
             // Re-fetch pack pointer since ensurePackage may have caused HashMap reallocation
             pack = self.packages.getPtr(pkg_name).?;
 
@@ -1822,6 +1888,16 @@ pub const BuildEnv = struct {
             const dep_name = try self.gpa.dupe(u8, alias);
 
             try self.ensurePackage(dep_name, child_info.kind, abs);
+
+            // Transfer provides entries from parsed header to platform package
+            if (child_info.kind == .platform) {
+                if (self.packages.getPtr(alias)) |plat_pkg| {
+                    if (plat_pkg.provides_entries.items.len == 0) {
+                        plat_pkg.provides_entries = child_info.provides_entries;
+                        child_info.provides_entries = .{}; // Prevent double-free in deinit
+                    }
+                }
+            }
 
             // Re-fetch pack pointer since ensurePackage may have caused HashMap reallocation
             pack = self.packages.getPtr(pkg_name).?;
@@ -2065,6 +2141,8 @@ pub const BuildEnv = struct {
         is_platform_sibling: bool,
         /// Dependency depth from root
         depth: u32,
+        /// Platform provides entries (only populated for platform main modules)
+        provides_entries: []const ProvidesEntry = &.{},
     };
 
     /// Get all compiled modules from the schedulers (after build completes).
@@ -2086,9 +2164,9 @@ pub const BuildEnv = struct {
             const sched = sched_entry.value_ptr.*;
 
             // Determine package kind
-            const pkg_info = self.packages.get(pkg_name);
-            const is_platform_pkg = pkg_info != null and pkg_info.?.kind == .platform;
-            const is_app_pkg = pkg_info != null and (pkg_info.?.kind == .app or pkg_info.?.kind == .default_app);
+            const pkg_ptr = self.packages.getPtr(pkg_name);
+            const is_platform_pkg = pkg_ptr != null and pkg_ptr.?.kind == .platform;
+            const is_app_pkg = pkg_ptr != null and (pkg_ptr.?.kind == .app or pkg_ptr.?.kind == .default_app);
 
             for (sched.modules.items, 0..) |*sched_mod, mod_idx| {
                 // Skip modules without env (not compiled or failed)
@@ -2112,6 +2190,10 @@ pub const BuildEnv = struct {
                     .is_app = is_app,
                     .is_platform_sibling = is_platform_sibling,
                     .depth = sched_mod.depth,
+                    .provides_entries = if (is_platform_main)
+                        if (pkg_ptr) |p| p.provides_entries.items else &.{}
+                    else
+                        &.{},
                 });
             }
         }
