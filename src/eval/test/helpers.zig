@@ -318,6 +318,9 @@ const WasmEvalError = error{
 
 /// Evaluate an expression using the WasmEvaluator + bytebox and return the result as a string.
 fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) WasmEvalError![]const u8 {
+    // Reset host-side heap pointer for each test
+    wasm_heap_ptr = 65536;
+
     var wasm_eval = WasmEvaluator.init(allocator) catch {
         return error.WasmEvaluatorInitFailed;
     };
@@ -391,22 +394,73 @@ fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_i
             return error.WasmExecFailed;
         };
 
-        env_imports.addHostFunction(
-            "roc_panic",
-            &[_]bytebox.ValType{ .I32, .I32 },
-            &[_]bytebox.ValType{},
-            hostPanic,
-            null,
-        ) catch {
-            return error.WasmExecFailed;
-        };
-
         // roc_list_eq: (i32 list_a_ptr, i32 list_b_ptr, i32 elem_size) -> i32 (0 or 1)
         env_imports.addHostFunction(
             "roc_list_eq",
             &[_]bytebox.ValType{ .I32, .I32, .I32 },
             &[_]bytebox.ValType{.I32},
             hostListEq,
+            null,
+        ) catch {
+            return error.WasmExecFailed;
+        };
+
+        // RocOps function imports: all (i32 args_ptr, i32 env_ptr) -> void
+        env_imports.addHostFunction(
+            "roc_alloc",
+            &[_]bytebox.ValType{ .I32, .I32 },
+            &[_]bytebox.ValType{},
+            hostRocAlloc,
+            null,
+        ) catch {
+            return error.WasmExecFailed;
+        };
+
+        env_imports.addHostFunction(
+            "roc_dealloc",
+            &[_]bytebox.ValType{ .I32, .I32 },
+            &[_]bytebox.ValType{},
+            hostRocDealloc,
+            null,
+        ) catch {
+            return error.WasmExecFailed;
+        };
+
+        env_imports.addHostFunction(
+            "roc_realloc",
+            &[_]bytebox.ValType{ .I32, .I32 },
+            &[_]bytebox.ValType{},
+            hostRocRealloc,
+            null,
+        ) catch {
+            return error.WasmExecFailed;
+        };
+
+        env_imports.addHostFunction(
+            "roc_dbg",
+            &[_]bytebox.ValType{ .I32, .I32 },
+            &[_]bytebox.ValType{},
+            hostRocDbg,
+            null,
+        ) catch {
+            return error.WasmExecFailed;
+        };
+
+        env_imports.addHostFunction(
+            "roc_expect_failed",
+            &[_]bytebox.ValType{ .I32, .I32 },
+            &[_]bytebox.ValType{},
+            hostRocExpectFailed,
+            null,
+        ) catch {
+            return error.WasmExecFailed;
+        };
+
+        env_imports.addHostFunction(
+            "roc_crashed",
+            &[_]bytebox.ValType{ .I32, .I32 },
+            &[_]bytebox.ValType{},
+            hostRocCrashed,
             null,
         ) catch {
             return error.WasmExecFailed;
@@ -577,7 +631,7 @@ fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_i
         return error.WasmExecFailed;
     };
 
-    var params: [0]bytebox.Val = undefined;
+    var params = [1]bytebox.Val{.{ .I32 = 0 }}; // env_ptr = 0
     var returns: [1]bytebox.Val = undefined;
     _ = module_instance.invoke(handle, &params, &returns, .{}) catch {
         return error.WasmExecFailed;
@@ -837,19 +891,6 @@ fn hostStrEq(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const b
 
     const equal = std.mem.eql(u8, a_data[0..a_len], b_data[0..b_len]);
     results[0] = bytebox.Val{ .I32 = if (equal) 1 else 0 };
-}
-
-fn hostPanic(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
-    const mem = module.store.getMemory(0);
-    const buffer = mem.buffer();
-
-    const msg_ptr: usize = @intCast(params[0].I32);
-    const msg_len: usize = @intCast(params[1].I32);
-
-    if (msg_ptr + msg_len <= buffer.len) {
-        const msg = buffer[msg_ptr..][0..msg_len];
-        std.debug.print("Roc crashed: {s}\n", .{msg});
-    }
 }
 
 /// Host function for roc_list_eq: compares two RocList structs for content equality.
@@ -1378,6 +1419,106 @@ fn hostListListEq(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]co
     }
 
     results[0] = bytebox.Val{ .I32 = 1 };
+}
+
+/// Host-side heap pointer for wasm bump allocation (starts after stack at 65536).
+var wasm_heap_ptr: u32 = 65536;
+
+/// Host function: roc_alloc — bump allocator.
+/// Reads RocAlloc struct {alignment: u32, length: u32, answer: u32} from args_ptr.
+/// Writes the allocated pointer into the answer field (offset +8).
+fn hostRocAlloc(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    const mem = module.store.getMemory(0);
+    const buffer = mem.buffer();
+    const args_ptr: u32 = @bitCast(params[0].I32);
+
+    if (args_ptr + 12 > buffer.len) return;
+
+    const alignment: u32 = @bitCast(buffer[args_ptr..][0..4].*);
+    const length: u32 = @bitCast(buffer[args_ptr + 4 ..][0..4].*);
+
+    // Align the heap pointer
+    const align_val = if (alignment > 0) alignment else 1;
+    const aligned = (wasm_heap_ptr + align_val - 1) & ~(align_val - 1);
+    wasm_heap_ptr = aligned + length;
+
+    // Write answer
+    const answer_bytes: [4]u8 = @bitCast(aligned);
+    @memcpy(buffer[args_ptr + 8 ..][0..4], &answer_bytes);
+}
+
+/// Host function: roc_dealloc — no-op for bump allocator.
+fn hostRocDealloc(_: ?*anyopaque, _: *bytebox.ModuleInstance, _: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {}
+
+/// Host function: roc_realloc — bump allocator (allocate new, no free).
+/// Reads RocRealloc struct {alignment: u32, new_length: u32, answer: u32} from args_ptr.
+fn hostRocRealloc(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    const mem = module.store.getMemory(0);
+    const buffer = mem.buffer();
+    const args_ptr: u32 = @bitCast(params[0].I32);
+
+    if (args_ptr + 12 > buffer.len) return;
+
+    const alignment: u32 = @bitCast(buffer[args_ptr..][0..4].*);
+    const new_length: u32 = @bitCast(buffer[args_ptr + 4 ..][0..4].*);
+
+    const align_val = if (alignment > 0) alignment else 1;
+    const aligned = (wasm_heap_ptr + align_val - 1) & ~(align_val - 1);
+    wasm_heap_ptr = aligned + new_length;
+
+    const answer_bytes: [4]u8 = @bitCast(aligned);
+    @memcpy(buffer[args_ptr + 8 ..][0..4], &answer_bytes);
+}
+
+/// Host function: roc_dbg — print debug message.
+fn hostRocDbg(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    const mem = module.store.getMemory(0);
+    const buffer = mem.buffer();
+    const args_ptr: u32 = @bitCast(params[0].I32);
+
+    if (args_ptr + 8 > buffer.len) return;
+
+    const msg_ptr: u32 = @bitCast(buffer[args_ptr..][0..4].*);
+    const msg_len: u32 = @bitCast(buffer[args_ptr + 4 ..][0..4].*);
+
+    if (msg_ptr + msg_len <= buffer.len) {
+        const msg = buffer[msg_ptr..][0..msg_len];
+        std.debug.print("[dbg] {s}\n", .{msg});
+    }
+}
+
+/// Host function: roc_expect_failed — print failed expect message.
+fn hostRocExpectFailed(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    const mem = module.store.getMemory(0);
+    const buffer = mem.buffer();
+    const args_ptr: u32 = @bitCast(params[0].I32);
+
+    if (args_ptr + 8 > buffer.len) return;
+
+    const msg_ptr: u32 = @bitCast(buffer[args_ptr..][0..4].*);
+    const msg_len: u32 = @bitCast(buffer[args_ptr + 4 ..][0..4].*);
+
+    if (msg_ptr + msg_len <= buffer.len) {
+        const msg = buffer[msg_ptr..][0..msg_len];
+        std.debug.print("Expect failed: {s}\n", .{msg});
+    }
+}
+
+/// Host function: roc_crashed — print crash message.
+fn hostRocCrashed(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    const mem = module.store.getMemory(0);
+    const buffer = mem.buffer();
+    const args_ptr: u32 = @bitCast(params[0].I32);
+
+    if (args_ptr + 8 > buffer.len) return;
+
+    const msg_ptr: u32 = @bitCast(buffer[args_ptr..][0..4].*);
+    const msg_len: u32 = @bitCast(buffer[args_ptr + 4 ..][0..4].*);
+
+    if (msg_ptr + msg_len <= buffer.len) {
+        const msg = buffer[msg_ptr..][0..msg_len];
+        std.debug.print("Roc crashed: {s}\n", .{msg});
+    }
 }
 
 /// Compare Interpreter result string with WasmEvaluator result string.

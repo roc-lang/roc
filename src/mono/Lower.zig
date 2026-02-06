@@ -119,6 +119,11 @@ next_join_point_id: u32 = 0,
 /// where the inner list's type var is flex but the expression is clearly a list.
 expr_layout_hints: std.AutoHashMap(types.Var, LayoutIdx),
 
+/// When lowering a lambda body during a call, this holds the caller's return
+/// type variable. Used as a fallback in resolveTagDiscriminant when the
+/// expression's own type variable has unresolved flex extension variables.
+caller_return_type_var: ?types.Var = null,
+
 /// Deferred lambda/closure definitions.
 /// When a block-local s_decl binds a lambda/closure, we defer lowering the body
 /// until call time (when type_scope is populated). Maps pattern_idx → CIR expr_idx.
@@ -459,7 +464,81 @@ fn resolveTagDiscriminant(self: *Self, module_env: *ModuleEnv, type_var: types.V
             .alias => |alias| {
                 current_ext = types_store.getAliasBackingVar(alias);
             },
-            .flex, .rigid => break,
+            .flex, .rigid => {
+                // Try resolving through type_scope (same logic as initial resolution)
+                if (self.type_scope.lookup(ext_resolved.var_)) |mapped| {
+                    current_ext = mapped;
+                } else if (self.caller_return_type_var) |caller_ret_var| {
+                    // Fallback: use the caller's return type variable to count
+                    // missing tags. This handles cases where the lambda body's tag
+                    // union has unresolved flex extensions (e.g., ? operator).
+                    const caller_resolved = types_store.resolveVar(caller_ret_var);
+                    const caller_tu = blk: {
+                        if (caller_resolved.desc.content.unwrapNominalType()) |nominal| {
+                            const backing_var = types_store.getNominalBackingVar(nominal);
+                            const backing = types_store.resolveVar(backing_var);
+                            break :blk backing.desc.content.unwrapTagUnion();
+                        }
+                        break :blk caller_resolved.desc.content.unwrapTagUnion();
+                    };
+                    if (caller_tu) |ctu| {
+                        // Count tags from the caller's type that sort before target
+                        const caller_tags = types_store.getTagsSlice(ctu.tags);
+                        for (caller_tags.items(.name)) |other_name| {
+                            const other_text = ident_store.getText(other_name);
+                            // Only count tags not already seen in the initial row
+                            if (std.mem.order(u8, other_text, target_text) == .lt) {
+                                // Check if this tag was already counted
+                                var already_counted = false;
+                                for (tags_slice.items(.name)) |seen_name| {
+                                    if (std.mem.eql(u8, ident_store.getText(seen_name), other_text)) {
+                                        already_counted = true;
+                                        break;
+                                    }
+                                }
+                                if (!already_counted) {
+                                    discriminant += 1;
+                                }
+                            }
+                        }
+                        // Also follow the caller type's extension chain
+                        var caller_ext = ctu.ext;
+                        var cguard: u32 = 0;
+                        while (cguard < 100) : (cguard += 1) {
+                            const cext = types_store.resolveVar(caller_ext);
+                            switch (cext.desc.content) {
+                                .structure => |cft| switch (cft) {
+                                    .tag_union => |cext_tu| {
+                                        const cext_tags = types_store.getTagsSlice(cext_tu.tags);
+                                        for (cext_tags.items(.name)) |other_name| {
+                                            const other_text = ident_store.getText(other_name);
+                                            if (std.mem.order(u8, other_text, target_text) == .lt) {
+                                                var already_counted2 = false;
+                                                for (tags_slice.items(.name)) |seen_name| {
+                                                    if (std.mem.eql(u8, ident_store.getText(seen_name), other_text)) {
+                                                        already_counted2 = true;
+                                                        break;
+                                                    }
+                                                }
+                                                if (!already_counted2) {
+                                                    discriminant += 1;
+                                                }
+                                            }
+                                        }
+                                        caller_ext = cext_tu.ext;
+                                    },
+                                    .empty_tag_union => break,
+                                    else => break,
+                                },
+                                else => break,
+                            }
+                        }
+                    }
+                    break;
+                } else {
+                    break;
+                }
+            },
             else => break,
         }
     }
@@ -947,6 +1026,7 @@ fn setupLocalCallLayoutHints(
     module_env: *ModuleEnv,
     lookup_pattern_idx: CIR.Pattern.Idx,
     call_args: CIR.Expr.Span,
+    call_expr_idx: CIR.Expr.Idx,
 ) Allocator.Error!void {
     // Find the CIR expression for the definition
     const def_expr_idx: CIR.Expr.Idx = blk: {
@@ -996,6 +1076,55 @@ fn setupLocalCallLayoutHints(
             const arg_idx = arg_indices[i];
             const caller_arg_var = ModuleEnv.varFrom(arg_idx);
             try self.collectTypeMappingsWithExpr(scope, module_env, param_var, module_env, caller_arg_var, arg_idx);
+        }
+
+        // Store the caller's return type variable. This is used as a fallback
+        // in resolveTagDiscriminant when the lambda body's type variable has
+        // unresolved flex extension variables (e.g., for the ? operator's early return).
+        const caller_ret_var = ModuleEnv.varFrom(call_expr_idx);
+        self.caller_return_type_var = caller_ret_var;
+
+        // Also map the function's return type to the call expression's result type.
+        try self.collectTypeMappingsWithExpr(scope, module_env, func.ret, module_env, caller_ret_var, null);
+
+        // Pre-cache the correct return type layout for the lambda body's type variable.
+        // The lambda body's type may have unresolved flex extensions that produce a
+        // wrong (too few variants) tag union layout. By pre-computing the layout from
+        // the caller's concrete return type and caching it under the body's type variable,
+        // we ensure layout consistency.
+        if (self.layout_store) |ls| {
+            const lambda_body: ?CIR.Expr.Idx = switch (def_expr) {
+                .e_lambda => |l| l.body,
+                .e_closure => |c| blk: {
+                    const inner_expr = module_env.store.getExpr(c.lambda_idx);
+                    break :blk switch (inner_expr) {
+                        .e_lambda => |l| l.body,
+                        else => null,
+                    };
+                },
+                else => null,
+            };
+            if (lambda_body) |body_idx| {
+                const body_type_var = ModuleEnv.varFrom(body_idx);
+                const body_resolved = module_env.types.resolveVar(body_type_var);
+                // Only pre-cache when the body type has a tag union with flex extension
+                if (body_resolved.desc.content == .structure) {
+                    if (body_resolved.desc.content.unwrapTagUnion()) |tu| {
+                        const ext_resolved = module_env.types.resolveVar(tu.ext);
+                        if (ext_resolved.desc.content == .flex or ext_resolved.desc.content == .rigid) {
+                            // Compute the correct layout from the caller's return type
+                            const correct_layout = ls.fromTypeVar(self.current_module_idx, caller_ret_var, &self.type_scope, self.type_scope_caller_module) catch null;
+                            if (correct_layout) |layout_idx| {
+                                const cache_key = layout_mod.ModuleVarKey{
+                                    .module_idx = self.current_module_idx,
+                                    .var_ = body_resolved.var_,
+                                };
+                                ls.layouts_by_module_var.put(cache_key, layout_idx) catch {};
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -1596,6 +1725,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             // We need to clean up after the call is done to avoid polluting subsequent calls.
             const is_external_call = fn_expr == .e_lookup_external;
             const old_caller_module = self.type_scope_caller_module;
+            const old_caller_return_type_var = self.caller_return_type_var;
             if (is_external_call) {
                 const lookup = fn_expr.e_lookup_external;
                 try self.setupExternalCallTypeScope(module_env, lookup, call.args, expr_idx);
@@ -1605,7 +1735,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             const is_local_call_with_hints = fn_expr == .e_lookup_local;
             if (is_local_call_with_hints) {
                 const lookup = fn_expr.e_lookup_local;
-                try self.setupLocalCallLayoutHints(module_env, lookup.pattern_idx, call.args);
+                try self.setupLocalCallLayoutHints(module_env, lookup.pattern_idx, call.args, expr_idx);
                 // Set type_scope_caller_module so that fromTypeVar checks the type
                 // scope for flex/rigid vars inside the lambda body. Without this,
                 // layout computations for parameters with unresolved types (like list
@@ -1620,6 +1750,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             // must not clear scope[0] because the outer call still needs those mappings.
             defer if (is_external_call or is_local_call_with_hints) {
                 self.type_scope_caller_module = old_caller_module;
+                self.caller_return_type_var = old_caller_return_type_var;
                 if (old_caller_module == null) {
                     if (self.type_scope.scopes.items.len > 0) {
                         self.type_scope.scopes.items[0].clearRetainingCapacity();
