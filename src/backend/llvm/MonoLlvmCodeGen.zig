@@ -608,6 +608,13 @@ pub const MonoLlvmCodeGen = struct {
             // Pattern matching
             .when => |w| self.generateWhen(w),
 
+            // Low-level builtins
+            .low_level => |ll| self.generateLowLevel(ll),
+
+            // Runtime error (unreachable) — emit LLVM unreachable
+            .runtime_error => self.generateRuntimeError(),
+            .crash => self.generateRuntimeError(),
+
             else => error.UnsupportedExpression,
         };
     }
@@ -1471,6 +1478,222 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     // ---------------------------------------------------------------
+    // Runtime error / unreachable
+    // ---------------------------------------------------------------
+
+    /// Generate an LLVM unreachable instruction for runtime_error and crash expressions.
+    /// Returns a poison value so the caller has something to work with
+    /// (the unreachable guarantees this code is never actually reached).
+    fn generateRuntimeError(self: *MonoLlvmCodeGen) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
+        _ = wip.@"unreachable"() catch return error.CompilationFailed;
+        // We need to return a value for the switch expression even though
+        // this code is unreachable. Create a new block so subsequent code
+        // (like phi nodes) has somewhere to live.
+        const dead_block = wip.block(0, "unreachable") catch return error.OutOfMemory;
+        wip.cursor = .{ .block = dead_block };
+        return builder.intValue(.i64, 0) catch return error.OutOfMemory;
+    }
+
+    // ---------------------------------------------------------------
+    // Low-level builtins
+    // ---------------------------------------------------------------
+
+    /// Generate code for low-level builtin operations.
+    /// Handles numeric conversions and simple operations directly as LLVM
+    /// instructions. Complex operations (list, string) fall through to
+    /// UnsupportedExpression.
+    fn generateLowLevel(self: *MonoLlvmCodeGen, ll: anytype) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
+        const args = self.store.getExprSpan(ll.args);
+
+        switch (ll.op) {
+            // --- Numeric arithmetic ---
+            .num_add => {
+                if (args.len < 2) return error.UnsupportedExpression;
+                const lhs = try self.generateExpr(args[0]);
+                const rhs = try self.generateExpr(args[1]);
+                const is_float = isFloatLayout(ll.ret_layout);
+                return if (is_float)
+                    wip.bin(.fadd, lhs, rhs, "") catch return error.CompilationFailed
+                else
+                    wip.bin(.add, lhs, rhs, "") catch return error.CompilationFailed;
+            },
+            .num_sub => {
+                if (args.len < 2) return error.UnsupportedExpression;
+                const lhs = try self.generateExpr(args[0]);
+                const rhs = try self.generateExpr(args[1]);
+                const is_float = isFloatLayout(ll.ret_layout);
+                return if (is_float)
+                    wip.bin(.fsub, lhs, rhs, "") catch return error.CompilationFailed
+                else
+                    wip.bin(.sub, lhs, rhs, "") catch return error.CompilationFailed;
+            },
+            .num_mul => {
+                if (args.len < 2) return error.UnsupportedExpression;
+                const lhs = try self.generateExpr(args[0]);
+                const rhs = try self.generateExpr(args[1]);
+                const is_float = isFloatLayout(ll.ret_layout);
+                return if (is_float)
+                    wip.bin(.fmul, lhs, rhs, "") catch return error.CompilationFailed
+                else
+                    wip.bin(.mul, lhs, rhs, "") catch return error.CompilationFailed;
+            },
+            .num_neg => {
+                if (args.len < 1) return error.UnsupportedExpression;
+                const operand = try self.generateExpr(args[0]);
+                const is_float = isFloatLayout(ll.ret_layout);
+                if (is_float) {
+                    return wip.bin(.fsub, builder.intValue(.i64, 0) catch return error.OutOfMemory, operand, "") catch return error.CompilationFailed;
+                } else {
+                    const zero = builder.intValue(operand.typeOfWip(wip), 0) catch return error.OutOfMemory;
+                    return wip.bin(.sub, zero, operand, "") catch return error.CompilationFailed;
+                }
+            },
+
+            // --- Widening integer conversions (always safe) ---
+            .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128,
+            .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128,
+            .u16_to_i32, .u16_to_i64, .u16_to_i128,
+            .u16_to_u32, .u16_to_u64, .u16_to_u128,
+            .u32_to_i64, .u32_to_i128,
+            .u32_to_u64, .u32_to_u128,
+            .u64_to_i128, .u64_to_u128,
+            => {
+                if (args.len < 1) return error.UnsupportedExpression;
+                const operand = try self.generateExpr(args[0]);
+                const target_type = layoutToLlvmType(ll.ret_layout);
+                return wip.conv(.unsigned, operand, target_type, "") catch return error.CompilationFailed;
+            },
+
+            .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128,
+            .i16_to_i32, .i16_to_i64, .i16_to_i128,
+            .i32_to_i64, .i32_to_i128,
+            .i64_to_i128,
+            => {
+                if (args.len < 1) return error.UnsupportedExpression;
+                const operand = try self.generateExpr(args[0]);
+                const target_type = layoutToLlvmType(ll.ret_layout);
+                return wip.conv(.signed, operand, target_type, "") catch return error.CompilationFailed;
+            },
+
+            // --- Narrowing/wrapping integer conversions ---
+            .u8_to_i8_wrap, .i8_to_u8_wrap,
+            .u16_to_i8_wrap, .u16_to_i16_wrap, .u16_to_u8_wrap,
+            .i16_to_i8_wrap, .i16_to_u8_wrap, .i16_to_u16_wrap,
+            .u32_to_i8_wrap, .u32_to_i16_wrap, .u32_to_i32_wrap, .u32_to_u8_wrap, .u32_to_u16_wrap,
+            .i32_to_i8_wrap, .i32_to_i16_wrap, .i32_to_u8_wrap, .i32_to_u16_wrap, .i32_to_u32_wrap,
+            .u64_to_i8_wrap, .u64_to_i16_wrap, .u64_to_i32_wrap, .u64_to_i64_wrap,
+            .u64_to_u8_wrap, .u64_to_u16_wrap, .u64_to_u32_wrap,
+            .i64_to_i8_wrap, .i64_to_i16_wrap, .i64_to_i32_wrap,
+            .i64_to_u8_wrap, .i64_to_u16_wrap, .i64_to_u32_wrap, .i64_to_u64_wrap,
+            .u128_to_i8_wrap, .u128_to_i16_wrap, .u128_to_i32_wrap, .u128_to_i64_wrap, .u128_to_i128_wrap,
+            .u128_to_u8_wrap, .u128_to_u16_wrap, .u128_to_u32_wrap, .u128_to_u64_wrap,
+            .i128_to_i8_wrap, .i128_to_i16_wrap, .i128_to_i32_wrap, .i128_to_i64_wrap,
+            .i128_to_u8_wrap, .i128_to_u16_wrap, .i128_to_u32_wrap, .i128_to_u64_wrap, .i128_to_u128_wrap,
+            => {
+                if (args.len < 1) return error.UnsupportedExpression;
+                const operand = try self.generateExpr(args[0]);
+                const target_type = layoutToLlvmType(ll.ret_layout);
+                return wip.conv(.unsigned, operand, target_type, "") catch return error.CompilationFailed;
+            },
+
+            // --- Integer to float conversions ---
+            .u8_to_f32, .u16_to_f32, .u32_to_f32, .u64_to_f32, .u128_to_f32,
+            .u8_to_f64, .u16_to_f64, .u32_to_f64, .u64_to_f64, .u128_to_f64,
+            => {
+                if (args.len < 1) return error.UnsupportedExpression;
+                const operand = try self.generateExpr(args[0]);
+                const target_type = layoutToLlvmType(ll.ret_layout);
+                return wip.cast(.uitofp, operand, target_type, "") catch return error.CompilationFailed;
+            },
+            .i8_to_f32, .i16_to_f32, .i32_to_f32, .i64_to_f32, .i128_to_f32,
+            .i8_to_f64, .i16_to_f64, .i32_to_f64, .i64_to_f64, .i128_to_f64,
+            => {
+                if (args.len < 1) return error.UnsupportedExpression;
+                const operand = try self.generateExpr(args[0]);
+                const target_type = layoutToLlvmType(ll.ret_layout);
+                return wip.cast(.sitofp, operand, target_type, "") catch return error.CompilationFailed;
+            },
+
+            // --- Float to integer conversions (truncating) ---
+            .f32_to_i8_trunc, .f32_to_i16_trunc, .f32_to_i32_trunc, .f32_to_i64_trunc, .f32_to_i128_trunc,
+            .f64_to_i8_trunc, .f64_to_i16_trunc, .f64_to_i32_trunc, .f64_to_i64_trunc, .f64_to_i128_trunc,
+            => {
+                if (args.len < 1) return error.UnsupportedExpression;
+                const operand = try self.generateExpr(args[0]);
+                const target_type = layoutToLlvmType(ll.ret_layout);
+                return wip.cast(.fptosi, operand, target_type, "") catch return error.CompilationFailed;
+            },
+            .f32_to_u8_trunc, .f32_to_u16_trunc, .f32_to_u32_trunc, .f32_to_u64_trunc, .f32_to_u128_trunc,
+            .f64_to_u8_trunc, .f64_to_u16_trunc, .f64_to_u32_trunc, .f64_to_u64_trunc, .f64_to_u128_trunc,
+            => {
+                if (args.len < 1) return error.UnsupportedExpression;
+                const operand = try self.generateExpr(args[0]);
+                const target_type = layoutToLlvmType(ll.ret_layout);
+                return wip.cast(.fptoui, operand, target_type, "") catch return error.CompilationFailed;
+            },
+
+            // --- Float to float conversions ---
+            .f32_to_f64 => {
+                if (args.len < 1) return error.UnsupportedExpression;
+                const operand = try self.generateExpr(args[0]);
+                return wip.cast(.fpext, operand, .double, "") catch return error.CompilationFailed;
+            },
+            .f64_to_f32_wrap => {
+                if (args.len < 1) return error.UnsupportedExpression;
+                const operand = try self.generateExpr(args[0]);
+                return wip.cast(.fptrunc, operand, .float, "") catch return error.CompilationFailed;
+            },
+
+            // --- Integer to Dec conversion (multiply by 10^18) ---
+            .u8_to_dec, .u16_to_dec, .u32_to_dec, .u64_to_dec,
+            .i8_to_dec, .i16_to_dec, .i32_to_dec, .i64_to_dec,
+            => {
+                if (args.len < 1) return error.UnsupportedExpression;
+                const operand = try self.generateExpr(args[0]);
+                // Extend to i128 first
+                const operand_layout = self.getExprResultLayout(args[0]) orelse ll.ret_layout;
+                const ext = wip.conv(
+                    if (isSigned(operand_layout)) .signed else .unsigned,
+                    operand,
+                    .i128,
+                    "",
+                ) catch return error.CompilationFailed;
+                // Multiply by 10^18 (Dec fixed-point scale)
+                const scale = builder.intValue(.i128, 1_000_000_000_000_000_000) catch return error.OutOfMemory;
+                return wip.bin(.mul, ext, scale, "") catch return error.CompilationFailed;
+            },
+
+            // --- List operations (need builtins) ---
+            .list_len => {
+                // List is a (ptr, len, capacity) triple — length at offset 8
+                if (args.len < 1) return error.UnsupportedExpression;
+                const list_val = try self.generateExpr(args[0]);
+                const len_offset = builder.intValue(.i32, 8) catch return error.OutOfMemory;
+                const len_ptr = wip.gep(.inbounds, .i8, list_val, &.{len_offset}, "") catch return error.CompilationFailed;
+                return wip.load(.normal, .i64, len_ptr, LlvmBuilder.Alignment.fromByteUnits(8), "") catch return error.CompilationFailed;
+            },
+
+            .list_is_empty => {
+                // List is empty if length == 0
+                if (args.len < 1) return error.UnsupportedExpression;
+                const list_val = try self.generateExpr(args[0]);
+                const len_offset = builder.intValue(.i32, 8) catch return error.OutOfMemory;
+                const len_ptr = wip.gep(.inbounds, .i8, list_val, &.{len_offset}, "") catch return error.CompilationFailed;
+                const len_val = wip.load(.normal, .i64, len_ptr, LlvmBuilder.Alignment.fromByteUnits(8), "") catch return error.CompilationFailed;
+                const zero = builder.intValue(.i64, 0) catch return error.OutOfMemory;
+                const is_empty = wip.icmp(.eq, len_val, zero, "") catch return error.OutOfMemory;
+                return wip.conv(.unsigned, is_empty, .i8, "") catch return error.CompilationFailed;
+            },
+
+            else => return error.UnsupportedExpression,
+        }
+    }
+
+    // ---------------------------------------------------------------
     // String generation
     // ---------------------------------------------------------------
 
@@ -1558,6 +1781,8 @@ pub const MonoLlvmCodeGen = struct {
             .tag => |t| t.union_layout,
             .discriminant_switch => |ds| ds.union_layout,
             .when => |w| w.result_layout,
+            .early_return => |er| er.ret_layout,
+            .runtime_error, .crash => .i64, // dummy layout for unreachable
             else => null,
         };
     }
