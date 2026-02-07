@@ -120,6 +120,12 @@ pub const MonoLlvmCodeGen = struct {
     /// Set by the evaluator before calling generateCode.
     layout_store: ?*const layout.Store = null,
 
+    /// Output pointer for the top-level expression result.
+    /// Set during generateCode so that string/composite generators can
+    /// store data directly to the output buffer, avoiding LLVM constant
+    /// pool references to .rodata (which we don't extract from the object file).
+    out_ptr: ?LlvmBuilder.Value = null,
+
     /// Result of bitcode generation
     pub const BitcodeResult = struct {
         bitcode: []const u32,
@@ -237,6 +243,8 @@ pub const MonoLlvmCodeGen = struct {
 
         // Get the output pointer and roc_ops pointer
         const out_ptr = wip.arg(0);
+        self.out_ptr = out_ptr;
+        defer self.out_ptr = null;
         self.roc_ops_arg = wip.arg(1);
         defer self.roc_ops_arg = null;
 
@@ -244,6 +252,12 @@ pub const MonoLlvmCodeGen = struct {
         const value = self.generateExpr(expr_id) catch return error.UnsupportedExpression;
 
         // Store the result to the output pointer.
+        // Some generators (e.g., string literals) write directly to out_ptr and
+        // return .none as a sentinel — skip the storage step for those.
+        if (value == .none) {
+            // Result already written to out_ptr by the generator.
+        } else {
+
         // For scalar types, extend to the canonical size (i64 for ints, i128 for wide ints).
         // For composite types (records, tuples), store the struct directly.
         const is_scalar = switch (result_layout) {
@@ -283,31 +297,39 @@ pub const MonoLlvmCodeGen = struct {
             });
             _ = wip.store(.normal, store_value, out_ptr, alignment) catch return error.CompilationFailed;
         } else {
-            // Composite type (record, tuple, tag_union, etc.)
-            const ls = self.layout_store orelse return error.UnsupportedExpression;
-            const stored_layout = ls.getLayout(result_layout);
-            switch (stored_layout.tag) {
-                .tag_union => {
-                    // Tag union value is an alloca pointer — memcpy to out_ptr
-                    const tu_align_bytes: u64 = @intCast(stored_layout.data.tag_union.alignment.toByteUnits());
-                    const tu_alignment = LlvmBuilder.Alignment.fromByteUnits(tu_align_bytes);
-                    const tu_data = ls.getTagUnionData(stored_layout.data.tag_union.idx);
-                    const copy_size = builder.intValue(.i32, tu_data.size) catch return error.OutOfMemory;
-                    _ = wip.callMemCpy(out_ptr, tu_alignment, value, tu_alignment, copy_size, .normal, false) catch return error.OutOfMemory;
-                },
-                else => {
-                    // Record, tuple, etc. — store the struct value directly.
-                    const align_bytes: u32 = switch (stored_layout.tag) {
-                        .record => @intCast(stored_layout.data.record.alignment.toByteUnits()),
-                        .tuple => @intCast(stored_layout.data.tuple.alignment.toByteUnits()),
-                        .zst => 1,
-                        else => return error.UnsupportedExpression,
-                    };
-                    const alignment = LlvmBuilder.Alignment.fromByteUnits(align_bytes);
-                    _ = wip.store(.normal, value, out_ptr, alignment) catch return error.CompilationFailed;
-                },
+            // Composite type (record, tuple, tag_union, str, etc.)
+            if (result_layout == .str) {
+                // String — alloca pointer, memcpy 24 bytes to out_ptr
+                const copy_size = builder.intValue(.i32, roc_str_size) catch return error.OutOfMemory;
+                const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
+                _ = wip.callMemCpy(out_ptr, alignment, value, alignment, copy_size, .normal, false) catch return error.OutOfMemory;
+            } else {
+                const ls = self.layout_store orelse return error.UnsupportedExpression;
+                const stored_layout = ls.getLayout(result_layout);
+                switch (stored_layout.tag) {
+                    .tag_union => {
+                        // Tag union — alloca pointer, memcpy to out_ptr
+                        const tu_data = ls.getTagUnionData(stored_layout.data.tag_union.idx);
+                        const copy_size = builder.intValue(.i32, tu_data.size) catch return error.OutOfMemory;
+                        const tu_align: u64 = @intCast(stored_layout.data.tag_union.alignment.toByteUnits());
+                        const alignment = LlvmBuilder.Alignment.fromByteUnits(tu_align);
+                        _ = wip.callMemCpy(out_ptr, alignment, value, alignment, copy_size, .normal, false) catch return error.OutOfMemory;
+                    },
+                    else => {
+                        // Record, tuple, etc. — store the LLVM struct value directly.
+                        const align_bytes: u32 = switch (stored_layout.tag) {
+                            .record => @intCast(stored_layout.data.record.alignment.toByteUnits()),
+                            .tuple => @intCast(stored_layout.data.tuple.alignment.toByteUnits()),
+                            .zst => 1,
+                            else => return error.UnsupportedExpression,
+                        };
+                        const alignment = LlvmBuilder.Alignment.fromByteUnits(align_bytes);
+                        _ = wip.store(.normal, value, out_ptr, alignment) catch return error.CompilationFailed;
+                    },
+                }
             }
         }
+        } // end of value != .none else
 
         _ = wip.retVoid() catch return error.CompilationFailed;
         wip.finish() catch return error.CompilationFailed;
@@ -576,6 +598,9 @@ pub const MonoLlvmCodeGen = struct {
             .zero_arg_tag => |zat| self.generateZeroArgTag(zat),
             .tag => |t| self.generateTagWithPayload(t),
             .discriminant_switch => |ds| self.generateDiscriminantSwitch(ds),
+
+            // Strings
+            .str_literal => |str_idx| self.generateStrLiteral(str_idx),
 
             // Nominal wrappers are transparent
             .nominal => |nom| self.generateExpr(nom.backing_expr),
@@ -861,6 +886,11 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn generateRecord(self: *MonoLlvmCodeGen, rec: anytype) Error!LlvmBuilder.Value {
+        // Clear out_ptr — record field values must not write to the output buffer.
+        const saved_out_ptr = self.out_ptr;
+        self.out_ptr = null;
+        defer self.out_ptr = saved_out_ptr;
+
         const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
         const ls = self.layout_store orelse return error.UnsupportedExpression;
@@ -917,6 +947,10 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn generateTuple(self: *MonoLlvmCodeGen, tup: anytype) Error!LlvmBuilder.Value {
+        const saved_out_ptr = self.out_ptr;
+        self.out_ptr = null;
+        defer self.out_ptr = saved_out_ptr;
+
         const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
         const ls = self.layout_store orelse return error.UnsupportedExpression;
@@ -1053,6 +1087,10 @@ pub const MonoLlvmCodeGen = struct {
 
     /// Generate a tag with payload arguments.
     fn generateTagWithPayload(self: *MonoLlvmCodeGen, tag_expr: anytype) Error!LlvmBuilder.Value {
+        const saved_out_ptr = self.out_ptr;
+        self.out_ptr = null;
+        defer self.out_ptr = saved_out_ptr;
+
         const wip = self.wip orelse return error.CompilationFailed;
         const builder = self.builder orelse return error.CompilationFailed;
         const ls = self.layout_store orelse return error.UnsupportedExpression;
@@ -1118,6 +1156,10 @@ pub const MonoLlvmCodeGen = struct {
 
     /// Generate a discriminant switch — dispatch on a tag union's discriminant.
     fn generateDiscriminantSwitch(self: *MonoLlvmCodeGen, ds: anytype) Error!LlvmBuilder.Value {
+        const saved_out_ptr = self.out_ptr;
+        self.out_ptr = null;
+        defer self.out_ptr = saved_out_ptr;
+
         const wip = self.wip orelse return error.CompilationFailed;
         const builder = self.builder orelse return error.CompilationFailed;
         const ls = self.layout_store orelse return error.UnsupportedExpression;
@@ -1152,7 +1194,7 @@ pub const MonoLlvmCodeGen = struct {
         };
 
         // Create basic blocks for each branch and the merge block
-        const merge_block = wip.block(0, "ds_merge") catch return error.OutOfMemory;
+        const merge_block = wip.block(@intCast(branch_exprs.len), "ds_merge") catch return error.OutOfMemory;
 
         // Generate branches as a chain of compare-and-branch (like if-else-if)
         // For each discriminant value, check if it matches, and if so generate that branch.
@@ -1205,6 +1247,65 @@ pub const MonoLlvmCodeGen = struct {
         return phi_inst.toValue();
     }
 
+    // ---------------------------------------------------------------
+    // String generation
+    // ---------------------------------------------------------------
+
+    /// RocStr size in bytes (3 pointer-sized words: ptr/bytes, length, capacity)
+    const roc_str_size: u32 = 24; // 3 * 8 on 64-bit
+    const small_str_max_len: u32 = roc_str_size - 1; // 23 bytes
+
+    /// Generate a string literal by storing bytes directly to the output pointer.
+    /// Small strings (≤ 23 bytes) are stored inline in the RocStr struct.
+    /// Large strings (> 23 bytes) are NOT yet supported.
+    ///
+    /// Stores bytes directly to `out_ptr` to avoid LLVM placing constants
+    /// in .rodata (which we don't extract from the object file). Individual
+    /// i8 stores use small immediates that stay inline in the code.
+    ///
+    /// Returns a sentinel value (.none) since the result is written directly
+    /// to the output buffer. The caller should skip the result storage step.
+    fn generateStrLiteral(self: *MonoLlvmCodeGen, str_idx: anytype) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
+        const dest_ptr = self.out_ptr orelse return error.UnsupportedExpression;
+
+        const str_bytes = self.store.getString(str_idx);
+
+        if (str_bytes.len >= roc_str_size) {
+            // Large strings not yet supported
+            return error.UnsupportedExpression;
+        }
+
+        const byte_alignment = LlvmBuilder.Alignment.fromByteUnits(1);
+
+        // Store each string byte individually to dest_ptr using volatile stores.
+        // Volatile prevents LLVM from combining adjacent byte stores into
+        // word stores that reference a constant pool in .rodata (which we
+        // don't extract from the object file).
+        for (str_bytes, 0..) |byte, i| {
+            if (byte == 0) continue;
+            const byte_val = builder.intValue(.i8, byte) catch return error.OutOfMemory;
+            if (i == 0) {
+                _ = wip.store(.@"volatile", byte_val, dest_ptr, byte_alignment) catch return error.CompilationFailed;
+            } else {
+                const offset = builder.intValue(.i32, @as(u32, @intCast(i))) catch return error.OutOfMemory;
+                const ptr = wip.gep(.inbounds, .i8, dest_ptr, &.{offset}, "") catch return error.CompilationFailed;
+                _ = wip.store(.@"volatile", byte_val, ptr, byte_alignment) catch return error.CompilationFailed;
+            }
+        }
+
+        // Store the length byte at position 23: length | 0x80
+        const len_byte: u8 = @intCast(str_bytes.len | 0x80);
+        const len_val = builder.intValue(.i8, len_byte) catch return error.OutOfMemory;
+        const len_offset = builder.intValue(.i32, small_str_max_len) catch return error.OutOfMemory;
+        const len_ptr = wip.gep(.inbounds, .i8, dest_ptr, &.{len_offset}, "") catch return error.CompilationFailed;
+        _ = wip.store(.@"volatile", len_val, len_ptr, byte_alignment) catch return error.CompilationFailed;
+
+        // Return .none as sentinel — data already written to out_ptr
+        return .none;
+    }
+
     /// Get the result layout of a mono expression (for determining operand types).
     fn getExprResultLayout(self: *const MonoLlvmCodeGen, expr_id: MonoExprId) ?layout.Idx {
         const MonoExpr = mono.MonoIR.MonoExpr;
@@ -1222,6 +1323,7 @@ pub const MonoLlvmCodeGen = struct {
             .bool_literal => .bool,
             .i128_literal => .i128,
             .dec_literal => .dec,
+            .str_literal => .str,
             .record => |r| r.record_layout,
             .empty_record => .zst,
             .tuple => |t| t.tuple_layout,
@@ -1332,6 +1434,10 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn generateIfThenElse(self: *MonoLlvmCodeGen, ite: anytype) Error!LlvmBuilder.Value {
+        const saved_out_ptr = self.out_ptr;
+        self.out_ptr = null;
+        defer self.out_ptr = saved_out_ptr;
+
         const wip = self.wip orelse return error.CompilationFailed;
 
         // Get the branches
@@ -1387,6 +1493,11 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn generateBlock(self: *MonoLlvmCodeGen, block_data: anytype) Error!LlvmBuilder.Value {
+        // Save out_ptr — intermediate statements must not write to it.
+        // Only the final expression should use out_ptr for direct-store types (strings).
+        const saved_out_ptr = self.out_ptr;
+        self.out_ptr = null;
+
         // Process all statements (let bindings)
         const stmts = self.store.getStmts(block_data.stmts);
         for (stmts) |stmt| {
@@ -1406,6 +1517,8 @@ pub const MonoLlvmCodeGen = struct {
             try self.bindPattern(stmt.pattern, val);
         }
 
+        // Restore out_ptr for the final expression
+        self.out_ptr = saved_out_ptr;
         // Generate and return the final expression
         return self.generateExpr(block_data.final_expr);
     }
@@ -1415,6 +1528,10 @@ pub const MonoLlvmCodeGen = struct {
     // ---------------------------------------------------------------
 
     fn generateCall(self: *MonoLlvmCodeGen, call: anytype) Error!LlvmBuilder.Value {
+        const saved_out_ptr = self.out_ptr;
+        self.out_ptr = null;
+        defer self.out_ptr = saved_out_ptr;
+
         const fn_expr = self.store.getExpr(call.fn_expr);
 
         return switch (fn_expr) {

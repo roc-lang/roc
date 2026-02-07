@@ -522,8 +522,6 @@ fn llvmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_i
         return error.LlvmEvaluatorInitFailed;
     };
     defer llvm_eval.deinit();
-    // Note: optimizations are enabled (default) because opt_level=None
-    // produces incorrect code for floating-point operations on aarch64.
 
     const all_module_envs = [_]*ModuleEnv{ module_env, @constCast(builtin_module_env) };
 
@@ -584,6 +582,25 @@ fn llvmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_i
             var buf: [builtins.dec.RocDec.max_str_length]u8 = undefined;
             const slice = dec.format_to_buf(&buf);
             break :blk allocator.dupe(u8, slice);
+        },
+        layout_mod.Idx.str => blk: {
+            // RocStr is 24 bytes
+            var result_bytes: [24]u8 align(8) = .{0} ** 24;
+            executable.callWithResultPtrAndRocOps(@ptrCast(&result_bytes), @ptrCast(&dummy_roc_ops));
+
+            // Check if small string (last byte has high bit set)
+            if (result_bytes[23] & 0x80 != 0) {
+                const len = result_bytes[23] ^ 0x80;
+                break :blk allocator.dupe(u8, result_bytes[0..len]);
+            } else {
+                // Large string — read pointer and length from the RocStr struct
+                const str_ptr: *const ?[*]const u8 = @ptrCast(@alignCast(&result_bytes));
+                const str_len: *const usize = @ptrCast(@alignCast(result_bytes[8..16]));
+                if (str_ptr.* != null and str_len.* > 0) {
+                    break :blk allocator.dupe(u8, str_ptr.*.?[0..str_len.*]);
+                }
+                break :blk allocator.dupe(u8, "");
+            }
         },
         else => blk: {
             // Handle composite types (records, tuples)
