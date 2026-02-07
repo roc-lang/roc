@@ -2076,6 +2076,58 @@ pub const MonoLlvmCodeGen = struct {
                 return wip.cast(.fptoui, operand, target_type, "") catch return error.CompilationFailed;
             },
 
+            // --- Float to integer "try_unsafe" conversions (same as trunc, assumes no overflow) ---
+            .f32_to_i8_try_unsafe, .f32_to_i16_try_unsafe, .f32_to_i32_try_unsafe, .f32_to_i64_try_unsafe, .f32_to_i128_try_unsafe,
+            .f64_to_i8_try_unsafe, .f64_to_i16_try_unsafe, .f64_to_i32_try_unsafe, .f64_to_i64_try_unsafe, .f64_to_i128_try_unsafe,
+            => {
+                if (args.len < 1) return error.UnsupportedExpression;
+                const operand = try self.generateExpr(args[0]);
+                const target_type = layoutToLlvmType(ll.ret_layout);
+                return wip.cast(.fptosi, operand, target_type, "") catch return error.CompilationFailed;
+            },
+            .f32_to_u8_try_unsafe, .f32_to_u16_try_unsafe, .f32_to_u32_try_unsafe, .f32_to_u64_try_unsafe, .f32_to_u128_try_unsafe,
+            .f64_to_u8_try_unsafe, .f64_to_u16_try_unsafe, .f64_to_u32_try_unsafe, .f64_to_u64_try_unsafe, .f64_to_u128_try_unsafe,
+            => {
+                if (args.len < 1) return error.UnsupportedExpression;
+                const operand = try self.generateExpr(args[0]);
+                const target_type = layoutToLlvmType(ll.ret_layout);
+                return wip.cast(.fptoui, operand, target_type, "") catch return error.CompilationFailed;
+            },
+            .f64_to_f32_try_unsafe => {
+                if (args.len < 1) return error.UnsupportedExpression;
+                const operand = try self.generateExpr(args[0]);
+                return wip.cast(.fptrunc, operand, .float, "") catch return error.CompilationFailed;
+            },
+
+            // --- Integer "try" conversions (return Result — not yet implemented) ---
+            .u8_to_i8_try,
+            .i8_to_u8_try, .i8_to_u16_try, .i8_to_u32_try, .i8_to_u64_try, .i8_to_u128_try,
+            .u16_to_i8_try, .u16_to_i16_try, .u16_to_u8_try,
+            .i16_to_i8_try, .i16_to_u8_try, .i16_to_u16_try, .i16_to_u32_try, .i16_to_u64_try, .i16_to_u128_try,
+            .u32_to_i8_try, .u32_to_i16_try, .u32_to_i32_try, .u32_to_u8_try, .u32_to_u16_try,
+            .i32_to_i8_try, .i32_to_i16_try, .i32_to_u8_try, .i32_to_u16_try, .i32_to_u32_try, .i32_to_u64_try, .i32_to_u128_try,
+            .u64_to_i8_try, .u64_to_i16_try, .u64_to_i32_try, .u64_to_i64_try, .u64_to_u8_try, .u64_to_u16_try, .u64_to_u32_try,
+            .i64_to_i8_try, .i64_to_i16_try, .i64_to_i32_try, .i64_to_u8_try, .i64_to_u16_try, .i64_to_u32_try, .i64_to_u64_try, .i64_to_u128_try,
+            .u128_to_i8_try, .u128_to_i16_try, .u128_to_i32_try, .u128_to_i64_try, .u128_to_i128_try,
+            .u128_to_u8_try, .u128_to_u16_try, .u128_to_u32_try, .u128_to_u64_try,
+            .i128_to_i8_try, .i128_to_i16_try, .i128_to_i32_try, .i128_to_i64_try,
+            .i128_to_u8_try, .i128_to_u16_try, .i128_to_u32_try, .i128_to_u64_try, .i128_to_u128_try,
+            .u128_to_dec_try_unsafe, .i128_to_dec_try_unsafe,
+            => return error.UnsupportedExpression,
+
+            // --- Dec truncation conversions (not yet fully handled) ---
+            .dec_to_i8_trunc, .dec_to_i8_try_unsafe,
+            .dec_to_i16_trunc, .dec_to_i16_try_unsafe,
+            .dec_to_i32_trunc, .dec_to_i32_try_unsafe,
+            .dec_to_i128_trunc, .dec_to_i128_try_unsafe,
+            .dec_to_u8_trunc, .dec_to_u8_try_unsafe,
+            .dec_to_u16_trunc, .dec_to_u16_try_unsafe,
+            .dec_to_u32_trunc, .dec_to_u32_try_unsafe,
+            .dec_to_u64_trunc, .dec_to_u64_try_unsafe,
+            .dec_to_u128_trunc, .dec_to_u128_try_unsafe,
+            .dec_to_f32_wrap, .dec_to_f32_try_unsafe,
+            => return error.UnsupportedExpression,
+
             // --- Float to float conversions ---
             .f32_to_f64 => {
                 if (args.len < 1) return error.UnsupportedExpression;
@@ -2105,6 +2157,42 @@ pub const MonoLlvmCodeGen = struct {
                 // Multiply by 10^18 (Dec fixed-point scale)
                 const scale = builder.intValue(.i128, 1_000_000_000_000_000_000) catch return error.OutOfMemory;
                 return wip.bin(.mul, ext, scale, "") catch return error.CompilationFailed;
+            },
+
+            .num_div => {
+                if (args.len < 2) return error.UnsupportedExpression;
+                const lhs = try self.generateExpr(args[0]);
+                const rhs = try self.generateExpr(args[1]);
+                const is_float = isFloatLayout(ll.ret_layout);
+                return if (is_float)
+                    wip.bin(.fdiv, lhs, rhs, "") catch return error.CompilationFailed
+                else
+                    wip.bin(.sdiv, lhs, rhs, "") catch return error.CompilationFailed;
+            },
+            .num_mod => {
+                if (args.len < 2) return error.UnsupportedExpression;
+                const lhs = try self.generateExpr(args[0]);
+                const rhs = try self.generateExpr(args[1]);
+                const is_float = isFloatLayout(ll.ret_layout);
+                return if (is_float)
+                    wip.bin(.frem, lhs, rhs, "") catch return error.CompilationFailed
+                else
+                    wip.bin(.srem, lhs, rhs, "") catch return error.CompilationFailed;
+            },
+            .num_pow => {
+                // For integer pow, use repeated multiplication; for float, use llvm.pow intrinsic
+                // For now, return error for float pow (needs intrinsic call)
+                return error.UnsupportedExpression;
+            },
+            .num_round, .num_floor, .num_ceiling => {
+                // These need float intrinsics (llvm.round, llvm.floor, llvm.ceil)
+                return error.UnsupportedExpression;
+            },
+            .num_sqrt, .num_log => {
+                return error.UnsupportedExpression;
+            },
+            .num_to_str, .num_from_str, .num_from_numeral => {
+                return error.UnsupportedExpression;
             },
 
             // --- String operations ---
@@ -2140,6 +2228,111 @@ pub const MonoLlvmCodeGen = struct {
                 const is_empty = wip.icmp(.eq, len_val, zero, "") catch return error.OutOfMemory;
                 return wip.conv(.unsigned, is_empty, .i8, "") catch return error.CompilationFailed;
             },
+
+            .list_get => {
+                // list_get(list, index) — load element at index from list data pointer
+                if (args.len < 2) return error.UnsupportedExpression;
+                const ls = self.layout_store orelse return error.UnsupportedExpression;
+                const list_ptr = try self.materializeAsPtr(args[0], 24);
+                const index = try self.generateExpr(args[1]);
+
+                // Load data pointer from list (offset 0)
+                const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
+                const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
+                const data_ptr = wip.load(.normal, ptr_type, list_ptr, alignment, "") catch return error.CompilationFailed;
+
+                // Get element size from ret_layout
+                const elem_layout = ls.getLayout(ll.ret_layout);
+                const elem_sa = ls.layoutSizeAlign(elem_layout);
+                const elem_size: u64 = elem_sa.size;
+
+                // Calculate element pointer: data_ptr + index * elem_size
+                const size_const = builder.intValue(.i64, elem_size) catch return error.OutOfMemory;
+                const byte_offset = wip.bin(.mul, index, size_const, "") catch return error.CompilationFailed;
+                const elem_ptr = wip.gep(.inbounds, .i8, data_ptr, &.{byte_offset}, "") catch return error.CompilationFailed;
+
+                // Load the element
+                const elem_type = layoutToLlvmType(ll.ret_layout);
+                const elem_align = LlvmBuilder.Alignment.fromByteUnits(@intCast(elem_sa.alignment.toByteUnits()));
+                return wip.load(.normal, elem_type, elem_ptr, elem_align, "") catch return error.CompilationFailed;
+            },
+
+            .str_count_utf8_bytes => {
+                // For a RocStr, the length in bytes is stored at offset 8 for heap strings,
+                // or derived from byte 23 for small strings. This is complex; return unsupported for now.
+                return error.UnsupportedExpression;
+            },
+
+            // --- Dec truncation/conversion operations ---
+            .dec_to_i64_trunc => {
+                if (args.len < 1) return error.UnsupportedExpression;
+                const operand = try self.generateExpr(args[0]);
+                // Dec is i128 fixed-point with 10^18 scale. Truncate: divide by 10^18
+                const scale = builder.intValue(.i128, 1_000_000_000_000_000_000) catch return error.OutOfMemory;
+                const divided = wip.bin(.sdiv, operand, scale, "") catch return error.CompilationFailed;
+                return wip.conv(.signed, divided, .i64, "") catch return error.CompilationFailed;
+            },
+            .dec_to_f64 => {
+                if (args.len < 1) return error.UnsupportedExpression;
+                const operand = try self.generateExpr(args[0]);
+                // Convert i128 to f64, then divide by 10^18
+                const as_f64 = wip.cast(.sitofp, operand, .double, "") catch return error.CompilationFailed;
+                const scale = (builder.doubleConst(1_000_000_000_000_000_000.0) catch return error.OutOfMemory).toValue();
+                return wip.bin(.fdiv, as_f64, scale, "") catch return error.CompilationFailed;
+            },
+
+            // --- Comparison ---
+            .compare => {
+                // compare(a, b) -> {-1, 0, 1} as i8
+                if (args.len < 2) return error.UnsupportedExpression;
+                const lhs = try self.generateExpr(args[0]);
+                const rhs = try self.generateExpr(args[1]);
+                // Get the layout of the first argument to determine comparison type
+                const arg_layout = self.getExprResultLayout(args[0]) orelse ll.ret_layout;
+                const is_float = isFloatLayout(arg_layout);
+                if (is_float) {
+                    const lt = wip.fcmp(.normal, .olt, lhs, rhs, "") catch return error.OutOfMemory;
+                    const gt = wip.fcmp(.normal, .ogt, lhs, rhs, "") catch return error.OutOfMemory;
+                    const lt_val = wip.conv(.unsigned, lt, .i8, "") catch return error.CompilationFailed;
+                    const gt_val = wip.conv(.unsigned, gt, .i8, "") catch return error.CompilationFailed;
+                    // result = gt - lt => 1 if gt, -1 (255 unsigned but signed -1) if lt, 0 if eq
+                    return wip.bin(.sub, gt_val, lt_val, "") catch return error.CompilationFailed;
+                } else {
+                    const lt = wip.icmp(.slt, lhs, rhs, "") catch return error.OutOfMemory;
+                    const gt = wip.icmp(.sgt, lhs, rhs, "") catch return error.OutOfMemory;
+                    const lt_val = wip.conv(.unsigned, lt, .i8, "") catch return error.CompilationFailed;
+                    const gt_val = wip.conv(.unsigned, gt, .i8, "") catch return error.CompilationFailed;
+                    return wip.bin(.sub, gt_val, lt_val, "") catch return error.CompilationFailed;
+                }
+            },
+
+            // --- Crash ---
+            .crash => {
+                _ = wip.@"unreachable"() catch return error.CompilationFailed;
+                const dead_block = wip.block(0, "after_crash") catch return error.OutOfMemory;
+                wip.cursor = .{ .block = dead_block };
+                return builder.intValue(.i64, 0) catch return error.OutOfMemory;
+            },
+
+            // --- Box operations (not yet implemented) ---
+            .box_box, .box_unbox => return error.UnsupportedExpression,
+
+            // --- Unsupported string/list operations (need runtime builtins) ---
+            .str_is_eq, .str_concat, .str_contains, .str_starts_with, .str_ends_with,
+            .str_caseless_ascii_equals, .str_to_utf8, .str_from_utf8,
+            .str_repeat, .str_trim, .str_trim_start, .str_trim_end,
+            .str_split, .str_join_with, .str_reserve, .str_release_excess_capacity,
+            .str_with_capacity, .str_drop_prefix, .str_drop_suffix,
+            .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_with_prefix,
+            .str_from_utf8_lossy,
+            => return error.UnsupportedExpression,
+
+            .list_set, .list_append, .list_prepend, .list_concat,
+            .list_first, .list_last, .list_drop_first, .list_drop_last,
+            .list_take_first, .list_take_last, .list_contains, .list_reverse,
+            .list_reserve, .list_release_excess_capacity, .list_with_capacity,
+            .list_repeat, .list_split_first, .list_split_last,
+            => return error.UnsupportedExpression,
 
             else => return error.UnsupportedExpression,
         }
