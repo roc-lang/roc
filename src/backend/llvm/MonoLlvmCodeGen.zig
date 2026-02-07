@@ -650,6 +650,23 @@ pub const MonoLlvmCodeGen = struct {
             }
         }
 
+        // Align integer operand widths (e.g., i64 vs i128 from Dec literals)
+        if (!is_float) {
+            const lhs_type = lhs.typeOfWip(wip);
+            const rhs_type = rhs.typeOfWip(wip);
+            if (isIntType(lhs_type) and isIntType(rhs_type) and lhs_type != rhs_type) {
+                const lhs_bits = intTypeBits(lhs_type);
+                const rhs_bits = intTypeBits(rhs_type);
+                if (lhs_bits < rhs_bits) {
+                    const lhs_layout = self.getExprResultLayout(binop.lhs) orelse binop.result_layout;
+                    lhs = wip.cast(if (isSigned(lhs_layout)) .sext else .zext, lhs, rhs_type, "") catch return error.CompilationFailed;
+                } else {
+                    const rhs_layout = self.getExprResultLayout(binop.rhs) orelse binop.result_layout;
+                    rhs = wip.cast(if (isSigned(rhs_layout)) .sext else .zext, rhs, lhs_type, "") catch return error.CompilationFailed;
+                }
+            }
+        }
+
         return switch (binop.op) {
             .add => if (is_float)
                 wip.bin(.fadd, lhs, rhs, "") catch return error.CompilationFailed
@@ -1051,8 +1068,20 @@ pub const MonoLlvmCodeGen = struct {
             }
             return wip.un(.fneg, val, "") catch return error.CompilationFailed;
         } else {
+            // Align value type to result type (e.g., i64_literal produces i64 but result may be i8)
+            const result_type = layoutToLlvmType(unary.result_layout);
+            const val_type = val.typeOfWip(wip);
+            if (isIntType(val_type) and isIntType(result_type) and val_type != result_type) {
+                const val_bits = intTypeBits(val_type);
+                const result_bits = intTypeBits(result_type);
+                if (val_bits > result_bits) {
+                    val = wip.cast(.trunc, val, result_type, "") catch return error.CompilationFailed;
+                } else {
+                    val = wip.cast(if (isSigned(unary.result_layout)) .sext else .zext, val, result_type, "") catch return error.CompilationFailed;
+                }
+            }
             // For integers, subtract from 0
-            const zero = (builder.intConst(layoutToLlvmType(unary.result_layout), 0) catch return error.OutOfMemory).toValue();
+            const zero = (builder.intConst(result_type, 0) catch return error.OutOfMemory).toValue();
             return wip.bin(.sub, zero, val, "") catch return error.CompilationFailed;
         }
     }
@@ -1104,9 +1133,9 @@ pub const MonoLlvmCodeGen = struct {
         _ = wip.br(merge_block) catch return error.CompilationFailed;
         const else_exit_block = wip.cursor.block;
 
-        // Merge block with phi
+        // Merge block with phi — use actual value type, not layout (which may be wrong for structs)
         wip.cursor = .{ .block = merge_block };
-        const result_type = layoutToLlvmType(ite.result_layout);
+        const result_type = then_val.typeOfWip(wip);
         const phi_inst = wip.phi(result_type, "") catch return error.CompilationFailed;
         phi_inst.finish(
             &.{ then_val, else_val },
