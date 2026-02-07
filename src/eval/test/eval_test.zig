@@ -2201,10 +2201,10 @@ test "debug 8783a: lambda with tag match called directly" {
         \\{
         \\    f = |child|
         \\        match child {
-        \\            Text(_) => 1.I64
-        \\            Element(_, _) => 10.I64
+        \\            Aaa(_, _) => 10.I64
+        \\            Bbb(_) => 1.I64
         \\        }
-        \\    f(Text("hello"))
+        \\    f(Bbb(42.I64))
         \\}
     , 1, .no_trace);
 }

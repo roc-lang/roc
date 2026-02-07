@@ -4,6 +4,7 @@
 //! - Primitives that fit in a wasm value type are returned directly
 //! - Composites (i128, Dec, Str, List, records) use linear memory
 
+const std = @import("std");
 const layout = @import("layout");
 const WasmModule = @import("WasmModule.zig");
 const ValType = WasmModule.ValType;
@@ -52,14 +53,26 @@ pub fn wasmReprWithStore(layout_idx: layout.Idx, ls: *const layout.Store) WasmRe
                 .tuple => .{ .stack_memory = ls.layoutSize(l) },
                 .tag_union => blk: {
                     const size2 = ls.layoutSize(l);
-                    // Single-byte tag unions (enums) can be treated as i32 primitives
-                    if (size2 <= 4) break :blk .{ .primitive = .i32 };
+                    const tu_data = ls.getTagUnionData(l.data.tag_union.idx);
+                    // Discriminant-only tag unions (enums, disc_offset == 0) with size ≤ 4
+                    // are treated as i32 primitives. Tag unions with payloads
+                    // (disc_offset > 0) always use stack memory so the payload
+                    // can be stored and extracted correctly.
+                    if (size2 <= 4 and tu_data.discriminant_offset == 0) break :blk .{ .primitive = .i32 };
                     break :blk .{ .stack_memory = size2 };
                 },
                 .zst => .{ .primitive = .i32 }, // zero-sized, dummy i32
                 .box, .box_of_zst => .{ .primitive = .i32 }, // pointer
                 .list, .list_of_zst => .{ .stack_memory = 12 }, // RocList
-                .closure => .{ .stack_memory = ls.layoutSize(l) },
+                .closure => blk: {
+                    // For unwrapped_capture closures, the runtime value IS the capture
+                    // value itself (not a pointer). Resolve the captures layout to check.
+                    const captures_repr = wasmReprWithStore(l.data.closure.captures_layout_idx, ls);
+                    break :blk switch (captures_repr) {
+                        .primitive => captures_repr,
+                        .stack_memory => .{ .stack_memory = ls.layoutSize(l) },
+                    };
+                },
             };
         },
     }

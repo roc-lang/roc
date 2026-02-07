@@ -430,6 +430,7 @@ fn resolveTagDiscriminant(self: *Self, module_env: *ModuleEnv, type_var: types.V
 
     // Process the initial tag union row
     const tags_slice = types_store.getTagsSlice(tag_union.tags);
+
     for (tags_slice.items(.name)) |other_name| {
         const other_text = ident_store.getText(other_name);
         if (std.mem.order(u8, other_text, target_text) == .lt) {
@@ -437,7 +438,17 @@ fn resolveTagDiscriminant(self: *Self, module_env: *ModuleEnv, type_var: types.V
         }
     }
 
-    // Follow the extension variable chain to collect tags from all rows
+    // Follow the extension variable chain to collect tags from all rows.
+    // Track seen tag names to avoid double-counting duplicates across rows.
+    var seen_texts: [64][]const u8 = undefined;
+    var seen_count: usize = 0;
+    for (tags_slice.items(.name)) |init_name| {
+        if (seen_count < 64) {
+            seen_texts[seen_count] = ident_store.getText(init_name);
+            seen_count += 1;
+        }
+    }
+
     var current_ext = tag_union.ext;
     var guard: u32 = 0;
     while (guard < 100) : (guard += 1) {
@@ -448,8 +459,22 @@ fn resolveTagDiscriminant(self: *Self, module_env: *ModuleEnv, type_var: types.V
                     const ext_tags = types_store.getTagsSlice(ext_tu.tags);
                     for (ext_tags.items(.name)) |other_name| {
                         const other_text = ident_store.getText(other_name);
-                        if (std.mem.order(u8, other_text, target_text) == .lt) {
-                            discriminant += 1;
+                        // Skip tags already seen in a previous row
+                        var already_seen = false;
+                        for (seen_texts[0..seen_count]) |seen| {
+                            if (std.mem.eql(u8, seen, other_text)) {
+                                already_seen = true;
+                                break;
+                            }
+                        }
+                        if (!already_seen) {
+                            if (seen_count < 64) {
+                                seen_texts[seen_count] = other_text;
+                                seen_count += 1;
+                            }
+                            if (std.mem.order(u8, other_text, target_text) == .lt) {
+                                discriminant += 1;
+                            }
                         }
                     }
                     current_ext = ext_tu.ext;

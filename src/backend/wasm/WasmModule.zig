@@ -250,7 +250,6 @@ pub const BlockType = enum(u8) {
 /// A function type (signature)
 const FuncType = struct {
     params: []const ValType,
-    results: []const ValType,
 };
 
 /// An export entry
@@ -284,6 +283,7 @@ const funcref: u8 = 0x70;
 /// Module state
 allocator: Allocator,
 func_types: std.ArrayList(FuncType),
+func_type_results: std.ArrayList(?ValType), // parallel to func_types
 func_type_indices: std.ArrayList(u32), // func_idx -> type_idx
 func_bodies: std.ArrayList(FuncBody),
 exports: std.ArrayList(Export),
@@ -303,6 +303,7 @@ pub fn init(allocator: Allocator) Self {
     return .{
         .allocator = allocator,
         .func_types = .empty,
+        .func_type_results = .empty,
         .func_type_indices = .empty,
         .func_bodies = .empty,
         .exports = .empty,
@@ -320,9 +321,9 @@ pub fn init(allocator: Allocator) Self {
 pub fn deinit(self: *Self) void {
     for (self.func_types.items) |ft| {
         self.allocator.free(ft.params);
-        self.allocator.free(ft.results);
     }
     self.func_types.deinit(self.allocator);
+    self.func_type_results.deinit(self.allocator);
     self.func_type_indices.deinit(self.allocator);
     for (self.func_bodies.items) |fb| {
         if (fb.body.len > 0) {
@@ -360,12 +361,10 @@ pub fn importCount(self: *const Self) u32 {
 pub fn addFuncType(self: *Self, params: []const ValType, results: []const ValType) !u32 {
     const idx: u32 = @intCast(self.func_types.items.len);
     const params_copy = try self.allocator.dupe(ValType, params);
-    errdefer self.allocator.free(params_copy);
-    const results_copy = try self.allocator.dupe(ValType, results);
     try self.func_types.append(self.allocator, .{
         .params = params_copy,
-        .results = results_copy,
     });
+    try self.func_type_results.append(self.allocator, if (results.len > 0) results[0] else null);
     return idx;
 }
 
@@ -510,15 +509,17 @@ fn encodeTypeSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) !v
 
     try leb128WriteU32(gpa, &section_data, @intCast(self.func_types.items.len));
 
-    for (self.func_types.items) |ft| {
+    for (self.func_types.items, 0..) |ft, idx| {
         try section_data.append(gpa, 0x60); // func type marker
         try leb128WriteU32(gpa, &section_data, @intCast(ft.params.len));
         for (ft.params) |p| {
             try section_data.append(gpa, @intFromEnum(p));
         }
-        try leb128WriteU32(gpa, &section_data, @intCast(ft.results.len));
-        for (ft.results) |r| {
+        if (self.func_type_results.items[idx]) |r| {
+            try section_data.append(gpa, 1); // 1 result
             try section_data.append(gpa, @intFromEnum(r));
+        } else {
+            try section_data.append(gpa, 0); // 0 results
         }
     }
 
