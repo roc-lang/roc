@@ -75,15 +75,39 @@ const Instantiator = types.instantiate.Instantiator;
 
 const Self = @This();
 
-/// Key for looking up specializations
+/// Key for looking up specializations.
+/// Contains the original ident, the concrete type var (for structural equality),
+/// and a precomputed structural type hash (for fast HashMap bucketing).
 pub const SpecializationKey = struct {
     original_ident: base.Ident.Idx,
+    concrete_type: types.Var,
     type_hash: u64,
+};
 
-    pub fn eql(a: SpecializationKey, b: SpecializationKey) bool {
-        return a.original_ident == b.original_ident and a.type_hash == b.type_hash;
+/// Custom HashMap context for SpecializationKey.
+/// Uses precomputed type_hash for hashing and structuralTypeEqual for equality.
+pub const SpecKeyContext = struct {
+    types_store: *types.Store,
+    allocator: std.mem.Allocator,
+
+    pub fn hash(_: @This(), key: SpecializationKey) u64 {
+        var h = std.hash.Wyhash.init(0);
+        h.update(std.mem.asBytes(&key.original_ident));
+        h.update(std.mem.asBytes(&key.type_hash));
+        return h.final();
+    }
+
+    pub fn eql(ctx: @This(), a: SpecializationKey, b: SpecializationKey) bool {
+        if (a.original_ident != b.original_ident) return false;
+        if (a.type_hash != b.type_hash) return false;
+        return structuralTypeEqual(ctx.types_store, ctx.allocator, a.concrete_type, b.concrete_type);
     }
 };
+
+/// HashMap types using custom context
+const SpecNameMap = std.HashMap(SpecializationKey, base.Ident.Idx, SpecKeyContext, 80);
+const SpecProcMap = std.HashMap(SpecializationKey, SpecializedProc, SpecKeyContext, 80);
+const SpecInProgressMap = std.HashMap(SpecializationKey, void, SpecKeyContext, 80);
 
 /// A function that hasn't been specialized yet (partial proc).
 /// Stores the original function definition that can be specialized to
@@ -149,11 +173,6 @@ pub const ExternalSpecializationRequest = struct {
     /// The call site in this module (for error reporting)
     call_site: ?Expr.Idx,
 
-    pub fn eql(a: ExternalSpecializationRequest, b: ExternalSpecializationRequest) bool {
-        return a.source_module == b.source_module and
-            a.original_ident == b.original_ident;
-        // Note: concrete_type comparison would require type equality check
-    }
 };
 
 /// Result of requesting an external specialization.
@@ -169,8 +188,32 @@ pub const ExternalSpecializationResult = struct {
 pub const ExternalSpecKey = struct {
     source_module: CIR.Import.Idx,
     original_ident: base.Ident.Idx,
+    concrete_type: types.Var,
     type_hash: u64,
 };
+
+/// Custom HashMap context for ExternalSpecKey.
+pub const ExtSpecKeyContext = struct {
+    types_store: *types.Store,
+    allocator: std.mem.Allocator,
+
+    pub fn hash(_: @This(), key: ExternalSpecKey) u64 {
+        var h = std.hash.Wyhash.init(0);
+        h.update(std.mem.asBytes(&key.source_module));
+        h.update(std.mem.asBytes(&key.original_ident));
+        h.update(std.mem.asBytes(&key.type_hash));
+        return h.final();
+    }
+
+    pub fn eql(ctx: @This(), a: ExternalSpecKey, b: ExternalSpecKey) bool {
+        if (a.source_module != b.source_module) return false;
+        if (a.original_ident != b.original_ident) return false;
+        if (a.type_hash != b.type_hash) return false;
+        return structuralTypeEqual(ctx.types_store, ctx.allocator, a.concrete_type, b.concrete_type);
+    }
+};
+
+const ExtSpecMap = std.HashMap(ExternalSpecKey, base.Ident.Idx, ExtSpecKeyContext, 80);
 
 /// The allocator for intermediate allocations
 allocator: std.mem.Allocator,
@@ -187,14 +230,14 @@ partial_procs: std.AutoHashMap(base.Ident.Idx, PartialProc),
 /// Specializations that need to be made (queue processed in making phase)
 pending_specializations: std.ArrayList(PendingSpecialization),
 
-/// Completed specializations: (original, type_hash) -> specialized proc
-specialized: std.AutoHashMap(SpecializationKey, SpecializedProc),
+/// Completed specializations: (original, concrete_type) -> specialized proc
+specialized: SpecProcMap,
 
-/// Map from (original_name, concrete_type_hash) -> specialized_name (for lookup)
-specialization_names: std.AutoHashMap(SpecializationKey, base.Ident.Idx),
+/// Map from (original_name, concrete_type) -> specialized_name (for lookup)
+specialization_names: SpecNameMap,
 
 /// Specializations currently being made (to detect recursion)
-in_progress: std.AutoHashMap(SpecializationKey, void),
+in_progress: SpecInProgressMap,
 
 /// Counter for generating unique specialization names
 specialization_counter: u32,
@@ -214,9 +257,9 @@ specialization_stack: std.ArrayList(SpecializationKey),
 /// External specializations requested from other modules
 external_requests: std.ArrayList(ExternalSpecializationRequest),
 
-/// Resolved external specializations: maps (source_module, original_ident, type_hash) to specialized_ident.
+/// Resolved external specializations: maps (source_module, original_ident, concrete_type) to specialized_ident.
 /// Populated by resolveExternalSpecialization, used by requestExternalSpecialization.
-resolved_external_specs: std.AutoHashMap(ExternalSpecKey, base.Ident.Idx),
+resolved_external_specs: ExtSpecMap,
 
 /// Optional closure transformer for resolving unspecialized lambda set entries.
 /// When set, the monomorphizer will resolve unspecialized closures during specialization.
@@ -235,22 +278,24 @@ pub fn init(
     module_env: *ModuleEnv,
     types_store: *types.Store,
 ) Self {
+    const spec_ctx = SpecKeyContext{ .types_store = types_store, .allocator = allocator };
+    const ext_ctx = ExtSpecKeyContext{ .types_store = types_store, .allocator = allocator };
     return .{
         .allocator = allocator,
         .module_env = module_env,
         .types_store = types_store,
         .partial_procs = std.AutoHashMap(base.Ident.Idx, PartialProc).init(allocator),
         .pending_specializations = std.ArrayList(PendingSpecialization).empty,
-        .specialized = std.AutoHashMap(SpecializationKey, SpecializedProc).init(allocator),
-        .specialization_names = std.AutoHashMap(SpecializationKey, base.Ident.Idx).init(allocator),
-        .in_progress = std.AutoHashMap(SpecializationKey, void).init(allocator),
+        .specialized = SpecProcMap.initContext(allocator, spec_ctx),
+        .specialization_names = SpecNameMap.initContext(allocator, spec_ctx),
+        .in_progress = SpecInProgressMap.initContext(allocator, spec_ctx),
         .specialization_counter = 0,
         .phase = .finding,
         .recursion_depth = 0,
         .max_recursion_depth = DEFAULT_MAX_RECURSION_DEPTH,
         .specialization_stack = std.ArrayList(SpecializationKey).empty,
         .external_requests = std.ArrayList(ExternalSpecializationRequest).empty,
-        .resolved_external_specs = std.AutoHashMap(ExternalSpecKey, base.Ident.Idx).init(allocator),
+        .resolved_external_specs = ExtSpecMap.initContext(allocator, ext_ctx),
         .closure_transformer = null,
         .impl_lambda_sets = null,
     };
@@ -817,6 +862,7 @@ pub fn requestSpecialization(
     const type_hash = self.structuralTypeHash(concrete_type);
     const key = SpecializationKey{
         .original_ident = original_ident,
+        .concrete_type = concrete_type,
         .type_hash = type_hash,
     };
 
@@ -828,8 +874,7 @@ pub fn requestSpecialization(
     // Check if it's already pending - if so, look up or create the specialized name
     for (self.pending_specializations.items) |pending| {
         if (pending.original_ident == original_ident) {
-            const pending_hash = self.structuralTypeHash(pending.concrete_type);
-            if (pending_hash == type_hash) {
+            if (structuralTypeEqual(self.types_store, self.allocator, pending.concrete_type, concrete_type)) {
                 // Already pending - create and return the specialized name so call sites
                 // can reference it. The name will be reused when the spec is processed.
                 const specialized_name = try self.createSpecializedName(original_ident, concrete_type);
@@ -883,6 +928,7 @@ pub fn requestExternalSpecialization(
     const ext_key = ExternalSpecKey{
         .source_module = source_module,
         .original_ident = original_ident,
+        .concrete_type = concrete_type,
         .type_hash = new_type_hash,
     };
     if (self.resolved_external_specs.get(ext_key)) |resolved_ident| {
@@ -897,9 +943,8 @@ pub fn requestExternalSpecialization(
         if (existing.source_module == source_module and
             existing.original_ident == original_ident)
         {
-            // Compare concrete types using structural type hashing
-            const existing_type_hash = self.structuralTypeHash(existing.concrete_type);
-            if (existing_type_hash == new_type_hash) {
+            // Compare concrete types using structural type equality
+            if (structuralTypeEqual(self.types_store, self.allocator, existing.concrete_type, concrete_type)) {
                 // Pending but not yet resolved - create/lookup the specialized name
                 // so all call sites use a consistent reference
                 const specialized_name = try self.createSpecializedName(original_ident, concrete_type);
@@ -949,6 +994,7 @@ pub fn getUnresolvedExternalRequests(self: *Self) !std.ArrayList(ExternalSpecial
         const ext_key = ExternalSpecKey{
             .source_module = request.source_module,
             .original_ident = request.original_ident,
+            .concrete_type = request.concrete_type,
             .type_hash = type_hash,
         };
 
@@ -968,6 +1014,7 @@ pub fn allExternalSpecializationsResolved(self: *Self) bool {
         const ext_key = ExternalSpecKey{
             .source_module = request.source_module,
             .original_ident = request.original_ident,
+            .concrete_type = request.concrete_type,
             .type_hash = type_hash,
         };
 
@@ -992,6 +1039,7 @@ pub fn resolveExternalSpecialization(
     // Store in the local specialization names for consistency
     const key = SpecializationKey{
         .original_ident = original_ident,
+        .concrete_type = concrete_type,
         .type_hash = type_hash,
     };
     try self.specialization_names.put(key, specialized_ident);
@@ -1000,6 +1048,7 @@ pub fn resolveExternalSpecialization(
     const ext_key = ExternalSpecKey{
         .source_module = source_module,
         .original_ident = original_ident,
+        .concrete_type = concrete_type,
         .type_hash = type_hash,
     };
     try self.resolved_external_specs.put(ext_key, specialized_ident);
@@ -1029,6 +1078,7 @@ fn makeSpecialization(self: *Self, pending: *PendingSpecialization) !void {
     const type_hash = self.structuralTypeHash(pending.concrete_type);
     const key = SpecializationKey{
         .original_ident = pending.original_ident,
+        .concrete_type = pending.concrete_type,
         .type_hash = type_hash,
     };
 
@@ -2002,14 +2052,14 @@ fn hashTypeRecursive(
     type_var: types.Var,
     seen: *std.AutoHashMap(types.Var, void),
 ) void {
-    // Check for cycles
-    if (seen.contains(type_var)) {
+    const resolved = self.types_store.resolveVar(type_var);
+
+    // Check for cycles using the resolved var (not the input var)
+    if (seen.contains(resolved.var_)) {
         hasher.update("CYCLE");
         return;
     }
-    seen.put(type_var, {}) catch return;
-
-    const resolved = self.types_store.resolveVar(type_var);
+    seen.put(resolved.var_, {}) catch return;
 
     // Hash based on content
     switch (resolved.desc.content) {
@@ -2040,6 +2090,8 @@ fn hashTypeRecursive(
                         hasher.update(std.mem.asBytes(&name));
                         self.hashTypeRecursive(hasher, var_, seen);
                     }
+                    // Hash the extension variable
+                    self.hashTypeRecursive(hasher, record.ext, seen);
                 },
                 .tag_union => |tag_union| {
                     // Hash tags
@@ -2051,6 +2103,8 @@ fn hashTypeRecursive(
                             self.hashTypeRecursive(hasher, arg, seen);
                         }
                     }
+                    // Hash the extension variable
+                    self.hashTypeRecursive(hasher, tag_union.ext, seen);
                 },
                 .tuple => |tuple| {
                     const elems = self.types_store.sliceVars(tuple.elems);
@@ -2069,21 +2123,206 @@ fn hashTypeRecursive(
                 .empty_tag_union => hasher.update("empty_tag_union"),
             }
         },
-        .flex => |flex| {
-            hasher.update("flex");
-            if (flex.name) |name| {
-                hasher.update(std.mem.asBytes(&name));
-            }
-        },
-        .rigid => |rigid| {
-            hasher.update("rigid");
-            hasher.update(std.mem.asBytes(&rigid.name));
+        .flex, .rigid => {
+            // Hash by resolved Var identity — two flex/rigid vars that
+            // resolved to the same variable must hash the same, and
+            // different variables must (likely) hash differently.
+            hasher.update("var");
+            hasher.update(std.mem.asBytes(&resolved.var_));
         },
         .alias => |alias| {
             hasher.update("alias");
             hasher.update(std.mem.asBytes(&alias.ident.ident_idx));
+            // Recurse into alias args
+            const alias_args = self.types_store.sliceAliasArgs(alias);
+            for (alias_args) |arg| {
+                self.hashTypeRecursive(hasher, arg, seen);
+            }
+            // Recurse into backing var
+            const backing = self.types_store.getAliasBackingVar(alias);
+            self.hashTypeRecursive(hasher, backing, seen);
         },
         .err => hasher.update("err"),
+    }
+}
+
+/// Pair of type variables used as key for cycle detection in structural equality.
+const VarPair = struct {
+    a: types.Var,
+    b: types.Var,
+};
+
+/// Check structural equality of two types.
+/// Two types are structurally equal if they have the same shape when fully resolved.
+/// Uses an internal seen-set for cycle detection. On allocation failure, returns
+/// false (conservative — may create a duplicate specialization but never wrong code).
+pub fn structuralTypeEqual(
+    types_store: *types.Store,
+    allocator: std.mem.Allocator,
+    var_a: types.Var,
+    var_b: types.Var,
+) bool {
+    var seen = std.AutoHashMap(VarPair, void).init(allocator);
+    defer seen.deinit();
+    return structuralTypeEqualRecursive(types_store, var_a, var_b, &seen);
+}
+
+fn structuralTypeEqualRecursive(
+    store: *types.Store,
+    var_a: types.Var,
+    var_b: types.Var,
+    seen: *std.AutoHashMap(VarPair, void),
+) bool {
+    const ra = store.resolveVar(var_a);
+    const rb = store.resolveVar(var_b);
+
+    // Same resolved variable — trivially equal
+    if (ra.var_ == rb.var_) return true;
+
+    // Cycle detection using resolved var pair
+    const pair = VarPair{ .a = ra.var_, .b = rb.var_ };
+    if (seen.contains(pair)) return true; // assumed equal (co-inductive)
+    seen.put(pair, {}) catch return false;
+
+    // Content must match
+    switch (ra.desc.content) {
+        .structure => |flat_a| {
+            const flat_b = switch (rb.desc.content) {
+                .structure => |fb| fb,
+                else => return false,
+            };
+            return structuralFlatTypeEqual(store, flat_a, flat_b, seen);
+        },
+        .flex, .rigid => {
+            // Unresolved vars: equal only if same resolved var (checked above)
+            return switch (rb.desc.content) {
+                .flex, .rigid => false,
+                else => false,
+            };
+        },
+        .alias => |alias_a| {
+            const alias_b = switch (rb.desc.content) {
+                .alias => |ab| ab,
+                else => return false,
+            };
+            // Must be same alias ident
+            if (alias_a.ident.ident_idx != alias_b.ident.ident_idx) return false;
+
+            // Compare alias args
+            const args_a = store.sliceAliasArgs(alias_a);
+            const args_b = store.sliceAliasArgs(alias_b);
+            if (args_a.len != args_b.len) return false;
+            for (args_a, args_b) |aa, ab| {
+                if (!structuralTypeEqualRecursive(store, aa, ab, seen)) return false;
+            }
+
+            // Compare backing var
+            const backing_a = store.getAliasBackingVar(alias_a);
+            const backing_b = store.getAliasBackingVar(alias_b);
+            return structuralTypeEqualRecursive(store, backing_a, backing_b, seen);
+        },
+        .err => {
+            return rb.desc.content == .err;
+        },
+    }
+}
+
+fn structuralFlatTypeEqual(
+    store: *types.Store,
+    flat_a: types.FlatType,
+    flat_b: types.FlatType,
+    seen: *std.AutoHashMap(VarPair, void),
+) bool {
+    // Must be same variant
+    if (@intFromEnum(flat_a) != @intFromEnum(flat_b)) return false;
+
+    switch (flat_a) {
+        .nominal_type => |nom_a| {
+            const nom_b = flat_b.nominal_type;
+            if (nom_a.ident.ident_idx != nom_b.ident.ident_idx) return false;
+            const vars_a = store.sliceVars(nom_a.vars.nonempty);
+            const vars_b = store.sliceVars(nom_b.vars.nonempty);
+            if (vars_a.len != vars_b.len) return false;
+            for (vars_a, vars_b) |va, vb| {
+                if (!structuralTypeEqualRecursive(store, va, vb, seen)) return false;
+            }
+            return true;
+        },
+        .fn_pure, .fn_effectful, .fn_unbound => |func_a| {
+            const func_b = switch (flat_b) {
+                .fn_pure, .fn_effectful, .fn_unbound => |f| f,
+                else => unreachable,
+            };
+            const args_a = store.sliceVars(func_a.args);
+            const args_b = store.sliceVars(func_b.args);
+            if (args_a.len != args_b.len) return false;
+            for (args_a, args_b) |va, vb| {
+                if (!structuralTypeEqualRecursive(store, va, vb, seen)) return false;
+            }
+            return structuralTypeEqualRecursive(store, func_a.ret, func_b.ret, seen);
+        },
+        .record => |rec_a| {
+            const rec_b = flat_b.record;
+            const fields_a = store.getRecordFieldsSlice(rec_a.fields);
+            const fields_b = store.getRecordFieldsSlice(rec_b.fields);
+            if (fields_a.len != fields_b.len) return false;
+            const names_a = fields_a.items(.name);
+            const names_b = fields_b.items(.name);
+            const vars_a = fields_a.items(.var_);
+            const vars_b = fields_b.items(.var_);
+            for (names_a, names_b, vars_a, vars_b) |na, nb, va, vb| {
+                if (na != nb) return false;
+                if (!structuralTypeEqualRecursive(store, va, vb, seen)) return false;
+            }
+            return structuralTypeEqualRecursive(store, rec_a.ext, rec_b.ext, seen);
+        },
+        .tag_union => |tu_a| {
+            const tu_b = flat_b.tag_union;
+            const tags_a = store.getTagsSlice(tu_a.tags);
+            const tags_b = store.getTagsSlice(tu_b.tags);
+            if (tags_a.len != tags_b.len) return false;
+            const tnames_a = tags_a.items(.name);
+            const tnames_b = tags_b.items(.name);
+            const targs_a = tags_a.items(.args);
+            const targs_b = tags_b.items(.args);
+            for (tnames_a, tnames_b, targs_a, targs_b) |na, nb, aa, ab| {
+                if (na != nb) return false;
+                const payload_a = store.sliceVars(aa);
+                const payload_b = store.sliceVars(ab);
+                if (payload_a.len != payload_b.len) return false;
+                for (payload_a, payload_b) |pa, pb| {
+                    if (!structuralTypeEqualRecursive(store, pa, pb, seen)) return false;
+                }
+            }
+            return structuralTypeEqualRecursive(store, tu_a.ext, tu_b.ext, seen);
+        },
+        .tuple => |tup_a| {
+            const tup_b = flat_b.tuple;
+            const elems_a = store.sliceVars(tup_a.elems);
+            const elems_b = store.sliceVars(tup_b.elems);
+            if (elems_a.len != elems_b.len) return false;
+            for (elems_a, elems_b) |ea, eb| {
+                if (!structuralTypeEqualRecursive(store, ea, eb, seen)) return false;
+            }
+            return true;
+        },
+        .record_unbound => |fields_range_a| {
+            const fields_range_b = flat_b.record_unbound;
+            const fields_a = store.getRecordFieldsSlice(fields_range_a);
+            const fields_b = store.getRecordFieldsSlice(fields_range_b);
+            if (fields_a.len != fields_b.len) return false;
+            const names_a = fields_a.items(.name);
+            const names_b = fields_b.items(.name);
+            const vars_a = fields_a.items(.var_);
+            const vars_b = fields_b.items(.var_);
+            for (names_a, names_b, vars_a, vars_b) |na, nb, va, vb| {
+                if (na != nb) return false;
+                if (!structuralTypeEqualRecursive(store, va, vb, seen)) return false;
+            }
+            return true;
+        },
+        .empty_record => return flat_b == .empty_record,
+        .empty_tag_union => return flat_b == .empty_tag_union,
     }
 }
 
@@ -2170,6 +2409,7 @@ pub fn createSpecializedName(
     const type_hash = self.structuralTypeHash(type_var);
     const key = SpecializationKey{
         .original_ident = original_name,
+        .concrete_type = type_var,
         .type_hash = type_hash,
     };
 
@@ -2212,13 +2452,14 @@ pub fn getSpecializedName(
     const type_hash = mutable_self.structuralTypeHash(type_var);
     const key = SpecializationKey{
         .original_ident = original_ident,
+        .concrete_type = type_var,
         .type_hash = type_hash,
     };
     return self.specialization_names.get(key);
 }
 
 /// Iterator for specialized procs
-pub fn specializedIterator(self: *const Self) std.AutoHashMap(SpecializationKey, SpecializedProc).ValueIterator {
+pub fn specializedIterator(self: *const Self) SpecProcMap.ValueIterator {
     return self.specialized.valueIterator();
 }
 
@@ -2291,26 +2532,49 @@ test "monomorphizer: isPolymorphic" {
     try testing.expect(mono.isPolymorphic(flex_var));
 }
 
-test "monomorphizer: specialization key equality" {
+test "monomorphizer: specialization key equality via context" {
+    const allocator = testing.allocator;
+
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, "test");
+    defer {
+        module_env.deinit();
+        allocator.destroy(module_env);
+    }
+
+    const ctx = SpecKeyContext{ .types_store = &module_env.types, .allocator = allocator };
+
     const test_ident = base.Ident.Idx{
         .attributes = .{ .effectful = false, .ignored = false, .reassignable = false },
         .idx = 1,
     };
+
+    // Same type var should be equal
+    const type_var = try module_env.types.fresh();
+    var mono = Self.init(allocator, module_env, &module_env.types);
+    defer mono.deinit();
+    const hash1 = mono.structuralTypeHash(type_var);
+
     const key1 = SpecializationKey{
         .original_ident = test_ident,
-        .type_hash = 12345,
+        .concrete_type = type_var,
+        .type_hash = hash1,
     };
     const key2 = SpecializationKey{
         .original_ident = test_ident,
-        .type_hash = 12345,
-    };
-    const key3 = SpecializationKey{
-        .original_ident = test_ident,
-        .type_hash = 67890,
+        .concrete_type = type_var,
+        .type_hash = hash1,
     };
 
-    try testing.expect(key1.eql(key2));
-    try testing.expect(!key1.eql(key3));
+    try testing.expect(ctx.eql(key1, key2));
+
+    // Different type hash should not be equal
+    const key3 = SpecializationKey{
+        .original_ident = test_ident,
+        .concrete_type = type_var,
+        .type_hash = 67890,
+    };
+    try testing.expect(!ctx.eql(key1, key3));
 }
 
 test "monomorphizer: type hashing consistency" {
@@ -2564,12 +2828,25 @@ test "monomorphizer: external specialization resolution stores and retrieves" {
 }
 
 test "monomorphizer: ExternalSpecKey stores module info" {
+    const allocator = testing.allocator;
+
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, "test");
+    defer {
+        module_env.deinit();
+        allocator.destroy(module_env);
+    }
+
+    const type_var = try module_env.types.fresh();
+    const ctx = ExtSpecKeyContext{ .types_store = &module_env.types, .allocator = allocator };
+
     const key1 = ExternalSpecKey{
         .source_module = @enumFromInt(1),
         .original_ident = base.Ident.Idx{
             .attributes = .{ .effectful = false, .ignored = false, .reassignable = false },
             .idx = 42,
         },
+        .concrete_type = type_var,
         .type_hash = 12345,
     };
 
@@ -2579,12 +2856,13 @@ test "monomorphizer: ExternalSpecKey stores module info" {
             .attributes = .{ .effectful = false, .ignored = false, .reassignable = false },
             .idx = 42,
         },
+        .concrete_type = type_var,
         .type_hash = 12345,
     };
 
-    // Different modules should produce different keys
-    const hash1 = std.hash.Wyhash.hash(0, std.mem.asBytes(&key1));
-    const hash2 = std.hash.Wyhash.hash(0, std.mem.asBytes(&key2));
+    // Different modules should produce different context hashes
+    const hash1 = ctx.hash(key1);
+    const hash2 = ctx.hash(key2);
     try testing.expect(hash1 != hash2);
 }
 
