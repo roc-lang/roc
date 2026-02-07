@@ -3078,3 +3078,83 @@ test "Bool in record with mixed alignment fields - bug confirmation" {
     try runExpectBool("{ key: 42u64, count: 1u32, flag: Bool.True }.flag", true, .no_trace);
     try runExpectBool("{ key: 42u64, count: 1u32, flag: Bool.False }.flag", false, .no_trace);
 }
+
+// ============ Str builtin operations tests ============
+
+test "Str.trim" {
+    try runExpectStr("Str.trim(\"  hello  \")", "hello", .no_trace);
+    try runExpectStr("Str.trim(\"hello\")", "hello", .no_trace);
+    try runExpectStr("Str.trim(\"  \")", "", .no_trace);
+}
+
+test "Str.trim_start" {
+    try runExpectStr("Str.trim_start(\"  hello  \")", "hello  ", .no_trace);
+    try runExpectStr("Str.trim_start(\"hello\")", "hello", .no_trace);
+}
+
+test "Str.trim_end" {
+    try runExpectStr("Str.trim_end(\"  hello  \")", "  hello", .no_trace);
+    try runExpectStr("Str.trim_end(\"hello\")", "hello", .no_trace);
+}
+
+test "Str.with_ascii_lowercased" {
+    try runExpectStr("Str.with_ascii_lowercased(\"HELLO\")", "hello", .no_trace);
+    try runExpectStr("Str.with_ascii_lowercased(\"Hello World\")", "hello world", .no_trace);
+    try runExpectStr("Str.with_ascii_lowercased(\"abc\")", "abc", .no_trace);
+}
+
+test "Str.with_ascii_uppercased" {
+    try runExpectStr("Str.with_ascii_uppercased(\"hello\")", "HELLO", .no_trace);
+    try runExpectStr("Str.with_ascii_uppercased(\"Hello World\")", "HELLO WORLD", .no_trace);
+    try runExpectStr("Str.with_ascii_uppercased(\"ABC\")", "ABC", .no_trace);
+}
+
+test "Str.caseless_ascii_equals" {
+    try runExpectBool("Str.caseless_ascii_equals(\"hello\", \"HELLO\")", true, .no_trace);
+    try runExpectBool("Str.caseless_ascii_equals(\"abc\", \"abc\")", true, .no_trace);
+    try runExpectBool("Str.caseless_ascii_equals(\"abc\", \"def\")", false, .no_trace);
+}
+
+test "Str.repeat" {
+    try runExpectStr("Str.repeat(\"ab\", 3)", "ababab", .no_trace);
+    try runExpectStr("Str.repeat(\"x\", 1)", "x", .no_trace);
+    try runExpectStr("Str.repeat(\"x\", 0)", "", .no_trace);
+}
+
+test "Str.with_prefix" {
+    try runExpectStr("Str.with_prefix(\"world\", \"hello \")", "hello world", .no_trace);
+    try runExpectStr("Str.with_prefix(\"bar\", \"\")", "bar", .no_trace);
+}
+
+test "Str.drop_prefix" {
+    try runExpectStr("Str.drop_prefix(\"foobar\", \"foo\")", "bar", .no_trace);
+    try runExpectStr("Str.drop_prefix(\"foobar\", \"baz\")", "foobar", .no_trace);
+}
+
+test "Str.drop_suffix" {
+    try runExpectStr("Str.drop_suffix(\"foobar\", \"bar\")", "foo", .no_trace);
+    try runExpectStr("Str.drop_suffix(\"foobar\", \"baz\")", "foobar", .no_trace);
+}
+
+test "Str.release_excess_capacity" {
+    try runExpectStr("Str.release_excess_capacity(\"hello\")", "hello", .no_trace);
+}
+
+test "Str.split_on and Str.join_with" {
+    try runExpectStr(
+        \\{
+        \\    parts = Str.split_on("a,b,c", ",")
+        \\    Str.join_with(parts, "-")
+        \\}
+    , "a-b-c", .no_trace);
+}
+
+test "Str.join_with" {
+    try runExpectStr(
+        \\Str.join_with(["hello", "world"], " ")
+    , "hello world", .no_trace);
+}
+
+// Note: Str.from_utf8 returns a Result which requires match support in all evaluators.
+// It is tested indirectly via the encode/decode tests. The wasm codegen for it is implemented
+// but we don't add a standalone test here to avoid DevEvaluator limitations with Result matching.

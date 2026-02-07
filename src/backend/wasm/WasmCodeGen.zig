@@ -107,6 +107,22 @@ dec_to_f32_import: ?u32 = null,
 list_str_eq_import: ?u32 = null,
 /// Wasm function index for imported roc_list_list_eq host function.
 list_list_eq_import: ?u32 = null,
+str_repeat_import: ?u32 = null,
+str_trim_import: ?u32 = null,
+str_trim_start_import: ?u32 = null,
+str_trim_end_import: ?u32 = null,
+str_split_import: ?u32 = null,
+str_join_with_import: ?u32 = null,
+str_reserve_import: ?u32 = null,
+str_release_excess_capacity_import: ?u32 = null,
+str_with_capacity_import: ?u32 = null,
+str_drop_prefix_import: ?u32 = null,
+str_drop_suffix_import: ?u32 = null,
+str_with_ascii_lowercased_import: ?u32 = null,
+str_with_ascii_uppercased_import: ?u32 = null,
+str_with_prefix_import: ?u32 = null,
+str_caseless_ascii_equals_import: ?u32 = null,
+str_from_utf8_import: ?u32 = null,
 /// Configurable wasm stack size in bytes (default 1MB).
 wasm_stack_bytes: u32 = 1024 * 1024,
 /// Configurable wasm memory pages (0 = auto-compute from stack size).
@@ -299,6 +315,30 @@ fn registerHostImports(self: *Self) !void {
         &.{.i32},
     );
     self.list_list_eq_import = try self.module.addImport("env", "roc_list_list_eq", list_list_eq_type);
+
+    // String ops: (str_ptr, result_ptr) -> void
+    const str_unary_type = try self.module.addFuncType(&.{ .i32, .i32 }, &.{});
+    self.str_trim_import = try self.module.addImport("env", "roc_str_trim", str_unary_type);
+    self.str_trim_start_import = try self.module.addImport("env", "roc_str_trim_start", str_unary_type);
+    self.str_trim_end_import = try self.module.addImport("env", "roc_str_trim_end", str_unary_type);
+    self.str_with_ascii_lowercased_import = try self.module.addImport("env", "roc_str_with_ascii_lowercased", str_unary_type);
+    self.str_with_ascii_uppercased_import = try self.module.addImport("env", "roc_str_with_ascii_uppercased", str_unary_type);
+    self.str_release_excess_capacity_import = try self.module.addImport("env", "roc_str_release_excess_capacity", str_unary_type);
+    self.str_with_capacity_import = try self.module.addImport("env", "roc_str_with_capacity", str_unary_type);
+    self.str_from_utf8_import = try self.module.addImport("env", "roc_str_from_utf8", str_unary_type);
+
+    // String ops: (arg1, arg2, result_ptr) -> void
+    const str_binary_type = try self.module.addFuncType(&.{ .i32, .i32, .i32 }, &.{});
+    self.str_with_prefix_import = try self.module.addImport("env", "roc_str_with_prefix", str_binary_type);
+    self.str_drop_prefix_import = try self.module.addImport("env", "roc_str_drop_prefix", str_binary_type);
+    self.str_drop_suffix_import = try self.module.addImport("env", "roc_str_drop_suffix", str_binary_type);
+    self.str_split_import = try self.module.addImport("env", "roc_str_split", str_binary_type);
+    self.str_join_with_import = try self.module.addImport("env", "roc_str_join_with", str_binary_type);
+    self.str_repeat_import = try self.module.addImport("env", "roc_str_repeat", str_binary_type);
+    self.str_reserve_import = try self.module.addImport("env", "roc_str_reserve", str_binary_type);
+
+    // Caseless equals: (str_a, str_b) -> i32
+    self.str_caseless_ascii_equals_import = try self.module.addImport("env", "roc_str_caseless_ascii_equals", str_eq_type);
 }
 
 /// Result of generating a wasm module
@@ -8044,12 +8084,135 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         .str_from_utf8_lossy => {
             try self.generateStrFromUtf8Lossy(args[0]);
         },
-        .str_caseless_ascii_equals, .str_from_utf8,
-        .str_repeat, .str_trim, .str_trim_start, .str_trim_end, .str_split,
-        .str_join_with, .str_reserve, .str_release_excess_capacity, .str_with_capacity,
-        .str_drop_prefix, .str_drop_suffix, .str_with_ascii_lowercased,
-        .str_with_ascii_uppercased, .str_with_prefix,
-        => unreachable, // Not yet implemented
+        .str_trim, .str_trim_start, .str_trim_end,
+        .str_with_ascii_lowercased, .str_with_ascii_uppercased,
+        .str_release_excess_capacity,
+        => {
+            const import_idx = switch (ll.op) {
+                .str_trim => self.str_trim_import orelse unreachable,
+                .str_trim_start => self.str_trim_start_import orelse unreachable,
+                .str_trim_end => self.str_trim_end_import orelse unreachable,
+                .str_with_ascii_lowercased => self.str_with_ascii_lowercased_import orelse unreachable,
+                .str_with_ascii_uppercased => self.str_with_ascii_uppercased_import orelse unreachable,
+                .str_release_excess_capacity => self.str_release_excess_capacity_import orelse unreachable,
+                else => unreachable,
+            };
+            try self.generateExpr(args[0]);
+            const input = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitLocalSet(input);
+            const result_offset = try self.allocStackMemory(12, 4);
+            try self.emitLocalGet(input);
+            try self.emitFpOffset(result_offset);
+            self.body.append(self.allocator, Op.call) catch return error.OutOfMemory;
+            WasmModule.leb128WriteU32(self.allocator, &self.body, import_idx) catch return error.OutOfMemory;
+            try self.emitFpOffset(result_offset);
+        },
+        .str_with_prefix, .str_drop_prefix, .str_drop_suffix => {
+            const import_idx = switch (ll.op) {
+                .str_with_prefix => self.str_with_prefix_import orelse unreachable,
+                .str_drop_prefix => self.str_drop_prefix_import orelse unreachable,
+                .str_drop_suffix => self.str_drop_suffix_import orelse unreachable,
+                else => unreachable,
+            };
+            try self.generateExpr(args[0]);
+            const a = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitLocalSet(a);
+            try self.generateExpr(args[1]);
+            const b = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitLocalSet(b);
+            const result_offset = try self.allocStackMemory(12, 4);
+            try self.emitLocalGet(a);
+            try self.emitLocalGet(b);
+            try self.emitFpOffset(result_offset);
+            self.body.append(self.allocator, Op.call) catch return error.OutOfMemory;
+            WasmModule.leb128WriteU32(self.allocator, &self.body, import_idx) catch return error.OutOfMemory;
+            try self.emitFpOffset(result_offset);
+        },
+        .str_split, .str_join_with => {
+            const import_idx = switch (ll.op) {
+                .str_split => self.str_split_import orelse unreachable,
+                .str_join_with => self.str_join_with_import orelse unreachable,
+                else => unreachable,
+            };
+            try self.generateExpr(args[0]);
+            const a = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitLocalSet(a);
+            try self.generateExpr(args[1]);
+            const b = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitLocalSet(b);
+            const result_offset = try self.allocStackMemory(12, 4);
+            try self.emitLocalGet(a);
+            try self.emitLocalGet(b);
+            try self.emitFpOffset(result_offset);
+            self.body.append(self.allocator, Op.call) catch return error.OutOfMemory;
+            WasmModule.leb128WriteU32(self.allocator, &self.body, import_idx) catch return error.OutOfMemory;
+            try self.emitFpOffset(result_offset);
+        },
+        .str_repeat, .str_reserve => {
+            const import_idx = switch (ll.op) {
+                .str_repeat => self.str_repeat_import orelse unreachable,
+                .str_reserve => self.str_reserve_import orelse unreachable,
+                else => unreachable,
+            };
+            try self.generateExpr(args[0]);
+            const str_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitLocalSet(str_local);
+            try self.generateExpr(args[1]);
+            const int_vt = self.exprValType(args[1]);
+            if (int_vt == .i64) {
+                self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
+            }
+            const int_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitLocalSet(int_local);
+            const result_offset = try self.allocStackMemory(12, 4);
+            try self.emitLocalGet(str_local);
+            try self.emitLocalGet(int_local);
+            try self.emitFpOffset(result_offset);
+            self.body.append(self.allocator, Op.call) catch return error.OutOfMemory;
+            WasmModule.leb128WriteU32(self.allocator, &self.body, import_idx) catch return error.OutOfMemory;
+            try self.emitFpOffset(result_offset);
+        },
+        .str_with_capacity => {
+            const import_idx = self.str_with_capacity_import orelse unreachable;
+            try self.generateExpr(args[0]);
+            const int_vt = self.exprValType(args[0]);
+            if (int_vt == .i64) {
+                self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
+            }
+            const int_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitLocalSet(int_local);
+            const result_offset = try self.allocStackMemory(12, 4);
+            try self.emitLocalGet(int_local);
+            try self.emitFpOffset(result_offset);
+            self.body.append(self.allocator, Op.call) catch return error.OutOfMemory;
+            WasmModule.leb128WriteU32(self.allocator, &self.body, import_idx) catch return error.OutOfMemory;
+            try self.emitFpOffset(result_offset);
+        },
+        .str_caseless_ascii_equals => {
+            const import_idx = self.str_caseless_ascii_equals_import orelse unreachable;
+            try self.generateExpr(args[0]);
+            const a = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitLocalSet(a);
+            try self.generateExpr(args[1]);
+            const b = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitLocalSet(b);
+            try self.emitLocalGet(a);
+            try self.emitLocalGet(b);
+            self.body.append(self.allocator, Op.call) catch return error.OutOfMemory;
+            WasmModule.leb128WriteU32(self.allocator, &self.body, import_idx) catch return error.OutOfMemory;
+        },
+        .str_from_utf8 => {
+            const import_idx = self.str_from_utf8_import orelse unreachable;
+            try self.generateExpr(args[0]);
+            const input = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitLocalSet(input);
+            const result_offset = try self.allocStackMemory(16, 4);
+            try self.emitLocalGet(input);
+            try self.emitFpOffset(result_offset);
+            self.body.append(self.allocator, Op.call) catch return error.OutOfMemory;
+            WasmModule.leb128WriteU32(self.allocator, &self.body, import_idx) catch return error.OutOfMemory;
+            try self.emitFpOffset(result_offset);
+        },
 
         .num_to_str, .num_from_str, .num_from_numeral => unreachable, // Resolved by MonoIR lowering
 
