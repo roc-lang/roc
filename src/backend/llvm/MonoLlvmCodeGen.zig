@@ -126,6 +126,13 @@ pub const MonoLlvmCodeGen = struct {
     /// pool references to .rodata (which we don't extract from the object file).
     out_ptr: ?LlvmBuilder.Value = null,
 
+    /// Block for early returns — branches here skip the rest of the function.
+    /// The block contains retVoid since the value is already stored to out_ptr.
+    early_return_block: ?LlvmBuilder.Function.Block.Index = null,
+
+    /// Result layout for the top-level expression (needed by early_return).
+    result_layout: ?layout.Idx = null,
+
     /// Result of bitcode generation
     pub const BitcodeResult = struct {
         bitcode: []const u32,
@@ -248,6 +255,15 @@ pub const MonoLlvmCodeGen = struct {
         self.roc_ops_arg = wip.arg(1);
         defer self.roc_ops_arg = null;
 
+        // Store result layout for early_return
+        self.result_layout = result_layout;
+        defer self.result_layout = null;
+
+        // Create the early return block (used by early_return expressions)
+        const early_ret_block = wip.block(0, "early_ret") catch return error.OutOfMemory;
+        self.early_return_block = early_ret_block;
+        defer self.early_return_block = null;
+
         // Generate LLVM IR for the expression
         const value = self.generateExpr(expr_id) catch return error.UnsupportedExpression;
 
@@ -332,6 +348,11 @@ pub const MonoLlvmCodeGen = struct {
         } // end of value != .none else
 
         _ = wip.retVoid() catch return error.CompilationFailed;
+
+        // Fill in the early return block (just ret void — value already stored to out_ptr)
+        wip.cursor = .{ .block = early_ret_block };
+        _ = wip.retVoid() catch return error.CompilationFailed;
+
         wip.finish() catch return error.CompilationFailed;
 
         // Serialize to bitcode
@@ -610,6 +631,9 @@ pub const MonoLlvmCodeGen = struct {
 
             // Low-level builtins
             .low_level => |ll| self.generateLowLevel(ll),
+
+            // Early return (? operator)
+            .early_return => |er| self.generateEarlyReturn(er),
 
             // Runtime error (unreachable) — emit LLVM unreachable
             .runtime_error => self.generateRuntimeError(),
@@ -1475,6 +1499,80 @@ pub const MonoLlvmCodeGen = struct {
                 else => return error.UnsupportedExpression,
             }
         }
+    }
+
+    // ---------------------------------------------------------------
+    // Early return
+    // ---------------------------------------------------------------
+
+    /// Generate an early return — stores the result to out_ptr and branches to the
+    /// early return block (which contains retVoid). Used for the `?` operator.
+    fn generateEarlyReturn(self: *MonoLlvmCodeGen, er: anytype) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
+        const out_ptr = self.out_ptr orelse return error.UnsupportedExpression;
+        const ret_block = self.early_return_block orelse return error.UnsupportedExpression;
+        const ret_layout = self.result_layout orelse return error.UnsupportedExpression;
+
+        // Generate the return value
+        const value = try self.generateExpr(er.expr);
+
+        // Store to output pointer (same logic as in generateCode)
+        if (value != .none) {
+            const is_scalar = switch (ret_layout) {
+                .bool, .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64,
+                .i128, .u128, .dec, .f32, .f64,
+                => true,
+                else => false,
+            };
+
+            if (is_scalar) {
+                const final_type: LlvmBuilder.Type = switch (ret_layout) {
+                    .bool, .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64 => .i64,
+                    .i128, .u128, .dec => .i128,
+                    .f32 => .float,
+                    .f64 => .double,
+                    else => unreachable,
+                };
+                const signedness: LlvmBuilder.Constant.Cast.Signedness = switch (ret_layout) {
+                    .i8, .i16, .i32, .i64, .i128 => .signed,
+                    .bool, .u8, .u16, .u32, .u64, .u128 => .unsigned,
+                    .f32, .f64, .dec => .unneeded,
+                    else => .unneeded,
+                };
+                const store_value = if (value.typeOfWip(wip) == final_type)
+                    value
+                else
+                    wip.conv(signedness, value, final_type, "") catch return error.CompilationFailed;
+                const alignment = LlvmBuilder.Alignment.fromByteUnits(switch (final_type) {
+                    .i64 => 8,
+                    .i128 => 16,
+                    .float => 4,
+                    .double => 8,
+                    else => 0,
+                });
+                _ = wip.store(.normal, store_value, out_ptr, alignment) catch return error.CompilationFailed;
+            } else {
+                // Composite — memcpy
+                const ls = self.layout_store orelse return error.UnsupportedExpression;
+                const stored_layout = ls.getLayout(ret_layout);
+                const copy_size = switch (stored_layout.tag) {
+                    .tag_union => ls.getTagUnionData(stored_layout.data.tag_union.idx).size,
+                    else => return error.UnsupportedExpression,
+                };
+                const size_val = builder.intValue(.i32, copy_size) catch return error.OutOfMemory;
+                const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
+                _ = wip.callMemCpy(out_ptr, alignment, value, alignment, size_val, .normal, false) catch return error.OutOfMemory;
+            }
+        }
+
+        // Branch to early return block
+        _ = wip.br(ret_block) catch return error.OutOfMemory;
+
+        // Create a dead block for subsequent code
+        const dead_block = wip.block(0, "after_early_ret") catch return error.OutOfMemory;
+        wip.cursor = .{ .block = dead_block };
+        return builder.intValue(.i64, 0) catch return error.OutOfMemory;
     }
 
     // ---------------------------------------------------------------
