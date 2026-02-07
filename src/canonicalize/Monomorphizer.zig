@@ -172,6 +172,7 @@ pub const ExternalSpecializationRequest = struct {
     concrete_type: types.Var,
     /// The call site in this module (for error reporting)
     call_site: ?Expr.Idx,
+
 };
 
 /// Result of requesting an external specialization.
@@ -339,8 +340,6 @@ pub fn deinit(self: *Self) void {
     self.specialization_stack.deinit(self.allocator);
     self.external_requests.deinit(self.allocator);
     self.resolved_external_specs.deinit();
-    self.pending_specialization_keys.deinit();
-    self.pending_external_keys.deinit();
 }
 
 /// Result of looking up a static dispatch implementation for a concrete type.
@@ -926,7 +925,6 @@ pub fn requestSpecialization(
         .call_site = call_site,
         .type_substitutions = type_subs,
     });
-    try self.pending_specialization_keys.put(key, {});
 
     return specialized_name;
 }
@@ -962,12 +960,21 @@ pub fn requestExternalSpecialization(
     }
 
     // Check if we already have a pending request
-    if (self.pending_external_keys.contains(ext_key)) {
-        const specialized_name = try self.createSpecializedName(original_ident, concrete_type);
-        return ExternalSpecializationResult{
-            .specialized_ident = specialized_name,
-            .is_new = false,
-        };
+    for (self.external_requests.items) |existing| {
+        if (existing.source_module == source_module and
+            existing.original_ident == original_ident)
+        {
+            // Compare concrete types using structural type equality
+            if (structuralTypeEqual(self.types_store, self.allocator, existing.concrete_type, concrete_type)) {
+                // Pending but not yet resolved - create/lookup the specialized name
+                // so all call sites use a consistent reference
+                const specialized_name = try self.createSpecializedName(original_ident, concrete_type);
+                return ExternalSpecializationResult{
+                    .specialized_ident = specialized_name,
+                    .is_new = false,
+                };
+            }
+        }
     }
 
     // Create the specialized name now so all call sites use a consistent reference.
@@ -981,7 +988,6 @@ pub fn requestExternalSpecialization(
         .concrete_type = concrete_type,
         .call_site = call_site,
     });
-    try self.pending_external_keys.put(ext_key, {});
 
     return ExternalSpecializationResult{
         .specialized_ident = specialized_name,
@@ -1085,7 +1091,6 @@ pub fn processPendingSpecializations(self: *Self) !void {
         pending.type_substitutions.deinit();
     }
 
-    self.pending_specialization_keys.clearRetainingCapacity();
     self.phase = .finding;
 }
 
@@ -2330,12 +2335,14 @@ fn hashTypeRecursive(
         .alias => |alias| {
             hasher.update("alias");
             hasher.update(std.mem.asBytes(&alias.ident.ident_idx));
-            // Hash all vars (backing var + type arguments) to differentiate
-            // e.g. List(U64) from List(Str)
-            const vars = self.types_store.sliceVars(alias.vars.nonempty);
-            for (vars) |v| {
-                self.hashTypeRecursive(hasher, v, seen);
+            // Recurse into alias args
+            const alias_args = self.types_store.sliceAliasArgs(alias);
+            for (alias_args) |arg| {
+                self.hashTypeRecursive(hasher, arg, seen);
             }
+            // Recurse into backing var
+            const backing = self.types_store.getAliasBackingVar(alias);
+            self.hashTypeRecursive(hasher, backing, seen);
         },
         .err => hasher.update("err"),
     }
