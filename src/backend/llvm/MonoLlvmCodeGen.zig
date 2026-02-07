@@ -605,6 +605,9 @@ pub const MonoLlvmCodeGen = struct {
             // Nominal wrappers are transparent
             .nominal => |nom| self.generateExpr(nom.backing_expr),
 
+            // Pattern matching
+            .when => |w| self.generateWhen(w),
+
             else => error.UnsupportedExpression,
         };
     }
@@ -1248,6 +1251,226 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     // ---------------------------------------------------------------
+    // When/match expression generation
+    // ---------------------------------------------------------------
+
+    /// Generate a when/match expression.
+    /// Evaluates the scrutinee, then checks each branch pattern sequentially.
+    /// Unconditional patterns (wildcard, bind) go directly to the body.
+    /// Conditional patterns (int_literal, tag) compare and branch.
+    fn generateWhen(self: *MonoLlvmCodeGen, w: anytype) Error!LlvmBuilder.Value {
+        const saved_out_ptr = self.out_ptr;
+        self.out_ptr = null;
+        defer self.out_ptr = saved_out_ptr;
+
+        const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
+
+        // Evaluate the scrutinee
+        const scrutinee = try self.generateExpr(w.value);
+
+        // Get branches
+        const branches = self.store.getWhenBranches(w.branches);
+        if (branches.len == 0) return error.UnsupportedExpression;
+
+        // Compute the incoming count for the merge block by scanning patterns.
+        // Each branch contributes one incoming edge. Unconditional patterns
+        // (wildcard/bind) stop further branches, so count up to and including
+        // the first unconditional one.
+        var merge_incoming: u32 = 0;
+        for (branches) |branch| {
+            merge_incoming += 1;
+            const pat = self.store.getPattern(branch.pattern);
+            if (pat == .wildcard or pat == .bind) break;
+        }
+
+        const merge_block = wip.block(merge_incoming, "when_merge") catch return error.OutOfMemory;
+
+        // Buffers for phi node
+        var result_vals: [32]LlvmBuilder.Value = undefined;
+        var result_blocks: [32]LlvmBuilder.Function.Block.Index = undefined;
+        var branch_count: u32 = 0;
+
+        for (branches, 0..) |branch, i| {
+            const pattern = self.store.getPattern(branch.pattern);
+            const is_last = (i == branches.len - 1);
+
+            switch (pattern) {
+                .wildcard => {
+                    // Always matches — generate body directly
+                    const body_val = try self.generateExpr(branch.body);
+                    _ = wip.br(merge_block) catch return error.OutOfMemory;
+                    result_vals[branch_count] = body_val;
+                    result_blocks[branch_count] = wip.cursor.block;
+                    branch_count += 1;
+                    break; // No more branches after wildcard
+                },
+
+                .bind => |bind| {
+                    // Always matches, bind the scrutinee to the symbol
+                    const symbol_key: u48 = @bitCast(bind.symbol);
+                    self.symbol_values.put(symbol_key, scrutinee) catch return error.OutOfMemory;
+                    const body_val = try self.generateExpr(branch.body);
+                    _ = wip.br(merge_block) catch return error.OutOfMemory;
+                    result_vals[branch_count] = body_val;
+                    result_blocks[branch_count] = wip.cursor.block;
+                    branch_count += 1;
+                    break; // No more branches after bind
+                },
+
+                .int_literal => |int_pat| {
+                    // Compare scrutinee with pattern value
+                    const pat_type = layoutToLlvmType(int_pat.layout_idx);
+                    const pat_val = builder.intValue(pat_type, @as(u64, @truncate(@as(u128, @bitCast(int_pat.value))))) catch return error.OutOfMemory;
+                    // Ensure scrutinee is the right type for comparison
+                    const cmp_scrutinee = if (scrutinee.typeOfWip(wip) == pat_type)
+                        scrutinee
+                    else
+                        wip.conv(.unsigned, scrutinee, pat_type, "") catch return error.CompilationFailed;
+                    const cmp = wip.icmp(.eq, cmp_scrutinee, pat_val, "") catch return error.OutOfMemory;
+
+                    if (is_last) {
+                        // Last branch — treat as default (skip comparison)
+                        const body_val = try self.generateExpr(branch.body);
+                        _ = wip.br(merge_block) catch return error.OutOfMemory;
+                        result_vals[branch_count] = body_val;
+                        result_blocks[branch_count] = wip.cursor.block;
+                        branch_count += 1;
+                    } else {
+                        const then_block = wip.block(1, "int_match") catch return error.OutOfMemory;
+                        const else_block = wip.block(1, "int_next") catch return error.OutOfMemory;
+                        _ = wip.brCond(cmp, then_block, else_block, .none) catch return error.OutOfMemory;
+
+                        // Then block — pattern matches
+                        wip.cursor = .{ .block = then_block };
+                        const body_val = try self.generateExpr(branch.body);
+                        _ = wip.br(merge_block) catch return error.OutOfMemory;
+                        result_vals[branch_count] = body_val;
+                        result_blocks[branch_count] = wip.cursor.block;
+                        branch_count += 1;
+
+                        // Else block — continue to next branch
+                        wip.cursor = .{ .block = else_block };
+                    }
+                },
+
+                .tag => |tag_pat| {
+                    // Extract discriminant and compare
+                    const ls = self.layout_store orelse return error.UnsupportedExpression;
+                    const stored_layout = ls.getLayout(tag_pat.union_layout);
+
+                    const discriminant = switch (stored_layout.tag) {
+                        .scalar => scrutinee, // Scalar tag — value IS the discriminant
+                        .tag_union => blk: {
+                            const tu_data = ls.getTagUnionData(stored_layout.data.tag_union.idx);
+                            const disc_type = discriminantIntType(tu_data.discriminant_size);
+                            const disc_offset_val = builder.intValue(.i32, tu_data.discriminant_offset) catch return error.OutOfMemory;
+                            const disc_ptr = wip.gep(.inbounds, .i8, scrutinee, &.{disc_offset_val}, "") catch return error.CompilationFailed;
+                            break :blk wip.load(.normal, disc_type, disc_ptr, LlvmBuilder.Alignment.fromByteUnits(@as(u64, tu_data.discriminant_size)), "") catch return error.CompilationFailed;
+                        },
+                        else => return error.UnsupportedExpression,
+                    };
+
+                    const disc_type = discriminant.typeOfWip(wip);
+                    const pat_disc = builder.intValue(disc_type, @as(u64, tag_pat.discriminant)) catch return error.OutOfMemory;
+                    const cmp = wip.icmp(.eq, discriminant, pat_disc, "") catch return error.OutOfMemory;
+
+                    if (is_last) {
+                        // Last branch — bind payload args if needed, generate body
+                        try self.bindTagPayloadArgs(tag_pat, scrutinee);
+                        const body_val = try self.generateExpr(branch.body);
+                        _ = wip.br(merge_block) catch return error.OutOfMemory;
+                        result_vals[branch_count] = body_val;
+                        result_blocks[branch_count] = wip.cursor.block;
+                        branch_count += 1;
+                    } else {
+                        const then_block = wip.block(1, "tag_match") catch return error.OutOfMemory;
+                        const else_block = wip.block(1, "tag_next") catch return error.OutOfMemory;
+                        _ = wip.brCond(cmp, then_block, else_block, .none) catch return error.OutOfMemory;
+
+                        wip.cursor = .{ .block = then_block };
+                        try self.bindTagPayloadArgs(tag_pat, scrutinee);
+                        const body_val = try self.generateExpr(branch.body);
+                        _ = wip.br(merge_block) catch return error.OutOfMemory;
+                        result_vals[branch_count] = body_val;
+                        result_blocks[branch_count] = wip.cursor.block;
+                        branch_count += 1;
+
+                        wip.cursor = .{ .block = else_block };
+                    }
+                },
+
+                else => return error.UnsupportedExpression,
+            }
+        }
+
+        if (branch_count == 0) return error.UnsupportedExpression;
+
+        // Merge block with phi
+        wip.cursor = .{ .block = merge_block };
+        const result_type = result_vals[0].typeOfWip(wip);
+        const phi_inst = wip.phi(result_type, "") catch return error.OutOfMemory;
+        phi_inst.finish(
+            result_vals[0..branch_count],
+            result_blocks[0..branch_count],
+            wip,
+        );
+        return phi_inst.toValue();
+    }
+
+    /// Bind tag payload arguments from a matched tag pattern.
+    /// For tag unions with payloads, extracts field values from the tag struct.
+    fn bindTagPayloadArgs(self: *MonoLlvmCodeGen, tag_pat: anytype, scrutinee: LlvmBuilder.Value) Error!void {
+        const args = self.store.getPatternSpan(tag_pat.args);
+        if (args.len == 0) return;
+
+        const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
+        const ls = self.layout_store orelse return error.UnsupportedExpression;
+
+        const stored_layout = ls.getLayout(tag_pat.union_layout);
+        if (stored_layout.tag != .tag_union) return;
+
+        const tu_data = ls.getTagUnionData(stored_layout.data.tag_union.idx);
+        const variants = ls.getTagUnionVariants(tu_data);
+        if (tag_pat.discriminant >= variants.len) return;
+        const variant = variants.get(tag_pat.discriminant);
+
+        // Get the payload layout to determine field offsets
+        const payload_layout = ls.getLayout(variant.payload_layout);
+
+        for (args, 0..) |arg_id, arg_i| {
+            const arg_pattern = self.store.getPattern(arg_id);
+            switch (arg_pattern) {
+                .bind => |bind| {
+                    // Load the field value from the tag struct
+                    const field_val = if (args.len == 1) blk: {
+                        // Single arg — payload is at offset 0
+                        const field_type = layoutToLlvmType(bind.layout_idx);
+                        break :blk wip.load(.normal, field_type, scrutinee, .default, "") catch return error.CompilationFailed;
+                    } else blk: {
+                        // Multiple args — payload is a tuple, load from offset
+                        const field_type = layoutToLlvmType(bind.layout_idx);
+                        const offset: u32 = if (payload_layout.tag == .tuple)
+                            ls.getTupleElementOffset(payload_layout.data.tuple.idx, @intCast(arg_i))
+                        else
+                            0;
+                        const offset_val = builder.intValue(.i32, offset) catch return error.OutOfMemory;
+                        const field_ptr = wip.gep(.inbounds, .i8, scrutinee, &.{offset_val}, "") catch return error.CompilationFailed;
+                        break :blk wip.load(.normal, field_type, field_ptr, .default, "") catch return error.CompilationFailed;
+                    };
+                    const symbol_key: u48 = @bitCast(bind.symbol);
+                    self.symbol_values.put(symbol_key, field_val) catch return error.OutOfMemory;
+                },
+                .wildcard => {
+                    // Skip — no binding needed
+                },
+                else => return error.UnsupportedExpression,
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------
     // String generation
     // ---------------------------------------------------------------
 
@@ -1334,6 +1557,7 @@ pub const MonoLlvmCodeGen = struct {
             .zero_arg_tag => |zat| zat.union_layout,
             .tag => |t| t.union_layout,
             .discriminant_switch => |ds| ds.union_layout,
+            .when => |w| w.result_layout,
             else => null,
         };
     }
