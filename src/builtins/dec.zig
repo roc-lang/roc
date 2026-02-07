@@ -24,7 +24,7 @@ fn printI128Decimal(buf: []u8, val: i128) usize {
         return 1;
     }
     const is_negative = val < 0;
-    var abs_val: u128 = if (is_negative) @intCast(-val) else @intCast(val);
+    var abs_val: u128 = if (is_negative) ~@as(u128, @bitCast(val)) +% 1 else @intCast(val);
 
     // Write digits in reverse into a temp buffer
     var tmp: [40]u8 = undefined;

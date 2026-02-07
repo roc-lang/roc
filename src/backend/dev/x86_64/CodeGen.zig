@@ -357,8 +357,12 @@ pub fn CodeGen(comptime target: RocTarget) type {
         // Stack management
 
         pub fn allocStack(self: *Self, size: u32) i32 {
-            const aligned_size = (size + 7) & ~@as(u32, 7);
+            // Align to 16 bytes for i128/u128 (vmovdqa requires it), 8 bytes otherwise
+            const alignment: u32 = if (size > 8) 16 else 8;
+            const aligned_size = (size + alignment - 1) & ~(alignment - 1);
             self.stack_offset -= @intCast(aligned_size);
+            // Ensure the offset itself is aligned (not just the size)
+            self.stack_offset &= ~@as(i32, @intCast(alignment - 1));
             return self.stack_offset;
         }
 

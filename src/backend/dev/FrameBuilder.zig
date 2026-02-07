@@ -473,7 +473,9 @@ pub fn ForwardFrameBuilder(comptime EmitType: type) type {
             const push_bytes: i32 = @as(i32, self.push_count) * 8;
 
             // 3. Allocate stack space (aligned to 16 bytes)
-            self.actual_stack_alloc = CC_EMIT.alignStackSize(self.stack_size);
+            // When push_count is odd, RSP is misaligned by 8 after the pushes.
+            // computeActualStackAlloc adds 8 bytes of padding to realign RSP.
+            self.actual_stack_alloc = self.computeActualStackAlloc();
 
             if (self.actual_stack_alloc > 0) {
                 try self.emit.subRegImm32(.w64, CC_EMIT.STACK_PTR, @intCast(self.actual_stack_alloc));
@@ -545,7 +547,8 @@ pub fn ForwardFrameBuilder(comptime EmitType: type) type {
 
         fn emitEpilogueX86_64(self: *Self) !void {
             // Compute actual_stack_alloc if not already set (allows separate prologue/epilogue instances)
-            if (self.actual_stack_alloc == 0 and self.stack_size > 0) {
+            // Also trigger for odd push_count which needs alignment padding even with stack_size=0
+            if (self.actual_stack_alloc == 0 and (self.stack_size > 0 or self.push_count % 2 == 1)) {
                 self.actual_stack_alloc = self.computeActualStackAlloc();
             }
 
@@ -611,7 +614,12 @@ pub fn ForwardFrameBuilder(comptime EmitType: type) type {
                 const total_needed = self.stack_size + odd_reg_space;
                 return CC_EMIT.alignStackSize(total_needed);
             } else {
-                return CC_EMIT.alignStackSize(self.stack_size);
+                var alloc = CC_EMIT.alignStackSize(self.stack_size);
+                // When push_count is odd, RSP is misaligned by 8 after the pushes
+                // (push rbp + odd number of register pushes = even total pushes).
+                // Add 8 bytes to realign RSP to 16 bytes.
+                if (self.push_count % 2 == 1) alloc += 8;
+                return alloc;
             }
         }
     };
