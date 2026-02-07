@@ -281,6 +281,8 @@ pub const LlvmEvaluator = struct {
 
         // Provide addresses of Dec builtins for indirect calls
         codegen.dec_mul_addr = @intFromPtr(&builtins.dec.mulSaturatedC);
+        codegen.dec_div_addr = @intFromPtr(&builtins.dec.divC);
+        codegen.dec_div_trunc_addr = @intFromPtr(&builtins.dec.divTruncC);
 
         const procs = mono_store.getProcs();
         if (procs.len > 0) {

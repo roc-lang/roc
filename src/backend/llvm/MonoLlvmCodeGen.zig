@@ -110,6 +110,12 @@ pub const MonoLlvmCodeGen = struct {
     /// Address of Dec multiply builtin (mulSaturatedC). Set by the evaluator.
     dec_mul_addr: usize = 0,
 
+    /// Address of Dec divide builtin (divC). Set by the evaluator.
+    dec_div_addr: usize = 0,
+
+    /// Address of Dec truncating divide builtin (divTruncC). Set by the evaluator.
+    dec_div_trunc_addr: usize = 0,
+
     /// Result of bitcode generation
     pub const BitcodeResult = struct {
         bitcode: []const u32,
@@ -587,6 +593,10 @@ pub const MonoLlvmCodeGen = struct {
 
         const is_float = binop.result_layout == .f32 or binop.result_layout == .f64;
 
+        // For comparison operations, signedness comes from the operand type, not the result
+        // (result is always .bool). Get the LHS operand's layout for this purpose.
+        const operand_layout = self.getExprResultLayout(binop.lhs) orelse binop.result_layout;
+
         return switch (binop.op) {
             .add => if (is_float)
                 wip.bin(.fadd, lhs, rhs, "") catch return error.CompilationFailed
@@ -607,6 +617,8 @@ pub const MonoLlvmCodeGen = struct {
 
             .div => if (is_float)
                 wip.bin(.fdiv, lhs, rhs, "") catch return error.CompilationFailed
+            else if (binop.result_layout == .dec)
+                self.callDecDiv(lhs, rhs) catch return error.CompilationFailed
             else if (isSigned(binop.result_layout))
                 wip.bin(.sdiv, lhs, rhs, "") catch return error.CompilationFailed
             else
@@ -614,6 +626,8 @@ pub const MonoLlvmCodeGen = struct {
 
             .div_trunc => if (is_float)
                 wip.bin(.fdiv, lhs, rhs, "") catch return error.CompilationFailed
+            else if (binop.result_layout == .dec)
+                self.callDecDivTrunc(lhs, rhs) catch return error.CompilationFailed
             else if (isSigned(binop.result_layout))
                 wip.bin(.sdiv, lhs, rhs, "") catch return error.CompilationFailed
             else
@@ -638,28 +652,28 @@ pub const MonoLlvmCodeGen = struct {
 
             .lt => if (is_float)
                 wip.fcmp(.normal, .olt, lhs, rhs, "") catch return error.CompilationFailed
-            else if (isSigned(binop.result_layout))
+            else if (isSigned(operand_layout))
                 wip.icmp(.slt, lhs, rhs, "") catch return error.CompilationFailed
             else
                 wip.icmp(.ult, lhs, rhs, "") catch return error.CompilationFailed,
 
             .lte => if (is_float)
                 wip.fcmp(.normal, .ole, lhs, rhs, "") catch return error.CompilationFailed
-            else if (isSigned(binop.result_layout))
+            else if (isSigned(operand_layout))
                 wip.icmp(.sle, lhs, rhs, "") catch return error.CompilationFailed
             else
                 wip.icmp(.ule, lhs, rhs, "") catch return error.CompilationFailed,
 
             .gt => if (is_float)
                 wip.fcmp(.normal, .ogt, lhs, rhs, "") catch return error.CompilationFailed
-            else if (isSigned(binop.result_layout))
+            else if (isSigned(operand_layout))
                 wip.icmp(.sgt, lhs, rhs, "") catch return error.CompilationFailed
             else
                 wip.icmp(.ugt, lhs, rhs, "") catch return error.CompilationFailed,
 
             .gte => if (is_float)
                 wip.fcmp(.normal, .oge, lhs, rhs, "") catch return error.CompilationFailed
-            else if (isSigned(binop.result_layout))
+            else if (isSigned(operand_layout))
                 wip.icmp(.sge, lhs, rhs, "") catch return error.CompilationFailed
             else
                 wip.icmp(.uge, lhs, rhs, "") catch return error.CompilationFailed,
@@ -673,6 +687,27 @@ pub const MonoLlvmCodeGen = struct {
         return switch (result_layout) {
             .i8, .i16, .i32, .i64, .i128, .dec => true,
             else => false,
+        };
+    }
+
+    /// Get the result layout of a mono expression (for determining operand types).
+    fn getExprResultLayout(self: *const MonoLlvmCodeGen, expr_id: MonoExprId) ?layout.Idx {
+        const MonoExpr = mono.MonoIR.MonoExpr;
+        const expr: MonoExpr = self.store.getExpr(expr_id);
+        return switch (expr) {
+            .block => |b| self.getExprResultLayout(b.final_expr),
+            .binop => |b| b.result_layout,
+            .unary_minus => |um| um.result_layout,
+            .call => |c| c.ret_layout,
+            .low_level => |ll| ll.ret_layout,
+            .lookup => |l| l.layout_idx,
+            .i64_literal => .i64,
+            .f64_literal => .f64,
+            .f32_literal => .f32,
+            .bool_literal => .bool,
+            .i128_literal => .i128,
+            .dec_literal => .dec,
+            else => null,
         };
     }
 
@@ -694,6 +729,38 @@ pub const MonoLlvmCodeGen = struct {
 
         // Call the function
         return wip.call(.normal, .ccc, .none, fn_type, fn_ptr, &.{ lhs, rhs }, "") catch return error.CompilationFailed;
+    }
+
+    /// Call Dec divide builtin via indirect call through function pointer.
+    /// Dec division requires (a * 10^18) / b, which is handled by divC.
+    fn callDecDiv(self: *MonoLlvmCodeGen, lhs: LlvmBuilder.Value, rhs: LlvmBuilder.Value) !LlvmBuilder.Value {
+        return self.callDecBuiltin3(self.dec_div_addr, lhs, rhs);
+    }
+
+    /// Call Dec truncating divide builtin via indirect call through function pointer.
+    fn callDecDivTrunc(self: *MonoLlvmCodeGen, lhs: LlvmBuilder.Value, rhs: LlvmBuilder.Value) !LlvmBuilder.Value {
+        return self.callDecBuiltin3(self.dec_div_trunc_addr, lhs, rhs);
+    }
+
+    /// Call a Dec builtin with signature (RocDec, RocDec, *RocOps) -> i128
+    fn callDecBuiltin3(self: *MonoLlvmCodeGen, fn_addr: usize, lhs: LlvmBuilder.Value, rhs: LlvmBuilder.Value) !LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
+
+        if (fn_addr == 0) return error.CompilationFailed;
+
+        const roc_ops = self.roc_ops_arg orelse return error.CompilationFailed;
+
+        // Create function type: i128(i128, i128, ptr) — divC(RocDec, RocDec, *RocOps) -> i128
+        const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
+        const fn_type = builder.fnType(.i128, &.{ .i128, .i128, ptr_type }, .normal) catch return error.CompilationFailed;
+
+        // Create constant with the function address and cast to pointer
+        const addr_val = builder.intValue(.i64, fn_addr) catch return error.CompilationFailed;
+        const fn_ptr = wip.cast(.inttoptr, addr_val, ptr_type, "") catch return error.CompilationFailed;
+
+        // Call the function with roc_ops
+        return wip.call(.normal, .ccc, .none, fn_type, fn_ptr, &.{ lhs, rhs, roc_ops }, "") catch return error.CompilationFailed;
     }
 
     fn generateUnaryMinus(self: *MonoLlvmCodeGen, unary: anytype) Error!LlvmBuilder.Value {
