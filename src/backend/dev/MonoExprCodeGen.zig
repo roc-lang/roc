@@ -687,6 +687,12 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
         /// Register where RocOps pointer is saved (for calling builtins that need it)
         roc_ops_reg: ?GeneralReg = null,
 
+        /// Stack slot where the hidden return pointer is saved (for return-by-pointer
+        /// convention used when the return type exceeds the register limit).
+        /// Set during compileLambdaAsProc, used by moveToReturnRegisterWithLayout
+        /// and generateEarlyReturn.
+        ret_ptr_slot: ?i32 = null,
+
         /// Counter for unique temporary local IDs.
         /// Starts at 0x8000_0000 to avoid collision with real local variables.
         /// Used by allocTempGeneral() for temporaries that don't correspond to real locals.
@@ -8718,8 +8724,12 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             // We must be inside a compileLambdaAsProc — early returns require the
             // jump-to-epilogue infrastructure that compileLambdaAsProc sets up.
             const ret_layout = self.early_return_ret_layout orelse unreachable;
-            // Move the value to the return register
-            try self.moveToReturnRegisterWithLayout(value_loc, ret_layout);
+            // Move the value to the return register (or copy to return pointer)
+            if (self.ret_ptr_slot) |ret_slot| {
+                try self.copyResultToReturnPointer(value_loc, ret_layout, ret_slot);
+            } else {
+                try self.moveToReturnRegisterWithLayout(value_loc, ret_layout);
+            }
             // Emit a jump (will be patched to the epilogue location)
             const patch = try self.codegen.emitJump();
             try self.early_return_patches.append(self.allocator, patch);
@@ -12408,6 +12418,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             // Save early return state before generating body
             const saved_early_return_ret_layout = self.early_return_ret_layout;
             const saved_early_return_patches_len = self.early_return_patches.items.len;
+            const saved_ret_ptr_slot = self.ret_ptr_slot;
 
             // PHASE 1: Generate body first (to determine callee_saved_used)
             // Initialize stack_offset to reserve space for callee-saved area
@@ -12433,6 +12444,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 self.codegen.callee_saved_used = saved_callee_saved_used;
                 self.codegen.callee_saved_available = saved_callee_saved_available;
                 self.roc_ops_reg = saved_roc_ops_reg;
+                self.ret_ptr_slot = saved_ret_ptr_slot;
                 self.symbol_locations.deinit();
                 self.symbol_locations = saved_symbol_locations.clone() catch unreachable;
                 self.mutable_var_slots.deinit();
@@ -12443,8 +12455,21 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 self.early_return_patches.shrinkRetainingCapacity(saved_early_return_patches_len);
             }
 
+            // Check if return type needs return-by-pointer (exceeds register limit)
+            const needs_ret_ptr = self.needsInternalReturnByPointer(lambda.ret_layout);
+            if (needs_ret_ptr) {
+                // The first argument register contains a hidden return pointer.
+                // Save it to a local stack slot for use after body generation.
+                self.ret_ptr_slot = self.codegen.allocStackSlot(8);
+                const first_reg = self.getArgumentRegister(0);
+                try self.codegen.emitStoreStack(.w64, self.ret_ptr_slot.?, first_reg);
+            } else {
+                self.ret_ptr_slot = null;
+            }
+
             // Bind parameters from argument registers
-            try self.bindLambdaParams(lambda.params);
+            // When needs_ret_ptr, arg registers are shifted by 1 (hidden ptr is arg 0)
+            try self.bindLambdaParams(lambda.params, if (needs_ret_ptr) 1 else 0);
 
             // Set early return state so generateEarlyReturn can emit jumps
             self.early_return_ret_layout = lambda.ret_layout;
@@ -12452,9 +12477,12 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             // Generate the body
             const result_loc = try self.generateExpr(lambda.body);
 
-            // Move result to return register if needed
-            // Pass the return layout so we can handle records > 8 bytes
-            try self.moveToReturnRegisterWithLayout(result_loc, lambda.ret_layout);
+            // Move result to return register or copy to return pointer
+            if (self.ret_ptr_slot) |ret_slot| {
+                try self.copyResultToReturnPointer(result_loc, lambda.ret_layout, ret_slot);
+            } else {
+                try self.moveToReturnRegisterWithLayout(result_loc, lambda.ret_layout);
+            }
 
             // Record epilogue location (relative to body, will adjust after prepending prologue)
             const body_epilogue_offset = self.codegen.currentOffset();
@@ -12524,6 +12552,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 self.codegen.callee_saved_used = saved_callee_saved_used;
                 self.codegen.callee_saved_available = saved_callee_saved_available;
                 self.roc_ops_reg = saved_roc_ops_reg;
+                self.ret_ptr_slot = saved_ret_ptr_slot;
                 self.symbol_locations.deinit();
                 self.symbol_locations = saved_symbol_locations.clone() catch return Error.OutOfMemory;
                 self.mutable_var_slots.deinit();
@@ -12586,6 +12615,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 self.codegen.callee_saved_used = saved_callee_saved_used;
                 self.codegen.callee_saved_available = saved_callee_saved_available;
                 self.roc_ops_reg = saved_roc_ops_reg;
+                self.ret_ptr_slot = saved_ret_ptr_slot;
                 self.symbol_locations.deinit();
                 self.symbol_locations = saved_symbol_locations.clone() catch return Error.OutOfMemory;
                 self.mutable_var_slots.deinit();
@@ -12597,6 +12627,27 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
                 return prologue_start;
             }
+        }
+
+        /// Maximum number of registers used for multi-register returns in internal Roc calls.
+        /// x86_64: RAX, RDX, RCX, R8, R9, R10, R11, RDI, RSI = 9 registers = 72 bytes
+        /// aarch64: X0-X7, XR, X9-X15 = 16 registers = 128 bytes
+        const max_return_regs: u32 = if (target.toCpuArch() == .aarch64) 16 else 9;
+        const max_return_size: u32 = max_return_regs * 8;
+
+        /// Check if a return type exceeds the register limit and needs return-by-pointer.
+        /// When true, the caller passes a hidden first argument (pointer to a pre-allocated
+        /// buffer) and the callee writes the result there instead of using return registers.
+        fn needsInternalReturnByPointer(self: *Self, ret_layout: layout.Idx) bool {
+            if (self.layout_store) |ls| {
+                if (@intFromEnum(ret_layout) < ls.layouts.len()) {
+                    const layout_val = ls.getLayout(ret_layout);
+                    if (layout_val.tag == .record or layout_val.tag == .tag_union or layout_val.tag == .tuple) {
+                        return ls.layoutSizeAlign(layout_val).size > max_return_size;
+                    }
+                }
+            }
+            return false;
         }
 
         /// Bind lambda parameters from argument registers.
@@ -12647,7 +12698,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        fn bindLambdaParams(self: *Self, params: mono.MonoPatternSpan) Error!void {
+        fn bindLambdaParams(self: *Self, params: mono.MonoPatternSpan, initial_reg_idx: u8) Error!void {
             const pattern_ids = self.store.getPatternSpan(params);
 
             // Pre-scan: determine which params are passed by pointer.
@@ -12655,7 +12706,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             var param_pass_by_ptr: [16]bool = .{false} ** 16;
             {
                 var param_num_regs: [16]u8 = .{1} ** 16;
-                var pre_reg_count: u8 = 0;
+                var pre_reg_count: u8 = initial_reg_idx;
                 for (pattern_ids, 0..) |pid, pi| {
                     if (pi >= 16) break;
                     const pat = self.store.getPattern(pid);
@@ -12710,7 +12761,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 }
             }
 
-            var reg_idx: u8 = 0;
+            var reg_idx: u8 = initial_reg_idx;
             // Track offset for stack arguments (first stack arg at RBP+16/FP+16)
             var stack_arg_offset: i32 = 16;
 
@@ -13111,6 +13162,46 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             return self.moveToReturnRegister(loc);
         }
 
+        /// Copy a result value to the hidden return pointer buffer.
+        /// Used when the return type exceeds the register limit and the caller
+        /// has passed a pointer to a pre-allocated buffer as a hidden first argument.
+        fn copyResultToReturnPointer(self: *Self, result_loc: ValueLocation, ret_layout: layout.Idx, ret_ptr_stack_slot: i32) Error!void {
+            const ls = self.layout_store orelse unreachable;
+            const layout_val = ls.getLayout(ret_layout);
+            const ret_size = ls.layoutSizeAlign(layout_val).size;
+
+            // Ensure result is on stack
+            const result_offset: i32 = switch (result_loc) {
+                .stack => |s| s.offset,
+                .list_stack => |info| info.struct_offset,
+                .stack_str => |off| off,
+                .stack_i128 => |off| off,
+                else => try self.ensureOnStack(result_loc, ret_size),
+            };
+
+            // Load the return pointer from the saved stack slot
+            const ptr_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X9 else .R11;
+            if (comptime target.toCpuArch() == .aarch64) {
+                try self.codegen.emit.ldrRegMemSoff(.w64, ptr_reg, .FP, ret_ptr_stack_slot);
+            } else {
+                try self.codegen.emit.movRegMem(.w64, ptr_reg, .RBP, ret_ptr_stack_slot);
+            }
+
+            // Copy data in 8-byte chunks from local stack to return buffer
+            const temp_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X10 else .RAX;
+            const num_words = (ret_size + 7) / 8;
+            for (0..num_words) |w| {
+                const off: i32 = @intCast(w * 8);
+                if (comptime target.toCpuArch() == .aarch64) {
+                    try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, result_offset + off);
+                    try self.codegen.emit.strRegMemSoff(.w64, temp_reg, ptr_reg, off);
+                } else {
+                    try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, result_offset + off);
+                    try self.codegen.emit.movMemReg(.w64, ptr_reg, off, temp_reg);
+                }
+            }
+        }
+
         fn moveToReturnRegister(self: *Self, loc: ValueLocation) Error!void {
             const ret_reg = self.getReturnRegister();
             switch (loc) {
@@ -13240,6 +13331,18 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 arg_infos[i] = .{ .loc = arg_loc, .layout_idx = arg_layout, .num_regs = num_regs };
             }
 
+            // Check if return type exceeds register limit and needs return-by-pointer.
+            // If so, the first argument register carries a hidden pointer to a caller-
+            // allocated buffer, and all other args shift right by one register.
+            const needs_ret_ptr = self.needsInternalReturnByPointer(ret_layout);
+            var ret_buffer_offset: i32 = 0;
+            if (needs_ret_ptr) {
+                const ls = self.layout_store orelse unreachable;
+                const ret_layout_val = ls.getLayout(ret_layout);
+                const ret_size = ls.layoutSizeAlign(ret_layout_val).size;
+                ret_buffer_offset = self.codegen.allocStackSlot(ret_size);
+            }
+
             // Pre-compute which multi-register args should be passed by pointer.
             // The deferred prologue pattern makes FP-relative stack-arg offsets
             // unknowable at body-gen time, so we pass large args by pointer instead.
@@ -13248,7 +13351,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             var pass_by_ptr: [16]bool = .{false} ** 16;
             var stack_spill_size: i32 = 0;
             {
-                var reg_count: u8 = 0;
+                // If needs_ret_ptr, the hidden pointer consumes one register slot
+                var reg_count: u8 = if (needs_ret_ptr) 1 else 0;
                 // First pass: convert overflowing multi-reg args to pointer
                 for (0..args.len) |i| {
                     if (i >= 16) break;
@@ -13303,6 +13407,22 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             // Pass 2: Load all argument values into registers or spill to stack
             var reg_idx: u8 = 0;
             var stack_arg_offset: i32 = 0;
+
+            // If return-by-pointer, load the hidden return buffer pointer as arg 0
+            if (needs_ret_ptr) {
+                const arg_reg = self.getArgumentRegister(0);
+                if (comptime target.toCpuArch() == .aarch64) {
+                    if (ret_buffer_offset >= 0 and ret_buffer_offset <= 4095) {
+                        try self.codegen.emit.addRegRegImm12(.w64, arg_reg, .FP, @intCast(ret_buffer_offset));
+                    } else {
+                        try self.codegen.emitLoadImm(arg_reg, @intCast(ret_buffer_offset));
+                        try self.codegen.emit.addRegRegReg(.w64, arg_reg, .FP, arg_reg);
+                    }
+                } else {
+                    try self.codegen.emit.leaRegMem(arg_reg, .RBP, ret_buffer_offset);
+                }
+                reg_idx = 1;
+            }
 
             for (0..args.len) |i| {
                 if (i >= 16) break;
@@ -13478,6 +13598,12 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 }
             }
 
+            // If we used return-by-pointer, the callee has written the result
+            // to our pre-allocated buffer. No register saving needed.
+            if (needs_ret_ptr) {
+                return .{ .stack = .{ .offset = ret_buffer_offset } };
+            }
+
             // Handle i128/Dec return values (returned in two registers)
             if (ret_layout == .i128 or ret_layout == .u128 or ret_layout == .dec) {
                 const stack_offset = self.codegen.allocStackSlot(16);
@@ -13628,12 +13754,22 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 arg_infos[i] = .{ .loc = arg_loc, .layout_idx = arg_layout, .num_regs = num_regs };
             }
 
+            // Check if return type needs return-by-pointer (same as generateCallToLambda)
+            const needs_ret_ptr = self.needsInternalReturnByPointer(ret_layout);
+            var ret_buffer_offset: i32 = 0;
+            if (needs_ret_ptr) {
+                const ls = self.layout_store orelse unreachable;
+                const ret_layout_val = ls.getLayout(ret_layout);
+                const ret_size = ls.layoutSizeAlign(ret_layout_val).size;
+                ret_buffer_offset = self.codegen.allocStackSlot(ret_size);
+            }
+
             // Pre-compute pass_by_ptr (same algorithm as generateCallToLambda)
             // to ensure caller and callee agree on the calling convention.
             var pass_by_ptr: [16]bool = .{false} ** 16;
             var stack_spill_size: i32 = 0;
             {
-                var reg_count: u8 = 0;
+                var reg_count: u8 = if (needs_ret_ptr) 1 else 0;
                 for (0..args.len) |i| {
                     if (i >= 16) break;
                     const nr = arg_infos[i].num_regs;
@@ -13684,6 +13820,22 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             // Load arguments into registers (same logic as generateCallToLambda)
             var reg_idx: u8 = 0;
             var stack_arg_offset: i32 = 0;
+
+            // If return-by-pointer, load the hidden return buffer pointer as arg 0
+            if (needs_ret_ptr) {
+                const arg_reg = self.getArgumentRegister(0);
+                if (comptime target.toCpuArch() == .aarch64) {
+                    if (ret_buffer_offset >= 0 and ret_buffer_offset <= 4095) {
+                        try self.codegen.emit.addRegRegImm12(.w64, arg_reg, .FP, @intCast(ret_buffer_offset));
+                    } else {
+                        try self.codegen.emitLoadImm(arg_reg, @intCast(ret_buffer_offset));
+                        try self.codegen.emit.addRegRegReg(.w64, arg_reg, .FP, arg_reg);
+                    }
+                } else {
+                    try self.codegen.emit.leaRegMem(arg_reg, .RBP, ret_buffer_offset);
+                }
+                reg_idx = 1;
+            }
 
             for (0..args.len) |i| {
                 if (i >= 16) break;
@@ -13810,6 +13962,12 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 } else {
                     try self.codegen.emit.addRegRegImm12(.w64, .ZRSP, .ZRSP, @intCast(stack_spill_size));
                 }
+            }
+
+            // If we used return-by-pointer, the callee has written the result
+            // to our pre-allocated buffer. No register saving needed.
+            if (needs_ret_ptr) {
+                return .{ .stack = .{ .offset = ret_buffer_offset } };
             }
 
             // Handle return values (same logic as generateCallToLambda)

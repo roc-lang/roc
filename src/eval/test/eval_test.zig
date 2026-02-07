@@ -3096,3 +3096,105 @@ test "U8 in record field access" {
 test "U16 in record field access" {
     try runExpectI64("{ x: 1000u16 }.x", 1000, .no_trace);
 }
+
+test "large record - 4 string fields access each field" {
+    // 4 strings × 24 bytes = 96 bytes total, exceeds 72-byte register limit
+    try runExpectStr(
+        \\{ w: "alpha", x: "beta", y: "gamma", z: "delta" }.w
+    , "alpha", .no_trace);
+    try runExpectStr(
+        \\{ w: "alpha", x: "beta", y: "gamma", z: "delta" }.x
+    , "beta", .no_trace);
+    try runExpectStr(
+        \\{ w: "alpha", x: "beta", y: "gamma", z: "delta" }.y
+    , "gamma", .no_trace);
+    try runExpectStr(
+        \\{ w: "alpha", x: "beta", y: "gamma", z: "delta" }.z
+    , "delta", .no_trace);
+}
+
+test "large record - 5 string fields access each field" {
+    // 5 strings × 24 bytes = 120 bytes, well beyond register limit
+    try runExpectStr(
+        \\{ a: "one", b: "two", c: "three", d: "four", e: "five" }.a
+    , "one", .no_trace);
+    try runExpectStr(
+        \\{ a: "one", b: "two", c: "three", d: "four", e: "five" }.e
+    , "five", .no_trace);
+}
+
+test "large record - function returning 4-field record" {
+    // Lambda returns a large record; caller accesses fields
+    try runExpectStr(
+        \\{
+        \\    make_config = |w, x, y, z| { w, x, y, z }
+        \\    config = make_config("10", "20", "30", "40")
+        \\    config.z
+        \\}
+    , "40", .no_trace);
+    try runExpectStr(
+        \\{
+        \\    make_config = |w, x, y, z| { w, x, y, z }
+        \\    config = make_config("10", "20", "30", "40")
+        \\    config.w
+        \\}
+    , "10", .no_trace);
+}
+
+test "large record - nested function calls with large intermediates" {
+    // Nested calls: inner function returns large record, outer uses it
+    try runExpectStr(
+        \\{
+        \\    make_pair = |a, b| { a, b }
+        \\    wrap = |a, b| { data: make_pair(a, b), tag: "wrapped" }
+        \\    result = wrap("hello", "world")
+        \\    result.data.a
+        \\}
+    , "hello", .no_trace);
+    try runExpectStr(
+        \\{
+        \\    make_pair = |a, b| { a, b }
+        \\    wrap = |a, b| { data: make_pair(a, b), tag: "wrapped" }
+        \\    result = wrap("hello", "world")
+        \\    result.tag
+        \\}
+    , "wrapped", .no_trace);
+}
+
+test "large record - higher-order function returning large struct" {
+    // map2-like pattern: higher-order function calls a mapper that returns a large record
+    try runExpectStr(
+        \\{
+        \\    apply = |a, b, f| f(a, b)
+        \\    result = apply("foo", "bar", |x, y| { x, y, combined: Str.concat(x, y) })
+        \\    result.combined
+        \\}
+    , "foobar", .no_trace);
+    try runExpectStr(
+        \\{
+        \\    apply = |a, b, f| f(a, b)
+        \\    result = apply("foo", "bar", |x, y| { x, y, combined: Str.concat(x, y) })
+        \\    result.x
+        \\}
+    , "foo", .no_trace);
+}
+
+test "large record - chained higher-order calls with growing intermediates" {
+    // Simulates the record builder pattern: nested apply calls build up larger types
+    try runExpectStr(
+        \\{
+        \\    apply2 = |a, b, f| f(a, b)
+        \\    step1 = apply2("x_val", "y_val", |x, y| { x, y })
+        \\    result = apply2("w_val", step1.y, |w, y| { w, y })
+        \\    result.w
+        \\}
+    , "w_val", .no_trace);
+    try runExpectStr(
+        \\{
+        \\    apply2 = |a, b, f| f(a, b)
+        \\    step1 = apply2("x_val", "y_val", |x, y| { x, y })
+        \\    result = apply2("w_val", step1.y, |w, y| { w, y })
+        \\    result.y
+        \\}
+    , "y_val", .no_trace);
+}
