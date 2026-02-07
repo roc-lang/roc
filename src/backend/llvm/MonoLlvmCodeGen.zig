@@ -116,6 +116,9 @@ pub const MonoLlvmCodeGen = struct {
     /// Address of Dec truncating divide builtin (divTruncC). Set by the evaluator.
     dec_div_trunc_addr: usize = 0,
 
+    /// Address of allocateWithRefcountC builtin. Set by the evaluator.
+    alloc_with_refcount_addr: usize = 0,
+
     /// Layout store for resolving composite type layouts (records, tuples).
     /// Set by the evaluator before calling generateCode.
     layout_store: ?*const layout.Store = null,
@@ -629,6 +632,14 @@ pub const MonoLlvmCodeGen = struct {
             // Pattern matching
             .when => |w| self.generateWhen(w),
 
+            // Debug and expect — just evaluate the inner expression
+            .dbg => |d| self.generateExpr(d.expr),
+            .expect => |e| self.generateExpr(e.body),
+
+            // Lists
+            .empty_list => self.generateEmptyList(),
+            .list => |l| self.generateList(l),
+
             // Low-level builtins
             .low_level => |ll| self.generateLowLevel(ll),
 
@@ -638,6 +649,20 @@ pub const MonoLlvmCodeGen = struct {
             // Runtime error (unreachable) — emit LLVM unreachable
             .runtime_error => self.generateRuntimeError(),
             .crash => self.generateRuntimeError(),
+
+            // Reference counting — no-ops in the evaluator (short-lived memory)
+            .incref => |inc| {
+                _ = try self.generateExpr(inc.value);
+                return (self.builder orelse return error.CompilationFailed).intValue(.i8, 0) catch return error.OutOfMemory;
+            },
+            .decref => |dec_rc| {
+                _ = try self.generateExpr(dec_rc.value);
+                return (self.builder orelse return error.CompilationFailed).intValue(.i8, 0) catch return error.OutOfMemory;
+            },
+            .free => |f| {
+                _ = try self.generateExpr(f.value);
+                return (self.builder orelse return error.CompilationFailed).intValue(.i8, 0) catch return error.OutOfMemory;
+            },
 
             else => error.UnsupportedExpression,
         };
@@ -1582,6 +1607,108 @@ pub const MonoLlvmCodeGen = struct {
     /// Generate an LLVM unreachable instruction for runtime_error and crash expressions.
     /// Returns a poison value so the caller has something to work with
     /// (the unreachable guarantees this code is never actually reached).
+    /// Generate an empty list: ptr=null(0), len=0, capacity=0.
+    /// A RocList is 24 bytes (3 x i64). Write zeros to out_ptr.
+    fn generateEmptyList(self: *MonoLlvmCodeGen) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
+        const dest_ptr = self.out_ptr orelse return error.UnsupportedExpression;
+
+        const zero = builder.intValue(.i64, 0) catch return error.OutOfMemory;
+        const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
+
+        // Store ptr (offset 0)
+        _ = wip.store(.normal, zero, dest_ptr, alignment) catch return error.CompilationFailed;
+
+        // Store len (offset 8)
+        const off8 = builder.intValue(.i32, 8) catch return error.OutOfMemory;
+        const ptr8 = wip.gep(.inbounds, .i8, dest_ptr, &.{off8}, "") catch return error.CompilationFailed;
+        _ = wip.store(.normal, zero, ptr8, alignment) catch return error.CompilationFailed;
+
+        // Store capacity (offset 16)
+        const off16 = builder.intValue(.i32, 16) catch return error.OutOfMemory;
+        const ptr16 = wip.gep(.inbounds, .i8, dest_ptr, &.{off16}, "") catch return error.CompilationFailed;
+        _ = wip.store(.normal, zero, ptr16, alignment) catch return error.CompilationFailed;
+
+        return .none;
+    }
+
+    /// Generate a list with elements: allocate heap, store elements, write RocList to out_ptr.
+    fn generateList(self: *MonoLlvmCodeGen, list: anytype) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
+        const dest_ptr = self.out_ptr orelse return error.UnsupportedExpression;
+        const ls = self.layout_store orelse return error.UnsupportedExpression;
+
+        const elems = self.store.getExprSpan(list.elems);
+        if (elems.len == 0) return self.generateEmptyList();
+
+        // Get element layout info
+        const elem_layout_data = ls.getLayout(list.elem_layout);
+        const elem_sa = ls.layoutSizeAlign(elem_layout_data);
+        const elem_size: u64 = elem_sa.size;
+        const elem_align: u32 = @intCast(elem_sa.alignment.toByteUnits());
+        const num_elems: u64 = @intCast(elems.len);
+        const total_bytes: u64 = elem_size * num_elems;
+
+        // Call allocateWithRefcountC(data_bytes, elem_align, elements_refcounted, roc_ops)
+        if (self.alloc_with_refcount_addr == 0) return error.CompilationFailed;
+        const roc_ops = self.roc_ops_arg orelse return error.CompilationFailed;
+
+        const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
+        // Signature: ptr(usize, u32, i1, ptr) -> ptr
+        const alloc_fn_type = builder.fnType(ptr_type, &.{ .i64, .i32, .i1, ptr_type }, .normal) catch return error.CompilationFailed;
+        const addr_val = builder.intValue(.i64, self.alloc_with_refcount_addr) catch return error.CompilationFailed;
+        const fn_ptr = wip.cast(.inttoptr, addr_val, ptr_type, "") catch return error.CompilationFailed;
+
+        const size_val = builder.intValue(.i64, total_bytes) catch return error.OutOfMemory;
+        const align_val = builder.intValue(.i32, elem_align) catch return error.OutOfMemory;
+        const refcounted_val = builder.intValue(.i1, 0) catch return error.OutOfMemory;
+
+        const heap_ptr = wip.call(.normal, .ccc, .none, alloc_fn_type, fn_ptr, &.{ size_val, align_val, refcounted_val, roc_ops }, "heap") catch return error.CompilationFailed;
+
+        // Store each element to heap memory
+        const saved_out_ptr = self.out_ptr;
+        self.out_ptr = null;
+        defer self.out_ptr = saved_out_ptr;
+
+        for (elems, 0..) |elem_id, i| {
+            const elem_val = try self.generateExpr(elem_id);
+
+            const offset: u64 = @as(u64, @intCast(i)) * elem_size;
+            const elem_ptr = if (offset == 0)
+                heap_ptr
+            else blk: {
+                const off_val = builder.intValue(.i32, @as(u32, @intCast(offset))) catch return error.OutOfMemory;
+                break :blk wip.gep(.inbounds, .i8, heap_ptr, &.{off_val}, "") catch return error.CompilationFailed;
+            };
+
+            // Convert value to match element layout
+            const store_val = try self.convertToFieldType(elem_val, list.elem_layout);
+            const store_align = LlvmBuilder.Alignment.fromByteUnits(@intCast(elem_align));
+            _ = wip.store(.normal, store_val, elem_ptr, store_align) catch return error.CompilationFailed;
+        }
+
+        // Write RocList struct to out_ptr: {ptr, len, capacity}
+        const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
+
+        // Store ptr (offset 0)
+        _ = wip.store(.normal, heap_ptr, dest_ptr, alignment) catch return error.CompilationFailed;
+
+        // Store len (offset 8)
+        const len_val = builder.intValue(.i64, num_elems) catch return error.OutOfMemory;
+        const off8 = builder.intValue(.i32, 8) catch return error.OutOfMemory;
+        const ptr8 = wip.gep(.inbounds, .i8, dest_ptr, &.{off8}, "") catch return error.CompilationFailed;
+        _ = wip.store(.normal, len_val, ptr8, alignment) catch return error.CompilationFailed;
+
+        // Store capacity (offset 16) — same as len for new lists
+        const off16 = builder.intValue(.i32, 16) catch return error.OutOfMemory;
+        const ptr16 = wip.gep(.inbounds, .i8, dest_ptr, &.{off16}, "") catch return error.CompilationFailed;
+        _ = wip.store(.normal, len_val, ptr16, alignment) catch return error.CompilationFailed;
+
+        return .none;
+    }
+
     fn generateRuntimeError(self: *MonoLlvmCodeGen) Error!LlvmBuilder.Value {
         const wip = self.wip orelse return error.CompilationFailed;
         const builder = self.builder orelse return error.CompilationFailed;
@@ -1769,18 +1896,18 @@ pub const MonoLlvmCodeGen = struct {
             .list_len => {
                 // List is a (ptr, len, capacity) triple — length at offset 8
                 if (args.len < 1) return error.UnsupportedExpression;
-                const list_val = try self.generateExpr(args[0]);
+                const list_ptr = try self.materializeAsPtr(args[0], 24);
                 const len_offset = builder.intValue(.i32, 8) catch return error.OutOfMemory;
-                const len_ptr = wip.gep(.inbounds, .i8, list_val, &.{len_offset}, "") catch return error.CompilationFailed;
+                const len_ptr = wip.gep(.inbounds, .i8, list_ptr, &.{len_offset}, "") catch return error.CompilationFailed;
                 return wip.load(.normal, .i64, len_ptr, LlvmBuilder.Alignment.fromByteUnits(8), "") catch return error.CompilationFailed;
             },
 
             .list_is_empty => {
                 // List is empty if length == 0
                 if (args.len < 1) return error.UnsupportedExpression;
-                const list_val = try self.generateExpr(args[0]);
+                const list_ptr = try self.materializeAsPtr(args[0], 24);
                 const len_offset = builder.intValue(.i32, 8) catch return error.OutOfMemory;
-                const len_ptr = wip.gep(.inbounds, .i8, list_val, &.{len_offset}, "") catch return error.CompilationFailed;
+                const len_ptr = wip.gep(.inbounds, .i8, list_ptr, &.{len_offset}, "") catch return error.CompilationFailed;
                 const len_val = wip.load(.normal, .i64, len_ptr, LlvmBuilder.Alignment.fromByteUnits(8), "") catch return error.CompilationFailed;
                 const zero = builder.intValue(.i64, 0) catch return error.OutOfMemory;
                 const is_empty = wip.icmp(.eq, len_val, zero, "") catch return error.OutOfMemory;
@@ -1789,6 +1916,46 @@ pub const MonoLlvmCodeGen = struct {
 
             else => return error.UnsupportedExpression,
         }
+    }
+
+    /// Materialize a sub-expression as a pointer to memory.
+    /// For composite types (lists, strings) that write to out_ptr, this allocates
+    /// a temporary stack slot via alloca, points out_ptr at it, generates the
+    /// expression, and returns the alloca pointer. For scalar types, it allocates,
+    /// stores the value, and returns the pointer.
+    fn materializeAsPtr(self: *MonoLlvmCodeGen, expr_id: MonoExprId, size: u32) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
+
+        // Allocate stack space via alloca
+        const byte_array_type = builder.arrayType(size, .i8) catch return error.OutOfMemory;
+        const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
+        const alloca_ptr = wip.alloca(.normal, byte_array_type, .none, alignment, .default, "buf") catch return error.CompilationFailed;
+
+        // Zero-initialize
+        const zero64 = builder.intValue(.i64, 0) catch return error.OutOfMemory;
+        for (0..size / 8) |i| {
+            if (i == 0) {
+                _ = wip.store(.normal, zero64, alloca_ptr, alignment) catch return error.CompilationFailed;
+            } else {
+                const off = builder.intValue(.i32, @as(u32, @intCast(i * 8))) catch return error.OutOfMemory;
+                const ptr = wip.gep(.inbounds, .i8, alloca_ptr, &.{off}, "") catch return error.CompilationFailed;
+                _ = wip.store(.normal, zero64, ptr, alignment) catch return error.CompilationFailed;
+            }
+        }
+
+        // Set out_ptr to the alloca, generate the expression, then restore
+        const saved_out_ptr = self.out_ptr;
+        self.out_ptr = alloca_ptr;
+        defer self.out_ptr = saved_out_ptr;
+
+        const result = try self.generateExpr(expr_id);
+        if (result != .none) {
+            // Scalar value — store it to the alloca
+            _ = wip.store(.normal, result, alloca_ptr, alignment) catch return error.CompilationFailed;
+        }
+
+        return alloca_ptr;
     }
 
     // ---------------------------------------------------------------
@@ -1879,6 +2046,8 @@ pub const MonoLlvmCodeGen = struct {
             .tag => |t| t.union_layout,
             .discriminant_switch => |ds| ds.union_layout,
             .when => |w| w.result_layout,
+            .dbg => |d| d.result_layout,
+            .expect => |e| e.result_layout,
             .early_return => |er| er.ret_layout,
             .runtime_error, .crash => .i64, // dummy layout for unreachable
             else => null,
