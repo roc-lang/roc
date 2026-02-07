@@ -801,11 +801,11 @@ fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_i
         };
 
         const imports = [_]bytebox.ModuleImportPackage{env_imports};
-        module_instance.instantiate(.{ .stack_size = 1024 * 64, .imports = &imports }) catch {
+        module_instance.instantiate(.{ .stack_size = 1024 * 256, .imports = &imports }) catch {
             return error.WasmExecFailed;
         };
     } else {
-        module_instance.instantiate(.{ .stack_size = 1024 * 64 }) catch {
+        module_instance.instantiate(.{ .stack_size = 1024 * 256 }) catch {
             return error.WasmExecFailed;
         };
     }
@@ -817,6 +817,15 @@ fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_i
     var params = [1]bytebox.Val{.{ .I32 = 0 }}; // env_ptr = 0
     var returns: [1]bytebox.Val = undefined;
     _ = module_instance.invoke(handle, &params, &returns, .{}) catch {
+        // Dump failing wasm for debugging
+        var counter_buf: [80]u8 = undefined;
+        const dump_path = std.fmt.bufPrint(&counter_buf, "/tmp/wasm_debug_runtime_{}.wasm", .{@intFromPtr(wasm_result.wasm_bytes.ptr) % 10000}) catch "/tmp/wasm_debug_runtime.wasm";
+        const dump_file = std.fs.createFileAbsolute(dump_path, .{}) catch null;
+        if (dump_file) |df| {
+            _ = df.write(wasm_result.wasm_bytes) catch {};
+            df.close();
+        }
+        std.debug.print("WASM RUNTIME FAILED: {} bytes dumped to {s}\n", .{ wasm_result.wasm_bytes.len, dump_path });
         return error.WasmExecFailed;
     };
 
@@ -892,7 +901,9 @@ fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_i
             // RocStr is 12 bytes on wasm32: { ptr/bytes[0..3], len/bytes[4..7], cap/bytes[8..11] }
             const str_ptr: u32 = @bitCast(returns[0].I32);
             const mem_slice = module_instance.memoryAll();
-            if (str_ptr + 12 > mem_slice.len) return error.WasmExecFailed;
+            if (str_ptr + 12 > mem_slice.len) {
+                return error.WasmExecFailed;
+            }
 
             // Check SSO: high bit of byte 11
             const byte11 = mem_slice[str_ptr + 11];

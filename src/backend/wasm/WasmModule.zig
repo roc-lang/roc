@@ -294,6 +294,7 @@ data_offset: u32,
 has_memory: bool,
 memory_min_pages: u32,
 has_stack_pointer: bool,
+stack_pointer_init: u32,
 /// Whether the module has a funcref table (for call_indirect).
 has_table: bool,
 /// Function indices to place in the table (element section).
@@ -313,6 +314,7 @@ pub fn init(allocator: Allocator) Self {
         .has_memory = false,
         .memory_min_pages = 1,
         .has_stack_pointer = false,
+        .stack_pointer_init = 65536,
         .has_table = false,
         .table_func_indices = .empty,
     };
@@ -425,8 +427,9 @@ pub fn addDataSegment(self: *Self, data: []const u8, align_bytes: u32) !u32 {
 }
 
 /// Enable the __stack_pointer global (global index 0).
-pub fn enableStackPointer(self: *Self, _: u32) void {
+pub fn enableStackPointer(self: *Self, initial_value: u32) void {
     self.has_stack_pointer = true;
+    self.stack_pointer_init = initial_value;
 }
 
 /// Enable the funcref table for call_indirect.
@@ -578,17 +581,17 @@ fn encodeMemorySection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) 
     try output.appendSlice(gpa, section_data.items);
 }
 
-fn encodeGlobalSection(_: *Self, gpa: Allocator, output: *std.ArrayList(u8)) !void {
+fn encodeGlobalSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) !void {
     var section_data: std.ArrayList(u8) = .empty;
     defer section_data.deinit(gpa);
 
     try leb128WriteU32(gpa, &section_data, 1); // 1 global
 
-    // Global 0: __stack_pointer (i32, mutable, init = 65536)
+    // Global 0: __stack_pointer (i32, mutable)
     try section_data.append(gpa, @intFromEnum(ValType.i32));
     try section_data.append(gpa, 0x01); // mutable
     try section_data.append(gpa, Op.i32_const);
-    try leb128WriteI32(gpa, &section_data, 65536);
+    try leb128WriteI32(gpa, &section_data, @intCast(self.stack_pointer_init));
     try section_data.append(gpa, Op.end);
 
     try output.append(gpa, @intFromEnum(SectionId.global_section));
