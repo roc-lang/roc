@@ -664,6 +664,10 @@ pub const MonoLlvmCodeGen = struct {
                 return (self.builder orelse return error.CompilationFailed).intValue(.i8, 0) catch return error.OutOfMemory;
             },
 
+            // Loops
+            .while_loop => |wl| self.generateWhileLoop(wl),
+            .for_loop => |fl| self.generateForLoop(fl),
+
             else => error.UnsupportedExpression,
         };
     }
@@ -1314,6 +1318,131 @@ pub const MonoLlvmCodeGen = struct {
     /// Evaluates the scrutinee, then checks each branch pattern sequentially.
     /// Unconditional patterns (wildcard, bind) go directly to the body.
     /// Conditional patterns (int_literal, tag) compare and branch.
+    // ---------------------------------------------------------------
+    // Loop generation
+    // ---------------------------------------------------------------
+
+    /// Generate a while loop: header checks condition, body executes, then loops back.
+    /// Returns unit (i8 0).
+    fn generateWhileLoop(self: *MonoLlvmCodeGen, wl: anytype) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
+
+        // Clear out_ptr for loop body
+        const saved_out_ptr = self.out_ptr;
+        self.out_ptr = null;
+        defer self.out_ptr = saved_out_ptr;
+
+        // Create blocks: cond has 2 incoming (entry + back-edge), body/exit have 0 (implicit)
+        const cond_block = wip.block(2, "while_cond") catch return error.OutOfMemory;
+        const body_block = wip.block(0, "while_body") catch return error.OutOfMemory;
+        const exit_block = wip.block(0, "while_exit") catch return error.OutOfMemory;
+
+        // Branch to condition check
+        _ = wip.br(cond_block) catch return error.CompilationFailed;
+
+        // Condition block
+        wip.cursor = .{ .block = cond_block };
+        var cond_val = try self.generateExpr(wl.cond);
+        if (cond_val.typeOfWip(wip) != .i1) {
+            cond_val = wip.cast(.trunc, cond_val, .i1, "") catch return error.CompilationFailed;
+        }
+        _ = wip.brCond(cond_val, body_block, exit_block, .none) catch return error.CompilationFailed;
+
+        // Body block
+        wip.cursor = .{ .block = body_block };
+        _ = try self.generateExpr(wl.body);
+        _ = wip.br(cond_block) catch return error.CompilationFailed;
+
+        // Exit block — return unit
+        wip.cursor = .{ .block = exit_block };
+        return builder.intValue(.i8, 0) catch return error.OutOfMemory;
+    }
+
+    /// Generate a for loop over a list: iterate elements, bind pattern, execute body.
+    /// Returns unit (i8 0).
+    fn generateForLoop(self: *MonoLlvmCodeGen, fl: anytype) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
+        const ls = self.layout_store orelse return error.UnsupportedExpression;
+
+        // Get element size for pointer arithmetic
+        const elem_layout_data = ls.getLayout(fl.elem_layout);
+        const elem_sa = ls.layoutSizeAlign(elem_layout_data);
+        const elem_size: u32 = elem_sa.size;
+
+        // Materialize the list as a pointer so we can read ptr/len
+        const list_ptr = try self.materializeAsPtr(fl.list_expr, 24);
+
+        // Load list data pointer (offset 0) and length (offset 8)
+        const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
+        const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
+        const data_ptr = wip.load(.normal, ptr_type, list_ptr, alignment, "") catch return error.CompilationFailed;
+
+        const len_off = builder.intValue(.i32, 8) catch return error.OutOfMemory;
+        const len_ptr = wip.gep(.inbounds, .i8, list_ptr, &.{len_off}, "") catch return error.CompilationFailed;
+        const list_len = wip.load(.normal, .i64, len_ptr, alignment, "") catch return error.CompilationFailed;
+
+        // Clear out_ptr for loop body
+        const saved_out_ptr = self.out_ptr;
+        self.out_ptr = null;
+        defer self.out_ptr = saved_out_ptr;
+
+        // Create blocks: header (phi for index), body, exit
+        const header_block = wip.block(2, "for_header") catch return error.OutOfMemory;
+        const body_block = wip.block(0, "for_body") catch return error.OutOfMemory;
+        const exit_block = wip.block(0, "for_exit") catch return error.OutOfMemory;
+
+        // Entry → header
+        const zero = builder.intValue(.i64, 0) catch return error.OutOfMemory;
+        const entry_block = wip.cursor.block;
+        _ = wip.br(header_block) catch return error.CompilationFailed;
+
+        // Header: phi for loop index, compare with length
+        wip.cursor = .{ .block = header_block };
+        const idx_phi = wip.phi(.i64, "idx") catch return error.CompilationFailed;
+        const idx_val = idx_phi.toValue();
+        const cond = wip.icmp(.ult, idx_val, list_len, "") catch return error.OutOfMemory;
+        _ = wip.brCond(cond, body_block, exit_block, .none) catch return error.CompilationFailed;
+
+        // Body: load element, bind pattern, execute body, increment index
+        wip.cursor = .{ .block = body_block };
+
+        // Load element from data_ptr + idx * elem_size
+        const elem_llvm_type = layoutToLlvmType(fl.elem_layout);
+        const size_const = builder.intValue(.i64, elem_size) catch return error.OutOfMemory;
+        const byte_offset = wip.bin(.mul, idx_val, size_const, "") catch return error.CompilationFailed;
+        const elem_ptr = wip.gep(.inbounds, .i8, data_ptr, &.{byte_offset}, "") catch return error.CompilationFailed;
+        const elem_val = wip.load(.normal, elem_llvm_type, elem_ptr, LlvmBuilder.Alignment.fromByteUnits(1), "") catch return error.CompilationFailed;
+
+        // Bind the element to the pattern
+        try self.bindPattern(fl.elem_pattern, elem_val);
+
+        // Execute the body
+        _ = try self.generateExpr(fl.body);
+
+        // Increment index and loop back
+        const one = builder.intValue(.i64, 1) catch return error.OutOfMemory;
+        const next_idx = wip.bin(.add, idx_val, one, "") catch return error.CompilationFailed;
+        const body_end_block = wip.cursor.block;
+        _ = wip.br(header_block) catch return error.CompilationFailed;
+
+        // Finish phi: entry→0, body_end→next_idx
+        idx_phi.finish(
+            &.{ zero, next_idx },
+            &.{ entry_block, body_end_block },
+            wip,
+        );
+
+        // Exit block — return unit
+        wip.cursor = .{ .block = exit_block };
+        return builder.intValue(.i8, 0) catch return error.OutOfMemory;
+    }
+
+    // ---------------------------------------------------------------
+    // Pattern matching
+    // ---------------------------------------------------------------
+
     fn generateWhen(self: *MonoLlvmCodeGen, w: anytype) Error!LlvmBuilder.Value {
         const saved_out_ptr = self.out_ptr;
         self.out_ptr = null;
@@ -1771,10 +1900,31 @@ pub const MonoLlvmCodeGen = struct {
                 const operand = try self.generateExpr(args[0]);
                 const is_float = isFloatLayout(ll.ret_layout);
                 if (is_float) {
-                    return wip.bin(.fsub, builder.intValue(.i64, 0) catch return error.OutOfMemory, operand, "") catch return error.CompilationFailed;
+                    return wip.un(.fneg, operand, "") catch return error.CompilationFailed;
                 } else {
                     const zero = builder.intValue(operand.typeOfWip(wip), 0) catch return error.OutOfMemory;
                     return wip.bin(.sub, zero, operand, "") catch return error.CompilationFailed;
+                }
+            },
+            .num_abs => {
+                if (args.len < 1) return error.UnsupportedExpression;
+                const operand = try self.generateExpr(args[0]);
+                const is_float = isFloatLayout(ll.ret_layout);
+                if (is_float) {
+                    // abs(x) = x < 0.0 ? -x : x
+                    const zero = if (ll.ret_layout == .f32)
+                        (builder.floatConst(0.0) catch return error.OutOfMemory).toValue()
+                    else
+                        (builder.doubleConst(0.0) catch return error.OutOfMemory).toValue();
+                    const is_neg = wip.fcmp(.normal, .olt, operand, zero, "") catch return error.OutOfMemory;
+                    const neg_val = wip.un(.fneg, operand, "") catch return error.CompilationFailed;
+                    return wip.select(.normal, is_neg, neg_val, operand, "") catch return error.CompilationFailed;
+                } else {
+                    // abs(x) = x < 0 ? -x : x
+                    const zero = builder.intValue(operand.typeOfWip(wip), 0) catch return error.OutOfMemory;
+                    const is_neg = wip.icmp(.slt, operand, zero, "") catch return error.OutOfMemory;
+                    const neg_val = wip.bin(.sub, zero, operand, "") catch return error.CompilationFailed;
+                    return wip.select(.normal, is_neg, neg_val, operand, "") catch return error.CompilationFailed;
                 }
             },
 
