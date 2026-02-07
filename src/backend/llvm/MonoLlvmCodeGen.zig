@@ -98,6 +98,11 @@ pub const MonoLlvmCodeGen = struct {
     /// Join point parameters (join point id -> parameter patterns)
     join_point_params: std.AutoHashMap(u32, []MonoPatternId),
 
+    /// Join point parameter allocas for SSA-correct join point handling.
+    /// Maps join point id to an array of alloca pointers, one per parameter.
+    /// Jump handlers store values here; join body loads before executing.
+    join_param_allocas: std.AutoHashMap(u32, []LlvmBuilder.Value),
+
     /// Current LLVM builder (set during code generation)
     builder: ?*LlvmBuilder = null,
 
@@ -167,6 +172,7 @@ pub const MonoLlvmCodeGen = struct {
             .proc_registry = std.AutoHashMap(u48, LlvmBuilder.Function.Index).init(allocator),
             .join_points = std.AutoHashMap(u32, LlvmBuilder.Function.Block.Index).init(allocator),
             .join_point_params = std.AutoHashMap(u32, []MonoPatternId).init(allocator),
+            .join_param_allocas = std.AutoHashMap(u32, []LlvmBuilder.Value).init(allocator),
         };
     }
 
@@ -182,6 +188,12 @@ pub const MonoLlvmCodeGen = struct {
             self.allocator.free(params.*);
         }
         self.join_point_params.deinit();
+        // Free allocated alloca slices
+        var it2 = self.join_param_allocas.valueIterator();
+        while (it2.next()) |allocas| {
+            self.allocator.free(allocas.*);
+        }
+        self.join_param_allocas.deinit();
     }
 
     /// Reset the code generator for a new expression
@@ -196,6 +208,11 @@ pub const MonoLlvmCodeGen = struct {
             self.allocator.free(params.*);
         }
         self.join_point_params.clearRetainingCapacity();
+        var it2 = self.join_param_allocas.valueIterator();
+        while (it2.next()) |allocas| {
+            self.allocator.free(allocas.*);
+        }
+        self.join_param_allocas.clearRetainingCapacity();
     }
 
     /// Generate LLVM bitcode for a Mono IR expression
@@ -266,6 +283,13 @@ pub const MonoLlvmCodeGen = struct {
         const early_ret_block = wip.block(0, "early_ret") catch return error.OutOfMemory;
         self.early_return_block = early_ret_block;
         defer self.early_return_block = null;
+
+        // Compile all procedures now that the builder is available.
+        // Must happen before generateExpr so that call sites can find procs.
+        const procs = self.store.getProcs();
+        if (procs.len > 0) {
+            self.compileAllProcs(procs) catch return error.UnsupportedExpression;
+        }
 
         // Generate LLVM IR for the expression
         const value = self.generateExpr(expr_id) catch return error.UnsupportedExpression;
@@ -386,13 +410,18 @@ pub const MonoLlvmCodeGen = struct {
     fn compileProc(self: *MonoLlvmCodeGen, proc: MonoProc) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
 
-        // Build the LLVM function type from arg_layouts and ret_layout
+        // Build the LLVM function type from arg_layouts and ret_layout.
+        // An extra ptr parameter is appended for roc_ops (hidden ABI argument)
+        // so that proc bodies can call builtins like allocateWithRefcountC.
         const arg_layouts = self.store.getLayoutIdxSpan(proc.arg_layouts);
+        const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
         var param_types: std.ArrayList(LlvmBuilder.Type) = .{};
         defer param_types.deinit(self.allocator);
         for (arg_layouts) |arg_layout| {
             param_types.append(self.allocator, layoutToLlvmType(arg_layout)) catch return error.OutOfMemory;
         }
+        // Hidden roc_ops parameter at the end
+        param_types.append(self.allocator, ptr_type) catch return error.OutOfMemory;
 
         const ret_type = layoutToLlvmType(proc.ret_layout);
         const fn_type = builder.fnType(ret_type, param_types.items, .normal) catch return error.OutOfMemory;
@@ -408,9 +437,14 @@ pub const MonoLlvmCodeGen = struct {
         // Register in proc_registry BEFORE compiling body (for recursive calls)
         self.proc_registry.put(key, func) catch return error.OutOfMemory;
 
-        // Save and restore outer wip state
+        // Save and restore outer wip state and roc_ops_arg
         const outer_wip = self.wip;
         defer self.wip = outer_wip;
+        const outer_roc_ops = self.roc_ops_arg;
+        defer self.roc_ops_arg = outer_roc_ops;
+        const outer_out_ptr = self.out_ptr;
+        defer self.out_ptr = outer_out_ptr;
+        self.out_ptr = null; // Procs don't have a top-level out_ptr
 
         // Create a new WipFunction for this procedure
         var proc_wip = LlvmBuilder.WipFunction.init(builder, .{
@@ -430,6 +464,9 @@ pub const MonoLlvmCodeGen = struct {
             const arg_val = proc_wip.arg(@intCast(i));
             try self.bindPattern(param_id, arg_val);
         }
+
+        // Set roc_ops_arg to the hidden last parameter
+        self.roc_ops_arg = proc_wip.arg(@intCast(params.len));
 
         // Generate the body (control flow statements)
         self.generateStmt(proc.body) catch return error.CompilationFailed;
@@ -480,6 +517,7 @@ pub const MonoLlvmCodeGen = struct {
             },
             .join => |j| {
                 const wip = self.wip orelse return error.CompilationFailed;
+                const builder = self.builder orelse return error.CompilationFailed;
 
                 // Store join point parameters for rebinding on jumps
                 const jp_key = @intFromEnum(j.id);
@@ -487,30 +525,56 @@ pub const MonoLlvmCodeGen = struct {
                 const params_copy = self.allocator.dupe(MonoPatternId, params) catch return error.OutOfMemory;
                 self.join_point_params.put(jp_key, params_copy) catch return error.OutOfMemory;
 
+                // Create allocas for each join point parameter so that jumps from
+                // different predecessor blocks can store values SSA-correctly.
+                // The join body loads from these allocas before executing.
+                if (params.len > 0) {
+                    const allocas = self.allocator.alloc(LlvmBuilder.Value, params.len) catch return error.OutOfMemory;
+                    const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
+                    for (allocas) |*a| {
+                        // Each param gets an i64 stack slot (we'll extend/truncate as needed)
+                        a.* = wip.alloca(.normal, .i64, .none, alignment, .default, "jp") catch return error.CompilationFailed;
+                    }
+                    self.join_param_allocas.put(jp_key, allocas) catch return error.OutOfMemory;
+
+                    // Initialize allocas to 0 to avoid undef
+                    const zero = builder.intValue(.i64, 0) catch return error.OutOfMemory;
+                    for (allocas) |a| {
+                        _ = wip.store(.normal, zero, a, alignment) catch return error.CompilationFailed;
+                    }
+                }
+
                 // Create a block for the join point body
-                // Use incoming=1 as a minimum (will be incremented by branches)
                 const join_block = wip.block(2, "join") catch return error.CompilationFailed;
                 self.join_points.put(jp_key, join_block) catch return error.OutOfMemory;
 
                 // Generate the remainder first (code that jumps TO join point)
                 try self.generateStmt(j.remainder);
 
-                // Now generate the join point body
+                // Now generate the join point body: load params from allocas first
                 wip.cursor = .{ .block = join_block };
+                if (self.join_param_allocas.get(jp_key)) |allocas| {
+                    const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
+                    for (params, allocas) |param_id, alloca_ptr| {
+                        const loaded = wip.load(.normal, .i64, alloca_ptr, alignment, "") catch return error.CompilationFailed;
+                        try self.bindPattern(param_id, loaded);
+                    }
+                }
                 try self.generateStmt(j.body);
             },
             .jump => |jmp| {
                 const wip = self.wip orelse return error.CompilationFailed;
                 const jp_key = @intFromEnum(jmp.target);
 
-                // Evaluate all arguments and rebind join point parameters
+                // Evaluate all arguments and store to join point allocas
                 const args = self.store.getExprSpan(jmp.args);
-                const params = self.join_point_params.get(jp_key);
+                const allocas = self.join_param_allocas.get(jp_key);
+                const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
                 for (args, 0..) |arg_id, i| {
                     const val = try self.generateExpr(arg_id);
-                    if (params) |p| {
-                        if (i < p.len) {
-                            try self.bindPattern(p[i], val);
+                    if (allocas) |a| {
+                        if (i < a.len) {
+                            _ = wip.store(.normal, val, a[i], alignment) catch return error.CompilationFailed;
                         }
                     }
                 }
@@ -545,8 +609,9 @@ pub const MonoLlvmCodeGen = struct {
             return;
         }
 
-        // Create blocks for each branch and the default
-        const default_block = wip.block(0, "switch_default") catch return error.CompilationFailed;
+        // Create blocks for each branch and the default.
+        // Each block has incoming=1 from the switch instruction.
+        const default_block = wip.block(1, "switch_default") catch return error.CompilationFailed;
 
         var switch_inst = wip.@"switch"(cond_val, default_block, @intCast(branches.len), .none) catch return error.CompilationFailed;
 
@@ -554,7 +619,7 @@ pub const MonoLlvmCodeGen = struct {
         defer branch_blocks.deinit(self.allocator);
 
         for (branches) |branch| {
-            const branch_block = wip.block(0, "switch_case") catch return error.CompilationFailed;
+            const branch_block = wip.block(1, "switch_case") catch return error.CompilationFailed;
             branch_blocks.append(self.allocator, branch_block) catch return error.OutOfMemory;
             const case_val = builder.intConst(cond_val.typeOfWip(wip), branch.value) catch return error.OutOfMemory;
             switch_inst.addCase(case_val, branch_block, wip) catch return error.CompilationFailed;
@@ -1274,8 +1339,8 @@ pub const MonoLlvmCodeGen = struct {
                 const idx_val = builder.intValue(disc_type, @as(u64, @intCast(i))) catch return error.OutOfMemory;
                 const cmp = wip.icmp(.eq, discriminant, idx_val, "") catch return error.OutOfMemory;
 
-                const then_block = wip.block(0, "") catch return error.OutOfMemory;
-                const else_block = wip.block(0, "") catch return error.OutOfMemory;
+                const then_block = wip.block(1, "") catch return error.OutOfMemory;
+                const else_block = wip.block(1, "") catch return error.OutOfMemory;
                 _ = wip.brCond(cmp, then_block, else_block, .none) catch return error.OutOfMemory;
 
                 // Then block — generate branch body
@@ -2042,6 +2107,18 @@ pub const MonoLlvmCodeGen = struct {
                 return wip.bin(.mul, ext, scale, "") catch return error.CompilationFailed;
             },
 
+            // --- String operations ---
+            .str_is_empty => {
+                // A string is empty when its last byte (position 23) is 0
+                if (args.len < 1) return error.UnsupportedExpression;
+                const str_ptr = try self.materializeAsPtr(args[0], 24);
+                const off23 = builder.intValue(.i32, 23) catch return error.OutOfMemory;
+                const last_byte_ptr = wip.gep(.inbounds, .i8, str_ptr, &.{off23}, "") catch return error.CompilationFailed;
+                const last_byte = wip.load(.normal, .i8, last_byte_ptr, LlvmBuilder.Alignment.fromByteUnits(1), "") catch return error.CompilationFailed;
+                const zero8 = builder.intValue(.i8, 0) catch return error.OutOfMemory;
+                return wip.icmp(.eq, last_byte, zero8, "") catch return error.OutOfMemory;
+            },
+
             // --- List operations (need builtins) ---
             .list_len => {
                 // List is a (ptr, len, capacity) triple — length at offset 8
@@ -2530,6 +2607,10 @@ pub const MonoLlvmCodeGen = struct {
             const val = try self.generateExpr(arg_id);
             arg_values.append(self.allocator, val) catch return error.OutOfMemory;
         }
+
+        // Append the hidden roc_ops parameter
+        const roc_ops = self.roc_ops_arg orelse return error.CompilationFailed;
+        arg_values.append(self.allocator, roc_ops) catch return error.OutOfMemory;
 
         const fn_type = func_index.typeOf(builder);
         const callee = func_index.toValue(builder);

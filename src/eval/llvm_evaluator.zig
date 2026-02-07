@@ -291,11 +291,6 @@ pub const LlvmEvaluator = struct {
         // Provide layout store for composite types (records, tuples)
         codegen.layout_store = layout_store_ptr;
 
-        const procs = mono_store.getProcs();
-        if (procs.len > 0) {
-            codegen.compileAllProcs(procs) catch return error.UnsupportedExpression;
-        }
-
         var gen_result = codegen.generateCode(mono_expr_id, result_layout) catch {
             return error.UnsupportedExpression;
         };
