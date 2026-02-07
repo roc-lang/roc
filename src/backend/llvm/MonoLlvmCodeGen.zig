@@ -1333,10 +1333,10 @@ pub const MonoLlvmCodeGen = struct {
         self.out_ptr = null;
         defer self.out_ptr = saved_out_ptr;
 
-        // Create blocks: cond has 2 incoming (entry + back-edge), body/exit have 0 (implicit)
+        // Create blocks: cond has 2 incoming (entry + back-edge), body/exit have 1 each
         const cond_block = wip.block(2, "while_cond") catch return error.OutOfMemory;
-        const body_block = wip.block(0, "while_body") catch return error.OutOfMemory;
-        const exit_block = wip.block(0, "while_exit") catch return error.OutOfMemory;
+        const body_block = wip.block(1, "while_body") catch return error.OutOfMemory;
+        const exit_block = wip.block(1, "while_exit") catch return error.OutOfMemory;
 
         // Branch to condition check
         _ = wip.br(cond_block) catch return error.CompilationFailed;
@@ -1390,8 +1390,8 @@ pub const MonoLlvmCodeGen = struct {
 
         // Create blocks: header (phi for index), body, exit
         const header_block = wip.block(2, "for_header") catch return error.OutOfMemory;
-        const body_block = wip.block(0, "for_body") catch return error.OutOfMemory;
-        const exit_block = wip.block(0, "for_exit") catch return error.OutOfMemory;
+        const body_block = wip.block(1, "for_body") catch return error.OutOfMemory;
+        const exit_block = wip.block(1, "for_exit") catch return error.OutOfMemory;
 
         // Entry → header
         const zero = builder.intValue(.i64, 0) catch return error.OutOfMemory;

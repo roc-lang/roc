@@ -536,48 +536,38 @@ fn llvmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_i
     defer executable.deinit();
 
     const layout_mod = @import("layout");
-    // Prepare a dummy roc_ops for calling the LLVM-generated function.
-    // The LLVM function signature is: void roc_eval(ptr out_ptr, ptr roc_ops_ptr)
-    var dummy_roc_ops = builtins.host_abi.RocOps{
-        .env = undefined,
-        .roc_alloc = undefined,
-        .roc_dealloc = undefined,
-        .roc_realloc = undefined,
-        .roc_dbg = undefined,
-        .roc_expect_failed = undefined,
-        .roc_crashed = undefined,
-        .hosted_fns = .{ .count = 0, .fns = undefined },
-    };
+    // Use real roc_ops from the LlvmEvaluator (needed for heap allocation in lists, etc.)
+    var roc_ops = llvm_eval.roc_ops;
 
     return switch (code_result.result_layout) {
         layout_mod.Idx.i64, layout_mod.Idx.i8, layout_mod.Idx.i16, layout_mod.Idx.i32 => blk: {
             var result: i64 = 0;
-            executable.callWithResultPtrAndRocOps(@ptrCast(&result), @ptrCast(&dummy_roc_ops));
+            executable.callWithResultPtrAndRocOps(@ptrCast(&result), @ptrCast(&roc_ops));
             break :blk std.fmt.allocPrint(allocator, "{}", .{result});
         },
         layout_mod.Idx.u64, layout_mod.Idx.u8, layout_mod.Idx.u16, layout_mod.Idx.u32, layout_mod.Idx.bool => blk: {
             var result: u64 = 0;
-            executable.callWithResultPtrAndRocOps(@ptrCast(&result), @ptrCast(&dummy_roc_ops));
+            executable.callWithResultPtrAndRocOps(@ptrCast(&result), @ptrCast(&roc_ops));
             break :blk std.fmt.allocPrint(allocator, "{}", .{result});
         },
         layout_mod.Idx.f64 => blk: {
             var result: f64 = 0;
-            executable.callWithResultPtrAndRocOps(@ptrCast(&result), @ptrCast(&dummy_roc_ops));
+            executable.callWithResultPtrAndRocOps(@ptrCast(&result), @ptrCast(&roc_ops));
             break :blk std.fmt.allocPrint(allocator, "{d}", .{result});
         },
         layout_mod.Idx.f32 => blk: {
             var result: f32 = 0;
-            executable.callWithResultPtrAndRocOps(@ptrCast(&result), @ptrCast(&dummy_roc_ops));
+            executable.callWithResultPtrAndRocOps(@ptrCast(&result), @ptrCast(&roc_ops));
             break :blk std.fmt.allocPrint(allocator, "{d}", .{result});
         },
         layout_mod.Idx.i128, layout_mod.Idx.u128 => blk: {
             var result: i128 align(16) = 0;
-            executable.callWithResultPtrAndRocOps(@ptrCast(&result), @ptrCast(&dummy_roc_ops));
+            executable.callWithResultPtrAndRocOps(@ptrCast(&result), @ptrCast(&roc_ops));
             break :blk std.fmt.allocPrint(allocator, "{}", .{result});
         },
         layout_mod.Idx.dec => blk: {
             var result: i128 align(16) = 0;
-            executable.callWithResultPtrAndRocOps(@ptrCast(&result), @ptrCast(&dummy_roc_ops));
+            executable.callWithResultPtrAndRocOps(@ptrCast(&result), @ptrCast(&roc_ops));
             const dec = builtins.dec.RocDec{ .num = result };
             var buf: [builtins.dec.RocDec.max_str_length]u8 = undefined;
             const slice = dec.format_to_buf(&buf);
@@ -586,7 +576,7 @@ fn llvmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_i
         layout_mod.Idx.str => blk: {
             // RocStr is 24 bytes
             var result_bytes: [24]u8 align(8) = .{0} ** 24;
-            executable.callWithResultPtrAndRocOps(@ptrCast(&result_bytes), @ptrCast(&dummy_roc_ops));
+            executable.callWithResultPtrAndRocOps(@ptrCast(&result_bytes), @ptrCast(&roc_ops));
 
             // Check if small string (last byte has high bit set)
             if (result_bytes[23] & 0x80 != 0) {
@@ -622,7 +612,7 @@ fn llvmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_i
                     // Allocate buffer and execute
                     var result_buf: [256]u8 align(16) = @splat(0);
                     if (struct_size > result_buf.len) return error.UnsupportedLayout;
-                    executable.callWithResultPtrAndRocOps(@ptrCast(&result_buf), @ptrCast(&dummy_roc_ops));
+                    executable.callWithResultPtrAndRocOps(@ptrCast(&result_buf), @ptrCast(&roc_ops));
 
                     // Format as "(elem1, elem2, ...)"
                     // Elements are in sorted order in memory; build original-order mapping
