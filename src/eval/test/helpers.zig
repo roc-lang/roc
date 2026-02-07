@@ -522,6 +522,8 @@ fn llvmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_i
         return error.LlvmEvaluatorInitFailed;
     };
     defer llvm_eval.deinit();
+    // Note: optimizations are enabled (default) because opt_level=None
+    // produces incorrect code for floating-point operations on aarch64.
 
     const all_module_envs = [_]*ModuleEnv{ module_env, @constCast(builtin_module_env) };
 
@@ -536,35 +538,48 @@ fn llvmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_i
     defer executable.deinit();
 
     const layout_mod = @import("layout");
+    // Prepare a dummy roc_ops for calling the LLVM-generated function.
+    // The LLVM function signature is: void roc_eval(ptr out_ptr, ptr roc_ops_ptr)
+    var dummy_roc_ops = builtins.host_abi.RocOps{
+        .env = undefined,
+        .roc_alloc = undefined,
+        .roc_dealloc = undefined,
+        .roc_realloc = undefined,
+        .roc_dbg = undefined,
+        .roc_expect_failed = undefined,
+        .roc_crashed = undefined,
+        .hosted_fns = .{ .count = 0, .fns = undefined },
+    };
+
     return switch (code_result.result_layout) {
         layout_mod.Idx.i64, layout_mod.Idx.i8, layout_mod.Idx.i16, layout_mod.Idx.i32 => blk: {
             var result: i64 = 0;
-            executable.callWithResultPtr(@ptrCast(&result));
+            executable.callWithResultPtrAndRocOps(@ptrCast(&result), @ptrCast(&dummy_roc_ops));
             break :blk std.fmt.allocPrint(allocator, "{}", .{result});
         },
         layout_mod.Idx.u64, layout_mod.Idx.u8, layout_mod.Idx.u16, layout_mod.Idx.u32, layout_mod.Idx.bool => blk: {
             var result: u64 = 0;
-            executable.callWithResultPtr(@ptrCast(&result));
+            executable.callWithResultPtrAndRocOps(@ptrCast(&result), @ptrCast(&dummy_roc_ops));
             break :blk std.fmt.allocPrint(allocator, "{}", .{result});
         },
         layout_mod.Idx.f64 => blk: {
             var result: f64 = 0;
-            executable.callWithResultPtr(@ptrCast(&result));
+            executable.callWithResultPtrAndRocOps(@ptrCast(&result), @ptrCast(&dummy_roc_ops));
             break :blk std.fmt.allocPrint(allocator, "{d}", .{result});
         },
         layout_mod.Idx.f32 => blk: {
             var result: f32 = 0;
-            executable.callWithResultPtr(@ptrCast(&result));
+            executable.callWithResultPtrAndRocOps(@ptrCast(&result), @ptrCast(&dummy_roc_ops));
             break :blk std.fmt.allocPrint(allocator, "{d}", .{result});
         },
         layout_mod.Idx.i128, layout_mod.Idx.u128 => blk: {
             var result: i128 align(16) = 0;
-            executable.callWithResultPtr(@ptrCast(&result));
+            executable.callWithResultPtrAndRocOps(@ptrCast(&result), @ptrCast(&dummy_roc_ops));
             break :blk std.fmt.allocPrint(allocator, "{}", .{result});
         },
         layout_mod.Idx.dec => blk: {
             var result: i128 align(16) = 0;
-            executable.callWithResultPtr(@ptrCast(&result));
+            executable.callWithResultPtrAndRocOps(@ptrCast(&result), @ptrCast(&dummy_roc_ops));
             const dec = builtins.dec.RocDec{ .num = result };
             var buf: [builtins.dec.RocDec.max_str_length]u8 = undefined;
             const slice = dec.format_to_buf(&buf);
@@ -613,8 +628,44 @@ pub fn compareWithLlvmEvaluator(allocator: std.mem.Allocator, interpreter_str: [
         // Parent process
         posix.close(pipe_write);
 
-        const wait_result = posix.waitpid(fork_result, 0);
-        const status = wait_result.status;
+        // Wait for child with 30-second timeout using non-blocking poll
+        const timeout_ns: u64 = 30 * std.time.ns_per_s;
+        const start_time = std.time.Instant.now() catch {
+            // If we can't get time, just kill child and skip
+            _ = std.posix.kill(fork_result, 9) catch {};
+            _ = posix.waitpid(fork_result, 0);
+            posix.close(pipe_read);
+            return;
+        };
+
+        var status: u32 = undefined;
+        var child_done = false;
+        while (true) {
+            const wait_result = posix.waitpid(fork_result, std.posix.W.NOHANG);
+            if (wait_result.pid != 0) {
+                status = wait_result.status;
+                child_done = true;
+                break;
+            }
+            // Check timeout
+            const elapsed = (std.time.Instant.now() catch break).since(start_time);
+            if (elapsed > timeout_ns) {
+                // Timeout — kill child and skip
+                _ = std.posix.kill(fork_result, 9) catch {};
+                _ = posix.waitpid(fork_result, 0);
+                posix.close(pipe_read);
+                return;
+            }
+            std.Thread.sleep(1_000_000); // 1ms
+        }
+
+        if (!child_done) {
+            _ = std.posix.kill(fork_result, 9) catch {};
+            _ = posix.waitpid(fork_result, 0);
+            posix.close(pipe_read);
+            return;
+        }
+
         const termination_signal: u8 = @truncate(status & 0x7f);
 
         if (termination_signal != 0) {

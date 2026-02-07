@@ -588,14 +588,30 @@ pub const MonoLlvmCodeGen = struct {
     fn generateBinop(self: *MonoLlvmCodeGen, binop: anytype) Error!LlvmBuilder.Value {
         const wip = self.wip orelse return error.CompilationFailed;
 
-        const lhs = try self.generateExpr(binop.lhs);
-        const rhs = try self.generateExpr(binop.rhs);
+        var lhs = try self.generateExpr(binop.lhs);
+        var rhs = try self.generateExpr(binop.rhs);
 
-        const is_float = binop.result_layout == .f32 or binop.result_layout == .f64;
-
-        // For comparison operations, signedness comes from the operand type, not the result
-        // (result is always .bool). Get the LHS operand's layout for this purpose.
+        // For comparison operations, result_layout is .bool, so check operand type instead.
         const operand_layout = self.getExprResultLayout(binop.lhs) orelse binop.result_layout;
+        const is_float = isFloatLayout(binop.result_layout) or isFloatLayout(operand_layout);
+
+        // When result is float but operands may be integer (e.g. `b : F32; b = 2`
+        // lowers the literal as i64), cast operands to the target float type.
+        // Check actual LLVM types to detect mismatches from lookups of int-valued symbols.
+        if (is_float) {
+            const float_layout = if (isFloatLayout(binop.result_layout)) binop.result_layout else operand_layout;
+            const target_type = layoutToLlvmType(float_layout);
+            const lhs_type = lhs.typeOfWip(wip);
+            const rhs_type = rhs.typeOfWip(wip);
+            if (lhs_type != target_type and lhs_type != .float and lhs_type != .double) {
+                const lhs_layout = self.getExprResultLayout(binop.lhs) orelse binop.result_layout;
+                lhs = wip.cast(if (isSigned(lhs_layout)) .sitofp else .uitofp, lhs, target_type, "") catch return error.CompilationFailed;
+            }
+            if (rhs_type != target_type and rhs_type != .float and rhs_type != .double) {
+                const rhs_layout = self.getExprResultLayout(binop.rhs) orelse binop.result_layout;
+                rhs = wip.cast(if (isSigned(rhs_layout)) .sitofp else .uitofp, rhs, target_type, "") catch return error.CompilationFailed;
+            }
+        }
 
         return switch (binop.op) {
             .add => if (is_float)
@@ -690,6 +706,10 @@ pub const MonoLlvmCodeGen = struct {
         };
     }
 
+    fn isFloatLayout(l: layout.Idx) bool {
+        return l == .f32 or l == .f64;
+    }
+
     /// Get the result layout of a mono expression (for determining operand types).
     fn getExprResultLayout(self: *const MonoLlvmCodeGen, expr_id: MonoExprId) ?layout.Idx {
         const MonoExpr = mono.MonoIR.MonoExpr;
@@ -767,10 +787,15 @@ pub const MonoLlvmCodeGen = struct {
         const wip = self.wip orelse return error.CompilationFailed;
         const builder = self.builder orelse return error.CompilationFailed;
 
-        const val = try self.generateExpr(unary.expr);
-        const is_float = unary.result_layout == .f32 or unary.result_layout == .f64;
+        var val = try self.generateExpr(unary.expr);
+        const is_float = isFloatLayout(unary.result_layout);
 
         if (is_float) {
+            // Cast integer operand to float if needed
+            const expr_layout = self.getExprResultLayout(unary.expr) orelse unary.result_layout;
+            if (!isFloatLayout(expr_layout)) {
+                val = wip.cast(if (isSigned(expr_layout)) .sitofp else .uitofp, val, layoutToLlvmType(unary.result_layout), "") catch return error.CompilationFailed;
+            }
             return wip.un(.fneg, val, "") catch return error.CompilationFailed;
         } else {
             // For integers, subtract from 0
