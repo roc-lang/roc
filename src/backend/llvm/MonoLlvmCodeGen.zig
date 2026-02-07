@@ -141,6 +141,18 @@ pub const MonoLlvmCodeGen = struct {
     /// Result layout for the top-level expression (needed by early_return).
     result_layout: ?layout.Idx = null,
 
+    /// Allocas for mutable variables inside loop bodies.
+    /// When a symbol is reassigned inside a for_loop or while_loop body,
+    /// its value is stored to an alloca so that post-loop code can load
+    /// the final value (avoiding SSA domination issues).
+    /// Stores both the alloca pointer and the element type for correct loads.
+    loop_var_allocas: std.AutoHashMap(u48, LoopVarAlloca),
+
+    const LoopVarAlloca = struct {
+        alloca_ptr: LlvmBuilder.Value,
+        elem_type: LlvmBuilder.Type,
+    };
+
     /// Result of bitcode generation
     pub const BitcodeResult = struct {
         bitcode: []const u32,
@@ -173,6 +185,7 @@ pub const MonoLlvmCodeGen = struct {
             .join_points = std.AutoHashMap(u32, LlvmBuilder.Function.Block.Index).init(allocator),
             .join_point_params = std.AutoHashMap(u32, []MonoPatternId).init(allocator),
             .join_param_allocas = std.AutoHashMap(u32, []LlvmBuilder.Value).init(allocator),
+            .loop_var_allocas = std.AutoHashMap(u48, LoopVarAlloca).init(allocator),
         };
     }
 
@@ -194,6 +207,7 @@ pub const MonoLlvmCodeGen = struct {
             self.allocator.free(allocas.*);
         }
         self.join_param_allocas.deinit();
+        self.loop_var_allocas.deinit();
     }
 
     /// Reset the code generator for a new expression
@@ -1398,6 +1412,26 @@ pub const MonoLlvmCodeGen = struct {
         self.out_ptr = null;
         defer self.out_ptr = saved_out_ptr;
 
+        const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
+
+        // Promote existing symbol bindings to allocas for SSA correctness
+        // (same as for_loop — loop body mutations must be visible after exit)
+        var promoted_keys: std.ArrayList(u48) = .{};
+        defer promoted_keys.deinit(self.allocator);
+        {
+            var sym_it = self.symbol_values.iterator();
+            while (sym_it.next()) |entry| {
+                const key = entry.key_ptr.*;
+                const val = entry.value_ptr.*;
+                if (self.loop_var_allocas.contains(key)) continue;
+                const val_type = val.typeOfWip(wip);
+                const alloca_val = wip.alloca(.normal, val_type, .none, alignment, .default, "lv") catch return error.CompilationFailed;
+                _ = wip.store(.normal, val, alloca_val, alignment) catch return error.CompilationFailed;
+                self.loop_var_allocas.put(key, .{ .alloca_ptr = alloca_val, .elem_type = val_type }) catch return error.OutOfMemory;
+                promoted_keys.append(self.allocator, key) catch return error.OutOfMemory;
+            }
+        }
+
         // Create blocks: cond has 2 incoming (entry + back-edge), body/exit have 1 each
         const cond_block = wip.block(2, "while_cond") catch return error.OutOfMemory;
         const body_block = wip.block(1, "while_body") catch return error.OutOfMemory;
@@ -1406,21 +1440,45 @@ pub const MonoLlvmCodeGen = struct {
         // Branch to condition check
         _ = wip.br(cond_block) catch return error.CompilationFailed;
 
-        // Condition block
+        // Condition block: load loop-carried variables before evaluating condition
         wip.cursor = .{ .block = cond_block };
+        for (promoted_keys.items) |key| {
+            if (self.loop_var_allocas.get(key)) |lva| {
+                const loaded = wip.load(.normal, lva.elem_type, lva.alloca_ptr, alignment, "") catch return error.CompilationFailed;
+                self.symbol_values.put(key, loaded) catch return error.OutOfMemory;
+            }
+        }
         var cond_val = try self.generateExpr(wl.cond);
         if (cond_val.typeOfWip(wip) != .i1) {
             cond_val = wip.cast(.trunc, cond_val, .i1, "") catch return error.CompilationFailed;
         }
         _ = wip.brCond(cond_val, body_block, exit_block, .none) catch return error.CompilationFailed;
 
-        // Body block
+        // Body block: load loop-carried variables, execute body
         wip.cursor = .{ .block = body_block };
+        for (promoted_keys.items) |key| {
+            if (self.loop_var_allocas.get(key)) |lva| {
+                const loaded = wip.load(.normal, lva.elem_type, lva.alloca_ptr, alignment, "") catch return error.CompilationFailed;
+                self.symbol_values.put(key, loaded) catch return error.OutOfMemory;
+            }
+        }
         _ = try self.generateExpr(wl.body);
         _ = wip.br(cond_block) catch return error.CompilationFailed;
 
-        // Exit block — return unit
+        // Exit block: load final values from allocas
         wip.cursor = .{ .block = exit_block };
+        for (promoted_keys.items) |key| {
+            if (self.loop_var_allocas.get(key)) |lva| {
+                const final_val = wip.load(.normal, lva.elem_type, lva.alloca_ptr, alignment, "") catch return error.CompilationFailed;
+                self.symbol_values.put(key, final_val) catch return error.OutOfMemory;
+            }
+        }
+
+        // Clean up loop variable allocas
+        for (promoted_keys.items) |key| {
+            _ = self.loop_var_allocas.remove(key);
+        }
+
         return builder.intValue(.i8, 0) catch return error.OutOfMemory;
     }
 
@@ -1453,6 +1511,27 @@ pub const MonoLlvmCodeGen = struct {
         self.out_ptr = null;
         defer self.out_ptr = saved_out_ptr;
 
+        // Promote existing symbol bindings to allocas so that loop body
+        // mutations are visible after the loop exit (SSA domination fix).
+        // The loop body may rebind variables via let_stmts; without allocas,
+        // the new SSA values from the body block don't dominate the exit block.
+        var promoted_keys: std.ArrayList(u48) = .{};
+        defer promoted_keys.deinit(self.allocator);
+        {
+            var sym_it = self.symbol_values.iterator();
+            while (sym_it.next()) |entry| {
+                const key = entry.key_ptr.*;
+                const val = entry.value_ptr.*;
+                // Skip if already promoted (nested loops)
+                if (self.loop_var_allocas.contains(key)) continue;
+                const val_type = val.typeOfWip(wip);
+                const alloca_val = wip.alloca(.normal, val_type, .none, alignment, .default, "lv") catch return error.CompilationFailed;
+                _ = wip.store(.normal, val, alloca_val, alignment) catch return error.CompilationFailed;
+                self.loop_var_allocas.put(key, .{ .alloca_ptr = alloca_val, .elem_type = val_type }) catch return error.OutOfMemory;
+                promoted_keys.append(self.allocator, key) catch return error.OutOfMemory;
+            }
+        }
+
         // Create blocks: header (phi for index), body, exit
         const header_block = wip.block(2, "for_header") catch return error.OutOfMemory;
         const body_block = wip.block(1, "for_body") catch return error.OutOfMemory;
@@ -1472,6 +1551,15 @@ pub const MonoLlvmCodeGen = struct {
 
         // Body: load element, bind pattern, execute body, increment index
         wip.cursor = .{ .block = body_block };
+
+        // Load loop-carried variables from allocas at the start of the body
+        // so lookups within the body see the latest values.
+        for (promoted_keys.items) |key| {
+            if (self.loop_var_allocas.get(key)) |lva| {
+                const loaded = wip.load(.normal, lva.elem_type, lva.alloca_ptr, alignment, "") catch return error.CompilationFailed;
+                self.symbol_values.put(key, loaded) catch return error.OutOfMemory;
+            }
+        }
 
         // Load element from data_ptr + idx * elem_size
         const elem_llvm_type = layoutToLlvmType(fl.elem_layout);
@@ -1499,8 +1587,20 @@ pub const MonoLlvmCodeGen = struct {
             wip,
         );
 
-        // Exit block — return unit
+        // Exit block: load final values from allocas into symbol_values
         wip.cursor = .{ .block = exit_block };
+        for (promoted_keys.items) |key| {
+            if (self.loop_var_allocas.get(key)) |lva| {
+                const final_val = wip.load(.normal, lva.elem_type, lva.alloca_ptr, alignment, "") catch return error.CompilationFailed;
+                self.symbol_values.put(key, final_val) catch return error.OutOfMemory;
+            }
+        }
+
+        // Clean up loop variable allocas (un-promote for this loop level)
+        for (promoted_keys.items) |key| {
+            _ = self.loop_var_allocas.remove(key);
+        }
+
         return builder.intValue(.i8, 0) catch return error.OutOfMemory;
     }
 
@@ -2883,12 +2983,21 @@ pub const MonoLlvmCodeGen = struct {
     // ---------------------------------------------------------------
 
     /// Bind a pattern to an LLVM value.
+    /// If the symbol has a loop variable alloca, also stores the value there
+    /// so that post-loop code can load the final value.
     fn bindPattern(self: *MonoLlvmCodeGen, pattern_id: MonoPatternId, value: LlvmBuilder.Value) Error!void {
         const pattern = self.store.getPattern(pattern_id);
         switch (pattern) {
             .bind => |bind| {
                 const key: u48 = @bitCast(bind.symbol);
                 self.symbol_values.put(key, value) catch return error.OutOfMemory;
+
+                // If this symbol has a loop variable alloca, store the updated value
+                if (self.loop_var_allocas.get(key)) |lva| {
+                    const wip = self.wip orelse return error.CompilationFailed;
+                    const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
+                    _ = wip.store(.normal, value, lva.alloca_ptr, alignment) catch return error.CompilationFailed;
+                }
             },
             .wildcard => {},
             else => {},
