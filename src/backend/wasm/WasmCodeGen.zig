@@ -877,15 +877,44 @@ fn generateExpr(self: *Self, expr_id: MonoExprId) Allocator.Error!void {
         },
         .lookup => |l| {
             const key: u48 = @bitCast(l.symbol);
-            const local_info = self.storage.locals.get(key) orelse unreachable;
-            self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-            WasmModule.leb128WriteU32(self.allocator, &self.body, local_info.idx) catch return error.OutOfMemory;
-            // Convert if the local's actual type differs from the expression's layout type.
-            // This can happen when a function parameter is i64 (Roc I64) but the body
-            // expression's layout resolves to i32 (e.g., used as a list count).
-            const expected_vt = self.resolveValType(l.layout_idx);
-            if (local_info.val_type != expected_vt) {
-                try self.emitConversion(local_info.val_type, expected_vt);
+            if (self.storage.locals.get(key)) |local_info| {
+                self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                WasmModule.leb128WriteU32(self.allocator, &self.body, local_info.idx) catch return error.OutOfMemory;
+                // Convert if the local's actual type differs from the expression's layout type.
+                // This can happen when a function parameter is i64 (Roc I64) but the body
+                // expression's layout resolves to i32 (e.g., used as a list count).
+                const expected_vt = self.resolveValType(l.layout_idx);
+                if (local_info.val_type != expected_vt) {
+                    try self.emitConversion(local_info.val_type, expected_vt);
+                }
+            } else if (self.closure_values.get(key)) |_| {
+                // Symbol is a closure bound via tryBindFunction — generate its
+                // runtime closure value (used when passing closures as arguments
+                // to higher-order functions like List.fold).
+                const def_id = self.store.getSymbolDef(l.symbol) orelse unreachable;
+                const def_expr = self.store.getExpr(def_id);
+                switch (def_expr) {
+                    .closure => |closure| try self.generateClosureValue(closure),
+                    .lambda => {
+                        // Lambda with no captures: push dummy 0 (direct_call)
+                        self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                        WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+                    },
+                    .nominal => |nom| {
+                        const inner = self.store.getExpr(nom.backing_expr);
+                        switch (inner) {
+                            .closure => |closure| try self.generateClosureValue(closure),
+                            .lambda => {
+                                self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                                WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+                            },
+                            else => unreachable,
+                        }
+                    },
+                    else => unreachable,
+                }
+            } else {
+                unreachable;
             }
         },
         .if_then_else => |ite| {
@@ -5068,8 +5097,8 @@ fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
                         try self.emitLocalGet(ptr_local);
                         const vt = self.resolveValType(cap.layout_idx);
                         try self.emitLoadOp(vt, field_offset);
-                        const cap_size = self.layoutByteSize(cap.layout_idx);
-                        field_offset += if (cap_size < 4) 4 else cap_size;
+                        const vs: u32 = valTypeSize(vt);
+                        field_offset += if (vs < 8) 8 else vs;
                     }
                     try self.emitForwardedCaptures(func_idx);
                     try self.generateCallArgs(c.args);
@@ -5280,9 +5309,16 @@ fn generateClosureValue(self: *Self, closure: anytype) Allocator.Error!void {
                 }
             }
         },
-        .struct_captures => |repr| {
+        .struct_captures => |_| {
             // Multiple captures - allocate struct on stack, materialize captures.
-            const struct_size = self.layoutByteSize(repr.struct_layout);
+            // Compute actual struct size from captures' wasm representation sizes,
+            // since the struct_layout in MonoIR is a TODO placeholder.
+            const captures = self.store.getCaptures(closure.captures);
+            var struct_size: u32 = 0;
+            for (captures) |cap| {
+                const vs: u32 = valTypeSize(self.resolveValType(cap.layout_idx));
+                struct_size += if (vs < 8) 8 else vs;
+            }
             if (struct_size == 0) {
                 self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
                 WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
@@ -5349,28 +5385,25 @@ fn materializeCapturesToStackWithBase(self: *Self, captures_span: mono.MonoIR.Mo
     var offset: u32 = payload_offset;
 
     for (captures) |cap| {
-        const cap_size = self.layoutByteSize(cap.layout_idx);
         const cap_vt = self.resolveValType(cap.layout_idx);
+        // Use the wasm value type size for offset calculation, not the layout byte size.
+        // Stack_memory types (Dec, i128, str, records) are represented as i32 pointers in wasm.
+        const val_size: u32 = valTypeSize(cap_vt);
 
         if (self.storage.getLocal(cap.symbol)) |local_idx| {
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, base_local) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, local_idx) catch return error.OutOfMemory;
-
-            if (cap_size <= 4) {
-                try self.emitStoreOpSized(cap_vt, cap_size, offset);
-            } else {
-                try self.emitStoreOp(cap_vt, offset);
-            }
+            try self.emitStoreOp(cap_vt, offset);
         } else {
             // Capture not found - zero-initialize
             self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, base_local) catch return error.OutOfMemory;
-            if (cap_size <= 4) {
+            if (val_size <= 4) {
                 self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
                 WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
-                try self.emitStoreOpSized(.i32, cap_size, offset);
+                try self.emitStoreOp(.i32, offset);
             } else {
                 self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
                 WasmModule.leb128WriteI64(self.allocator, &self.body, 0) catch return error.OutOfMemory;
@@ -5378,8 +5411,16 @@ fn materializeCapturesToStackWithBase(self: *Self, captures_span: mono.MonoIR.Mo
             }
         }
 
-        offset += if (cap_size < 8) 8 else cap_size;
+        offset += if (val_size < 8) 8 else val_size;
     }
+}
+
+/// Get the byte size of a wasm value type.
+fn valTypeSize(vt: ValType) u32 {
+    return switch (vt) {
+        .i32, .f32 => 4,
+        .i64, .f64 => 8,
+    };
 }
 
 /// Dispatch a closure call based on its ClosureValue.
@@ -5559,20 +5600,16 @@ fn bindCapturesFromStack(self: *Self, captures_span: mono.MonoIR.MonoCaptureSpan
     var offset: u32 = 0;
 
     for (captures) |cap| {
-        const cap_size = self.layoutByteSize(cap.layout_idx);
         const cap_vt = self.resolveValType(cap.layout_idx);
+        const val_size: u32 = valTypeSize(cap_vt);
 
         try self.emitFpOffset(base_offset + offset);
-        if (cap_size <= 4) {
-            try self.emitLoadOpSized(cap_vt, cap_size, 0);
-        } else {
-            try self.emitLoadOp(cap_vt, 0);
-        }
+        try self.emitLoadOp(cap_vt, 0);
 
         const local_idx = self.storage.allocLocal(cap.symbol, cap_vt) catch return error.OutOfMemory;
         try self.emitLocalSet(local_idx);
 
-        offset += if (cap_size < 8) 8 else cap_size;
+        offset += if (val_size < 8) 8 else val_size;
     }
 }
 

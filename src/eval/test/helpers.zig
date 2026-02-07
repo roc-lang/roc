@@ -528,15 +528,6 @@ fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_i
     var module_def = bytebox.createModuleDefinition(arena, .{}) catch {
         return error.WasmExecFailed;
     };
-    {
-        var name_buf: [64]u8 = undefined;
-        const name = std.fmt.bufPrint(&name_buf, "/tmp/wasm_debug_{}.wasm", .{wasm_result.wasm_bytes.len}) catch "/tmp/wasm_debug.wasm";
-        const debug_file = std.fs.cwd().createFile(name, .{}) catch null;
-        if (debug_file) |f| {
-            _ = f.write(wasm_result.wasm_bytes) catch {};
-            f.close();
-        }
-    }
     module_def.decode(wasm_result.wasm_bytes) catch {
         return error.WasmExecFailed;
     };
