@@ -758,3 +758,48 @@ pub fn roc_builtins_float_to_str(out: *RocStr, val_bits: u64, is_f32: bool, roc_
         std.fmt.bufPrint(&buf, "{d}", .{@as(f64, @bitCast(val_bits))}) catch unreachable;
     out.* = RocStr.init(&buf, result.len, roc_ops);
 }
+
+// ── Numeric-from-string wrappers ──
+
+fn writeIntParseResult(comptime T: type, out: [*]u8, disc_offset: u32, roc_str: RocStr) void {
+    const r = num.parseIntFromStr(T, roc_str);
+    const value_bytes = std.mem.asBytes(&r.value);
+    @memcpy(out[0..value_bytes.len], value_bytes);
+    // Roc discriminants: Err=0, Ok=1 (alphabetically sorted)
+    // parseIntFromStr errorcode: 0=success, 1=failure
+    // So: Ok discriminant = 1 - errorcode
+    out[disc_offset] = 1 - r.errorcode;
+}
+
+/// Unified integer-from-string wrapper: parses a string into an integer of the given width.
+/// Writes the result directly into the tag union memory at `out`:
+///   - Payload (parsed value) at offset 0
+///   - Discriminant (Ok=1, Err=0) at disc_offset
+pub fn roc_builtins_int_from_str(
+    out: [*]u8,
+    str_bytes: ?[*]u8,
+    str_len: usize,
+    str_cap: usize,
+    int_width: u8,
+    is_signed: bool,
+    disc_offset: u32,
+) callconv(.c) void {
+    const roc_str = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
+    if (is_signed) {
+        switch (int_width) {
+            1 => writeIntParseResult(i8, out, disc_offset, roc_str),
+            2 => writeIntParseResult(i16, out, disc_offset, roc_str),
+            4 => writeIntParseResult(i32, out, disc_offset, roc_str),
+            8 => writeIntParseResult(i64, out, disc_offset, roc_str),
+            else => unreachable,
+        }
+    } else {
+        switch (int_width) {
+            1 => writeIntParseResult(u8, out, disc_offset, roc_str),
+            2 => writeIntParseResult(u16, out, disc_offset, roc_str),
+            4 => writeIntParseResult(u32, out, disc_offset, roc_str),
+            8 => writeIntParseResult(u64, out, disc_offset, roc_str),
+            else => unreachable,
+        }
+    }
+}

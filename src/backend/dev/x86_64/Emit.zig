@@ -719,6 +719,16 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         /// LEA reg, [base + disp32] (load effective address)
+        /// LEA reg, [RIP + disp32] — compute PC-relative address
+        /// disp is relative to the end of this instruction (7 bytes total).
+        pub fn leaRegRipRel(self: *Self, dst: GeneralReg, disp: i32) !void {
+            try self.emitRex(.w64, dst, .RBP); // REX.W prefix (RBP enc = 5, doesn't matter for mod=00 rm=101)
+            try self.buf.append(self.allocator, 0x8D); // LEA
+            // ModRM: mod=00, reg=dst, rm=101 (RIP-relative)
+            try self.buf.append(self.allocator, modRM(0b00, dst.enc(), 0b101));
+            try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(disp)));
+        }
+
         pub fn leaRegMem(self: *Self, dst: GeneralReg, base: GeneralReg, disp: i32) !void {
             try self.emitRex(.w64, dst, base);
             try self.buf.append(self.allocator, 0x8D); // LEA

@@ -611,6 +611,21 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.emit32(inst);
         }
 
+        /// ADR Xd, #imm — compute PC-relative address
+        /// offset_bytes is a byte offset from the ADR instruction, range ±1 MB.
+        pub fn adr(self: *Self, rd: GeneralReg, offset_bytes: i21) !void {
+            // ADR: 0 immlo[1:0] 10000 immhi[18:0] Rd[4:0]
+            const imm: u21 = @bitCast(offset_bytes);
+            const immlo: u2 = @truncate(imm);
+            const immhi: u19 = @truncate(imm >> 2);
+            const inst: u32 = (0 << 31) |
+                (@as(u32, immlo) << 29) |
+                (0b10000 << 24) |
+                (@as(u32, immhi) << 5) |
+                @as(u32, rd.enc());
+            try self.emit32(inst);
+        }
+
         /// BLR Xn (branch with link to register - call to address in register)
         pub fn blrReg(self: *Self, reg: GeneralReg) !void {
             // BLR <Xn>

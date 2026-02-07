@@ -400,9 +400,6 @@ pub const MonoExpr = union(enum) {
         /// Whether this closure captures itself (for recursive closures)
         self_recursive: SelfRecursive,
         /// Whether this closure is bound to a variable (vs. used directly as an argument).
-        /// Used by the inlining heuristic:
-        /// - true: Closure may have multiple call sites, emit as separate function
-        /// - false: Closure is used directly (e.g., passed to map), safe to inline
         is_bound_to_variable: bool,
     },
 
@@ -581,6 +578,18 @@ pub const MonoExpr = union(enum) {
         union_layout: layout.Idx,
         /// One expression per variant, indexed by discriminant value
         branches: MonoExprSpan,
+    },
+
+    /// Extract the payload from a tag union value.
+    /// Used inside discriminant_switch branches to access the payload of the active variant.
+    /// The payload is always at offset 0 in the tag union memory.
+    tag_payload_access: struct {
+        /// Expression that produces the tag union value
+        value: MonoExprId,
+        /// Layout of the tag union
+        union_layout: layout.Idx,
+        /// Layout of the payload to extract
+        payload_layout: layout.Idx,
     },
 
     /// For loop over a list

@@ -292,9 +292,14 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
                 // Small frame: stp pre-index (scaled offset fits in i7)
                 const scaled_offset: i7 = @intCast(@divExact(-@as(i32, @intCast(aligned_frame)), 8));
                 try emit.stpPreIndex(.w64, .FP, .LR, .ZRSP, scaled_offset);
-            } else {
-                // Large frame: sub sp first, then store FP/LR at [sp]
+            } else if (aligned_frame <= 4095) {
+                // Medium frame: sub sp with imm12, then store FP/LR at [sp]
                 try emit.subRegRegImm12(.w64, .ZRSP, .ZRSP, @intCast(aligned_frame));
+                try emit.stpSignedOffset(.w64, .FP, .LR, .ZRSP, 0);
+            } else {
+                // Large frame: load size into scratch register, sub from sp
+                try emit.movRegImm64(.IP0, aligned_frame);
+                try emit.subRegRegReg(.w64, .ZRSP, .ZRSP, .IP0);
                 try emit.stpSignedOffset(.w64, .FP, .LR, .ZRSP, 0);
             }
 
@@ -327,10 +332,15 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
                 // Small frame: ldp post-index (scaled offset fits in i7)
                 const scaled_offset: i7 = @intCast(@divExact(@as(i32, @intCast(self.actual_stack_alloc)), 8));
                 try emit.ldpPostIndex(.w64, .FP, .LR, .ZRSP, scaled_offset);
-            } else {
-                // Large frame: ldp without writeback, then add sp
+            } else if (self.actual_stack_alloc <= 4095) {
+                // Medium frame: ldp without writeback, then add sp with imm12
                 try emit.ldpSignedOffset(.w64, .FP, .LR, .ZRSP, 0);
                 try emit.addRegRegImm12(.w64, .ZRSP, .ZRSP, @intCast(self.actual_stack_alloc));
+            } else {
+                // Large frame: ldp without writeback, then add sp via scratch register
+                try emit.ldpSignedOffset(.w64, .FP, .LR, .ZRSP, 0);
+                try emit.movRegImm64(.IP0, self.actual_stack_alloc);
+                try emit.addRegRegReg(.w64, .ZRSP, .ZRSP, .IP0);
             }
 
             // 3. ret

@@ -223,6 +223,9 @@ pub const RcInsertPass = struct {
                     try self.countUses(br_id);
                 }
             },
+            .tag_payload_access => |tpa| {
+                try self.countUses(tpa.value);
+            },
             .for_loop => |fl| {
                 try self.countUses(fl.list_expr);
                 try self.registerPatternSymbol(fl.elem_pattern);

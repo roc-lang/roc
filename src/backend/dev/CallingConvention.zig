@@ -425,10 +425,15 @@ pub fn CallBuilder(comptime EmitType: type) type {
                 },
                 .from_lea => |lea| {
                     if (comptime is_aarch64) {
-                        if (lea.offset >= 0)
-                            try self.emit.addRegRegImm12(.w64, dst, lea.base, @intCast(lea.offset))
-                        else
+                        if (lea.offset >= 0 and lea.offset <= 4095) {
+                            try self.emit.addRegRegImm12(.w64, dst, lea.base, @intCast(lea.offset));
+                        } else if (lea.offset < 0 and -lea.offset <= 4095) {
                             try self.emit.subRegRegImm12(.w64, dst, lea.base, @intCast(-lea.offset));
+                        } else {
+                            // Offset too large for imm12 — use movRegImm64 + add
+                            try self.emit.movRegImm64(dst, @bitCast(@as(i64, lea.offset)));
+                            try self.emit.addRegRegReg(.w64, dst, lea.base, dst);
+                        }
                     } else {
                         try self.emit.leaRegMem(dst, lea.base, lea.offset);
                     }

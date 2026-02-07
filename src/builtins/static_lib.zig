@@ -97,6 +97,8 @@ comptime {
     // Numeric-to-string wrappers
     @export(&dw.roc_builtins_int_to_str, .{ .name = "roc_builtins_int_to_str" });
     @export(&dw.roc_builtins_float_to_str, .{ .name = "roc_builtins_float_to_str" });
+    // Numeric-from-string wrapper
+    @export(&dw.roc_builtins_int_from_str, .{ .name = "roc_builtins_int_from_str" });
 }
 
 // Ensure ___muloti4 symbol is available by using @mulWithOverflow

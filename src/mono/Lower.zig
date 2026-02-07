@@ -192,7 +192,7 @@ fn getModuleEnv(self: *const Self, module_idx: u16) ?*ModuleEnv {
 /// Find the module index for a given origin_module ident (from a NominalType).
 /// Uses the import system of source_env to resolve the origin module name to a module index.
 fn findModuleForOrigin(self: *Self, source_env: *const ModuleEnv, origin_module: Ident.Idx) ?u16 {
-    // Check if origin is source_env itself
+    // Check if origin is source_env itself (by ident index)
     if (origin_module == source_env.module_name_idx) {
         for (self.all_module_envs, 0..) |env, idx| {
             if (env == source_env) return @intCast(idx);
@@ -223,6 +223,23 @@ fn findModuleForOrigin(self: *Self, source_env: *const ModuleEnv, origin_module:
                     return @intCast(mod_idx);
                 }
             }
+        }
+    }
+
+    // Fallback: check if origin name matches source_env itself (by string).
+    // This handles cases where origin_module and module_name_idx are different
+    // Ident.Idx values that resolve to the same string (e.g., app modules
+    // where the type's origin_module ident differs from the module's own name ident).
+    if (std.mem.eql(u8, origin_name, source_env.module_name)) {
+        for (self.all_module_envs, 0..) |env, idx| {
+            if (env == source_env) return @intCast(idx);
+        }
+    }
+
+    // Last resort: check all module envs by name
+    for (self.all_module_envs, 0..) |env, idx| {
+        if (std.mem.eql(u8, env.module_name, origin_name)) {
+            return @intCast(idx);
         }
     }
 
@@ -940,6 +957,8 @@ fn convertToMonoLowLevel(op: CIR.Expr.LowLevel) ?ir.MonoExpr.LowLevel {
         .dec_to_f32_wrap => .dec_to_f32_wrap,
         .dec_to_f32_try_unsafe => .dec_to_f32_try_unsafe,
         .dec_to_f64 => .dec_to_f64,
+
+        .num_from_str => .num_from_str,
 
         else => null,
     };
@@ -1713,9 +1732,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
         },
 
         .e_call => |call| blk: {
-            // Check if this is a call to a low-level lambda (like str_inspekt)
             const fn_expr = module_env.store.getExpr(call.func);
-
             // If calling an external function, set up type scope mappings before lowering.
             // We need to clean up after the call is done to avoid polluting subsequent calls.
             const is_external_call = fn_expr == .e_lookup_external;
@@ -1768,7 +1785,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                 }
             };
 
-            // For external calls to low-level lambdas, inline the operation directly.
+            // For external calls to low-level lambdas, emit the operation directly.
             // This avoids going through lowerExternalDefByIdx which would compute
             // ret_layout in the builtins module context with potentially unmapped rigid vars.
             // The type scope has been set up above, so we can resolve the return type
@@ -1901,7 +1918,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             // If current_binding_pattern is set, we're in a let statement like `f = |x| ...`
             // which means the closure may have multiple call sites.
             // If not set, the closure is used directly (e.g., `map(|x| x + 1, list)`)
-            // and is safe to inline at its single call site.
+            // and is used directly at its single call site.
             const is_bound = self.current_binding_pattern != null;
 
             // Select the closure representation based on captures
@@ -4127,6 +4144,12 @@ fn lowerInspectRecord(
     // Get layout data for field offsets
     const layout_val = layout_store.getLayout(value_layout);
 
+    // Get layout record fields (sorted by layout order, not type order)
+    const layout_fields = if (layout_val.tag == .record) blk: {
+        const record_data = layout_store.getRecordData(layout_val.data.record.idx);
+        break :blk layout_store.record_fields.sliceRange(record_data.getFields());
+    } else null;
+
     for (field_names, field_vars, 0..) |field_name_idx, field_var, i| {
         if (i > 0) {
             try parts.append(self.allocator, try self.addStrLiteral(", ", region));
@@ -4140,24 +4163,38 @@ fn lowerInspectRecord(
         defer self.allocator.free(name_with_colon);
         try parts.append(self.allocator, try self.addStrLiteral(name_with_colon, region));
 
-        // Get field layout from record layout
-        // For now, we create field access based on index
-        const field_layout = self.getFieldLayoutFromRecord(layout_val, @intCast(i), layout_store);
+        // Find field by name in layout fields to get the correct layout-order index
+        var field_idx: u16 = @intCast(i);
+        var field_layout: LayoutIdx = self.getFieldLayoutFromRecord(layout_val, @intCast(i), layout_store);
+        if (layout_fields) |fields| {
+            var j: u16 = 0;
+            while (j < fields.len) : (j += 1) {
+                const field = fields.get(j);
+                if (std.mem.eql(u8, module_env.getIdent(field.name), field_name)) {
+                    field_idx = j;
+                    field_layout = field.layout;
+                    break;
+                }
+            }
+        }
 
         // Create field access expression
         const field_access_expr = try self.store.addExpr(.{ .field_access = .{
             .record_expr = value_expr,
             .record_layout = value_layout,
             .field_layout = field_layout,
-            .field_idx = @intCast(i),
+            .field_idx = field_idx,
             .field_name = field_name_idx,
         } }, region);
+
+        // Compute type-based layout for inspect (may differ from record field layout)
+        const inspect_layout = layout_store.fromTypeVar(self.current_module_idx, field_var, &self.type_scope, self.type_scope_caller_module) catch field_layout;
 
         // Recursively inspect the field value
         const field_inspect = try self.lowerStrInspekt(
             field_access_expr,
             field_var,
-            field_layout,
+            inspect_layout,
             module_env,
             region,
         );
@@ -4238,6 +4275,8 @@ fn lowerInspectTagUnion(
     module_env: *const ModuleEnv,
     region: Region,
 ) Allocator.Error!MonoExprId {
+    const layout_store = self.layout_store orelse unreachable;
+
     // Get tag info from TYPE
     const tags_slice = module_env.types.getTagsSlice(tag_union.tags);
     const tag_names = tags_slice.items(.name);
@@ -4247,11 +4286,23 @@ fn lowerInspectTagUnion(
         return try self.addStrLiteral("[]", region);
     }
 
+    // Get variant layouts from LAYOUT
+    const layout_val = layout_store.getLayout(value_layout);
+    const has_variant_layouts = layout_val.tag == .tag_union;
+    const tu_data = if (has_variant_layouts)
+        layout_store.getTagUnionData(layout_val.data.tag_union.idx)
+    else
+        null;
+    const variants = if (tu_data) |td|
+        layout_store.getTagUnionVariants(td)
+    else
+        null;
+
     // Build a branch for each tag variant
     var branches = std.ArrayList(MonoExprId).empty;
     defer branches.deinit(self.allocator);
 
-    for (tag_names, tag_args) |tag_name_idx, args_range| {
+    for (tag_names, tag_args, 0..) |tag_name_idx, args_range, variant_idx| {
         const tag_name = module_env.getIdent(tag_name_idx);
         const args_slice = module_env.types.sliceVars(args_range);
 
@@ -4266,14 +4317,68 @@ fn lowerInspectTagUnion(
             try branch_parts.append(self.allocator, try self.addStrLiteral(tag_name, region));
             try branch_parts.append(self.allocator, try self.addStrLiteral("(", region));
 
-            // For multi-arg payloads, we'd need to access each argument
-            // For now, just show a placeholder for payload
-            for (args_slice, 0..) |_, arg_i| {
-                if (arg_i > 0) {
-                    try branch_parts.append(self.allocator, try self.addStrLiteral(", ", region));
+            // Get the payload layout for this variant
+            const payload_layout = if (variants) |v|
+                v.get(variant_idx).payload_layout
+            else
+                null;
+
+            if (args_slice.len == 1) {
+                // Single payload arg: extract directly
+                if (payload_layout) |pl| {
+                    const payload_expr = try self.store.addExpr(.{ .tag_payload_access = .{
+                        .value = value_expr,
+                        .union_layout = value_layout,
+                        .payload_layout = pl,
+                    } }, region);
+                    // Compute the type-based layout for inspect (may differ from tag union's internal payload layout)
+                    const arg_layout = layout_store.fromTypeVar(self.current_module_idx, args_slice[0], &self.type_scope, self.type_scope_caller_module) catch pl;
+                    const inspect_expr = try self.lowerStrInspekt(
+                        payload_expr,
+                        args_slice[0],
+                        arg_layout,
+                        module_env,
+                        region,
+                    );
+                    try branch_parts.append(self.allocator, inspect_expr);
+                } else {
+                    try branch_parts.append(self.allocator, try self.addStrLiteral("_", region));
                 }
-                // TODO: Access actual payload values using layout info
-                try branch_parts.append(self.allocator, try self.addStrLiteral("_", region));
+            } else {
+                // Multi-arg payload is a tuple
+                for (args_slice, 0..) |arg_var, arg_i| {
+                    if (arg_i > 0) {
+                        try branch_parts.append(self.allocator, try self.addStrLiteral(", ", region));
+                    }
+                    if (payload_layout) |pl| {
+                        // Extract the tuple payload from the tag union
+                        const tuple_expr = try self.store.addExpr(.{ .tag_payload_access = .{
+                            .value = value_expr,
+                            .union_layout = value_layout,
+                            .payload_layout = pl,
+                        } }, region);
+                        // Access individual tuple element
+                        const elem_layout = self.getTupleElemLayout(layout_store.getLayout(pl), @intCast(arg_i), layout_store);
+                        // Compute type-based layout for each element
+                        const arg_elem_layout = layout_store.fromTypeVar(self.current_module_idx, arg_var, &self.type_scope, self.type_scope_caller_module) catch elem_layout;
+                        const elem_expr = try self.store.addExpr(.{ .tuple_access = .{
+                            .tuple_expr = tuple_expr,
+                            .tuple_layout = pl,
+                            .elem_layout = elem_layout,
+                            .elem_idx = @intCast(arg_i),
+                        } }, region);
+                        const inspect_expr = try self.lowerStrInspekt(
+                            elem_expr,
+                            arg_var,
+                            arg_elem_layout,
+                            module_env,
+                            region,
+                        );
+                        try branch_parts.append(self.allocator, inspect_expr);
+                    } else {
+                        try branch_parts.append(self.allocator, try self.addStrLiteral("_", region));
+                    }
+                }
             }
 
             try branch_parts.append(self.allocator, try self.addStrLiteral(")", region));
@@ -4331,17 +4436,28 @@ fn lowerInspectNominal(
         }
     }
 
+    // Check for custom to_inspect method on this nominal type.
+    // This uses the same method resolution as dot-call dispatch.
+    if (try self.lowerInspectWithMethod(value_expr, nom, value_layout, module_env, region)) |result| {
+        return result;
+    }
+
     if (nom.is_opaque) {
-        // Opaque types render as <opaque>
+        // Opaque types without to_inspect render as <opaque>
         return try self.addStrLiteral("<opaque>", region);
     }
 
-    // For transparent nominal types, inspect the backing value
-    // Get the first type variable which should be the backing type
+    // For transparent nominal types, show TypeName.backing_value
     const vars = module_env.types.sliceVars(nom.vars.nonempty);
     if (vars.len > 0) {
+        var parts = std.ArrayList(MonoExprId).empty;
+        defer parts.deinit(self.allocator);
+
+        try parts.append(self.allocator, try self.addStrLiteral(type_name, region));
+        try parts.append(self.allocator, try self.addStrLiteral(".", region));
         const backing_var = vars[0];
-        return self.lowerStrInspekt(value_expr, backing_var, value_layout, module_env, region);
+        try parts.append(self.allocator, try self.lowerStrInspekt(value_expr, backing_var, value_layout, module_env, region));
+        return self.store.addExpr(.{ .str_concat = try self.store.addExprSpan(parts.items) }, region);
     }
 
     // Fallback: just show the type name with the value
@@ -4355,6 +4471,89 @@ fn lowerInspectNominal(
     try parts.append(self.allocator, try self.lowerInspectByLayout(value_expr, layout_val, value_layout, region));
 
     return self.store.addExpr(.{ .str_concat = try self.store.addExprSpan(parts.items) }, region);
+}
+
+/// Try to resolve and call a custom `to_inspect` method on a nominal type.
+/// Returns the MonoExprId of the call result, or null if no method exists.
+fn lowerInspectWithMethod(
+    self: *Self,
+    value_expr: MonoExprId,
+    nom: types.NominalType,
+    value_layout: LayoutIdx,
+    module_env: *const ModuleEnv,
+    region: Region,
+) Allocator.Error!?MonoExprId {
+    _ = value_layout;
+
+    // Find the origin module for this nominal type
+    const origin_module_idx = self.findModuleForOrigin(module_env, nom.origin_module) orelse return null;
+    const origin_env = self.all_module_envs[origin_module_idx];
+
+    // Look up the `to_inspect` method
+    const qualified_method = origin_env.lookupMethodIdentFromTwoEnvsConst(
+        module_env,
+        nom.ident.ident_idx,
+        module_env,
+        module_env.idents.to_inspect,
+    ) orelse return null;
+
+    // Get the CIR node index for the method definition
+    const node_idx = origin_env.getExposedNodeIndexById(qualified_method) orelse return null;
+
+    // Create method symbol
+    const method_symbol = MonoSymbol{
+        .module_idx = origin_module_idx,
+        .ident_idx = qualified_method,
+    };
+
+    // Lower the method definition if not already lowered
+    const method_symbol_key: u48 = @bitCast(method_symbol);
+    if (!self.lowered_symbols.contains(method_symbol_key)) {
+        try self.lowerExternalDefByIdx(method_symbol, node_idx);
+    }
+
+    // Determine return layout from the lowered method
+    var ret_layout: LayoutIdx = .str; // default assumption
+    if (self.store.getSymbolDef(method_symbol)) |method_expr_id| {
+        const method_mono = self.store.getExpr(method_expr_id);
+        switch (method_mono) {
+            .lambda => |lam| ret_layout = lam.ret_layout,
+            .closure => |clo| {
+                // Get ret_layout from the underlying lambda
+                const lam_expr = self.store.getExpr(clo.lambda);
+                if (lam_expr == .lambda) {
+                    ret_layout = lam_expr.lambda.ret_layout;
+                }
+            },
+            else => {},
+        }
+    }
+
+    // Create method lookup expression
+    const fn_expr_id = try self.store.addExpr(.{ .lookup = .{
+        .symbol = method_symbol,
+        .layout_idx = .i64,
+    } }, region);
+
+    // Create call: to_inspect(value)
+    const args_span = try self.store.addExprSpan(&[_]MonoExprId{value_expr});
+    const call_expr = try self.store.addExpr(.{ .call = .{
+        .fn_expr = fn_expr_id,
+        .fn_layout = LayoutIdx.named_fn,
+        .args = args_span,
+        .ret_layout = ret_layout,
+        .called_via = .apply,
+    } }, region);
+
+    // If the method returns Str, use the result directly
+    if (ret_layout == .str) {
+        return call_expr;
+    }
+
+    // For non-Str return (e.g., to_inspect : Color -> I64), inspect the result
+    const layout_store = self.layout_store orelse unreachable;
+    const ret_layout_val = layout_store.getLayout(ret_layout);
+    return try self.lowerInspectByLayout(call_expr, ret_layout_val, ret_layout, region);
 }
 
 /// Helper to add a string literal expression
