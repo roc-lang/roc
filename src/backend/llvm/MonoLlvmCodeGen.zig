@@ -2330,16 +2330,64 @@ pub const MonoLlvmCodeGen = struct {
                     wip.bin(.srem, lhs, rhs, "") catch return error.CompilationFailed;
             },
             .num_pow => {
-                // For integer pow, use repeated multiplication; for float, use llvm.pow intrinsic
-                // For now, return error for float pow (needs intrinsic call)
-                return error.UnsupportedExpression;
+                if (args.len < 2) return error.UnsupportedExpression;
+                const base = try self.generateExpr(args[0]);
+                const exp = try self.generateExpr(args[1]);
+                const is_float = isFloatLayout(ll.ret_layout);
+                if (!is_float) return error.UnsupportedExpression;
+                const float_type = layoutToLlvmType(ll.ret_layout);
+                return wip.callIntrinsic(.normal, .none, .pow, &.{float_type}, &.{ base, exp }, "") catch return error.CompilationFailed;
             },
-            .num_round, .num_floor, .num_ceiling => {
-                // These need float intrinsics (llvm.round, llvm.floor, llvm.ceil)
-                return error.UnsupportedExpression;
+            .num_round => {
+                if (args.len < 1) return error.UnsupportedExpression;
+                const operand = try self.generateExpr(args[0]);
+                const float_type = operand.typeOfWip(wip);
+                if (float_type != .float and float_type != .double) return error.UnsupportedExpression;
+                const rounded = wip.callIntrinsic(.normal, .none, .round, &.{float_type}, &.{operand}, "") catch return error.CompilationFailed;
+                // Round returns float; if ret_layout is an integer, convert
+                const ret_type = layoutToLlvmType(ll.ret_layout);
+                if (isIntType(ret_type)) {
+                    return wip.cast(if (isSigned(ll.ret_layout)) .fptosi else .fptoui, rounded, ret_type, "") catch return error.CompilationFailed;
+                }
+                return rounded;
             },
-            .num_sqrt, .num_log => {
-                return error.UnsupportedExpression;
+            .num_floor => {
+                if (args.len < 1) return error.UnsupportedExpression;
+                const operand = try self.generateExpr(args[0]);
+                const float_type = operand.typeOfWip(wip);
+                if (float_type != .float and float_type != .double) return error.UnsupportedExpression;
+                const floored = wip.callIntrinsic(.normal, .none, .floor, &.{float_type}, &.{operand}, "") catch return error.CompilationFailed;
+                const ret_type = layoutToLlvmType(ll.ret_layout);
+                if (isIntType(ret_type)) {
+                    return wip.cast(if (isSigned(ll.ret_layout)) .fptosi else .fptoui, floored, ret_type, "") catch return error.CompilationFailed;
+                }
+                return floored;
+            },
+            .num_ceiling => {
+                if (args.len < 1) return error.UnsupportedExpression;
+                const operand = try self.generateExpr(args[0]);
+                const float_type = operand.typeOfWip(wip);
+                if (float_type != .float and float_type != .double) return error.UnsupportedExpression;
+                const ceiled = wip.callIntrinsic(.normal, .none, .ceil, &.{float_type}, &.{operand}, "") catch return error.CompilationFailed;
+                const ret_type = layoutToLlvmType(ll.ret_layout);
+                if (isIntType(ret_type)) {
+                    return wip.cast(if (isSigned(ll.ret_layout)) .fptosi else .fptoui, ceiled, ret_type, "") catch return error.CompilationFailed;
+                }
+                return ceiled;
+            },
+            .num_sqrt => {
+                if (args.len < 1) return error.UnsupportedExpression;
+                const operand = try self.generateExpr(args[0]);
+                const float_type = operand.typeOfWip(wip);
+                if (float_type != .float and float_type != .double) return error.UnsupportedExpression;
+                return wip.callIntrinsic(.normal, .none, .sqrt, &.{float_type}, &.{operand}, "") catch return error.CompilationFailed;
+            },
+            .num_log => {
+                if (args.len < 1) return error.UnsupportedExpression;
+                const operand = try self.generateExpr(args[0]);
+                const float_type = operand.typeOfWip(wip);
+                if (float_type != .float and float_type != .double) return error.UnsupportedExpression;
+                return wip.callIntrinsic(.normal, .none, .log, &.{float_type}, &.{operand}, "") catch return error.CompilationFailed;
             },
             .num_to_str, .num_from_str, .num_from_numeral => {
                 return error.UnsupportedExpression;
