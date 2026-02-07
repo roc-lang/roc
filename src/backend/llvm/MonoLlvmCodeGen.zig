@@ -807,8 +807,13 @@ pub const MonoLlvmCodeGen = struct {
         var lhs = try self.generateExpr(binop.lhs);
         var rhs = try self.generateExpr(binop.rhs);
 
-        // Check if operands are aggregate types (structs) - LLVM can't compare them directly
-        if (!isIntType(lhs.typeOfWip(wip)) and lhs.typeOfWip(wip) != .float and lhs.typeOfWip(wip) != .double) {
+        // Check if operands are aggregate types (structs) - LLVM can't compare them directly.
+        // For eq/neq on aggregates, compare field-by-field.
+        const lhs_llvm_type = lhs.typeOfWip(wip);
+        if (!isIntType(lhs_llvm_type) and lhs_llvm_type != .float and lhs_llvm_type != .double) {
+            if (binop.op == .eq or binop.op == .neq) {
+                return self.generateAggregateEquality(lhs, rhs, binop.op == .neq);
+            }
             return error.UnsupportedExpression;
         }
 
@@ -935,6 +940,48 @@ pub const MonoLlvmCodeGen = struct {
             .@"and" => wip.bin(.@"and", lhs, rhs, "") catch return error.CompilationFailed,
             .@"or" => wip.bin(.@"or", lhs, rhs, "") catch return error.CompilationFailed,
         };
+    }
+
+    /// Compare two aggregate values (structs) field-by-field.
+    /// Returns i1: true if all fields are equal (or not equal for neq).
+    fn generateAggregateEquality(self: *MonoLlvmCodeGen, lhs: LlvmBuilder.Value, rhs: LlvmBuilder.Value, is_neq: bool) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
+
+        const lhs_type = lhs.typeOfWip(wip);
+        const fields = lhs_type.structFields(builder);
+        if (fields.len == 0) {
+            // Empty struct — always equal
+            const eq_val: i64 = if (is_neq) 0 else 1;
+            return builder.intValue(.i1, eq_val) catch return error.OutOfMemory;
+        }
+
+        // Compare each field and AND results together
+        var result = builder.intValue(.i1, 1) catch return error.OutOfMemory;
+        for (0..fields.len) |i| {
+            const idx: u32 = @intCast(i);
+            const lhs_field = wip.extractValue(lhs, &.{idx}, "") catch return error.CompilationFailed;
+            const rhs_field = wip.extractValue(rhs, &.{idx}, "") catch return error.CompilationFailed;
+
+            const field_type = lhs_field.typeOfWip(wip);
+            const field_eq = if (!isIntType(field_type) and field_type != .float and field_type != .double)
+                // Nested aggregate — recurse
+                try self.generateAggregateEquality(lhs_field, rhs_field, false)
+            else if (field_type == .float or field_type == .double)
+                wip.fcmp(.normal, .oeq, lhs_field, rhs_field, "") catch return error.CompilationFailed
+            else
+                wip.icmp(.eq, lhs_field, rhs_field, "") catch return error.CompilationFailed;
+
+            result = wip.bin(.@"and", result, field_eq, "") catch return error.CompilationFailed;
+        }
+
+        // For neq, invert the result
+        if (is_neq) {
+            const one = builder.intValue(.i1, 1) catch return error.OutOfMemory;
+            result = wip.bin(.xor, result, one, "") catch return error.CompilationFailed;
+        }
+
+        return result;
     }
 
     fn isSigned(result_layout: layout.Idx) bool {
