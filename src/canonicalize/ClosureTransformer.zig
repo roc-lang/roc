@@ -170,7 +170,7 @@ pub const UnspecializedClosure = struct {
     /// Region number for ordering during resolution.
     /// When resolving nested static-dispatch-dependent closures, we process
     /// innermost first (higher region numbers first).
-    region: u8,
+    region: u32,
 };
 
 /// Internal validation error for lambda set resolution failures.
@@ -718,7 +718,7 @@ top_level_patterns: std.AutoHashMap(CIR.Pattern.Idx, void),
 /// Current region number for ordering unspecialized closures.
 /// Incremented when entering nested lambda scopes.
 /// Higher region = more deeply nested = should be resolved first.
-current_region: u8,
+current_region: u32,
 
 /// Tracks unspecialized entries by the type variable they depend on.
 /// This enables efficient lookup during monomorphization when a type variable
@@ -753,16 +753,14 @@ pub fn initWithInference(allocator: std.mem.Allocator, module_env: *ModuleEnv, i
 
 /// Enter a new nested scope (e.g., lambda body), incrementing the region counter.
 /// Returns the previous region value for restoration.
-pub fn enterRegion(self: *Self) u8 {
+pub fn enterRegion(self: *Self) u32 {
     const prev = self.current_region;
-    if (self.current_region < 255) {
-        self.current_region += 1;
-    }
+    self.current_region += 1;
     return prev;
 }
 
 /// Exit a nested scope, restoring the previous region value.
-pub fn exitRegion(self: *Self, prev_region: u8) void {
+pub fn exitRegion(self: *Self, prev_region: u32) void {
     self.current_region = prev_region;
 }
 
@@ -2661,23 +2659,23 @@ test "ClosureTransformer: region tracking" {
     defer transformer.deinit();
 
     // Initial region should be 0
-    try testing.expectEqual(@as(u8, 0), transformer.current_region);
+    try testing.expectEqual(@as(u32, 0), transformer.current_region);
 
     // Enter nested scopes
     const region0 = transformer.enterRegion();
-    try testing.expectEqual(@as(u8, 0), region0);
-    try testing.expectEqual(@as(u8, 1), transformer.current_region);
+    try testing.expectEqual(@as(u32, 0), region0);
+    try testing.expectEqual(@as(u32, 1), transformer.current_region);
 
     const region1 = transformer.enterRegion();
-    try testing.expectEqual(@as(u8, 1), region1);
-    try testing.expectEqual(@as(u8, 2), transformer.current_region);
+    try testing.expectEqual(@as(u32, 1), region1);
+    try testing.expectEqual(@as(u32, 2), transformer.current_region);
 
     // Exit scopes
     transformer.exitRegion(region1);
-    try testing.expectEqual(@as(u8, 1), transformer.current_region);
+    try testing.expectEqual(@as(u32, 1), transformer.current_region);
 
     transformer.exitRegion(region0);
-    try testing.expectEqual(@as(u8, 0), transformer.current_region);
+    try testing.expectEqual(@as(u32, 0), transformer.current_region);
 }
 
 test "LambdaSet: unspecialized closures" {
