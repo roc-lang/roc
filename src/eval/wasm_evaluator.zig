@@ -86,6 +86,8 @@ pub const WasmEvaluator = struct {
     builtin_module: LoadedModule,
     builtin_indices: CIR.BuiltinIndices,
     global_layout_store: ?*layout.Store = null,
+    /// Configurable wasm stack size in bytes (default 1MB).
+    wasm_stack_bytes: u32 = 1024 * 1024,
 
     pub const Error = error{
         OutOfMemory,
@@ -196,6 +198,7 @@ pub const WasmEvaluator = struct {
 
         // Generate wasm module
         var codegen = WasmCodeGen.init(self.allocator, &mono_store, layout_store_ptr);
+        codegen.wasm_stack_bytes = self.wasm_stack_bytes;
         defer codegen.deinit();
 
         const gen_result = codegen.generateModule(mono_expr_id, result_layout) catch {

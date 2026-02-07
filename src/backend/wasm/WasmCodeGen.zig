@@ -107,6 +107,10 @@ dec_to_f32_import: ?u32 = null,
 list_str_eq_import: ?u32 = null,
 /// Wasm function index for imported roc_list_list_eq host function.
 list_list_eq_import: ?u32 = null,
+/// Configurable wasm stack size in bytes (default 1MB).
+wasm_stack_bytes: u32 = 1024 * 1024,
+/// Configurable wasm memory pages (0 = auto-compute from stack size).
+wasm_memory_pages: u32 = 0,
 
 /// Closure value storage for runtime dispatch.
 /// Tracks how a closure is stored so call sites can dispatch correctly.
@@ -344,8 +348,10 @@ pub fn generateModule(self: *Self, expr_id: MonoExprId, result_layout: layout.Id
     try self.generateExpr(expr_id);
 
     // Always enable memory + stack pointer (RocOps struct + allocations need linear memory)
-    self.module.enableMemory(8); // 8 pages = 512KB
-    self.module.enableStackPointer(8 * 65536); // stack starts at top of memory
+    const stack_pages = (self.wasm_stack_bytes + 65535) / 65536; // round up to page boundary
+    const memory_pages = if (self.wasm_memory_pages > 0) self.wasm_memory_pages else stack_pages;
+    self.module.enableMemory(memory_pages);
+    self.module.enableStackPointer(memory_pages * 65536); // stack starts at top of memory
     self.uses_stack_memory = true;
     self.module.addExport("memory", .memory, 0) catch return error.OutOfMemory;
 
