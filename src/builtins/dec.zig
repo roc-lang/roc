@@ -16,6 +16,39 @@ const RocStr = @import("str.zig").RocStr;
 const mul_u128 = @import("num.zig").mul_u128;
 const math = std.math;
 
+/// Format an i128 as decimal into a buffer, returning the number of bytes written.
+/// Uses i128h helpers to avoid compiler_rt 128-bit div/mod intrinsics.
+fn printI128Decimal(buf: []u8, val: i128) usize {
+    if (val == 0) {
+        buf[0] = '0';
+        return 1;
+    }
+    const is_negative = val < 0;
+    var abs_val: u128 = if (is_negative) @intCast(-val) else @intCast(val);
+
+    // Write digits in reverse into a temp buffer
+    var tmp: [40]u8 = undefined;
+    var len: usize = 0;
+    while (abs_val != 0) {
+        const digit: u8 = @truncate(i128h.rem_u128(abs_val, 10));
+        tmp[len] = '0' + digit;
+        len += 1;
+        abs_val = i128h.divTrunc_u128(abs_val, 10);
+    }
+
+    // Write sign then reversed digits into output buffer
+    var pos: usize = 0;
+    if (is_negative) {
+        buf[pos] = '-';
+        pos += 1;
+    }
+    for (0..len) |i| {
+        buf[pos] = tmp[len - 1 - i];
+        pos += 1;
+    }
+    return pos;
+}
+
 /// TODO: Document the RocDec struct.
 pub const RocDec = extern struct {
     num: i128,
@@ -189,8 +222,9 @@ pub const RocDec = extern struct {
         const is_negative = num < 0;
 
         // Format the backing i128 into an array of digit (ascii) characters (u8s)
+        // Uses i128h helpers to avoid compiler_rt 128-bit div/mod intrinsics.
         var digit_bytes_storage: [max_digits + 1]u8 = undefined;
-        var num_digits = std.fmt.printInt(digit_bytes_storage[0..], num, 10, .lower, .{});
+        var num_digits = printI128Decimal(&digit_bytes_storage, num);
         var digit_bytes: [*]u8 = digit_bytes_storage[0..];
 
         var position: usize = 0;
@@ -891,7 +925,7 @@ fn div_u256_by_u128(numerator: U256, denominator: u128) U256 {
         // 0 X
         return .{
             .hi = 0,
-            .lo = numerator.lo / denominator,
+            .lo = i128h.divTrunc_u128(numerator.lo, denominator),
         };
     }
 
@@ -902,7 +936,7 @@ fn div_u256_by_u128(numerator: U256, denominator: u128) U256 {
         // 0 0
         return .{
             .hi = 0,
-            .lo = numerator.hi / denominator,
+            .lo = i128h.divTrunc_u128(numerator.hi, denominator),
         };
     } else {
         // K X

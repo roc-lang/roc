@@ -705,6 +705,40 @@ pub fn roc_builtins_list_append_safe(out: *RocList, list_bytes: ?[*]u8, list_len
 
 // ── Numeric-to-string wrappers ──
 
+/// Format a u128 to decimal string without using compiler_rt intrinsics.
+/// Uses i128h.divTrunc_u128 and i128h.rem_u128 to avoid __udivti3/__umodti3.
+fn u128ToStr(buf: []u8, val: u128) []u8 {
+    if (val == 0) {
+        buf[0] = '0';
+        return buf[0..1];
+    }
+    var tmp: [40]u8 = undefined;
+    var len: usize = 0;
+    var v = val;
+    while (v != 0) {
+        const digit: u8 = @truncate(i128h.rem_u128(v, 10));
+        tmp[len] = '0' + digit;
+        len += 1;
+        v = i128h.divTrunc_u128(v, 10);
+    }
+    // Reverse into output buffer
+    for (0..len) |i| {
+        buf[i] = tmp[len - 1 - i];
+    }
+    return buf[0..len];
+}
+
+/// Format an i128 to decimal string without using compiler_rt intrinsics.
+fn i128ToStr(buf: []u8, val: i128) []u8 {
+    if (val >= 0) {
+        return u128ToStr(buf, @intCast(val));
+    }
+    buf[0] = '-';
+    const abs: u128 = @intCast(-val);
+    const digits = u128ToStr(buf[1..], abs);
+    return buf[0 .. 1 + digits.len];
+}
+
 /// Unified integer-to-string wrapper: dispatches on int_width/is_signed
 pub fn roc_builtins_int_to_str(out: *RocStr, val_low: u64, val_high: u64, int_width: u8, is_signed: bool, roc_ops: *RocOps) callconv(.c) void {
     var buf: [40]u8 = undefined;
@@ -728,9 +762,9 @@ pub fn roc_builtins_int_to_str(out: *RocStr, val_low: u64, val_high: u64, int_wi
         16 => blk: {
             const val128: u128 = @as(u128, val_high) << 64 | @as(u128, val_low);
             break :blk if (is_signed)
-                std.fmt.bufPrint(&buf, "{}", .{@as(i128, @bitCast(val128))}) catch unreachable
+                i128ToStr(&buf, @as(i128, @bitCast(val128)))
             else
-                std.fmt.bufPrint(&buf, "{}", .{val128}) catch unreachable;
+                u128ToStr(&buf, val128);
         },
         else => unreachable,
     };
