@@ -255,8 +255,8 @@ fn evalToBool(allocator: std.mem.Allocator, source: []const u8) !bool {
         break :blk bool_ptr.* != 0;
     } else return error.NotABool;
 
-    // Backend comparison
-    const bool_str: []const u8 = if (result_bool) "True" else "False";
+    // Backend comparison — use integer format ("0"/"1") to match dev evaluator output
+    const bool_str: []const u8 = if (result_bool) "1" else "0";
     try helpers.compareWithDevEvaluator(allocator, bool_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
     try helpers.compareWithLlvmEvaluator(allocator, bool_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
@@ -320,37 +320,29 @@ test "roundtrip: if expression produces same result" {
 test "roundtrip: boolean True produces same result" {
     const source = "True";
 
-    // Get original result
-    const original_result = try evalToBool(test_allocator, source);
-
-    // Emit and re-parse
+    // Standalone True has type [True]* (open single-tag union), not Bool.
+    // In [True]*, True is at discriminant 0 (only tag in the union).
+    const original_result = try evalToInt(test_allocator, source);
     const emitted = try emitFromSource(test_allocator, source);
     defer test_allocator.free(emitted);
+    const emitted_result = try evalToInt(test_allocator, emitted);
 
-    // Get result from emitted code
-    const emitted_result = try evalToBool(test_allocator, emitted);
-
-    // Verify they match
     try testing.expectEqual(original_result, emitted_result);
-    try testing.expectEqual(true, emitted_result);
+    try testing.expectEqual(@as(i128, 0), emitted_result);
 }
 
 test "roundtrip: boolean False produces same result" {
     const source = "False";
 
-    // Get original result
-    const original_result = try evalToBool(test_allocator, source);
-
-    // Emit and re-parse
+    // Standalone False has type [False]* (open single-tag union), not Bool.
+    // In [False]*, False is at discriminant 0 (only tag in the union).
+    const original_result = try evalToInt(test_allocator, source);
     const emitted = try emitFromSource(test_allocator, source);
     defer test_allocator.free(emitted);
+    const emitted_result = try evalToInt(test_allocator, emitted);
 
-    // Get result from emitted code
-    const emitted_result = try evalToBool(test_allocator, emitted);
-
-    // Verify they match
     try testing.expectEqual(original_result, emitted_result);
-    try testing.expectEqual(false, emitted_result);
+    try testing.expectEqual(@as(i128, 0), emitted_result);
 }
 
 test "roundtrip: complex arithmetic produces same result" {

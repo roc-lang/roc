@@ -3078,3 +3078,40 @@ test "Bool in record with mixed alignment fields - bug confirmation" {
     try runExpectBool("{ key: 42u64, count: 1u32, flag: Bool.True }.flag", true, .no_trace);
     try runExpectBool("{ key: 42u64, count: 1u32, flag: Bool.False }.flag", false, .no_trace);
 }
+
+test "tag union with True/False mixed among other tags uses correct discriminants" {
+    // Verifies that True and False tags in an anonymous tag union like
+    // [A, B, True, K, False, V] get their correct alphabetical discriminants
+    // (A=0, B=1, False=2, K=3, True=4, V=5) rather than being special-cased
+    // to Bool discriminants (False=0, True=1). The match expression dispatches
+    // based on the discriminant, so a wrong discriminant would cause the wrong
+    // branch to be taken.
+    try runExpectI64(
+        \\{
+        \\    x = True
+        \\    match x {
+        \\        A => 0i64
+        \\        B => 1i64
+        \\        False => 2i64
+        \\        K => 3i64
+        \\        True => 4i64
+        \\        V => 5i64
+        \\    }
+        \\}
+    , 4, .no_trace);
+
+    // Also verify False gets discriminant 2 (not 0)
+    try runExpectI64(
+        \\{
+        \\    x = False
+        \\    match x {
+        \\        A => 0i64
+        \\        B => 1i64
+        \\        False => 2i64
+        \\        K => 3i64
+        \\        True => 4i64
+        \\        V => 5i64
+        \\    }
+        \\}
+    , 2, .no_trace);
+}
