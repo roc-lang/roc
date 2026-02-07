@@ -75,6 +75,14 @@ const Instantiator = types.instantiate.Instantiator;
 
 const Self = @This();
 
+/// An unspecialized entry paired with the member it's expected to resolve to.
+/// Used during lambda set resolution to detect index invalidation from swapRemove.
+const EntryWithExpected = struct {
+    lambda_set: *ClosureTransformer.LambdaSet,
+    index: usize,
+    expected_member: base.Ident.Idx,
+};
+
 /// Key for looking up specializations
 pub const SpecializationKey = struct {
     original_ident: base.Ident.Idx,
@@ -361,22 +369,6 @@ pub fn lookupStaticDispatch(
     };
 }
 
-/// Get the concrete type name from a type variable for error messages
-pub fn getConcreteTypeName(self: *Self, type_var: types.Var) ?[]const u8 {
-    const resolved = self.types_store.resolveVar(type_var);
-    return switch (resolved.desc.content) {
-        .structure => |flat| switch (flat) {
-            .nominal_type => |nom| self.module_env.getIdent(nom.ident.ident_idx),
-            .record, .record_unbound, .empty_record => "Record",
-            .tag_union, .empty_tag_union => "Tag",
-            .tuple => "Tuple",
-            .fn_pure, .fn_effectful, .fn_unbound => "Function",
-        },
-        .alias => |alias| self.module_env.getIdent(alias.ident.ident_idx),
-        else => null,
-    };
-}
-
 /// The ClosureTransformer module contains lambda set types
 const ClosureTransformer = @import("ClosureTransformer.zig");
 
@@ -640,37 +632,40 @@ pub fn resolveEntriesForTypeVar(
     // We need to re-fetch entry_refs since flattening may have modified indices
     const updated_entry_refs = tracker.getEntriesForVar(type_var) orelse return 0;
 
-    var all_entries = std.ArrayList(ClosureTransformer.UnspecializedEntryRef).empty;
+    var all_entries = std.ArrayList(EntryWithExpected).empty;
     defer all_entries.deinit(self.allocator);
 
     // Add original entries
     for (updated_entry_refs) |entry_ref| {
-        try all_entries.append(self.allocator, entry_ref);
+        try all_entries.append(self.allocator, .{
+            .lambda_set = entry_ref.lambda_set,
+            .index = entry_ref.index,
+            .expected_member = entry_ref.lambda_set.unspecialized.items[entry_ref.index].member,
+        });
     }
 
     // Add entries from flattened lambda sets
     for (flattened_lambda_sets.items) |lambda_set| {
-        for (lambda_set.unspecialized.items, 0..) |_, i| {
+        for (lambda_set.unspecialized.items, 0..) |unspec, i| {
             try all_entries.append(self.allocator, .{
                 .lambda_set = lambda_set,
                 .index = i,
+                .expected_member = unspec.member,
             });
         }
     }
 
     // Sort by region DESCENDING (innermost first - higher region numbers first)
-    std.mem.sort(ClosureTransformer.UnspecializedEntryRef, all_entries.items, {}, compareByRegionDesc);
+    std.mem.sort(EntryWithExpected, all_entries.items, {}, compareByRegionDesc);
 
     var resolved_count: usize = 0;
 
     // Step 3: Process each entry in region order
-    for (all_entries.items) |entry_ref| {
-        // Validate the entry is still valid (index might be stale after swapRemove)
-        if (entry_ref.index >= entry_ref.lambda_set.unspecialized.items.len) {
-            continue;
-        }
+    for (all_entries.items, 0..) |entry, entry_i| {
+        std.debug.assert(entry.index < entry.lambda_set.unspecialized.items.len);
 
-        const unspec = entry_ref.lambda_set.unspecialized.items[entry_ref.index];
+        const unspec = entry.lambda_set.unspecialized.items[entry.index];
+        std.debug.assert(unspec.member == entry.expected_member);
 
         // Look up the static dispatch implementation for the concrete type
         if (self.lookupStaticDispatch(concrete_type, unspec.member)) |impl| {
@@ -681,12 +676,18 @@ pub fn resolveEntriesForTypeVar(
             };
 
             // Add to the lambda set as a closure
-            try self.addResolvedToLambdaSet(entry_ref.lambda_set, resolved);
+            try self.addResolvedToLambdaSet(entry.lambda_set, resolved);
 
-            // Remove from unspecialized list
-            // Note: Using swapRemove changes indices, which is why we process all entries
-            // in one pass and then remove the tracking entirely
-            _ = entry_ref.lambda_set.unspecialized.swapRemove(entry_ref.index);
+            // Remove from unspecialized list. swapRemove moves the last element
+            // to entry.index, so fix up any later entry that pointed to that last element.
+            _ = entry.lambda_set.unspecialized.swapRemove(entry.index);
+            const swapped_from = entry.lambda_set.unspecialized.items.len;
+            for (all_entries.items[entry_i + 1 ..]) |*later| {
+                if (later.lambda_set == entry.lambda_set and later.index == swapped_from) {
+                    later.index = entry.index;
+                    break;
+                }
+            }
 
             resolved_count += 1;
         }
@@ -699,22 +700,15 @@ pub fn resolveEntriesForTypeVar(
     return resolved_count;
 }
 
-/// Comparison function for sorting UnspecializedEntryRef by region descending.
+/// Comparison function for sorting entries by region descending.
 fn compareByRegionDesc(
     _: void,
-    a: ClosureTransformer.UnspecializedEntryRef,
-    b: ClosureTransformer.UnspecializedEntryRef,
+    a: EntryWithExpected,
+    b: EntryWithExpected,
 ) bool {
-    // Handle potential out-of-bounds indices gracefully
-    const a_region = if (a.index < a.lambda_set.unspecialized.items.len)
-        a.lambda_set.unspecialized.items[a.index].region
-    else
-        0;
-    const b_region = if (b.index < b.lambda_set.unspecialized.items.len)
-        b.lambda_set.unspecialized.items[b.index].region
-    else
-        0;
-    return a_region > b_region; // Descending order
+    std.debug.assert(a.index < a.lambda_set.unspecialized.items.len);
+    std.debug.assert(b.index < b.lambda_set.unspecialized.items.len);
+    return a.lambda_set.unspecialized.items[a.index].region > b.lambda_set.unspecialized.items[b.index].region;
 }
 
 /// Unify ambient function types when resolving an unspecialized entry.
@@ -785,28 +779,33 @@ pub fn resolveEntriesForTypeVarWithUnification(
 
     if (entry_refs.len == 0) return 0;
 
-    // Copy to slice for sorting
-    const entries = try self.allocator.alloc(ClosureTransformer.UnspecializedEntryRef, entry_refs.len);
+    // Copy to slice for sorting, capturing expected member for debug validation
+    const entries = try self.allocator.alloc(EntryWithExpected, entry_refs.len);
     defer self.allocator.free(entries);
-    @memcpy(entries, entry_refs);
+    for (entry_refs, 0..) |entry_ref, i| {
+        entries[i] = .{
+            .lambda_set = entry_ref.lambda_set,
+            .index = entry_ref.index,
+            .expected_member = entry_ref.lambda_set.unspecialized.items[entry_ref.index].member,
+        };
+    }
 
     // Sort by region DESCENDING (innermost first)
-    std.mem.sort(ClosureTransformer.UnspecializedEntryRef, entries, {}, compareByRegionDesc);
+    std.mem.sort(EntryWithExpected, entries, {}, compareByRegionDesc);
 
     var resolved_count: usize = 0;
 
-    for (entries) |entry_ref| {
-        if (entry_ref.index >= entry_ref.lambda_set.unspecialized.items.len) {
-            continue;
-        }
+    for (entries, 0..) |entry, entry_i| {
+        std.debug.assert(entry.index < entry.lambda_set.unspecialized.items.len);
 
-        const unspec = entry_ref.lambda_set.unspecialized.items[entry_ref.index];
+        const unspec = entry.lambda_set.unspecialized.items[entry.index];
+        std.debug.assert(unspec.member == entry.expected_member);
 
         if (self.lookupStaticDispatch(concrete_type, unspec.member)) |impl| {
             // Perform ambient function unification if we have the implementation's lambda set
             if (impl_lambda_sets) |ls_map| {
                 if (ls_map.get(impl.method_ident)) |impl_ls| {
-                    self.unifyAmbientFunctions(entry_ref.lambda_set, impl_ls);
+                    self.unifyAmbientFunctions(entry.lambda_set, impl_ls);
                 }
             }
 
@@ -816,8 +815,19 @@ pub fn resolveEntriesForTypeVarWithUnification(
                 .impl_lookup = impl,
             };
 
-            try self.addResolvedToLambdaSet(entry_ref.lambda_set, resolved);
-            _ = entry_ref.lambda_set.unspecialized.swapRemove(entry_ref.index);
+            try self.addResolvedToLambdaSet(entry.lambda_set, resolved);
+
+            // Remove from unspecialized list. swapRemove moves the last element
+            // to entry.index, so fix up any later entry that pointed to that last element.
+            _ = entry.lambda_set.unspecialized.swapRemove(entry.index);
+            const swapped_from = entry.lambda_set.unspecialized.items.len;
+            for (entries[entry_i + 1 ..]) |*later| {
+                if (later.lambda_set == entry.lambda_set and later.index == swapped_from) {
+                    later.index = entry.index;
+                    break;
+                }
+            }
+
             resolved_count += 1;
         }
     }
@@ -864,7 +874,7 @@ pub fn requestSpecialization(
     concrete_type: types.Var,
     call_site: ?Expr.Idx,
 ) !?base.Ident.Idx {
-    const type_hash = self.structuralTypeHash(concrete_type);
+    const type_hash = try self.structuralTypeHash(concrete_type);
     const key = SpecializationKey{
         .original_ident = original_ident,
         .type_hash = type_hash,
@@ -878,7 +888,7 @@ pub fn requestSpecialization(
     // Check if it's already pending - if so, look up or create the specialized name
     for (self.pending_specializations.items) |pending| {
         if (pending.original_ident == original_ident) {
-            const pending_hash = self.structuralTypeHash(pending.concrete_type);
+            const pending_hash = try self.structuralTypeHash(pending.concrete_type);
             if (pending_hash == type_hash) {
                 // Already pending - create and return the specialized name so call sites
                 // can reference it. The name will be reused when the spec is processed.
@@ -927,7 +937,7 @@ pub fn requestExternalSpecialization(
     call_site: ?Expr.Idx,
 ) !ExternalSpecializationResult {
     // Check if we already have this request (same module, ident, and concrete type)
-    const new_type_hash = self.structuralTypeHash(concrete_type);
+    const new_type_hash = try self.structuralTypeHash(concrete_type);
 
     // First, check if this has already been resolved
     const ext_key = ExternalSpecKey{
@@ -948,7 +958,7 @@ pub fn requestExternalSpecialization(
             existing.original_ident == original_ident)
         {
             // Compare concrete types using structural type hashing
-            const existing_type_hash = self.structuralTypeHash(existing.concrete_type);
+            const existing_type_hash = try self.structuralTypeHash(existing.concrete_type);
             if (existing_type_hash == new_type_hash) {
                 // Pending but not yet resolved - create/lookup the specialized name
                 // so all call sites use a consistent reference
@@ -995,7 +1005,7 @@ pub fn getUnresolvedExternalRequests(self: *Self) !std.ArrayList(ExternalSpecial
     var unresolved = std.ArrayList(ExternalSpecializationRequest).empty;
 
     for (self.external_requests.items) |request| {
-        const type_hash = self.structuralTypeHash(request.concrete_type);
+        const type_hash = try self.structuralTypeHash(request.concrete_type);
         const ext_key = ExternalSpecKey{
             .source_module = request.source_module,
             .original_ident = request.original_ident,
@@ -1012,9 +1022,9 @@ pub fn getUnresolvedExternalRequests(self: *Self) !std.ArrayList(ExternalSpecial
 
 /// Check if all external specialization requests have been resolved.
 /// Returns true if all are resolved, false otherwise.
-pub fn allExternalSpecializationsResolved(self: *Self) bool {
+pub fn allExternalSpecializationsResolved(self: *Self) !bool {
     for (self.external_requests.items) |request| {
-        const type_hash = self.structuralTypeHash(request.concrete_type);
+        const type_hash = try self.structuralTypeHash(request.concrete_type);
         const ext_key = ExternalSpecKey{
             .source_module = request.source_module,
             .original_ident = request.original_ident,
@@ -1037,7 +1047,7 @@ pub fn resolveExternalSpecialization(
     specialized_ident: base.Ident.Idx,
     concrete_type: types.Var,
 ) !void {
-    const type_hash = self.structuralTypeHash(concrete_type);
+    const type_hash = try self.structuralTypeHash(concrete_type);
 
     // Store in the local specialization names for consistency
     const key = SpecializationKey{
@@ -1076,7 +1086,7 @@ pub fn processPendingSpecializations(self: *Self) !void {
 
 /// Create a single specialization from a pending request.
 fn makeSpecialization(self: *Self, pending: *PendingSpecialization) !void {
-    const type_hash = self.structuralTypeHash(pending.concrete_type);
+    const type_hash = try self.structuralTypeHash(pending.concrete_type);
     const key = SpecializationKey{
         .original_ident = pending.original_ident,
         .type_hash = type_hash,
@@ -1099,7 +1109,7 @@ fn makeSpecialization(self: *Self, pending: *PendingSpecialization) !void {
     std.debug.assert(self.recursion_depth < self.max_recursion_depth);
 
     // Get the partial proc
-    const partial = self.partial_procs.get(pending.original_ident) orelse return;
+    const partial = self.partial_procs.get(pending.original_ident) orelse unreachable;
 
     // Mark as in progress and track depth
     try self.in_progress.put(key, {});
@@ -1414,8 +1424,8 @@ fn duplicateExpr(
                 } else {
                     // Create a synthetic let-binding for this complex argument
                     // Use # prefix which is invalid in Roc syntax (starts a comment)
-                    var name_buf: [32]u8 = undefined;
-                    const name = std.fmt.bufPrint(&name_buf, "#arg{d}", .{self.synthetic_arg_counter}) catch "#arg";
+                    const name = try std.fmt.allocPrint(self.allocator, "#arg{d}", .{self.synthetic_arg_counter});
+                    defer self.allocator.free(name);
                     self.synthetic_arg_counter += 1;
 
                     // Create the synthetic identifier and pattern
@@ -1947,17 +1957,7 @@ fn resolveTypeVarDispatch(
             base.Region.zero(),
         );
     } else {
-        // Method not found - create a diagnostic for this error
-        // TODO: Create a more specific diagnostic for method resolution failures
-        const diagnostic_idx = try self.module_env.addDiagnostic(.{
-            .expr_not_canonicalized = .{ .region = base.Region.zero() },
-        });
-        return try self.module_env.store.addExpr(
-            Expr{ .e_runtime_error = .{
-                .diagnostic = diagnostic_idx,
-            } },
-            base.Region.zero(),
-        );
+        unreachable;
     }
 }
 
@@ -2201,11 +2201,11 @@ pub fn isPolymorphic(self: *Self, type_var: types.Var) bool {
 
 /// Compute a structural hash for a type.
 /// Two structurally equivalent types will have the same hash.
-pub fn structuralTypeHash(self: *Self, type_var: types.Var) u64 {
+pub fn structuralTypeHash(self: *Self, type_var: types.Var) std.mem.Allocator.Error!u64 {
     var hasher = std.hash.Wyhash.init(0);
     var seen = std.AutoHashMap(types.Var, void).init(self.allocator);
     defer seen.deinit();
-    self.hashTypeRecursive(&hasher, type_var, &seen);
+    try self.hashTypeRecursive(&hasher, type_var, &seen);
     return hasher.final();
 }
 
@@ -2214,13 +2214,13 @@ fn hashTypeRecursive(
     hasher: *std.hash.Wyhash,
     type_var: types.Var,
     seen: *std.AutoHashMap(types.Var, void),
-) void {
+) std.mem.Allocator.Error!void {
     // Check for cycles
     if (seen.contains(type_var)) {
         hasher.update("CYCLE");
         return;
     }
-    seen.put(type_var, {}) catch return;
+    try seen.put(type_var, {});
 
     const resolved = self.types_store.resolveVar(type_var);
 
@@ -2235,23 +2235,23 @@ fn hashTypeRecursive(
                     // Hash type parameters
                     const vars = self.types_store.sliceVars(nom.vars.nonempty);
                     for (vars) |v| {
-                        self.hashTypeRecursive(hasher, v, seen);
+                        try self.hashTypeRecursive(hasher, v, seen);
                     }
                 },
                 .fn_pure, .fn_effectful, .fn_unbound => |func| {
                     // Hash function arguments and return type
                     const args = self.types_store.sliceVars(func.args);
                     for (args) |arg| {
-                        self.hashTypeRecursive(hasher, arg, seen);
+                        try self.hashTypeRecursive(hasher, arg, seen);
                     }
-                    self.hashTypeRecursive(hasher, func.ret, seen);
+                    try self.hashTypeRecursive(hasher, func.ret, seen);
                 },
                 .record => |record| {
                     // Hash record fields
                     const fields_slice = self.types_store.getRecordFieldsSlice(record.fields);
                     for (fields_slice.items(.name), fields_slice.items(.var_)) |name, var_| {
                         hasher.update(std.mem.asBytes(&name));
-                        self.hashTypeRecursive(hasher, var_, seen);
+                        try self.hashTypeRecursive(hasher, var_, seen);
                     }
                 },
                 .tag_union => |tag_union| {
@@ -2261,21 +2261,21 @@ fn hashTypeRecursive(
                         hasher.update(std.mem.asBytes(&name));
                         const tag_args = self.types_store.sliceVars(args);
                         for (tag_args) |arg| {
-                            self.hashTypeRecursive(hasher, arg, seen);
+                            try self.hashTypeRecursive(hasher, arg, seen);
                         }
                     }
                 },
                 .tuple => |tuple| {
                     const elems = self.types_store.sliceVars(tuple.elems);
                     for (elems) |elem| {
-                        self.hashTypeRecursive(hasher, elem, seen);
+                        try self.hashTypeRecursive(hasher, elem, seen);
                     }
                 },
                 .record_unbound => |fields_range| {
                     const fields_slice = self.types_store.getRecordFieldsSlice(fields_range);
                     for (fields_slice.items(.name), fields_slice.items(.var_)) |name, var_| {
                         hasher.update(std.mem.asBytes(&name));
-                        self.hashTypeRecursive(hasher, var_, seen);
+                        try self.hashTypeRecursive(hasher, var_, seen);
                     }
                 },
                 .empty_record => hasher.update("empty_record"),
@@ -2380,7 +2380,7 @@ pub fn createSpecializedName(
     original_name: base.Ident.Idx,
     type_var: types.Var,
 ) !base.Ident.Idx {
-    const type_hash = self.structuralTypeHash(type_var);
+    const type_hash = try self.structuralTypeHash(type_var);
     const key = SpecializationKey{
         .original_ident = original_name,
         .type_hash = type_hash,
@@ -2416,13 +2416,11 @@ pub fn getSpecializationCount(self: *const Self) usize {
 
 /// Get the specialized name for a function at a concrete type, if it exists
 pub fn getSpecializedName(
-    self: *const Self,
+    self: *Self,
     original_ident: base.Ident.Idx,
     type_var: types.Var,
-) ?base.Ident.Idx {
-    // Need mutable self for structuralTypeHash but we only read
-    const mutable_self: *Self = @constCast(self);
-    const type_hash = mutable_self.structuralTypeHash(type_var);
+) !?base.Ident.Idx {
+    const type_hash = try self.structuralTypeHash(type_var);
     const key = SpecializationKey{
         .original_ident = original_ident,
         .type_hash = type_hash,
@@ -2541,8 +2539,8 @@ test "monomorphizer: type hashing consistency" {
 
     // Same type should produce same hash
     const type_var = try module_env.types.fresh();
-    const hash1 = mono.structuralTypeHash(type_var);
-    const hash2 = mono.structuralTypeHash(type_var);
+    const hash1 = try mono.structuralTypeHash(type_var);
+    const hash2 = try mono.structuralTypeHash(type_var);
     try testing.expectEqual(hash1, hash2);
 
     // Note: Fresh flex vars may hash the same since they have the same structure.
@@ -2612,25 +2610,6 @@ test "monomorphizer: static dispatch lookup returns null for flex vars" {
     // (can't dispatch until we know the concrete type)
     const result = mono.lookupStaticDispatch(flex_var, method_name);
     try testing.expect(result == null);
-}
-
-test "monomorphizer: getConcreteTypeName" {
-    const allocator = testing.allocator;
-
-    const module_env = try allocator.create(ModuleEnv);
-    module_env.* = try ModuleEnv.init(allocator, "test");
-    defer {
-        module_env.deinit();
-        allocator.destroy(module_env);
-    }
-
-    var mono = Self.init(allocator, module_env, &module_env.types);
-    defer mono.deinit();
-
-    // For flex vars, should return null
-    const flex_var = try module_env.types.fresh();
-    const name = mono.getConcreteTypeName(flex_var);
-    try testing.expect(name == null);
 }
 
 test "monomorphizer: set closure transformer integration" {
@@ -2815,7 +2794,7 @@ test "monomorphizer: allExternalSpecializationsResolved detects unresolved" {
     defer mono.deinit();
 
     // Initially all resolved (no requests)
-    try testing.expect(mono.allExternalSpecializationsResolved());
+    try testing.expect(try mono.allExternalSpecializationsResolved());
 
     // Create test identifiers
     const original_ident = try module_env.insertIdent(base.Ident.for_text("external_fn"));
@@ -2826,7 +2805,7 @@ test "monomorphizer: allExternalSpecializationsResolved detects unresolved" {
     _ = try mono.requestExternalSpecialization(source_module, original_ident, concrete_type, null);
 
     // Now should report unresolved
-    try testing.expect(!mono.allExternalSpecializationsResolved());
+    try testing.expect(!try mono.allExternalSpecializationsResolved());
 
     // Get unresolved requests
     var unresolved = try mono.getUnresolvedExternalRequests();
@@ -2838,5 +2817,5 @@ test "monomorphizer: allExternalSpecializationsResolved detects unresolved" {
     try mono.resolveExternalSpecialization(source_module, original_ident, specialized_ident, concrete_type);
 
     // Now all resolved
-    try testing.expect(mono.allExternalSpecializationsResolved());
+    try testing.expect(try mono.allExternalSpecializationsResolved());
 }
