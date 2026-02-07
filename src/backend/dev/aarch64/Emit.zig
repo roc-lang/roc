@@ -244,34 +244,67 @@ pub fn Emit(comptime target: RocTarget) type {
 
         /// ADD reg, reg, reg
         pub fn addRegRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
-            // ADD <Xd>, <Xn>, <Xm>
-            // 31 30 29 28 27 26 25 24 23 22 21 20    16 15      10 9    5 4    0
-            // sf  0  0  0  1  0  1  1  shift  0  Rm[4:0]  imm6[5:0]  Rn[4:0]  Rd[4:0]
-            const sf = width.sf();
-            const inst: u32 = (@as(u32, sf) << 31) |
-                (0b0001011 << 24) |
-                (0b00 << 22) | // shift = LSL
-                (0 << 21) |
-                (@as(u32, src2.enc()) << 16) |
-                (0b000000 << 10) | // imm6 = 0
-                (@as(u32, src1.enc()) << 5) |
-                dst.enc();
-            try self.emit32(inst);
+            // When dst or src1 is SP, must use extended register encoding
+            // (shifted register encoding treats reg 31 as XZR, not SP)
+            if (dst == .ZRSP or src1 == .ZRSP) {
+                // ADD (extended register): sf 0 0 01011 00 1 Rm option imm3 Rn Rd
+                // option=011 (UXTX for 64-bit), imm3=000
+                const sf = width.sf();
+                const inst: u32 = (@as(u32, sf) << 31) |
+                    (0b0001011 << 24) |
+                    (0b00 << 22) |
+                    (1 << 21) | // extended register flag
+                    (@as(u32, src2.enc()) << 16) |
+                    (0b011 << 13) | // option = UXTX
+                    (0b000 << 10) | // imm3 = 0
+                    (@as(u32, src1.enc()) << 5) |
+                    dst.enc();
+                try self.emit32(inst);
+            } else {
+                // ADD (shifted register): sf 0 0 01011 shift 0 Rm imm6 Rn Rd
+                const sf = width.sf();
+                const inst: u32 = (@as(u32, sf) << 31) |
+                    (0b0001011 << 24) |
+                    (0b00 << 22) | // shift = LSL
+                    (0 << 21) |
+                    (@as(u32, src2.enc()) << 16) |
+                    (0b000000 << 10) | // imm6 = 0
+                    (@as(u32, src1.enc()) << 5) |
+                    dst.enc();
+                try self.emit32(inst);
+            }
         }
 
         /// SUB reg, reg, reg
         pub fn subRegRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
-            // SUB <Xd>, <Xn>, <Xm>
-            const sf = width.sf();
-            const inst: u32 = (@as(u32, sf) << 31) |
-                (0b1001011 << 24) | // Different from ADD
-                (0b00 << 22) |
-                (0 << 21) |
-                (@as(u32, src2.enc()) << 16) |
-                (0b000000 << 10) |
-                (@as(u32, src1.enc()) << 5) |
-                dst.enc();
-            try self.emit32(inst);
+            // When dst or src1 is SP, must use extended register encoding
+            // (shifted register encoding treats reg 31 as XZR, not SP)
+            if (dst == .ZRSP or src1 == .ZRSP) {
+                // SUB (extended register): sf 1 0 01011 00 1 Rm option imm3 Rn Rd
+                const sf = width.sf();
+                const inst: u32 = (@as(u32, sf) << 31) |
+                    (0b1001011 << 24) |
+                    (0b00 << 22) |
+                    (1 << 21) | // extended register flag
+                    (@as(u32, src2.enc()) << 16) |
+                    (0b011 << 13) | // option = UXTX
+                    (0b000 << 10) | // imm3 = 0
+                    (@as(u32, src1.enc()) << 5) |
+                    dst.enc();
+                try self.emit32(inst);
+            } else {
+                // SUB (shifted register): sf 1 0 01011 shift 0 Rm imm6 Rn Rd
+                const sf = width.sf();
+                const inst: u32 = (@as(u32, sf) << 31) |
+                    (0b1001011 << 24) |
+                    (0b00 << 22) |
+                    (0 << 21) |
+                    (@as(u32, src2.enc()) << 16) |
+                    (0b000000 << 10) |
+                    (@as(u32, src1.enc()) << 5) |
+                    dst.enc();
+                try self.emit32(inst);
+            }
         }
 
         /// ADDS reg, reg, reg (add and set flags)
