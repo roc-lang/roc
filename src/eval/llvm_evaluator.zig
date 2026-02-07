@@ -198,12 +198,15 @@ pub const LlvmEvaluator = struct {
         code: []const u8,
         allocator: Allocator,
         result_layout: LayoutIdx,
+        /// Reference to the global layout store (owned by LlvmEvaluator, not this struct)
+        layout_store: ?*layout.Store = null,
         entry_offset: usize = 0,
 
         pub fn deinit(self: *CodeResult) void {
             if (self.code.len > 0) {
                 self.allocator.free(self.code);
             }
+            // Note: layout_store is owned by LlvmEvaluator, not cleaned up here
         }
     };
 
@@ -284,6 +287,9 @@ pub const LlvmEvaluator = struct {
         codegen.dec_div_addr = @intFromPtr(&builtins.dec.divC);
         codegen.dec_div_trunc_addr = @intFromPtr(&builtins.dec.divTruncC);
 
+        // Provide layout store for composite types (records, tuples)
+        codegen.layout_store = layout_store_ptr;
+
         const procs = mono_store.getProcs();
         if (procs.len > 0) {
             codegen.compileAllProcs(procs) catch return error.UnsupportedExpression;
@@ -313,6 +319,7 @@ pub const LlvmEvaluator = struct {
             .code = code_copy,
             .allocator = self.allocator,
             .result_layout = result_layout,
+            .layout_store = layout_store_ptr,
             .entry_offset = code_info.entry_offset,
         };
     }

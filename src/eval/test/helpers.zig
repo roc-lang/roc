@@ -585,7 +585,94 @@ fn llvmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_i
             const slice = dec.format_to_buf(&buf);
             break :blk allocator.dupe(u8, slice);
         },
-        else => error.UnsupportedLayout,
+        else => blk: {
+            // Handle composite types (records, tuples)
+            const ls = code_result.layout_store orelse return error.UnsupportedLayout;
+            const stored_layout = ls.getLayout(code_result.result_layout);
+            switch (stored_layout.tag) {
+                .record => {
+                    const record_idx = stored_layout.data.record.idx.int_idx;
+                    const record_data = ls.record_data.items.items[record_idx];
+                    const field_count = record_data.fields.count;
+                    break :blk std.fmt.allocPrint(allocator, "{{record with {d} fields}}", .{field_count});
+                },
+                .tuple => {
+                    const tuple_data_val = ls.getTupleData(stored_layout.data.tuple.idx);
+                    const sorted_elements = ls.tuple_fields.sliceRange(tuple_data_val.getFields());
+                    const elem_count = sorted_elements.len;
+                    const struct_size = tuple_data_val.size;
+
+                    // Allocate buffer and execute
+                    var result_buf: [256]u8 align(16) = @splat(0);
+                    if (struct_size > result_buf.len) return error.UnsupportedLayout;
+                    executable.callWithResultPtrAndRocOps(@ptrCast(&result_buf), @ptrCast(&dummy_roc_ops));
+
+                    // Format as "(elem1, elem2, ...)"
+                    // Elements are in sorted order in memory; build original-order mapping
+                    var original_order_values: [32]i128 = undefined;
+                    for (0..elem_count) |sorted_i| {
+                        const element = sorted_elements.get(@intCast(sorted_i));
+                        const offset = ls.getTupleElementOffset(stored_layout.data.tuple.idx, @intCast(sorted_i));
+                        const field_ptr = result_buf[offset..];
+
+                        // Read value based on element layout
+                        const val: i128 = switch (element.layout) {
+                            layout_mod.Idx.i64, layout_mod.Idx.u64 => @as(i128, @as(*align(1) const i64, @ptrCast(field_ptr)).*),
+                            layout_mod.Idx.i32, layout_mod.Idx.u32 => @as(i128, @as(*align(1) const i32, @ptrCast(field_ptr)).*),
+                            layout_mod.Idx.i16, layout_mod.Idx.u16 => @as(i128, @as(*align(1) const i16, @ptrCast(field_ptr)).*),
+                            layout_mod.Idx.i8, layout_mod.Idx.u8, layout_mod.Idx.bool => @as(i128, @as(*align(1) const i8, @ptrCast(field_ptr)).*),
+                            layout_mod.Idx.i128, layout_mod.Idx.u128, layout_mod.Idx.dec => @as(*align(1) const i128, @ptrCast(field_ptr)).*,
+                            else => 0,
+                        };
+                        original_order_values[element.index] = val;
+                    }
+
+                    // Format tuple string in original order
+                    var output = std.array_list.Managed(u8).initCapacity(allocator, 64) catch return error.OutOfMemory;
+                    errdefer output.deinit();
+                    output.append('(') catch return error.OutOfMemory;
+
+                    for (0..elem_count) |i| {
+                        if (i > 0) {
+                            output.appendSlice(", ") catch return error.OutOfMemory;
+                        }
+                        // Find the layout for this original index
+                        var elem_layout: layout_mod.Idx = .i64;
+                        for (0..elem_count) |si| {
+                            const element = sorted_elements.get(@intCast(si));
+                            if (element.index == i) {
+                                elem_layout = element.layout;
+                                break;
+                            }
+                        }
+                        const raw_val = original_order_values[i];
+                        if (elem_layout == layout_mod.Idx.dec) {
+                            const dec_val = builtins.dec.RocDec{ .num = raw_val };
+                            var dec_buf: [builtins.dec.RocDec.max_str_length]u8 = undefined;
+                            const elem_str = dec_val.format_to_buf(&dec_buf);
+                            output.appendSlice(elem_str) catch return error.OutOfMemory;
+                        } else {
+                            const abs_val: u128 = if (raw_val < 0) @intCast(-raw_val) else @intCast(raw_val);
+                            const one_point_zero: u128 = 1_000_000_000_000_000_000;
+                            if (abs_val < one_point_zero / 10) {
+                                const elem_str = std.fmt.allocPrint(allocator, "{d}.0", .{raw_val}) catch return error.OutOfMemory;
+                                defer allocator.free(elem_str);
+                                output.appendSlice(elem_str) catch return error.OutOfMemory;
+                            } else {
+                                const dec_val = builtins.dec.RocDec{ .num = raw_val };
+                                var dec_buf: [builtins.dec.RocDec.max_str_length]u8 = undefined;
+                                const elem_str = dec_val.format_to_buf(&dec_buf);
+                                output.appendSlice(elem_str) catch return error.OutOfMemory;
+                            }
+                        }
+                    }
+
+                    output.append(')') catch return error.OutOfMemory;
+                    break :blk output.toOwnedSlice();
+                },
+                else => return error.UnsupportedLayout,
+            }
+        },
     };
 }
 

@@ -116,6 +116,10 @@ pub const MonoLlvmCodeGen = struct {
     /// Address of Dec truncating divide builtin (divTruncC). Set by the evaluator.
     dec_div_trunc_addr: usize = 0,
 
+    /// Layout store for resolving composite type layouts (records, tuples).
+    /// Set by the evaluator before calling generateCode.
+    layout_store: ?*const layout.Store = null,
+
     /// Result of bitcode generation
     pub const BitcodeResult = struct {
         bitcode: []const u32,
@@ -239,38 +243,59 @@ pub const MonoLlvmCodeGen = struct {
         // Generate LLVM IR for the expression
         const value = self.generateExpr(expr_id) catch return error.UnsupportedExpression;
 
-        // Determine the final type to store based on output layout
-        const final_type: LlvmBuilder.Type = switch (result_layout) {
-            .bool, .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64 => .i64,
-            .i128, .u128, .dec => .i128,
-            .f32 => .float,
-            .f64 => .double,
-            else => return error.UnsupportedExpression,
+        // Store the result to the output pointer.
+        // For scalar types, extend to the canonical size (i64 for ints, i128 for wide ints).
+        // For composite types (records, tuples), store the struct directly.
+        const is_scalar = switch (result_layout) {
+            .bool, .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64,
+            .i128, .u128, .dec, .f32, .f64,
+            => true,
+            else => false,
         };
 
-        // Determine signedness for integer extension
-        const signedness: LlvmBuilder.Constant.Cast.Signedness = switch (result_layout) {
-            .i8, .i16, .i32, .i64, .i128 => .signed,
-            .bool, .u8, .u16, .u32, .u64, .u128 => .unsigned,
-            .f32, .f64, .dec => .unneeded,
-            else => .unneeded,
-        };
+        if (is_scalar) {
+            const final_type: LlvmBuilder.Type = switch (result_layout) {
+                .bool, .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64 => .i64,
+                .i128, .u128, .dec => .i128,
+                .f32 => .float,
+                .f64 => .double,
+                else => unreachable,
+            };
 
-        // Convert value if needed and store
-        const store_value = if (value_type == final_type)
-            value
-        else
-            wip.conv(signedness, value, final_type, "") catch return error.CompilationFailed;
+            const signedness: LlvmBuilder.Constant.Cast.Signedness = switch (result_layout) {
+                .i8, .i16, .i32, .i64, .i128 => .signed,
+                .bool, .u8, .u16, .u32, .u64, .u128 => .unsigned,
+                .f32, .f64, .dec => .unneeded,
+                else => .unneeded,
+            };
 
-        // Use natural alignment for the stored type
-        const alignment = LlvmBuilder.Alignment.fromByteUnits(switch (final_type) {
-            .i64 => 8,
-            .i128 => 16,
-            .float => 4,
-            .double => 8,
-            else => 0,
-        });
-        _ = wip.store(.normal, store_value, out_ptr, alignment) catch return error.CompilationFailed;
+            const store_value = if (value_type == final_type)
+                value
+            else
+                wip.conv(signedness, value, final_type, "") catch return error.CompilationFailed;
+
+            const alignment = LlvmBuilder.Alignment.fromByteUnits(switch (final_type) {
+                .i64 => 8,
+                .i128 => 16,
+                .float => 4,
+                .double => 8,
+                else => 0,
+            });
+            _ = wip.store(.normal, store_value, out_ptr, alignment) catch return error.CompilationFailed;
+        } else {
+            // Composite type (record, tuple, etc.) — store the struct value directly.
+            // Use the struct's alignment from the layout store.
+            const ls = self.layout_store orelse return error.UnsupportedExpression;
+            const stored_layout = ls.getLayout(result_layout);
+            const align_bytes: u32 = switch (stored_layout.tag) {
+                .record => @intCast(stored_layout.data.record.alignment.toByteUnits()),
+                .tuple => @intCast(stored_layout.data.tuple.alignment.toByteUnits()),
+                .zst => 1,
+                else => return error.UnsupportedExpression,
+            };
+            const alignment = LlvmBuilder.Alignment.fromByteUnits(align_bytes);
+            _ = wip.store(.normal, value, out_ptr, alignment) catch return error.CompilationFailed;
+        }
 
         _ = wip.retVoid() catch return error.CompilationFailed;
         wip.finish() catch return error.CompilationFailed;
@@ -528,6 +553,13 @@ pub const MonoLlvmCodeGen = struct {
             .lambda => |lambda| self.generateLambda(lambda),
             .closure => |closure| self.generateClosure(closure),
 
+            // Records and tuples
+            .record => |rec| self.generateRecord(rec),
+            .empty_record => self.generateEmptyRecord(),
+            .field_access => |fa| self.generateFieldAccess(fa),
+            .tuple => |tup| self.generateTuple(tup),
+            .tuple_access => |ta| self.generateTupleAccess(ta),
+
             // Nominal wrappers are transparent
             .nominal => |nom| self.generateExpr(nom.backing_expr),
 
@@ -590,6 +622,11 @@ pub const MonoLlvmCodeGen = struct {
 
         var lhs = try self.generateExpr(binop.lhs);
         var rhs = try self.generateExpr(binop.rhs);
+
+        // Check if operands are aggregate types (structs) - LLVM can't compare them directly
+        if (!isIntType(lhs.typeOfWip(wip)) and lhs.typeOfWip(wip) != .float and lhs.typeOfWip(wip) != .double) {
+            return error.UnsupportedExpression;
+        }
 
         // For comparison operations, result_layout is .bool, so check operand type instead.
         const operand_layout = self.getExprResultLayout(binop.lhs) orelse binop.result_layout;
@@ -710,6 +747,215 @@ pub const MonoLlvmCodeGen = struct {
         return l == .f32 or l == .f64;
     }
 
+    /// Convert a layout.Idx to the LLVM type used for struct fields.
+    /// Unlike layoutToLlvmType, this maps bool to i8 (1 byte in memory)
+    /// instead of i1 (1 bit), matching the layout store's memory representation.
+    fn layoutToStructFieldType(field_layout: layout.Idx) LlvmBuilder.Type {
+        return switch (field_layout) {
+            .bool => .i8,
+            else => layoutToLlvmType(field_layout),
+        };
+    }
+
+    /// Build an LLVM struct type from the actual LLVM types of generated values.
+    fn buildStructTypeFromValues(builder: *LlvmBuilder, wip: *LlvmBuilder.WipFunction, values: []const LlvmBuilder.Value) Error!LlvmBuilder.Type {
+        var field_types: [32]LlvmBuilder.Type = undefined;
+        for (values, 0..) |val, i| {
+            field_types[i] = val.typeOfWip(wip);
+        }
+        return builder.structType(.normal, field_types[0..values.len]) catch return error.OutOfMemory;
+    }
+
+    /// Convert a value to match the expected struct field type.
+    /// Handles i1→i8 (bool), integer widening/narrowing, etc.
+    fn convertToFieldType(self: *MonoLlvmCodeGen, val: LlvmBuilder.Value, field_layout: layout.Idx) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const target_type = layoutToStructFieldType(field_layout);
+        const actual_type = val.typeOfWip(wip);
+
+        if (actual_type == target_type) return val;
+
+        // i1 → i8 (bool in struct)
+        if (actual_type == .i1 and target_type == .i8) {
+            return wip.cast(.zext, val, .i8, "") catch return error.CompilationFailed;
+        }
+
+        // Integer widening (e.g., i64 → i128 for Dec fields)
+        if (isIntType(actual_type) and isIntType(target_type)) {
+            const actual_bits = intTypeBits(actual_type);
+            const target_bits = intTypeBits(target_type);
+            if (actual_bits < target_bits) {
+                // Widen: use sext for signed, zext for unsigned
+                return wip.cast(if (isSigned(field_layout)) .sext else .zext, val, target_type, "") catch return error.CompilationFailed;
+            } else if (actual_bits > target_bits) {
+                return wip.cast(.trunc, val, target_type, "") catch return error.CompilationFailed;
+            }
+        }
+
+        // Int → Float conversions
+        if (isIntType(actual_type) and (target_type == .float or target_type == .double)) {
+            return wip.cast(if (isSigned(field_layout)) .sitofp else .uitofp, val, target_type, "") catch return error.CompilationFailed;
+        }
+
+        // If types don't match and we can't convert, return as-is (may cause assertion)
+        return val;
+    }
+
+    fn isIntType(t: LlvmBuilder.Type) bool {
+        return t == .i1 or t == .i8 or t == .i16 or t == .i32 or t == .i64 or t == .i128;
+    }
+
+    fn intTypeBits(t: LlvmBuilder.Type) u32 {
+        return switch (t) {
+            .i1 => 1,
+            .i8 => 8,
+            .i16 => 16,
+            .i32 => 32,
+            .i64 => 64,
+            .i128 => 128,
+            else => 0,
+        };
+    }
+
+    // ---------------------------------------------------------------
+    // Record and tuple generation
+    // ---------------------------------------------------------------
+
+    fn generateEmptyRecord(self: *MonoLlvmCodeGen) Error!LlvmBuilder.Value {
+        const builder = self.builder orelse return error.CompilationFailed;
+        return (builder.intConst(.i8, 0) catch return error.OutOfMemory).toValue();
+    }
+
+    fn generateRecord(self: *MonoLlvmCodeGen, rec: anytype) Error!LlvmBuilder.Value {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const ls = self.layout_store orelse return error.UnsupportedExpression;
+
+        const stored_layout = ls.getLayout(rec.record_layout);
+        if (stored_layout.tag != .record) return error.UnsupportedExpression;
+
+        const record_data = ls.getRecordData(stored_layout.data.record.idx);
+        const field_count = record_data.getFields().count;
+
+        if (field_count == 0) {
+            return self.generateEmptyRecord();
+        }
+
+        // Get field expressions (already in sorted order from the lowerer)
+        const field_exprs = self.store.getExprSpan(rec.fields);
+
+        // Generate field values and convert to their expected types
+        var field_values_buf: [32]LlvmBuilder.Value = undefined;
+
+        for (field_exprs, 0..) |field_expr_id, i| {
+            const raw_val = try self.generateExpr(field_expr_id);
+            const field_layout = ls.getRecordFieldLayout(stored_layout.data.record.idx, @intCast(i));
+            field_values_buf[i] = try self.convertToFieldType(raw_val, field_layout);
+        }
+
+        // Create LLVM struct type from actual generated value types
+        const struct_type = try buildStructTypeFromValues(builder, wip, field_values_buf[0..field_count]);
+
+        // Build struct value using insertvalue (types match by construction)
+        var struct_val = builder.poisonValue(struct_type) catch return error.OutOfMemory;
+        for (0..field_count) |i| {
+            struct_val = wip.insertValue(struct_val, field_values_buf[i], &.{@intCast(i)}, "") catch return error.CompilationFailed;
+        }
+
+        return struct_val;
+    }
+
+    fn generateFieldAccess(self: *MonoLlvmCodeGen, access: anytype) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+
+        // Generate the record value
+        const record_val = try self.generateExpr(access.record_expr);
+
+        // Extract the field at the sorted index
+        var val = wip.extractValue(record_val, &.{@intCast(access.field_idx)}, "") catch return error.CompilationFailed;
+
+        // Truncate i8 back to i1 for bool fields
+        if (access.field_layout == .bool and val.typeOfWip(wip) == .i8) {
+            val = wip.cast(.trunc, val, .i1, "") catch return error.CompilationFailed;
+        }
+
+        return val;
+    }
+
+    fn generateTuple(self: *MonoLlvmCodeGen, tup: anytype) Error!LlvmBuilder.Value {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const ls = self.layout_store orelse return error.UnsupportedExpression;
+
+        const stored_layout = ls.getLayout(tup.tuple_layout);
+        if (stored_layout.tag != .tuple) return error.UnsupportedExpression;
+
+        const tuple_data = ls.getTupleData(stored_layout.data.tuple.idx);
+        const sorted_elements = ls.tuple_fields.sliceRange(tuple_data.getFields());
+        const elem_count = sorted_elements.len;
+
+        if (elem_count == 0) {
+            return self.generateEmptyRecord();
+        }
+
+        // Get element expressions (in source/original order)
+        const elem_exprs = self.store.getExprSpan(tup.elems);
+
+        // Build sorted-position-to-value mapping.
+        // elem_exprs[i] has original index i; we need to find its sorted position.
+        var sorted_values: [32]LlvmBuilder.Value = undefined;
+        var sorted_layouts: [32]layout.Idx = undefined;
+
+        // First, fill in sorted layouts from the layout store
+        for (0..elem_count) |sorted_i| {
+            const element = sorted_elements.get(@intCast(sorted_i));
+            sorted_layouts[sorted_i] = element.layout;
+        }
+
+        // Generate each source-order element, convert to field type, and map to sorted position
+        for (elem_exprs, 0..) |elem_expr_id, original_i| {
+            const raw_val = try self.generateExpr(elem_expr_id);
+            // Find sorted position for this original index
+            var sorted_pos: usize = 0;
+            for (0..elem_count) |si| {
+                const element = sorted_elements.get(@intCast(si));
+                if (element.index == original_i) {
+                    sorted_pos = si;
+                    break;
+                }
+            }
+            sorted_values[sorted_pos] = try self.convertToFieldType(raw_val, sorted_layouts[sorted_pos]);
+        }
+
+        // Create LLVM struct type from actual generated value types
+        const struct_type = try buildStructTypeFromValues(builder, wip, sorted_values[0..elem_count]);
+
+        // Build struct value using insertvalue (types match by construction)
+        var struct_val = builder.poisonValue(struct_type) catch return error.OutOfMemory;
+        for (0..elem_count) |i| {
+            struct_val = wip.insertValue(struct_val, sorted_values[i], &.{@intCast(i)}, "") catch return error.CompilationFailed;
+        }
+
+        return struct_val;
+    }
+
+    fn generateTupleAccess(self: *MonoLlvmCodeGen, access: anytype) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+
+        // Generate the tuple value
+        const tuple_val = try self.generateExpr(access.tuple_expr);
+
+        // Extract the element at the sorted index
+        var val = wip.extractValue(tuple_val, &.{@intCast(access.elem_idx)}, "") catch return error.CompilationFailed;
+
+        // Truncate i8 back to i1 for bool fields
+        if (access.elem_layout == .bool and val.typeOfWip(wip) == .i8) {
+            val = wip.cast(.trunc, val, .i1, "") catch return error.CompilationFailed;
+        }
+
+        return val;
+    }
+
     /// Get the result layout of a mono expression (for determining operand types).
     fn getExprResultLayout(self: *const MonoLlvmCodeGen, expr_id: MonoExprId) ?layout.Idx {
         const MonoExpr = mono.MonoIR.MonoExpr;
@@ -727,6 +973,13 @@ pub const MonoLlvmCodeGen = struct {
             .bool_literal => .bool,
             .i128_literal => .i128,
             .dec_literal => .dec,
+            .record => |r| r.record_layout,
+            .empty_record => .zst,
+            .tuple => |t| t.tuple_layout,
+            .field_access => |fa| fa.field_layout,
+            .tuple_access => |ta| ta.elem_layout,
+            .nominal => |nom| self.getExprResultLayout(nom.backing_expr),
+            .if_then_else => |ite| ite.result_layout,
             else => null,
         };
     }
