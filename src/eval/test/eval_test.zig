@@ -3079,8 +3079,6 @@ test "Bool in record with mixed alignment fields - bug confirmation" {
     try runExpectBool("{ key: 42u64, count: 1u32, flag: Bool.False }.flag", false, .no_trace);
 }
 
-// ============ Str builtin operations tests ============
-
 test "Str.trim" {
     try runExpectStr("Str.trim(\"  hello  \")", "hello", .no_trace);
     try runExpectStr("Str.trim(\"hello\")", "hello", .no_trace);

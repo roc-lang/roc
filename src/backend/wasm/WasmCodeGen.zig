@@ -12,8 +12,6 @@ const MonoExprStore = mono.MonoExprStore;
 const MonoExpr = mono.MonoIR.MonoExpr;
 const MonoExprId = mono.MonoIR.MonoExprId;
 const MonoPattern = mono.MonoIR.MonoPattern;
-const MonoPatternId = mono.MonoIR.MonoPatternId;
-const BinOp = MonoExpr.BinOp;
 const WasmModule = @import("WasmModule.zig");
 const WasmLayout = @import("WasmLayout.zig");
 const Storage = @import("Storage.zig");
@@ -23,7 +21,6 @@ const BlockType = WasmModule.BlockType;
 
 const MonoSymbol = mono.MonoIR.MonoSymbol;
 const MonoProc = mono.MonoIR.MonoProc;
-const CFStmt = mono.MonoIR.CFStmt;
 const CFStmtId = mono.MonoIR.CFStmtId;
 
 const LayoutStore = layout.Store;
@@ -746,111 +743,111 @@ fn generateExpr(self: *Self, expr_id: MonoExprId) Allocator.Error!void {
                         if (try self.tryBindFunction(stmt.expr, stmt_expr, bind.symbol)) continue;
                         // Non-lambda, non-closure, non-function-alias — fall through to value binding
                         {
-                                // Check for type representation mismatch: composite expr bound
-                                // to scalar local (e.g., dec_literal bound to U64 local).
-                                // Conversion between these representations isn't supported yet.
-                                const expr_is_composite = self.isCompositeExpr(stmt.expr);
-                                const target_is_composite = self.isCompositeLayout(bind.layout_idx);
-                                if (expr_is_composite and !target_is_composite) {
-                                    // Composite expr bound to scalar local:
-                                    const target_size = self.layoutByteSize(bind.layout_idx);
-                                    const expr_size = self.exprByteSize(stmt.expr);
-                                    if (target_size == expr_size or target_size < expr_size) {
-                                        // Same size: representation difference (not truncation)
-                                        // Smaller target: truncation (e.g., i128_literal → u64 — take lower bytes)
-                                        try self.generateExpr(stmt.expr);
-                                        const vt2 = self.resolveValType(bind.layout_idx);
-                                        // Load the scalar from the pointer (lower bytes on little-endian)
-                                        try self.emitLoadOpSized(vt2, target_size, 0);
-                                        const local_idx = self.storage.getLocal(bind.symbol) orelse
-                                            (self.storage.allocLocal(bind.symbol, vt2) catch return error.OutOfMemory);
-                                        self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
-                                        WasmModule.leb128WriteU32(self.allocator, &self.body, local_idx) catch return error.OutOfMemory;
-                                        continue;
-                                    }
-                                    unreachable;
-                                } else if (!expr_is_composite and target_is_composite) {
-                                    // Scalar expr bound to composite local
-                                    const target_size = self.layoutByteSize(bind.layout_idx);
-                                    const expr_size = self.exprByteSize(stmt.expr);
+                            // Check for type representation mismatch: composite expr bound
+                            // to scalar local (e.g., dec_literal bound to U64 local).
+                            // Conversion between these representations isn't supported yet.
+                            const expr_is_composite = self.isCompositeExpr(stmt.expr);
+                            const target_is_composite = self.isCompositeLayout(bind.layout_idx);
+                            if (expr_is_composite and !target_is_composite) {
+                                // Composite expr bound to scalar local:
+                                const target_size = self.layoutByteSize(bind.layout_idx);
+                                const expr_size = self.exprByteSize(stmt.expr);
+                                if (target_size == expr_size or target_size < expr_size) {
+                                    // Same size: representation difference (not truncation)
+                                    // Smaller target: truncation (e.g., i128_literal → u64 — take lower bytes)
+                                    try self.generateExpr(stmt.expr);
+                                    const vt2 = self.resolveValType(bind.layout_idx);
+                                    // Load the scalar from the pointer (lower bytes on little-endian)
+                                    try self.emitLoadOpSized(vt2, target_size, 0);
+                                    const local_idx = self.storage.getLocal(bind.symbol) orelse
+                                        (self.storage.allocLocal(bind.symbol, vt2) catch return error.OutOfMemory);
+                                    self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
+                                    WasmModule.leb128WriteU32(self.allocator, &self.body, local_idx) catch return error.OutOfMemory;
+                                    continue;
+                                }
+                                unreachable;
+                            } else if (!expr_is_composite and target_is_composite) {
+                                // Scalar expr bound to composite local
+                                const target_size = self.layoutByteSize(bind.layout_idx);
+                                const expr_size = self.exprByteSize(stmt.expr);
 
-                                    // Allocate stack memory for the composite target
-                                    const alignment: u32 = if (target_size >= 8) 8 else if (target_size >= 4) 4 else if (target_size >= 2) 2 else 1;
-                                    const stack_offset = try self.allocStackMemory(target_size, alignment);
+                                // Allocate stack memory for the composite target
+                                const alignment: u32 = if (target_size >= 8) 8 else if (target_size >= 4) 4 else if (target_size >= 2) 2 else 1;
+                                const stack_offset = try self.allocStackMemory(target_size, alignment);
 
-                                    if (target_size > expr_size) {
-                                        // Widening: e.g., i64_literal → i128/u128 (8 → 16)
-                                        // Zero-init the target memory first
-                                        const base_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-                                        try self.emitFpOffset(stack_offset);
-                                        self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
-                                        WasmModule.leb128WriteU32(self.allocator, &self.body, base_local) catch return error.OutOfMemory;
-                                        try self.emitZeroInit(base_local, target_size);
+                                if (target_size > expr_size) {
+                                    // Widening: e.g., i64_literal → i128/u128 (8 → 16)
+                                    // Zero-init the target memory first
+                                    const base_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+                                    try self.emitFpOffset(stack_offset);
+                                    self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
+                                    WasmModule.leb128WriteU32(self.allocator, &self.body, base_local) catch return error.OutOfMemory;
+                                    try self.emitZeroInit(base_local, target_size);
 
-                                        // Generate the scalar and store at offset 0 (lower bytes)
-                                        try self.generateExpr(stmt.expr);
-                                        const scalar_vt = self.exprValType(stmt.expr);
-                                        try self.emitStoreToMem(base_local, 0, scalar_vt);
-
-                                        // For signed types, sign-extend the upper bytes
-                                        const expr_data = self.store.getExpr(stmt.expr);
-                                        if (expr_data == .i64_literal and expr_data.i64_literal < 0 and
-                                            (bind.layout_idx == .i128 or bind.layout_idx == .dec))
-                                        {
-                                            // Store -1 (all ones) in upper 8 bytes for sign extension
-                                            self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-                                            WasmModule.leb128WriteU32(self.allocator, &self.body, base_local) catch return error.OutOfMemory;
-                                            self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
-                                            WasmModule.leb128WriteI64(self.allocator, &self.body, -1) catch return error.OutOfMemory;
-                                            try self.emitStoreOp(.i64, 8);
-                                        }
-
-                                        // Bind pointer to the symbol's local
-                                        self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-                                        WasmModule.leb128WriteU32(self.allocator, &self.body, base_local) catch return error.OutOfMemory;
-                                        const local_idx = self.storage.getLocal(bind.symbol) orelse
-                                            (self.storage.allocLocal(bind.symbol, .i32) catch return error.OutOfMemory);
-                                        try self.emitLocalSet(local_idx);
-                                        continue;
-                                    }
-
-                                    std.debug.assert(target_size == expr_size);
-
-                                    // Same size: store scalar into stack memory, bind pointer
+                                    // Generate the scalar and store at offset 0 (lower bytes)
                                     try self.generateExpr(stmt.expr);
                                     const scalar_vt = self.exprValType(stmt.expr);
-                                    const tmp_local = self.storage.allocAnonymousLocal(scalar_vt) catch return error.OutOfMemory;
-                                    try self.emitLocalSet(tmp_local);
+                                    try self.emitStoreToMem(base_local, 0, scalar_vt);
 
-                                    // Store scalar at offset 0 of the allocated memory
-                                    try self.emitLocalGet(self.fp_local);
-                                    try self.emitLocalGet(tmp_local);
-                                    try self.emitStoreOp(scalar_vt, stack_offset);
-
-                                    // Bind pointer (fp + stack_offset) to the symbol's local
-                                    try self.emitLocalGet(self.fp_local);
-                                    if (stack_offset > 0) {
-                                        self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                                        WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(stack_offset)) catch return error.OutOfMemory;
-                                        self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+                                    // For signed types, sign-extend the upper bytes
+                                    const expr_data = self.store.getExpr(stmt.expr);
+                                    if (expr_data == .i64_literal and expr_data.i64_literal < 0 and
+                                        (bind.layout_idx == .i128 or bind.layout_idx == .dec))
+                                    {
+                                        // Store -1 (all ones) in upper 8 bytes for sign extension
+                                        self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                                        WasmModule.leb128WriteU32(self.allocator, &self.body, base_local) catch return error.OutOfMemory;
+                                        self.body.append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
+                                        WasmModule.leb128WriteI64(self.allocator, &self.body, -1) catch return error.OutOfMemory;
+                                        try self.emitStoreOp(.i64, 8);
                                     }
+
+                                    // Bind pointer to the symbol's local
+                                    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                                    WasmModule.leb128WriteU32(self.allocator, &self.body, base_local) catch return error.OutOfMemory;
                                     const local_idx = self.storage.getLocal(bind.symbol) orelse
                                         (self.storage.allocLocal(bind.symbol, .i32) catch return error.OutOfMemory);
                                     try self.emitLocalSet(local_idx);
                                     continue;
                                 }
-                                // Determine the target wasm type using layout store
-                                const vt = self.resolveValType(bind.layout_idx);
-                                // Generate the expression value
+
+                                std.debug.assert(target_size == expr_size);
+
+                                // Same size: store scalar into stack memory, bind pointer
                                 try self.generateExpr(stmt.expr);
-                                // Convert if the expression produced a different wasm type
-                                const expr_vt = self.exprValType(stmt.expr);
-                                try self.emitConversion(expr_vt, vt);
-                                // Allocate a local (or reuse existing one for mutable rebinding)
+                                const scalar_vt = self.exprValType(stmt.expr);
+                                const tmp_local = self.storage.allocAnonymousLocal(scalar_vt) catch return error.OutOfMemory;
+                                try self.emitLocalSet(tmp_local);
+
+                                // Store scalar at offset 0 of the allocated memory
+                                try self.emitLocalGet(self.fp_local);
+                                try self.emitLocalGet(tmp_local);
+                                try self.emitStoreOp(scalar_vt, stack_offset);
+
+                                // Bind pointer (fp + stack_offset) to the symbol's local
+                                try self.emitLocalGet(self.fp_local);
+                                if (stack_offset > 0) {
+                                    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                                    WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(stack_offset)) catch return error.OutOfMemory;
+                                    self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+                                }
                                 const local_idx = self.storage.getLocal(bind.symbol) orelse
-                                    (self.storage.allocLocal(bind.symbol, vt) catch return error.OutOfMemory);
-                                self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
-                                WasmModule.leb128WriteU32(self.allocator, &self.body, local_idx) catch return error.OutOfMemory;
+                                    (self.storage.allocLocal(bind.symbol, .i32) catch return error.OutOfMemory);
+                                try self.emitLocalSet(local_idx);
+                                continue;
+                            }
+                            // Determine the target wasm type using layout store
+                            const vt = self.resolveValType(bind.layout_idx);
+                            // Generate the expression value
+                            try self.generateExpr(stmt.expr);
+                            // Convert if the expression produced a different wasm type
+                            const expr_vt = self.exprValType(stmt.expr);
+                            try self.emitConversion(expr_vt, vt);
+                            // Allocate a local (or reuse existing one for mutable rebinding)
+                            const local_idx = self.storage.getLocal(bind.symbol) orelse
+                                (self.storage.allocLocal(bind.symbol, vt) catch return error.OutOfMemory);
+                            self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
+                            WasmModule.leb128WriteU32(self.allocator, &self.body, local_idx) catch return error.OutOfMemory;
                         }
                     },
                     .wildcard => {
@@ -2661,7 +2658,6 @@ fn emitI128Compare(self: *Self, lhs_local: u32, rhs_local: u32, cmp_op: I128CmpO
 
 /// Emit i128 bitwise operation (AND, OR, XOR) on both halves.
 /// Result is a pointer to 16-byte stack memory.
-
 /// Generate i128/Dec negation: result = -value (two's complement)
 fn generateCompositeI128Negate(self: *Self, expr: MonoExprId, _: layout.Idx) Allocator.Error!void {
     try self.generateExpr(expr);
@@ -5253,7 +5249,6 @@ fn emitCall(self: *Self, func_idx: u32) Allocator.Error!void {
     try WasmModule.leb128WriteU32(self.allocator, &self.body, func_idx);
 }
 
-
 /// Generate call arguments (helper to avoid duplication).
 fn generateCallArgs(self: *Self, args: mono.MonoIR.MonoExprSpan) Allocator.Error!void {
     const arg_exprs = self.store.getExprSpan(args);
@@ -5277,7 +5272,6 @@ fn emitForwardedCaptures(self: *Self, func_idx: u32) Allocator.Error!void {
         }
     }
 }
-
 
 // ---- Lambda set / Closure value generation ----
 // These functions handle runtime dispatch for lambda sets with multiple members.
@@ -6988,8 +6982,12 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
 
         // i32/u32 → i64/u64
-        .u8_to_i64, .u8_to_u64, .u16_to_i64, .u16_to_u64,
-        .u32_to_i64, .u32_to_u64,
+        .u8_to_i64,
+        .u8_to_u64,
+        .u16_to_i64,
+        .u16_to_u64,
+        .u32_to_i64,
+        .u32_to_u64,
         => {
             try self.generateExpr(args[0]);
             const arg_vt = self.exprValType(args[0]);
@@ -7014,11 +7012,18 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.generateExpr(args[0]);
             self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
         },
-        .i32_to_i8_wrap, .u32_to_u8_wrap, .i32_to_u8_wrap,
-        .i64_to_u8_wrap, .u64_to_u8_wrap, .i64_to_i8_wrap,
+        .i32_to_i8_wrap,
+        .u32_to_u8_wrap,
+        .i32_to_u8_wrap,
+        .i64_to_u8_wrap,
+        .u64_to_u8_wrap,
+        .i64_to_i8_wrap,
         .u64_to_i8_wrap,
-        .u16_to_i8_wrap, .u16_to_u8_wrap, .i16_to_i8_wrap,
-        .i16_to_u8_wrap, .u32_to_i8_wrap,
+        .u16_to_i8_wrap,
+        .u16_to_u8_wrap,
+        .i16_to_i8_wrap,
+        .i16_to_u8_wrap,
+        .u32_to_i8_wrap,
         => {
             try self.generateExpr(args[0]);
             // May need to wrap i64 to i32 first
@@ -7031,9 +7036,14 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             WasmModule.leb128WriteI32(self.allocator, &self.body, 0xFF) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
         },
-        .i32_to_i16_wrap, .u32_to_u16_wrap, .i32_to_u16_wrap,
-        .i64_to_u16_wrap, .u64_to_u16_wrap, .i64_to_i16_wrap,
-        .u64_to_i16_wrap, .u32_to_i16_wrap,
+        .i32_to_i16_wrap,
+        .u32_to_u16_wrap,
+        .i32_to_u16_wrap,
+        .i64_to_u16_wrap,
+        .u64_to_u16_wrap,
+        .i64_to_i16_wrap,
+        .u64_to_i16_wrap,
+        .u32_to_i16_wrap,
         => {
             try self.generateExpr(args[0]);
             const arg_vt = self.exprValType(args[0]);
@@ -7045,9 +7055,12 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             WasmModule.leb128WriteI32(self.allocator, &self.body, 0xFFFF) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
         },
-        .i32_to_u32_wrap, .u32_to_i32_wrap,
-        .u8_to_i8_wrap, .i8_to_u8_wrap,
-        .u16_to_i16_wrap, .i16_to_u16_wrap,
+        .i32_to_u32_wrap,
+        .u32_to_i32_wrap,
+        .u8_to_i8_wrap,
+        .i8_to_u8_wrap,
+        .u16_to_i16_wrap,
+        .i16_to_u16_wrap,
         => {
             // Same representation in wasm (both i32), no-op
             try self.generateExpr(args[0]);
@@ -8084,8 +8097,11 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         .str_from_utf8_lossy => {
             try self.generateStrFromUtf8Lossy(args[0]);
         },
-        .str_trim, .str_trim_start, .str_trim_end,
-        .str_with_ascii_lowercased, .str_with_ascii_uppercased,
+        .str_trim,
+        .str_trim_start,
+        .str_trim_end,
+        .str_with_ascii_lowercased,
+        .str_with_ascii_uppercased,
         .str_release_excess_capacity,
         => {
             const import_idx = switch (ll.op) {
@@ -8637,8 +8653,11 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             WasmModule.leb128WriteU32(self.allocator, &self.body, r.result_local) catch return error.OutOfMemory;
         },
         // i8/i16 → unsigned wider types (always succeed since value fits — but need sign check)
-        .i8_to_u16_try, .i8_to_u32_try, .i8_to_u64_try,
-        .i16_to_u32_try, .i16_to_u64_try,
+        .i8_to_u16_try,
+        .i8_to_u32_try,
+        .i8_to_u64_try,
+        .i16_to_u32_try,
+        .i16_to_u64_try,
         => {
             try self.generateExpr(args[0]);
             // These are widening but signed→unsigned, so check val >= 0
@@ -9016,21 +9035,28 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
 
         // Integer widening to i128/u128 (zero/sign-extend to 128 bits in stack memory)
-        .u8_to_i128, .u8_to_u128, .u16_to_i128, .u16_to_u128,
-        .u32_to_i128, .u32_to_u128,
+        .u8_to_i128,
+        .u8_to_u128,
+        .u16_to_i128,
+        .u16_to_u128,
+        .u32_to_i128,
+        .u32_to_u128,
         => {
             // Unsigned i32→i128: zero-extend i32 to i64, then to i128
             try self.generateExpr(args[0]);
             self.body.append(self.allocator, Op.i64_extend_i32_u) catch return error.OutOfMemory;
             try self.emitIntToI128(false);
         },
-        .u64_to_i128, .u64_to_u128,
+        .u64_to_i128,
+        .u64_to_u128,
         => {
             // Unsigned i64→i128: value is already i64
             try self.generateExpr(args[0]);
             try self.emitIntToI128(false);
         },
-        .i8_to_i128, .i16_to_i128, .i32_to_i128,
+        .i8_to_i128,
+        .i16_to_i128,
+        .i32_to_i128,
         => {
             // Signed i32→i128: sign-extend i32 to i64, then to i128
             try self.generateExpr(args[0]);
@@ -9043,7 +9069,8 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.generateExpr(args[0]);
             try self.emitIntToI128(true);
         },
-        .i8_to_u128_wrap, .i16_to_u128_wrap,
+        .i8_to_u128_wrap,
+        .i16_to_u128_wrap,
         => {
             // Signed i32→u128 wrap: sign-extend to i64, then i128
             try self.generateExpr(args[0]);
@@ -9057,7 +9084,10 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.emitIntToI128(true);
         },
         // i128/u128 truncation to smaller types (load low word, mask)
-        .i128_to_i8_wrap, .i128_to_u8_wrap, .u128_to_i8_wrap, .u128_to_u8_wrap,
+        .i128_to_i8_wrap,
+        .i128_to_u8_wrap,
+        .u128_to_i8_wrap,
+        .u128_to_u8_wrap,
         => {
             try self.generateExpr(args[0]);
             // Load low i64, wrap to i32, mask to 8 bits
@@ -9067,7 +9097,10 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             WasmModule.leb128WriteI32(self.allocator, &self.body, 0xFF) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
         },
-        .i128_to_i16_wrap, .i128_to_u16_wrap, .u128_to_i16_wrap, .u128_to_u16_wrap,
+        .i128_to_i16_wrap,
+        .i128_to_u16_wrap,
+        .u128_to_i16_wrap,
+        .u128_to_u16_wrap,
         => {
             try self.generateExpr(args[0]);
             try self.emitLoadOp(.i64, 0);
@@ -9076,18 +9109,25 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             WasmModule.leb128WriteI32(self.allocator, &self.body, 0xFFFF) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
         },
-        .i128_to_i32_wrap, .i128_to_u32_wrap, .u128_to_i32_wrap, .u128_to_u32_wrap,
+        .i128_to_i32_wrap,
+        .i128_to_u32_wrap,
+        .u128_to_i32_wrap,
+        .u128_to_u32_wrap,
         => {
             try self.generateExpr(args[0]);
             try self.emitLoadOp(.i64, 0);
             self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
         },
-        .i128_to_i64_wrap, .i128_to_u64_wrap, .u128_to_i64_wrap, .u128_to_u64_wrap,
+        .i128_to_i64_wrap,
+        .i128_to_u64_wrap,
+        .u128_to_i64_wrap,
+        .u128_to_u64_wrap,
         => {
             try self.generateExpr(args[0]);
             try self.emitLoadOp(.i64, 0);
         },
-        .u128_to_i128_wrap, .i128_to_u128_wrap,
+        .u128_to_i128_wrap,
+        .i128_to_u128_wrap,
         => {
             // Same representation — just pass through (pointer stays the same)
             try self.generateExpr(args[0]);
@@ -9419,9 +9459,13 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         // Dec try_unsafe conversions — return {val, is_int, in_range} record
         // Dec is i128 (fixed-point × 10^18). Check if remainder is 0 (is_int),
         // and if integer part fits in target range (in_range).
-        .dec_to_i8_try_unsafe, .dec_to_i16_try_unsafe, .dec_to_i32_try_unsafe,
+        .dec_to_i8_try_unsafe,
+        .dec_to_i16_try_unsafe,
+        .dec_to_i32_try_unsafe,
         .dec_to_i64_try_unsafe,
-        .dec_to_u8_try_unsafe, .dec_to_u16_try_unsafe, .dec_to_u32_try_unsafe,
+        .dec_to_u8_try_unsafe,
+        .dec_to_u16_try_unsafe,
+        .dec_to_u32_try_unsafe,
         .dec_to_u64_try_unsafe,
         => {
             try self.generateExpr(args[0]);
@@ -9748,23 +9792,47 @@ fn generateNumericLowLevel(self: *Self, op: anytype, args: []const MonoExprId, r
 
     switch (op) {
         .num_add => {
-            try self.generateExpr(args[0]); try self.generateExpr(args[1]);
-            const wasm_op: u8 = switch (vt) { .i32 => Op.i32_add, .i64 => Op.i64_add, .f32 => Op.f32_add, .f64 => Op.f64_add };
+            try self.generateExpr(args[0]);
+            try self.generateExpr(args[1]);
+            const wasm_op: u8 = switch (vt) {
+                .i32 => Op.i32_add,
+                .i64 => Op.i64_add,
+                .f32 => Op.f32_add,
+                .f64 => Op.f64_add,
+            };
             self.body.append(self.allocator, wasm_op) catch return error.OutOfMemory;
         },
         .num_sub => {
-            try self.generateExpr(args[0]); try self.generateExpr(args[1]);
-            const wasm_op: u8 = switch (vt) { .i32 => Op.i32_sub, .i64 => Op.i64_sub, .f32 => Op.f32_sub, .f64 => Op.f64_sub };
+            try self.generateExpr(args[0]);
+            try self.generateExpr(args[1]);
+            const wasm_op: u8 = switch (vt) {
+                .i32 => Op.i32_sub,
+                .i64 => Op.i64_sub,
+                .f32 => Op.f32_sub,
+                .f64 => Op.f64_sub,
+            };
             self.body.append(self.allocator, wasm_op) catch return error.OutOfMemory;
         },
         .num_mul => {
-            try self.generateExpr(args[0]); try self.generateExpr(args[1]);
-            const wasm_op: u8 = switch (vt) { .i32 => Op.i32_mul, .i64 => Op.i64_mul, .f32 => Op.f32_mul, .f64 => Op.f64_mul };
+            try self.generateExpr(args[0]);
+            try self.generateExpr(args[1]);
+            const wasm_op: u8 = switch (vt) {
+                .i32 => Op.i32_mul,
+                .i64 => Op.i64_mul,
+                .f32 => Op.f32_mul,
+                .f64 => Op.f64_mul,
+            };
             self.body.append(self.allocator, wasm_op) catch return error.OutOfMemory;
         },
         .num_div => {
-            try self.generateExpr(args[0]); try self.generateExpr(args[1]);
-            const wasm_op: u8 = switch (vt) { .i32 => Op.i32_div_s, .i64 => Op.i64_div_s, .f32 => Op.f32_div, .f64 => Op.f64_div };
+            try self.generateExpr(args[0]);
+            try self.generateExpr(args[1]);
+            const wasm_op: u8 = switch (vt) {
+                .i32 => Op.i32_div_s,
+                .i64 => Op.i64_div_s,
+                .f32 => Op.f32_div,
+                .f64 => Op.f64_div,
+            };
             self.body.append(self.allocator, wasm_op) catch return error.OutOfMemory;
         },
         .num_neg => {
@@ -11315,46 +11383,6 @@ fn emitDummyValue(self: *Self, vt: ValType) Allocator.Error!void {
             self.body.appendSlice(self.allocator, &[8]u8{ 0, 0, 0, 0, 0, 0, 0, 0 }) catch return error.OutOfMemory;
         },
     }
-}
-
-/// Ensure all lookup arguments have locals allocated. For callable arguments
-/// (lambda/closure definitions available only via getSymbolDef) that were never
-/// let-bound, allocate a local with a dummy value so dispatchClosureCall can
-/// generate local.get for them.
-fn ensureArgLocals(self: *Self, args: mono.MonoIR.MonoExprSpan) Allocator.Error!void {
-    const arg_exprs = self.store.getExprSpan(args);
-    for (arg_exprs) |arg_id| {
-        const arg_expr = self.store.getExpr(arg_id);
-        if (arg_expr != .lookup) continue;
-        if (self.storage.getLocal(arg_expr.lookup.symbol) != null) continue;
-        // Symbol has no local — check if it's a callable definition
-        if (self.store.getSymbolDef(arg_expr.lookup.symbol)) |sym_def_id| {
-            const sym_def = self.store.getExpr(sym_def_id);
-            switch (sym_def) {
-                .lambda, .closure => {
-                    const vt = self.exprValType(arg_id);
-                    const local = try self.storage.allocLocal(arg_expr.lookup.symbol, vt);
-                    try self.emitDummyValue(vt);
-                    try self.emitLocalSet(local);
-                },
-                else => {},
-            }
-        }
-    }
-}
-
-/// Check if a symbol is a callable (lambda or closure).
-fn isCallableSymbol(self: *Self, symbol: MonoSymbol) bool {
-    const key: u48 = @bitCast(symbol);
-    if (self.closure_values.contains(key)) return true;
-    if (self.store.getSymbolDef(symbol)) |def_expr_id| {
-        const def_expr = self.store.getExpr(def_expr_id);
-        return switch (def_expr) {
-            .lambda, .closure => true,
-            else => false,
-        };
-    }
-    return false;
 }
 
 /// Helper: emit local.set instruction

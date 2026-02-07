@@ -4,7 +4,6 @@
 //! - Primitives that fit in a wasm value type are returned directly
 //! - Composites (i128, Dec, Str, List, records) use linear memory
 
-const std = @import("std");
 const layout = @import("layout");
 const WasmModule = @import("WasmModule.zig");
 const ValType = WasmModule.ValType;

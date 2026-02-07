@@ -1829,12 +1829,17 @@ fn hostStrWithAsciiLowercased(_: ?*anyopaque, module: *bytebox.ModuleInstance, p
     const str_ptr: usize = @intCast(params[0].I32);
     const result_ptr: usize = @intCast(params[1].I32);
     const str = readWasmStr(buffer, str_ptr);
-    if (str.len == 0) { writeWasmEmptyStr(buffer, result_ptr); return; }
+    if (str.len == 0) {
+        writeWasmEmptyStr(buffer, result_ptr);
+        return;
+    }
     const dest_start = wasm_heap_ptr;
     wasm_heap_ptr += @intCast(str.len);
     const dest = buffer[dest_start..][0..str.len];
     const src = str.data[0..str.len];
-    for (src, 0..) |c, i| { dest[i] = if (c >= 'A' and c <= 'Z') c + 32 else c; }
+    for (src, 0..) |c, i| {
+        dest[i] = if (c >= 'A' and c <= 'Z') c + 32 else c;
+    }
     writeWasmStr(buffer, result_ptr, dest.ptr, str.len);
 }
 
@@ -1843,12 +1848,17 @@ fn hostStrWithAsciiUppercased(_: ?*anyopaque, module: *bytebox.ModuleInstance, p
     const str_ptr: usize = @intCast(params[0].I32);
     const result_ptr: usize = @intCast(params[1].I32);
     const str = readWasmStr(buffer, str_ptr);
-    if (str.len == 0) { writeWasmEmptyStr(buffer, result_ptr); return; }
+    if (str.len == 0) {
+        writeWasmEmptyStr(buffer, result_ptr);
+        return;
+    }
     const dest_start = wasm_heap_ptr;
     wasm_heap_ptr += @intCast(str.len);
     const dest = buffer[dest_start..][0..str.len];
     const src = str.data[0..str.len];
-    for (src, 0..) |c, i| { dest[i] = if (c >= 'a' and c <= 'z') c - 32 else c; }
+    for (src, 0..) |c, i| {
+        dest[i] = if (c >= 'a' and c <= 'z') c - 32 else c;
+    }
     writeWasmStr(buffer, result_ptr, dest.ptr, str.len);
 }
 
@@ -1868,7 +1878,10 @@ fn hostStrWithPrefix(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*
     const str = readWasmStr(buffer, str_ptr);
     const prefix = readWasmStr(buffer, prefix_ptr);
     const total_len = prefix.len + str.len;
-    if (total_len == 0) { writeWasmEmptyStr(buffer, result_ptr); return; }
+    if (total_len == 0) {
+        writeWasmEmptyStr(buffer, result_ptr);
+        return;
+    }
     const dest_start = wasm_heap_ptr;
     wasm_heap_ptr += @intCast(total_len);
     @memcpy(buffer[dest_start..][0..prefix.len], prefix.data[0..prefix.len]);
@@ -1911,7 +1924,10 @@ fn hostStrRepeat(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]con
     const count: usize = @intCast(@as(u32, @bitCast(params[1].I32)));
     const result_ptr: usize = @intCast(params[2].I32);
     const str = readWasmStr(buffer, str_ptr);
-    if (count == 0 or str.len == 0) { writeWasmEmptyStr(buffer, result_ptr); return; }
+    if (count == 0 or str.len == 0) {
+        writeWasmEmptyStr(buffer, result_ptr);
+        return;
+    }
     const total_len = str.len * count;
     const dest_start = wasm_heap_ptr;
     wasm_heap_ptr += @intCast(total_len);
@@ -1930,7 +1946,10 @@ fn hostStrReserve(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]co
     const result_ptr: usize = @intCast(params[2].I32);
     const str = readWasmStr(buffer, str_ptr);
     const needed = str.len + extra_cap;
-    if (needed < 12) { writeWasmStr(buffer, result_ptr, str.data, str.len); return; }
+    if (needed < 12) {
+        writeWasmStr(buffer, result_ptr, str.data, str.len);
+        return;
+    }
     const dest_start = wasm_heap_ptr;
     wasm_heap_ptr += @intCast(needed);
     @memcpy(buffer[dest_start..][0..str.len], str.data[0..str.len]);
@@ -1943,7 +1962,10 @@ fn hostStrWithCapacity(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: 
     const buffer = module.store.getMemory(0).buffer();
     const cap: usize = @intCast(@as(u32, @bitCast(params[0].I32)));
     const result_ptr: usize = @intCast(params[1].I32);
-    if (cap < 12) { writeWasmEmptyStr(buffer, result_ptr); return; }
+    if (cap < 12) {
+        writeWasmEmptyStr(buffer, result_ptr);
+        return;
+    }
     const dest_start = wasm_heap_ptr;
     wasm_heap_ptr += @intCast(cap);
     std.mem.writeInt(u32, buffer[result_ptr..][0..4], dest_start, .little);
@@ -1957,11 +1979,17 @@ fn hostStrCaselessAsciiEquals(_: ?*anyopaque, module: *bytebox.ModuleInstance, p
     const b_ptr: usize = @intCast(params[1].I32);
     const a = readWasmStr(buffer, a_ptr);
     const b = readWasmStr(buffer, b_ptr);
-    if (a.len != b.len) { results[0] = bytebox.Val{ .I32 = 0 }; return; }
+    if (a.len != b.len) {
+        results[0] = bytebox.Val{ .I32 = 0 };
+        return;
+    }
     for (0..a.len) |i| {
         const ac = if (a.data[i] >= 'A' and a.data[i] <= 'Z') a.data[i] + 32 else a.data[i];
         const bc = if (b.data[i] >= 'A' and b.data[i] <= 'Z') b.data[i] + 32 else b.data[i];
-        if (ac != bc) { results[0] = bytebox.Val{ .I32 = 0 }; return; }
+        if (ac != bc) {
+            results[0] = bytebox.Val{ .I32 = 0 };
+            return;
+        }
     }
     results[0] = bytebox.Val{ .I32 = 1 };
 }
@@ -1979,7 +2007,12 @@ fn hostStrSplit(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]cons
     if (sep.len > 0 and str.len >= sep.len) {
         var i: usize = 0;
         while (i + sep.len <= str.len) {
-            if (std.mem.eql(u8, str_slice[i..][0..sep.len], sep_slice)) { count += 1; i += sep.len; } else { i += 1; }
+            if (std.mem.eql(u8, str_slice[i..][0..sep.len], sep_slice)) {
+                count += 1;
+                i += sep.len;
+            } else {
+                i += 1;
+            }
         }
     }
     const list_data_start = wasm_heap_ptr;
@@ -1994,7 +2027,9 @@ fn hostStrSplit(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]cons
                 part_idx += 1;
                 start = i + sep.len;
                 i = start;
-            } else { i += 1; }
+            } else {
+                i += 1;
+            }
         }
     }
     writeWasmStr(buffer, list_data_start + part_idx * 12, str_slice[start..].ptr, str.len - start);
@@ -2010,12 +2045,20 @@ fn hostStrJoinWith(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]c
     const result_ptr: usize = @intCast(params[2].I32);
     const list_data: usize = @intCast(std.mem.readInt(u32, buffer[list_ptr..][0..4], .little));
     const list_len: usize = @intCast(std.mem.readInt(u32, buffer[list_ptr + 4 ..][0..4], .little));
-    if (list_len == 0) { writeWasmEmptyStr(buffer, result_ptr); return; }
+    if (list_len == 0) {
+        writeWasmEmptyStr(buffer, result_ptr);
+        return;
+    }
     const sep = readWasmStr(buffer, sep_ptr);
     var total_len: usize = 0;
-    for (0..list_len) |i| { total_len += readWasmStr(buffer, list_data + i * 12).len; }
+    for (0..list_len) |i| {
+        total_len += readWasmStr(buffer, list_data + i * 12).len;
+    }
     total_len += sep.len * (list_len - 1);
-    if (total_len == 0) { writeWasmEmptyStr(buffer, result_ptr); return; }
+    if (total_len == 0) {
+        writeWasmEmptyStr(buffer, result_ptr);
+        return;
+    }
     const dest_start = wasm_heap_ptr;
     wasm_heap_ptr += @intCast(total_len);
     var offset: usize = 0;

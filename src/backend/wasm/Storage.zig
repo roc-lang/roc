@@ -12,6 +12,7 @@ const ValType = WasmModule.ValType;
 
 const Self = @This();
 
+/// Info about a wasm local variable: its index and value type.
 pub const LocalInfo = struct {
     idx: u32,
     val_type: ValType,
