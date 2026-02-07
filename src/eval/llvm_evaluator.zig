@@ -30,6 +30,8 @@ const layout_resolve = @import("layout_resolve.zig");
 const getExprLayoutWithTypeEnv = layout_resolve.getExprLayoutWithTypeEnv;
 const codegen_prepare = @import("codegen_prepare.zig");
 
+const types = @import("types");
+
 const Allocator = std.mem.Allocator;
 const ModuleEnv = can.ModuleEnv;
 const CIR = can.CIR;
@@ -48,6 +50,45 @@ const RocOps = builtins.host_abi.RocOps;
 
 /// Layout index for result types
 pub const LayoutIdx = layout.Idx;
+
+/// Extract the result layout from a Mono IR expression for use as the overall
+/// expression result layout. For blocks and other compound expressions where the
+/// lowerer may have computed the layout from a CIR type variable with Content.err,
+/// this follows through to the final/inner expression to find the true layout.
+fn monoExprResultLayout(store: *const MonoExprStore, expr_id: mono.MonoIR.MonoExprId) ?layout.Idx {
+    const MonoExpr = mono.MonoIR.MonoExpr;
+    const expr: MonoExpr = store.getExpr(expr_id);
+    return switch (expr) {
+        .block => |b| monoExprResultLayout(store, b.final_expr),
+        .if_then_else => |ite| ite.result_layout,
+        .when => |w| w.result_layout,
+        .dbg => |d| d.result_layout,
+        .expect => |e| e.result_layout,
+        .binop => |b| b.result_layout,
+        .unary_minus => |um| um.result_layout,
+        .call => |c| c.ret_layout,
+        .low_level => |ll| ll.ret_layout,
+        .early_return => |er| er.ret_layout,
+        .lookup => |l| l.layout_idx,
+        .record => |r| r.record_layout,
+        .tuple => |t| t.tuple_layout,
+        .tag => |t| t.union_layout,
+        .zero_arg_tag => |z| z.union_layout,
+        .field_access => |fa| fa.field_layout,
+        .tuple_access => |ta| ta.elem_layout,
+        .closure => |c| c.closure_layout,
+        .nominal => |n| n.nominal_layout,
+        .i64_literal => .i64,
+        .f64_literal => .f64,
+        .f32_literal => .f32,
+        .bool_literal => .bool,
+        .i128_literal => .i128,
+        .dec_literal => .dec,
+        .str_literal => .str,
+        .unary_not => .bool,
+        else => null,
+    };
+}
 
 /// LLVM-based evaluator for Roc expressions
 ///
@@ -77,6 +118,9 @@ pub const LlvmEvaluator = struct {
     /// This is a bool rather than the LLVM type to preserve the lazy import
     /// pattern — non-LLVM builds don't need the LLVM bindings at struct scope.
     disable_optimizations: bool = false,
+
+    /// Global layout store shared across compilations (cached).
+    global_layout_store: ?*layout.Store = null,
 
     pub const Error = error{
         OutOfMemory,
@@ -122,8 +166,31 @@ pub const LlvmEvaluator = struct {
 
     /// Clean up resources
     pub fn deinit(self: *LlvmEvaluator) void {
+        if (self.global_layout_store) |ls| {
+            ls.deinit();
+            self.allocator.destroy(ls);
+        }
         self.allocator.destroy(self.roc_env);
         self.builtin_module.deinit();
+    }
+
+    /// Get or create the global layout store for resolving layouts of composite types.
+    fn ensureGlobalLayoutStore(self: *LlvmEvaluator, all_module_envs: []const *ModuleEnv, builtin_module_env: ?*const ModuleEnv) Error!*layout.Store {
+        if (self.global_layout_store) |ls| return ls;
+
+        const builtin_str = if (all_module_envs.len > 0)
+            all_module_envs[0].idents.builtin_str
+        else
+            null;
+
+        const ls = self.allocator.create(layout.Store) catch return error.OutOfMemory;
+        ls.* = layout.Store.initWithBuiltinEnv(all_module_envs, builtin_str, builtin_module_env, self.allocator, base.target.TargetUsize.native) catch {
+            self.allocator.destroy(ls);
+            return error.OutOfMemory;
+        };
+
+        self.global_layout_store = ls;
+        return ls;
     }
 
     /// Result of code generation
@@ -153,6 +220,7 @@ pub const LlvmEvaluator = struct {
         module_env: *ModuleEnv,
         expr_idx: CIR.Expr.Idx,
         all_module_envs: []const *ModuleEnv,
+        builtin_module_env: ?*const ModuleEnv,
     ) Error!CodeResult {
         // 1. Run pre-codegen transforms
         var mutable_envs = [_]*ModuleEnv{module_env};
@@ -178,8 +246,11 @@ pub const LlvmEvaluator = struct {
             }
         }
 
-        // Create the lowerer
-        var lowerer = MonoLower.init(self.allocator, &mono_store, all_module_envs, null, null);
+        // Get or create the global layout store
+        const layout_store_ptr = try self.ensureGlobalLayoutStore(all_module_envs, builtin_module_env);
+
+        // Create the lowerer with the layout store
+        var lowerer = MonoLower.init(self.allocator, &mono_store, all_module_envs, null, layout_store_ptr);
         defer lowerer.deinit();
 
         // Lower the CIR expression to Mono IR
@@ -187,16 +258,19 @@ pub const LlvmEvaluator = struct {
             return error.UnsupportedExpression;
         };
 
-        // 3. Determine result layout (using shared module)
-        var type_env = std.AutoHashMap(u32, layout.Idx).init(self.allocator);
-        defer type_env.deinit();
-        const cir_expr = module_env.store.getExpr(expr_idx);
-        const result_layout = getExprLayoutWithTypeEnv(
-            self.allocator,
-            module_env,
-            cir_expr,
-            &type_env,
-        );
+        // 3. Determine result layout from Mono IR expression.
+        // Prefer the layout embedded in the Mono expression because the CIR
+        // type variable can have Content.err for expressions involving the `?`
+        // operator at top level (where the Err branch desugars to runtime_error).
+        const result_layout = monoExprResultLayout(&mono_store, mono_expr_id) orelse blk: {
+            // Fallback: resolve from the CIR type variable
+            const type_var = can.ModuleEnv.varFrom(expr_idx);
+            var type_scope = types.TypeScope.init(self.allocator);
+            defer type_scope.deinit();
+            break :blk layout_store_ptr.fromTypeVar(module_idx, type_var, &type_scope, null) catch {
+                return error.UnsupportedExpression;
+            };
+        };
 
         // 4. Generate LLVM bitcode
         const llvm_compile = @import("llvm_compile");
@@ -204,6 +278,9 @@ pub const LlvmEvaluator = struct {
 
         var codegen = MonoLlvmCodeGen.init(self.allocator, &mono_store);
         defer codegen.deinit();
+
+        // Provide addresses of Dec builtins for indirect calls
+        codegen.dec_mul_addr = @intFromPtr(&builtins.dec.mulSaturatedC);
 
         const procs = mono_store.getProcs();
         if (procs.len > 0) {

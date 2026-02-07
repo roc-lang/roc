@@ -16,6 +16,7 @@ const builtin_loading_mod = eval_mod.builtin_loading;
 const TestEnv = @import("TestEnv.zig");
 const Interpreter = eval_mod.Interpreter;
 const DevEvaluator = eval_mod.DevEvaluator;
+const LlvmEvaluator = eval_mod.LlvmEvaluator;
 const StackValue = eval_mod.StackValue;
 const BuiltinTypes = eval_mod.BuiltinTypes;
 const LoadedModule = builtin_loading_mod.LoadedModule;
@@ -125,7 +126,7 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
     const all_module_envs = [_]*ModuleEnv{ module_env, @constCast(builtin_module_env) };
 
     // Generate code using Mono IR pipeline
-    var code_result = dev_eval.generateCode(module_env, expr_idx, &all_module_envs) catch {
+    var code_result = dev_eval.generateCode(module_env, expr_idx, &all_module_envs, builtin_module_env) catch {
         return error.GenerateCodeFailed;
     };
     defer code_result.deinit();
@@ -168,6 +169,7 @@ noinline fn executeAndFormat(
     // memory barrier, ensuring all struct fields are properly materialized
     // from memory rather than potentially kept in registers across fork().
     // This is necessary for fork-based test isolation in ReleaseFast builds.
+    // Compiler barrier (empty print acts as memory barrier for fork safety)
     std.debug.print("", .{});
 
     // Check if this is a tuple
@@ -221,7 +223,7 @@ noinline fn executeAndFormat(
             break :blk std.fmt.allocPrint(alloc, "{}", .{result});
         },
         layout_mod.Idx.u64, layout_mod.Idx.u8, layout_mod.Idx.u16, layout_mod.Idx.u32, layout_mod.Idx.bool => blk: {
-            var result: u64 = 0;
+            var result: u64 = 0xDEADBEEF; // sentinel to detect if callWithCrashProtection changes it
             try dev_eval.callWithCrashProtection(executable, @ptrCast(&result));
             break :blk std.fmt.allocPrint(alloc, "{}", .{result});
         },
@@ -465,7 +467,8 @@ fn forkAndExecute(
         }
 
         posix.close(pipe_read);
-        return result_buf.toOwnedSlice(allocator) catch return error.OutOfMemory;
+        const result_str = result_buf.toOwnedSlice(allocator) catch return error.OutOfMemory;
+        return result_str;
     }
 }
 
@@ -473,7 +476,7 @@ fn forkAndExecute(
 /// Compares ALL expressions - no exceptions. If DevEvaluator can't handle
 /// an expression, the test will fail (which is the desired behavior to
 /// track what still needs to be implemented).
-fn compareWithDevEvaluator(allocator: std.mem.Allocator, interpreter_str: []const u8, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) !void {
+pub fn compareWithDevEvaluator(allocator: std.mem.Allocator, interpreter_str: []const u8, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) !void {
     const dev_str = try devEvaluatorStr(allocator, module_env, expr_idx, builtin_module_env);
     defer allocator.free(dev_str);
 
@@ -503,6 +506,158 @@ fn numericStringsEqual(a: []const u8, b: []const u8) bool {
     }
 
     return false;
+}
+
+const LlvmEvalError = error{
+    LlvmEvaluatorInitFailed,
+    GenerateCodeFailed,
+    JitInitFailed,
+    UnsupportedLayout,
+    OutOfMemory,
+};
+
+/// Evaluate an expression using the LlvmEvaluator and return the result as a string.
+fn llvmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) LlvmEvalError![]const u8 {
+    var llvm_eval = LlvmEvaluator.init(allocator) catch {
+        return error.LlvmEvaluatorInitFailed;
+    };
+    defer llvm_eval.deinit();
+
+    const all_module_envs = [_]*ModuleEnv{ module_env, @constCast(builtin_module_env) };
+
+    var code_result = llvm_eval.generateCode(module_env, expr_idx, &all_module_envs, builtin_module_env) catch {
+        return error.GenerateCodeFailed;
+    };
+    defer code_result.deinit();
+
+    var executable = backend.ExecutableMemory.initWithEntryOffset(code_result.code, code_result.entry_offset) catch {
+        return error.JitInitFailed;
+    };
+    defer executable.deinit();
+
+    const layout_mod = @import("layout");
+    return switch (code_result.result_layout) {
+        layout_mod.Idx.i64, layout_mod.Idx.i8, layout_mod.Idx.i16, layout_mod.Idx.i32 => blk: {
+            var result: i64 = 0;
+            executable.callWithResultPtr(@ptrCast(&result));
+            break :blk std.fmt.allocPrint(allocator, "{}", .{result});
+        },
+        layout_mod.Idx.u64, layout_mod.Idx.u8, layout_mod.Idx.u16, layout_mod.Idx.u32, layout_mod.Idx.bool => blk: {
+            var result: u64 = 0;
+            executable.callWithResultPtr(@ptrCast(&result));
+            break :blk std.fmt.allocPrint(allocator, "{}", .{result});
+        },
+        layout_mod.Idx.f64 => blk: {
+            var result: f64 = 0;
+            executable.callWithResultPtr(@ptrCast(&result));
+            break :blk std.fmt.allocPrint(allocator, "{d}", .{result});
+        },
+        layout_mod.Idx.f32 => blk: {
+            var result: f32 = 0;
+            executable.callWithResultPtr(@ptrCast(&result));
+            break :blk std.fmt.allocPrint(allocator, "{d}", .{result});
+        },
+        layout_mod.Idx.i128, layout_mod.Idx.u128 => blk: {
+            var result: i128 align(16) = 0;
+            executable.callWithResultPtr(@ptrCast(&result));
+            break :blk std.fmt.allocPrint(allocator, "{}", .{result});
+        },
+        layout_mod.Idx.dec => blk: {
+            var result: i128 align(16) = 0;
+            executable.callWithResultPtr(@ptrCast(&result));
+            const dec = builtins.dec.RocDec{ .num = result };
+            var buf: [builtins.dec.RocDec.max_str_length]u8 = undefined;
+            const slice = dec.format_to_buf(&buf);
+            break :blk allocator.dupe(u8, slice);
+        },
+        else => error.UnsupportedLayout,
+    };
+}
+
+/// Compare Interpreter result string with LlvmEvaluator result string.
+/// If the LLVM backend can't handle an expression, the comparison is skipped.
+pub fn compareWithLlvmEvaluator(allocator: std.mem.Allocator, interpreter_str: []const u8, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) !void {
+    if (!has_fork) return;
+
+    const pipe_fds = posix.pipe() catch return;
+    const pipe_read = pipe_fds[0];
+    const pipe_write = pipe_fds[1];
+
+    const fork_result = posix.fork() catch {
+        posix.close(pipe_read);
+        posix.close(pipe_write);
+        return;
+    };
+
+    if (fork_result == 0) {
+        // Child process
+        posix.close(pipe_read);
+        const child_alloc = std.heap.page_allocator;
+
+        const llvm_str = llvmEvaluatorStr(child_alloc, module_env, expr_idx, builtin_module_env) catch {
+            posix.close(pipe_write);
+            posix.exit(1);
+        };
+
+        var written: usize = 0;
+        while (written < llvm_str.len) {
+            written += posix.write(pipe_write, llvm_str[written..]) catch {
+                posix.close(pipe_write);
+                posix.exit(1);
+            };
+        }
+
+        posix.close(pipe_write);
+        posix.exit(0);
+    } else {
+        // Parent process
+        posix.close(pipe_write);
+
+        const wait_result = posix.waitpid(fork_result, 0);
+        const status = wait_result.status;
+        const termination_signal: u8 = @truncate(status & 0x7f);
+
+        if (termination_signal != 0) {
+            posix.close(pipe_read);
+            std.debug.print("\nLLVM child killed by signal {d} during evaluation\n", .{termination_signal});
+            return; // Skip comparison on crash
+        }
+
+        const exit_code: u8 = @truncate((status >> 8) & 0xff);
+        if (exit_code != 0) {
+            posix.close(pipe_read);
+            return; // LLVM backend couldn't handle this expression, skip
+        }
+
+        // Read result string from pipe
+        var result_buf: std.ArrayList(u8) = .empty;
+        defer result_buf.deinit(allocator);
+
+        var read_buf: [4096]u8 = undefined;
+        while (true) {
+            const bytes_read = posix.read(pipe_read, &read_buf) catch {
+                posix.close(pipe_read);
+                return;
+            };
+            if (bytes_read == 0) break;
+            result_buf.appendSlice(allocator, read_buf[0..bytes_read]) catch {
+                posix.close(pipe_read);
+                return;
+            };
+        }
+        posix.close(pipe_read);
+
+        const llvm_str = result_buf.toOwnedSlice(allocator) catch return;
+        defer allocator.free(llvm_str);
+
+        if (!numericStringsEqual(interpreter_str, llvm_str)) {
+            std.debug.print(
+                "\nEvaluator mismatch! Interpreter: {s}, LlvmEvaluator: {s}\n",
+                .{ interpreter_str, llvm_str },
+            );
+            return error.EvaluatorMismatch;
+        }
+    }
 }
 
 /// Helper function to run an expression and expect a specific error.

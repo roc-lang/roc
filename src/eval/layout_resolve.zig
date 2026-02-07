@@ -169,17 +169,10 @@ pub fn getExprLayoutWithTypeEnv(allocator: Allocator, module_env: *ModuleEnv, ex
             const body_expr = module_env.store.getExpr(for_expr.body);
             break :blk getExprLayoutWithTypeEnv(allocator, module_env, body_expr, type_env);
         },
-        .e_incref => |incref| blk: {
-            break :blk type_env.get(@intFromEnum(incref.pattern_idx)) orelse .i64;
-        },
-        .e_decref => |decref| blk: {
-            break :blk type_env.get(@intFromEnum(decref.pattern_idx)) orelse .i64;
-        },
-        .e_free => |free| blk: {
-            break :blk type_env.get(@intFromEnum(free.pattern_idx)) orelse .i64;
-        },
+        // Tuple access result type depends on element; default to i64
+        .e_tuple_access => .i64,
         // Cross-module lookups need full module resolution to determine layout
-        .e_lookup_external, .e_lookup_required, .e_type_var_dispatch => .i64,
+        .e_lookup_external, .e_lookup_required, .e_lookup_pending, .e_type_var_dispatch => .i64,
         // Error/placeholder expressions have no meaningful result type
         .e_runtime_error, .e_crash, .e_ellipsis, .e_anno_only => .i64,
     };
@@ -298,7 +291,7 @@ pub fn getBinopLayout(allocator: Allocator, module_env: *ModuleEnv, binop: CIR.E
 pub fn layoutFromLocalOrExternal(loe: CIR.TypeAnno.LocalOrExternal) LayoutIdx {
     switch (loe) {
         .builtin => |b| return layoutFromBuiltin(b),
-        .local, .external => return .i64,
+        .local, .external, .pending => return .i64,
     }
 }
 

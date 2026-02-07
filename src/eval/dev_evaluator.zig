@@ -504,11 +504,11 @@ pub const DevEvaluator = struct {
 
     /// Get or create the global layout store.
     /// The global layout store uses all module type stores for cross-module layout computation.
-    fn ensureGlobalLayoutStore(self: *DevEvaluator, all_module_envs: []const *ModuleEnv) Error!*layout.Store {
+    fn ensureGlobalLayoutStore(self: *DevEvaluator, all_module_envs: []const *ModuleEnv, builtin_module_env: ?*const ModuleEnv) Error!*layout.Store {
         // If we already have a global layout store, return it
         if (self.global_layout_store) |ls| return ls;
 
-        // Get builtin_str from module 0 (should be the builtin module)
+        // Get builtin_str from module 0
         const builtin_str = if (all_module_envs.len > 0)
             all_module_envs[0].idents.builtin_str
         else
@@ -516,7 +516,7 @@ pub const DevEvaluator = struct {
 
         // Create the global layout store
         const ls = self.allocator.create(layout.Store) catch return error.OutOfMemory;
-        ls.* = layout.Store.init(all_module_envs, builtin_str, self.allocator, base.target.TargetUsize.native) catch {
+        ls.* = layout.Store.initWithBuiltinEnv(all_module_envs, builtin_str, builtin_module_env, self.allocator, base.target.TargetUsize.native) catch {
             self.allocator.destroy(ls);
             return error.OutOfMemory;
         };
@@ -659,6 +659,7 @@ pub const DevEvaluator = struct {
         module_env: *ModuleEnv,
         expr_idx: CIR.Expr.Idx,
         all_module_envs: []const *ModuleEnv,
+        builtin_module_env: ?*const ModuleEnv,
     ) Error!CodeResult {
         // Create a Mono IR store for lowered expressions
         var mono_store = MonoExprStore.init(self.allocator);
@@ -675,7 +676,7 @@ pub const DevEvaluator = struct {
 
         // Get or create the global layout store for resolving layouts of composite types
         // This is a single store shared across all modules for cross-module correctness
-        const layout_store_ptr = try self.ensureGlobalLayoutStore(all_module_envs);
+        const layout_store_ptr = try self.ensureGlobalLayoutStore(all_module_envs, builtin_module_env);
 
         // Create the lowerer with the layout store
         var lowerer = MonoLower.init(self.allocator, &mono_store, all_module_envs, null, layout_store_ptr);

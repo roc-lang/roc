@@ -674,7 +674,7 @@ pub const Repl = struct {
             if (self.dev_evaluator) |*dev_eval| {
                 // Generate and execute native code
                 const all_module_envs = &.{module_env};
-                var code_result = dev_eval.generateCode(module_env, final_expr_idx, all_module_envs) catch {
+                var code_result = dev_eval.generateCode(module_env, final_expr_idx, all_module_envs, null) catch {
                     // Fall back to interpreter on unsupported expressions
                     return self.evaluateWithInterpreter(module_env, final_expr_idx, &imported_modules, &checker);
                 };

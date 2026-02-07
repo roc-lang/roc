@@ -107,6 +107,9 @@ pub const MonoLlvmCodeGen = struct {
     /// The roc_ops argument passed to roc_eval (second parameter)
     roc_ops_arg: ?LlvmBuilder.Value = null,
 
+    /// Address of Dec multiply builtin (mulSaturatedC). Set by the evaluator.
+    dec_mul_addr: usize = 0,
+
     /// Result of bitcode generation
     pub const BitcodeResult = struct {
         bitcode: []const u32,
@@ -597,10 +600,19 @@ pub const MonoLlvmCodeGen = struct {
 
             .mul => if (is_float)
                 wip.bin(.fmul, lhs, rhs, "") catch return error.CompilationFailed
+            else if (binop.result_layout == .dec)
+                self.callDecMul(lhs, rhs) catch return error.CompilationFailed
             else
                 wip.bin(.mul, lhs, rhs, "") catch return error.CompilationFailed,
 
             .div => if (is_float)
+                wip.bin(.fdiv, lhs, rhs, "") catch return error.CompilationFailed
+            else if (isSigned(binop.result_layout))
+                wip.bin(.sdiv, lhs, rhs, "") catch return error.CompilationFailed
+            else
+                wip.bin(.udiv, lhs, rhs, "") catch return error.CompilationFailed,
+
+            .div_trunc => if (is_float)
                 wip.bin(.fdiv, lhs, rhs, "") catch return error.CompilationFailed
             else if (isSigned(binop.result_layout))
                 wip.bin(.sdiv, lhs, rhs, "") catch return error.CompilationFailed
@@ -662,6 +674,26 @@ pub const MonoLlvmCodeGen = struct {
             .i8, .i16, .i32, .i64, .i128, .dec => true,
             else => false,
         };
+    }
+
+    /// Call Dec multiply builtin via indirect call through function pointer.
+    /// Dec multiplication requires (a * b) / 10^18, which is handled by mulSaturatedC.
+    fn callDecMul(self: *MonoLlvmCodeGen, lhs: LlvmBuilder.Value, rhs: LlvmBuilder.Value) !LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
+
+        if (self.dec_mul_addr == 0) return error.CompilationFailed;
+
+        // Create function type: i128(i128, i128) — mulSaturatedC(RocDec, RocDec) -> RocDec
+        const fn_type = builder.fnType(.i128, &.{ .i128, .i128 }, .normal) catch return error.CompilationFailed;
+
+        // Create constant with the function address and cast to pointer
+        const addr_val = builder.intValue(.i64, self.dec_mul_addr) catch return error.CompilationFailed;
+        const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
+        const fn_ptr = wip.cast(.inttoptr, addr_val, ptr_type, "") catch return error.CompilationFailed;
+
+        // Call the function
+        return wip.call(.normal, .ccc, .none, fn_type, fn_ptr, &.{ lhs, rhs }, "") catch return error.CompilationFailed;
     }
 
     fn generateUnaryMinus(self: *MonoLlvmCodeGen, unary: anytype) Error!LlvmBuilder.Value {
