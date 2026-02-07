@@ -807,6 +807,9 @@ pub const MonoLlvmCodeGen = struct {
         var lhs = try self.generateExpr(binop.lhs);
         var rhs = try self.generateExpr(binop.rhs);
 
+        // Values that were written to out_ptr (lists, strings) return .none
+        if (lhs == .none or rhs == .none) return error.UnsupportedExpression;
+
         // Check if operands are aggregate types (structs) - LLVM can't compare them directly.
         // For eq/neq on aggregates, compare field-by-field.
         const lhs_llvm_type = lhs.typeOfWip(wip);
