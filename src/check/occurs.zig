@@ -449,6 +449,7 @@ test "occurs: recursive alias (v = Alias(List v))" {
         types.TypeIdent{ .ident_idx = undefined },
         backing_var,
         &.{arg},
+        Ident.Idx.NONE,
     ));
 
     const result = occurs(&types_store, &scratch, v);
@@ -475,6 +476,7 @@ test "occurs: alias with no recursion (v = Alias Str)" {
         types.TypeIdent{ .ident_idx = undefined },
         backing_var,
         &.{arg_var},
+        Ident.Idx.NONE,
     ));
 
     const result = occurs(&types_store, &scratch, alias_var);

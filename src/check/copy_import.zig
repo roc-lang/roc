@@ -178,9 +178,14 @@ fn copyAlias(
 
     const dest_vars_span = try dest_store.appendVars(dest_args.items);
 
+    // Translate the type name ident
+    const module_name_str = source_idents.getText(source_alias.origin_module);
+    const translated_module_ident = try dest_idents.insert(allocator, base.Ident.for_text(module_name_str));
+
     return Alias{
         .ident = types_mod.TypeIdent{ .ident_idx = translated_ident },
         .vars = .{ .nonempty = dest_vars_span },
+        .origin_module = translated_module_ident,
     };
 }
 

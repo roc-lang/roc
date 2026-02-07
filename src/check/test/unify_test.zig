@@ -133,7 +133,8 @@ const TestEnv = struct {
     // helpers - alias //
 
     fn mkAlias(self: *Self, name: []const u8, backing_var: Var, args: []const Var) std.mem.Allocator.Error!Content {
-        return try self.module_env.types.mkAlias(try self.mkTypeIdent(name), backing_var, args);
+        const module_ident_idx = try self.module_env.getIdentStore().insert(self.module_env.gpa, Ident.for_text("MyModule"));
+        return try self.module_env.types.mkAlias(try self.mkTypeIdent(name), backing_var, args, module_ident_idx);
     }
 
     // helpers - structure - tuple //
