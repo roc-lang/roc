@@ -283,18 +283,30 @@ pub const MonoLlvmCodeGen = struct {
             });
             _ = wip.store(.normal, store_value, out_ptr, alignment) catch return error.CompilationFailed;
         } else {
-            // Composite type (record, tuple, etc.) — store the struct value directly.
-            // Use the struct's alignment from the layout store.
+            // Composite type (record, tuple, tag_union, etc.)
             const ls = self.layout_store orelse return error.UnsupportedExpression;
             const stored_layout = ls.getLayout(result_layout);
-            const align_bytes: u32 = switch (stored_layout.tag) {
-                .record => @intCast(stored_layout.data.record.alignment.toByteUnits()),
-                .tuple => @intCast(stored_layout.data.tuple.alignment.toByteUnits()),
-                .zst => 1,
-                else => return error.UnsupportedExpression,
-            };
-            const alignment = LlvmBuilder.Alignment.fromByteUnits(align_bytes);
-            _ = wip.store(.normal, value, out_ptr, alignment) catch return error.CompilationFailed;
+            switch (stored_layout.tag) {
+                .tag_union => {
+                    // Tag union value is an alloca pointer — memcpy to out_ptr
+                    const tu_align_bytes: u64 = @intCast(stored_layout.data.tag_union.alignment.toByteUnits());
+                    const tu_alignment = LlvmBuilder.Alignment.fromByteUnits(tu_align_bytes);
+                    const tu_data = ls.getTagUnionData(stored_layout.data.tag_union.idx);
+                    const copy_size = builder.intValue(.i32, tu_data.size) catch return error.OutOfMemory;
+                    _ = wip.callMemCpy(out_ptr, tu_alignment, value, tu_alignment, copy_size, .normal, false) catch return error.OutOfMemory;
+                },
+                else => {
+                    // Record, tuple, etc. — store the struct value directly.
+                    const align_bytes: u32 = switch (stored_layout.tag) {
+                        .record => @intCast(stored_layout.data.record.alignment.toByteUnits()),
+                        .tuple => @intCast(stored_layout.data.tuple.alignment.toByteUnits()),
+                        .zst => 1,
+                        else => return error.UnsupportedExpression,
+                    };
+                    const alignment = LlvmBuilder.Alignment.fromByteUnits(align_bytes);
+                    _ = wip.store(.normal, value, out_ptr, alignment) catch return error.CompilationFailed;
+                },
+            }
         }
 
         _ = wip.retVoid() catch return error.CompilationFailed;
@@ -559,6 +571,11 @@ pub const MonoLlvmCodeGen = struct {
             .field_access => |fa| self.generateFieldAccess(fa),
             .tuple => |tup| self.generateTuple(tup),
             .tuple_access => |ta| self.generateTupleAccess(ta),
+
+            // Tag unions
+            .zero_arg_tag => |zat| self.generateZeroArgTag(zat),
+            .tag => |t| self.generateTagWithPayload(t),
+            .discriminant_switch => |ds| self.generateDiscriminantSwitch(ds),
 
             // Nominal wrappers are transparent
             .nominal => |nom| self.generateExpr(nom.backing_expr),
@@ -973,6 +990,221 @@ pub const MonoLlvmCodeGen = struct {
         return val;
     }
 
+    // ---------------------------------------------------------------
+    // Tag union generation
+    // ---------------------------------------------------------------
+
+    /// Get the LLVM integer type for a discriminant size.
+    fn discriminantIntType(disc_size: u8) LlvmBuilder.Type {
+        return switch (disc_size) {
+            1 => .i8,
+            2 => .i16,
+            4 => .i32,
+            8 => .i64,
+            else => .i8,
+        };
+    }
+
+    /// Generate a zero-argument tag (just the discriminant value).
+    fn generateZeroArgTag(self: *MonoLlvmCodeGen, zat: anytype) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
+        const ls = self.layout_store orelse return error.UnsupportedExpression;
+
+        const stored_layout = ls.getLayout(zat.union_layout);
+
+        switch (stored_layout.tag) {
+            .scalar => {
+                // Tag union with no payloads (e.g., Bool, Color) → just the discriminant integer
+                const llvm_type = layoutToLlvmType(zat.union_layout);
+                return (builder.intConst(llvm_type, @as(u64, zat.discriminant)) catch return error.OutOfMemory).toValue();
+            },
+            .zst => {
+                // Zero-sized tag union
+                return (builder.intConst(.i8, 0) catch return error.OutOfMemory).toValue();
+            },
+            .tag_union => {
+                // Tag union with payloads — need alloca for the full union
+                const tu_data = ls.getTagUnionData(stored_layout.data.tag_union.idx);
+                const tu_size = tu_data.size;
+                const tu_align_bytes: u64 = @intCast(stored_layout.data.tag_union.alignment.toByteUnits());
+                const alignment = LlvmBuilder.Alignment.fromByteUnits(tu_align_bytes);
+
+                // Alloca the tag union
+                const alloca_ptr = wip.alloca(.normal, .i8, builder.intValue(.i32, tu_size) catch return error.OutOfMemory, alignment, .default, "") catch return error.OutOfMemory;
+
+                // Zero the memory
+                const zero_val = builder.intValue(.i8, 0) catch return error.OutOfMemory;
+                const size_val = builder.intValue(.i32, tu_size) catch return error.OutOfMemory;
+                _ = wip.callMemSet(alloca_ptr, alignment, zero_val, size_val, .normal, false) catch return error.OutOfMemory;
+
+                // Store discriminant at discriminant_offset
+                const disc_offset = tu_data.discriminant_offset;
+                const disc_type = discriminantIntType(tu_data.discriminant_size);
+                const disc_val = builder.intValue(disc_type, @as(u64, zat.discriminant)) catch return error.OutOfMemory;
+                const disc_ptr = wip.gep(.inbounds, .i8, alloca_ptr, &.{builder.intValue(.i32, disc_offset) catch return error.OutOfMemory}, "") catch return error.OutOfMemory;
+                _ = wip.store(.normal, disc_val, disc_ptr, LlvmBuilder.Alignment.fromByteUnits(@as(u64, tu_data.discriminant_size))) catch return error.CompilationFailed;
+
+                return alloca_ptr;
+            },
+            else => return error.UnsupportedExpression,
+        }
+    }
+
+    /// Generate a tag with payload arguments.
+    fn generateTagWithPayload(self: *MonoLlvmCodeGen, tag_expr: anytype) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
+        const ls = self.layout_store orelse return error.UnsupportedExpression;
+
+        const stored_layout = ls.getLayout(tag_expr.union_layout);
+        if (stored_layout.tag != .tag_union) return error.UnsupportedExpression;
+
+        const tu_data = ls.getTagUnionData(stored_layout.data.tag_union.idx);
+        const tu_size = tu_data.size;
+        const tu_align_bytes: u64 = @intCast(stored_layout.data.tag_union.alignment.toByteUnits());
+        const alignment = LlvmBuilder.Alignment.fromByteUnits(tu_align_bytes);
+
+        // Alloca the tag union
+        const alloca_ptr = wip.alloca(.normal, .i8, builder.intValue(.i32, tu_size) catch return error.OutOfMemory, alignment, .default, "") catch return error.OutOfMemory;
+
+        // Zero the memory
+        const zero_val = builder.intValue(.i8, 0) catch return error.OutOfMemory;
+        const size_val = builder.intValue(.i32, tu_size) catch return error.OutOfMemory;
+        _ = wip.callMemSet(alloca_ptr, alignment, zero_val, size_val, .normal, false) catch return error.OutOfMemory;
+
+        // Store payload arguments
+        const arg_exprs = self.store.getExprSpan(tag_expr.args);
+        const variants = ls.getTagUnionVariants(tu_data);
+        const variant = variants.get(tag_expr.discriminant);
+
+        if (arg_exprs.len == 1) {
+            // Single argument — store directly at offset 0
+            const arg_val = try self.generateExpr(arg_exprs[0]);
+            _ = wip.store(.normal, arg_val, alloca_ptr, alignment) catch return error.CompilationFailed;
+        } else if (arg_exprs.len > 1) {
+            // Multiple arguments — payload is a tuple
+            const payload_layout = ls.getLayout(variant.payload_layout);
+            if (payload_layout.tag == .tuple) {
+                const tuple_data = ls.getTupleData(payload_layout.data.tuple.idx);
+                const sorted_elements = ls.tuple_fields.sliceRange(tuple_data.getFields());
+
+                for (arg_exprs, 0..) |arg_expr_id, i| {
+                    const arg_val = try self.generateExpr(arg_expr_id);
+                    // Find the offset for this original-order argument
+                    var offset: u32 = 0;
+                    for (0..sorted_elements.len) |si| {
+                        const elem = sorted_elements.get(@intCast(si));
+                        if (elem.index == i) {
+                            offset = ls.getTupleElementOffset(payload_layout.data.tuple.idx, @intCast(si));
+                            break;
+                        }
+                    }
+                    const field_ptr = wip.gep(.inbounds, .i8, alloca_ptr, &.{builder.intValue(.i32, offset) catch return error.OutOfMemory}, "") catch return error.OutOfMemory;
+                    _ = wip.store(.normal, arg_val, field_ptr, .default) catch return error.CompilationFailed;
+                }
+            }
+        }
+
+        // Store discriminant at discriminant_offset
+        const disc_offset = tu_data.discriminant_offset;
+        const disc_type = discriminantIntType(tu_data.discriminant_size);
+        const disc_val = builder.intValue(disc_type, @as(u64, tag_expr.discriminant)) catch return error.OutOfMemory;
+        const disc_ptr = wip.gep(.inbounds, .i8, alloca_ptr, &.{builder.intValue(.i32, disc_offset) catch return error.OutOfMemory}, "") catch return error.OutOfMemory;
+        _ = wip.store(.normal, disc_val, disc_ptr, LlvmBuilder.Alignment.fromByteUnits(@as(u64, tu_data.discriminant_size))) catch return error.CompilationFailed;
+
+        return alloca_ptr;
+    }
+
+    /// Generate a discriminant switch — dispatch on a tag union's discriminant.
+    fn generateDiscriminantSwitch(self: *MonoLlvmCodeGen, ds: anytype) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
+        const ls = self.layout_store orelse return error.UnsupportedExpression;
+
+        // Generate the value to switch on
+        const value = try self.generateExpr(ds.value);
+
+        // Get branch expressions
+        const branch_exprs = self.store.getExprSpan(ds.branches);
+        if (branch_exprs.len == 0) return error.UnsupportedExpression;
+
+        // Extract discriminant based on layout type
+        const stored_layout = ls.getLayout(ds.union_layout);
+        const discriminant: LlvmBuilder.Value = switch (stored_layout.tag) {
+            .scalar => blk: {
+                // Scalar tag union — value IS the discriminant (just an integer)
+                // May need truncation from i64 to the actual discriminant type
+                const val_type = value.typeOfWip(wip);
+                if (val_type == .i8 or val_type == .i1) break :blk value;
+                // Truncate to i8 for comparison
+                break :blk wip.cast(.trunc, value, .i8, "") catch return error.CompilationFailed;
+            },
+            .tag_union => blk: {
+                // Tag union — load discriminant from pointer
+                const tu_data = ls.getTagUnionData(stored_layout.data.tag_union.idx);
+                const disc_type = discriminantIntType(tu_data.discriminant_size);
+                const disc_offset = tu_data.discriminant_offset;
+                const disc_ptr = wip.gep(.inbounds, .i8, value, &.{builder.intValue(.i32, disc_offset) catch return error.OutOfMemory}, "") catch return error.OutOfMemory;
+                break :blk wip.load(.normal, disc_type, disc_ptr, LlvmBuilder.Alignment.fromByteUnits(@as(u64, tu_data.discriminant_size)), "") catch return error.OutOfMemory;
+            },
+            else => return error.UnsupportedExpression,
+        };
+
+        // Create basic blocks for each branch and the merge block
+        const merge_block = wip.block(0, "ds_merge") catch return error.OutOfMemory;
+
+        // Generate branches as a chain of compare-and-branch (like if-else-if)
+        // For each discriminant value, check if it matches, and if so generate that branch.
+        var result_vals: [64]LlvmBuilder.Value = undefined;
+        var result_blocks: [64]LlvmBuilder.Function.Block.Index = undefined;
+        var branch_count: usize = 0;
+
+        for (branch_exprs, 0..) |branch_expr_id, i| {
+            const is_last = (i == branch_exprs.len - 1);
+
+            if (!is_last) {
+                // Compare discriminant == i
+                const disc_type = discriminant.typeOfWip(wip);
+                const idx_val = builder.intValue(disc_type, @as(u64, @intCast(i))) catch return error.OutOfMemory;
+                const cmp = wip.icmp(.eq, discriminant, idx_val, "") catch return error.OutOfMemory;
+
+                const then_block = wip.block(0, "") catch return error.OutOfMemory;
+                const else_block = wip.block(0, "") catch return error.OutOfMemory;
+                _ = wip.brCond(cmp, then_block, else_block, .none) catch return error.OutOfMemory;
+
+                // Then block — generate branch body
+                wip.cursor = .{ .block = then_block };
+                const branch_val = try self.generateExpr(branch_expr_id);
+                _ = wip.br(merge_block) catch return error.OutOfMemory;
+                result_vals[branch_count] = branch_val;
+                result_blocks[branch_count] = wip.cursor.block;
+                branch_count += 1;
+
+                // Else block — continue to next comparison
+                wip.cursor = .{ .block = else_block };
+            } else {
+                // Last branch — no comparison needed (default case)
+                const branch_val = try self.generateExpr(branch_expr_id);
+                _ = wip.br(merge_block) catch return error.OutOfMemory;
+                result_vals[branch_count] = branch_val;
+                result_blocks[branch_count] = wip.cursor.block;
+                branch_count += 1;
+            }
+        }
+
+        // Merge block with phi
+        wip.cursor = .{ .block = merge_block };
+        const result_type = result_vals[0].typeOfWip(wip);
+        const phi_inst = wip.phi(result_type, "") catch return error.OutOfMemory;
+        phi_inst.finish(
+            result_vals[0..branch_count],
+            result_blocks[0..branch_count],
+            wip,
+        );
+        return phi_inst.toValue();
+    }
+
     /// Get the result layout of a mono expression (for determining operand types).
     fn getExprResultLayout(self: *const MonoLlvmCodeGen, expr_id: MonoExprId) ?layout.Idx {
         const MonoExpr = mono.MonoIR.MonoExpr;
@@ -997,6 +1229,9 @@ pub const MonoLlvmCodeGen = struct {
             .tuple_access => |ta| ta.elem_layout,
             .nominal => |nom| self.getExprResultLayout(nom.backing_expr),
             .if_then_else => |ite| ite.result_layout,
+            .zero_arg_tag => |zat| zat.union_layout,
+            .tag => |t| t.union_layout,
+            .discriminant_switch => |ds| ds.union_layout,
             else => null,
         };
     }
@@ -1109,7 +1344,12 @@ pub const MonoLlvmCodeGen = struct {
 
         // For simplicity, handle single branch if-then-else
         const first_branch = branches[0];
-        const cond_val = try self.generateExpr(first_branch.cond);
+        var cond_val = try self.generateExpr(first_branch.cond);
+
+        // Ensure condition is i1 for brCond (tag unions may produce i8 for Bool-like types)
+        if (cond_val.typeOfWip(wip) != .i1) {
+            cond_val = wip.cast(.trunc, cond_val, .i1, "") catch return error.CompilationFailed;
+        }
 
         // Create basic blocks
         // Each of then/else has 1 incoming edge (from the conditional branch),
