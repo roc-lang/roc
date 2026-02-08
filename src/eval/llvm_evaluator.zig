@@ -305,6 +305,22 @@ pub const LlvmEvaluator = struct {
         codegen.str_ends_with_addr = @intFromPtr(&wrapStrEndsWith);
         codegen.str_escape_and_quote_addr = @intFromPtr(&wrapStrEscapeAndQuote);
         codegen.str_to_utf8_addr = @intFromPtr(&wrapStrToUtf8);
+        codegen.str_repeat_addr = @intFromPtr(&wrapStrRepeat);
+        codegen.str_trim_addr = @intFromPtr(&wrapStrTrim);
+        codegen.str_trim_start_addr = @intFromPtr(&wrapStrTrimStart);
+        codegen.str_trim_end_addr = @intFromPtr(&wrapStrTrimEnd);
+        codegen.str_drop_prefix_addr = @intFromPtr(&wrapStrDropPrefix);
+        codegen.str_drop_suffix_addr = @intFromPtr(&wrapStrDropSuffix);
+        codegen.str_lowercased_addr = @intFromPtr(&wrapStrWithAsciiLowercased);
+        codegen.str_uppercased_addr = @intFromPtr(&wrapStrWithAsciiUppercased);
+        codegen.str_caseless_equals_addr = @intFromPtr(&wrapStrCaselessEquals);
+        codegen.str_with_capacity_addr = @intFromPtr(&wrapStrWithCapacity);
+        codegen.str_reserve_addr = @intFromPtr(&wrapStrReserve);
+        codegen.str_release_excess_capacity_addr = @intFromPtr(&wrapStrReleaseExcessCapacity);
+        codegen.list_concat_addr = @intFromPtr(&wrapListConcat);
+        codegen.list_prepend_wrap_addr = @intFromPtr(&wrapListPrepend);
+        codegen.list_reserve_addr = @intFromPtr(&wrapListReserve);
+        codegen.list_release_excess_capacity_addr = @intFromPtr(&wrapListReleaseExcessCapacity);
 
         // Provide layout store for composite types (records, tuples)
         codegen.layout_store = layout_store_ptr;
@@ -447,6 +463,93 @@ fn wrapDecToStr(out: *RocStr, lo: u64, hi: u64, roc_ops: *RocOps) callconv(.c) v
     var buf: [builtins.dec.RocDec.max_str_length]u8 = undefined;
     const result = dec.format_to_buf(&buf);
     out.* = RocStr.init(&buf, result.len, roc_ops);
+}
+
+// --- String operation wrappers (str → str with roc_ops) ---
+
+fn wrapStrRepeat(out: *RocStr, bytes: ?[*]u8, len: usize, cap: usize, count: u64, roc_ops: *RocOps) callconv(.c) void {
+    const s = RocStr{ .bytes = bytes, .length = len, .capacity_or_alloc_ptr = cap };
+    out.* = builtins.str.repeatC(s, count, roc_ops);
+}
+
+fn wrapStrTrim(out: *RocStr, bytes: ?[*]u8, len: usize, cap: usize, roc_ops: *RocOps) callconv(.c) void {
+    const s = RocStr{ .bytes = bytes, .length = len, .capacity_or_alloc_ptr = cap };
+    out.* = builtins.str.strTrim(s, roc_ops);
+}
+
+fn wrapStrTrimStart(out: *RocStr, bytes: ?[*]u8, len: usize, cap: usize, roc_ops: *RocOps) callconv(.c) void {
+    const s = RocStr{ .bytes = bytes, .length = len, .capacity_or_alloc_ptr = cap };
+    out.* = builtins.str.strTrimStart(s, roc_ops);
+}
+
+fn wrapStrTrimEnd(out: *RocStr, bytes: ?[*]u8, len: usize, cap: usize, roc_ops: *RocOps) callconv(.c) void {
+    const s = RocStr{ .bytes = bytes, .length = len, .capacity_or_alloc_ptr = cap };
+    out.* = builtins.str.strTrimEnd(s, roc_ops);
+}
+
+fn wrapStrDropPrefix(out: *RocStr, s_bytes: ?[*]u8, s_len: usize, s_cap: usize, p_bytes: ?[*]u8, p_len: usize, p_cap: usize, roc_ops: *RocOps) callconv(.c) void {
+    const s = RocStr{ .bytes = s_bytes, .length = s_len, .capacity_or_alloc_ptr = s_cap };
+    const p = RocStr{ .bytes = p_bytes, .length = p_len, .capacity_or_alloc_ptr = p_cap };
+    out.* = builtins.str.strDropPrefix(s, p, roc_ops);
+}
+
+fn wrapStrDropSuffix(out: *RocStr, s_bytes: ?[*]u8, s_len: usize, s_cap: usize, p_bytes: ?[*]u8, p_len: usize, p_cap: usize, roc_ops: *RocOps) callconv(.c) void {
+    const s = RocStr{ .bytes = s_bytes, .length = s_len, .capacity_or_alloc_ptr = s_cap };
+    const p = RocStr{ .bytes = p_bytes, .length = p_len, .capacity_or_alloc_ptr = p_cap };
+    out.* = builtins.str.strDropSuffix(s, p, roc_ops);
+}
+
+fn wrapStrWithAsciiLowercased(out: *RocStr, bytes: ?[*]u8, len: usize, cap: usize, roc_ops: *RocOps) callconv(.c) void {
+    const s = RocStr{ .bytes = bytes, .length = len, .capacity_or_alloc_ptr = cap };
+    out.* = builtins.str.strWithAsciiLowercased(s, roc_ops);
+}
+
+fn wrapStrWithAsciiUppercased(out: *RocStr, bytes: ?[*]u8, len: usize, cap: usize, roc_ops: *RocOps) callconv(.c) void {
+    const s = RocStr{ .bytes = bytes, .length = len, .capacity_or_alloc_ptr = cap };
+    out.* = builtins.str.strWithAsciiUppercased(s, roc_ops);
+}
+
+fn wrapStrCaselessEquals(a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize) callconv(.c) bool {
+    const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
+    const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
+    return builtins.str.strCaselessAsciiEquals(a, b);
+}
+
+fn wrapStrWithCapacity(out: *RocStr, capacity: u64, roc_ops: *RocOps) callconv(.c) void {
+    out.* = builtins.str.withCapacityC(capacity, roc_ops);
+}
+
+fn wrapStrReserve(out: *RocStr, bytes: ?[*]u8, len: usize, cap: usize, spare: u64, roc_ops: *RocOps) callconv(.c) void {
+    const s = RocStr{ .bytes = bytes, .length = len, .capacity_or_alloc_ptr = cap };
+    out.* = builtins.str.reserveC(s, spare, roc_ops);
+}
+
+fn wrapStrReleaseExcessCapacity(out: *RocStr, bytes: ?[*]u8, len: usize, cap: usize, roc_ops: *RocOps) callconv(.c) void {
+    const s = RocStr{ .bytes = bytes, .length = len, .capacity_or_alloc_ptr = cap };
+    out.* = builtins.str.strReleaseExcessCapacity(roc_ops, s);
+}
+
+// --- List operation wrappers ---
+
+fn wrapListPrepend(out: *builtins.list.RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, elem_ptr: ?[*]u8, alignment: u32, elem_width: usize, copy_fn: *const fn (?[*]u8, ?[*]u8) callconv(.c) void, roc_ops: *RocOps) callconv(.c) void {
+    const list = builtins.list.RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+    out.* = builtins.list.listPrepend(list, alignment, elem_ptr, elem_width, false, null, builtins.list.rcNone, copy_fn, roc_ops);
+}
+
+fn wrapListConcat(out: *builtins.list.RocList, a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize, alignment: u32, elem_width: usize, roc_ops: *RocOps) callconv(.c) void {
+    const a = builtins.list.RocList{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
+    const b = builtins.list.RocList{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
+    out.* = builtins.list.listConcat(a, b, alignment, elem_width, false, null, builtins.list.rcNone, null, builtins.list.rcNone, roc_ops);
+}
+
+fn wrapListReserve(out: *builtins.list.RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, spare: u64, alignment: u32, elem_width: usize, roc_ops: *RocOps) callconv(.c) void {
+    const list = builtins.list.RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+    out.* = builtins.list.listReserve(list, alignment, spare, elem_width, false, null, builtins.list.rcNone, .InPlace, roc_ops);
+}
+
+fn wrapListReleaseExcessCapacity(out: *builtins.list.RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, elem_width: usize, roc_ops: *RocOps) callconv(.c) void {
+    const list = builtins.list.RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+    out.* = builtins.list.listReleaseExcessCapacity(list, alignment, elem_width, false, null, builtins.list.rcNone, null, builtins.list.rcNone, .InPlace, roc_ops);
 }
 
 // Tests
