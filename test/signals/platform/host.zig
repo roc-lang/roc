@@ -351,9 +351,10 @@ fn parseTestSpec(allocator: std.mem.Allocator, content: []const u8) ParseError![
         if (std.mem.startsWith(u8, trimmed, "click ")) {
             const rest = trimmed[6..];
             const elem_id = parseElemId(rest) catch return ParseError.InvalidFormat;
+            const tag_copy = allocator.dupe(u8, elem_id.tag) catch return ParseError.OutOfMemory;
             commands.append(allocator, .{
                 .cmd_type = .click,
-                .tag = elem_id.tag,
+                .tag = tag_copy,
                 .index = elem_id.index,
                 .expected_text = null,
                 .line_num = line_num,
@@ -373,12 +374,13 @@ fn parseTestSpec(allocator: std.mem.Allocator, content: []const u8) ParseError![
 
             const elem_id = parseElemId(elem_part) catch return ParseError.InvalidFormat;
 
-            // Duplicate the text string
+            // Duplicate strings so they outlive the content buffer
+            const tag_copy = allocator.dupe(u8, elem_id.tag) catch return ParseError.OutOfMemory;
             const text_copy = allocator.dupe(u8, text) catch return ParseError.OutOfMemory;
 
             commands.append(allocator, .{
                 .cmd_type = .expect_text,
-                .tag = elem_id.tag,
+                .tag = tag_copy,
                 .index = elem_id.index,
                 .expected_text = text_copy,
                 .line_num = line_num,
@@ -398,6 +400,8 @@ fn parseElemId(s: []const u8) !ElemId {
     const tag = s[0..colon_idx];
     const index_str = s[colon_idx + 1 ..];
     const index = std.fmt.parseInt(usize, index_str, 10) catch return error.InvalidFormat;
+    // Note: tag is a slice into the caller's buffer.
+    // The caller (parseTestSpec) must dupe it if the buffer is transient.
     return .{ .tag = tag, .index = index };
 }
 
@@ -1004,6 +1008,17 @@ fn fireEvent(host: *HostEnv, node_id: u64, value: NodeValue) void {
     if (node_id >= host.graph_nodes.items.len) return;
 
     const allocator = host.gpa.allocator();
+
+    // Clear all event node values to prevent stale values from previous firings
+    // being picked up by event_merge nodes
+    for (host.graph_nodes.items) |*n| {
+        switch (n.kind) {
+            .event_source, .event_map, .event_filter, .event_merge => {
+                n.current_value = null;
+            },
+            else => {},
+        }
+    }
 
     // Set the event source value
     host.graph_nodes.items[node_id].current_value = value;

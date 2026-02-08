@@ -1,6 +1,6 @@
 platform ""
     requires {
-        main : {} -> Elem
+        main! : {} => Elem
     }
     exposes [Signal, Event, EventSender, Elem, NodeValue, SignalNode, EventNode]
     packages {}
@@ -29,7 +29,7 @@ import Host
 ## Called by host at startup to build the UI
 main_for_host! : {} => {}
 main_for_host! = |{}| {
-    elem = main({})
+    elem = main!({})
     root = Host.create_root!({})
     Elem.walk!(elem, root)
 }

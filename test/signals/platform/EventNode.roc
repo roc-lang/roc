@@ -5,13 +5,14 @@ import Host
 ## Closure types are inlined to avoid type alias visibility issues.
 EventNode := [
     Source,
+    Prebuilt(U64),
     MapEvent({ source : EventNode, transform : Box((NodeValue -> NodeValue)) }),
     Filter({ source : EventNode, predicate : Box((NodeValue -> Bool)) }),
     Merge({ left : EventNode, right : EventNode }),
 ].{
-    ## Create EventNode Source
-    make_source : {} -> EventNode
-    make_source = |{}| Source
+    ## Create EventNode from a pre-created host node ID
+    make_prebuilt : U64 -> EventNode
+    make_prebuilt = |id| Prebuilt(id)
 
     ## Create EventNode from MapEvent
     make_map_event : EventNode, Box((NodeValue -> NodeValue)) -> EventNode
@@ -32,6 +33,9 @@ EventNode := [
         match event {
             Source =>
                 Host.create_event_source!({})
+
+            Prebuilt(id) =>
+                id
 
             MapEvent({ source, transform }) => {
                 source_id = EventNode.walk!(source)
