@@ -105,7 +105,9 @@ fn divwide_generic(comptime T: type, _u1: T, _u0: T, v_: T, r: *T) T {
 }
 
 fn divwide(comptime T: type, _u1: T, _u0: T, v: T, r: *T) T {
-    if (T == u64 and builtin.target.cpu.arch == .x86_64 and builtin.target.os.tag != .windows) {
+    if (@inComptime()) {
+        return divwide_generic(T, _u1, _u0, v, r);
+    } else if (T == u64 and builtin.target.cpu.arch == .x86_64 and builtin.target.os.tag != .windows) {
         var rem: T = undefined;
         const quo = asm (
             \\divq %[v]

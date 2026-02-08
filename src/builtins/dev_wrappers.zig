@@ -771,14 +771,134 @@ pub fn roc_builtins_int_to_str(out: *RocStr, val_low: u64, val_high: u64, int_wi
     out.* = RocStr.init(&buf, result.len, roc_ops);
 }
 
-/// Unified float-to-string wrapper: dispatches on is_f32
+/// Unified float-to-string wrapper: dispatches on is_f32.
+/// Uses Ryu's binaryToDecimal directly and formats manually to avoid
+/// pulling in std.fmt.float.formatDecimal which references isPowerOf10
+/// (u128 div/mod → __udivti3/__umodti3 compiler_rt symbols).
 pub fn roc_builtins_float_to_str(out: *RocStr, val_bits: u64, is_f32: bool, roc_ops: *RocOps) callconv(.c) void {
     var buf: [400]u8 = undefined;
-    const result = if (is_f32)
-        std.fmt.bufPrint(&buf, "{d}", .{@as(f32, @bitCast(@as(u32, @truncate(val_bits))))}) catch unreachable
-    else
-        std.fmt.bufPrint(&buf, "{d}", .{@as(f64, @bitCast(val_bits))}) catch unreachable;
+    const result = formatFloatDecimal(&buf, val_bits, is_f32);
     out.* = RocStr.init(&buf, result.len, roc_ops);
+}
+
+/// Format a float to decimal string using Ryu's binaryToDecimal (u64-only)
+/// followed by manual decimal formatting that avoids u128 div/mod.
+fn formatFloatDecimal(buf: []u8, val_bits: u64, is_f32: bool) []u8 {
+    const float = std.fmt.float;
+    const tables = &float.Backend64_TablesFull;
+
+    const d = if (is_f32)
+        float.binaryToDecimal(u64, @as(u64, @as(u32, @truncate(val_bits))), 23, 8, false, tables)
+    else
+        float.binaryToDecimal(u64, val_bits, 52, 11, false, tables);
+
+    // Handle special values (NaN, inf)
+    if (d.exponent == 0x7fffffff) {
+        var pos: usize = 0;
+        if (d.sign) {
+            buf[0] = '-';
+            pos = 1;
+        }
+        if (d.mantissa != 0) {
+            @memcpy(buf[pos..][0..3], "nan");
+        } else {
+            @memcpy(buf[pos..][0..3], "inf");
+        }
+        return buf[0 .. pos + 3];
+    }
+
+    var pos: usize = 0;
+    if (d.sign) {
+        buf[pos] = '-';
+        pos += 1;
+    }
+
+    if (d.mantissa == 0) {
+        buf[pos] = '0';
+        return buf[0 .. pos + 1];
+    }
+
+    // d represents: mantissa * 10^exponent
+    const mantissa = d.mantissa;
+    const olength = u64DecimalDigits(mantissa);
+    const dp_offset: i32 = d.exponent + @as(i32, @intCast(olength));
+
+    if (dp_offset <= 0) {
+        // 0.000001234 — number is less than 1
+        buf[pos] = '0';
+        buf[pos + 1] = '.';
+        pos += 2;
+        const zeros: usize = @intCast(-dp_offset);
+        @memset(buf[pos..][0..zeros], '0');
+        pos += zeros;
+        writeU64Digits(buf[pos..], mantissa, olength);
+        pos += olength;
+    } else {
+        const dp_uoffset: usize = @intCast(dp_offset);
+        if (dp_uoffset >= olength) {
+            // 123456000 — integer, possibly with trailing zeros
+            writeU64Digits(buf[pos..], mantissa, olength);
+            pos += olength;
+            const trailing = dp_uoffset - olength;
+            if (trailing > 0) {
+                @memset(buf[pos..][0..trailing], '0');
+                pos += trailing;
+            }
+        } else {
+            // 123.456 — decimal point within digits
+            const frac_len = olength - dp_uoffset;
+            var m = mantissa;
+
+            // Extract fractional digits (least significant first, then reverse)
+            var frac_digits: [20]u8 = undefined;
+            for (0..frac_len) |i| {
+                frac_digits[frac_len - 1 - i] = '0' + @as(u8, @intCast(m % 10));
+                m /= 10;
+            }
+
+            // m now holds the integer part
+            writeU64Digits(buf[pos..], m, dp_uoffset);
+            pos += dp_uoffset;
+            buf[pos] = '.';
+            pos += 1;
+            @memcpy(buf[pos..][0..frac_len], frac_digits[0..frac_len]);
+            pos += frac_len;
+        }
+    }
+
+    return buf[0..pos];
+}
+
+/// Count decimal digits in a u64 value (assumes v > 0).
+fn u64DecimalDigits(v: u64) usize {
+    if (v >= 10000000000000000) return 17;
+    if (v >= 1000000000000000) return 16;
+    if (v >= 100000000000000) return 15;
+    if (v >= 10000000000000) return 14;
+    if (v >= 1000000000000) return 13;
+    if (v >= 100000000000) return 12;
+    if (v >= 10000000000) return 11;
+    if (v >= 1000000000) return 10;
+    if (v >= 100000000) return 9;
+    if (v >= 10000000) return 8;
+    if (v >= 1000000) return 7;
+    if (v >= 100000) return 6;
+    if (v >= 10000) return 5;
+    if (v >= 1000) return 4;
+    if (v >= 100) return 3;
+    if (v >= 10) return 2;
+    return 1;
+}
+
+/// Write u64 as decimal digits to buf (most significant first).
+fn writeU64Digits(buf: []u8, v_: u64, count: usize) void {
+    var v = v_;
+    var i: usize = count;
+    while (i > 0) {
+        i -= 1;
+        buf[i] = '0' + @as(u8, @intCast(v % 10));
+        v /= 10;
+    }
 }
 
 // ── Numeric-from-string wrappers ──
