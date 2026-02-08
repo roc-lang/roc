@@ -124,6 +124,12 @@ pub const MonoLlvmCodeGen = struct {
     /// Address of allocateWithRefcountC builtin. Set by the evaluator.
     alloc_with_refcount_addr: usize = 0,
 
+    /// Address of listAppendSafeC builtin. Set by the evaluator.
+    list_append_addr: usize = 0,
+
+    /// Address of memcpy (for list copy fallback). Set by the evaluator.
+    memcpy_addr: usize = 0,
+
     /// Layout store for resolving composite type layouts (records, tuples).
     /// Set by the evaluator before calling generateCode.
     layout_store: ?*const layout.Store = null,
@@ -2530,7 +2536,94 @@ pub const MonoLlvmCodeGen = struct {
             .str_from_utf8_lossy,
             => return error.UnsupportedExpression,
 
-            .list_set, .list_append, .list_prepend, .list_concat,
+            .list_append => {
+                // list_append(list, element) -> new_list
+                // Calls listAppendSafeC(out, list_bytes, list_len, list_cap, elem_ptr, align, elem_width, refcounted, copy_fn, roc_ops)
+                if (args.len < 2) return error.UnsupportedExpression;
+                if (self.list_append_addr == 0) return error.UnsupportedExpression;
+                const ls = self.layout_store orelse return error.UnsupportedExpression;
+                const roc_ops = self.roc_ops_arg orelse return error.CompilationFailed;
+                const dest_ptr = self.out_ptr orelse return error.UnsupportedExpression;
+
+                // Materialize the list to get ptr/len/cap
+                const list_ptr = try self.materializeAsPtr(args[0], 24);
+                const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
+                const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
+
+                // Load list fields: data_ptr (offset 0), len (offset 8), cap (offset 16)
+                const data_ptr = wip.load(.normal, ptr_type, list_ptr, alignment, "") catch return error.CompilationFailed;
+                const off8 = builder.intValue(.i32, 8) catch return error.OutOfMemory;
+                const len_ptr = wip.gep(.inbounds, .i8, list_ptr, &.{off8}, "") catch return error.CompilationFailed;
+                const list_len = wip.load(.normal, .i64, len_ptr, alignment, "") catch return error.CompilationFailed;
+                const off16 = builder.intValue(.i32, 16) catch return error.OutOfMemory;
+                const cap_ptr = wip.gep(.inbounds, .i8, list_ptr, &.{off16}, "") catch return error.CompilationFailed;
+                const list_cap = wip.load(.normal, .i64, cap_ptr, alignment, "") catch return error.CompilationFailed;
+
+                // Get element size/alignment from the list's element layout
+                const ret_layout = ls.getLayout(ll.ret_layout);
+                const elem_layout_idx = if (ret_layout.tag == .list)
+                    ret_layout.data.list
+                else
+                    return error.UnsupportedExpression;
+                const elem_sa = ls.layoutSizeAlign(ls.getLayout(elem_layout_idx));
+                const elem_size: u64 = elem_sa.size;
+                const elem_align: u32 = @intCast(elem_sa.alignment.toByteUnits());
+
+                // Create element alloca with proper size
+                const elem_alignment = LlvmBuilder.Alignment.fromByteUnits(@max(elem_align, 1));
+                const elem_count: i32 = @intCast(elem_size);
+                const elem_alloca = wip.alloca(.normal, .i8, builder.intValue(.i32, elem_count) catch return error.OutOfMemory, elem_alignment, .default, "elem") catch return error.CompilationFailed;
+
+                // Generate element value — set out_ptr to alloca for composite types
+                const saved_out_ptr = self.out_ptr;
+                self.out_ptr = elem_alloca;
+                defer self.out_ptr = saved_out_ptr;
+                const elem_val = try self.generateExpr(args[1]);
+                if (elem_val != .none) {
+                    _ = wip.store(.normal, elem_val, elem_alloca, elem_alignment) catch return error.CompilationFailed;
+                }
+
+                // Call listAppendSafeC
+                const fn_type = builder.fnType(.void, &.{
+                    ptr_type, // out
+                    ptr_type, // list_bytes
+                    .i64, // list_length
+                    .i64, // list_capacity_or_alloc_ptr
+                    ptr_type, // element
+                    .i32, // alignment
+                    .i64, // element_width
+                    .i1, // elements_refcounted
+                    ptr_type, // copy
+                    ptr_type, // roc_ops
+                }, .normal) catch return error.CompilationFailed;
+
+                const fn_addr = builder.intValue(.i64, self.list_append_addr) catch return error.CompilationFailed;
+                const fn_ptr = wip.cast(.inttoptr, fn_addr, ptr_type, "") catch return error.CompilationFailed;
+
+                const copy_addr = builder.intValue(.i64, self.memcpy_addr) catch return error.CompilationFailed;
+                const copy_fn = wip.cast(.inttoptr, copy_addr, ptr_type, "") catch return error.CompilationFailed;
+
+                const align_val = builder.intValue(.i32, elem_align) catch return error.OutOfMemory;
+                const width_val = builder.intValue(.i64, elem_size) catch return error.OutOfMemory;
+                const refcounted_val = builder.intValue(.i1, 0) catch return error.OutOfMemory;
+
+                _ = wip.call(.normal, .ccc, .none, fn_type, fn_ptr, &.{
+                    dest_ptr,
+                    data_ptr,
+                    list_len,
+                    list_cap,
+                    elem_alloca,
+                    align_val,
+                    width_val,
+                    refcounted_val,
+                    copy_fn,
+                    roc_ops,
+                }, "") catch return error.CompilationFailed;
+
+                return .none;
+            },
+
+            .list_set, .list_prepend, .list_concat,
             .list_first, .list_last, .list_drop_first, .list_drop_last,
             .list_take_first, .list_take_last, .list_contains, .list_reverse,
             .list_reserve, .list_release_excess_capacity, .list_with_capacity,

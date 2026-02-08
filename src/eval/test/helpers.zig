@@ -597,6 +597,52 @@ fn llvmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_i
             const ls = code_result.layout_store orelse return error.UnsupportedLayout;
             const stored_layout = ls.getLayout(code_result.result_layout);
             switch (stored_layout.tag) {
+                .list_of_zst => {
+                    var result_bytes: [24]u8 align(8) = .{0} ** 24;
+                    executable.callWithResultPtrAndRocOps(@ptrCast(&result_bytes), @ptrCast(&roc_ops));
+
+                    const list_len: *const usize = @ptrCast(@alignCast(result_bytes[8..16]));
+
+                    var output = std.array_list.Managed(u8).initCapacity(allocator, 64) catch return error.OutOfMemory;
+                    errdefer output.deinit();
+                    output.append('[') catch return error.OutOfMemory;
+
+                    for (0..list_len.*) |i| {
+                        if (i > 0) {
+                            output.appendSlice(", ") catch return error.OutOfMemory;
+                        }
+                        output.appendSlice("()") catch return error.OutOfMemory;
+                    }
+
+                    output.append(']') catch return error.OutOfMemory;
+                    break :blk output.toOwnedSlice();
+                },
+                .list => {
+                    var result_bytes: [24]u8 align(8) = .{0} ** 24;
+                    executable.callWithResultPtrAndRocOps(@ptrCast(&result_bytes), @ptrCast(&roc_ops));
+
+                    const data_ptr: *const ?[*]const i64 = @ptrCast(@alignCast(&result_bytes));
+                    const list_len: *const usize = @ptrCast(@alignCast(result_bytes[8..16]));
+
+                    var output = std.array_list.Managed(u8).initCapacity(allocator, 64) catch return error.OutOfMemory;
+                    errdefer output.deinit();
+                    output.append('[') catch return error.OutOfMemory;
+
+                    if (list_len.* > 0 and data_ptr.* != null) {
+                        const elements = data_ptr.*.?[0..list_len.*];
+                        for (elements, 0..) |elem, i| {
+                            if (i > 0) {
+                                output.appendSlice(", ") catch return error.OutOfMemory;
+                            }
+                            const elem_str = std.fmt.allocPrint(allocator, "{}", .{elem}) catch return error.OutOfMemory;
+                            defer allocator.free(elem_str);
+                            output.appendSlice(elem_str) catch return error.OutOfMemory;
+                        }
+                    }
+
+                    output.append(']') catch return error.OutOfMemory;
+                    break :blk output.toOwnedSlice();
+                },
                 .record => {
                     const record_idx = stored_layout.data.record.idx.int_idx;
                     const record_data = ls.record_data.items.items[record_idx];
