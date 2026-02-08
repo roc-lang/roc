@@ -11442,7 +11442,14 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         try self.emitRocCrash("hit a runtime error in call (dead code path)");
                         return .{ .immediate_i64 = 0 };
                     },
-                    else => unreachable,
+                    .crash => {
+                        return Error.Crash;
+                    },
+                    else => {
+                        // Unrecognized definition expression in a call — emit crash so build continues.
+                        try self.emitRocCrash("call target has unresolved definition");
+                        return .{ .immediate_i64 = 0 };
+                    },
                 };
             }
 
@@ -12627,6 +12634,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             // Save current state - procedure has its own scope that shouldn't pollute caller
             const saved_stack_offset = self.codegen.stack_offset;
             const saved_callee_saved_used = self.codegen.callee_saved_used;
+            const saved_callee_saved_available = self.codegen.callee_saved_available;
+            const saved_roc_ops_reg = self.roc_ops_reg;
             var saved_symbol_locations = self.symbol_locations.clone() catch return Error.OutOfMemory;
             defer saved_symbol_locations.deinit();
             var saved_mutable_var_slots = self.mutable_var_slots.clone() catch return Error.OutOfMemory;
@@ -12636,6 +12645,21 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             self.symbol_locations.clearRetainingCapacity();
             self.mutable_var_slots.clearRetainingCapacity();
             self.codegen.callee_saved_used = 0;
+
+            // Reserve R12/X20 for roc_ops (inherited from the caller via callee-saved convention).
+            // Same pattern as compileLambdaAsProc: mark as used so prologue saves/restores it,
+            // and remove from available pool so it can't be allocated as a scratch register.
+            if (comptime target.toCpuArch() == .x86_64) {
+                const r12_bit = @as(u16, 1) << @intFromEnum(x86_64.GeneralReg.R12);
+                self.codegen.callee_saved_used |= r12_bit;
+                self.codegen.callee_saved_available &= ~(@as(u32, 1) << @intFromEnum(x86_64.GeneralReg.R12));
+                self.roc_ops_reg = x86_64.GeneralReg.R12;
+            } else {
+                const x20_bit = @as(u32, 1) << @intFromEnum(aarch64.GeneralReg.X20);
+                self.codegen.callee_saved_used |= x20_bit;
+                self.codegen.callee_saved_available &= ~(@as(u32, 1) << @intFromEnum(aarch64.GeneralReg.X20));
+                self.roc_ops_reg = aarch64.GeneralReg.X20;
+            }
 
             // PHASE 1: Generate body first (to determine callee_saved_used)
             // Initialize stack_offset to reserve space for callee-saved area
@@ -12853,6 +12877,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             // Restore state
             self.codegen.stack_offset = saved_stack_offset;
             self.codegen.callee_saved_used = saved_callee_saved_used;
+            self.codegen.callee_saved_available = saved_callee_saved_available;
+            self.roc_ops_reg = saved_roc_ops_reg;
             self.symbol_locations.deinit();
             self.symbol_locations = saved_symbol_locations.clone() catch return Error.OutOfMemory;
             self.mutable_var_slots.deinit();
