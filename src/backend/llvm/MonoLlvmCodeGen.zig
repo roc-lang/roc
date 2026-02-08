@@ -811,10 +811,11 @@ pub const MonoLlvmCodeGen = struct {
         if (lhs == .none or rhs == .none) return error.UnsupportedExpression;
 
         // Check if operands are aggregate types (structs) - LLVM can't compare them directly.
-        // For eq/neq on aggregates, compare field-by-field.
+        // For eq/neq on structs, compare field-by-field.
         const lhs_llvm_type = lhs.typeOfWip(wip);
         if (!isIntType(lhs_llvm_type) and lhs_llvm_type != .float and lhs_llvm_type != .double) {
-            if (binop.op == .eq or binop.op == .neq) {
+            const bldr = self.builder orelse return error.CompilationFailed;
+            if ((binop.op == .eq or binop.op == .neq) and lhs_llvm_type.isStruct(bldr)) {
                 return self.generateAggregateEquality(lhs, rhs, binop.op == .neq);
             }
             return error.UnsupportedExpression;
@@ -952,6 +953,7 @@ pub const MonoLlvmCodeGen = struct {
         const builder = self.builder orelse return error.CompilationFailed;
 
         const lhs_type = lhs.typeOfWip(wip);
+        if (!lhs_type.isStruct(builder)) return error.UnsupportedExpression;
         const fields = lhs_type.structFields(builder);
         if (fields.len == 0) {
             // Empty struct — always equal
@@ -967,9 +969,12 @@ pub const MonoLlvmCodeGen = struct {
             const rhs_field = wip.extractValue(rhs, &.{idx}, "") catch return error.CompilationFailed;
 
             const field_type = lhs_field.typeOfWip(wip);
-            const field_eq = if (!isIntType(field_type) and field_type != .float and field_type != .double)
-                // Nested aggregate — recurse
+            const field_eq = if (!isIntType(field_type) and field_type != .float and field_type != .double and field_type.isStruct(builder))
+                // Nested struct — recurse
                 try self.generateAggregateEquality(lhs_field, rhs_field, false)
+            else if (!isIntType(field_type) and field_type != .float and field_type != .double)
+                // Non-struct aggregate (pointer, etc.) — can't compare
+                return error.UnsupportedExpression
             else if (field_type == .float or field_type == .double)
                 wip.fcmp(.normal, .oeq, lhs_field, rhs_field, "") catch return error.CompilationFailed
             else
