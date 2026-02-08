@@ -1,0 +1,2 @@
+# Test spec for counter app
+# Initial state - just verify app starts without crashing
