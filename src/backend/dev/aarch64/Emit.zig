@@ -483,7 +483,21 @@ pub fn Emit(comptime target: RocTarget) type {
 
         /// NEG reg, reg (negate - alias for SUB from XZR)
         pub fn negRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg) !void {
-            try self.subRegRegReg(width, dst, .ZRSP, src);
+            // NEG is SUB Xd, XZR, Xm (shifted register encoding).
+            // Must NOT use subRegRegReg here because its SP detection would
+            // emit extended register encoding, interpreting reg 31 as SP
+            // instead of XZR. NEG needs the shifted register form where
+            // reg 31 in Rn means XZR.
+            const sf = width.sf();
+            const inst: u32 = (@as(u32, sf) << 31) |
+                (0b1001011 << 24) |
+                (0b00 << 22) |
+                (0 << 21) |
+                (@as(u32, src.enc()) << 16) |
+                (0b000000 << 10) |
+                (@as(u32, GeneralReg.ZRSP.enc()) << 5) |
+                dst.enc();
+            try self.emit32(inst);
         }
 
         /// CMP reg, reg (compare - alias for SUBS with XZR destination)

@@ -4847,7 +4847,7 @@ fn lowerInspectNominal(
 
     // Check for custom to_inspect method on this nominal type.
     // This uses the same method resolution as dot-call dispatch.
-    if (try self.lowerInspectWithMethod(value_expr, nom, value_layout, module_env, region)) |result| {
+    if (try self.lowerInspectWithMethod(value_expr, nom, module_env, region)) |result| {
         return result;
     }
 
@@ -4888,11 +4888,9 @@ fn lowerInspectWithMethod(
     self: *Self,
     value_expr: MonoExprId,
     nom: types.NominalType,
-    value_layout: LayoutIdx,
     module_env: *const ModuleEnv,
     region: Region,
 ) Allocator.Error!?MonoExprId {
-    _ = value_layout;
 
     // Find the origin module for this nominal type
     const origin_module_idx = self.findModuleForOrigin(module_env, nom.origin_module) orelse return null;

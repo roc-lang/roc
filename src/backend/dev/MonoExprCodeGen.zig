@@ -10023,24 +10023,106 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             }
         }
 
+        /// Check if a lambda body returns a callable value (closure/lambda).
+        /// Used to decide whether to inline or compile as a separate procedure.
+        fn bodyReturnsCallable(self: *Self, body_expr_id: mono.MonoExprId) bool {
+            const body = self.store.getExpr(body_expr_id);
+            return switch (body) {
+                .lambda, .closure => true,
+                .block => |block| self.bodyReturnsCallable(block.final_expr),
+                .if_then_else => |ite| self.bodyReturnsCallable(ite.final_else),
+                else => false,
+            };
+        }
+
+        /// Check if any argument is a callable value (lambda, closure, or lookup
+        /// that resolves to one). Higher-order function calls with callable args
+        /// must be inlined because compiled procs can't dispatch opaque stack values.
+        fn hasCallableArguments(self: *Self, args_span: anytype) bool {
+            const args = self.store.getExprSpan(args_span);
+            for (args) |arg_id| {
+                const arg_expr = self.store.getExpr(arg_id);
+                switch (arg_expr) {
+                    .lambda, .closure => return true,
+                    .lookup => |lk| {
+                        const sk: u48 = @bitCast(lk.symbol);
+                        if (self.symbol_locations.get(sk)) |loc| {
+                            switch (loc) {
+                                .lambda_code, .closure_value => return true,
+                                else => {},
+                            }
+                        }
+                        if (self.store.getSymbolDef(lk.symbol)) |def_id| {
+                            const def = self.store.getExpr(def_id);
+                            switch (def) {
+                                .lambda, .closure => return true,
+                                else => {},
+                            }
+                        }
+                    },
+                    else => {},
+                }
+            }
+            return false;
+        }
+
+        /// Inline a lambda body at the call site, binding parameters directly.
+        /// Used for direct lambda calls (e.g., `(|x| x + 1)(5)`) where the
+        /// lambda may return closures whose capture data must remain on the
+        /// current stack frame. Unlike compileLambdaAsProc, this does NOT
+        /// create a separate procedure — the body runs in the caller's scope.
+        fn callLambdaBodyDirect(self: *Self, lambda: anytype, args_span: anytype) Error!ValueLocation {
+            const args = self.store.getExprSpan(args_span);
+            const params = self.store.getPatternSpan(lambda.params);
+            for (params, 0..) |pattern_id, i| {
+                if (i >= args.len) break;
+                const arg_loc = try self.generateExpr(args[i]);
+                try self.bindPattern(pattern_id, arg_loc);
+            }
+
+            // Set up early return context for inlined lambda.
+            const saved_early_return_ret_layout = self.early_return_ret_layout;
+            const saved_early_return_patches_len = self.early_return_patches.items.len;
+            self.early_return_ret_layout = lambda.ret_layout;
+
+            // Generate the lambda body inline
+            const result_loc = try self.generateExpr(lambda.body);
+
+            // Check if any early returns were generated
+            if (self.early_return_patches.items.len > saved_early_return_patches_len) {
+                // Patch early return jumps to the current position (merge point)
+                const merge_point = self.codegen.currentOffset();
+                for (self.early_return_patches.items[saved_early_return_patches_len..]) |patch| {
+                    self.codegen.patchJump(patch, merge_point);
+                }
+                self.early_return_patches.shrinkRetainingCapacity(saved_early_return_patches_len);
+            }
+
+            // Restore early return state
+            self.early_return_ret_layout = saved_early_return_ret_layout;
+
+            return result_loc;
+        }
+
         /// Generate code for a function call
         fn generateCall(self: *Self, call: anytype) Error!ValueLocation {
             // Get the function expression
             const fn_expr = self.store.getExpr(call.fn_expr);
 
             return switch (fn_expr) {
-                // Direct lambda call: compile as a proc and call it.
+                // Direct lambda call: inline the body in the current scope.
+                // Inline lambdas are defined at a single call site, cannot be
+                // recursive, and may return closures whose capture data must
+                // remain on the current stack frame.
                 .lambda => |lambda| {
-                    const code_offset = try self.compileLambdaAsProc(call.fn_expr, lambda);
-                    return try self.generateCallToLambda(code_offset, call.args, call.ret_layout);
+                    return try self.callLambdaBodyDirect(lambda, call.args);
                 },
 
-                // Direct closure call: compile the inner lambda as a proc and call it.
+                // Direct closure call: inline the inner lambda's body.
                 .closure => |closure| {
                     const inner = self.store.getExpr(closure.lambda);
                     if (inner == .lambda) {
-                        const code_offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda);
-                        return try self.generateCallToLambda(code_offset, call.args, call.ret_layout);
+                        return try self.callLambdaBodyDirect(inner.lambda, call.args);
                     }
                     unreachable;
                 },
@@ -10390,18 +10472,16 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     return try self.callSingleClosureWithCaptures(cv, args_span, ret_layout);
                 },
                 .direct_call => {
-                    // Compile the lambda as a proc and call it
+                    // Inline the lambda body (no captures, no separate proc needed)
                     const lambda_expr = self.store.getExpr(cv.lambda);
                     switch (lambda_expr) {
                         .lambda => |l| {
-                            const code_offset = try self.compileLambdaAsProc(cv.lambda, l);
-                            return try self.generateCallToLambda(code_offset, args_span, ret_layout);
+                            return try self.callLambdaBodyDirect(l, args_span);
                         },
                         .closure => |c| {
                             const inner = self.store.getExpr(c.lambda);
                             if (inner == .lambda) {
-                                const code_offset = try self.compileLambdaAsProc(c.lambda, inner.lambda);
-                                return try self.generateCallToLambda(code_offset, args_span, ret_layout);
+                                return try self.callLambdaBodyDirect(inner.lambda, args_span);
                             }
                             unreachable;
                         },
@@ -10541,12 +10621,12 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
         }
 
         /// Call a single closure (unwrapped_capture or struct_captures) by binding
-        /// its captures to symbol_locations and compiling the lambda as a proc.
+        /// its captures to symbol_locations and inlining the lambda body.
         fn callSingleClosureWithCaptures(
             self: *Self,
             cv: anytype,
             args_span: anytype,
-            ret_layout: layout.Idx,
+            _: layout.Idx,
         ) Error!ValueLocation {
             // Bind captures from the closure's stack data to their symbols
             const captures = self.store.getCaptures(cv.captures);
@@ -10574,18 +10654,16 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 offset += @intCast(capture_size);
             }
 
-            // Get the lambda and compile it as a proc
+            // Inline the lambda body (captures must stay in scope)
             const lambda_expr = self.store.getExpr(cv.lambda);
             switch (lambda_expr) {
                 .lambda => |l| {
-                    const code_offset = try self.compileLambdaAsProc(cv.lambda, l);
-                    return try self.generateCallToLambda(code_offset, args_span, ret_layout);
+                    return try self.callLambdaBodyDirect(l, args_span);
                 },
                 .closure => |c| {
                     const inner = self.store.getExpr(c.lambda);
                     if (inner == .lambda) {
-                        const code_offset = try self.compileLambdaAsProc(c.lambda, inner.lambda);
-                        return try self.generateCallToLambda(code_offset, args_span, ret_layout);
+                        return try self.callLambdaBodyDirect(inner.lambda, args_span);
                     }
                     unreachable;
                 },
@@ -10785,12 +10863,22 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
                 return switch (def_expr) {
                     .lambda => |lambda| {
+                        // Inline when:
+                        // 1. Args contain callables (higher-order calls)
+                        // 2. Body returns callable (closure-returning functions)
+                        // 3. Polymorphic lambda with different ret_layout
+                        if (self.hasCallableArguments(args_span) or self.bodyReturnsCallable(lambda.body) or lambda.ret_layout != ret_layout) {
+                            return try self.callLambdaBodyDirect(lambda, args_span);
+                        }
                         const offset = try self.compileLambdaAsProc(def_expr_id, lambda);
                         return try self.generateCallToLambda(offset, args_span, ret_layout);
                     },
                     .closure => |closure| {
                         const inner = self.store.getExpr(closure.lambda);
                         if (inner == .lambda) {
+                            if (self.hasCallableArguments(args_span) or self.bodyReturnsCallable(inner.lambda.body) or inner.lambda.ret_layout != ret_layout) {
+                                return try self.callLambdaBodyDirect(inner.lambda, args_span);
+                            }
                             const offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda);
                             return try self.generateCallToLambda(offset, args_span, ret_layout);
                         }
@@ -10815,12 +10903,18 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         // Unwrap nominal and retry with the inner expression
                         const inner = self.store.getExpr(nom.backing_expr);
                         if (inner == .lambda) {
+                            if (self.hasCallableArguments(args_span) or self.bodyReturnsCallable(inner.lambda.body) or inner.lambda.ret_layout != ret_layout) {
+                                return try self.callLambdaBodyDirect(inner.lambda, args_span);
+                            }
                             const offset = try self.compileLambdaAsProc(nom.backing_expr, inner.lambda);
                             return try self.generateCallToLambda(offset, args_span, ret_layout);
                         }
                         if (inner == .closure) {
                             const closure_inner = self.store.getExpr(inner.closure.lambda);
                             if (closure_inner == .lambda) {
+                                if (self.hasCallableArguments(args_span) or self.bodyReturnsCallable(closure_inner.lambda.body) or closure_inner.lambda.ret_layout != ret_layout) {
+                                    return try self.callLambdaBodyDirect(closure_inner.lambda, args_span);
+                                }
                                 const offset = try self.compileLambdaAsProc(inner.closure.lambda, closure_inner.lambda);
                                 return try self.generateCallToLambda(offset, args_span, ret_layout);
                             }
@@ -11291,162 +11385,6 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
         }
 
         /// Get the size in bytes for a layout index.
-        fn getLayoutSizeForIdx(self: *Self, layout_idx: layout.Idx) u32 {
-            // Handle well-known types first
-            if (layout_idx == .str) return roc_str_size;
-            if (layout_idx == .i128 or layout_idx == .u128 or layout_idx == .dec) return 16;
-            if (layout_idx == .i64 or layout_idx == .u64 or layout_idx == .f64) return 8;
-            if (layout_idx == .i32 or layout_idx == .u32 or layout_idx == .f32) return 4;
-            if (layout_idx == .i16 or layout_idx == .u16) return 2;
-            if (layout_idx == .i8 or layout_idx == .u8 or layout_idx == .bool) return 1;
-
-            if (self.layout_store) |ls| {
-                const layout_val = ls.getLayout(layout_idx);
-                if (layout_val.tag == .list or layout_val.tag == .list_of_zst) return roc_list_size;
-                return ls.layoutSizeAlign(layout_val).size;
-            }
-            return target_ptr_size; // Default to pointer size
-        }
-
-        /// Get the size of a result from its location and fallback layout.
-        /// This is needed because lambda ret_layout can be a Box placeholder when
-        /// the return type involves polymorphic type variables that weren't fully resolved.
-        fn getResultSizeFromLoc(self: *Self, loc: ValueLocation, fallback_layout: layout.Idx) u32 {
-            // Use the location type to infer size when possible
-            switch (loc) {
-                .stack_i128 => return 16,
-                .stack_str => return roc_str_size,
-                .list_stack => return roc_list_size,
-                .immediate_i128 => return 16,
-                .immediate_i64, .general_reg => return 8,
-                .stack => {
-                    // Stack location doesn't carry size info, use layout
-                    // But first check if the layout is a placeholder (Box)
-                    if (self.layout_store) |ls| {
-                        const layout_val = ls.getLayout(fallback_layout);
-                        if (layout_val.tag == .box) {
-                            // Placeholder layout - can't trust the size
-                            // For tag unions, assume 16 bytes (payload + discriminant)
-                            // This is a conservative estimate that works for Result
-                            return 16;
-                        }
-                        return ls.layoutSizeAlign(layout_val).size;
-                    }
-                    return self.getLayoutSizeForIdx(fallback_layout);
-                },
-                else => return self.getLayoutSizeForIdx(fallback_layout),
-            }
-        }
-
-        /// Store a ValueLocation to a stack slot (FP-relative).
-        fn storeValueToStack(self: *Self, loc: ValueLocation, slot: i32, size: u32) Error!void {
-            const temp_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X9 else .R11;
-            const num_regs: u32 = (size + 7) / 8;
-
-            switch (loc) {
-                .stack_i128, .stack_str => |src_offset| {
-                    var i: u32 = 0;
-                    while (i < num_regs) : (i += 1) {
-                        const off: i32 = @intCast(i * 8);
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, src_offset + off);
-                            try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, slot + off);
-                        } else {
-                            try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, src_offset + off);
-                            try self.codegen.emit.movMemReg(.w64, .RBP, slot + off, temp_reg);
-                        }
-                    }
-                },
-                .stack => |s| {
-                    const src_offset = s.offset;
-                    var i: u32 = 0;
-                    while (i < num_regs) : (i += 1) {
-                        const off: i32 = @intCast(i * 8);
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, src_offset + off);
-                            try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, slot + off);
-                        } else {
-                            try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, src_offset + off);
-                            try self.codegen.emit.movMemReg(.w64, .RBP, slot + off, temp_reg);
-                        }
-                    }
-                },
-                .list_stack => |info| {
-                    var i: u32 = 0;
-                    while (i < num_regs) : (i += 1) {
-                        const off: i32 = @intCast(i * 8);
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, info.struct_offset + off);
-                            try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, slot + off);
-                        } else {
-                            try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, info.struct_offset + off);
-                            try self.codegen.emit.movMemReg(.w64, .RBP, slot + off, temp_reg);
-                        }
-                    }
-                },
-                .immediate_i64 => |val| {
-                    try self.codegen.emitLoadImm(temp_reg, val);
-                    try self.codegen.emitStoreStack(.w64, slot, temp_reg);
-                },
-                .immediate_i128 => |val| {
-                    const low: u64 = @truncate(@as(u128, @bitCast(val)));
-                    const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
-                    try self.codegen.emitLoadImm(temp_reg, @bitCast(low));
-                    try self.codegen.emitStoreStack(.w64, slot, temp_reg);
-                    try self.codegen.emitLoadImm(temp_reg, @bitCast(high));
-                    try self.codegen.emitStoreStack(.w64, slot + 8, temp_reg);
-                },
-                .general_reg => |reg| {
-                    try self.codegen.emitStoreStack(.w64, slot, reg);
-                },
-                else => {
-                    try self.moveToReg(loc, temp_reg);
-                    try self.codegen.emitStoreStack(.w64, slot, temp_reg);
-                },
-            }
-        }
-
-        /// Store return registers to a stack slot (for early return merge).
-        fn storeReturnRegsToStack(self: *Self, slot: i32, size: u32, layout_idx: layout.Idx) Error!void {
-            const num_regs: u32 = (size + 7) / 8;
-
-            if (comptime target.toCpuArch() == .aarch64) {
-                const regs = [_]GeneralReg{ .X0, .X1, .X2, .X3, .X4, .X5, .X6, .X7 };
-                for (0..@min(num_regs, regs.len)) |i| {
-                    try self.codegen.emit.strRegMemSoff(.w64, regs[i], .FP, slot + @as(i32, @intCast(i * 8)));
-                }
-            } else {
-                // x86_64: return values in RAX, RDX, RCX for large types
-                if (layout_idx == .str or (self.layout_store != null and blk: {
-                    const ls = self.layout_store.?;
-                    const lv = ls.getLayout(layout_idx);
-                    break :blk lv.tag == .list or lv.tag == .list_of_zst;
-                })) {
-                    try self.codegen.emit.movMemReg(.w64, .RBP, slot, .RAX);
-                    try self.codegen.emit.movMemReg(.w64, .RBP, slot + 8, .RDX);
-                    try self.codegen.emit.movMemReg(.w64, .RBP, slot + 16, .RCX);
-                } else if (num_regs >= 2) {
-                    try self.codegen.emit.movMemReg(.w64, .RBP, slot, .RAX);
-                    try self.codegen.emit.movMemReg(.w64, .RBP, slot + 8, .RDX);
-                } else {
-                    try self.codegen.emit.movMemReg(.w64, .RBP, slot, .RAX);
-                }
-            }
-        }
-
-        /// Create a ValueLocation for a stack slot based on the type.
-        fn locationForStackSlot(self: *Self, slot: i32, layout_idx: layout.Idx) ValueLocation {
-            if (layout_idx == .str) return .{ .stack_str = slot };
-            if (layout_idx == .i128 or layout_idx == .u128 or layout_idx == .dec) return .{ .stack_i128 = slot };
-            if (self.layout_store) |ls| {
-                const layout_val = ls.getLayout(layout_idx);
-                if (layout_val.tag == .list or layout_val.tag == .list_of_zst) {
-                    return .{ .list_stack = .{ .struct_offset = slot, .data_offset = 0, .num_elements = 0 } };
-                }
-            }
-            return .{ .stack = .{ .offset = slot } };
-        }
-
         /// Allocate a general register with a unique temporary local ID.
         /// Use this for temporary registers that don't correspond to real local variables.
         /// This prevents register ownership conflicts that can corrupt spill tracking.
