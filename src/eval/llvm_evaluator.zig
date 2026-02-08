@@ -293,6 +293,11 @@ pub const LlvmEvaluator = struct {
         codegen.list_append_unsafe_addr = @intFromPtr(&builtins.list.listAppendUnsafeC);
         codegen.rc_none_addr = @intFromPtr(&builtins.list.rcNone);
         codegen.list_prepend_addr = @intFromPtr(&builtins.list.listPrepend);
+        codegen.str_concat_addr = @intFromPtr(&wrapStrConcat);
+        codegen.str_equal_addr = @intFromPtr(&wrapStrEqual);
+        codegen.str_contains_addr = @intFromPtr(&wrapStrContains);
+        codegen.str_starts_with_addr = @intFromPtr(&wrapStrStartsWith);
+        codegen.str_ends_with_addr = @intFromPtr(&wrapStrEndsWith);
 
         // Provide layout store for composite types (records, tuples)
         codegen.layout_store = layout_store_ptr;
@@ -326,6 +331,40 @@ pub const LlvmEvaluator = struct {
         };
     }
 };
+
+// Decomposed C-compatible wrappers for string operations.
+// These avoid ABI issues with passing 24-byte RocStr by value on aarch64.
+const RocStr = builtins.str.RocStr;
+
+fn wrapStrConcat(out: *RocStr, a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize, roc_ops: *RocOps) callconv(.c) void {
+    const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
+    const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
+    out.* = builtins.str.strConcatC(a, b, roc_ops);
+}
+
+fn wrapStrEqual(a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize) callconv(.c) bool {
+    const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
+    const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
+    return builtins.str.strEqual(a, b);
+}
+
+fn wrapStrContains(a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize) callconv(.c) bool {
+    const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
+    const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
+    return builtins.str.strContains(a, b);
+}
+
+fn wrapStrStartsWith(a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize) callconv(.c) bool {
+    const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
+    const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
+    return builtins.str.startsWith(a, b);
+}
+
+fn wrapStrEndsWith(a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize) callconv(.c) bool {
+    const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
+    const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
+    return builtins.str.endsWith(a, b);
+}
 
 // Tests
 

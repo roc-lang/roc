@@ -142,6 +142,13 @@ pub const MonoLlvmCodeGen = struct {
     /// Address of listPrepend builtin. Set by the evaluator.
     list_prepend_addr: usize = 0,
 
+    /// Address of string operation wrappers (decomposed args for ABI safety).
+    str_concat_addr: usize = 0,
+    str_equal_addr: usize = 0,
+    str_contains_addr: usize = 0,
+    str_starts_with_addr: usize = 0,
+    str_ends_with_addr: usize = 0,
+
     /// Layout store for resolving composite type layouts (records, tuples).
     /// Set by the evaluator before calling generateCode.
     layout_store: ?*const layout.Store = null,
@@ -2538,8 +2545,72 @@ pub const MonoLlvmCodeGen = struct {
             // --- Box operations (not yet implemented) ---
             .box_box, .box_unbox => return error.UnsupportedExpression,
 
-            // --- Unsupported string/list operations (need runtime builtins) ---
-            .str_is_eq, .str_concat, .str_contains, .str_starts_with, .str_ends_with,
+            // --- String operations via decomposed wrappers ---
+            .str_concat => {
+                // str_concat(a, b) -> RocStr (written to out_ptr)
+                if (args.len < 2) return error.UnsupportedExpression;
+                if (self.str_concat_addr == 0) return error.UnsupportedExpression;
+                const roc_ops = self.roc_ops_arg orelse return error.CompilationFailed;
+                const dest_ptr = self.out_ptr orelse return error.UnsupportedExpression;
+                const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
+                const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
+
+                // Materialize both strings
+                const a_ptr = try self.materializeAsPtr(args[0], 24);
+                const b_ptr = try self.materializeAsPtr(args[1], 24);
+
+                // Load decomposed fields for each string
+                const off8 = builder.intValue(.i32, 8) catch return error.OutOfMemory;
+                const off16 = builder.intValue(.i32, 16) catch return error.OutOfMemory;
+
+                const a_bytes = wip.load(.normal, ptr_type, a_ptr, alignment, "") catch return error.CompilationFailed;
+                const a_len_ptr = wip.gep(.inbounds, .i8, a_ptr, &.{off8}, "") catch return error.CompilationFailed;
+                const a_len = wip.load(.normal, .i64, a_len_ptr, alignment, "") catch return error.CompilationFailed;
+                const a_cap_ptr = wip.gep(.inbounds, .i8, a_ptr, &.{off16}, "") catch return error.CompilationFailed;
+                const a_cap = wip.load(.normal, .i64, a_cap_ptr, alignment, "") catch return error.CompilationFailed;
+
+                const b_bytes = wip.load(.normal, ptr_type, b_ptr, alignment, "") catch return error.CompilationFailed;
+                const b_len_ptr = wip.gep(.inbounds, .i8, b_ptr, &.{off8}, "") catch return error.CompilationFailed;
+                const b_len = wip.load(.normal, .i64, b_len_ptr, alignment, "") catch return error.CompilationFailed;
+                const b_cap_ptr = wip.gep(.inbounds, .i8, b_ptr, &.{off16}, "") catch return error.CompilationFailed;
+                const b_cap = wip.load(.normal, .i64, b_cap_ptr, alignment, "") catch return error.CompilationFailed;
+
+                // Call wrapStrConcat(out, a_bytes, a_len, a_cap, b_bytes, b_len, b_cap, roc_ops)
+                const fn_type = builder.fnType(.void, &.{
+                    ptr_type, ptr_type, .i64, .i64, ptr_type, .i64, .i64, ptr_type,
+                }, .normal) catch return error.CompilationFailed;
+                const fn_addr = builder.intValue(.i64, self.str_concat_addr) catch return error.CompilationFailed;
+                const fn_ptr = wip.cast(.inttoptr, fn_addr, ptr_type, "") catch return error.CompilationFailed;
+
+                _ = wip.call(.normal, .ccc, .none, fn_type, fn_ptr, &.{
+                    dest_ptr, a_bytes, a_len, a_cap, b_bytes, b_len, b_cap, roc_ops,
+                }, "") catch return error.CompilationFailed;
+
+                return .none;
+            },
+            .str_is_eq => {
+                // str_is_eq(a, b) -> Bool
+                if (args.len < 2) return error.UnsupportedExpression;
+                if (self.str_equal_addr == 0) return error.UnsupportedExpression;
+                return try self.callStrStr2Bool(args[0], args[1], self.str_equal_addr);
+            },
+            .str_contains => {
+                if (args.len < 2) return error.UnsupportedExpression;
+                if (self.str_contains_addr == 0) return error.UnsupportedExpression;
+                return try self.callStrStr2Bool(args[0], args[1], self.str_contains_addr);
+            },
+            .str_starts_with => {
+                if (args.len < 2) return error.UnsupportedExpression;
+                if (self.str_starts_with_addr == 0) return error.UnsupportedExpression;
+                return try self.callStrStr2Bool(args[0], args[1], self.str_starts_with_addr);
+            },
+            .str_ends_with => {
+                if (args.len < 2) return error.UnsupportedExpression;
+                if (self.str_ends_with_addr == 0) return error.UnsupportedExpression;
+                return try self.callStrStr2Bool(args[0], args[1], self.str_ends_with_addr);
+            },
+
+            // --- Unsupported string operations ---
             .str_caseless_ascii_equals, .str_to_utf8, .str_from_utf8,
             .str_repeat, .str_trim, .str_trim_start, .str_trim_end,
             .str_split, .str_join_with, .str_reserve, .str_release_excess_capacity,
@@ -2822,6 +2893,46 @@ pub const MonoLlvmCodeGen = struct {
         }
 
         return alloca_ptr;
+    }
+
+    /// Call a (str, str) -> bool wrapper function with decomposed args.
+    /// Materializes both string args, loads their 3 fields, calls via indirect pointer.
+    fn callStrStr2Bool(self: *MonoLlvmCodeGen, arg_a: MonoExprId, arg_b: MonoExprId, fn_addr_val: usize) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
+        const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
+        const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
+
+        const a_ptr = try self.materializeAsPtr(arg_a, 24);
+        const b_ptr = try self.materializeAsPtr(arg_b, 24);
+
+        const off8 = builder.intValue(.i32, 8) catch return error.OutOfMemory;
+        const off16 = builder.intValue(.i32, 16) catch return error.OutOfMemory;
+
+        const a_bytes = wip.load(.normal, ptr_type, a_ptr, alignment, "") catch return error.CompilationFailed;
+        const a_len_ptr = wip.gep(.inbounds, .i8, a_ptr, &.{off8}, "") catch return error.CompilationFailed;
+        const a_len = wip.load(.normal, .i64, a_len_ptr, alignment, "") catch return error.CompilationFailed;
+        const a_cap_ptr = wip.gep(.inbounds, .i8, a_ptr, &.{off16}, "") catch return error.CompilationFailed;
+        const a_cap = wip.load(.normal, .i64, a_cap_ptr, alignment, "") catch return error.CompilationFailed;
+
+        const b_bytes = wip.load(.normal, ptr_type, b_ptr, alignment, "") catch return error.CompilationFailed;
+        const b_len_ptr = wip.gep(.inbounds, .i8, b_ptr, &.{off8}, "") catch return error.CompilationFailed;
+        const b_len = wip.load(.normal, .i64, b_len_ptr, alignment, "") catch return error.CompilationFailed;
+        const b_cap_ptr = wip.gep(.inbounds, .i8, b_ptr, &.{off16}, "") catch return error.CompilationFailed;
+        const b_cap = wip.load(.normal, .i64, b_cap_ptr, alignment, "") catch return error.CompilationFailed;
+
+        // fn(a_bytes, a_len, a_cap, b_bytes, b_len, b_cap) -> i1
+        const fn_type = builder.fnType(.i1, &.{
+            ptr_type, .i64, .i64, ptr_type, .i64, .i64,
+        }, .normal) catch return error.CompilationFailed;
+        const addr = builder.intValue(.i64, fn_addr_val) catch return error.CompilationFailed;
+        const fn_ptr = wip.cast(.inttoptr, addr, ptr_type, "") catch return error.CompilationFailed;
+
+        const result = wip.call(.normal, .ccc, .none, fn_type, fn_ptr, &.{
+            a_bytes, a_len, a_cap, b_bytes, b_len, b_cap,
+        }, "") catch return error.CompilationFailed;
+
+        return result;
     }
 
     // ---------------------------------------------------------------
