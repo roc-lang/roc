@@ -660,9 +660,6 @@ pub fn resolveEntriesForTypeVar(
         }
     }
 
-    // Sort by region DESCENDING (innermost first - higher region numbers first)
-    std.mem.sort(ClosureTransformer.UnspecializedEntryRef, all_entries.items, {}, compareByRegionDesc);
-
     var resolved_count: usize = 0;
 
     // Step 3: Process each entry in region order
@@ -699,24 +696,6 @@ pub fn resolveEntriesForTypeVar(
     tracker.removeVar(type_var);
 
     return resolved_count;
-}
-
-/// Comparison function for sorting UnspecializedEntryRef by region descending.
-fn compareByRegionDesc(
-    _: void,
-    a: ClosureTransformer.UnspecializedEntryRef,
-    b: ClosureTransformer.UnspecializedEntryRef,
-) bool {
-    // Handle potential out-of-bounds indices gracefully
-    const a_region = if (a.index < a.lambda_set.unspecialized.items.len)
-        a.lambda_set.unspecialized.items[a.index].region
-    else
-        0;
-    const b_region = if (b.index < b.lambda_set.unspecialized.items.len)
-        b.lambda_set.unspecialized.items[b.index].region
-    else
-        0;
-    return a_region > b_region; // Descending order
 }
 
 /// Unify ambient function types when resolving an unspecialized entry.
@@ -787,17 +766,9 @@ pub fn resolveEntriesForTypeVarWithUnification(
 
     if (entry_refs.len == 0) return 0;
 
-    // Copy to slice for sorting
-    const entries = try self.allocator.alloc(ClosureTransformer.UnspecializedEntryRef, entry_refs.len);
-    defer self.allocator.free(entries);
-    @memcpy(entries, entry_refs);
-
-    // Sort by region DESCENDING (innermost first)
-    std.mem.sort(ClosureTransformer.UnspecializedEntryRef, entries, {}, compareByRegionDesc);
-
     var resolved_count: usize = 0;
 
-    for (entries) |entry_ref| {
+    for (entry_refs) |entry_ref| {
         if (entry_ref.index >= entry_ref.lambda_set.unspecialized.items.len) {
             continue;
         }
