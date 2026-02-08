@@ -2581,21 +2581,31 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
         },
 
         .e_closure => |closure| blk: {
+            // Check binding status and recursion BEFORE lowering the lambda body.
+            // This is important because current_binding_pattern must not leak into
+            // nested closures within the lambda body.
+            const is_bound = self.current_binding_pattern != null;
+            const recursion_info = self.detectClosureRecursion(module_env, closure.lambda_idx);
+
+            // Reset binding context before lowering the lambda body.
+            // Without this, nested closures (e.g., |child| { walk!(child, id) } inside
+            // a match branch) would inherit current_binding_pattern and be incorrectly
+            // identified as the bound recursive closure, creating a proc with just a
+            // self-call instead of the actual match/when body.
+            const saved_binding_pattern = self.current_binding_pattern;
+            const saved_binding_symbol = self.current_binding_symbol;
+            self.current_binding_pattern = null;
+            self.current_binding_symbol = null;
+
             const lambda_id = try self.lowerExprFromIdx(module_env, closure.lambda_idx);
             const captures = try self.lowerCaptures(module_env, closure.captures);
 
-            // Determine if this closure is bound to a variable.
-            // If current_binding_pattern is set, we're in a let statement like `f = |x| ...`
-            // which means the closure may have multiple call sites.
-            // If not set, the closure is used directly (e.g., `map(|x| x + 1, list)`)
-            // and is used directly at its single call site.
-            const is_bound = self.current_binding_pattern != null;
+            // Restore binding context
+            self.current_binding_pattern = saved_binding_pattern;
+            self.current_binding_symbol = saved_binding_symbol;
 
             // Select the closure representation based on captures
             const representation = self.selectClosureRepresentation(captures);
-
-            // Detect if this closure is recursive (references itself)
-            const recursion_info = self.detectClosureRecursion(module_env, closure.lambda_idx);
 
             // If this is a recursive closure bound to a variable, create a MonoProc
             // so it can be compiled as a separate procedure with proper stack frame.
@@ -2605,7 +2615,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                         .self_recursive => |id| id,
                         .not_self_recursive => unreachable,
                     };
-                    const proc = try self.lowerClosureToProc(module_env, closure, binding_symbol, join_point_id);
+                    const proc = try self.lowerClosureToProc(binding_symbol, join_point_id, lambda_id);
                     _ = try self.store.addProc(proc);
                 }
             }
@@ -5485,6 +5495,47 @@ fn lowerExprToStmt(self: *Self, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, 
     };
 }
 
+/// Convert an already-lowered MonoExpr to a CFStmt.
+/// This is used by lowerClosureToProc to avoid re-reading from CIR,
+/// which may have been transformed by the closure transformer.
+///
+/// For block expressions, creates a let_stmt chain so that tail recursion
+/// detection can see through the block structure. For other expressions
+/// (including when/match), wraps in a ret statement — the code generator
+/// handles when/match expressions directly via generateWhen.
+fn monoExprToStmt(self: *Self, expr_id: ir.MonoExprId, ret_layout: LayoutIdx) Allocator.Error!CFStmtId {
+    const expr = self.store.getExpr(expr_id);
+    switch (expr) {
+        .block => |block| {
+            // Convert block to let_stmt chain with final expression as stmt
+            const stmts = self.store.getStmts(block.stmts);
+            var current_stmt = try self.monoExprToStmt(block.final_expr, ret_layout);
+
+            // Prepend each statement in reverse order
+            var i = stmts.len;
+            while (i > 0) {
+                i -= 1;
+                const stmt = stmts[i];
+                current_stmt = try self.store.addCFStmt(.{
+                    .let_stmt = .{
+                        .pattern = stmt.pattern,
+                        .value = stmt.expr,
+                        .next = current_stmt,
+                    },
+                });
+            }
+            return current_stmt;
+        },
+        else => {
+            // Wrap in a return statement. The code generator handles when/match
+            // expressions via generateWhen which has full tag dispatch logic.
+            return try self.store.addCFStmt(.{
+                .ret = .{ .value = expr_id },
+            });
+        },
+    }
+}
+
 /// Lower a block to a chain of let statements.
 /// The final expression is lowered to a statement (which might be ret, switch, etc.)
 fn lowerBlockToStmt(self: *Self, module_env: *ModuleEnv, block: anytype, ret_layout: LayoutIdx) Allocator.Error!CFStmtId {
@@ -5604,27 +5655,42 @@ fn lowerIfToSwitchStmt(self: *Self, module_env: *ModuleEnv, ite: anytype, ret_la
 /// - Parameter patterns and their layouts
 /// - Body lowered to control flow statements
 /// - Tail recursion transformation if applicable
+///
+/// Uses the already-lowered MonoExpr lambda body instead of re-reading from CIR.
+/// This is critical because the CIR lambda body may have been transformed by the
+/// closure transformer into a self-call wrapper, losing the original match/when
+/// expressions. The MonoExpr body preserves the correct structure.
 fn lowerClosureToProc(
     self: *Self,
-    module_env: *ModuleEnv,
-    closure: CIR.Expr.Closure,
     binding_symbol: MonoSymbol,
     join_point_id: JoinPointId,
+    lowered_lambda_id: ir.MonoExprId,
 ) Allocator.Error!MonoProc {
-    // Get the lambda from the closure
-    const lambda_expr = module_env.store.getExpr(closure.lambda_idx);
-    const lambda = switch (lambda_expr) {
-        .e_lambda => |l| l,
-        else => unreachable,
+    // Get parameter info from the already-lowered lambda MonoExpr.
+    // The lowered expression may be a lambda directly or a closure wrapping a lambda.
+    const lambda_data = blk: {
+        const lowered_lambda = self.store.getExpr(lowered_lambda_id);
+        switch (lowered_lambda) {
+            .lambda => |l| break :blk l,
+            .closure => |c| {
+                const inner = self.store.getExpr(c.lambda);
+                switch (inner) {
+                    .lambda => |l| break :blk l,
+                    else => unreachable,
+                }
+            },
+            else => unreachable,
+        }
     };
-
-    // Lower parameters first, then extract their layouts
-    const params = try self.lowerPatternSpan(module_env, lambda.args);
+    const params = lambda_data.params;
+    const body_expr_id = lambda_data.body;
+    const ret_layout = lambda_data.ret_layout;
     const param_layouts = try self.extractParamLayouts(params);
-    const ret_layout = self.getExprLayoutFromIdx(module_env, lambda.body);
 
-    // Lower body to statements
-    var body_stmt = try self.lowerExprToStmt(module_env, lambda.body, ret_layout);
+    // Convert the MonoExpr body to a CFStmt by wrapping in ret.
+    // The body contains the correct when/match expressions from the
+    // initial lowering pass.
+    var body_stmt = try self.monoExprToStmt(body_expr_id, ret_layout);
 
     // Apply tail recursion transformation if recursive (join_point_id is valid)
     const is_recursive = !join_point_id.isNone();

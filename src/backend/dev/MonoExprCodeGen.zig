@@ -7476,7 +7476,12 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                             }
                                         }
                                     },
-                                    else => unreachable,
+                                    else => {
+                                        // For other patterns (record, tuple, etc.) inside tag args,
+                                        // delegate to bindPattern which handles all pattern types.
+                                        // The payload location is used as the base.
+                                        try self.bindPattern(arg_pattern_id, value_loc);
+                                    },
                                 }
                             }
                         }
@@ -13242,6 +13247,113 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             return false;
         }
 
+        /// Calculate the number of registers a pattern needs based on its type.
+        /// This is the pattern-level equivalent of calcParamRegCount — it handles
+        /// all pattern variants (bind, wildcard, record, tuple, list, etc.).
+        fn calcPatternRegCount(self: *Self, pat: anytype) u8 {
+            return switch (pat) {
+                .bind => |b| self.calcParamRegCount(b.layout_idx),
+                .wildcard => |w| self.calcParamRegCount(w.layout_idx),
+                .record => |r| blk: {
+                    const ls = self.layout_store orelse break :blk 1;
+                    const rl = ls.getLayout(r.record_layout);
+                    const sz = ls.layoutSizeAlign(rl).size;
+                    break :blk @max(1, @as(u8, @intCast((sz + 7) / 8)));
+                },
+                .tuple => |t| blk: {
+                    const ls = self.layout_store orelse break :blk 1;
+                    const tl = ls.getLayout(t.tuple_layout);
+                    const sz = ls.layoutSizeAlign(tl).size;
+                    break :blk @max(1, @as(u8, @intCast((sz + 7) / 8)));
+                },
+                .list => 3,
+                else => 1,
+            };
+        }
+
+        /// Extract the parameter span from a lambda or closure expression.
+        /// Returns null if the expression is not a lambda/closure.
+        fn getLambdaParams(self: *Self, expr_id: MonoExprId) ?mono.MonoPatternSpan {
+            const expr = self.store.getExpr(expr_id);
+            return switch (expr) {
+                .lambda => |l| l.params,
+                .closure => |c| blk: {
+                    const inner = self.store.getExpr(c.lambda);
+                    break :blk switch (inner) {
+                        .lambda => |l| l.params,
+                        else => null,
+                    };
+                },
+                else => null,
+            };
+        }
+
+        const ParamLayout = struct {
+            /// Register index where roc_ops should be passed (after all regular params).
+            /// Always < max_arg_regs because the pre-scan converts multi-reg params to
+            /// pass-by-pointer to make room.
+            roc_ops_reg_idx: u8,
+            /// Which params are passed by pointer (multi-reg params that don't fit inline).
+            pass_by_ptr: [16]bool,
+        };
+
+        /// Pre-compute the register layout for a set of lambda parameters.
+        /// Determines which params are passed by pointer and where roc_ops goes.
+        /// This must match the logic used by generateCallToLambda and bindLambdaParams.
+        fn precomputeParamLayout(self: *Self, params: mono.MonoPatternSpan) ParamLayout {
+            return self.precomputeParamLayoutFrom(params, 0);
+        }
+
+        fn precomputeParamLayoutFrom(self: *Self, params: mono.MonoPatternSpan, initial_reg_idx: u8) ParamLayout {
+            const pattern_ids = self.store.getPatternSpan(params);
+            var result: ParamLayout = .{
+                .roc_ops_reg_idx = 0,
+                .pass_by_ptr = .{false} ** 16,
+            };
+            var param_num_regs: [16]u8 = .{1} ** 16;
+            var reg_count: u8 = initial_reg_idx;
+
+            for (pattern_ids, 0..) |pid, pi| {
+                if (pi >= 16) break;
+                const pat = self.store.getPattern(pid);
+                const nr = self.calcPatternRegCount(pat);
+                param_num_regs[pi] = nr;
+                if (reg_count + nr <= max_arg_regs) {
+                    reg_count += nr;
+                } else if (nr > 1) {
+                    result.pass_by_ptr[pi] = true;
+                    if (reg_count + 1 <= max_arg_regs) {
+                        reg_count += 1;
+                    } else {
+                        reg_count = max_arg_regs;
+                    }
+                } else {
+                    reg_count = max_arg_regs;
+                }
+            }
+
+            // Ensure roc_ops fits in a register by converting more multi-reg params
+            while (reg_count + 1 > max_arg_regs) {
+                var found = false;
+                var best_idx: usize = 0;
+                var best_regs: u8 = 0;
+                for (0..pattern_ids.len) |pi| {
+                    if (pi >= 16) break;
+                    if (!result.pass_by_ptr[pi] and param_num_regs[pi] > 1 and param_num_regs[pi] > best_regs) {
+                        best_idx = pi;
+                        best_regs = param_num_regs[pi];
+                        found = true;
+                    }
+                }
+                if (!found) break;
+                result.pass_by_ptr[best_idx] = true;
+                reg_count -= (best_regs - 1);
+            }
+
+            result.roc_ops_reg_idx = reg_count;
+            return result;
+        }
+
         /// Copy parameter data from caller's stack frame to local stack.
         /// caller_offset is the offset from RBP/FP to the caller's argument.
         /// For x86_64: first stack arg is at [RBP+16], second at [RBP+24], etc.
@@ -13266,63 +13378,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
             // Pre-scan: determine which params are passed by pointer.
             // This must match the logic in generateCallToLambda.
-            var param_pass_by_ptr: [16]bool = .{false} ** 16;
-            {
-                var param_num_regs: [16]u8 = .{1} ** 16;
-                var pre_reg_count: u8 = initial_reg_idx;
-                for (pattern_ids, 0..) |pid, pi| {
-                    if (pi >= 16) break;
-                    const pat = self.store.getPattern(pid);
-                    const nr: u8 = switch (pat) {
-                        .bind => |b| self.calcParamRegCount(b.layout_idx),
-                        .wildcard => |w| self.calcParamRegCount(w.layout_idx),
-                        .record => |r| blk: {
-                            const ls = self.layout_store orelse break :blk 1;
-                            const rl = ls.getLayout(r.record_layout);
-                            const sz = ls.layoutSizeAlign(rl).size;
-                            break :blk @max(1, @as(u8, @intCast((sz + 7) / 8)));
-                        },
-                        .tuple => |t| blk: {
-                            const ls = self.layout_store orelse break :blk 1;
-                            const tl = ls.getLayout(t.tuple_layout);
-                            const sz = ls.layoutSizeAlign(tl).size;
-                            break :blk @max(1, @as(u8, @intCast((sz + 7) / 8)));
-                        },
-                        .list => 3,
-                        else => 1,
-                    };
-                    param_num_regs[pi] = nr;
-                    if (pre_reg_count + nr <= max_arg_regs) {
-                        pre_reg_count += nr;
-                    } else if (nr > 1) {
-                        param_pass_by_ptr[pi] = true;
-                        if (pre_reg_count + 1 <= max_arg_regs) {
-                            pre_reg_count += 1;
-                        } else {
-                            pre_reg_count = max_arg_regs;
-                        }
-                    } else {
-                        pre_reg_count = max_arg_regs;
-                    }
-                }
-                // If roc_ops doesn't fit, convert more inline multi-reg args
-                while (pre_reg_count + 1 > max_arg_regs) {
-                    var found = false;
-                    var best_idx: usize = 0;
-                    var best_regs: u8 = 0;
-                    for (0..pattern_ids.len) |pi| {
-                        if (pi >= 16) break;
-                        if (!param_pass_by_ptr[pi] and param_num_regs[pi] > 1 and param_num_regs[pi] > best_regs) {
-                            best_idx = pi;
-                            best_regs = param_num_regs[pi];
-                            found = true;
-                        }
-                    }
-                    if (!found) break;
-                    param_pass_by_ptr[best_idx] = true;
-                    pre_reg_count -= (best_regs - 1);
-                }
-            }
+            const param_layout = self.precomputeParamLayoutFrom(params, initial_reg_idx);
+            const param_pass_by_ptr = param_layout.pass_by_ptr;
 
             var reg_idx: u8 = initial_reg_idx;
             // Track offset for stack arguments (first stack arg at RBP+16/FP+16)
@@ -16024,11 +16081,14 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 const relocs_before = self.codegen.relocations.items.len;
 
                 // Save args to callee-saved registers (safe because prologue will save them)
-                try self.codegen.emit.movRegReg(.w64, .X19, .X0);
-                try self.codegen.emit.movRegReg(.w64, .X20, .X1);
+                // X20 = roc_ops (must match compileProc's convention: roc_ops_reg = X20)
+                // X19 = ret_ptr
+                // X21 = args_ptr
+                try self.codegen.emit.movRegReg(.w64, .X20, .X0);
+                try self.codegen.emit.movRegReg(.w64, .X19, .X1);
                 try self.codegen.emit.movRegReg(.w64, .X21, .X2);
 
-                self.roc_ops_reg = .X19;
+                self.roc_ops_reg = .X20;
 
                 // Unpack arguments from args_ptr (X21) to argument registers
                 var args_offset: i32 = 0;
@@ -16052,15 +16112,21 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
                 const final_result = switch (result_loc) {
                     .lambda_code => |lc| blk: {
-                        // The lambda's return layout is the actual return type
                         actual_ret_layout = lc.ret_layout;
-                        // Call the lambda with BL instruction (aarch64)
-                        // Calculate relative offset from current position
+                        // Pass roc_ops to the lambda in the register it expects.
+                        // The lambda (compileLambdaAsProc) receives roc_ops after all
+                        // regular params — use precomputeParamLayout to find that index.
+                        const lambda_params = self.getLambdaParams(body_expr);
+                        if (lambda_params) |params| {
+                            const param_layout = self.precomputeParamLayout(params);
+                            const roc_ops_arg_reg = self.getArgumentRegister(param_layout.roc_ops_reg_idx);
+                            try self.codegen.emit.movRegReg(.w64, roc_ops_arg_reg, .X20);
+                        }
+
                         const current_offset = self.codegen.currentOffset();
                         const rel_offset: i28 = @intCast(@as(i32, @intCast(lc.code_offset)) - @as(i32, @intCast(current_offset)));
                         try self.codegen.emit.bl(rel_offset);
 
-                        // Result is in X0
                         break :blk ValueLocation{ .general_reg = .X0 };
                     },
                     .closure_value => |cv| blk: {
@@ -16083,12 +16149,12 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     else => result_loc,
                 };
 
-                // Store result to ret_ptr (X20) - but only if return type is non-zero-sized
+                // Store result to ret_ptr (X19) - but only if return type is non-zero-sized
                 // Per RocCall ABI: "If the Roc function returns a zero-sized type like `{}`,
                 // it will not write anything into this address."
                 const ret_size = self.getLayoutSize(actual_ret_layout);
                 if (ret_size > 0) {
-                    try self.storeResultToSavedPtr(final_result, actual_ret_layout, .X20, 1);
+                    try self.storeResultToSavedPtr(final_result, actual_ret_layout, .X19, 1);
                 }
 
                 // Emit epilogue using DeferredFrameBuilder with actual stack usage
@@ -16208,21 +16274,18 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
                 const final_result = switch (result_loc) {
                     .lambda_code => |lc| blk: {
-                        // The lambda's return layout is the actual return type
                         actual_ret_layout = lc.ret_layout;
-                        // Call the lambda with roc_ops as first argument
-                        // The lambda's code is at lc.code_offset and expects roc_ops in RCX (Windows)
-                        // R12 holds roc_ops, so pass it to the lambda
-                        if (target.isWindows()) {
-                            try self.codegen.emit.movRegReg(.w64, .RCX, .R12);
-                        } else {
-                            try self.codegen.emit.movRegReg(.w64, .RDI, .R12);
+                        // Pass roc_ops to the lambda in the register it expects.
+                        const lambda_params = self.getLambdaParams(body_expr);
+                        if (lambda_params) |params| {
+                            const param_layout = self.precomputeParamLayout(params);
+                            const roc_ops_arg_reg = self.getArgumentRegister(param_layout.roc_ops_reg_idx);
+                            try self.codegen.emit.movRegReg(.w64, roc_ops_arg_reg, .R12);
                         }
 
                         const rel_offset = @as(i32, @intCast(lc.code_offset)) - @as(i32, @intCast(self.codegen.currentOffset() + 5));
                         try self.codegen.emit.callRel32(rel_offset);
 
-                        // Result is in RAX (for small return values)
                         break :blk ValueLocation{ .general_reg = .RAX };
                     },
                     .closure_value => |cv| blk: {

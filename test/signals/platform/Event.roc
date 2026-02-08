@@ -1,6 +1,7 @@
 import NodeValue exposing [NodeValue]
 import EventNode exposing [EventNode]
 import EventSender exposing [EventSender]
+import Host
 
 ## An Event represents discrete occurrences over time.
 ## Uses record wrapper pattern for structural lifting to work.
@@ -10,9 +11,11 @@ Event(a) := { node : EventNode }.{
     to_node = |event| event.node
 
     ## Create a channel - returns sender/receiver pair
-    channel : {} -> { sender : EventSender(a), receiver : Event(a) }
-    channel = |{}| {
-        event_node = EventNode.make_source({})
+    ## Effectful: eagerly creates host event source so sender and receiver share the same node
+    channel! : {} => { sender : EventSender(a), receiver : Event(a) }
+    channel! = |{}| {
+        host_id = Host.create_event_source!({})
+        event_node = EventNode.make_prebuilt(host_id)
         {
             sender: { node: event_node },
             receiver: { node: event_node },

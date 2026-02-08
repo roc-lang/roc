@@ -1,2 +1,16 @@
-# Test spec for counter app
-# Initial state - just verify app starts without crashing
+# Counter app test
+expect_text button:0 "-"
+expect_text span:0 "0"
+expect_text button:1 "+"
+
+# Click increment
+click button:1
+expect_text span:0 "1"
+
+# Click increment again
+click button:1
+expect_text span:0 "2"
+
+# Click decrement
+click button:0
+expect_text span:0 "1"
