@@ -230,15 +230,13 @@ noinline fn executeAndFormat(
         layout_mod.Idx.f64 => blk: {
             var result: f64 = 0;
             try dev_eval.callWithCrashProtection(executable, @ptrCast(&result));
-            var float_buf: [32]u8 = undefined;
-            break :blk std.fmt.allocPrint(alloc, "{s}", .{i128h.f64_to_str(&float_buf, result)});
+            break :blk std.fmt.allocPrint(alloc, "{d}", .{result});
         },
         layout_mod.Idx.f32 => blk: {
             // F32 stores 4 bytes, use f32 buffer and print at f32 precision
             var result: f32 = 0;
             try dev_eval.callWithCrashProtection(executable, @ptrCast(&result));
-            var float_buf: [32]u8 = undefined;
-            break :blk std.fmt.allocPrint(alloc, "{s}", .{i128h.f32_to_str(&float_buf, result)});
+            break :blk std.fmt.allocPrint(alloc, "{d}", .{@as(f64, result)});
         },
         layout_mod.Idx.i128, layout_mod.Idx.u128 => blk: {
             var result: i128 align(16) = 0; // Initialize to 0 and ensure 16-byte alignment
@@ -720,18 +718,14 @@ pub fn runExpectF32(src: []const u8, expected_f32: f32, should_trace: enum { tra
     const actual = result.asF32();
 
     // Compare with DevEvaluator using string representation
-    var float_buf: [32]u8 = undefined;
-    const float_str = try test_allocator.dupe(u8, i128h.f32_to_str(&float_buf, actual));
+    const float_str = try std.fmt.allocPrint(test_allocator, "{d}", .{@as(f64, actual)});
     defer test_allocator.free(float_str);
     try compareWithDevEvaluator(test_allocator, float_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     const epsilon: f32 = 0.0001;
     const diff = @abs(actual - expected_f32);
     if (diff > epsilon) {
-        var e_buf: [32]u8 = undefined;
-        var a_buf: [32]u8 = undefined;
-        var d_buf: [32]u8 = undefined;
-        std.debug.print("Expected {s}, got {s}, diff {s}\n", .{ i128h.f32_to_str(&e_buf, expected_f32), i128h.f32_to_str(&a_buf, actual), i128h.f32_to_str(&d_buf, diff) });
+        std.debug.print("Expected {d}, got {d}, diff {d}\n", .{ @as(f64, expected_f32), @as(f64, actual), @as(f64, diff) });
         return error.TestExpectedEqual;
     }
 }
@@ -764,18 +758,14 @@ pub fn runExpectF64(src: []const u8, expected_f64: f64, should_trace: enum { tra
     const actual = result.asF64();
 
     // Compare with DevEvaluator using string representation
-    var float_buf: [32]u8 = undefined;
-    const float_str = try test_allocator.dupe(u8, i128h.f64_to_str(&float_buf, actual));
+    const float_str = try std.fmt.allocPrint(test_allocator, "{d}", .{actual});
     defer test_allocator.free(float_str);
     try compareWithDevEvaluator(test_allocator, float_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     const epsilon: f64 = 0.000000001;
     const diff = @abs(actual - expected_f64);
     if (diff > epsilon) {
-        var e_buf: [32]u8 = undefined;
-        var a_buf: [32]u8 = undefined;
-        var d_buf: [32]u8 = undefined;
-        std.debug.print("Expected {s}, got {s}, diff {s}\n", .{ i128h.f64_to_str(&e_buf, expected_f64), i128h.f64_to_str(&a_buf, actual), i128h.f64_to_str(&d_buf, diff) });
+        std.debug.print("Expected {d}, got {d}, diff {d}\n", .{ expected_f64, actual, diff });
         return error.TestExpectedEqual;
     }
 }

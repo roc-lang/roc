@@ -5005,17 +5005,13 @@ pub const Interpreter = struct {
 
         const float_value: T = builtins.utils.readAs(T, float_arg.ptr.?, @src());
 
-        // Use our own f64_to_str to avoid std.fmt.float which uses u128 internally
-        var buf: [32]u8 = undefined;
-        const result = if (T == f32)
-            i128h.f32_to_str(&buf, float_value)
-        else
-            i128h.f64_to_str(&buf, float_value);
+        const str_bytes = try std.fmt.allocPrint(self.allocator, "{d}", .{float_value});
+        defer self.allocator.free(str_bytes);
 
         const str_rt_var = try self.getCanonicalStrRuntimeVar();
         const value = try self.pushStr(str_rt_var);
         const roc_str_ptr = value.asRocStr().?;
-        roc_str_ptr.* = RocStr.init(result.ptr, result.len, roc_ops);
+        roc_str_ptr.* = RocStr.init(str_bytes.ptr, str_bytes.len, roc_ops);
         return value;
     }
 

@@ -681,8 +681,7 @@ pub const Repl = struct {
                         LayoutIdx.u64, LayoutIdx.u8, LayoutIdx.u16, LayoutIdx.u32 => try std.fmt.allocPrint(self.allocator, "{} : U64", .{executable.callReturnU64()}),
                         LayoutIdx.bool => if (executable.callReturnU64() != 0) try self.allocator.dupe(u8, "Bool.true : Bool") else try self.allocator.dupe(u8, "Bool.false : Bool"),
                         LayoutIdx.f64, LayoutIdx.f32 => blk: {
-                            var fbuf: [32]u8 = undefined;
-                            break :blk try std.fmt.allocPrint(self.allocator, "{s} : F64", .{builtins.compiler_rt_128.f64_to_str(&fbuf, executable.callReturnF64())});
+                            break :blk try std.fmt.allocPrint(self.allocator, "{d} : F64", .{executable.callReturnF64()});
                         },
                         LayoutIdx.dec => try std.fmt.allocPrint(self.allocator, "{} : Dec", .{executable.callReturnI64()}), // TODO: proper Dec formatting
                         else => return self.evaluateWithInterpreter(module_env, final_expr_idx, &imported_modules, &checker),

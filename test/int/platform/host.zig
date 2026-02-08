@@ -3,7 +3,6 @@
 
 const std = @import("std");
 const builtins = @import("builtins");
-const f64str = builtins.compiler_rt_128.f64_to_str;
 const f32str = builtins.compiler_rt_128.f32_to_str;
 
 /// Host environment - contains our arena allocator

@@ -722,7 +722,7 @@ pub fn formatBase256ToDecimal(
             }
             // Print fractional part (removing leading "0.")
             var frac_buf: [32]u8 = undefined;
-            const frac_str = builtins.compiler_rt_128.f64_to_str(&frac_buf, frac);
+            const frac_str = std.fmt.bufPrint(&frac_buf, "{d}", .{frac}) catch "";
             if (frac_str.len > 2 and std.mem.startsWith(u8, frac_str, "0.")) {
                 w.writeAll(frac_str[2..]) catch {};
             }

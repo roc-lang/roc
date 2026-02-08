@@ -1350,10 +1350,10 @@ test "shiftRightZeroFillI128 basic functionality" {
     const result3 = shiftRightZeroFillI128(value, 128);
     try std.testing.expectEqual(@as(i128, 0), result3);
 
-    // Test negative value (arithmetic right shift preserves sign bit)
+    // Test negative value (zero-fill right shift clears the sign bit)
     const neg_value: i128 = -1;
     const result4 = shiftRightZeroFillI128(neg_value, 1);
-    try std.testing.expectEqual(@as(i128, -1), result4);
+    try std.testing.expectEqual(@as(i128, std.math.maxInt(i128)), result4);
 }
 
 test "shiftRightZeroFillU128 basic functionality" {
