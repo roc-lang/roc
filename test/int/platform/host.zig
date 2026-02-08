@@ -3,6 +3,8 @@
 
 const std = @import("std");
 const builtins = @import("builtins");
+const f64str = builtins.compiler_rt_128.f64_to_str;
+const f32str = builtins.compiler_rt_128.f32_to_str;
 
 /// Host environment - contains our arena allocator
 const HostEnv = struct {
@@ -239,24 +241,34 @@ fn platform_main() !void {
     roc__test_struct_arg(&roc_ops, @as(*anyopaque, @ptrCast(&frame_output)), @as(*anyopaque, @ptrCast(&frame_input)));
 
     // Verify all field values came through correctly
-    try stdout.print("Input:  frame_count={}, mouse_wheel={d:.2}, mouse_x={d:.2}, mouse_y={d:.2}, mouse_left={}, mouse_middle={}, mouse_right={}\n", .{
-        frame_input.frame_count,
-        frame_input.mouse_wheel,
-        frame_input.mouse_x,
-        frame_input.mouse_y,
-        frame_input.mouse_left,
-        frame_input.mouse_middle,
-        frame_input.mouse_right,
-    });
-    try stdout.print("Output: frame_count={}, mouse_wheel={d:.2}, mouse_x={d:.2}, mouse_y={d:.2}, mouse_left={}, mouse_middle={}, mouse_right={}\n", .{
-        frame_output.frame_count,
-        frame_output.mouse_wheel,
-        frame_output.mouse_x,
-        frame_output.mouse_y,
-        frame_output.mouse_left,
-        frame_output.mouse_middle,
-        frame_output.mouse_right,
-    });
+    {
+        var b1: [32]u8 = undefined;
+        var b2: [32]u8 = undefined;
+        var b3: [32]u8 = undefined;
+        try stdout.print("Input:  frame_count={}, mouse_wheel={s}, mouse_x={s}, mouse_y={s}, mouse_left={}, mouse_middle={}, mouse_right={}\n", .{
+            frame_input.frame_count,
+            f32str(&b1, frame_input.mouse_wheel),
+            f32str(&b2, frame_input.mouse_x),
+            f32str(&b3, frame_input.mouse_y),
+            frame_input.mouse_left,
+            frame_input.mouse_middle,
+            frame_input.mouse_right,
+        });
+    }
+    {
+        var b1: [32]u8 = undefined;
+        var b2: [32]u8 = undefined;
+        var b3: [32]u8 = undefined;
+        try stdout.print("Output: frame_count={}, mouse_wheel={s}, mouse_x={s}, mouse_y={s}, mouse_left={}, mouse_middle={}, mouse_right={}\n", .{
+            frame_output.frame_count,
+            f32str(&b1, frame_output.mouse_wheel),
+            f32str(&b2, frame_output.mouse_x),
+            f32str(&b3, frame_output.mouse_y),
+            frame_output.mouse_left,
+            frame_output.mouse_middle,
+            frame_output.mouse_right,
+        });
+    }
 
     const struct_match = frame_output.frame_count == frame_input.frame_count and
         frame_output.mouse_wheel == frame_input.mouse_wheel and
@@ -293,24 +305,34 @@ fn platform_main() !void {
 
     roc__test_effectful_struct_arg(&roc_ops, @as(*anyopaque, @ptrCast(&effectful_frame_output)), @as(*anyopaque, @ptrCast(&effectful_frame_input)));
 
-    try stdout.print("Input:  frame_count={}, mouse_wheel={d:.2}, mouse_x={d:.2}, mouse_y={d:.2}, mouse_left={}, mouse_middle={}, mouse_right={}\n", .{
-        effectful_frame_input.frame_count,
-        effectful_frame_input.mouse_wheel,
-        effectful_frame_input.mouse_x,
-        effectful_frame_input.mouse_y,
-        effectful_frame_input.mouse_left,
-        effectful_frame_input.mouse_middle,
-        effectful_frame_input.mouse_right,
-    });
-    try stdout.print("Output: frame_count={}, mouse_wheel={d:.2}, mouse_x={d:.2}, mouse_y={d:.2}, mouse_left={}, mouse_middle={}, mouse_right={}\n", .{
-        effectful_frame_output.frame_count,
-        effectful_frame_output.mouse_wheel,
-        effectful_frame_output.mouse_x,
-        effectful_frame_output.mouse_y,
-        effectful_frame_output.mouse_left,
-        effectful_frame_output.mouse_middle,
-        effectful_frame_output.mouse_right,
-    });
+    {
+        var b1: [32]u8 = undefined;
+        var b2: [32]u8 = undefined;
+        var b3: [32]u8 = undefined;
+        try stdout.print("Input:  frame_count={}, mouse_wheel={s}, mouse_x={s}, mouse_y={s}, mouse_left={}, mouse_middle={}, mouse_right={}\n", .{
+            effectful_frame_input.frame_count,
+            f32str(&b1, effectful_frame_input.mouse_wheel),
+            f32str(&b2, effectful_frame_input.mouse_x),
+            f32str(&b3, effectful_frame_input.mouse_y),
+            effectful_frame_input.mouse_left,
+            effectful_frame_input.mouse_middle,
+            effectful_frame_input.mouse_right,
+        });
+    }
+    {
+        var b1: [32]u8 = undefined;
+        var b2: [32]u8 = undefined;
+        var b3: [32]u8 = undefined;
+        try stdout.print("Output: frame_count={}, mouse_wheel={s}, mouse_x={s}, mouse_y={s}, mouse_left={}, mouse_middle={}, mouse_right={}\n", .{
+            effectful_frame_output.frame_count,
+            f32str(&b1, effectful_frame_output.mouse_wheel),
+            f32str(&b2, effectful_frame_output.mouse_x),
+            f32str(&b3, effectful_frame_output.mouse_y),
+            effectful_frame_output.mouse_left,
+            effectful_frame_output.mouse_middle,
+            effectful_frame_output.mouse_right,
+        });
+    }
 
     const effectful_struct_match = effectful_frame_output.frame_count == effectful_frame_input.frame_count and
         effectful_frame_output.mouse_wheel == effectful_frame_input.mouse_wheel and
@@ -375,8 +397,16 @@ fn platform_main() !void {
     var three_pure_input = ThreeFloats{ .aaa = 1.0, .bbb = 2.0, .ccc = 3.0 };
     var three_pure_output: ThreeFloats = undefined;
     roc__test_three_floats_pure(&roc_ops, @as(*anyopaque, @ptrCast(&three_pure_output)), @as(*anyopaque, @ptrCast(&three_pure_input)));
-    try stdout.print("Input:  aaa={d:.1}, bbb={d:.1}, ccc={d:.1}\n", .{ three_pure_input.aaa, three_pure_input.bbb, three_pure_input.ccc });
-    try stdout.print("Output: aaa={d:.1}, bbb={d:.1}, ccc={d:.1}\n", .{ three_pure_output.aaa, three_pure_output.bbb, three_pure_output.ccc });
+    {
+        var b1: [32]u8 = undefined;
+        var b2: [32]u8 = undefined;
+        var b3: [32]u8 = undefined;
+        var b4: [32]u8 = undefined;
+        var b5: [32]u8 = undefined;
+        var b6: [32]u8 = undefined;
+        try stdout.print("Input:  aaa={s}, bbb={s}, ccc={s}\n", .{ f32str(&b1, three_pure_input.aaa), f32str(&b2, three_pure_input.bbb), f32str(&b3, three_pure_input.ccc) });
+        try stdout.print("Output: aaa={s}, bbb={s}, ccc={s}\n", .{ f32str(&b4, three_pure_output.aaa), f32str(&b5, three_pure_output.bbb), f32str(&b6, three_pure_output.ccc) });
+    }
     if (three_pure_output.aaa == three_pure_input.aaa and three_pure_output.bbb == three_pure_input.bbb and three_pure_output.ccc == three_pure_input.ccc) {
         try stdout.print("\x1b[32mSUCCESS\x1b[0m: PURE ThreeFloats passed correctly!\n", .{});
         success_count += 1;
@@ -389,8 +419,16 @@ fn platform_main() !void {
     var three_eff_input = ThreeFloats{ .aaa = 1.0, .bbb = 2.0, .ccc = 3.0 };
     var three_eff_output: ThreeFloats = undefined;
     roc__test_three_floats_effectful(&roc_ops, @as(*anyopaque, @ptrCast(&three_eff_output)), @as(*anyopaque, @ptrCast(&three_eff_input)));
-    try stdout.print("Input:  aaa={d:.1}, bbb={d:.1}, ccc={d:.1}\n", .{ three_eff_input.aaa, three_eff_input.bbb, three_eff_input.ccc });
-    try stdout.print("Output: aaa={d:.1}, bbb={d:.1}, ccc={d:.1}\n", .{ three_eff_output.aaa, three_eff_output.bbb, three_eff_output.ccc });
+    {
+        var b1: [32]u8 = undefined;
+        var b2: [32]u8 = undefined;
+        var b3: [32]u8 = undefined;
+        var b4: [32]u8 = undefined;
+        var b5: [32]u8 = undefined;
+        var b6: [32]u8 = undefined;
+        try stdout.print("Input:  aaa={s}, bbb={s}, ccc={s}\n", .{ f32str(&b1, three_eff_input.aaa), f32str(&b2, three_eff_input.bbb), f32str(&b3, three_eff_input.ccc) });
+        try stdout.print("Output: aaa={s}, bbb={s}, ccc={s}\n", .{ f32str(&b4, three_eff_output.aaa), f32str(&b5, three_eff_output.bbb), f32str(&b6, three_eff_output.ccc) });
+    }
     if (three_eff_output.aaa == three_eff_input.aaa and three_eff_output.bbb == three_eff_input.bbb and three_eff_output.ccc == three_eff_input.ccc) {
         try stdout.print("\x1b[32mSUCCESS\x1b[0m: EFFECTFUL ThreeFloats passed correctly!\n", .{});
         success_count += 1;
