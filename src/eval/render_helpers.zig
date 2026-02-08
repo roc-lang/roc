@@ -6,7 +6,6 @@ const can = @import("can");
 const layout = @import("layout");
 const builtins = @import("builtins");
 const StackValue = @import("StackValue.zig");
-const i128h = builtins.compiler_rt_128;
 const RocDec = builtins.dec.RocDec;
 const TypeScope = types.TypeScope;
 
@@ -692,10 +691,9 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
         if (scalar.tag == .frac and scalar.data.frac == .dec) {
             const dec = @as(*const RocDec, @ptrCast(@alignCast(value.ptr.?))).*;
             // Check if this is a whole number (no fractional part)
-            if (i128h.rem_u128(@abs(dec.num), @as(u128, @intCast(RocDec.one_point_zero_i128))) == 0) {
-                const whole = i128h.divTrunc_i128(dec.num, RocDec.one_point_zero_i128);
-                var str_buf: [40]u8 = undefined;
-                return try gpa.dupe(u8, i128h.i128_to_str(&str_buf, whole).str);
+            if (@rem(@abs(dec.num), RocDec.one_point_zero_i128) == 0) {
+                const whole = @divTrunc(dec.num, RocDec.one_point_zero_i128);
+                return try std.fmt.allocPrint(gpa, "{d}", .{whole});
             }
         }
     }
@@ -704,212 +702,17 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
 }
 
 /// Render `value` using only its layout (without additional type information).
+/// Delegates to the shared `values.RocValue.format()` for canonical formatting.
 pub fn renderValueRoc(ctx: *RenderCtx, value: StackValue) ![]u8 {
-    const gpa = ctx.allocator;
-    if (value.layout.tag == .scalar) {
-        const scalar = value.layout.data.scalar;
-        switch (scalar.tag) {
-            .str => {
-                const rs: *const builtins.str.RocStr = @ptrCast(@alignCast(value.ptr.?));
-                const s = rs.asSlice();
-                var buf = std.array_list.AlignedManaged(u8, null).init(gpa);
-                errdefer buf.deinit();
-                try buf.append('"');
-                for (s) |ch| {
-                    switch (ch) {
-                        '\\' => try buf.appendSlice("\\\\"),
-                        '"' => try buf.appendSlice("\\\""),
-                        else => try buf.append(ch),
-                    }
-                }
-                try buf.append('"');
-                return buf.toOwnedSlice();
-            },
-            .int => {
-                // Check if this is an unsigned type that needs asU128
-                const precision = value.getIntPrecision();
-                var str_buf: [40]u8 = undefined;
-                return switch (precision) {
-                    .u64, .u128 => try gpa.dupe(u8, i128h.u128_to_str(&str_buf, value.asU128()).str),
-                    else => try gpa.dupe(u8, i128h.i128_to_str(&str_buf, value.asI128()).str),
-                };
-            },
-            .frac => {
-                std.debug.assert(value.ptr != null);
-                return switch (scalar.data.frac) {
-                    .f32 => {
-                        const ptr = @as(*const f32, @ptrCast(@alignCast(value.ptr.?)));
-                        var float_buf: [400]u8 = undefined;
-                        // Cast f32 to f64 and format at f64 precision to show the
-                        // exact binary representation (e.g. 3.140000104904175 for 3.14f32).
-                        return try gpa.dupe(u8, i128h.f64_to_str(&float_buf, @as(f64, ptr.*)));
-                    },
-                    .f64 => {
-                        const ptr = @as(*const f64, @ptrCast(@alignCast(value.ptr.?)));
-                        var float_buf: [400]u8 = undefined;
-                        return try gpa.dupe(u8, i128h.f64_to_str(&float_buf, ptr.*));
-                    },
-                    .dec => {
-                        const dec = @as(*const RocDec, @ptrCast(@alignCast(value.ptr.?))).*;
-                        // In REPL mode, strip .0 from whole-number Dec values
-                        if (ctx.strip_unbound_numeral_decimal and
-                            i128h.rem_u128(@abs(dec.num), @as(u128, @intCast(RocDec.one_point_zero_i128))) == 0)
-                        {
-                            const whole = i128h.divTrunc_i128(dec.num, RocDec.one_point_zero_i128);
-                            var str_buf: [40]u8 = undefined;
-                            return try gpa.dupe(u8, i128h.i128_to_str(&str_buf, whole).str);
-                        }
-                        var buf: [RocDec.max_str_length]u8 = undefined;
-                        const slice = dec.format_to_buf(&buf);
-                        return try gpa.dupe(u8, slice);
-                    },
-                };
-            },
-            else => {},
-        }
-    }
-    if (value.layout.tag == .tuple) {
-        var out = std.array_list.AlignedManaged(u8, null).init(gpa);
-        errdefer out.deinit();
-        try out.append('(');
-        var acc = try value.asTuple(ctx.layout_store);
-        const count = acc.getElementCount();
-        var i: usize = 0;
-        while (i < count) : (i += 1) {
-            // rt_var undefined (no type info available in this context)
-            const elem = try acc.getElement(i, undefined);
-            const rendered = try renderValueRoc(ctx, elem);
-            defer gpa.free(rendered);
-            try out.appendSlice(rendered);
-            if (i + 1 < count) try out.appendSlice(", ");
-        }
-        try out.append(')');
-        return out.toOwnedSlice();
-    }
-    if (value.layout.tag == .list) {
-        var out = std.array_list.AlignedManaged(u8, null).init(gpa);
-        errdefer out.deinit();
-        const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(value.ptr.?));
-        const len = roc_list.len();
-        try out.append('[');
-        if (len > 0) {
-            const elem_layout_idx = value.layout.data.list;
-            const elem_layout = ctx.layout_store.getLayout(elem_layout_idx);
-            const elem_size = ctx.layout_store.layoutSize(elem_layout);
-            var i: usize = 0;
-            while (i < len) : (i += 1) {
-                if (roc_list.bytes) |bytes| {
-                    const elem_ptr: *anyopaque = @ptrCast(bytes + i * elem_size);
-                    const elem_val = StackValue{ .layout = elem_layout, .ptr = elem_ptr, .is_initialized = true, .rt_var = undefined };
-                    const rendered = try renderValueRoc(ctx, elem_val);
-                    defer gpa.free(rendered);
-                    try out.appendSlice(rendered);
-                    if (i + 1 < len) try out.appendSlice(", ");
-                }
-            }
-        }
-        try out.append(']');
-        return out.toOwnedSlice();
-    }
-    if (value.layout.tag == .list_of_zst) {
-        // list_of_zst is used for empty lists - render as []
-        const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(value.ptr.?));
-        const len = roc_list.len();
-        if (len == 0) {
-            return try gpa.dupe(u8, "[]");
-        }
-        // Non-empty list of ZST - show count
-        return try std.fmt.allocPrint(gpa, "[<{d} zero-sized elements>]", .{len});
-    }
-    if (value.layout.tag == .record) {
-        var out = std.array_list.AlignedManaged(u8, null).init(gpa);
-        errdefer out.deinit();
-        const rec_data = ctx.layout_store.getRecordData(value.layout.data.record.idx);
-        if (rec_data.fields.count == 0) {
-            try out.appendSlice("{}");
-            return out.toOwnedSlice();
-        }
-        try out.appendSlice("{ ");
-        const fields = ctx.layout_store.record_fields.sliceRange(rec_data.getFields());
-        var i: usize = 0;
-        while (i < fields.len) : (i += 1) {
-            const fld = fields.get(i);
-            const name_text = ctx.env.getIdent(fld.name);
-            try out.appendSlice(name_text);
-            try out.appendSlice(": ");
-            const offset = ctx.layout_store.getRecordFieldOffset(value.layout.data.record.idx, @intCast(i));
-            const field_layout = ctx.layout_store.getLayout(fld.layout);
-            const base_ptr: [*]u8 = @ptrCast(@alignCast(value.ptr.?));
-            const field_ptr: *anyopaque = @ptrCast(base_ptr + offset);
-            const field_val = StackValue{ .layout = field_layout, .ptr = field_ptr, .is_initialized = true, .rt_var = undefined };
-            const rendered = try renderValueRoc(ctx, field_val);
-            defer gpa.free(rendered);
-            try out.appendSlice(rendered);
-            if (i + 1 < fields.len) try out.appendSlice(", ");
-        }
-        try out.appendSlice(" }");
-        return out.toOwnedSlice();
-    }
-    if (value.layout.tag == .box) {
-        // Layout-only Box rendering: we know it's a Box from layout but don't have type info
-        var out = std.array_list.AlignedManaged(u8, null).init(gpa);
-        errdefer out.deinit();
-        try out.appendSlice("Box(");
-
-        // Get the element layout and render the boxed value
-        const elem_layout_idx = value.layout.data.box;
-        const elem_layout = ctx.layout_store.getLayout(elem_layout_idx);
-        const elem_size = ctx.layout_store.layoutSize(elem_layout);
-
-        if (elem_size > 0) {
-            if (value.getBoxedData()) |data_ptr| {
-                const elem_val = StackValue{
-                    .layout = elem_layout,
-                    .ptr = @ptrCast(data_ptr),
-                    .is_initialized = true,
-                    .rt_var = undefined,
-                };
-                const rendered = try renderValueRoc(ctx, elem_val);
-                defer gpa.free(rendered);
-                try out.appendSlice(rendered);
-            } else {
-                try out.appendSlice("<null>");
-            }
-        } else {
-            // Zero-sized element
-            const elem_val = StackValue{
-                .layout = elem_layout,
-                .ptr = null,
-                .is_initialized = true,
-                .rt_var = undefined,
-            };
-            const rendered = try renderValueRoc(ctx, elem_val);
-            defer gpa.free(rendered);
-            try out.appendSlice(rendered);
-        }
-
-        try out.append(')');
-        return out.toOwnedSlice();
-    }
-    if (value.layout.tag == .box_of_zst) {
-        // Box of zero-sized type - render as Box({}) or similar
-        return try gpa.dupe(u8, "Box({})");
-    }
-    if (value.layout.tag == .tag_union) {
-        // Layout-only fallback for tag_union: show discriminant and raw payload
-        const tu_idx = value.layout.data.tag_union.idx;
-        const tu_data = ctx.layout_store.getTagUnionData(tu_idx);
-        const disc_offset = ctx.layout_store.getTagUnionDiscriminantOffset(tu_idx);
-        var out = std.array_list.AlignedManaged(u8, null).init(gpa);
-        errdefer out.deinit();
-        if (value.ptr) |ptr| {
-            const base_ptr: [*]u8 = @ptrCast(ptr);
-            const discriminant = tu_data.readDiscriminantFromPtr(base_ptr + disc_offset);
-            try std.fmt.format(out.writer(), "<tag_union variant={d}>", .{discriminant});
-        } else {
-            try out.appendSlice("<tag_union>");
-        }
-        return out.toOwnedSlice();
-    }
-    return try gpa.dupe(u8, "<unsupported>");
+    const values = @import("values");
+    const roc_val = values.RocValue{
+        .ptr = if (value.ptr) |p| @ptrCast(p) else null,
+        .lay = value.layout,
+    };
+    const fmt_ctx = values.RocValue.FormatContext{
+        .layout_store = ctx.layout_store,
+        .ident_store = ctx.env.getIdentStoreConst(),
+        .strip_whole_number_decimal = ctx.strip_unbound_numeral_decimal,
+    };
+    return roc_val.format(ctx.allocator, fmt_ctx);
 }
