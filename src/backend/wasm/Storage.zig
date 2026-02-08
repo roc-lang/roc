@@ -67,7 +67,6 @@ pub fn getLocal(self: *const Self, symbol: MonoSymbol) ?u32 {
     return null;
 }
 
-
 /// Reset for a new function scope (keeps allocated memory).
 pub fn reset(self: *Self) void {
     self.locals.clearRetainingCapacity();
