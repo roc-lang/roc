@@ -67,10 +67,6 @@ pub fn getLocal(self: *const Self, symbol: MonoSymbol) ?u32 {
     return null;
 }
 
-/// Number of locals allocated.
-pub fn localCount(self: *const Self) u32 {
-    return self.next_local_idx;
-}
 
 /// Reset for a new function scope (keeps allocated memory).
 pub fn reset(self: *Self) void {
