@@ -171,6 +171,14 @@ pub const MonoLlvmCodeGen = struct {
     list_reserve_addr: usize = 0,
     list_sublist_addr: usize = 0,
     list_release_excess_capacity_addr: usize = 0,
+    list_set_addr: usize = 0,
+    list_reverse_addr: usize = 0,
+
+    /// Address of integer try-conversion wrappers.
+    int_try_signed_addr: usize = 0,
+    int_try_unsigned_addr: usize = 0,
+    i128_try_convert_addr: usize = 0,
+    u128_try_convert_addr: usize = 0,
 
     /// Address of number-to-string wrappers.
     i64_to_str_addr: usize = 0,
@@ -1127,6 +1135,17 @@ pub const MonoLlvmCodeGen = struct {
             .i32 => 32,
             .i64 => 64,
             .i128 => 128,
+            else => 0,
+        };
+    }
+
+    fn llvmTypeByteSize(t: LlvmBuilder.Type) u64 {
+        return switch (t) {
+            .i1, .i8 => 1,
+            .i16 => 2,
+            .i32, .float => 4,
+            .i64, .double => 8,
+            .i128 => 16,
             else => 0,
         };
     }
@@ -2313,7 +2332,7 @@ pub const MonoLlvmCodeGen = struct {
                 return wip.cast(.fptrunc, operand, .float, "") catch return error.CompilationFailed;
             },
 
-            // --- Integer "try" conversions (return Result — not yet implemented) ---
+            // --- Integer "try" conversions (return Result tag union via C wrapper) ---
             .u8_to_i8_try,
             .i8_to_u8_try, .i8_to_u16_try, .i8_to_u32_try, .i8_to_u64_try, .i8_to_u128_try,
             .u16_to_i8_try, .u16_to_i16_try, .u16_to_u8_try,
@@ -2326,6 +2345,9 @@ pub const MonoLlvmCodeGen = struct {
             .u128_to_u8_try, .u128_to_u16_try, .u128_to_u32_try, .u128_to_u64_try,
             .i128_to_i8_try, .i128_to_i16_try, .i128_to_i32_try, .i128_to_i64_try,
             .i128_to_u8_try, .i128_to_u16_try, .i128_to_u32_try, .i128_to_u64_try, .i128_to_u128_try,
+            => {
+                return try self.generateIntTryConversion(ll);
+            },
             .u128_to_dec_try_unsafe, .i128_to_dec_try_unsafe,
             => return error.UnsupportedExpression,
 
@@ -3407,7 +3429,193 @@ pub const MonoLlvmCodeGen = struct {
                 return try self.callListSublistFromPtr(list_ptr, zero, count, ll);
             },
 
-            .list_set, .list_contains, .list_reverse,
+            .list_set => {
+                // list_set(list, index, element) -> new_list
+                if (args.len < 3) return error.UnsupportedExpression;
+                if (self.list_set_addr == 0) return error.UnsupportedExpression;
+                const ls = self.layout_store orelse return error.UnsupportedExpression;
+                const dest_ptr = self.out_ptr orelse return error.UnsupportedExpression;
+                const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
+                const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
+
+                // Get element layout info from the return list type
+                const ret_layout = ls.getLayout(ll.ret_layout);
+                const elem_layout_idx = if (ret_layout.tag == .list) ret_layout.data.list else return error.UnsupportedExpression;
+                const elem_sa = ls.layoutSizeAlign(ls.getLayout(elem_layout_idx));
+                const elem_size: u64 = elem_sa.size;
+                const elem_align: u32 = @intCast(elem_sa.alignment.toByteUnits());
+
+                // Materialize list as pointer, generate index and element
+                const list_ptr = try self.materializeAsPtr(args[0], 24);
+
+                const saved = self.out_ptr;
+                self.out_ptr = null;
+                const index_val = try self.generateExpr(args[1]);
+                self.out_ptr = saved;
+
+                // Materialize element to stack
+                const elem_ptr = try self.materializeAsPtr(args[2], @intCast(elem_size));
+
+                // Allocate scratch for old element (required by listReplace)
+                const old_elem_size: u32 = @intCast(if (elem_size > 0) elem_size else 8);
+                const old_elem_alloca = wip.alloca(.normal, .i8, builder.intValue(.i32, old_elem_size) catch return error.OutOfMemory, alignment, .default, "old_elem") catch return error.CompilationFailed;
+
+                // Decompose list
+                const off8 = builder.intValue(.i32, 8) catch return error.OutOfMemory;
+                const off16 = builder.intValue(.i32, 16) catch return error.OutOfMemory;
+                const list_bytes = wip.load(.normal, ptr_type, list_ptr, alignment, "") catch return error.CompilationFailed;
+                const len_ptr = wip.gep(.inbounds, .i8, list_ptr, &.{off8}, "") catch return error.CompilationFailed;
+                const list_len = wip.load(.normal, .i64, len_ptr, alignment, "") catch return error.CompilationFailed;
+                const cap_ptr = wip.gep(.inbounds, .i8, list_ptr, &.{off16}, "") catch return error.CompilationFailed;
+                const list_cap = wip.load(.normal, .i64, cap_ptr, alignment, "") catch return error.CompilationFailed;
+
+                const roc_ops = self.roc_ops_arg orelse return error.CompilationFailed;
+
+                // wrapListSet(out, list_bytes, list_len, list_cap, alignment, index, element, element_width, out_element, roc_ops)
+                const fn_type = builder.fnType(.void, &.{
+                    ptr_type, ptr_type, .i64, .i64, .i32, .i64, ptr_type, .i64, ptr_type, ptr_type,
+                }, .normal) catch return error.CompilationFailed;
+                const fn_addr = builder.intValue(.i64, self.list_set_addr) catch return error.CompilationFailed;
+                const fn_ptr = wip.cast(.inttoptr, fn_addr, ptr_type, "") catch return error.CompilationFailed;
+                const align_val = builder.intValue(.i32, elem_align) catch return error.OutOfMemory;
+                const width_val = builder.intValue(.i64, elem_size) catch return error.OutOfMemory;
+
+                _ = wip.call(.normal, .ccc, .none, fn_type, fn_ptr, &.{
+                    dest_ptr, list_bytes, list_len, list_cap, align_val, index_val, elem_ptr, width_val, old_elem_alloca, roc_ops,
+                }, "") catch return error.CompilationFailed;
+                return .none;
+            },
+
+            .list_reverse => {
+                // list_reverse(list) -> new_list
+                if (args.len < 1) return error.UnsupportedExpression;
+                if (self.list_reverse_addr == 0) return error.UnsupportedExpression;
+                const ls = self.layout_store orelse return error.UnsupportedExpression;
+                const dest_ptr = self.out_ptr orelse return error.UnsupportedExpression;
+                const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
+                const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
+
+                const ret_layout = ls.getLayout(ll.ret_layout);
+                const elem_layout_idx = if (ret_layout.tag == .list) ret_layout.data.list else return error.UnsupportedExpression;
+                const elem_sa = ls.layoutSizeAlign(ls.getLayout(elem_layout_idx));
+                const elem_size: u64 = elem_sa.size;
+                const elem_align: u32 = @intCast(elem_sa.alignment.toByteUnits());
+
+                const list_ptr = try self.materializeAsPtr(args[0], 24);
+
+                const off8 = builder.intValue(.i32, 8) catch return error.OutOfMemory;
+                const off16 = builder.intValue(.i32, 16) catch return error.OutOfMemory;
+                const list_bytes = wip.load(.normal, ptr_type, list_ptr, alignment, "") catch return error.CompilationFailed;
+                const len_ptr = wip.gep(.inbounds, .i8, list_ptr, &.{off8}, "") catch return error.CompilationFailed;
+                const list_len = wip.load(.normal, .i64, len_ptr, alignment, "") catch return error.CompilationFailed;
+                const cap_ptr = wip.gep(.inbounds, .i8, list_ptr, &.{off16}, "") catch return error.CompilationFailed;
+                const list_cap = wip.load(.normal, .i64, cap_ptr, alignment, "") catch return error.CompilationFailed;
+
+                const roc_ops = self.roc_ops_arg orelse return error.CompilationFailed;
+
+                // wrapListReverse(out, list_bytes, list_len, list_cap, alignment, elem_width, roc_ops)
+                const fn_type = builder.fnType(.void, &.{
+                    ptr_type, ptr_type, .i64, .i64, .i32, .i64, ptr_type,
+                }, .normal) catch return error.CompilationFailed;
+                const fn_addr = builder.intValue(.i64, self.list_reverse_addr) catch return error.CompilationFailed;
+                const fn_ptr = wip.cast(.inttoptr, fn_addr, ptr_type, "") catch return error.CompilationFailed;
+                const align_val = builder.intValue(.i32, elem_align) catch return error.OutOfMemory;
+                const width_val = builder.intValue(.i64, elem_size) catch return error.OutOfMemory;
+
+                _ = wip.call(.normal, .ccc, .none, fn_type, fn_ptr, &.{
+                    dest_ptr, list_bytes, list_len, list_cap, align_val, width_val, roc_ops,
+                }, "") catch return error.CompilationFailed;
+                return .none;
+            },
+
+            .list_contains => {
+                // list_contains(list, needle) -> Bool
+                // Inline loop: iterate through list, compare each element
+                if (args.len < 2) return error.UnsupportedExpression;
+                const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
+                const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
+
+                // Generate needle value first to determine element type
+                const saved = self.out_ptr;
+                self.out_ptr = null;
+                const needle = try self.generateExpr(args[1]);
+                self.out_ptr = saved;
+
+                const elem_type = needle.typeOfWip(wip);
+                const elem_size: u64 = llvmTypeByteSize(elem_type);
+                if (elem_size == 0) return error.UnsupportedExpression;
+                const elem_align = LlvmBuilder.Alignment.fromByteUnits(@intCast(elem_size));
+                const is_float = (elem_type == .float or elem_type == .double);
+
+                // Materialize list
+                const list_ptr = try self.materializeAsPtr(args[0], 24);
+                const data_ptr = wip.load(.normal, ptr_type, list_ptr, alignment, "") catch return error.CompilationFailed;
+                const off8 = builder.intValue(.i32, 8) catch return error.OutOfMemory;
+                const len_ptr_val = wip.gep(.inbounds, .i8, list_ptr, &.{off8}, "") catch return error.CompilationFailed;
+                const list_len = wip.load(.normal, .i64, len_ptr_val, alignment, "") catch return error.CompilationFailed;
+
+                // Build loop: header -> body -> exit
+                const header_block = wip.block(2, "contains_hdr") catch return error.OutOfMemory;
+                const body_block = wip.block(1, "contains_body") catch return error.OutOfMemory;
+                const found_block = wip.block(1, "contains_found") catch return error.OutOfMemory;
+                const exit_block = wip.block(3, "contains_exit") catch return error.OutOfMemory;
+
+                const zero_i64 = builder.intValue(.i64, 0) catch return error.OutOfMemory;
+                const one_i64 = builder.intValue(.i64, 1) catch return error.OutOfMemory;
+                const false_val = builder.intValue(.i1, 0) catch return error.OutOfMemory;
+                const true_val = builder.intValue(.i1, 1) catch return error.OutOfMemory;
+
+                const entry_block = wip.cursor.block;
+                _ = wip.br(header_block) catch return error.CompilationFailed;
+
+                // Header: phi for counter, compare with len
+                wip.cursor = .{ .block = header_block };
+                const counter_phi = wip.phi(.i64, "ctr") catch return error.CompilationFailed;
+                const ctr_val = counter_phi.toValue();
+                const cond = wip.icmp(.ult, ctr_val, list_len, "") catch return error.OutOfMemory;
+                _ = wip.brCond(cond, body_block, exit_block, .none) catch return error.CompilationFailed;
+
+                // Body: load element, compare with needle
+                wip.cursor = .{ .block = body_block };
+                const size_const = builder.intValue(.i64, elem_size) catch return error.OutOfMemory;
+                const byte_offset = wip.bin(.mul, ctr_val, size_const, "") catch return error.CompilationFailed;
+                const elem_ptr_val = wip.gep(.inbounds, .i8, data_ptr, &.{byte_offset}, "") catch return error.CompilationFailed;
+                const elem_val = wip.load(.normal, elem_type, elem_ptr_val, elem_align, "") catch return error.CompilationFailed;
+
+                // Compare based on type (integer or float)
+                const is_equal = if (is_float)
+                    wip.fcmp(.normal, .oeq, elem_val, needle, "") catch return error.OutOfMemory
+                else
+                    wip.icmp(.eq, elem_val, needle, "") catch return error.OutOfMemory;
+
+                _ = wip.brCond(is_equal, found_block, header_block, .none) catch return error.CompilationFailed;
+
+                // Increment counter for back-edge
+                const next_ctr = wip.bin(.add, ctr_val, one_i64, "") catch return error.CompilationFailed;
+                const body_end_block = wip.cursor.block;
+
+                // Found block
+                wip.cursor = .{ .block = found_block };
+                _ = wip.br(exit_block) catch return error.CompilationFailed;
+
+                // Finish counter phi: entry->0, body_end->next_ctr
+                counter_phi.finish(
+                    &.{ zero_i64, next_ctr },
+                    &.{ entry_block, body_end_block },
+                    wip,
+                );
+
+                // Exit block: phi for result (false from header, true from found)
+                wip.cursor = .{ .block = exit_block };
+                const result_phi = wip.phi(.i1, "result") catch return error.CompilationFailed;
+                result_phi.finish(
+                    &.{ false_val, true_val },
+                    &.{ header_block, found_block },
+                    wip,
+                );
+                return result_phi.toValue();
+            },
+
             .list_split_first, .list_split_last,
             => return error.UnsupportedExpression,
 
@@ -3453,6 +3661,222 @@ pub const MonoLlvmCodeGen = struct {
         }
 
         return alloca_ptr;
+    }
+
+    /// Generate a checked integer try-conversion returning a Result tag union.
+    /// Calls a C wrapper that checks range and writes to a tag union buffer.
+    fn generateIntTryConversion(self: *MonoLlvmCodeGen, ll: anytype) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
+        const ls = self.layout_store orelse return error.UnsupportedExpression;
+        const dest_ptr = self.out_ptr orelse return error.UnsupportedExpression;
+        const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
+        const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
+        const args = self.store.getExprSpan(ll.args);
+        if (args.len < 1) return error.UnsupportedExpression;
+
+        // Get the tag union layout for the Result return type
+        const ret_layout_val = ls.getLayout(ll.ret_layout);
+        if (ret_layout_val.tag != .tag_union) return error.UnsupportedExpression;
+        const tu_data = ls.getTagUnionData(ret_layout_val.data.tag_union.idx);
+        const disc_offset: u32 = tu_data.discriminant_offset;
+        const payload_size: u32 = disc_offset; // payload is before discriminant
+        const total_size: u32 = tu_data.size;
+
+        // Zero the output buffer first
+        const zero_byte = builder.intValue(.i8, 0) catch return error.OutOfMemory;
+        const total_size_val = builder.intValue(.i32, total_size) catch return error.OutOfMemory;
+        _ = wip.callMemSet(dest_ptr, alignment, zero_byte, total_size_val, .normal, false) catch return error.CompilationFailed;
+
+        // Get conversion info
+        const info = intTryConvInfo(ll.op);
+
+        // Generate source value
+        const saved = self.out_ptr;
+        self.out_ptr = null;
+        const operand = try self.generateExpr(args[0]);
+        self.out_ptr = saved;
+
+        if (info.src_bits > 64) {
+            // 128-bit source: split into low/high u64 halves
+            const fn_addr_val = if (info.src_signed) self.i128_try_convert_addr else self.u128_try_convert_addr;
+            if (fn_addr_val == 0) return error.UnsupportedExpression;
+
+            const low = wip.cast(.trunc, operand, .i64, "") catch return error.CompilationFailed;
+            const shifted = wip.bin(.lshr, operand, builder.intValue(.i128, 64) catch return error.OutOfMemory, "") catch return error.CompilationFailed;
+            const high = wip.cast(.trunc, shifted, .i64, "") catch return error.CompilationFailed;
+
+            // fn(out, val_low, val_high, target_bits, target_is_signed, payload_size, disc_offset) -> void
+            const fn_type = builder.fnType(.void, &.{
+                ptr_type, .i64, .i64, .i32, .i32, .i32, .i32,
+            }, .normal) catch return error.CompilationFailed;
+            const fn_addr = builder.intValue(.i64, fn_addr_val) catch return error.CompilationFailed;
+            const fn_ptr = wip.cast(.inttoptr, fn_addr, ptr_type, "") catch return error.CompilationFailed;
+
+            const tgt_bits_val = builder.intValue(.i32, @as(u32, info.tgt_bits)) catch return error.OutOfMemory;
+            const tgt_signed_val = builder.intValue(.i32, @as(u32, if (info.tgt_signed) 1 else 0)) catch return error.OutOfMemory;
+            const payload_size_val = builder.intValue(.i32, payload_size) catch return error.OutOfMemory;
+            const disc_offset_val = builder.intValue(.i32, disc_offset) catch return error.OutOfMemory;
+
+            _ = wip.call(.normal, .ccc, .none, fn_type, fn_ptr, &.{
+                dest_ptr,
+                low,
+                high,
+                tgt_bits_val,
+                tgt_signed_val,
+                payload_size_val,
+                disc_offset_val,
+            }, "") catch return error.CompilationFailed;
+        } else {
+            // ≤64-bit source: sign/zero extend to i64, call C wrapper
+            const src_type = operand.typeOfWip(wip);
+            const val_i64 = if (src_type == .i64)
+                operand
+            else if (info.src_signed)
+                wip.cast(.sext, operand, .i64, "") catch return error.CompilationFailed
+            else
+                wip.cast(.zext, operand, .i64, "") catch return error.CompilationFailed;
+
+            if (info.src_signed) {
+                // Signed source: call wrapIntTrySigned(out, val, min_val, max_val, payload_size, disc_offset)
+                if (self.int_try_signed_addr == 0) return error.UnsupportedExpression;
+
+                const min_val: i64 = if (info.tgt_signed) blk: {
+                    if (info.tgt_bits >= 64) break :blk std.math.minInt(i64);
+                    const shift: u6 = @intCast(info.tgt_bits - 1);
+                    break :blk -(@as(i64, 1) << shift);
+                } else 0;
+
+                // For tgt_bits >= 64 (signed or unsigned target): any value representable
+                // in the source (≤64 bits) fits, so use maxInt(i64) as upper bound
+                const max_val: i64 = if (info.tgt_bits >= 64) blk: {
+                    break :blk std.math.maxInt(i64);
+                } else if (info.tgt_signed) blk: {
+                    const shift: u6 = @intCast(info.tgt_bits - 1);
+                    break :blk (@as(i64, 1) << shift) - 1;
+                } else blk: {
+                    const shift: u6 = @intCast(info.tgt_bits);
+                    break :blk (@as(i64, 1) << shift) - 1;
+                };
+
+                const fn_type = builder.fnType(.void, &.{
+                    ptr_type, .i64, .i64, .i64, .i32, .i32,
+                }, .normal) catch return error.CompilationFailed;
+                const fn_addr = builder.intValue(.i64, self.int_try_signed_addr) catch return error.CompilationFailed;
+                const fn_ptr = wip.cast(.inttoptr, fn_addr, ptr_type, "") catch return error.CompilationFailed;
+
+                _ = wip.call(.normal, .ccc, .none, fn_type, fn_ptr, &.{
+                    dest_ptr,
+                    val_i64,
+                    builder.intValue(.i64, min_val) catch return error.OutOfMemory,
+                    builder.intValue(.i64, max_val) catch return error.OutOfMemory,
+                    builder.intValue(.i32, payload_size) catch return error.OutOfMemory,
+                    builder.intValue(.i32, disc_offset) catch return error.OutOfMemory,
+                }, "") catch return error.CompilationFailed;
+            } else {
+                // Unsigned source: call wrapIntTryUnsigned(out, val, max_val, payload_size, disc_offset)
+                if (self.int_try_unsigned_addr == 0) return error.UnsupportedExpression;
+
+                const max_val: u64 = if (info.tgt_bits >= 64) blk: {
+                    // Source is ≤64-bit unsigned, so any value fits in ≥64-bit target
+                    break :blk std.math.maxInt(u64);
+                } else if (info.tgt_signed) blk: {
+                    const shift: u6 = @intCast(info.tgt_bits - 1);
+                    break :blk (@as(u64, 1) << shift) - 1;
+                } else blk: {
+                    const shift: u6 = @intCast(info.tgt_bits);
+                    break :blk (@as(u64, 1) << shift) - 1;
+                };
+
+                const fn_type = builder.fnType(.void, &.{
+                    ptr_type, .i64, .i64, .i32, .i32,
+                }, .normal) catch return error.CompilationFailed;
+                const fn_addr = builder.intValue(.i64, self.int_try_unsigned_addr) catch return error.CompilationFailed;
+                const fn_ptr = wip.cast(.inttoptr, fn_addr, ptr_type, "") catch return error.CompilationFailed;
+
+                _ = wip.call(.normal, .ccc, .none, fn_type, fn_ptr, &.{
+                    dest_ptr,
+                    val_i64,
+                    builder.intValue(.i64, max_val) catch return error.OutOfMemory,
+                    builder.intValue(.i32, payload_size) catch return error.OutOfMemory,
+                    builder.intValue(.i32, disc_offset) catch return error.OutOfMemory,
+                }, "") catch return error.CompilationFailed;
+            }
+        }
+        return .none;
+    }
+
+    const IntTryInfo = struct {
+        src_bits: u8,
+        src_signed: bool,
+        tgt_bits: u8,
+        tgt_signed: bool,
+    };
+
+    fn intTryConvInfo(op: anytype) IntTryInfo {
+        return switch (op) {
+            .u8_to_i8_try => .{ .src_bits = 8, .src_signed = false, .tgt_bits = 8, .tgt_signed = true },
+            .i8_to_u8_try => .{ .src_bits = 8, .src_signed = true, .tgt_bits = 8, .tgt_signed = false },
+            .i8_to_u16_try => .{ .src_bits = 8, .src_signed = true, .tgt_bits = 16, .tgt_signed = false },
+            .i8_to_u32_try => .{ .src_bits = 8, .src_signed = true, .tgt_bits = 32, .tgt_signed = false },
+            .i8_to_u64_try => .{ .src_bits = 8, .src_signed = true, .tgt_bits = 64, .tgt_signed = false },
+            .i8_to_u128_try => .{ .src_bits = 8, .src_signed = true, .tgt_bits = 128, .tgt_signed = false },
+            .u16_to_i8_try => .{ .src_bits = 16, .src_signed = false, .tgt_bits = 8, .tgt_signed = true },
+            .u16_to_i16_try => .{ .src_bits = 16, .src_signed = false, .tgt_bits = 16, .tgt_signed = true },
+            .u16_to_u8_try => .{ .src_bits = 16, .src_signed = false, .tgt_bits = 8, .tgt_signed = false },
+            .i16_to_i8_try => .{ .src_bits = 16, .src_signed = true, .tgt_bits = 8, .tgt_signed = true },
+            .i16_to_u8_try => .{ .src_bits = 16, .src_signed = true, .tgt_bits = 8, .tgt_signed = false },
+            .i16_to_u16_try => .{ .src_bits = 16, .src_signed = true, .tgt_bits = 16, .tgt_signed = false },
+            .i16_to_u32_try => .{ .src_bits = 16, .src_signed = true, .tgt_bits = 32, .tgt_signed = false },
+            .i16_to_u64_try => .{ .src_bits = 16, .src_signed = true, .tgt_bits = 64, .tgt_signed = false },
+            .i16_to_u128_try => .{ .src_bits = 16, .src_signed = true, .tgt_bits = 128, .tgt_signed = false },
+            .u32_to_i8_try => .{ .src_bits = 32, .src_signed = false, .tgt_bits = 8, .tgt_signed = true },
+            .u32_to_i16_try => .{ .src_bits = 32, .src_signed = false, .tgt_bits = 16, .tgt_signed = true },
+            .u32_to_i32_try => .{ .src_bits = 32, .src_signed = false, .tgt_bits = 32, .tgt_signed = true },
+            .u32_to_u8_try => .{ .src_bits = 32, .src_signed = false, .tgt_bits = 8, .tgt_signed = false },
+            .u32_to_u16_try => .{ .src_bits = 32, .src_signed = false, .tgt_bits = 16, .tgt_signed = false },
+            .i32_to_i8_try => .{ .src_bits = 32, .src_signed = true, .tgt_bits = 8, .tgt_signed = true },
+            .i32_to_i16_try => .{ .src_bits = 32, .src_signed = true, .tgt_bits = 16, .tgt_signed = true },
+            .i32_to_u8_try => .{ .src_bits = 32, .src_signed = true, .tgt_bits = 8, .tgt_signed = false },
+            .i32_to_u16_try => .{ .src_bits = 32, .src_signed = true, .tgt_bits = 16, .tgt_signed = false },
+            .i32_to_u32_try => .{ .src_bits = 32, .src_signed = true, .tgt_bits = 32, .tgt_signed = false },
+            .i32_to_u64_try => .{ .src_bits = 32, .src_signed = true, .tgt_bits = 64, .tgt_signed = false },
+            .i32_to_u128_try => .{ .src_bits = 32, .src_signed = true, .tgt_bits = 128, .tgt_signed = false },
+            .u64_to_i8_try => .{ .src_bits = 64, .src_signed = false, .tgt_bits = 8, .tgt_signed = true },
+            .u64_to_i16_try => .{ .src_bits = 64, .src_signed = false, .tgt_bits = 16, .tgt_signed = true },
+            .u64_to_i32_try => .{ .src_bits = 64, .src_signed = false, .tgt_bits = 32, .tgt_signed = true },
+            .u64_to_i64_try => .{ .src_bits = 64, .src_signed = false, .tgt_bits = 64, .tgt_signed = true },
+            .u64_to_u8_try => .{ .src_bits = 64, .src_signed = false, .tgt_bits = 8, .tgt_signed = false },
+            .u64_to_u16_try => .{ .src_bits = 64, .src_signed = false, .tgt_bits = 16, .tgt_signed = false },
+            .u64_to_u32_try => .{ .src_bits = 64, .src_signed = false, .tgt_bits = 32, .tgt_signed = false },
+            .i64_to_i8_try => .{ .src_bits = 64, .src_signed = true, .tgt_bits = 8, .tgt_signed = true },
+            .i64_to_i16_try => .{ .src_bits = 64, .src_signed = true, .tgt_bits = 16, .tgt_signed = true },
+            .i64_to_i32_try => .{ .src_bits = 64, .src_signed = true, .tgt_bits = 32, .tgt_signed = true },
+            .i64_to_u8_try => .{ .src_bits = 64, .src_signed = true, .tgt_bits = 8, .tgt_signed = false },
+            .i64_to_u16_try => .{ .src_bits = 64, .src_signed = true, .tgt_bits = 16, .tgt_signed = false },
+            .i64_to_u32_try => .{ .src_bits = 64, .src_signed = true, .tgt_bits = 32, .tgt_signed = false },
+            .i64_to_u64_try => .{ .src_bits = 64, .src_signed = true, .tgt_bits = 64, .tgt_signed = false },
+            .i64_to_u128_try => .{ .src_bits = 64, .src_signed = true, .tgt_bits = 128, .tgt_signed = false },
+            .u128_to_i8_try => .{ .src_bits = 128, .src_signed = false, .tgt_bits = 8, .tgt_signed = true },
+            .u128_to_i16_try => .{ .src_bits = 128, .src_signed = false, .tgt_bits = 16, .tgt_signed = true },
+            .u128_to_i32_try => .{ .src_bits = 128, .src_signed = false, .tgt_bits = 32, .tgt_signed = true },
+            .u128_to_i64_try => .{ .src_bits = 128, .src_signed = false, .tgt_bits = 64, .tgt_signed = true },
+            .u128_to_i128_try => .{ .src_bits = 128, .src_signed = false, .tgt_bits = 128, .tgt_signed = true },
+            .u128_to_u8_try => .{ .src_bits = 128, .src_signed = false, .tgt_bits = 8, .tgt_signed = false },
+            .u128_to_u16_try => .{ .src_bits = 128, .src_signed = false, .tgt_bits = 16, .tgt_signed = false },
+            .u128_to_u32_try => .{ .src_bits = 128, .src_signed = false, .tgt_bits = 32, .tgt_signed = false },
+            .u128_to_u64_try => .{ .src_bits = 128, .src_signed = false, .tgt_bits = 64, .tgt_signed = false },
+            .i128_to_i8_try => .{ .src_bits = 128, .src_signed = true, .tgt_bits = 8, .tgt_signed = true },
+            .i128_to_i16_try => .{ .src_bits = 128, .src_signed = true, .tgt_bits = 16, .tgt_signed = true },
+            .i128_to_i32_try => .{ .src_bits = 128, .src_signed = true, .tgt_bits = 32, .tgt_signed = true },
+            .i128_to_i64_try => .{ .src_bits = 128, .src_signed = true, .tgt_bits = 64, .tgt_signed = true },
+            .i128_to_u8_try => .{ .src_bits = 128, .src_signed = true, .tgt_bits = 8, .tgt_signed = false },
+            .i128_to_u16_try => .{ .src_bits = 128, .src_signed = true, .tgt_bits = 16, .tgt_signed = false },
+            .i128_to_u32_try => .{ .src_bits = 128, .src_signed = true, .tgt_bits = 32, .tgt_signed = false },
+            .i128_to_u64_try => .{ .src_bits = 128, .src_signed = true, .tgt_bits = 64, .tgt_signed = false },
+            .i128_to_u128_try => .{ .src_bits = 128, .src_signed = true, .tgt_bits = 128, .tgt_signed = false },
+            else => unreachable,
+        };
     }
 
     /// Call a (str, str) -> bool wrapper function with decomposed args.

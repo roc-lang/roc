@@ -324,6 +324,12 @@ pub const LlvmEvaluator = struct {
         codegen.list_reserve_addr = @intFromPtr(&wrapListReserve);
         codegen.list_sublist_addr = @intFromPtr(&wrapListSublist);
         codegen.list_release_excess_capacity_addr = @intFromPtr(&wrapListReleaseExcessCapacity);
+        codegen.list_set_addr = @intFromPtr(&wrapListSet);
+        codegen.list_reverse_addr = @intFromPtr(&wrapListReverse);
+        codegen.int_try_signed_addr = @intFromPtr(&wrapIntTrySigned);
+        codegen.int_try_unsigned_addr = @intFromPtr(&wrapIntTryUnsigned);
+        codegen.i128_try_convert_addr = @intFromPtr(&wrapI128TryConvert);
+        codegen.u128_try_convert_addr = @intFromPtr(&wrapU128TryConvert);
 
         // Provide layout store for composite types (records, tuples)
         codegen.layout_store = layout_store_ptr;
@@ -570,6 +576,116 @@ fn wrapListSublist(out: *builtins.list.RocList, list_bytes: ?[*]u8, list_len: us
 fn wrapListReleaseExcessCapacity(out: *builtins.list.RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, elem_width: usize, roc_ops: *RocOps) callconv(.c) void {
     const list = builtins.list.RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
     out.* = builtins.list.listReleaseExcessCapacity(list, alignment, elem_width, false, null, builtins.list.rcNone, null, builtins.list.rcNone, .InPlace, roc_ops);
+}
+
+fn wrapListSet(out: *builtins.list.RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, index: u64, element: ?[*]u8, element_width: usize, out_element: ?[*]u8, roc_ops: *RocOps) callconv(.c) void {
+    const list = builtins.list.RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+    out.* = builtins.list.listReplace(list, alignment, index, element, element_width, false, null, builtins.list.rcNone, null, builtins.list.rcNone, out_element, @ptrCast(&builtins.list.copy_fallback), roc_ops);
+}
+
+fn wrapListReverse(out: *builtins.list.RocList, list_bytes: ?[*]u8, list_len: usize, _: usize, alignment: u32, elem_width: usize, roc_ops: *RocOps) callconv(.c) void {
+    if (list_len == 0 or list_bytes == null) {
+        out.* = .{ .bytes = null, .length = 0, .capacity_or_alloc_ptr = 0 };
+        return;
+    }
+    // Allocate new list
+    var new_list = builtins.list.RocList{ .bytes = null, .length = 0, .capacity_or_alloc_ptr = 0 };
+    new_list = builtins.list.listReserve(new_list, alignment, list_len, elem_width, false, null, builtins.list.rcNone, .InPlace, roc_ops);
+    if (new_list.bytes) |dst| {
+        const src = list_bytes.?;
+        // Copy elements in reverse
+        var i: usize = 0;
+        while (i < list_len) : (i += 1) {
+            const src_offset = (list_len - 1 - i) * elem_width;
+            const dst_offset = i * elem_width;
+            @memcpy(dst[dst_offset .. dst_offset + elem_width], src[src_offset .. src_offset + elem_width]);
+        }
+    }
+    new_list.length = list_len;
+    out.* = new_list;
+}
+
+/// Try integer conversion for signed source (≤64-bit): checks if value is in [min, max] range.
+/// Writes to a tag union buffer: payload at offset 0, discriminant (0=Err, 1=Ok) at disc_offset.
+fn wrapIntTrySigned(out: [*]u8, val: i64, min_val: i64, max_val: i64, payload_size: u32, disc_offset: u32) callconv(.c) void {
+    if (val >= min_val and val <= max_val) {
+        const payload_bytes: [8]u8 = @bitCast(val);
+        if (payload_size <= 8) {
+            @memcpy(out[0..payload_size], payload_bytes[0..payload_size]);
+        } else {
+            @memcpy(out[0..8], &payload_bytes);
+            @memset(out[8..payload_size], 0);
+        }
+        out[disc_offset] = 1; // Ok
+    } else {
+        out[disc_offset] = 0; // Err
+    }
+}
+
+/// Try integer conversion for unsigned source (≤64-bit): checks if value is in [0, max] range.
+fn wrapIntTryUnsigned(out: [*]u8, val: u64, max_val: u64, payload_size: u32, disc_offset: u32) callconv(.c) void {
+    if (val <= max_val) {
+        const payload_bytes: [8]u8 = @bitCast(@as(i64, @bitCast(val)));
+        @memcpy(out[0..payload_size], payload_bytes[0..payload_size]);
+        out[disc_offset] = 1; // Ok
+    } else {
+        out[disc_offset] = 0; // Err
+    }
+}
+
+/// Try conversion for i128 source: checks if value fits in the target integer type.
+fn wrapI128TryConvert(out: [*]u8, val_low: u64, val_high: u64, target_bits: u32, target_is_signed: u32, payload_size: u32, disc_offset: u32) callconv(.c) void {
+    const val: i128 = @bitCast(@as(u128, val_high) << 64 | @as(u128, val_low));
+    if (i128InTargetRange(val, target_bits, target_is_signed != 0)) {
+        const payload_bytes: [16]u8 = @bitCast(@as(u128, @bitCast(val)));
+        @memcpy(out[0..payload_size], payload_bytes[0..payload_size]);
+        out[disc_offset] = 1; // Ok
+    } else {
+        out[disc_offset] = 0; // Err
+    }
+}
+
+/// Try conversion for u128 source: checks if value fits in the target integer type.
+fn wrapU128TryConvert(out: [*]u8, val_low: u64, val_high: u64, target_bits: u32, target_is_signed: u32, payload_size: u32, disc_offset: u32) callconv(.c) void {
+    const val: u128 = @as(u128, val_high) << 64 | @as(u128, val_low);
+    if (u128InTargetRange(val, target_bits, target_is_signed != 0)) {
+        const payload_bytes: [16]u8 = @bitCast(val);
+        @memcpy(out[0..payload_size], payload_bytes[0..payload_size]);
+        out[disc_offset] = 1; // Ok
+    } else {
+        out[disc_offset] = 0; // Err
+    }
+}
+
+fn i128InTargetRange(val: i128, target_bits: u32, target_signed: bool) bool {
+    if (target_bits >= 128) {
+        return if (target_signed) true else val >= 0;
+    }
+    if (target_signed) {
+        const shift: u7 = @intCast(target_bits - 1);
+        const min_val: i128 = -(@as(i128, 1) << shift);
+        const max_val: i128 = (@as(i128, 1) << shift) - 1;
+        return val >= min_val and val <= max_val;
+    } else {
+        if (val < 0) return false;
+        const shift: u7 = @intCast(target_bits);
+        const max_val: i128 = (@as(i128, 1) << shift) - 1;
+        return val <= max_val;
+    }
+}
+
+fn u128InTargetRange(val: u128, target_bits: u32, target_signed: bool) bool {
+    if (target_bits >= 128) {
+        return if (target_signed) val <= @as(u128, @bitCast(@as(i128, std.math.maxInt(i128)))) else true;
+    }
+    const max_val: u128 = if (target_signed) blk: {
+        const shift: u7 = @intCast(target_bits - 1);
+        break :blk (@as(u128, 1) << shift) - 1;
+    } else blk: {
+        const shift: u7 = @intCast(target_bits);
+        break :blk (@as(u128, 1) << shift) - 1;
+    };
+    return val <= max_val;
 }
 
 // Tests
