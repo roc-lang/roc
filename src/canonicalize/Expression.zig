@@ -1335,13 +1335,8 @@ pub const Expr = union(enum) {
                 const region = ir.store.getExprRegion(expr_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
-                var value_buf: [512]u8 = undefined;
-                const value_str = if (e.value == 0)
-                    "0.0"
-                else if (@abs(e.value) < 1e-10 or @abs(e.value) > 1e10)
-                    std.fmt.bufPrint(&value_buf, "{e}", .{e.value}) catch "fmt_error"
-                else
-                    std.fmt.bufPrint(&value_buf, "{d}", .{e.value}) catch "fmt_error";
+                var value_buf: [400]u8 = undefined;
+                const value_str = builtins.compiler_rt_128.f32_to_str(&value_buf, e.value);
                 try tree.pushStringPair("value", value_str);
 
                 const attrs = tree.beginNode();
@@ -1353,13 +1348,8 @@ pub const Expr = union(enum) {
                 const region = ir.store.getExprRegion(expr_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
-                var value_buf: [512]u8 = undefined;
-                const value_str = if (e.value == 0)
-                    "0.0"
-                else if (@abs(e.value) < 1e-10 or @abs(e.value) > 1e10)
-                    std.fmt.bufPrint(&value_buf, "{e}", .{e.value}) catch "fmt_error"
-                else
-                    std.fmt.bufPrint(&value_buf, "{d}", .{e.value}) catch "fmt_error";
+                var value_buf: [400]u8 = undefined;
+                const value_str = builtins.compiler_rt_128.f64_to_str(&value_buf, e.value);
                 try tree.pushStringPair("value", value_str);
 
                 const attrs = tree.beginNode();
@@ -1372,13 +1362,8 @@ pub const Expr = union(enum) {
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
                 const dec_value_f64: f64 = builtins.compiler_rt_128.i128_to_f64(e.value.num) / std.math.pow(f64, 10, 18);
-                var value_buf: [512]u8 = undefined;
-                const value_str = if (dec_value_f64 == 0)
-                    "0.0"
-                else if (@abs(dec_value_f64) < 1e-10 or @abs(dec_value_f64) > 1e10)
-                    std.fmt.bufPrint(&value_buf, "{e}", .{dec_value_f64}) catch "fmt_error"
-                else
-                    std.fmt.bufPrint(&value_buf, "{d}", .{dec_value_f64}) catch "fmt_error";
+                var value_buf: [400]u8 = undefined;
+                const value_str = builtins.compiler_rt_128.f64_to_str(&value_buf, dec_value_f64);
                 try tree.pushStringPair("value", value_str);
 
                 const attrs = tree.beginNode();
@@ -1402,13 +1387,8 @@ pub const Expr = union(enum) {
                 const denominator_f64: f64 = std.math.pow(f64, 10, @floatFromInt(e.value.denominator_power_of_ten));
                 const value_f64 = numerator_f64 / denominator_f64;
 
-                var value_buf: [512]u8 = undefined;
-                const value_str = if (value_f64 == 0)
-                    "0.0"
-                else if (@abs(value_f64) < 1e-10 or @abs(value_f64) > 1e10)
-                    std.fmt.bufPrint(&value_buf, "{e}", .{value_f64}) catch "fmt_error"
-                else
-                    std.fmt.bufPrint(&value_buf, "{d}", .{value_f64}) catch "fmt_error";
+                var value_buf: [400]u8 = undefined;
+                const value_str = builtins.compiler_rt_128.f64_to_str(&value_buf, value_f64);
                 try tree.pushStringPair("value", value_str);
 
                 const attrs = tree.beginNode();

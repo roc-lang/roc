@@ -230,13 +230,15 @@ noinline fn executeAndFormat(
         layout_mod.Idx.f64 => blk: {
             var result: f64 = 0;
             try dev_eval.callWithCrashProtection(executable, @ptrCast(&result));
-            break :blk std.fmt.allocPrint(alloc, "{d}", .{result});
+            var fbuf: [400]u8 = undefined;
+            break :blk alloc.dupe(u8, i128h.f64_to_str(&fbuf, result));
         },
         layout_mod.Idx.f32 => blk: {
-            // F32 stores 4 bytes, use f32 buffer and print at f32 precision
+            // F32 stores 4 bytes, cast to f64 for consistent display precision
             var result: f32 = 0;
             try dev_eval.callWithCrashProtection(executable, @ptrCast(&result));
-            break :blk std.fmt.allocPrint(alloc, "{d}", .{@as(f64, result)});
+            var fbuf: [400]u8 = undefined;
+            break :blk alloc.dupe(u8, i128h.f64_to_str(&fbuf, @as(f64, result)));
         },
         layout_mod.Idx.i128, layout_mod.Idx.u128 => blk: {
             var result: i128 align(16) = 0; // Initialize to 0 and ensure 16-byte alignment
@@ -718,8 +720,8 @@ pub fn runExpectF32(src: []const u8, expected_f32: f32, should_trace: enum { tra
     const actual = result.asF32();
 
     // Compare with DevEvaluator using string representation
-    const float_str = try std.fmt.allocPrint(test_allocator, "{d}", .{@as(f64, actual)});
-    defer test_allocator.free(float_str);
+    var float_buf: [400]u8 = undefined;
+    const float_str = i128h.f64_to_str(&float_buf, @as(f64, actual));
     try compareWithDevEvaluator(test_allocator, float_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     const epsilon: f32 = 0.0001;
@@ -758,8 +760,8 @@ pub fn runExpectF64(src: []const u8, expected_f64: f64, should_trace: enum { tra
     const actual = result.asF64();
 
     // Compare with DevEvaluator using string representation
-    const float_str = try std.fmt.allocPrint(test_allocator, "{d}", .{actual});
-    defer test_allocator.free(float_str);
+    var float_buf2: [400]u8 = undefined;
+    const float_str = i128h.f64_to_str(&float_buf2, actual);
     try compareWithDevEvaluator(test_allocator, float_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     const epsilon: f64 = 0.000000001;

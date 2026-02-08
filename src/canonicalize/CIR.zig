@@ -505,14 +505,17 @@ pub const IntValue = struct {
     }
 
     pub fn bufPrint(self: IntValue, buf: []u8) ![]u8 {
+        const i128h = builtins.compiler_rt_128;
         switch (self.kind) {
             .i128 => {
                 const val: i128 = @bitCast(self.bytes);
-                return std.fmt.bufPrint(buf, "{d}", .{val});
+                const result = i128h.i128_to_str(buf, val);
+                return buf[result.start..buf.len];
             },
             .u128 => {
                 const val: u128 = @bitCast(self.bytes);
-                return std.fmt.bufPrint(buf, "{d}", .{val});
+                const result = i128h.u128_to_str(buf, val);
+                return buf[result.start..buf.len];
             },
         }
     }
@@ -721,8 +724,8 @@ pub fn formatBase256ToDecimal(
                 frac_mult /= 256.0;
             }
             // Print fractional part (removing leading "0.")
-            var frac_buf: [32]u8 = undefined;
-            const frac_str = std.fmt.bufPrint(&frac_buf, "{d}", .{frac}) catch "";
+            var frac_buf: [400]u8 = undefined;
+            const frac_str = builtins.compiler_rt_128.f64_to_str(&frac_buf, frac);
             if (frac_str.len > 2 and std.mem.startsWith(u8, frac_str, "0.")) {
                 w.writeAll(frac_str[2..]) catch {};
             }

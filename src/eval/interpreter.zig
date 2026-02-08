@@ -5005,8 +5005,11 @@ pub const Interpreter = struct {
 
         const float_value: T = builtins.utils.readAs(T, float_arg.ptr.?, @src());
 
-        const str_bytes = try std.fmt.allocPrint(self.allocator, "{d}", .{float_value});
-        defer self.allocator.free(str_bytes);
+        var float_buf: [400]u8 = undefined;
+        const str_bytes = if (T == f32)
+            i128h.f32_to_str(&float_buf, float_value)
+        else
+            i128h.f64_to_str(&float_buf, float_value);
 
         const str_rt_var = try self.getCanonicalStrRuntimeVar();
         const value = try self.pushStr(str_rt_var);
