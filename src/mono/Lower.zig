@@ -3170,6 +3170,29 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
 
         .e_crash => |crash| .{ .crash = .{ .msg = crash.msg } },
         .e_runtime_error => .{ .runtime_error = {} },
+        .e_ellipsis => blk: {
+            const msg_idx = self.store.insertString(
+                "This expression uses `...` as a placeholder. Implementation is required.",
+            ) catch return error.OutOfMemory;
+            break :blk .{ .crash = .{ .msg = msg_idx } };
+        },
+
+        .e_tuple_access => |ta| blk: {
+            const tuple_expr = try self.lowerExprFromIdx(module_env, ta.tuple);
+            const tuple_layout = self.getExprLayoutFromIdx(module_env, ta.tuple);
+            const elem_layout = self.getExprLayoutFromIdx(module_env, expr_idx);
+            break :blk .{
+                .tuple_access = .{
+                    .tuple_expr = tuple_expr,
+                    .tuple_layout = tuple_layout,
+                    .elem_layout = elem_layout,
+                    .elem_idx = @intCast(ta.elem_index),
+                },
+            };
+        },
+
+        .e_anno_only => .{ .runtime_error = {} },
+        .e_lookup_pending => .{ .runtime_error = {} },
 
         .e_nominal => |nom| blk: {
             const backing = try self.lowerExprFromIdx(module_env, nom.backing_expr);
@@ -3564,10 +3587,6 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                     },
                 };
             }
-        },
-
-        else => {
-            unreachable;
         },
     };
 
