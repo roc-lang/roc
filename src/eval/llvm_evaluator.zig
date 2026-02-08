@@ -302,6 +302,7 @@ pub const LlvmEvaluator = struct {
         codegen.str_contains_addr = @intFromPtr(&wrapStrContains);
         codegen.str_starts_with_addr = @intFromPtr(&wrapStrStartsWith);
         codegen.str_ends_with_addr = @intFromPtr(&wrapStrEndsWith);
+        codegen.str_escape_and_quote_addr = @intFromPtr(&wrapStrEscapeAndQuote);
 
         // Provide layout store for composite types (records, tuples)
         codegen.layout_store = layout_store_ptr;
@@ -368,6 +369,50 @@ fn wrapStrEndsWith(a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8,
     const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
     const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
     return builtins.str.endsWith(a, b);
+}
+
+fn wrapStrEscapeAndQuote(out: *RocStr, str_bytes: ?[*]u8, str_len: usize, str_cap: usize, roc_ops: *RocOps) callconv(.c) void {
+    const s = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
+    const slice = s.asSlice();
+
+    var extra: usize = 0;
+    for (slice) |ch| {
+        if (ch == '\\' or ch == '"') extra += 1;
+    }
+
+    const result_len = slice.len + extra + 2;
+    const small_string_size = @sizeOf(RocStr);
+
+    if (result_len < small_string_size) {
+        var buf: [small_string_size]u8 = .{0} ** small_string_size;
+        buf[0] = '"';
+        var pos: usize = 1;
+        for (slice) |ch| {
+            if (ch == '\\' or ch == '"') {
+                buf[pos] = '\\';
+                pos += 1;
+            }
+            buf[pos] = ch;
+            pos += 1;
+        }
+        buf[pos] = '"';
+        buf[small_string_size - 1] = @intCast(result_len | 0x80);
+        out.* = @bitCast(buf);
+    } else {
+        const heap_ptr = builtins.utils.allocateWithRefcountC(result_len, 1, false, roc_ops);
+        heap_ptr[0] = '"';
+        var pos: usize = 1;
+        for (slice) |ch| {
+            if (ch == '\\' or ch == '"') {
+                heap_ptr[pos] = '\\';
+                pos += 1;
+            }
+            heap_ptr[pos] = ch;
+            pos += 1;
+        }
+        heap_ptr[pos] = '"';
+        out.* = .{ .bytes = heap_ptr, .length = result_len, .capacity_or_alloc_ptr = result_len };
+    }
 }
 
 // C-compatible wrappers for number-to-string conversions.

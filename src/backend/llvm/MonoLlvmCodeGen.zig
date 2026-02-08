@@ -148,6 +148,7 @@ pub const MonoLlvmCodeGen = struct {
     str_contains_addr: usize = 0,
     str_starts_with_addr: usize = 0,
     str_ends_with_addr: usize = 0,
+    str_escape_and_quote_addr: usize = 0,
 
     /// Address of number-to-string wrappers.
     i64_to_str_addr: usize = 0,
@@ -3156,11 +3157,35 @@ pub const MonoLlvmCodeGen = struct {
         return .none;
     }
 
-    /// Generate str_escape_and_quote: wraps string in quotes with escaping.
-    /// For now, returns UnsupportedExpression.
-    fn generateStrEscapeAndQuote(self: *MonoLlvmCodeGen, _: anytype) Error!LlvmBuilder.Value {
-        _ = self;
-        return error.UnsupportedExpression;
+    /// Generate str_escape_and_quote: calls wrapper fn(out, str_bytes, str_len, str_cap, roc_ops)
+    fn generateStrEscapeAndQuote(self: *MonoLlvmCodeGen, expr_id: anytype) Error!LlvmBuilder.Value {
+        if (self.str_escape_and_quote_addr == 0) return error.UnsupportedExpression;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
+        const roc_ops = self.roc_ops_arg orelse return error.CompilationFailed;
+        const dest_ptr = self.out_ptr orelse return error.UnsupportedExpression;
+        const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
+        const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
+
+        // Materialize the string arg
+        const str_ptr = try self.materializeAsPtr(expr_id, 24);
+
+        // Load decomposed fields
+        const off8 = builder.intValue(.i32, 8) catch return error.OutOfMemory;
+        const off16 = builder.intValue(.i32, 16) catch return error.OutOfMemory;
+        const str_bytes = wip.load(.normal, ptr_type, str_ptr, alignment, "") catch return error.CompilationFailed;
+        const str_len_ptr = wip.gep(.inbounds, .i8, str_ptr, &.{off8}, "") catch return error.CompilationFailed;
+        const str_len = wip.load(.normal, .i64, str_len_ptr, alignment, "") catch return error.CompilationFailed;
+        const str_cap_ptr = wip.gep(.inbounds, .i8, str_ptr, &.{off16}, "") catch return error.CompilationFailed;
+        const str_cap = wip.load(.normal, .i64, str_cap_ptr, alignment, "") catch return error.CompilationFailed;
+
+        // fn(out, str_bytes, str_len, str_cap, roc_ops)
+        const fn_type = builder.fnType(.void, &.{ ptr_type, ptr_type, .i64, .i64, ptr_type }, .normal) catch return error.CompilationFailed;
+        const addr = builder.intValue(.i64, self.str_escape_and_quote_addr) catch return error.CompilationFailed;
+        const fn_ptr = wip.cast(.inttoptr, addr, ptr_type, "") catch return error.CompilationFailed;
+
+        _ = wip.call(.normal, .ccc, .none, fn_type, fn_ptr, &.{ dest_ptr, str_bytes, str_len, str_cap, roc_ops }, "") catch return error.CompilationFailed;
+        return .none;
     }
 
     /// Get the result layout of a mono expression (for determining operand types).
