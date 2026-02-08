@@ -1249,6 +1249,24 @@ fn buildFlatTypeSubstitutions(
                 else => return,
             };
 
+            // Compare tag payload types (tags are sorted by name, so positional match is correct)
+            const poly_tags = self.types_store.getTagsSlice(poly_union.tags);
+            const concrete_tags = self.types_store.getTagsSlice(concrete_union.tags);
+
+            const poly_args_slice = poly_tags.items(.args);
+            const concrete_args_slice = concrete_tags.items(.args);
+
+            const min_tags = @min(poly_args_slice.len, concrete_args_slice.len);
+            for (0..min_tags) |i| {
+                const poly_tag_args = self.types_store.sliceVars(poly_args_slice[i]);
+                const concrete_tag_args = self.types_store.sliceVars(concrete_args_slice[i]);
+
+                const min_args = @min(poly_tag_args.len, concrete_tag_args.len);
+                for (0..min_args) |j| {
+                    try self.buildTypeSubstitutions(poly_tag_args[j], concrete_tag_args[j], var_map);
+                }
+            }
+
             // Compare extension types
             try self.buildTypeSubstitutions(poly_union.ext, concrete_union.ext, var_map);
         },
