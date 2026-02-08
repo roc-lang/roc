@@ -16776,7 +16776,9 @@ pub const Interpreter = struct {
                                 },
                                 .flex => |flex| flex.constraints.count > 0,
                                 .rigid => |rigid| rigid.constraints.count > 0,
-                                else => true,
+                                // Error types are not concrete - fall back to lambda's return type
+                                .err => false,
+                                .alias => true,
                             };
 
                             if (is_concrete) {
