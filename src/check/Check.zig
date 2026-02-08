@@ -123,6 +123,21 @@ top_level_ptrns: std.AutoHashMap(CIR.Pattern.Idx, DefProcessed),
 enclosing_func_name: ?Ident.Idx,
 /// Type writer for formatting types at snapshot time
 type_writer: types_mod.TypeWriter,
+/// The def currently being type-checked (innermost in the call stack)
+current_processing_def: ?CIR.Def.Idx = null,
+/// When a dispatch cycle is detected, the .processing def that is the
+/// outermost participant (the "root" that will handle generalization)
+cycle_root_def: ?CIR.Def.Idx = null,
+/// True when generalization should be deferred (a dispatch cycle was detected)
+defer_generalize: bool = false,
+/// Deferred def-level unifications (def_var = ptrn_var = expr_var).
+/// These must happen AFTER generalization to avoid lowering expr_var's rank
+/// before generalization can process it.
+deferred_def_unifications: std.ArrayListUnmanaged(DeferredDefUnification),
+/// Envs from cycle participants whose vars need to be merged at the cycle root.
+/// Stored here instead of merging eagerly so that ranks remain correct
+/// (no `popRankRetainingVars` needed).
+deferred_cycle_envs: std.ArrayListUnmanaged(Env),
 
 /// A def + processing data
 const DefProcessed = struct {
@@ -133,6 +148,13 @@ const DefProcessed = struct {
 
 /// Indicates if something has been processed or not
 const HasProcessed = enum { processed, processing, not_processed };
+
+/// A deferred def-level unification (def_var = ptrn_var = expr_var).
+const DeferredDefUnification = struct {
+    def_var: Var,
+    ptrn_var: Var,
+    expr_var: Var,
+};
 
 /// A struct scratch info about a static dispatch constraint
 const ScratchStaticDispatchConstraint = struct {
@@ -227,6 +249,8 @@ pub fn init(
         .enclosing_func_name = null,
         // Initialize with null import_mapping - caller should call fixupTypeWriter() after storing Check
         .type_writer = try types_mod.TypeWriter.initFromParts(gpa, types, mutable_cir.getIdentStore(), null),
+        .deferred_def_unifications = .{},
+        .deferred_cycle_envs = .{},
     };
 }
 
@@ -245,6 +269,11 @@ pub fn deinit(self: *Self) void {
     self.unify_scratch.deinit();
     self.occurs_scratch.deinit();
     self.seen_annos.deinit();
+    // Release any stored cycle envs before deiniting the pool
+    for (self.deferred_cycle_envs.items) |deferred_env| {
+        self.env_pool.release(deferred_env);
+    }
+    self.deferred_cycle_envs.deinit(self.gpa);
     self.env_pool.deinit();
     self.generalizer.deinit(self.gpa);
     self.var_map.deinit();
@@ -261,6 +290,7 @@ pub fn deinit(self: *Self) void {
     self.ident_to_var_map.deinit();
     self.top_level_ptrns.deinit();
     self.type_writer.deinit();
+    self.deferred_def_unifications.deinit(self.gpa);
 }
 
 /// Assert that type vars and regions in sync
@@ -1719,6 +1749,11 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
         }
     }
 
+    // Track which def is currently being processed (for cycle detection)
+    const saved_processing_def = self.current_processing_def;
+    self.current_processing_def = def_idx;
+    defer self.current_processing_def = saved_processing_def;
+
     // Make as processing
     const def_name = self.getPatternIdent(def.pattern);
     try self.top_level_ptrns.put(def.pattern, .{
@@ -1759,11 +1794,22 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
     // Infer types for the body, checking against the instantiated annotation
     _ = try self.checkExpr(def.expr, env, expectation);
 
-    // Unify the ptrn and the expr
-    _ = try self.unify(ptrn_var, expr_var, env);
+    if (self.defer_generalize) {
+        // Defer unifications until after generalization.
+        // If we unify now, def_var(R1) with expr_var(R2) lowers expr_var
+        // to R1 in the type store, and generalize at R2 would skip it.
+        try self.deferred_def_unifications.append(self.gpa, .{
+            .def_var = def_var,
+            .ptrn_var = ptrn_var,
+            .expr_var = expr_var,
+        });
+    } else {
+        // Unify the ptrn and the expr
+        _ = try self.unify(ptrn_var, expr_var, env);
 
-    // Unify the def and ptrn
-    _ = try self.unify(def_var, ptrn_var, env);
+        // Unify the def and ptrn
+        _ = try self.unify(def_var, ptrn_var, env);
+    }
 
     // Mark as processed
     try self.top_level_ptrns.put(def.pattern, .{
@@ -3031,7 +3077,23 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
     // Push/pop ranks based on if we should generalize
     if (should_generalize) try env.var_pool.pushRank();
-    defer if (should_generalize) env.var_pool.popRank();
+    defer if (should_generalize) {
+        // For an intermediate cycle participant's top-level lambda,
+        // don't pop: rank and vars are preserved for the caller to
+        // store and merge at the cycle root before generalization.
+        // Inner lambdas (rank > outermost+1) always pop normally.
+        const at_def_top_level = env.rank() == Rank.outermost.next();
+        const is_intermediate = if (self.cycle_root_def) |root_def|
+            self.current_processing_def == null or root_def != self.current_processing_def.?
+        else
+            false;
+
+        if (is_intermediate and at_def_top_level) {
+            // Don't pop — vars will be merged by cycle root.
+        } else {
+            env.var_pool.popRank();
+        }
+    };
 
     try self.setVarRank(expr_var_raw, env);
 
@@ -3645,17 +3707,32 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 switch (processing_def.status) {
                     .not_processed => {
                         var sub_env = try self.env_pool.acquire();
-                        defer self.env_pool.release(sub_env);
+                        errdefer self.env_pool.release(sub_env);
 
                         // Push through to top_level
                         try sub_env.var_pool.pushRank();
                         std.debug.assert(sub_env.rank() == .outermost);
 
-                        // Check def and assert that ranks have been processed
                         try self.checkDef(processing_def.def_idx, &sub_env);
-                        std.debug.assert(sub_env.rank() == .outermost);
 
-                        // TODO: Handle mutually recursive functions
+                        if (self.defer_generalize) {
+                            // Cycle detected: store env for merge at cycle root.
+                            try self.deferred_cycle_envs.append(self.gpa, sub_env);
+
+                            // Use the def's closure/expr var directly. Its rank
+                            // was elevated by e_closure to match the lambda's rank
+                            // (rank 2), so this won't pull body vars below the
+                            // generalization rank. This preserves cross-function
+                            // constraint propagation within the cycle.
+                            const def = self.cir.store.getDef(processing_def.def_idx);
+                            const def_expr_var = ModuleEnv.varFrom(def.expr);
+                            _ = try self.unify(expr_var, def_expr_var, env);
+
+                            break :blk;
+                        } else {
+                            std.debug.assert(sub_env.rank() == .outermost);
+                            self.env_pool.release(sub_env);
+                        }
                     },
                     .processing => {
                         // This is a recursive reference
@@ -3677,6 +3754,18 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                             .actual = expr_var,
                             .ctx = .{ .recursive_def = .{ .def_name = processing_def.def_name } },
                         } });
+
+                        // Detect mutual recursion through local lookups.
+                        // If the referenced def is different from the current one,
+                        // we have a cycle: current → ... → this_def → ... → current
+                        if (self.current_processing_def) |current_def| {
+                            if (current_def != processing_def.def_idx) {
+                                self.defer_generalize = true;
+                                if (self.cycle_root_def == null) {
+                                    self.cycle_root_def = processing_def.def_idx;
+                                }
+                            }
+                        }
 
                         break :blk;
                     },
@@ -3903,7 +3992,22 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             // Here, we must forward the expected valued to the inner lambda, so
             // the annotation type is created at the same rank as the expr
             does_fx = try self.checkExpr(closure.lambda_idx, env, expected) or does_fx;
-            _ = try self.unify(expr_var, ModuleEnv.varFrom(closure.lambda_idx), env);
+            const lambda_var = ModuleEnv.varFrom(closure.lambda_idx);
+
+            // For intermediate cycle participants, the inner lambda skipped
+            // generalization and kept its rank (2). The closure var was set
+            // at the outer rank (1) before the lambda pushed. Elevate the
+            // closure var to match so unification doesn't pull to min(1,2)=1,
+            // which would prevent generalization at the cycle root.
+            const lambda_rank = self.types.resolveVar(lambda_var).desc.rank;
+            if (lambda_rank != .generalized) {
+                const expr_resolved = self.types.resolveVar(expr_var);
+                if (@intFromEnum(lambda_rank) > @intFromEnum(expr_resolved.desc.rank)) {
+                    self.types.setDescRank(expr_resolved.desc_idx, lambda_rank);
+                }
+            }
+
+            _ = try self.unify(expr_var, lambda_var, env);
         },
         // function calling //
         .e_call => |call| {
@@ -4423,7 +4527,53 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
     // If this type of expr should be generalized, generalize it!
     if (should_generalize) {
-        try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
+        const at_def_top_level = env.rank() == Rank.outermost.next();
+        const is_cycle_root = if (self.cycle_root_def) |root_def|
+            self.current_processing_def != null and root_def == self.current_processing_def.?
+        else
+            false;
+        const is_intermediate = self.cycle_root_def != null and !is_cycle_root;
+
+        if (is_cycle_root and at_def_top_level) {
+            // Cycle root's top-level lambda: merge all stored cycle envs,
+            // generalize, then run deferred unifications.
+            for (self.deferred_cycle_envs.items) |*deferred_env| {
+                std.debug.assert(deferred_env.rank() == Rank.outermost.next());
+                try env.var_pool.mergeFrom(&deferred_env.var_pool);
+            }
+
+            try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
+
+            // Execute deferred def-level unifications (now safe since
+            // expr_vars are generalized and won't be lowered by Rank.min)
+            for (self.deferred_def_unifications.items) |u| {
+                _ = try self.unify(u.ptrn_var, u.expr_var, env);
+                _ = try self.unify(u.def_var, u.ptrn_var, env);
+            }
+            self.deferred_def_unifications.clearRetainingCapacity();
+
+            // Resolve eql constraints accumulated during cycle body checks
+            // (from .processing handlers). This must happen now — before
+            // subsequent defs use the generalized types — so that cross-
+            // function constraints are propagated into the generalized vars
+            // before instantiation creates independent copies.
+            try self.checkConstraints(env);
+
+            // Release stored envs back to pool
+            for (self.deferred_cycle_envs.items) |deferred_env| {
+                self.env_pool.release(deferred_env);
+            }
+            self.deferred_cycle_envs.clearRetainingCapacity();
+
+            self.cycle_root_def = null;
+            self.defer_generalize = false;
+        } else if (is_intermediate and at_def_top_level) {
+            // Intermediate's top-level lambda: skip generalization.
+            // Vars are preserved and will be merged by the cycle root.
+        } else {
+            // Normal generalization (no cycle, or inner lambda within a cycle participant).
+            try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
+        }
     }
 
     return does_fx;
@@ -5895,6 +6045,9 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Erro
                 const def_idx: CIR.Def.Idx = @enumFromInt(@as(u32, @intCast(node_idx_in_original_env)));
                 const def_var: Var = ModuleEnv.varFrom(def_idx);
 
+                // Track whether we just processed a cycle participant
+                var cycle_method_expr_var: ?Var = null;
+
                 if (is_this_module) {
                     // Check if we've processed this def already.
                     const def = original_env.store.getDef(def_idx);
@@ -5904,21 +6057,44 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Erro
                         switch (processing_def.status) {
                             .not_processed => {
                                 var sub_env = try self.env_pool.acquire();
-                                defer self.env_pool.release(sub_env);
+                                errdefer self.env_pool.release(sub_env);
 
                                 try sub_env.var_pool.pushRank();
                                 std.debug.assert(sub_env.rank() == .outermost);
 
-                                // Check def and assert that ranks have been processed
                                 try self.checkDef(processing_def.def_idx, &sub_env);
-                                std.debug.assert(sub_env.rank() == .outermost);
 
-                                // TODO: Handle mutually recursive functions
+                                if (self.defer_generalize) {
+                                    // Cycle detected: store env for merge at cycle root.
+                                    try self.deferred_cycle_envs.append(self.gpa, sub_env);
+                                    // Use a fresh flex at the current rank (like .processing does)
+                                    // to avoid rank lowering from the closure var at outermost.
+                                    cycle_method_expr_var = try self.fresh(env, region);
+                                } else {
+                                    std.debug.assert(sub_env.rank() == .outermost);
+                                    self.env_pool.release(sub_env);
+                                }
                             },
                             .processing => {
-                                // Recursive reference during static dispatch resolution.
-                                // The def is still being processed, so we'll use its
-                                // current (non-generalized) type.
+                                // Create a fresh flex var at the current rank for
+                                // the method type. Using def_var directly (rank
+                                // outermost) would pull body vars to a lower rank
+                                // and prevent generalization.
+                                cycle_method_expr_var = try self.fresh(env, region);
+
+                                // Check if this is mutual recursion through dispatch.
+                                // A .processing def that is different from the current def
+                                // means we have a cycle: current → ... → this_def → ... → current
+                                if (self.current_processing_def) |current_def| {
+                                    if (current_def != processing_def.def_idx) {
+                                        // Mutual recursion detected!
+                                        self.defer_generalize = true;
+                                        if (self.cycle_root_def == null) {
+                                            // The .processing def is the outermost in the chain
+                                            self.cycle_root_def = processing_def.def_idx;
+                                        }
+                                    }
+                                }
                             },
                             .processed => {},
                         }
@@ -5926,7 +6102,11 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Erro
                 }
 
                 // Copy the actual method from the dest module env to this module env
-                const method_var = if (is_this_module) blk: {
+                const method_var = if (cycle_method_expr_var) |expr_var_for_method| blk: {
+                    // Cycle participant or recursive self-dispatch: use the
+                    // fresh flex var instead of def_var to avoid rank lowering.
+                    break :blk expr_var_for_method;
+                } else if (is_this_module) blk: {
                     if (self.types.resolveVar(def_var).desc.rank == .generalized)
                         break :blk try self.instantiateVar(def_var, env, .use_last_var)
                     else

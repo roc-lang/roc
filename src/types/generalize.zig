@@ -487,6 +487,26 @@ pub const VarPool = struct {
         }
     }
 
+    /// Merge another VarPool's vars into this one, rank by rank.
+    pub fn mergeFrom(self: *Self, other: *const VarPool) std.mem.Allocator.Error!void {
+        const max_rank: usize = @max(
+            @intFromEnum(self.current_rank),
+            @intFromEnum(other.current_rank),
+        );
+        // Defensively include any ranks in the array beyond current_rank
+        const upper = @max(max_rank + 1, other.ranks.items.len);
+        if (upper > 0) {
+            try self.ensureRanksThrough(@enumFromInt(upper - 1));
+        }
+        for (0..upper) |rank_idx| {
+            if (rank_idx < other.ranks.items.len) {
+                for (other.ranks.items[rank_idx].items) |v| {
+                    try self.ranks.items[rank_idx].append(v);
+                }
+            }
+        }
+    }
+
     pub fn addVarToRank(self: *Self, variable: Var, rank: Rank) !void {
         if (builtin.mode == .Debug) {
             if (@intFromEnum(rank) > @intFromEnum(self.current_rank)) {
