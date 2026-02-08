@@ -16,7 +16,6 @@ comptime {
     // Export other core functions that might be needed
     @import("num.zig").exportAddWithOverflow(i128, "roc__num_add_with_overflow_");
     @import("num.zig").exportSubWithOverflow(i128, "roc__num_sub_with_overflow_");
-
 }
 
 // Export dev backend wrapper functions - these are used by `roc build --backend=dev`
@@ -101,4 +100,3 @@ comptime {
     // Numeric-from-string wrapper
     @export(&dw.roc_builtins_int_from_str, .{ .name = "roc_builtins_int_from_str" });
 }
-
