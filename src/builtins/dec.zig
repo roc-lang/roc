@@ -87,7 +87,7 @@ pub const RocDec = extern struct {
             0
         else
             decimal_places - @as(u5, @intCast(denominator_power));
-        const scale = math.pow(i128, 10, scale_power);
+        const scale = i128h.pow10_i128(@intCast(scale_power));
         return .{ .num = i128h.mul_i128(numerator, scale) };
     }
 
@@ -156,7 +156,7 @@ pub const RocDec = extern struct {
 
             const after_str = roc_str_slice[pi + 1 .. length];
             const after_u64 = std.fmt.parseUnsigned(u64, after_str, 10) catch null;
-            after_val_i128 = if (after_u64) |f| i128h.mul_i128(@as(i128, @intCast(f)), math.pow(i128, 10, diff_decimal_places)) else null;
+            after_val_i128 = if (after_u64) |f| i128h.mul_i128(@as(i128, @intCast(f)), i128h.pow10_i128(@intCast(diff_decimal_places))) else null;
         }
 
         const before_str = roc_str_slice[initial_index..before_str_length];
@@ -530,7 +530,7 @@ pub const RocDec = extern struct {
             return RocDec.one_point_zero;
         } else if (exponent > 0) {
             if (exponent & 1 == 0) {
-                const half_power = RocDec.powInt(base, exponent >> 1, roc_ops); // `>> 1` == `/ 2`
+                const half_power = RocDec.powInt(base, i128h.shr_i128(exponent, 1), roc_ops); // `>> 1` == `/ 2`
                 return RocDec.mul(half_power, half_power, roc_ops);
             } else {
                 return RocDec.mul(base, RocDec.powInt(base, exponent - 1, roc_ops), roc_ops);
@@ -656,7 +656,7 @@ pub const RocDec = extern struct {
             }
         }
 
-        const numerator_u256: U256 = mul_u128(numerator_u128, math.pow(u128, 10, decimal_places));
+        const numerator_u256: U256 = mul_u128(numerator_u128, comptime math.pow(u128, 10, decimal_places));
         const answer = div_u256_by_u128(numerator_u256, denominator_u128);
 
         var unsigned_answer: i128 = undefined;
@@ -682,7 +682,7 @@ pub const RocDec = extern struct {
         // This is dec/(b0+1), but as a multiplication.
         // So dec * (1/(b0+1)). This is way faster.
         const dec = self.num;
-        const tmp = @as(i128, @intCast(mul_u128(@abs(dec), 249757942369376157886101012127821356963).hi >> (190 - 128)));
+        const tmp = @as(i128, @intCast(i128h.shr(mul_u128(@abs(dec), 249757942369376157886101012127821356963).hi, 62)));
         const q0 = if (dec < 0) -tmp else tmp;
 
         const upper = i128h.mul_i128(q0, @as(i128, b0));
@@ -693,8 +693,8 @@ pub const RocDec = extern struct {
         // Currently is is probably cmovs, but could be just math?
         const q0_sign: i128 =
             if (q0 > 0) 1 else -1;
-        const overflowed_val: i128 = if (overflowed == 1) q0_sign << 64 else 0;
-        const full = upper + @as(i128, @intCast(lower >> 64)) + overflowed_val;
+        const overflowed_val: i128 = if (overflowed == 1) @as(i128, @bitCast(i128h.shl(@as(u128, @bitCast(q0_sign)), 64))) else 0;
+        const full = upper + i128h.shr_i128(lower, 64) + overflowed_val;
 
         var out = dec - full;
         if (out < 0) {
@@ -761,7 +761,7 @@ inline fn count_trailing_zeros_base10(input: i128) u6 {
     var k: i128 = 1;
 
     while (true) {
-        if (i128h.mod_i128(input, std.math.pow(i128, 10, k)) == 0) {
+        if (i128h.mod_i128(input, i128h.pow10_i128(@intCast(k))) == 0) {
             count += 1;
             k += 1;
         } else {
@@ -897,8 +897,8 @@ fn mul_and_decimalize(a: u128, b: u128) WithOverflow(i128) {
 
     // Since d is being shift left 69 times, all of those 69 bits (+1 for the sign bit)
     // must be zero. Otherwise, we have an overflow.
-    const d_high_bits = d >> 58;
-    return .{ .value = @as(i128, @intCast(c >> 59 | (d << (128 - 59)))), .has_overflowed = overflowed | d_high_bits != 0 };
+    const d_high_bits = i128h.shr(d, 58);
+    return .{ .value = @as(i128, @intCast(i128h.shr(c, 59) | i128h.shl(d, 69))), .has_overflowed = overflowed | d_high_bits != 0 };
 }
 
 // Multiply two 128-bit ints and divide the result by 10^DECIMAL_PLACES
@@ -952,8 +952,8 @@ fn div_u256_by_u128(numerator: U256, denominator: u128) U256 {
             sr = @ctz(denominator);
 
             return .{
-                .hi = math.shr(u128, numerator.hi, sr),
-                .lo = math.shl(u128, numerator.hi, N_UDWORD_BITS - sr) | math.shr(u128, numerator.lo, sr),
+                .hi = i128h.shr(numerator.hi, @intCast(sr)),
+                .lo = i128h.shl(numerator.hi, @intCast(N_UDWORD_BITS - sr)) | i128h.shr(numerator.lo, @intCast(sr)),
             };
         }
 
@@ -979,22 +979,22 @@ fn div_u256_by_u128(numerator: U256, denominator: u128) U256 {
         } else if (sr < N_UDWORD_BITS) {
             // 2 <= sr <= N_UDWORD_BITS - 1
             q = .{
-                .hi = math.shl(u128, numerator.lo, N_UDWORD_BITS - sr),
+                .hi = i128h.shl(numerator.lo, @intCast(N_UDWORD_BITS - sr)),
                 .lo = 0,
             };
             r = .{
-                .hi = math.shr(u128, numerator.hi, sr),
-                .lo = math.shl(u128, numerator.hi, N_UDWORD_BITS - sr) | math.shr(u128, numerator.lo, sr),
+                .hi = i128h.shr(numerator.hi, @intCast(sr)),
+                .lo = i128h.shl(numerator.hi, @intCast(N_UDWORD_BITS - sr)) | i128h.shr(numerator.lo, @intCast(sr)),
             };
         } else {
             // N_UDWORD_BITS + 1 <= sr <= N_UTWORD_BITS - 1
             q = .{
-                .hi = math.shl(u128, numerator.hi, N_UTWORD_BITS - sr) | math.shr(u128, numerator.lo, sr - N_UDWORD_BITS),
-                .lo = math.shl(u128, numerator.lo, N_UTWORD_BITS - sr),
+                .hi = i128h.shl(numerator.hi, @intCast(N_UTWORD_BITS - sr)) | i128h.shr(numerator.lo, @intCast(sr - N_UDWORD_BITS)),
+                .lo = i128h.shl(numerator.lo, @intCast(N_UTWORD_BITS - sr)),
             };
             r = .{
                 .hi = 0,
-                .lo = math.shr(u128, numerator.hi, sr - N_UDWORD_BITS),
+                .lo = i128h.shr(numerator.hi, @intCast(sr - N_UDWORD_BITS)),
             };
         }
     }
@@ -1008,10 +1008,10 @@ fn div_u256_by_u128(numerator: U256, denominator: u128) U256 {
 
     while (sr > 0) {
         // r:q = ((r:q)  << 1) | carry
-        r.hi = (r.hi << 1) | (r.lo >> (N_UDWORD_BITS - 1));
-        r.lo = (r.lo << 1) | (q.hi >> (N_UDWORD_BITS - 1));
-        q.hi = (q.hi << 1) | (q.lo >> (N_UDWORD_BITS - 1));
-        q.lo = (q.lo << 1) | carry;
+        r.hi = i128h.shl(r.hi, 1) | i128h.shr(r.lo, 127);
+        r.lo = i128h.shl(r.lo, 1) | i128h.shr(q.hi, 127);
+        q.hi = i128h.shl(q.hi, 1) | i128h.shr(q.lo, 127);
+        q.lo = i128h.shl(q.lo, 1) | carry;
 
         // carry = 0;
         // if (r.all >= d.all)
@@ -1038,7 +1038,7 @@ fn div_u256_by_u128(numerator: U256, denominator: u128) U256 {
         //
         // As an implementation of `as_u256`, we wrap a negative value around to the maximum value of U256.
 
-        const s_u128 = math.shr(u128, hi, 127);
+        const s_u128 = i128h.shr(hi, 127);
         var s_hi: u128 = undefined;
         var s_lo: u128 = undefined;
         if (s_u128 == 1) {
@@ -1066,10 +1066,10 @@ fn div_u256_by_u128(numerator: U256, denominator: u128) U256 {
         sr -= 1;
     }
 
-    const hi = (q.hi << 1) | (q.lo >> (127));
-    const lo = (q.lo << 1) | carry;
+    const result_hi = i128h.shl(q.hi, 1) | i128h.shr(q.lo, 127);
+    const result_lo = i128h.shl(q.lo, 1) | carry;
 
-    return .{ .hi = hi, .lo = lo };
+    return .{ .hi = result_hi, .lo = result_lo };
 }
 
 const testing = std.testing;

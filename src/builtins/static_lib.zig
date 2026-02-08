@@ -5,6 +5,9 @@
 //! - Numeric overflow functions (for compiler-rt)
 //! - Dev backend wrapper functions (for roc build --backend=dev)
 
+const builtin = @import("builtin");
+const i128h = @import("compiler_rt_128.zig");
+
 // Export key functions that might need compiler-rt symbols
 comptime {
     // Export overflow functions that might need compiler-rt symbols
@@ -16,6 +19,21 @@ comptime {
     // Export other core functions that might be needed
     @import("num.zig").exportAddWithOverflow(i128, "roc__num_add_with_overflow_");
     @import("num.zig").exportSubWithOverflow(i128, "roc__num_sub_with_overflow_");
+}
+
+// On wasm32, Zig's standard library functions (std.fmt.float.log10Pow2,
+// std.math.mul, std.math.cast, etc.) and overflow-checked i64 multiplication
+// all generate calls to __multi3 because wasm32 has no native i128 multiply.
+// Provide our own implementation to keep builtins self-contained without
+// bundling the entire compiler_rt library.
+comptime {
+    if (builtin.cpu.arch == .wasm32) {
+        @export(&wasm32_multi3, .{ .name = "__multi3", .linkage = .strong });
+    }
+}
+
+fn wasm32_multi3(a: i128, b: i128) callconv(.c) i128 {
+    return i128h.mul_i128(a, b);
 }
 
 // Export dev backend wrapper functions - these are used by `roc build --backend=dev`

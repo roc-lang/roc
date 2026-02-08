@@ -55,6 +55,94 @@ const lo = switch (native_endian) {
     .little => 0,
 };
 const hi = 1 - lo;
+const is_wasm = builtin.cpu.arch == .wasm32;
+
+// ─── Shift / widening-multiply helpers ──────────────────────────────
+// On 64-bit targets the native <<, >>, and widening * compile to a few
+// inline instructions.  On wasm32 they would call __ashlti3 etc., so we
+// decompose into u64 (or u32) operations instead.
+
+/// Construct a u128 from two u64 halves without shifts.
+pub inline fn from_u64_pair(low_val: u64, high_val: u64) u128 {
+    var result: [2]u64 = undefined;
+    result[lo] = low_val;
+    result[hi] = high_val;
+    return @bitCast(result);
+}
+
+/// Extract the high 64 bits of a u128 without shifts.
+pub inline fn hi64(val: u128) u64 {
+    const parts: [2]u64 = @bitCast(val);
+    return parts[hi];
+}
+
+/// u128 left shift, decomposed to u64 ops on wasm32.
+pub inline fn shl(a: u128, shift: u7) u128 {
+    if (comptime !is_wasm) return a << shift;
+    if (shift == 0) return a;
+    const h: [2]u64 = @bitCast(a);
+    if (shift >= 64) {
+        const s: u6 = @intCast(shift - 64);
+        return @bitCast([2]u64{ 0, h[lo] << s });
+    }
+    const s: u6 = @intCast(shift);
+    const inv: u6 = @intCast(@as(u7, 64) - shift);
+    return @bitCast([2]u64{ h[lo] << s, (h[hi] << s) | (h[lo] >> inv) });
+}
+
+/// u128 logical right shift, decomposed to u64 ops on wasm32.
+pub inline fn shr(a: u128, shift: u7) u128 {
+    if (comptime !is_wasm) return a >> shift;
+    if (shift == 0) return a;
+    const h: [2]u64 = @bitCast(a);
+    if (shift >= 64) {
+        const s: u6 = @intCast(shift - 64);
+        return @bitCast([2]u64{ h[hi] >> s, 0 });
+    }
+    const s: u6 = @intCast(shift);
+    const inv: u6 = @intCast(@as(u7, 64) - shift);
+    return @bitCast([2]u64{ (h[lo] >> s) | (h[hi] << inv), h[hi] >> s });
+}
+
+/// i128 arithmetic right shift, decomposed to u64 ops on wasm32.
+pub inline fn shr_i128(a: i128, shift: u7) i128 {
+    if (comptime !is_wasm) return a >> shift;
+    if (shift == 0) return a;
+    const h: [2]u64 = @bitCast(@as(u128, @bitCast(a)));
+    const hi_s: i64 = @bitCast(h[hi]);
+    if (shift >= 64) {
+        const s: u6 = @intCast(shift - 64);
+        return @bitCast([2]u64{ @bitCast(hi_s >> s), @bitCast(hi_s >> 63) });
+    }
+    const s: u6 = @intCast(shift);
+    const inv: u6 = @intCast(@as(u7, 64) - shift);
+    return @bitCast([2]u64{ (h[lo] >> s) | (@as(u64, @bitCast(hi_s)) << inv), @bitCast(hi_s >> s) });
+}
+
+/// u64 × u64 → u128 widening multiply, decomposed to u32 ops on wasm32.
+pub inline fn mul_u64_wide(a: u64, b: u64) u128 {
+    if (comptime !is_wasm) return @as(u128, a) * @as(u128, b);
+    // Decompose each u64 into two u32 halves, then four u32×u32→u64 products.
+    const a_lo: u64 = a & 0xFFFFFFFF;
+    const a_hi: u64 = a >> 32;
+    const b_lo: u64 = b & 0xFFFFFFFF;
+    const b_hi: u64 = b >> 32;
+
+    const p0 = a_lo * b_lo;
+    const p1 = a_hi * b_lo;
+    const p2 = a_lo * b_hi;
+    const p3 = a_hi * b_hi;
+
+    const mid_result = @addWithOverflow(p1, p2);
+    const mid: u64 = mid_result[0];
+    const mid_carry: u64 = @as(u64, mid_result[1]) << 32;
+
+    const result_lo = p0 +% (mid << 32);
+    const lo_carry: u64 = if (result_lo < p0) 1 else 0;
+    const result_hi = p3 +% (mid >> 32) +% mid_carry +% lo_carry;
+
+    return @bitCast([2]u64{ result_lo, result_hi });
+}
 
 fn divwide_generic(comptime T: type, _u1: T, _u0: T, v_: T, r: *T) T {
     const HalfT = HalveInt(T, false).HalfT;
@@ -157,15 +245,15 @@ fn udivmod(comptime T: type, a_: T, b_: T, maybe_rem: ?*T) T {
 
     const shift: Log2Int(T) = @clz(b[hi]) - @clz(a[hi]);
     var af: T = @bitCast(a);
-    var bf = @as(T, @bitCast(b)) << shift;
+    var bf = shl(@as(T, @bitCast(b)), @intCast(shift));
     q = @bitCast(@as(T, 0));
 
     for (0..shift + 1) |_| {
         q[lo] <<= 1;
-        const s = @as(SignedT, @bitCast(bf -% af -% 1)) >> (@bitSizeOf(T) - 1);
+        const s = shr_i128(@as(SignedT, @bitCast(bf -% af -% 1)), @bitSizeOf(T) - 1);
         q[lo] |= @intCast(s & 1);
         af -= bf & @as(T, @bitCast(s));
-        bf >>= 1;
+        bf = shr(bf, 1);
     }
     if (maybe_rem) |rem| {
         rem.* = @bitCast(af);
@@ -232,8 +320,8 @@ pub fn mul_u128_lo(a: u128, b: u128) u128 {
 
 /// Signed 128-bit truncating division.
 pub fn divTrunc_i128(a: i128, b: i128) i128 {
-    const s_a = a >> (128 - 1);
-    const s_b = b >> (128 - 1);
+    const s_a = shr_i128(a, 127);
+    const s_b = shr_i128(b, 127);
     const an = (a ^ s_a) -% s_a;
     const bn = (b ^ s_b) -% s_b;
     const r = udivmod(u128, @bitCast(an), @bitCast(bn), null);
@@ -261,8 +349,8 @@ pub fn divFloor_i128(a: i128, b: i128) i128 {
 
 /// Signed 128-bit truncating remainder (same sign as dividend).
 pub fn rem_i128(a: i128, b: i128) i128 {
-    const s_a = a >> (128 - 1);
-    const s_b = b >> (128 - 1);
+    const s_a = shr_i128(a, 127);
+    const s_b = shr_i128(b, 127);
     const an = (a ^ s_a) -% s_a;
     const bn = (b ^ s_b) -% s_b;
     var r: u128 = undefined;
@@ -321,12 +409,11 @@ fn u128_to_f32_impl(x: u128) f32 {
 
     // Shift right to get 24 significant bits
     const shift: u7 = @intCast(bit_pos - 23);
-    const shifted: u128 = x >> shift;
-    var mantissa: u32 = @truncate(shifted);
+    var mantissa: u32 = @truncate(shr(x, shift));
 
     // Round to nearest even
-    const round_bit: u128 = (x >> (@as(u7, shift) - 1)) & 1;
-    const sticky_mask: u128 = (@as(u128, 1) << (@as(u7, shift) - 1)) - 1;
+    const round_bit: u128 = shr(x, @as(u7, shift) - 1) & 1;
+    const sticky_mask: u128 = shl(@as(u128, 1), @as(u7, shift) - 1) - 1;
     const sticky: u128 = if ((x & sticky_mask) != 0) @as(u128, 1) else 0;
 
     if (round_bit != 0 and (sticky != 0 or (mantissa & 1) != 0)) {
@@ -335,15 +422,15 @@ fn u128_to_f32_impl(x: u128) f32 {
             mantissa >>= 1;
             const exponent: u32 = @as(u32, bit_pos) + 1 + 127;
             if (exponent >= 255) return std.math.inf(f32);
-            const bits: u32 = (exponent << 23) | (mantissa & ((@as(u32, 1) << 23) - 1));
-            return @bitCast(bits);
+            const f32_bits: u32 = (exponent << 23) | (mantissa & ((@as(u32, 1) << 23) - 1));
+            return @bitCast(f32_bits);
         }
     }
 
     const exponent: u32 = @as(u32, bit_pos) + 127;
     if (exponent >= 255) return std.math.inf(f32);
-    const bits: u32 = (exponent << 23) | (mantissa & ((@as(u32, 1) << 23) - 1));
-    return @bitCast(bits);
+    const f32_bits: u32 = (exponent << 23) | (mantissa & ((@as(u32, 1) << 23) - 1));
+    return @bitCast(f32_bits);
 }
 
 /// Convert i128 to f64 using only 64-bit operations.
@@ -381,12 +468,11 @@ fn u128_to_f64_impl(x: u128) f64 {
 
     // We need to shift right by (bit_pos - 52) to get 53 bits
     const shift: u7 = @intCast(bit_pos - 52);
-    const shifted: u128 = x >> shift;
-    var mantissa: u64 = @truncate(shifted);
+    var mantissa: u64 = @truncate(shr(x, shift));
 
     // Round to nearest even
-    const round_bit: u128 = x >> (@as(u7, shift) - 1) & 1;
-    const sticky_mask: u128 = (@as(u128, 1) << (@as(u7, shift) - 1)) - 1;
+    const round_bit: u128 = shr(x, @as(u7, shift) - 1) & 1;
+    const sticky_mask: u128 = shl(@as(u128, 1), @as(u7, shift) - 1) - 1;
     const sticky: u128 = if ((x & sticky_mask) != 0) @as(u128, 1) else 0;
 
     if (round_bit != 0 and (sticky != 0 or (mantissa & 1) != 0)) {
@@ -427,14 +513,16 @@ pub fn f64_to_i128(x: f64) i128 {
     }
 
     // Reconstruct the integer: (1.mantissa) << (exp - 52)
+    // Note: (1 << 52) | mantissa is comptime-width but only 53 bits, fits in u64 range.
+    // But the result type is u128 and the shift can go up to 75, so we need shl/shr.
     const full_mantissa: u128 = (@as(u128, 1) << 52) | @as(u128, mantissa);
     var result: u128 = undefined;
     if (exp >= 52) {
         const shift: u7 = @intCast(exp - 52);
-        result = full_mantissa << shift;
+        result = shl(full_mantissa, shift);
     } else {
         const shift: u7 = @intCast(52 - exp);
-        result = full_mantissa >> shift;
+        result = shr(full_mantissa, shift);
     }
 
     if (sign != 0) {
@@ -464,10 +552,10 @@ pub fn f64_to_u128(x: f64) u128 {
     const full_mantissa: u128 = (@as(u128, 1) << 52) | @as(u128, mantissa);
     if (exp >= 52) {
         const shift: u7 = @intCast(exp - 52);
-        return full_mantissa << shift;
+        return shl(full_mantissa, shift);
     } else {
         const shift: u7 = @intCast(52 - exp);
-        return full_mantissa >> shift;
+        return shr(full_mantissa, shift);
     }
 }
 
@@ -703,6 +791,20 @@ fn pow10_f64(exp: u5) f64 {
         1e0,  1e1,  1e2,  1e3,  1e4,  1e5,  1e6,  1e7,
         1e8,  1e9,  1e10, 1e11, 1e12, 1e13, 1e14, 1e15,
         1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22,
+    };
+    return table[exp];
+}
+
+/// Compute 10^exp for i128 via lookup table. No runtime multiplication.
+/// exp must be 0..38 (10^38 fits in i128; 10^39 would overflow).
+pub fn pow10_i128(exp: u6) i128 {
+    const table = comptime blk: {
+        var t: [39]i128 = undefined;
+        t[0] = 1;
+        for (1..39) |i| {
+            t[i] = t[i - 1] * 10;
+        }
+        break :blk t;
     };
     return table[exp];
 }
