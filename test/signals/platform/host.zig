@@ -152,9 +152,7 @@ fn handleRocArithmeticError() noreturn {
     }
 }
 
-// ============================================================================
 // NodeValue - Universal value type matching Roc's NodeValue
-// ============================================================================
 
 // Tag values must match Roc's alphabetical ordering of NodeValue variants:
 // NvBool, NvF64, NvI64, NvList, NvStr, NvUnit
@@ -184,20 +182,6 @@ const NodeValue = extern struct {
         };
     }
 
-    fn fromI64(val: i64) NodeValue {
-        return .{
-            .tag = @intFromEnum(NodeValueTag.i64_val),
-            .payload = .{ .i64_val = val },
-        };
-    }
-
-    fn fromStr(str: RocStr) NodeValue {
-        return .{
-            .tag = @intFromEnum(NodeValueTag.str_val),
-            .payload = .{ .str_val = str },
-        };
-    }
-
     fn toI64(self: NodeValue) i64 {
         return self.payload.i64_val;
     }
@@ -207,9 +191,7 @@ const NodeValue = extern struct {
     }
 };
 
-// ============================================================================
 // Simulated DOM
-// ============================================================================
 
 const DomElement = struct {
     id: u64,
@@ -237,9 +219,7 @@ const DomElement = struct {
     }
 };
 
-// ============================================================================
 // Reactive Graph
-// ============================================================================
 
 const RocBox = *anyopaque;
 
@@ -275,9 +255,7 @@ const GraphNode = struct {
     }
 };
 
-// ============================================================================
 // Test Spec Types
-// ============================================================================
 
 const SpecCommandType = enum {
     click,
@@ -405,9 +383,7 @@ fn parseElemId(s: []const u8) !ElemId {
     return .{ .tag = tag, .index = index };
 }
 
-// ============================================================================
 // Host Environment
-// ============================================================================
 
 const RocAllocation = struct {
     ptr: [*]u8,
@@ -496,9 +472,7 @@ const HostEnv = struct {
     }
 };
 
-// ============================================================================
 // Memory Management (same as fx platform)
-// ============================================================================
 
 fn rocAllocFn(roc_alloc: *builtins.host_abi.RocAlloc, env: *anyopaque) callconv(.c) void {
     const host: *HostEnv = @ptrCast(@alignCast(env));
@@ -612,9 +586,7 @@ fn rocCrashedFn(roc_crashed: *const builtins.host_abi.RocCrashed, env: *anyopaqu
     std.process.exit(1);
 }
 
-// ============================================================================
 // Roc Entrypoints
-// ============================================================================
 
 extern fn roc__main(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
 extern fn roc__call_transform(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: *anyopaque) callconv(.c) void;
@@ -622,9 +594,7 @@ extern fn roc__call_step(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, ar
 
 const RocStr = builtins.str.RocStr;
 
-// ============================================================================
 // Hosted Effects
-// ============================================================================
 
 /// Host.append_child! (alphabetically first)
 fn hostedAppendChild(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, args_ptr: *anyopaque) callconv(.c) void {
@@ -978,9 +948,7 @@ const hosted_function_ptrs = [_]builtins.host_abi.HostedFn{
     hostedSetText, // Host.set_text!
 };
 
-// ============================================================================
 // Reactive Graph Propagation
-// ============================================================================
 
 fn callRocTransform(host: *HostEnv, transform: RocBox, input: NodeValue) NodeValue {
     if (host.roc_ops) |ops| {
@@ -1166,9 +1134,7 @@ fn updateAllTextBindings(host: *HostEnv) void {
     }
 }
 
-// ============================================================================
 // Main Entry Point
-// ============================================================================
 
 comptime {
     @export(&main, .{ .name = "main" });
