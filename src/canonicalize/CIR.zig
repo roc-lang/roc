@@ -699,7 +699,8 @@ pub fn formatBase256ToDecimal(
     for (digits_before_pt) |digit| {
         value = value * 256 + digit;
     }
-    w.print("{d}", .{value}) catch {};
+    var int_buf: [40]u8 = undefined;
+    w.writeAll(builtins.compiler_rt_128.u128_to_str(&int_buf, value).str) catch {};
 
     // Format fractional part if present and non-zero
     if (digits_after_pt.len > 0) {
@@ -714,14 +715,14 @@ pub fn formatBase256ToDecimal(
             w.writeAll(".") catch {};
             // Convert base-256 fractional digits to decimal
             var frac: f64 = 0;
-            var mult: f64 = 1.0 / 256.0;
+            var frac_mult: f64 = 1.0 / 256.0;
             for (digits_after_pt) |digit| {
-                frac += @as(f64, @floatFromInt(digit)) * mult;
-                mult /= 256.0;
+                frac += @as(f64, @floatFromInt(digit)) * frac_mult;
+                frac_mult /= 256.0;
             }
             // Print fractional part (removing leading "0.")
             var frac_buf: [32]u8 = undefined;
-            const frac_str = std.fmt.bufPrint(&frac_buf, "{d:.6}", .{frac}) catch "0";
+            const frac_str = builtins.compiler_rt_128.f64_to_str(&frac_buf, frac);
             if (frac_str.len > 2 and std.mem.startsWith(u8, frac_str, "0.")) {
                 w.writeAll(frac_str[2..]) catch {};
             }

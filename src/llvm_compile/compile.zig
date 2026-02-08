@@ -439,7 +439,8 @@ pub fn compileAndExecute(
             const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
             var result: f64 = undefined;
             eval_fn(&result);
-            return std.fmt.allocPrint(allocator, "{d}", .{result}) catch return error.OutOfMemory;
+            var float_buf: [32]u8 = undefined;
+            return allocator.dupe(u8, i128h.f64_to_str(&float_buf, result)) catch return error.OutOfMemory;
         },
         .dec => {
             const EvalFn = *const fn (*i128) callconv(.c) void;

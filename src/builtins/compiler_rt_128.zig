@@ -516,17 +516,217 @@ pub fn i128_to_str(buf: []u8, val: i128) FormatResult {
     return u128_to_str_inner(buf, @as(u128, @intCast(val)));
 }
 
-// ABI exports for __udivti3 and __umodti3.
-// Zig's std.fmt.float (used for {d} formatting of f64) internally performs
-// u128 division/modulo in isPowerOf10 and printIntAny. Since we build with
-// bundle_compiler_rt=false, we must provide these two symbols ourselves.
+// f64/f32 to string formatting.
+// Zig's std.fmt.float uses u128 arithmetic internally (isPowerOf10, printIntAny),
+// which pulls in __udivti3/__umodti3 from compiler-rt. Since we build with
+// bundle_compiler_rt=false, we provide our own float-to-string conversion that
+// uses only f64 and u64 arithmetic.
 
-/// Unsigned 128-bit division — matches the compiler-rt ABI.
-export fn __udivti3(a: u128, b: u128) callconv(.c) u128 {
-    return divTrunc_u128(a, b);
+/// Format an f64 as a decimal string into the provided buffer.
+/// Returns the slice of `buf` that contains the formatted number.
+/// Buffer must be at least 32 bytes.
+pub fn f64_to_str(buf: []u8, val: f64) []const u8 {
+    // Special values
+    if (math.isNan(val)) {
+        @memcpy(buf[0..3], "NaN");
+        return buf[0..3];
+    }
+    if (math.isInf(val)) {
+        if (val < 0) {
+            @memcpy(buf[0..4], "-inf");
+            return buf[0..4];
+        }
+        @memcpy(buf[0..3], "inf");
+        return buf[0..3];
+    }
+
+    var pos: usize = 0;
+
+    // Zero (including -0)
+    if (val == 0.0) {
+        if (@as(u64, @bitCast(val)) >> 63 != 0) {
+            @memcpy(buf[0..4], "-0.0");
+            return buf[0..4];
+        }
+        @memcpy(buf[0..3], "0.0");
+        return buf[0..3];
+    }
+
+    // Sign
+    var v = val;
+    if (v < 0) {
+        buf[pos] = '-';
+        pos += 1;
+        v = -v;
+    }
+
+    // Get decimal exponent: floor(log10(v))
+    var exp10: i32 = @intFromFloat(@floor(math.log10(v)));
+
+    // Scale to [1.0, 10.0)
+    var scaled: f64 = if (exp10 == 0)
+        v
+    else if (exp10 > 0 and exp10 < 23)
+        v / pow10_f64(@intCast(exp10))
+    else if (exp10 < 0 and exp10 > -23)
+        v * pow10_f64(@intCast(-exp10))
+    else
+        v / math.pow(f64, 10.0, @floatFromInt(exp10));
+
+    // Correct potential off-by-one from log10 rounding
+    if (scaled >= 10.0) {
+        scaled /= 10.0;
+        exp10 += 1;
+    }
+    if (scaled < 1.0 and scaled > 0.0) {
+        scaled *= 10.0;
+        exp10 -= 1;
+    }
+
+    // Extract significant digits (up to 17 for f64)
+    var digits: [18]u8 = undefined;
+    var ndigits: usize = 0;
+    var s = scaled;
+    while (ndigits < 17) : (ndigits += 1) {
+        const d: u8 = @intFromFloat(@min(s, 9.0));
+        digits[ndigits] = d;
+        s = (s - @as(f64, @floatFromInt(d))) * 10.0;
+    }
+
+    // Round: check if next digit >= 5
+    if (s >= 5.0) {
+        // Propagate rounding up
+        var i: usize = ndigits;
+        while (i > 0) {
+            i -= 1;
+            digits[i] += 1;
+            if (digits[i] < 10) break;
+            digits[i] = 0;
+            if (i == 0) {
+                // Carried past first digit: shift digits right, set first to 1
+                var j: usize = ndigits;
+                while (j > 0) : (j -= 1) {
+                    digits[j] = digits[j - 1];
+                }
+                digits[0] = 1;
+                exp10 += 1;
+                break;
+            }
+        }
+    }
+
+    // Trim trailing zeros (keep at least 1 digit after decimal point)
+    while (ndigits > 1 and digits[ndigits - 1] == 0) ndigits -= 1;
+
+    // Format based on exponent range
+    if (exp10 >= 0 and exp10 < 16) {
+        // Decimal notation: e.g. 314.159
+        const int_digits: usize = @intCast(exp10 + 1);
+        if (int_digits >= ndigits) {
+            // All digits are integer part
+            for (digits[0..ndigits]) |d| {
+                buf[pos] = '0' + d;
+                pos += 1;
+            }
+            // Pad with zeros
+            var pad = int_digits - ndigits;
+            while (pad > 0) : (pad -= 1) {
+                buf[pos] = '0';
+                pos += 1;
+            }
+            buf[pos] = '.';
+            pos += 1;
+            buf[pos] = '0';
+            pos += 1;
+        } else {
+            // Some digits before decimal, some after
+            for (digits[0..int_digits]) |d| {
+                buf[pos] = '0' + d;
+                pos += 1;
+            }
+            buf[pos] = '.';
+            pos += 1;
+            for (digits[int_digits..ndigits]) |d| {
+                buf[pos] = '0' + d;
+                pos += 1;
+            }
+        }
+    } else if (exp10 < 0 and exp10 >= -4) {
+        // Small decimal: e.g. 0.00123
+        buf[pos] = '0';
+        pos += 1;
+        buf[pos] = '.';
+        pos += 1;
+        var zeros: usize = @intCast(-exp10 - 1);
+        while (zeros > 0) : (zeros -= 1) {
+            buf[pos] = '0';
+            pos += 1;
+        }
+        for (digits[0..ndigits]) |d| {
+            buf[pos] = '0' + d;
+            pos += 1;
+        }
+    } else {
+        // Scientific notation: e.g. 1.23e45
+        buf[pos] = '0' + digits[0];
+        pos += 1;
+        if (ndigits > 1) {
+            buf[pos] = '.';
+            pos += 1;
+            for (digits[1..ndigits]) |d| {
+                buf[pos] = '0' + d;
+                pos += 1;
+            }
+        }
+        buf[pos] = 'e';
+        pos += 1;
+        if (exp10 < 0) {
+            buf[pos] = '-';
+            pos += 1;
+            pos = writeU64(buf, pos, @intCast(-exp10));
+        } else {
+            pos = writeU64(buf, pos, @intCast(exp10));
+        }
+    }
+
+    return buf[0..pos];
 }
 
-/// Unsigned 128-bit modulo — matches the compiler-rt ABI.
-export fn __umodti3(a: u128, b: u128) callconv(.c) u128 {
-    return rem_u128(a, b);
+/// Format an f32 as a decimal string (converts to f64 internally).
+pub fn f32_to_str(buf: []u8, val: f32) []const u8 {
+    return f64_to_str(buf, @as(f64, val));
+}
+
+/// Fast power-of-10 lookup for small exponents (0..22).
+fn pow10_f64(exp: u5) f64 {
+    const table = [_]f64{
+        1e0,  1e1,  1e2,  1e3,  1e4,  1e5,  1e6,  1e7,
+        1e8,  1e9,  1e10, 1e11, 1e12, 1e13, 1e14, 1e15,
+        1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22,
+    };
+    return table[exp];
+}
+
+/// Write a u64 in decimal to buf starting at pos, return new pos.
+fn writeU64(buf: []u8, start: usize, val: u64) usize {
+    if (val == 0) {
+        buf[start] = '0';
+        return start + 1;
+    }
+    var tmp: [20]u8 = undefined;
+    var len: usize = 0;
+    var v = val;
+    while (v != 0) {
+        tmp[len] = @truncate(v % 10);
+        len += 1;
+        v /= 10;
+    }
+    var pos = start;
+    var i: usize = len;
+    while (i > 0) {
+        i -= 1;
+        buf[pos] = '0' + tmp[i];
+        pos += 1;
+    }
+    return pos;
 }

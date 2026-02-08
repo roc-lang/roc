@@ -771,7 +771,10 @@ pub const DevEvaluator = struct {
             switch (self_val) {
                 .i64_val => |v| try writer.print("{}", .{v}),
                 .u64_val => |v| try writer.print("{}", .{v}),
-                .f64_val => |v| try writer.print("{d}", .{v}),
+                .f64_val => |v| {
+                    var buf: [32]u8 = undefined;
+                    try writer.writeAll(i128h.f64_to_str(&buf, v));
+                },
                 .i128_val => |v| {
                     var buf: [40]u8 = undefined;
                     try writer.writeAll(i128h.i128_to_str(&buf, v).str);

@@ -626,10 +626,13 @@ fn strFromFloatHelp(
     float: T,
     roc_ops: *RocOps,
 ) RocStr {
-    var buf: [400]u8 = undefined;
-    const result = std.fmt.bufPrint(&buf, "{d}", .{float}) catch unreachable;
+    var buf: [32]u8 = undefined;
+    const result = if (T == f32)
+        compiler_rt_128.f32_to_str(&buf, float)
+    else
+        compiler_rt_128.f64_to_str(&buf, float);
 
-    return RocStr.init(&buf, result.len, roc_ops);
+    return RocStr.init(result.ptr, result.len, roc_ops);
 }
 
 // Str.splitOn
