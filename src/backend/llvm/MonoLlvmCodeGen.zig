@@ -2607,8 +2607,8 @@ pub const MonoLlvmCodeGen = struct {
         const str_bytes = self.store.getString(str_idx);
 
         if (str_bytes.len >= roc_str_size) {
-            // Large strings not yet supported
-            return error.UnsupportedExpression;
+            // Large string: allocate heap memory, copy bytes, write RocStr to dest_ptr
+            return self.generateLargeStrLiteral(str_bytes, dest_ptr);
         }
 
         const byte_alignment = LlvmBuilder.Alignment.fromByteUnits(1);
@@ -2637,6 +2637,61 @@ pub const MonoLlvmCodeGen = struct {
         _ = wip.store(.@"volatile", len_val, len_ptr, byte_alignment) catch return error.CompilationFailed;
 
         // Return .none as sentinel — data already written to out_ptr
+        return .none;
+    }
+
+    /// Generate a large string literal (>= 24 bytes) by allocating heap memory.
+    fn generateLargeStrLiteral(self: *MonoLlvmCodeGen, str_bytes: []const u8, dest_ptr: LlvmBuilder.Value) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
+
+        if (self.alloc_with_refcount_addr == 0) return error.CompilationFailed;
+        const roc_ops = self.roc_ops_arg orelse return error.CompilationFailed;
+
+        // Call allocateWithRefcountC(total_bytes, alignment=1, refcounted=false, roc_ops)
+        const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
+        const alloc_fn_type = builder.fnType(ptr_type, &.{ .i64, .i32, .i1, ptr_type }, .normal) catch return error.CompilationFailed;
+        const addr_val = builder.intValue(.i64, self.alloc_with_refcount_addr) catch return error.CompilationFailed;
+        const fn_ptr = wip.cast(.inttoptr, addr_val, ptr_type, "") catch return error.CompilationFailed;
+
+        const str_len: u64 = @intCast(str_bytes.len);
+        const size_val = builder.intValue(.i64, str_len) catch return error.OutOfMemory;
+        const align_val = builder.intValue(.i32, 1) catch return error.OutOfMemory;
+        const refcounted_val = builder.intValue(.i1, 0) catch return error.OutOfMemory;
+
+        const heap_ptr = wip.call(.normal, .ccc, .none, alloc_fn_type, fn_ptr, &.{ size_val, align_val, refcounted_val, roc_ops }, "str_heap") catch return error.CompilationFailed;
+
+        // Copy string bytes to heap memory using volatile stores
+        const byte_alignment = LlvmBuilder.Alignment.fromByteUnits(1);
+        for (str_bytes, 0..) |byte, i| {
+            if (byte == 0) continue;
+            const byte_val = builder.intValue(.i8, byte) catch return error.OutOfMemory;
+            if (i == 0) {
+                _ = wip.store(.@"volatile", byte_val, heap_ptr, byte_alignment) catch return error.CompilationFailed;
+            } else {
+                const offset = builder.intValue(.i32, @as(u32, @intCast(i))) catch return error.OutOfMemory;
+                const ptr = wip.gep(.inbounds, .i8, heap_ptr, &.{offset}, "") catch return error.CompilationFailed;
+                _ = wip.store(.@"volatile", byte_val, ptr, byte_alignment) catch return error.CompilationFailed;
+            }
+        }
+
+        // Write RocStr struct to dest_ptr: {ptr, len, capacity}
+        const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
+
+        // Store data pointer (offset 0)
+        _ = wip.store(.normal, heap_ptr, dest_ptr, alignment) catch return error.CompilationFailed;
+
+        // Store len (offset 8)
+        const len_val = builder.intValue(.i64, str_len) catch return error.OutOfMemory;
+        const off8 = builder.intValue(.i32, 8) catch return error.OutOfMemory;
+        const ptr8 = wip.gep(.inbounds, .i8, dest_ptr, &.{off8}, "") catch return error.CompilationFailed;
+        _ = wip.store(.normal, len_val, ptr8, alignment) catch return error.CompilationFailed;
+
+        // Store capacity (offset 16) — same as len for new strings
+        const off16 = builder.intValue(.i32, 16) catch return error.OutOfMemory;
+        const ptr16 = wip.gep(.inbounds, .i8, dest_ptr, &.{off16}, "") catch return error.CompilationFailed;
+        _ = wip.store(.normal, len_val, ptr16, alignment) catch return error.CompilationFailed;
+
         return .none;
     }
 
