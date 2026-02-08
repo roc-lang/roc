@@ -2328,7 +2328,7 @@ pub const MonoLlvmCodeGen = struct {
             .u128_to_dec_try_unsafe, .i128_to_dec_try_unsafe,
             => return error.UnsupportedExpression,
 
-            // --- Dec truncation conversions (not yet fully handled) ---
+            // --- Dec truncation conversions: sdiv by 10^18, then trunc ---
             .dec_to_i8_trunc, .dec_to_i8_try_unsafe,
             .dec_to_i16_trunc, .dec_to_i16_try_unsafe,
             .dec_to_i32_trunc, .dec_to_i32_try_unsafe,
@@ -2338,8 +2338,26 @@ pub const MonoLlvmCodeGen = struct {
             .dec_to_u32_trunc, .dec_to_u32_try_unsafe,
             .dec_to_u64_trunc, .dec_to_u64_try_unsafe,
             .dec_to_u128_trunc, .dec_to_u128_try_unsafe,
-            .dec_to_f32_wrap, .dec_to_f32_try_unsafe,
-            => return error.UnsupportedExpression,
+            => {
+                if (args.len < 1) return error.UnsupportedExpression;
+                const operand = try self.generateExpr(args[0]);
+                // Dec is i128 scaled by 10^18. Divide to get whole number part.
+                const scale = (builder.intConst(.i128, 1_000_000_000_000_000_000) catch return error.OutOfMemory).toValue();
+                const whole = wip.bin(.sdiv, operand, scale, "") catch return error.CompilationFailed;
+                // Truncate to target integer type
+                const target_type = layoutToLlvmType(ll.ret_layout);
+                if (target_type == .i128) return whole;
+                return wip.cast(.trunc, whole, target_type, "") catch return error.CompilationFailed;
+            },
+            .dec_to_f32_wrap, .dec_to_f32_try_unsafe => {
+                if (args.len < 1) return error.UnsupportedExpression;
+                const operand = try self.generateExpr(args[0]);
+                // Convert i128 to f64, divide by 10^18, then fptrunc to f32
+                const as_f64 = wip.cast(.sitofp, operand, .double, "") catch return error.CompilationFailed;
+                const scale = (builder.doubleConst(1_000_000_000_000_000_000.0) catch return error.OutOfMemory).toValue();
+                const f64_result = wip.bin(.fdiv, as_f64, scale, "") catch return error.CompilationFailed;
+                return wip.cast(.fptrunc, f64_result, .float, "") catch return error.CompilationFailed;
+            },
 
             // --- Float to float conversions ---
             .f32_to_f64 => {
