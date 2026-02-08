@@ -317,6 +317,8 @@ pub const LlvmEvaluator = struct {
         codegen.str_with_capacity_addr = @intFromPtr(&wrapStrWithCapacity);
         codegen.str_reserve_addr = @intFromPtr(&wrapStrReserve);
         codegen.str_release_excess_capacity_addr = @intFromPtr(&wrapStrReleaseExcessCapacity);
+        codegen.str_split_addr = @intFromPtr(&wrapStrSplitOn);
+        codegen.str_join_with_addr = @intFromPtr(&wrapStrJoinWith);
         codegen.list_concat_addr = @intFromPtr(&wrapListConcat);
         codegen.list_prepend_wrap_addr = @intFromPtr(&wrapListPrepend);
         codegen.list_reserve_addr = @intFromPtr(&wrapListReserve);
@@ -527,6 +529,18 @@ fn wrapStrReserve(out: *RocStr, bytes: ?[*]u8, len: usize, cap: usize, spare: u6
 fn wrapStrReleaseExcessCapacity(out: *RocStr, bytes: ?[*]u8, len: usize, cap: usize, roc_ops: *RocOps) callconv(.c) void {
     const s = RocStr{ .bytes = bytes, .length = len, .capacity_or_alloc_ptr = cap };
     out.* = builtins.str.strReleaseExcessCapacity(roc_ops, s);
+}
+
+fn wrapStrSplitOn(out: *builtins.list.RocList, s_bytes: ?[*]u8, s_len: usize, s_cap: usize, d_bytes: ?[*]u8, d_len: usize, d_cap: usize, roc_ops: *RocOps) callconv(.c) void {
+    const s = RocStr{ .bytes = s_bytes, .length = s_len, .capacity_or_alloc_ptr = s_cap };
+    const d = RocStr{ .bytes = d_bytes, .length = d_len, .capacity_or_alloc_ptr = d_cap };
+    out.* = builtins.str.strSplitOn(s, d, roc_ops);
+}
+
+fn wrapStrJoinWith(out: *RocStr, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, sep_bytes: ?[*]u8, sep_len: usize, sep_cap: usize, roc_ops: *RocOps) callconv(.c) void {
+    const list = builtins.list.RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+    const sep = RocStr{ .bytes = sep_bytes, .length = sep_len, .capacity_or_alloc_ptr = sep_cap };
+    out.* = builtins.str.strJoinWithC(list, sep, roc_ops);
 }
 
 // --- List operation wrappers ---

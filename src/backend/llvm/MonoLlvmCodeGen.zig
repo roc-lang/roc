@@ -162,6 +162,8 @@ pub const MonoLlvmCodeGen = struct {
     str_with_capacity_addr: usize = 0,
     str_reserve_addr: usize = 0,
     str_release_excess_capacity_addr: usize = 0,
+    str_split_addr: usize = 0,
+    str_join_with_addr: usize = 0,
 
     /// Address of list operation wrappers.
     list_concat_addr: usize = 0,
@@ -2771,8 +2773,30 @@ pub const MonoLlvmCodeGen = struct {
                 return try self.callStr2Str(args[0], self.str_release_excess_capacity_addr);
             },
 
-            .str_from_utf8, .str_split, .str_join_with,
-            .str_with_prefix, .str_from_utf8_lossy,
+            .str_with_prefix => {
+                // str_with_prefix(string, prefix) -> prefix ++ string
+                if (args.len < 2) return error.UnsupportedExpression;
+                if (self.str_concat_addr == 0) return error.UnsupportedExpression;
+                // Swap args: with_prefix calls concat(prefix, string)
+                return try self.callStrStr2Str(args[1], args[0], self.str_concat_addr);
+            },
+            .str_split => {
+                // str_split(string, delimiter) -> List(Str) (written to out_ptr)
+                if (args.len < 2) return error.UnsupportedExpression;
+                if (self.str_split_addr == 0) return error.UnsupportedExpression;
+                // Same pattern as callStrStr2Str but writes List instead of Str (both 24 bytes)
+                return try self.callStrStr2Str(args[0], args[1], self.str_split_addr);
+            },
+            .str_join_with => {
+                // str_join_with(list, separator) -> Str (written to out_ptr)
+                // Wrapper: fn(out, list_bytes, list_len, list_cap, sep_bytes, sep_len, sep_cap, roc_ops)
+                if (args.len < 2) return error.UnsupportedExpression;
+                if (self.str_join_with_addr == 0) return error.UnsupportedExpression;
+                // list is first arg, separator is second; both are 24-byte structs
+                return try self.callStrStr2Str(args[0], args[1], self.str_join_with_addr);
+            },
+
+            .str_from_utf8, .str_from_utf8_lossy,
             => return error.UnsupportedExpression,
 
             .list_append => {
