@@ -326,10 +326,13 @@ pub const LlvmEvaluator = struct {
         codegen.list_release_excess_capacity_addr = @intFromPtr(&wrapListReleaseExcessCapacity);
         codegen.list_set_addr = @intFromPtr(&wrapListSet);
         codegen.list_reverse_addr = @intFromPtr(&wrapListReverse);
+        codegen.str_from_utf8_lossy_addr = @intFromPtr(&wrapStrFromUtf8Lossy);
         codegen.int_try_signed_addr = @intFromPtr(&wrapIntTrySigned);
         codegen.int_try_unsigned_addr = @intFromPtr(&wrapIntTryUnsigned);
         codegen.i128_try_convert_addr = @intFromPtr(&wrapI128TryConvert);
         codegen.u128_try_convert_addr = @intFromPtr(&wrapU128TryConvert);
+        codegen.i128_to_dec_try_unsafe_addr = @intFromPtr(&wrapI128ToDecTryUnsafe);
+        codegen.u128_to_dec_try_unsafe_addr = @intFromPtr(&wrapU128ToDecTryUnsafe);
 
         // Provide layout store for composite types (records, tuples)
         codegen.layout_store = layout_store_ptr;
@@ -655,6 +658,34 @@ fn wrapU128TryConvert(out: [*]u8, val_low: u64, val_high: u64, target_bits: u32,
     } else {
         out[disc_offset] = 0; // Err
     }
+}
+
+fn wrapStrFromUtf8Lossy(out: *RocStr, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, roc_ops: *RocOps) callconv(.c) void {
+    const list = builtins.list.RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+    out.* = builtins.str.fromUtf8Lossy(list, roc_ops);
+}
+
+fn wrapI128ToDecTryUnsafe(out: [*]u8, val_low: u64, val_high: u64) callconv(.c) void {
+    const val: i128 = @bitCast(@as(u128, val_high) << 64 | @as(u128, val_low));
+    const RocDec = builtins.dec.RocDec;
+    const result = RocDec.fromWholeInt(val);
+    const success = result != null;
+    const dec_val: i128 = if (result) |d| d.num else 0;
+    const dec_bytes: [16]u8 = @bitCast(@as(u128, @bitCast(dec_val)));
+    @memcpy(out[0..16], &dec_bytes);
+    out[16] = @intFromBool(success);
+}
+
+fn wrapU128ToDecTryUnsafe(out: [*]u8, val_low: u64, val_high: u64) callconv(.c) void {
+    const val: u128 = @as(u128, val_high) << 64 | @as(u128, val_low);
+    const RocDec = builtins.dec.RocDec;
+    const fits_i128 = val <= @as(u128, @bitCast(@as(i128, std.math.maxInt(i128))));
+    const result: ?RocDec = if (fits_i128) RocDec.fromWholeInt(@as(i128, @bitCast(val))) else null;
+    const success = result != null;
+    const dec_val: i128 = if (result) |d| d.num else 0;
+    const dec_bytes: [16]u8 = @bitCast(@as(u128, @bitCast(dec_val)));
+    @memcpy(out[0..16], &dec_bytes);
+    out[16] = @intFromBool(success);
 }
 
 fn i128InTargetRange(val: i128, target_bits: u32, target_signed: bool) bool {

@@ -164,6 +164,7 @@ pub const MonoLlvmCodeGen = struct {
     str_release_excess_capacity_addr: usize = 0,
     str_split_addr: usize = 0,
     str_join_with_addr: usize = 0,
+    str_from_utf8_lossy_addr: usize = 0,
 
     /// Address of list operation wrappers.
     list_concat_addr: usize = 0,
@@ -179,6 +180,10 @@ pub const MonoLlvmCodeGen = struct {
     int_try_unsigned_addr: usize = 0,
     i128_try_convert_addr: usize = 0,
     u128_try_convert_addr: usize = 0,
+
+    /// Address of Dec try-conversion wrappers.
+    i128_to_dec_try_unsafe_addr: usize = 0,
+    u128_to_dec_try_unsafe_addr: usize = 0,
 
     /// Address of number-to-string wrappers.
     i64_to_str_addr: usize = 0,
@@ -2348,8 +2353,9 @@ pub const MonoLlvmCodeGen = struct {
             => {
                 return try self.generateIntTryConversion(ll);
             },
-            .u128_to_dec_try_unsafe, .i128_to_dec_try_unsafe,
-            => return error.UnsupportedExpression,
+            .u128_to_dec_try_unsafe, .i128_to_dec_try_unsafe => {
+                return try self.generateDecTryUnsafeConversion(ll);
+            },
 
             // --- Dec truncation conversions: sdiv by 10^18, then trunc ---
             .dec_to_i8_trunc, .dec_to_i8_try_unsafe,
@@ -2837,8 +2843,14 @@ pub const MonoLlvmCodeGen = struct {
                 return try self.callStrStr2Str(args[0], args[1], self.str_join_with_addr);
             },
 
-            .str_from_utf8, .str_from_utf8_lossy,
-            => return error.UnsupportedExpression,
+            .str_from_utf8_lossy, .str_from_utf8 => {
+                // str_from_utf8_lossy(list) -> Str
+                // str_from_utf8(list) -> Str (using lossy version as placeholder, same as dev backend)
+                // List U8 has same decomposed layout as Str (bytes, len, cap) so callStr2Str works.
+                if (args.len < 1) return error.UnsupportedExpression;
+                if (self.str_from_utf8_lossy_addr == 0) return error.UnsupportedExpression;
+                return try self.callStr2Str(args[0], self.str_from_utf8_lossy_addr);
+            },
 
             .list_append => {
                 // list_append(list, element) -> new_list
@@ -3877,6 +3889,59 @@ pub const MonoLlvmCodeGen = struct {
             .i128_to_u128_try => .{ .src_bits = 128, .src_signed = true, .tgt_bits = 128, .tgt_signed = false },
             else => unreachable,
         };
+    }
+
+    /// Generate a Dec try-unsafe conversion (u128_to_dec_try_unsafe, i128_to_dec_try_unsafe).
+    /// The source is an i128 value, the result is a record {val: Dec(i128), success: Bool}.
+    /// Calls a C wrapper that does RocDec.fromWholeInt and writes {dec_bytes, success} to output.
+    fn generateDecTryUnsafeConversion(self: *MonoLlvmCodeGen, ll: anytype) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
+        const dest_ptr = self.out_ptr orelse return error.UnsupportedExpression;
+        const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
+        const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
+        const args = self.store.getExprSpan(ll.args);
+        if (args.len < 1) return error.UnsupportedExpression;
+
+        // Zero the output buffer first (result is {Dec(i128), Bool} = 17 bytes typically)
+        const ls = self.layout_store orelse return error.UnsupportedExpression;
+        const ret_layout_val = ls.getLayout(ll.ret_layout);
+        const size_align = ls.layoutSizeAlign(ret_layout_val);
+        const total_size: u32 = size_align.size;
+        const zero_byte = builder.intValue(.i8, 0) catch return error.OutOfMemory;
+        const total_size_val = builder.intValue(.i32, total_size) catch return error.OutOfMemory;
+        _ = wip.callMemSet(dest_ptr, alignment, zero_byte, total_size_val, .normal, false) catch return error.CompilationFailed;
+
+        // Determine which wrapper to call based on signedness
+        const is_signed = ll.op == .i128_to_dec_try_unsafe;
+        const fn_addr_val = if (is_signed) self.i128_to_dec_try_unsafe_addr else self.u128_to_dec_try_unsafe_addr;
+        if (fn_addr_val == 0) return error.UnsupportedExpression;
+
+        // Generate source i128 value
+        const saved = self.out_ptr;
+        self.out_ptr = null;
+        const operand = try self.generateExpr(args[0]);
+        self.out_ptr = saved;
+
+        // Split i128 into low/high u64 halves
+        const low = wip.cast(.trunc, operand, .i64, "") catch return error.CompilationFailed;
+        const shifted = wip.bin(.lshr, operand, builder.intValue(.i128, 64) catch return error.OutOfMemory, "") catch return error.CompilationFailed;
+        const high = wip.cast(.trunc, shifted, .i64, "") catch return error.CompilationFailed;
+
+        // fn(out, val_low, val_high) -> void
+        const fn_type = builder.fnType(.void, &.{
+            ptr_type, .i64, .i64,
+        }, .normal) catch return error.CompilationFailed;
+        const fn_addr = builder.intValue(.i64, fn_addr_val) catch return error.CompilationFailed;
+        const fn_ptr = wip.cast(.inttoptr, fn_addr, ptr_type, "") catch return error.CompilationFailed;
+
+        _ = wip.call(.normal, .ccc, .none, fn_type, fn_ptr, &.{
+            dest_ptr,
+            low,
+            high,
+        }, "") catch return error.CompilationFailed;
+
+        return .none;
     }
 
     /// Call a (str, str) -> bool wrapper function with decomposed args.
