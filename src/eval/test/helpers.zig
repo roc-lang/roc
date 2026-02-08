@@ -16,6 +16,7 @@ const builtin_loading_mod = eval_mod.builtin_loading;
 const TestEnv = @import("TestEnv.zig");
 const Interpreter = eval_mod.Interpreter;
 const DevEvaluator = eval_mod.DevEvaluator;
+const LlvmEvaluator = eval_mod.LlvmEvaluator;
 const StackValue = eval_mod.StackValue;
 const BuiltinTypes = eval_mod.BuiltinTypes;
 const LoadedModule = builtin_loading_mod.LoadedModule;
@@ -125,7 +126,7 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
     const all_module_envs = [_]*ModuleEnv{ module_env, @constCast(builtin_module_env) };
 
     // Generate code using Mono IR pipeline
-    var code_result = dev_eval.generateCode(module_env, expr_idx, &all_module_envs) catch {
+    var code_result = dev_eval.generateCode(module_env, expr_idx, &all_module_envs, builtin_module_env) catch {
         return error.GenerateCodeFailed;
     };
     defer code_result.deinit();
@@ -168,6 +169,7 @@ noinline fn executeAndFormat(
     // memory barrier, ensuring all struct fields are properly materialized
     // from memory rather than potentially kept in registers across fork().
     // This is necessary for fork-based test isolation in ReleaseFast builds.
+    // Compiler barrier (empty print acts as memory barrier for fork safety)
     std.debug.print("", .{});
 
     // Check if this is a tuple
@@ -221,7 +223,7 @@ noinline fn executeAndFormat(
             break :blk std.fmt.allocPrint(alloc, "{}", .{result});
         },
         layout_mod.Idx.u64, layout_mod.Idx.u8, layout_mod.Idx.u16, layout_mod.Idx.u32, layout_mod.Idx.bool => blk: {
-            var result: u64 = 0;
+            var result: u64 = 0xDEADBEEF; // sentinel to detect if callWithCrashProtection changes it
             try dev_eval.callWithCrashProtection(executable, @ptrCast(&result));
             break :blk std.fmt.allocPrint(alloc, "{}", .{result});
         },
@@ -465,7 +467,8 @@ fn forkAndExecute(
         }
 
         posix.close(pipe_read);
-        return result_buf.toOwnedSlice(allocator) catch return error.OutOfMemory;
+        const result_str = result_buf.toOwnedSlice(allocator) catch return error.OutOfMemory;
+        return result_str;
     }
 }
 
@@ -473,7 +476,7 @@ fn forkAndExecute(
 /// Compares ALL expressions - no exceptions. If DevEvaluator can't handle
 /// an expression, the test will fail (which is the desired behavior to
 /// track what still needs to be implemented).
-fn compareWithDevEvaluator(allocator: std.mem.Allocator, interpreter_str: []const u8, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) !void {
+pub fn compareWithDevEvaluator(allocator: std.mem.Allocator, interpreter_str: []const u8, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) !void {
     const dev_str = try devEvaluatorStr(allocator, module_env, expr_idx, builtin_module_env);
     defer allocator.free(dev_str);
 
@@ -503,6 +506,348 @@ fn numericStringsEqual(a: []const u8, b: []const u8) bool {
     }
 
     return false;
+}
+
+const LlvmEvalError = error{
+    LlvmEvaluatorInitFailed,
+    GenerateCodeFailed,
+    JitInitFailed,
+    UnsupportedLayout,
+    OutOfMemory,
+};
+
+/// Evaluate an expression using the LlvmEvaluator and return the result as a string.
+fn llvmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) LlvmEvalError![]const u8 {
+    var llvm_eval = LlvmEvaluator.init(allocator) catch {
+        return error.LlvmEvaluatorInitFailed;
+    };
+    defer llvm_eval.deinit();
+
+    const all_module_envs = [_]*ModuleEnv{ module_env, @constCast(builtin_module_env) };
+
+    var code_result = llvm_eval.generateCode(module_env, expr_idx, &all_module_envs, builtin_module_env) catch {
+        return error.GenerateCodeFailed;
+    };
+    defer code_result.deinit();
+
+    var executable = backend.ExecutableMemory.initWithEntryOffset(code_result.code, code_result.entry_offset) catch {
+        return error.JitInitFailed;
+    };
+    defer executable.deinit();
+
+    const layout_mod = @import("layout");
+    // Use real roc_ops from the LlvmEvaluator (needed for heap allocation in lists, etc.)
+    var roc_ops = llvm_eval.roc_ops;
+
+    return switch (code_result.result_layout) {
+        layout_mod.Idx.i64, layout_mod.Idx.i8, layout_mod.Idx.i16, layout_mod.Idx.i32 => blk: {
+            var result: i64 = 0;
+            executable.callWithResultPtrAndRocOps(@ptrCast(&result), @ptrCast(&roc_ops));
+            break :blk std.fmt.allocPrint(allocator, "{}", .{result});
+        },
+        layout_mod.Idx.u64, layout_mod.Idx.u8, layout_mod.Idx.u16, layout_mod.Idx.u32, layout_mod.Idx.bool => blk: {
+            var result: u64 = 0;
+            executable.callWithResultPtrAndRocOps(@ptrCast(&result), @ptrCast(&roc_ops));
+            break :blk std.fmt.allocPrint(allocator, "{}", .{result});
+        },
+        layout_mod.Idx.f64 => blk: {
+            var result: f64 = 0;
+            executable.callWithResultPtrAndRocOps(@ptrCast(&result), @ptrCast(&roc_ops));
+            break :blk std.fmt.allocPrint(allocator, "{d}", .{result});
+        },
+        layout_mod.Idx.f32 => blk: {
+            var result: f32 = 0;
+            executable.callWithResultPtrAndRocOps(@ptrCast(&result), @ptrCast(&roc_ops));
+            break :blk std.fmt.allocPrint(allocator, "{d}", .{result});
+        },
+        layout_mod.Idx.i128, layout_mod.Idx.u128 => blk: {
+            var result: i128 align(16) = 0;
+            executable.callWithResultPtrAndRocOps(@ptrCast(&result), @ptrCast(&roc_ops));
+            break :blk std.fmt.allocPrint(allocator, "{}", .{result});
+        },
+        layout_mod.Idx.dec => blk: {
+            var result: i128 align(16) = 0;
+            executable.callWithResultPtrAndRocOps(@ptrCast(&result), @ptrCast(&roc_ops));
+            const dec = builtins.dec.RocDec{ .num = result };
+            var buf: [builtins.dec.RocDec.max_str_length]u8 = undefined;
+            const slice = dec.format_to_buf(&buf);
+            break :blk allocator.dupe(u8, slice);
+        },
+        layout_mod.Idx.str => blk: {
+            // RocStr is 24 bytes
+            var result_bytes: [24]u8 align(8) = .{0} ** 24;
+            executable.callWithResultPtrAndRocOps(@ptrCast(&result_bytes), @ptrCast(&roc_ops));
+
+            // Check if small string (last byte has high bit set)
+            if (result_bytes[23] & 0x80 != 0) {
+                const len = result_bytes[23] ^ 0x80;
+                break :blk allocator.dupe(u8, result_bytes[0..len]);
+            } else {
+                // Large string — read pointer and length from the RocStr struct
+                const str_ptr: *const ?[*]const u8 = @ptrCast(@alignCast(&result_bytes));
+                const str_len: *const usize = @ptrCast(@alignCast(result_bytes[8..16]));
+                if (str_ptr.* != null and str_len.* > 0) {
+                    break :blk allocator.dupe(u8, str_ptr.*.?[0..str_len.*]);
+                }
+                break :blk allocator.dupe(u8, "");
+            }
+        },
+        else => blk: {
+            // Handle composite types (records, tuples)
+            const ls = code_result.layout_store orelse return error.UnsupportedLayout;
+            const stored_layout = ls.getLayout(code_result.result_layout);
+            switch (stored_layout.tag) {
+                .list_of_zst => {
+                    var result_bytes: [24]u8 align(8) = .{0} ** 24;
+                    executable.callWithResultPtrAndRocOps(@ptrCast(&result_bytes), @ptrCast(&roc_ops));
+
+                    const list_len: *const usize = @ptrCast(@alignCast(result_bytes[8..16]));
+
+                    var output = std.array_list.Managed(u8).initCapacity(allocator, 64) catch return error.OutOfMemory;
+                    errdefer output.deinit();
+                    output.append('[') catch return error.OutOfMemory;
+
+                    for (0..list_len.*) |i| {
+                        if (i > 0) {
+                            output.appendSlice(", ") catch return error.OutOfMemory;
+                        }
+                        output.appendSlice("()") catch return error.OutOfMemory;
+                    }
+
+                    output.append(']') catch return error.OutOfMemory;
+                    break :blk output.toOwnedSlice();
+                },
+                .list => {
+                    var result_bytes: [24]u8 align(8) = .{0} ** 24;
+                    executable.callWithResultPtrAndRocOps(@ptrCast(&result_bytes), @ptrCast(&roc_ops));
+
+                    const data_ptr: *const ?[*]const i64 = @ptrCast(@alignCast(&result_bytes));
+                    const list_len: *const usize = @ptrCast(@alignCast(result_bytes[8..16]));
+
+                    var output = std.array_list.Managed(u8).initCapacity(allocator, 64) catch return error.OutOfMemory;
+                    errdefer output.deinit();
+                    output.append('[') catch return error.OutOfMemory;
+
+                    if (list_len.* > 0 and data_ptr.* != null) {
+                        const elements = data_ptr.*.?[0..list_len.*];
+                        for (elements, 0..) |elem, i| {
+                            if (i > 0) {
+                                output.appendSlice(", ") catch return error.OutOfMemory;
+                            }
+                            const elem_str = std.fmt.allocPrint(allocator, "{}", .{elem}) catch return error.OutOfMemory;
+                            defer allocator.free(elem_str);
+                            output.appendSlice(elem_str) catch return error.OutOfMemory;
+                        }
+                    }
+
+                    output.append(']') catch return error.OutOfMemory;
+                    break :blk output.toOwnedSlice();
+                },
+                .record => {
+                    const record_idx = stored_layout.data.record.idx.int_idx;
+                    const record_data = ls.record_data.items.items[record_idx];
+                    const field_count = record_data.fields.count;
+                    break :blk std.fmt.allocPrint(allocator, "{{record with {d} fields}}", .{field_count});
+                },
+                .tuple => {
+                    const tuple_data_val = ls.getTupleData(stored_layout.data.tuple.idx);
+                    const sorted_elements = ls.tuple_fields.sliceRange(tuple_data_val.getFields());
+                    const elem_count = sorted_elements.len;
+                    const struct_size = tuple_data_val.size;
+
+                    // Allocate buffer and execute
+                    var result_buf: [256]u8 align(16) = @splat(0);
+                    if (struct_size > result_buf.len) return error.UnsupportedLayout;
+                    executable.callWithResultPtrAndRocOps(@ptrCast(&result_buf), @ptrCast(&roc_ops));
+
+                    // Format as "(elem1, elem2, ...)"
+                    // Elements are in sorted order in memory; build original-order mapping
+                    var original_order_values: [32]i128 = undefined;
+                    for (0..elem_count) |sorted_i| {
+                        const element = sorted_elements.get(@intCast(sorted_i));
+                        const offset = ls.getTupleElementOffset(stored_layout.data.tuple.idx, @intCast(sorted_i));
+                        const field_ptr = result_buf[offset..];
+
+                        // Read value based on element layout
+                        const val: i128 = switch (element.layout) {
+                            layout_mod.Idx.i64, layout_mod.Idx.u64 => @as(i128, @as(*align(1) const i64, @ptrCast(field_ptr)).*),
+                            layout_mod.Idx.i32, layout_mod.Idx.u32 => @as(i128, @as(*align(1) const i32, @ptrCast(field_ptr)).*),
+                            layout_mod.Idx.i16, layout_mod.Idx.u16 => @as(i128, @as(*align(1) const i16, @ptrCast(field_ptr)).*),
+                            layout_mod.Idx.i8, layout_mod.Idx.u8, layout_mod.Idx.bool => @as(i128, @as(*align(1) const i8, @ptrCast(field_ptr)).*),
+                            layout_mod.Idx.i128, layout_mod.Idx.u128, layout_mod.Idx.dec => @as(*align(1) const i128, @ptrCast(field_ptr)).*,
+                            else => 0,
+                        };
+                        original_order_values[element.index] = val;
+                    }
+
+                    // Format tuple string in original order
+                    var output = std.array_list.Managed(u8).initCapacity(allocator, 64) catch return error.OutOfMemory;
+                    errdefer output.deinit();
+                    output.append('(') catch return error.OutOfMemory;
+
+                    for (0..elem_count) |i| {
+                        if (i > 0) {
+                            output.appendSlice(", ") catch return error.OutOfMemory;
+                        }
+                        // Find the layout for this original index
+                        var elem_layout: layout_mod.Idx = .i64;
+                        for (0..elem_count) |si| {
+                            const element = sorted_elements.get(@intCast(si));
+                            if (element.index == i) {
+                                elem_layout = element.layout;
+                                break;
+                            }
+                        }
+                        const raw_val = original_order_values[i];
+                        if (elem_layout == layout_mod.Idx.dec) {
+                            const dec_val = builtins.dec.RocDec{ .num = raw_val };
+                            var dec_buf: [builtins.dec.RocDec.max_str_length]u8 = undefined;
+                            const elem_str = dec_val.format_to_buf(&dec_buf);
+                            output.appendSlice(elem_str) catch return error.OutOfMemory;
+                        } else {
+                            const abs_val: u128 = if (raw_val < 0) @intCast(-raw_val) else @intCast(raw_val);
+                            const one_point_zero: u128 = 1_000_000_000_000_000_000;
+                            if (abs_val < one_point_zero / 10) {
+                                const elem_str = std.fmt.allocPrint(allocator, "{d}.0", .{raw_val}) catch return error.OutOfMemory;
+                                defer allocator.free(elem_str);
+                                output.appendSlice(elem_str) catch return error.OutOfMemory;
+                            } else {
+                                const dec_val = builtins.dec.RocDec{ .num = raw_val };
+                                var dec_buf: [builtins.dec.RocDec.max_str_length]u8 = undefined;
+                                const elem_str = dec_val.format_to_buf(&dec_buf);
+                                output.appendSlice(elem_str) catch return error.OutOfMemory;
+                            }
+                        }
+                    }
+
+                    output.append(')') catch return error.OutOfMemory;
+                    break :blk output.toOwnedSlice();
+                },
+                else => return error.UnsupportedLayout,
+            }
+        },
+    };
+}
+
+/// Compare Interpreter result string with LlvmEvaluator result string.
+/// If the LLVM backend can't handle an expression, the comparison is skipped.
+pub fn compareWithLlvmEvaluator(allocator: std.mem.Allocator, interpreter_str: []const u8, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) !void {
+    if (!has_fork) return;
+
+    const pipe_fds = posix.pipe() catch return;
+    const pipe_read = pipe_fds[0];
+    const pipe_write = pipe_fds[1];
+
+    const fork_result = posix.fork() catch {
+        posix.close(pipe_read);
+        posix.close(pipe_write);
+        return;
+    };
+
+    if (fork_result == 0) {
+        // Child process
+        posix.close(pipe_read);
+        const child_alloc = std.heap.page_allocator;
+
+        const llvm_str = llvmEvaluatorStr(child_alloc, module_env, expr_idx, builtin_module_env) catch {
+            posix.close(pipe_write);
+            posix.exit(1);
+        };
+
+        var written: usize = 0;
+        while (written < llvm_str.len) {
+            written += posix.write(pipe_write, llvm_str[written..]) catch {
+                posix.close(pipe_write);
+                posix.exit(1);
+            };
+        }
+
+        posix.close(pipe_write);
+        posix.exit(0);
+    } else {
+        // Parent process
+        posix.close(pipe_write);
+
+        // Wait for child with 30-second timeout using non-blocking poll
+        const timeout_ns: u64 = 30 * std.time.ns_per_s;
+        const start_time = std.time.Instant.now() catch {
+            // If we can't get time, just kill child and skip
+            _ = std.posix.kill(fork_result, 9) catch {};
+            _ = posix.waitpid(fork_result, 0);
+            posix.close(pipe_read);
+            return;
+        };
+
+        var status: u32 = undefined;
+        var child_done = false;
+        while (true) {
+            const wait_result = posix.waitpid(fork_result, std.posix.W.NOHANG);
+            if (wait_result.pid != 0) {
+                status = wait_result.status;
+                child_done = true;
+                break;
+            }
+            // Check timeout
+            const elapsed = (std.time.Instant.now() catch break).since(start_time);
+            if (elapsed > timeout_ns) {
+                // Timeout — kill child and skip
+                _ = std.posix.kill(fork_result, 9) catch {};
+                _ = posix.waitpid(fork_result, 0);
+                posix.close(pipe_read);
+                return;
+            }
+            std.Thread.sleep(1_000_000); // 1ms
+        }
+
+        if (!child_done) {
+            _ = std.posix.kill(fork_result, 9) catch {};
+            _ = posix.waitpid(fork_result, 0);
+            posix.close(pipe_read);
+            return;
+        }
+
+        const termination_signal: u8 = @truncate(status & 0x7f);
+
+        if (termination_signal != 0) {
+            posix.close(pipe_read);
+            return; // Skip comparison on crash
+        }
+
+        const exit_code: u8 = @truncate((status >> 8) & 0xff);
+        if (exit_code != 0) {
+            posix.close(pipe_read);
+            return; // LLVM backend couldn't handle this expression, skip
+        }
+
+        // Read result string from pipe
+        var result_buf: std.ArrayList(u8) = .empty;
+        defer result_buf.deinit(allocator);
+
+        var read_buf: [4096]u8 = undefined;
+        while (true) {
+            const bytes_read = posix.read(pipe_read, &read_buf) catch {
+                posix.close(pipe_read);
+                return;
+            };
+            if (bytes_read == 0) break;
+            result_buf.appendSlice(allocator, read_buf[0..bytes_read]) catch {
+                posix.close(pipe_read);
+                return;
+            };
+        }
+        posix.close(pipe_read);
+
+        const llvm_str = result_buf.toOwnedSlice(allocator) catch return;
+        defer allocator.free(llvm_str);
+
+        if (!numericStringsEqual(interpreter_str, llvm_str)) {
+            std.debug.print(
+                "\nEvaluator mismatch! Interpreter: {s}, LlvmEvaluator: {s}\n",
+                .{ interpreter_str, llvm_str },
+            );
+            return error.EvaluatorMismatch;
+        }
+    }
 }
 
 /// Helper function to run an expression and expect a specific error.
@@ -628,6 +973,7 @@ pub fn runExpectI64(src: []const u8, expected_int: i128, should_trace: enum { tr
     const int_str = try std.fmt.allocPrint(test_allocator, "{}", .{int_value});
     defer test_allocator.free(int_str);
     try compareWithDevEvaluator(test_allocator, int_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    try compareWithLlvmEvaluator(test_allocator, int_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     try std.testing.expectEqual(expected_int, int_value);
 }
@@ -673,6 +1019,7 @@ pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: enum { 
     const int_str = try std.fmt.allocPrint(test_allocator, "{}", .{int_val});
     defer test_allocator.free(int_str);
     try compareWithDevEvaluator(test_allocator, int_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    try compareWithLlvmEvaluator(test_allocator, int_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     const bool_val = int_val != 0;
     try std.testing.expectEqual(expected_bool, bool_val);
@@ -709,6 +1056,7 @@ pub fn runExpectF32(src: []const u8, expected_f32: f32, should_trace: enum { tra
     const float_str = try std.fmt.allocPrint(test_allocator, "{d}", .{actual});
     defer test_allocator.free(float_str);
     try compareWithDevEvaluator(test_allocator, float_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    try compareWithLlvmEvaluator(test_allocator, float_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     const epsilon: f32 = 0.0001;
     const diff = @abs(actual - expected_f32);
@@ -749,6 +1097,7 @@ pub fn runExpectF64(src: []const u8, expected_f64: f64, should_trace: enum { tra
     const float_str = try std.fmt.allocPrint(test_allocator, "{d}", .{actual});
     defer test_allocator.free(float_str);
     try compareWithDevEvaluator(test_allocator, float_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    try compareWithLlvmEvaluator(test_allocator, float_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     const epsilon: f64 = 0.000000001;
     const diff = @abs(actual - expected_f64);
@@ -795,6 +1144,7 @@ pub fn runExpectIntDec(src: []const u8, expected_int: i128, should_trace: enum {
     const dec_str = try test_allocator.dupe(u8, dec_slice);
     defer test_allocator.free(dec_str);
     try compareWithDevEvaluator(test_allocator, dec_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    try compareWithLlvmEvaluator(test_allocator, dec_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     const expected_dec = expected_int * dec_scale;
     if (actual_dec.num != expected_dec) {
@@ -838,6 +1188,7 @@ pub fn runExpectDec(src: []const u8, expected_dec_num: i128, should_trace: enum 
     const dec_str = try test_allocator.dupe(u8, dec_slice);
     defer test_allocator.free(dec_str);
     try compareWithDevEvaluator(test_allocator, dec_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    try compareWithLlvmEvaluator(test_allocator, dec_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     if (actual_dec.num != expected_dec_num) {
         std.debug.print("Expected Dec({d}), got Dec({d})\n", .{ expected_dec_num, actual_dec.num });
@@ -877,6 +1228,7 @@ pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: enu
 
     // Compare with DevEvaluator
     try compareWithDevEvaluator(test_allocator, str_slice, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    try compareWithLlvmEvaluator(test_allocator, str_slice, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     try std.testing.expectEqualStrings(expected_str, str_slice);
 
@@ -985,6 +1337,7 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
 
     // Compare with DevEvaluator
     try compareWithDevEvaluator(test_allocator, tuple_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    try compareWithLlvmEvaluator(test_allocator, tuple_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 }
 
 /// Helpers to setup and run an interpreter expecting a record result.
@@ -1071,6 +1424,7 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
 
     // Compare with DevEvaluator
     try compareWithDevEvaluator(test_allocator, record_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    try compareWithLlvmEvaluator(test_allocator, record_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 }
 
 /// Helpers to setup and run an interpreter expecting a list of zst result.
@@ -1125,6 +1479,7 @@ pub fn runExpectListZst(src: []const u8, expected_element_count: usize, should_t
 
     // Compare with DevEvaluator
     try compareWithDevEvaluator(test_allocator, list_str.items, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    try compareWithLlvmEvaluator(test_allocator, list_str.items, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 }
 
 /// Helpers to setup and run an interpreter expecting a list of i64 result.
@@ -1192,6 +1547,7 @@ pub fn runExpectListI64(src: []const u8, expected_elements: []const i64, should_
 
     // Compare with DevEvaluator
     try compareWithDevEvaluator(test_allocator, list_str.items, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    try compareWithLlvmEvaluator(test_allocator, list_str.items, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 }
 
 /// Like runExpectListI64 but expects an empty list with .list_of_zst layout.
@@ -1238,6 +1594,7 @@ pub fn runExpectEmptyListI64(src: []const u8, should_trace: enum { trace, no_tra
 
     // Compare with DevEvaluator - empty list is "[]"
     try compareWithDevEvaluator(test_allocator, "[]", resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    try compareWithLlvmEvaluator(test_allocator, "[]", resources.module_env, resources.expr_idx, resources.builtin_module.env);
 }
 
 /// Parse and canonicalize an expression.

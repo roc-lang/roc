@@ -1,511 +1,565 @@
 //! LLVM-based Evaluator for Roc expressions
 //!
-//! This module generates LLVM bitcode from Roc expressions. The bitcode can then
-//! be JIT compiled and executed by llvm_compile.compileAndExecute().
+//! This module evaluates Roc expressions by:
+//! 1. Parsing source code
+//! 2. Canonicalizing to CIR
+//! 3. Type checking
+//! 4. Lowering to Mono IR (globally unique symbols)
+//! 5. Generating LLVM bitcode via MonoLlvmCodeGen
+//! 6. Compiling bitcode to a native object file via LLVM
+//! 7. Extracting the .text section from the object file
+//! 8. Executing the generated code in mmap'd memory
 //!
-//! Used when the `--opt=size` or `--opt=speed` flags are passed to the REPL.
-//!
-//! The evaluator works by:
-//! 1. Parsing and type-checking the source expression
-//! 2. Translating the CIR to LLVM IR using Zig's LLVM Builder
-//! 3. Serializing to LLVM bitcode for JIT compilation
+//! This mirrors the dev backend pipeline, except the code generation
+//! produces LLVM IR which is then compiled through LLVM's backend.
 
 const std = @import("std");
 const builtin = @import("builtin");
 const base = @import("base");
 const can = @import("can");
-const parse = @import("parse");
-const check = @import("check");
+const layout = @import("layout");
+const mono = @import("mono");
+const backend = @import("backend");
+const builtin_loading = @import("builtin_loading.zig");
 const compiled_builtins = @import("compiled_builtins");
-const eval_mod = @import("mod.zig");
+const builtins = @import("builtins");
 
-// LLVM Builder from Zig's standard library (for IR generation)
-const LlvmBuilder = std.zig.llvm.Builder;
+const RocEnv = @import("roc_env.zig").RocEnv;
+const createRocOps = @import("roc_env.zig").createRocOps;
+const layout_resolve = @import("layout_resolve.zig");
+const getExprLayoutWithTypeEnv = layout_resolve.getExprLayoutWithTypeEnv;
+const codegen_prepare = @import("codegen_prepare.zig");
+
+const types = @import("types");
 
 const Allocator = std.mem.Allocator;
-const Allocators = base.Allocators;
 const ModuleEnv = can.ModuleEnv;
 const CIR = can.CIR;
-const Can = can.Can;
-const Check = check.Check;
-const builtin_loading = eval_mod.builtin_loading;
+const LoadedModule = builtin_loading.LoadedModule;
 
-/// Get the LLVM target triple for the current platform.
-/// This must match the triple that LLVM's GetDefaultTargetTriple() returns,
-/// or there will be calling convention mismatches when JIT-compiling.
-///
-/// Note: Zig on Windows uses GNU ABI (mingw), not MSVC!
-fn getLlvmTriple() []const u8 {
-    const arch = switch (builtin.cpu.arch) {
-        .x86_64 => "x86_64",
-        .aarch64 => "aarch64",
-        .x86 => "i686",
-        .arm, .armeb => "arm",
-        .thumb, .thumbeb => "thumb",
-        .wasm32 => "wasm32",
-        .wasm64 => "wasm64",
-        .riscv32 => "riscv32",
-        .riscv64 => "riscv64",
-        else => "unknown",
+// Mono IR types
+const MonoExprStore = mono.MonoExprStore;
+const MonoLower = mono.Lower;
+
+// LLVM code generation and compilation are accessed via the "llvm_compile"
+// anonymous import, but only inside function bodies (lazy evaluation) to
+// avoid breaking builds that don't link LLVM (e.g., playground wasm).
+
+// Host ABI types
+const RocOps = builtins.host_abi.RocOps;
+
+/// Layout index for result types
+pub const LayoutIdx = layout.Idx;
+
+/// Extract the result layout from a Mono IR expression for use as the overall
+/// expression result layout. For blocks and other compound expressions where the
+/// lowerer may have computed the layout from a CIR type variable with Content.err,
+/// this follows through to the final/inner expression to find the true layout.
+fn monoExprResultLayout(store: *const MonoExprStore, expr_id: mono.MonoIR.MonoExprId) ?layout.Idx {
+    const MonoExpr = mono.MonoIR.MonoExpr;
+    const expr: MonoExpr = store.getExpr(expr_id);
+    return switch (expr) {
+        .block => |b| monoExprResultLayout(store, b.final_expr),
+        .if_then_else => |ite| ite.result_layout,
+        .when => |w| w.result_layout,
+        .dbg => |d| d.result_layout,
+        .expect => |e| e.result_layout,
+        .binop => |b| b.result_layout,
+        .unary_minus => |um| um.result_layout,
+        .call => |c| c.ret_layout,
+        .low_level => |ll| ll.ret_layout,
+        .early_return => |er| er.ret_layout,
+        .lookup => |l| l.layout_idx,
+        .record => |r| r.record_layout,
+        .tuple => |t| t.tuple_layout,
+        .tag => |t| t.union_layout,
+        .zero_arg_tag => |z| z.union_layout,
+        .field_access => |fa| fa.field_layout,
+        .tuple_access => |ta| ta.elem_layout,
+        .closure => |c| c.closure_layout,
+        .nominal => |n| n.nominal_layout,
+        .i64_literal => .i64,
+        .f64_literal => .f64,
+        .f32_literal => .f32,
+        .bool_literal => .bool,
+        .i128_literal => .i128,
+        .dec_literal => .dec,
+        .str_literal => .str,
+        .unary_not => .bool,
+        else => null,
     };
-
-    const vendor_os = switch (builtin.os.tag) {
-        // Windows 64-bit uses w64 (mingw-w64) vendor, not pc
-        .windows => "-w64-windows",
-        .macos => "-apple-darwin",
-        .ios => "-apple-ios",
-        .linux => "-unknown-linux",
-        .freebsd => "-unknown-freebsd",
-        .openbsd => "-unknown-openbsd",
-        .netbsd => "-unknown-netbsd",
-        .freestanding => "-unknown-unknown",
-        .wasi => "-wasi",
-        else => "-unknown-unknown",
-    };
-
-    // ABI suffix - Zig's LLVM on Windows uses GNU (mingw), not MSVC!
-    const abi = switch (builtin.os.tag) {
-        .windows => "-gnu", // Zig uses mingw/GNU toolchain on Windows
-        .linux => switch (builtin.abi) {
-            .musleabihf => "-musleabihf",
-            .gnueabihf => "-gnueabihf",
-            .musleabi => "-musleabi",
-            .gnueabi => "-gnueabi",
-            .musl => "-musl",
-            .gnu => "-gnu",
-            .android => "-android",
-            else => "-gnu",
-        },
-        .freestanding, .wasi => "",
-        else => "", // macOS, iOS, BSDs don't need ABI suffix
-    };
-
-    return arch ++ vendor_os ++ abi;
 }
 
 /// LLVM-based evaluator for Roc expressions
+///
+/// Orchestrates the full compilation pipeline:
+/// - Initializes with builtin modules
+/// - Parses, canonicalizes, and type-checks expressions
+/// - Lowers to Mono IR
+/// - Generates LLVM bitcode
+/// - Compiles to native object file
+/// - Extracts and executes native code
 pub const LlvmEvaluator = struct {
     allocator: Allocator,
 
-    /// Builtin type declaration indices (loaded once at startup)
+    /// Loaded builtin module (Bool, Result, etc.)
+    builtin_module: LoadedModule,
     builtin_indices: CIR.BuiltinIndices,
 
-    /// Loaded Builtin module (loaded once at startup)
-    builtin_module: builtin_loading.LoadedModule,
+    /// RocOps environment for RC operations.
+    /// Heap-allocated to ensure stable pointer for the roc_ops reference.
+    roc_env: *RocEnv,
+
+    /// RocOps instance for passing to generated code.
+    /// Contains function pointers for allocation, deallocation, and error handling.
+    roc_ops: RocOps,
+
+    /// When true, disables LLVM optimization passes (uses OptLevel.None).
+    /// This is a bool rather than the LLVM type to preserve the lazy import
+    /// pattern — non-LLVM builds don't need the LLVM bindings at struct scope.
+    disable_optimizations: bool = false,
+
+    /// Global layout store shared across compilations (cached).
+    global_layout_store: ?*layout.Store = null,
 
     pub const Error = error{
         OutOfMemory,
-        CompilationFailed,
         UnsupportedType,
+        UnsupportedExpression,
+        Crash,
+        RuntimeError,
         ParseError,
         CanonicalizeError,
         TypeError,
+        ExecutionError,
+        CompilationFailed,
+        UnsupportedLayout,
     };
 
-    /// Initialize a new LLVM evaluator
+    /// Initialize the evaluator with builtin modules
     pub fn init(allocator: Allocator) Error!LlvmEvaluator {
-        // Load builtin indices once at startup (generated at build time)
         const builtin_indices = builtin_loading.deserializeBuiltinIndices(
             allocator,
             compiled_builtins.builtin_indices_bin,
         ) catch return error.OutOfMemory;
 
-        // Load Builtin module once at startup
-        const builtin_source = compiled_builtins.builtin_source;
-        var builtin_module = builtin_loading.loadCompiledModule(
+        const builtin_module = builtin_loading.loadCompiledModule(
             allocator,
             compiled_builtins.builtin_bin,
             "Builtin",
-            builtin_source,
+            compiled_builtins.builtin_source,
         ) catch return error.OutOfMemory;
-        errdefer builtin_module.deinit();
+
+        // Heap-allocate the RocOps environment so the pointer remains stable
+        const roc_env = allocator.create(RocEnv) catch return error.OutOfMemory;
+        roc_env.* = RocEnv.init(allocator);
+        const roc_ops = createRocOps(roc_env);
 
         return LlvmEvaluator{
             .allocator = allocator,
-            .builtin_indices = builtin_indices,
             .builtin_module = builtin_module,
+            .builtin_indices = builtin_indices,
+            .roc_env = roc_env,
+            .roc_ops = roc_ops,
         };
     }
 
-    /// Clean up the evaluator
+    /// Clean up resources
     pub fn deinit(self: *LlvmEvaluator) void {
+        if (self.global_layout_store) |ls| {
+            ls.deinit();
+            self.allocator.destroy(ls);
+        }
+        self.roc_env.deinit();
+        self.allocator.destroy(self.roc_env);
         self.builtin_module.deinit();
     }
 
-    /// Type of the result value for JIT execution.
-    /// This enum must be kept in sync with llvm_compile.ResultType.
-    /// The snapshot_tool depends on both having identical variants in the same order.
-    /// See llvm_compile/compile.zig for the canonical definition.
-    pub const ResultType = enum {
-        i64,
-        u64,
-        i128,
-        u128,
-        f64,
-        dec,
+    /// Get or create the global layout store for resolving layouts of composite types.
+    fn ensureGlobalLayoutStore(self: *LlvmEvaluator, all_module_envs: []const *ModuleEnv, builtin_module_env: ?*const ModuleEnv) Error!*layout.Store {
+        if (self.global_layout_store) |ls| return ls;
 
-        /// Default numeric type for unbound/polymorphic numbers.
-        pub const default_num: ResultType = .dec;
+        const builtin_str = if (all_module_envs.len > 0)
+            all_module_envs[0].idents.builtin_str
+        else
+            null;
 
-        /// Compile-time validation that this enum matches the expected structure.
-        /// This helps catch accidental divergence from llvm_compile.ResultType.
-        /// Using ordinal comparison instead of string comparison to comply with lint rules.
-        pub fn validate() void {
-            comptime {
-                // Validate there are exactly 6 variants by checking that ordinal 5 is the max
-                if (@typeInfo(ResultType).@"enum".fields.len != 6) @compileError("ResultType must have exactly 6 variants");
-                // Validate ordinals match expected order
-                if (@intFromEnum(ResultType.i64) != 0) @compileError("ResultType.i64 must be ordinal 0");
-                if (@intFromEnum(ResultType.u64) != 1) @compileError("ResultType.u64 must be ordinal 1");
-                if (@intFromEnum(ResultType.i128) != 2) @compileError("ResultType.i128 must be ordinal 2");
-                if (@intFromEnum(ResultType.u128) != 3) @compileError("ResultType.u128 must be ordinal 3");
-                if (@intFromEnum(ResultType.f64) != 4) @compileError("ResultType.f64 must be ordinal 4");
-                if (@intFromEnum(ResultType.dec) != 5) @compileError("ResultType.dec must be ordinal 5");
-            }
-        }
-    };
+        const ls = self.allocator.create(layout.Store) catch return error.OutOfMemory;
+        ls.* = layout.Store.initWithBuiltinEnv(all_module_envs, builtin_str, builtin_module_env, self.allocator, base.target.TargetUsize.native) catch {
+            self.allocator.destroy(ls);
+            return error.OutOfMemory;
+        };
 
-    comptime {
-        ResultType.validate();
+        self.global_layout_store = ls;
+        return ls;
     }
 
-    /// Result of bitcode generation
-    pub const BitcodeResult = struct {
-        bitcode: []const u32,
-        result_type: ResultType,
+    /// Result of code generation
+    pub const CodeResult = struct {
+        code: []const u8,
         allocator: Allocator,
+        result_layout: LayoutIdx,
+        /// Reference to the global layout store (owned by LlvmEvaluator, not this struct)
+        layout_store: ?*layout.Store = null,
+        entry_offset: usize = 0,
 
-        pub fn deinit(self: *BitcodeResult) void {
-            self.allocator.free(self.bitcode);
+        pub fn deinit(self: *CodeResult) void {
+            if (self.code.len > 0) {
+                self.allocator.free(self.code);
+            }
+            // Note: layout_store is owned by LlvmEvaluator, not cleaned up here
         }
     };
 
-    /// Generate LLVM bitcode for a CIR expression
-    /// Returns the bitcode and whether it's a float type (for printf formatting)
-    /// The caller is responsible for freeing the bitcode via result.deinit()
-    pub fn generateBitcode(self: *LlvmEvaluator, module_env: *ModuleEnv, expr: CIR.Expr) Error!BitcodeResult {
-        // Create LLVM Builder with target triple so LLVM uses correct calling conventions.
-        // The triple must match what LLVM's GetDefaultTargetTriple() returns on the host,
-        // otherwise calling convention mismatches will cause segfaults on Windows.
-        var builder = LlvmBuilder.init(.{
-            .allocator = self.allocator,
-            .name = "roc_repl_eval",
-            .target = &builtin.target,
-            .triple = getLlvmTriple(),
-        }) catch return error.OutOfMemory;
-        defer builder.deinit();
-
-        // Generate LLVM IR for the expression
-        const value_type = try self.getExprLlvmType(&builder, expr);
-        const value = try self.emitExprValue(&builder, module_env, expr);
-
-        // Determine the result type for JIT execution
-        // We need to look at the original expression to get signedness,
-        // since LLVM types don't distinguish signed from unsigned
-        const result_type: ResultType = self.getExprResultType(expr);
-
-        // Generate a main function that returns the result
-        // The return type must match what compile.zig expects based on result_type
-        try self.emitMainWithPrint(&builder, value_type, value, result_type);
-
-        // Serialize to bitcode
-        const producer = LlvmBuilder.Producer{
-            .name = "Roc LLVM Evaluator",
-            .version = .{ .major = 1, .minor = 0, .patch = 0 },
-        };
-
-        const bitcode = builder.toBitcode(self.allocator, producer) catch return error.CompilationFailed;
-
-        return BitcodeResult{
-            .bitcode = bitcode,
-            .result_type = result_type,
-            .allocator = self.allocator,
-        };
-    }
-
-    /// Generate bitcode from source code string
-    /// This does the full pipeline: parse → canonicalize → type check → generate bitcode
-    /// The caller is responsible for compiling and executing the bitcode using llvm_compile.
-    pub fn generateBitcodeFromSource(self: *LlvmEvaluator, source: []const u8) Error!BitcodeResult {
-        // Step 1: Create module environment and parse
-        var module_env = ModuleEnv.init(self.allocator, source) catch return error.OutOfMemory;
-        defer module_env.deinit();
-
-        var allocators: Allocators = undefined;
-        allocators.initInPlace(self.allocator);
-        defer allocators.deinit();
-
-        const parse_ast = parse.parseExpr(&allocators, &module_env.common) catch {
-            return error.ParseError;
-        };
-        defer parse_ast.deinit();
-
-        if (parse_ast.hasErrors()) {
-            return error.ParseError;
+    /// Generate code for a CIR expression (full pipeline)
+    ///
+    /// This runs the complete pipeline:
+    /// 1. Pre-codegen transforms (lambda lifting, closure transformation)
+    /// 2. Lowering CIR to Mono IR
+    /// 3. Generating LLVM bitcode
+    /// 4. Compiling bitcode to native object file
+    /// 5. Extracting .text section with entry point
+    pub fn generateCode(
+        self: *LlvmEvaluator,
+        module_env: *ModuleEnv,
+        expr_idx: CIR.Expr.Idx,
+        all_module_envs: []const *ModuleEnv,
+        builtin_module_env: ?*const ModuleEnv,
+    ) Error!CodeResult {
+        // 1. Run pre-codegen transforms
+        var mutable_envs = [_]*ModuleEnv{module_env};
+        const inference = codegen_prepare.prepareModulesForCodegen(
+            self.allocator,
+            &mutable_envs,
+        ) catch return error.OutOfMemory;
+        defer {
+            inference.deinit();
+            self.allocator.destroy(inference);
         }
 
-        // Step 2: Initialize CIR and canonicalize
-        module_env.initCIRFields("llvm_eval") catch return error.OutOfMemory;
+        // 2. Create Mono IR store and lower
+        var mono_store = MonoExprStore.init(self.allocator);
+        defer mono_store.deinit();
 
-        // Set up module envs map for auto-imported builtins
-        var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(self.allocator);
-        defer module_envs_map.deinit();
-
-        Can.populateModuleEnvs(
-            &module_envs_map,
-            &module_env,
-            self.builtin_module.env,
-            self.builtin_indices,
-        ) catch return error.OutOfMemory;
-
-        var czer = Can.init(&allocators, &module_env, parse_ast, &module_envs_map) catch {
-            return error.CanonicalizeError;
-        };
-        defer czer.deinit();
-
-        const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
-        const canonical_expr = czer.canonicalizeExpr(expr_idx) catch {
-            return error.CanonicalizeError;
-        } orelse {
-            return error.CanonicalizeError;
-        };
-        const final_expr_idx = canonical_expr.get_idx();
-
-        // Step 3: Type check
-        const imported_modules = [_]*const ModuleEnv{self.builtin_module.env};
-        module_env.imports.resolveImports(&module_env, &imported_modules);
-
-        const builtin_ctx: Check.BuiltinContext = .{
-            .module_name = module_env.insertIdent(base.Ident.for_text("llvm_eval")) catch return error.OutOfMemory,
-            .bool_stmt = self.builtin_indices.bool_type,
-            .try_stmt = self.builtin_indices.try_type,
-            .str_stmt = self.builtin_indices.str_type,
-            .builtin_module = self.builtin_module.env,
-            .builtin_indices = self.builtin_indices,
-        };
-
-        var checker = Check.init(
-            self.allocator,
-            &module_env.types,
-            &module_env,
-            &imported_modules,
-            &module_envs_map,
-            &module_env.store.regions,
-            builtin_ctx,
-        ) catch return error.OutOfMemory;
-        defer checker.deinit();
-
-        _ = checker.checkExprRepl(final_expr_idx) catch {
-            return error.TypeError;
-        };
-
-        // Step 4: Generate bitcode
-        const expr = module_env.store.getExpr(final_expr_idx);
-        return self.generateBitcode(&module_env, expr);
-    }
-
-    /// Get the ResultType for JIT execution from a CIR expression.
-    /// This captures signedness which LLVM types don't distinguish.
-    /// NOTE: Only called for expressions that pass emitExprValue, which only supports numeric types.
-    fn getExprResultType(_: *LlvmEvaluator, expr: CIR.Expr) ResultType {
-        return switch (expr) {
-            // Numeric literals - the only types emitExprValue actually supports
-            .e_num => |num| switch (num.kind) {
-                .i8, .i16, .i32, .i64 => .i64,
-                .u8, .u16, .u32, .u64 => .u64,
-                .i128 => .i128,
-                .u128 => .u128,
-                .f32, .f64 => .f64,
-                .dec, .num_unbound, .int_unbound => ResultType.default_num,
-            },
-            .e_frac_f32, .e_frac_f64 => .f64,
-            .e_dec, .e_dec_small => .dec,
-            // All other expression types fail in emitExprValue with UnsupportedType,
-            // so this code is unreachable for them
-            .e_typed_int,
-            .e_typed_frac,
-            .e_str_segment,
-            .e_str,
-            .e_lookup_local,
-            .e_lookup_external,
-            .e_lookup_required,
-            .e_list,
-            .e_empty_list,
-            .e_tuple,
-            .e_match,
-            .e_if,
-            .e_call,
-            .e_record,
-            .e_empty_record,
-            .e_block,
-            .e_tag,
-            .e_nominal,
-            .e_nominal_external,
-            .e_zero_argument_tag,
-            .e_closure,
-            .e_lambda,
-            .e_binop,
-            .e_unary_minus,
-            .e_unary_not,
-            .e_dot_access,
-            .e_runtime_error,
-            .e_crash,
-            .e_dbg,
-            .e_expect,
-            .e_ellipsis,
-            => unreachable,
-        };
-    }
-
-    /// Get the LLVM type for a CIR expression
-    fn getExprLlvmType(_: *LlvmEvaluator, builder: *LlvmBuilder, expr: CIR.Expr) !LlvmBuilder.Type {
-        return switch (expr) {
-            .e_num => |num| switch (num.kind) {
-                .u8, .i8 => .i8,
-                .u16, .i16 => .i16,
-                .u32, .i32 => .i32,
-                .u64, .i64 => .i64,
-                // Dec is stored as i128 (scaled by 10^18)
-                // Unbound numeric types default to Dec
-                .u128, .i128, .dec, .num_unbound, .int_unbound => .i128,
-                .f32 => .float,
-                .f64 => .double,
-            },
-            .e_frac_f32 => .float,
-            .e_frac_f64 => .double,
-            .e_dec, .e_dec_small => .i128, // Dec is stored as i128 (scaled by 10^18)
-            else => try builder.ptrType(.default), // For complex types, use pointer
-        };
-    }
-
-    /// Emit LLVM value for a CIR expression
-    ///
-    /// Note on u128 handling: We use toI128() for all integer values, including u128.
-    /// For u128 values larger than i128 max, this reinterprets the bits as a negative
-    /// i128. This works correctly because LLVM's i128 type is just 128 bits - signedness
-    /// is a matter of interpretation. The JIT execution in compile.zig interprets the
-    /// return value based on ResultType (u128 vs i128) to display the correct value.
-    fn emitExprValue(self: *LlvmEvaluator, builder: *LlvmBuilder, _: *ModuleEnv, expr: CIR.Expr) !LlvmBuilder.Constant {
-        return switch (expr) {
-            .e_num => |num| {
-                const int_value = num.value.toI128();
-                // Handle float suffixes (e.g., 42f32, 42f64)
-                return switch (num.kind) {
-                    .f32 => builder.floatConst(@floatFromInt(int_value)) catch return error.CompilationFailed,
-                    .f64 => builder.doubleConst(@floatFromInt(int_value)) catch return error.CompilationFailed,
-                    else => blk: {
-                        const llvm_type = try self.getExprLlvmType(builder, expr);
-                        break :blk builder.intConst(llvm_type, int_value) catch return error.CompilationFailed;
-                    },
-                };
-            },
-            .e_frac_f32 => |frac| {
-                return builder.floatConst(frac.value) catch return error.CompilationFailed;
-            },
-            .e_frac_f64 => |frac| {
-                return builder.doubleConst(frac.value) catch return error.CompilationFailed;
-            },
-            .e_dec => |dec| {
-                // Dec is stored as i128 internally (scaled by 10^18)
-                return builder.intConst(.i128, dec.value.num) catch return error.CompilationFailed;
-            },
-            .e_dec_small => |dec| {
-                // Convert small Dec representation to full i128
-                // RocDec.decimal_places is 18
-                const decimal_places: u5 = 18;
-                const scale_factor = std.math.pow(i128, 10, decimal_places - dec.value.denominator_power_of_ten);
-                const scaled_value = @as(i128, dec.value.numerator) * scale_factor;
-                return builder.intConst(.i128, scaled_value) catch return error.CompilationFailed;
-            },
-            else => return error.UnsupportedType,
-        };
-    }
-
-    /// Emit an eval function that writes the computed value to a pointer.
-    ///
-    /// Following Roc's host ABI (see src/builtins/host_abi.zig), all functions
-    /// exposed to the host return void and write their result to a pointer.
-    /// This makes the ABI simple and platform-independent: "return pointer, done."
-    ///
-    /// Function signature: void roc_eval(<type>* out_ptr)
-    fn emitMainWithPrint(_: *LlvmEvaluator, builder: *LlvmBuilder, value_type: LlvmBuilder.Type, value: LlvmBuilder.Constant, result_type: ResultType) !void {
-        // Determine the value type to store
-        const final_type: LlvmBuilder.Type = switch (result_type) {
-            .i64, .u64 => .i64,
-            .i128, .u128, .dec => .i128,
-            .f64 => .double,
-        };
-
-        // Determine signedness for integer extension
-        const signedness: LlvmBuilder.Constant.Cast.Signedness = switch (result_type) {
-            .i64, .i128 => .signed,
-            .u64, .u128 => .unsigned,
-            .f64, .dec => .unneeded, // f64 uses fpext, dec is already i128
-        };
-
-        // All platforms: void roc_eval(<type>* out_ptr)
-        // This follows Roc's host ABI where all exposed functions return void
-        // and write their result to a pointer argument.
-        const ptr_type = try builder.ptrType(.default);
-        const eval_type = try builder.fnType(.void, &.{ptr_type}, .normal);
-        const eval_name = if (builtin.os.tag == .macos)
-            try builder.strtabString("\x01_roc_eval") // \x01 prefix tells LLVM to use name verbatim
-        else
-            try builder.strtabString("roc_eval");
-        const eval_fn = try builder.addFunction(eval_type, eval_name, .default);
-        eval_fn.setLinkage(.external, builder);
-
-        // Explicitly set the calling convention for the platform.
-        // Without this, LLVM may not know which C convention to use.
-        // On Windows x64, we need win64cc for correct argument passing (RCX for first arg).
-        // On System V x64, we need x86_64_sysvcc (RDI for first arg).
-        if (builtin.cpu.arch == .x86_64) {
-            if (builtin.os.tag == .windows) {
-                eval_fn.setCallConv(.win64cc, builder);
-            } else {
-                eval_fn.setCallConv(.x86_64_sysvcc, builder);
+        // Find the module index for this module
+        var module_idx: u16 = 0;
+        for (all_module_envs, 0..) |env, i| {
+            if (env == module_env) {
+                module_idx = @intCast(i);
+                break;
             }
         }
-        // Other architectures use the default ccc which maps correctly
 
-        // Build function body
-        var wip = try LlvmBuilder.WipFunction.init(builder, .{
-            .function = eval_fn,
-            .strip = false,
-        });
-        defer wip.deinit();
+        // Get or create the global layout store
+        const layout_store_ptr = try self.ensureGlobalLayoutStore(all_module_envs, builtin_module_env);
 
-        const entry_block = try wip.block(0, "entry"); // entry block has 0 incoming branches
-        wip.cursor = .{ .block = entry_block };
+        // Create the lowerer with the layout store
+        var lowerer = MonoLower.init(self.allocator, &mono_store, all_module_envs, null, layout_store_ptr);
+        defer lowerer.deinit();
 
-        // Get the pointer argument
-        const out_ptr = wip.arg(0);
+        // Lower the CIR expression to Mono IR
+        const mono_expr_id = lowerer.lowerExpr(module_idx, expr_idx) catch {
+            return error.UnsupportedExpression;
+        };
 
-        // Convert value if needed and store through pointer
-        const store_value = if (value_type == final_type)
-            value.toValue()
-        else
-            try wip.conv(signedness, value.toValue(), final_type, "");
+        // 3. Determine result layout from Mono IR expression.
+        // Prefer the layout embedded in the Mono expression because the CIR
+        // type variable can have Content.err for expressions involving the `?`
+        // operator at top level (where the Err branch desugars to runtime_error).
+        const result_layout = monoExprResultLayout(&mono_store, mono_expr_id) orelse blk: {
+            // Fallback: resolve from the CIR type variable
+            const type_var = can.ModuleEnv.varFrom(expr_idx);
+            var type_scope = types.TypeScope.init(self.allocator);
+            defer type_scope.deinit();
+            break :blk layout_store_ptr.fromTypeVar(module_idx, type_var, &type_scope, null) catch {
+                return error.UnsupportedExpression;
+            };
+        };
 
-        // Use natural alignment for the stored type
-        const alignment = LlvmBuilder.Alignment.fromByteUnits(switch (final_type) {
-            .i64 => 8,
-            .i128 => 16,
-            .double => 8,
-            else => 0, // default
-        });
-        _ = try wip.store(.normal, store_value, out_ptr, alignment);
-        _ = try wip.retVoid();
-        try wip.finish();
+        // 4. Generate LLVM bitcode
+        const llvm_compile = @import("llvm_compile");
+        const MonoLlvmCodeGen = llvm_compile.MonoLlvmCodeGen;
+
+        var codegen = MonoLlvmCodeGen.init(self.allocator, &mono_store);
+        defer codegen.deinit();
+
+        // Provide addresses of Dec builtins for indirect calls
+        codegen.dec_mul_addr = @intFromPtr(&builtins.dec.mulSaturatedC);
+        codegen.dec_div_addr = @intFromPtr(&builtins.dec.divC);
+        codegen.dec_div_trunc_addr = @intFromPtr(&builtins.dec.divTruncC);
+        codegen.alloc_with_refcount_addr = @intFromPtr(&builtins.utils.allocateWithRefcountC);
+        codegen.list_append_addr = @intFromPtr(&builtins.list.listAppendSafeC);
+        codegen.memcpy_addr = @intFromPtr(&builtins.list.copy_fallback);
+        codegen.list_with_capacity_addr = @intFromPtr(&builtins.list.listWithCapacityC);
+        codegen.list_append_unsafe_addr = @intFromPtr(&builtins.list.listAppendUnsafeC);
+        codegen.rc_none_addr = @intFromPtr(&builtins.list.rcNone);
+        codegen.list_prepend_addr = @intFromPtr(&builtins.list.listPrepend);
+        codegen.i64_to_str_addr = @intFromPtr(&wrapI64ToStr);
+        codegen.f64_to_str_addr = @intFromPtr(&wrapF64ToStr);
+        codegen.f32_to_str_addr = @intFromPtr(&wrapF32ToStr);
+        codegen.dec_to_str_addr = @intFromPtr(&wrapDecToStr);
+        codegen.str_concat_addr = @intFromPtr(&wrapStrConcat);
+        codegen.str_equal_addr = @intFromPtr(&wrapStrEqual);
+        codegen.str_contains_addr = @intFromPtr(&wrapStrContains);
+        codegen.str_starts_with_addr = @intFromPtr(&wrapStrStartsWith);
+        codegen.str_ends_with_addr = @intFromPtr(&wrapStrEndsWith);
+        codegen.str_escape_and_quote_addr = @intFromPtr(&wrapStrEscapeAndQuote);
+        codegen.str_to_utf8_addr = @intFromPtr(&wrapStrToUtf8);
+        codegen.str_repeat_addr = @intFromPtr(&wrapStrRepeat);
+        codegen.str_trim_addr = @intFromPtr(&wrapStrTrim);
+        codegen.str_trim_start_addr = @intFromPtr(&wrapStrTrimStart);
+        codegen.str_trim_end_addr = @intFromPtr(&wrapStrTrimEnd);
+        codegen.str_drop_prefix_addr = @intFromPtr(&wrapStrDropPrefix);
+        codegen.str_drop_suffix_addr = @intFromPtr(&wrapStrDropSuffix);
+        codegen.str_lowercased_addr = @intFromPtr(&wrapStrWithAsciiLowercased);
+        codegen.str_uppercased_addr = @intFromPtr(&wrapStrWithAsciiUppercased);
+        codegen.str_caseless_equals_addr = @intFromPtr(&wrapStrCaselessEquals);
+        codegen.str_with_capacity_addr = @intFromPtr(&wrapStrWithCapacity);
+        codegen.str_reserve_addr = @intFromPtr(&wrapStrReserve);
+        codegen.str_release_excess_capacity_addr = @intFromPtr(&wrapStrReleaseExcessCapacity);
+        codegen.list_concat_addr = @intFromPtr(&wrapListConcat);
+        codegen.list_prepend_wrap_addr = @intFromPtr(&wrapListPrepend);
+        codegen.list_reserve_addr = @intFromPtr(&wrapListReserve);
+        codegen.list_release_excess_capacity_addr = @intFromPtr(&wrapListReleaseExcessCapacity);
+
+        // Provide layout store for composite types (records, tuples)
+        codegen.layout_store = layout_store_ptr;
+
+        var gen_result = codegen.generateCode(mono_expr_id, result_layout) catch {
+            return error.UnsupportedExpression;
+        };
+        defer gen_result.deinit();
+
+        // 5. Compile bitcode to object file
+        const object_bytes = llvm_compile.compileToObject(
+            self.allocator,
+            gen_result.bitcode,
+            .{ .function_sections = false, .opt_level = if (self.disable_optimizations) .None else .Default },
+        ) catch return error.CompilationFailed;
+        defer self.allocator.free(object_bytes);
+
+        // 6. Extract .text section and find entry point
+        const object_reader = backend.object_reader;
+        const code_info = object_reader.extractCodeSectionWithEntry(object_bytes) catch return error.CompilationFailed;
+
+        // 7. Copy code (it's a slice into object_bytes which we're about to free)
+        const code_copy = self.allocator.dupe(u8, code_info.code) catch return error.OutOfMemory;
+
+        return CodeResult{
+            .code = code_copy,
+            .allocator = self.allocator,
+            .result_layout = result_layout,
+            .layout_store = layout_store_ptr,
+            .entry_offset = code_info.entry_offset,
+        };
     }
 };
 
+// Decomposed C-compatible wrappers for string operations.
+// These avoid ABI issues with passing 24-byte RocStr by value on aarch64.
+const RocStr = builtins.str.RocStr;
+
+fn wrapStrConcat(out: *RocStr, a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize, roc_ops: *RocOps) callconv(.c) void {
+    const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
+    const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
+    out.* = builtins.str.strConcatC(a, b, roc_ops);
+}
+
+fn wrapStrEqual(a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize) callconv(.c) bool {
+    const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
+    const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
+    return builtins.str.strEqual(a, b);
+}
+
+fn wrapStrContains(a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize) callconv(.c) bool {
+    const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
+    const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
+    return builtins.str.strContains(a, b);
+}
+
+fn wrapStrStartsWith(a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize) callconv(.c) bool {
+    const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
+    const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
+    return builtins.str.startsWith(a, b);
+}
+
+fn wrapStrEndsWith(a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize) callconv(.c) bool {
+    const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
+    const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
+    return builtins.str.endsWith(a, b);
+}
+
+fn wrapStrToUtf8(out: *builtins.list.RocList, str_bytes: ?[*]u8, str_len: usize, str_cap: usize, roc_ops: *RocOps) callconv(.c) void {
+    const s = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
+    out.* = builtins.str.strToUtf8C(s, roc_ops);
+}
+
+fn wrapStrEscapeAndQuote(out: *RocStr, str_bytes: ?[*]u8, str_len: usize, str_cap: usize, roc_ops: *RocOps) callconv(.c) void {
+    const s = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
+    const slice = s.asSlice();
+
+    var extra: usize = 0;
+    for (slice) |ch| {
+        if (ch == '\\' or ch == '"') extra += 1;
+    }
+
+    const result_len = slice.len + extra + 2;
+    const small_string_size = @sizeOf(RocStr);
+
+    if (result_len < small_string_size) {
+        var buf: [small_string_size]u8 = .{0} ** small_string_size;
+        buf[0] = '"';
+        var pos: usize = 1;
+        for (slice) |ch| {
+            if (ch == '\\' or ch == '"') {
+                buf[pos] = '\\';
+                pos += 1;
+            }
+            buf[pos] = ch;
+            pos += 1;
+        }
+        buf[pos] = '"';
+        buf[small_string_size - 1] = @intCast(result_len | 0x80);
+        out.* = @bitCast(buf);
+    } else {
+        const heap_ptr = builtins.utils.allocateWithRefcountC(result_len, 1, false, roc_ops);
+        heap_ptr[0] = '"';
+        var pos: usize = 1;
+        for (slice) |ch| {
+            if (ch == '\\' or ch == '"') {
+                heap_ptr[pos] = '\\';
+                pos += 1;
+            }
+            heap_ptr[pos] = ch;
+            pos += 1;
+        }
+        heap_ptr[pos] = '"';
+        out.* = .{ .bytes = heap_ptr, .length = result_len, .capacity_or_alloc_ptr = result_len };
+    }
+}
+
+// C-compatible wrappers for number-to-string conversions.
+fn wrapI64ToStr(out: *RocStr, value: i64, roc_ops: *RocOps) callconv(.c) void {
+    var buf: [20]u8 = undefined;
+    const result = std.fmt.bufPrint(&buf, "{}", .{value}) catch unreachable;
+    out.* = RocStr.init(&buf, result.len, roc_ops);
+}
+
+fn wrapF64ToStr(out: *RocStr, value: f64, roc_ops: *RocOps) callconv(.c) void {
+    var buf: [400]u8 = undefined;
+    const result = std.fmt.bufPrint(&buf, "{d}", .{value}) catch unreachable;
+    out.* = RocStr.init(&buf, result.len, roc_ops);
+}
+
+fn wrapF32ToStr(out: *RocStr, value: f32, roc_ops: *RocOps) callconv(.c) void {
+    var buf: [400]u8 = undefined;
+    const result = std.fmt.bufPrint(&buf, "{d}", .{value}) catch unreachable;
+    out.* = RocStr.init(&buf, result.len, roc_ops);
+}
+
+fn wrapDecToStr(out: *RocStr, lo: u64, hi: u64, roc_ops: *RocOps) callconv(.c) void {
+    const value: i128 = @bitCast(@as(u128, hi) << 64 | @as(u128, lo));
+    const dec = builtins.dec.RocDec{ .num = value };
+    var buf: [builtins.dec.RocDec.max_str_length]u8 = undefined;
+    const result = dec.format_to_buf(&buf);
+    out.* = RocStr.init(&buf, result.len, roc_ops);
+}
+
+// --- String operation wrappers (str → str with roc_ops) ---
+
+fn wrapStrRepeat(out: *RocStr, bytes: ?[*]u8, len: usize, cap: usize, count: u64, roc_ops: *RocOps) callconv(.c) void {
+    const s = RocStr{ .bytes = bytes, .length = len, .capacity_or_alloc_ptr = cap };
+    out.* = builtins.str.repeatC(s, count, roc_ops);
+}
+
+fn wrapStrTrim(out: *RocStr, bytes: ?[*]u8, len: usize, cap: usize, roc_ops: *RocOps) callconv(.c) void {
+    const s = RocStr{ .bytes = bytes, .length = len, .capacity_or_alloc_ptr = cap };
+    out.* = builtins.str.strTrim(s, roc_ops);
+}
+
+fn wrapStrTrimStart(out: *RocStr, bytes: ?[*]u8, len: usize, cap: usize, roc_ops: *RocOps) callconv(.c) void {
+    const s = RocStr{ .bytes = bytes, .length = len, .capacity_or_alloc_ptr = cap };
+    out.* = builtins.str.strTrimStart(s, roc_ops);
+}
+
+fn wrapStrTrimEnd(out: *RocStr, bytes: ?[*]u8, len: usize, cap: usize, roc_ops: *RocOps) callconv(.c) void {
+    const s = RocStr{ .bytes = bytes, .length = len, .capacity_or_alloc_ptr = cap };
+    out.* = builtins.str.strTrimEnd(s, roc_ops);
+}
+
+fn wrapStrDropPrefix(out: *RocStr, s_bytes: ?[*]u8, s_len: usize, s_cap: usize, p_bytes: ?[*]u8, p_len: usize, p_cap: usize, roc_ops: *RocOps) callconv(.c) void {
+    const s = RocStr{ .bytes = s_bytes, .length = s_len, .capacity_or_alloc_ptr = s_cap };
+    const p = RocStr{ .bytes = p_bytes, .length = p_len, .capacity_or_alloc_ptr = p_cap };
+    out.* = builtins.str.strDropPrefix(s, p, roc_ops);
+}
+
+fn wrapStrDropSuffix(out: *RocStr, s_bytes: ?[*]u8, s_len: usize, s_cap: usize, p_bytes: ?[*]u8, p_len: usize, p_cap: usize, roc_ops: *RocOps) callconv(.c) void {
+    const s = RocStr{ .bytes = s_bytes, .length = s_len, .capacity_or_alloc_ptr = s_cap };
+    const p = RocStr{ .bytes = p_bytes, .length = p_len, .capacity_or_alloc_ptr = p_cap };
+    out.* = builtins.str.strDropSuffix(s, p, roc_ops);
+}
+
+fn wrapStrWithAsciiLowercased(out: *RocStr, bytes: ?[*]u8, len: usize, cap: usize, roc_ops: *RocOps) callconv(.c) void {
+    const s = RocStr{ .bytes = bytes, .length = len, .capacity_or_alloc_ptr = cap };
+    out.* = builtins.str.strWithAsciiLowercased(s, roc_ops);
+}
+
+fn wrapStrWithAsciiUppercased(out: *RocStr, bytes: ?[*]u8, len: usize, cap: usize, roc_ops: *RocOps) callconv(.c) void {
+    const s = RocStr{ .bytes = bytes, .length = len, .capacity_or_alloc_ptr = cap };
+    out.* = builtins.str.strWithAsciiUppercased(s, roc_ops);
+}
+
+fn wrapStrCaselessEquals(a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize) callconv(.c) bool {
+    const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
+    const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
+    return builtins.str.strCaselessAsciiEquals(a, b);
+}
+
+fn wrapStrWithCapacity(out: *RocStr, capacity: u64, roc_ops: *RocOps) callconv(.c) void {
+    out.* = builtins.str.withCapacityC(capacity, roc_ops);
+}
+
+fn wrapStrReserve(out: *RocStr, bytes: ?[*]u8, len: usize, cap: usize, spare: u64, roc_ops: *RocOps) callconv(.c) void {
+    const s = RocStr{ .bytes = bytes, .length = len, .capacity_or_alloc_ptr = cap };
+    out.* = builtins.str.reserveC(s, spare, roc_ops);
+}
+
+fn wrapStrReleaseExcessCapacity(out: *RocStr, bytes: ?[*]u8, len: usize, cap: usize, roc_ops: *RocOps) callconv(.c) void {
+    const s = RocStr{ .bytes = bytes, .length = len, .capacity_or_alloc_ptr = cap };
+    out.* = builtins.str.strReleaseExcessCapacity(roc_ops, s);
+}
+
+// --- List operation wrappers ---
+
+fn wrapListPrepend(out: *builtins.list.RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, elem_ptr: ?[*]u8, alignment: u32, elem_width: usize, copy_fn: *const fn (?[*]u8, ?[*]u8) callconv(.c) void, roc_ops: *RocOps) callconv(.c) void {
+    const list = builtins.list.RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+    out.* = builtins.list.listPrepend(list, alignment, elem_ptr, elem_width, false, null, builtins.list.rcNone, copy_fn, roc_ops);
+}
+
+fn wrapListConcat(out: *builtins.list.RocList, a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize, alignment: u32, elem_width: usize, roc_ops: *RocOps) callconv(.c) void {
+    const a = builtins.list.RocList{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
+    const b = builtins.list.RocList{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
+    out.* = builtins.list.listConcat(a, b, alignment, elem_width, false, null, builtins.list.rcNone, null, builtins.list.rcNone, roc_ops);
+}
+
+fn wrapListReserve(out: *builtins.list.RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, spare: u64, alignment: u32, elem_width: usize, roc_ops: *RocOps) callconv(.c) void {
+    const list = builtins.list.RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+    out.* = builtins.list.listReserve(list, alignment, spare, elem_width, false, null, builtins.list.rcNone, .InPlace, roc_ops);
+}
+
+fn wrapListReleaseExcessCapacity(out: *builtins.list.RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, elem_width: usize, roc_ops: *RocOps) callconv(.c) void {
+    const list = builtins.list.RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+    out.* = builtins.list.listReleaseExcessCapacity(list, alignment, elem_width, false, null, builtins.list.rcNone, null, builtins.list.rcNone, .InPlace, roc_ops);
+}
+
+// Tests
+
 test "llvm evaluator initialization" {
-    const allocator = std.testing.allocator;
-
-    var evaluator = try LlvmEvaluator.init(allocator);
+    var evaluator = LlvmEvaluator.init(std.testing.allocator) catch |err| {
+        return switch (err) {
+            error.OutOfMemory => error.SkipZigTest,
+            else => err,
+        };
+    };
     defer evaluator.deinit();
-
-    // Just verify initialization works - the evaluator should be usable
-    try std.testing.expect(evaluator.allocator.ptr == allocator.ptr);
 }

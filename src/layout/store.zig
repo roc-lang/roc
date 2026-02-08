@@ -112,6 +112,12 @@ pub const Store = struct {
     // Cached Box ident to avoid repeated string lookups (null if Box doesn't exist in this env)
     box_ident: ?Ident.Idx,
 
+    // The builtin module's own environment, used for cross-module ident comparison.
+    // Nominal types from the builtin module store ident indices from the builtin module's
+    // own ident store, which differ from the user module's ident store indices.
+    // Null when the builtin module is not found in all_module_envs.
+    builtin_env: ?*const ModuleEnv,
+
     // Cached numeric type idents to avoid repeated string lookups
     u8_ident: ?Ident.Idx,
     i8_ident: ?Ident.Idx,
@@ -179,6 +185,16 @@ pub const Store = struct {
         allocator: std.mem.Allocator,
         target_usize: target.TargetUsize,
     ) std.mem.Allocator.Error!Self {
+        return initWithBuiltinEnv(all_module_envs, builtin_str_ident, null, allocator, target_usize);
+    }
+
+    pub fn initWithBuiltinEnv(
+        all_module_envs: []const *const ModuleEnv,
+        builtin_str_ident: ?Ident.Idx,
+        builtin_env: ?*const ModuleEnv,
+        allocator: std.mem.Allocator,
+        target_usize: target.TargetUsize,
+    ) std.mem.Allocator.Error!Self {
         // Use module 0's idents for builtin type identification
         const env = all_module_envs[0];
 
@@ -240,6 +256,7 @@ pub const Store = struct {
             .dec_ident = env.idents.dec_type,
             .bool_ident = env.idents.bool_type,
             .bool_plain_ident = env.idents.bool,
+            .builtin_env = builtin_env,
             .target_usize = target_usize,
         };
     }
@@ -1799,6 +1816,10 @@ pub const Store = struct {
                                     if (self.builtin_str_plain_ident) |plain_str| {
                                         if (nominal_type.ident.ident_idx == plain_str) break :blk true;
                                     }
+                                    // Cross-module check: ident comes from the builtin module's store
+                                    if (self.builtin_env) |benv| {
+                                        if (nominal_type.ident.ident_idx == benv.idents.str) break :blk true;
+                                    }
                                 }
                                 break :blk false;
                             };
@@ -1817,6 +1838,11 @@ pub const Store = struct {
                                     if (self.bool_plain_ident) |plain_bool| {
                                         if (nominal_type.ident.ident_idx == plain_bool) break :blk true;
                                     }
+                                    // Cross-module check: the nominal type's ident comes from the
+                                    // builtin module's own ident store, so compare against it.
+                                    if (self.builtin_env) |benv| {
+                                        if (nominal_type.ident.ident_idx == benv.idents.bool) break :blk true;
+                                    }
                                 }
                                 break :blk false;
                             };
@@ -1826,11 +1852,18 @@ pub const Store = struct {
                             }
 
                             // Special handling for Builtin.Box
-                            const is_builtin_box = if (self.box_ident) |box_ident|
-                                nominal_type.origin_module == self.currentEnv().idents.builtin_module and
-                                    nominal_type.ident.ident_idx == box_ident
-                            else
-                                false;
+                            const is_builtin_box = blk: {
+                                if (nominal_type.origin_module == self.currentEnv().idents.builtin_module) {
+                                    if (self.box_ident) |box_ident| {
+                                        if (nominal_type.ident.ident_idx == box_ident) break :blk true;
+                                    }
+                                    // Cross-module check: ident comes from the builtin module's store
+                                    if (self.builtin_env) |benv| {
+                                        if (nominal_type.ident.ident_idx == benv.idents.box) break :blk true;
+                                    }
+                                }
+                                break :blk false;
+                            };
                             if (is_builtin_box) {
                                 // Extract the element type from the type arguments
                                 const type_args = self.getTypesStore().sliceNominalArgs(nominal_type);
@@ -1867,11 +1900,18 @@ pub const Store = struct {
                             }
 
                             // Special handling for Builtin.List
-                            const is_builtin_list = if (self.list_ident) |list_ident|
-                                nominal_type.origin_module == self.currentEnv().idents.builtin_module and
-                                    nominal_type.ident.ident_idx == list_ident
-                            else
-                                false;
+                            const is_builtin_list = blk: {
+                                if (nominal_type.origin_module == self.currentEnv().idents.builtin_module) {
+                                    if (self.list_ident) |list_ident| {
+                                        if (nominal_type.ident.ident_idx == list_ident) break :blk true;
+                                    }
+                                    // Cross-module check: ident comes from the builtin module's store
+                                    if (self.builtin_env) |benv| {
+                                        if (nominal_type.ident.ident_idx == benv.idents.list) break :blk true;
+                                    }
+                                }
+                                break :blk false;
+                            };
                             if (is_builtin_list) {
                                 // Extract the element type from the type arguments
                                 const type_args = self.getTypesStore().sliceNominalArgs(nominal_type);
@@ -1991,6 +2031,7 @@ pub const Store = struct {
                             // These have empty tag union backings but need scalar layouts
                             if (nominal_type.origin_module == self.currentEnv().idents.builtin_module) {
                                 const ident_idx = nominal_type.ident.ident_idx;
+                                // First try matching against this module's idents (qualified names)
                                 const num_layout: ?Layout = blk: {
                                     if (self.u8_ident) |u8_id| if (ident_idx == u8_id) break :blk Layout.int(types.Int.Precision.u8);
                                     if (self.i8_ident) |i8_id| if (ident_idx == i8_id) break :blk Layout.int(types.Int.Precision.i8);
@@ -2005,6 +2046,22 @@ pub const Store = struct {
                                     if (self.f32_ident) |f32_id| if (ident_idx == f32_id) break :blk Layout.frac(types.Frac.Precision.f32);
                                     if (self.f64_ident) |f64_id| if (ident_idx == f64_id) break :blk Layout.frac(types.Frac.Precision.f64);
                                     if (self.dec_ident) |dec_id| if (ident_idx == dec_id) break :blk Layout.frac(types.Frac.Precision.dec);
+                                    // Cross-module fallback: ident comes from the builtin module's store
+                                    if (self.builtin_env) |benv| {
+                                        if (ident_idx == benv.idents.u8) break :blk Layout.int(types.Int.Precision.u8);
+                                        if (ident_idx == benv.idents.i8) break :blk Layout.int(types.Int.Precision.i8);
+                                        if (ident_idx == benv.idents.u16) break :blk Layout.int(types.Int.Precision.u16);
+                                        if (ident_idx == benv.idents.i16) break :blk Layout.int(types.Int.Precision.i16);
+                                        if (ident_idx == benv.idents.u32) break :blk Layout.int(types.Int.Precision.u32);
+                                        if (ident_idx == benv.idents.i32) break :blk Layout.int(types.Int.Precision.i32);
+                                        if (ident_idx == benv.idents.u64) break :blk Layout.int(types.Int.Precision.u64);
+                                        if (ident_idx == benv.idents.i64) break :blk Layout.int(types.Int.Precision.i64);
+                                        if (ident_idx == benv.idents.u128) break :blk Layout.int(types.Int.Precision.u128);
+                                        if (ident_idx == benv.idents.i128) break :blk Layout.int(types.Int.Precision.i128);
+                                        if (ident_idx == benv.idents.f32) break :blk Layout.frac(types.Frac.Precision.f32);
+                                        if (ident_idx == benv.idents.f64) break :blk Layout.frac(types.Frac.Precision.f64);
+                                        if (ident_idx == benv.idents.dec) break :blk Layout.frac(types.Frac.Precision.dec);
+                                    }
                                     break :blk null;
                                 };
 

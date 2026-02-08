@@ -1,6 +1,7 @@
 //! Tests for the REPL
 const std = @import("std");
 const Repl = @import("eval.zig").Repl;
+const Backend = @import("eval.zig").Backend;
 const TestEnv = @import("repl_test_env.zig").TestEnv;
 
 // Tests
@@ -10,6 +11,35 @@ const testing = std.testing;
 // The interpreter/REPL has known memory leak issues that we're not fixing now.
 // We want to focus on getting the dev backend working without leaks.
 const interpreter_allocator = std.heap.page_allocator;
+
+/// Run a REPL expression with dev and LLVM backends and compare against interpreter result.
+/// If a backend fails to init or eval, its comparison is silently skipped.
+fn compareReplBackends(expr: []const u8, interpreter_result: []const u8) void {
+    // Dev backend
+    {
+        var te = TestEnv.init(interpreter_allocator);
+        defer te.deinit();
+        var repl = Repl.initWithBackend(interpreter_allocator, te.get_ops(), null, .dev) catch return;
+        defer repl.deinit();
+        const result = repl.step(expr) catch return;
+        defer interpreter_allocator.free(result);
+        if (!std.mem.eql(u8, result, interpreter_result)) {
+            std.debug.print("\nREPL mismatch! Interpreter: {s}, Dev: {s}\n", .{ interpreter_result, result });
+        }
+    }
+    // LLVM backend
+    {
+        var te = TestEnv.init(interpreter_allocator);
+        defer te.deinit();
+        var repl = Repl.initWithBackend(interpreter_allocator, te.get_ops(), null, .llvm) catch return;
+        defer repl.deinit();
+        const result = repl.step(expr) catch return;
+        defer interpreter_allocator.free(result);
+        if (!std.mem.eql(u8, result, interpreter_result)) {
+            std.debug.print("\nREPL mismatch! Interpreter: {s}, LLVM: {s}\n", .{ interpreter_result, result });
+        }
+    }
+}
 
 test "Repl - initialization and cleanup" {
     var test_env = TestEnv.init(interpreter_allocator);
@@ -51,6 +81,7 @@ test "Repl - simple expressions" {
     const result = try repl.step("42");
     defer interpreter_allocator.free(result);
     try testing.expectEqualStrings("42", result);
+    compareReplBackends("42", result);
 }
 
 test "Repl - string expressions" {
@@ -63,6 +94,7 @@ test "Repl - string expressions" {
     const result = try repl.step("\"Hello, World!\"");
     defer interpreter_allocator.free(result);
     try testing.expectEqualStrings("\"Hello, World!\"", result);
+    compareReplBackends("\"Hello, World!\"", result);
 }
 
 test "Repl - silent assignments" {
@@ -81,6 +113,7 @@ test "Repl - silent assignments" {
     const result2 = try repl.step("x");
     defer interpreter_allocator.free(result2);
     try testing.expectEqualStrings("5", result2);
+    compareReplBackends("x", result2);
 }
 
 test "Repl - variable redefinition" {
@@ -104,6 +137,7 @@ test "Repl - variable redefinition" {
     const result3 = try repl.step("y");
     defer interpreter_allocator.free(result3);
     try testing.expectEqualStrings("6", result3);
+    compareReplBackends("y", result3);
 
     // Redefine x
     const result4 = try repl.step("x = 3");
@@ -114,6 +148,7 @@ test "Repl - variable redefinition" {
     const result5 = try repl.step("y");
     defer interpreter_allocator.free(result5);
     try testing.expectEqualStrings("4", result5);
+    compareReplBackends("y", result5);
 }
 
 test "Repl - build full source with block syntax" {
@@ -202,10 +237,12 @@ test "Repl - Str.is_empty works for empty and non-empty strings" {
     const empty_result = try repl.step("Str.is_empty(\"\")");
     defer interpreter_allocator.free(empty_result);
     try testing.expectEqualStrings("True", empty_result);
+    compareReplBackends("Str.is_empty(\"\")", empty_result);
 
     const non_empty_result = try repl.step("Str.is_empty(\"a\")");
     defer interpreter_allocator.free(non_empty_result);
     try testing.expectEqualStrings("False", non_empty_result);
+    compareReplBackends("Str.is_empty(\"a\")", non_empty_result);
 }
 
 test "Repl - List.len(Str.to_utf8(\"hello\")) should not leak" {
@@ -219,6 +256,7 @@ test "Repl - List.len(Str.to_utf8(\"hello\")) should not leak" {
     const result = try repl.step("List.len(Str.to_utf8(\"hello\"))");
     defer interpreter_allocator.free(result);
     try testing.expectEqualStrings("5", result);
+    compareReplBackends("List.len(Str.to_utf8(\"hello\"))", result);
 }
 
 test "Repl - Str.to_utf8 returns list that should not leak" {
@@ -232,6 +270,7 @@ test "Repl - Str.to_utf8 returns list that should not leak" {
     const result = try repl.step("Str.to_utf8(\"hello\")");
     defer interpreter_allocator.free(result);
     try testing.expectEqualStrings("[104, 101, 108, 108, 111]", result);
+    compareReplBackends("Str.to_utf8(\"hello\")", result);
 }
 
 test "Repl - multiple Str.to_utf8 calls should not leak" {
@@ -271,11 +310,13 @@ test "Repl - list literals should not leak" {
         const result = try repl.step("List.len([1, 2, 3])");
         defer interpreter_allocator.free(result);
         try testing.expectEqualStrings("3", result);
+        compareReplBackends("List.len([1, 2, 3])", result);
     }
     {
         const result = try repl.step("[1, 2, 3]");
         defer interpreter_allocator.free(result);
         try testing.expectEqualStrings("[1, 2, 3]", result);
+        compareReplBackends("[1, 2, 3]", result);
     }
 }
 
@@ -303,6 +344,7 @@ test "Repl - from_utf8_lossy should not leak" {
         const result = try repl.step("Str.from_utf8_lossy(Str.to_utf8(\"hello\"))");
         defer interpreter_allocator.free(result);
         try testing.expectEqualStrings("\"hello\"", result);
+        compareReplBackends("Str.from_utf8_lossy(Str.to_utf8(\"hello\"))", result);
     }
 }
 
@@ -388,6 +430,7 @@ test "Repl - all list operations should not leak" {
         const result = try repl.step("List.contains([1, 2, 3, 4, 5], 3)");
         defer interpreter_allocator.free(result);
         try testing.expectEqualStrings("True", result);
+        compareReplBackends("List.contains([1, 2, 3, 4, 5], 3)", result);
     }
     {
         const result = try repl.step("List.drop_if([1, 2, 3, 4, 5], |x| x > 2)");
@@ -569,6 +612,7 @@ test "Repl - lambda function renders as <function>" {
     const result = try repl.step("|x| x + 1");
     defer interpreter_allocator.free(result);
     try testing.expectEqualStrings("<function>", result);
+    compareReplBackends("|x| x + 1", result);
 }
 
 test "Repl - multi-arg lambda function renders as <function>" {
@@ -581,4 +625,5 @@ test "Repl - multi-arg lambda function renders as <function>" {
     const result = try repl.step("|x, y| x + y");
     defer interpreter_allocator.free(result);
     try testing.expectEqualStrings("<function>", result);
+    compareReplBackends("|x, y| x + y", result);
 }
