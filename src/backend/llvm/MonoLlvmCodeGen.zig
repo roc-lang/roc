@@ -3283,7 +3283,52 @@ pub const MonoLlvmCodeGen = struct {
                 return .none;
             },
 
-            .list_set, .list_first, .list_last, .list_drop_first, .list_drop_last,
+            .list_first => {
+                // list_first(list) -> element at index 0
+                if (args.len < 1) return error.UnsupportedExpression;
+                const ls = self.layout_store orelse return error.UnsupportedExpression;
+                const list_ptr = try self.materializeAsPtr(args[0], 24);
+                const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
+                const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
+                const data_ptr = wip.load(.normal, ptr_type, list_ptr, alignment, "") catch return error.CompilationFailed;
+
+                const elem_layout = ls.getLayout(ll.ret_layout);
+                const elem_sa = ls.layoutSizeAlign(elem_layout);
+                const elem_type = layoutToLlvmType(ll.ret_layout);
+                const elem_align = LlvmBuilder.Alignment.fromByteUnits(@intCast(elem_sa.alignment.toByteUnits()));
+                return wip.load(.normal, elem_type, data_ptr, elem_align, "") catch return error.CompilationFailed;
+            },
+
+            .list_last => {
+                // list_last(list) -> element at index (len - 1)
+                if (args.len < 1) return error.UnsupportedExpression;
+                const ls = self.layout_store orelse return error.UnsupportedExpression;
+                const list_ptr = try self.materializeAsPtr(args[0], 24);
+                const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
+                const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
+                const data_ptr = wip.load(.normal, ptr_type, list_ptr, alignment, "") catch return error.CompilationFailed;
+
+                // Load length (offset 8)
+                const off8 = builder.intValue(.i32, 8) catch return error.OutOfMemory;
+                const len_ptr = wip.gep(.inbounds, .i8, list_ptr, &.{off8}, "") catch return error.CompilationFailed;
+                const list_len = wip.load(.normal, .i64, len_ptr, alignment, "") catch return error.CompilationFailed;
+
+                // Calculate offset: (len - 1) * elem_size
+                const elem_layout = ls.getLayout(ll.ret_layout);
+                const elem_sa = ls.layoutSizeAlign(elem_layout);
+                const elem_size: u64 = elem_sa.size;
+                const one = builder.intValue(.i64, 1) catch return error.OutOfMemory;
+                const last_idx = wip.bin(.sub, list_len, one, "") catch return error.CompilationFailed;
+                const size_const = builder.intValue(.i64, elem_size) catch return error.OutOfMemory;
+                const byte_offset = wip.bin(.mul, last_idx, size_const, "") catch return error.CompilationFailed;
+                const elem_ptr = wip.gep(.inbounds, .i8, data_ptr, &.{byte_offset}, "") catch return error.CompilationFailed;
+
+                const elem_type = layoutToLlvmType(ll.ret_layout);
+                const elem_align = LlvmBuilder.Alignment.fromByteUnits(@intCast(elem_sa.alignment.toByteUnits()));
+                return wip.load(.normal, elem_type, elem_ptr, elem_align, "") catch return error.CompilationFailed;
+            },
+
+            .list_set, .list_drop_first, .list_drop_last,
             .list_take_first, .list_take_last, .list_contains, .list_reverse,
             .list_split_first, .list_split_last,
             => return error.UnsupportedExpression,
