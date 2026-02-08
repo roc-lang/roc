@@ -515,3 +515,18 @@ pub fn i128_to_str(buf: []u8, val: i128) FormatResult {
     }
     return u128_to_str_inner(buf, @as(u128, @intCast(val)));
 }
+
+// ABI exports for __udivti3 and __umodti3.
+// Zig's std.fmt.float (used for {d} formatting of f64) internally performs
+// u128 division/modulo in isPowerOf10 and printIntAny. Since we build with
+// bundle_compiler_rt=false, we must provide these two symbols ourselves.
+
+/// Unsigned 128-bit division — matches the compiler-rt ABI.
+export fn __udivti3(a: u128, b: u128) callconv(.c) u128 {
+    return divTrunc_u128(a, b);
+}
+
+/// Unsigned 128-bit modulo — matches the compiler-rt ABI.
+export fn __umodti3(a: u128, b: u128) callconv(.c) u128 {
+    return rem_u128(a, b);
+}

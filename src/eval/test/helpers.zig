@@ -810,7 +810,9 @@ pub fn runExpectIntDec(src: []const u8, expected_int: i128, should_trace: enum {
 
     const expected_dec = expected_int * dec_scale;
     if (actual_dec.num != expected_dec) {
-        std.debug.print("Expected Dec({d}), got Dec({d})\n", .{ expected_dec, actual_dec.num });
+        var exp_buf: [40]u8 = undefined;
+        var act_buf: [40]u8 = undefined;
+        std.debug.print("Expected Dec({s}), got Dec({s})\n", .{ i128h.i128_to_str(&exp_buf, expected_dec).str, i128h.i128_to_str(&act_buf, actual_dec.num).str });
         return error.TestExpectedEqual;
     }
 }
@@ -852,7 +854,9 @@ pub fn runExpectDec(src: []const u8, expected_dec_num: i128, should_trace: enum 
     try compareWithDevEvaluator(test_allocator, dec_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     if (actual_dec.num != expected_dec_num) {
-        std.debug.print("Expected Dec({d}), got Dec({d})\n", .{ expected_dec_num, actual_dec.num });
+        var exp_buf2: [40]u8 = undefined;
+        var act_buf2: [40]u8 = undefined;
+        std.debug.print("Expected Dec({s}), got Dec({s})\n", .{ i128h.i128_to_str(&exp_buf2, expected_dec_num).str, i128h.i128_to_str(&act_buf2, actual_dec.num).str });
         return error.TestExpectedEqual;
     }
 }
