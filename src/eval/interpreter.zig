@@ -9783,10 +9783,17 @@ pub const Interpreter = struct {
                         buf[i] = try self.translateTypeVar(module, ct_arg);
                     }
                     // Translate the alias's ident from source module's ident store to runtime ident store
-                    const source_alias_str = module.getIdent(alias.ident.ident_idx);
-                    const rt_alias_ident_idx = try self.runtime_layout_store.getMutableEnv().?.insertIdent(base_pkg.Ident.for_text(source_alias_str));
-                    const rt_alias_ident = types.TypeIdent{ .ident_idx = rt_alias_ident_idx };
-                    const content = try self.runtime_types.mkAlias(rt_alias_ident, rt_backing, buf);
+                    const layout_env = self.runtime_layout_store.getMutableEnv().?;
+                    const needs_translation = @intFromPtr(&module.common.idents.interner) != @intFromPtr(&layout_env.common.idents.interner);
+                    const translated_ident = if (needs_translation) ident_blk: {
+                        const type_name_str = module.getIdent(alias.ident.ident_idx);
+                        break :ident_blk types.TypeIdent{ .ident_idx = try layout_env.insertIdent(base_pkg.Ident.for_text(type_name_str)) };
+                    } else alias.ident;
+                    const translated_origin = if (needs_translation) origin_blk: {
+                        const origin_str = module.getIdent(alias.origin_module);
+                        break :origin_blk try layout_env.insertIdent(base_pkg.Ident.for_text(origin_str));
+                    } else alias.origin_module;
+                    const content = try self.runtime_types.mkAlias(translated_ident, rt_backing, buf, translated_origin);
                     break :blk try self.runtime_types.freshFromContent(content);
                 },
                 .flex => |flex| {
@@ -20104,7 +20111,7 @@ test "interpreter: translateTypeVar for alias of Str" {
     };
     const ct_str = try env.types.freshFromContent(.{ .structure = .{ .nominal_type = str_nominal } });
 
-    const ct_alias_content = try env.types.mkAlias(type_ident, ct_str, &.{});
+    const ct_alias_content = try env.types.mkAlias(type_ident, ct_str, &.{}, alias_name);
     const ct_alias_var = try env.types.freshFromContent(ct_alias_content);
 
     const rt_var = try interp.translateTypeVar(&env, ct_alias_var);
