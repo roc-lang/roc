@@ -3690,14 +3690,15 @@ pub const Interpreter = struct {
                     },
                     .dec => |l| switch (rhs) {
                         .dec => |r| {
-                            // For Dec, div and div_trunc are the same since it's already integer-like
                             if (r.num == 0) return error.DivisionByZero;
-                            out.setDec(RocDec.div(l, r, roc_ops), roc_ops);
+                            const result_num = builtins.dec.divTruncC(l, r, roc_ops);
+                            out.setDec(RocDec{ .num = result_num }, roc_ops);
                         },
                         .int => |r| {
                             if (r == 0) return error.DivisionByZero;
                             const r_dec = RocDec.fromWholeInt(r).?;
-                            out.setDec(RocDec.div(l, r_dec, roc_ops), roc_ops);
+                            const result_num = builtins.dec.divTruncC(l, r_dec, roc_ops);
+                            out.setDec(RocDec{ .num = result_num }, roc_ops);
                         },
                         else => return error.TypeMismatch,
                     },
@@ -6280,11 +6281,22 @@ pub const Interpreter = struct {
                 .dec => |l| switch (rhs_val) {
                     .dec => |r| {
                         if (r.num == 0) return error.DivisionByZero;
-                        out.setDec(RocDec.div(l, r, roc_ops), roc_ops);
+                        if (op == .div_trunc) {
+                            const result_num = builtins.dec.divTruncC(l, r, roc_ops);
+                            out.setDec(RocDec{ .num = result_num }, roc_ops);
+                        } else {
+                            out.setDec(RocDec.div(l, r, roc_ops), roc_ops);
+                        }
                     },
                     .int => |r| {
                         if (r == 0) return error.DivisionByZero;
-                        out.setDec(RocDec.div(l, RocDec.fromWholeInt(r).?, roc_ops), roc_ops);
+                        const r_dec = RocDec.fromWholeInt(r).?;
+                        if (op == .div_trunc) {
+                            const result_num = builtins.dec.divTruncC(l, r_dec, roc_ops);
+                            out.setDec(RocDec{ .num = result_num }, roc_ops);
+                        } else {
+                            out.setDec(RocDec.div(l, r_dec, roc_ops), roc_ops);
+                        }
                     },
                     else => return error.TypeMismatch,
                 },

@@ -668,31 +668,36 @@ pub const Repl = struct {
                     };
                     defer code_result.deinit();
 
-                    // Execute the compiled code
-                    var executable = eval_mod.ExecutableMemory.init(code_result.code) catch {
+                    // Execute the compiled code (with entry_offset for compiled procedures)
+                    var executable = eval_mod.ExecutableMemory.initWithEntryOffset(code_result.code, code_result.entry_offset) catch {
                         return self.evaluateWithInterpreter(module_env, final_expr_idx, &imported_modules, &checker);
                     };
                     defer executable.deinit();
 
-                    // Format result based on layout
-                    const LayoutIdx = eval_mod.layout.Idx;
-                    const output = switch (code_result.result_layout) {
-                        LayoutIdx.i64, LayoutIdx.i8, LayoutIdx.i16, LayoutIdx.i32 => try std.fmt.allocPrint(self.allocator, "{} : I64", .{executable.callReturnI64()}),
-                        LayoutIdx.u64, LayoutIdx.u8, LayoutIdx.u16, LayoutIdx.u32 => try std.fmt.allocPrint(self.allocator, "{} : U64", .{executable.callReturnU64()}),
-                        LayoutIdx.bool => if (executable.callReturnU64() != 0) try self.allocator.dupe(u8, "Bool.true : Bool") else try self.allocator.dupe(u8, "Bool.false : Bool"),
-                        LayoutIdx.f64, LayoutIdx.f32 => blk: {
-                            break :blk try std.fmt.allocPrint(self.allocator, "{d} : F64", .{executable.callReturnF64()});
-                        },
-                        LayoutIdx.dec => blk: {
-                            var dec_bytes: [16]u8 align(16) = undefined;
-                            executable.callWithResultPtr(@ptrCast(&dec_bytes));
-                            const dec_val: i128 = @bitCast(dec_bytes);
-                            const d = builtins.dec.RocDec{ .num = dec_val };
-                            var buf: [builtins.dec.RocDec.max_str_length]u8 = undefined;
-                            const formatted = d.format_to_buf(&buf);
-                            break :blk try std.fmt.allocPrint(self.allocator, "{s} : Dec", .{formatted});
-                        },
-                        else => return self.evaluateWithInterpreter(module_env, final_expr_idx, &imported_modules, &checker),
+                    // Execute and write result into a stack buffer
+                    var result_buf: [256]u8 align(16) = undefined;
+                    executable.callWithResultPtr(@ptrCast(&result_buf));
+
+                    // Format using shared RocValue
+                    const values = @import("values");
+                    const result_layout = if (code_result.layout_store) |ls|
+                        ls.getLayout(code_result.result_layout)
+                    else
+                        return self.evaluateWithInterpreter(module_env, final_expr_idx, &imported_modules, &checker);
+
+                    const roc_val = values.RocValue{
+                        .ptr = &result_buf,
+                        .lay = result_layout,
+                        .layout_idx = code_result.result_layout,
+                    };
+                    const fmt_ctx = values.RocValue.FormatContext{
+                        .layout_store = code_result.layout_store orelse
+                            return self.evaluateWithInterpreter(module_env, final_expr_idx, &imported_modules, &checker),
+                        .ident_store = module_env.getIdentStoreConst(),
+                        .strip_whole_number_decimal = true,
+                    };
+                    const output = roc_val.format(self.allocator, fmt_ctx) catch {
+                        return self.evaluateWithInterpreter(module_env, final_expr_idx, &imported_modules, &checker);
                     };
                     return .{ .expression = output };
                 }

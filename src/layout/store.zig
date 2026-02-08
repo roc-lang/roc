@@ -1773,6 +1773,10 @@ pub const Store = struct {
 
             // Declare layout outside the if so it's accessible in container finalization
             var layout: Layout = undefined;
+            // Flag to override layout_idx to Idx.bool after insertLayout.
+            // Bool has a dedicated sentinel (Idx.bool = 0) distinct from Idx.u8 = 3,
+            // but insertLayout maps Layout.boolType() (= Layout.int(.u8)) to Idx.u8.
+            var is_bool_override = false;
 
             if (!skip_layout_computation) {
                 // Mark this var as in-progress before processing.
@@ -1821,7 +1825,9 @@ pub const Store = struct {
                                 break :blk false;
                             };
                             if (is_builtin_bool) {
-                                // This is Builtin.Bool - use bool layout (u8)
+                                // This is Builtin.Bool - use bool layout (u8).
+                                // Set flag so layout_idx is overridden to Idx.bool after insertLayout.
+                                is_bool_override = true;
                                 break :flat_type Layout.boolType();
                             }
 
@@ -2479,6 +2485,9 @@ pub const Store = struct {
 
                 // We actually resolved a layout that wasn't zero-sized!
                 layout_idx = try self.insertLayout(layout);
+                // Override to Idx.bool for Bool types. insertLayout maps Layout.boolType()
+                // (= Layout.int(.u8)) to Idx.u8, but Bool needs its own sentinel Idx.
+                if (is_bool_override) layout_idx = Idx.bool;
                 const layout_cache_key = ModuleVarKey{ .module_idx = self.current_module_idx, .var_ = current.var_ };
                 // Only cache if the layout doesn't depend on unresolved type parameters.
                 // Layouts that depend on unresolved params (like List(a) where 'a' has no mapping)

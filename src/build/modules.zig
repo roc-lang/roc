@@ -33,6 +33,7 @@ fn aggregatorFilters(module_type: ModuleType) []const []const u8 {
         .check => &.{"check tests"},
         .parse => &.{"parser tests"},
         .layout => &.{"layout tests"},
+        .values => &.{"values tests"},
         .eval => &.{"eval tests"},
         .ipc => &.{"ipc tests"},
         .repl => &.{"repl tests"},
@@ -269,7 +270,7 @@ pub const ModuleTest = struct {
 /// unnamed wrappers) so callers can correct the reported totals.
 pub const ModuleTestsResult = struct {
     /// Compile/run steps for each module's tests, in creation order.
-    tests: [23]ModuleTest,
+    tests: [24]ModuleTest,
     /// Number of synthetic passes the summary must subtract when filters were injected.
     /// Includes aggregator ensures and unconditional wrapper tests.
     forced_passes: usize,
@@ -291,6 +292,7 @@ pub const ModuleType = enum {
     fs,
     build_options,
     layout,
+    values,
     eval,
     ipc,
     repl,
@@ -321,10 +323,11 @@ pub const ModuleType = enum {
             .can => &.{ .tracy, .builtins, .collections, .types, .base, .parse, .reporting, .build_options },
             .check => &.{ .tracy, .builtins, .collections, .base, .parse, .types, .can, .reporting },
             .layout => &.{ .tracy, .collections, .base, .types, .builtins, .can },
-            .eval => &.{ .tracy, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .build_options, .reporting, .backend, .mono, .roc_target, .sljmp },
+            .values => &.{ .collections, .base, .builtins, .layout },
+            .eval => &.{ .tracy, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .values, .build_options, .reporting, .backend, .mono, .roc_target, .sljmp },
             .compile => &.{ .tracy, .build_options, .fs, .builtins, .collections, .base, .types, .parse, .can, .check, .reporting, .layout, .eval, .unbundle, .roc_target },
             .ipc => &.{},
-            .repl => &.{ .base, .collections, .compile, .parse, .types, .can, .check, .builtins, .layout, .eval, .backend, .roc_target },
+            .repl => &.{ .base, .collections, .compile, .parse, .types, .can, .check, .builtins, .layout, .values, .eval, .backend, .roc_target },
             .fmt => &.{ .base, .parse, .collections, .can, .fs, .tracy },
             .watch => &.{.build_options},
             .bundle => &.{ .base, .collections, .base58, .unbundle },
@@ -355,6 +358,7 @@ pub const RocModules = struct {
     fs: *Module,
     build_options: *Module,
     layout: *Module,
+    values: *Module,
     eval: *Module,
     ipc: *Module,
     repl: *Module,
@@ -391,6 +395,7 @@ pub const RocModules = struct {
                 .{ .root_source_file = build_options_step.getOutput() },
             ),
             .layout = b.addModule("layout", .{ .root_source_file = b.path("src/layout/mod.zig") }),
+            .values = b.addModule("values", .{ .root_source_file = b.path("src/values/mod.zig") }),
             .eval = b.addModule("eval", .{ .root_source_file = b.path("src/eval/mod.zig") }),
             .ipc = b.addModule("ipc", .{ .root_source_file = b.path("src/ipc/mod.zig") }),
             .repl = b.addModule("repl", .{ .root_source_file = b.path("src/repl/mod.zig") }),
@@ -433,6 +438,7 @@ pub const RocModules = struct {
             .fs,
             .build_options,
             .layout,
+            .values,
             .eval,
             .ipc,
             .repl,
@@ -475,6 +481,7 @@ pub const RocModules = struct {
         step.root_module.addImport("fs", self.fs);
         step.root_module.addImport("build_options", self.build_options);
         step.root_module.addImport("layout", self.layout);
+        step.root_module.addImport("values", self.values);
         step.root_module.addImport("eval", self.eval);
         step.root_module.addImport("repl", self.repl);
         step.root_module.addImport("fmt", self.fmt);
@@ -516,6 +523,7 @@ pub const RocModules = struct {
             .fs => self.fs,
             .build_options => self.build_options,
             .layout => self.layout,
+            .values => self.values,
             .eval => self.eval,
             .ipc => self.ipc,
             .repl => self.repl,
@@ -561,6 +569,7 @@ pub const RocModules = struct {
             .check,
             .fs,
             .layout,
+            .values,
             .eval,
             .ipc,
             .repl,
