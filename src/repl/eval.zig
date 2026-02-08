@@ -1,6 +1,7 @@
 //! The evaluation part of the Read-Eval-Print-Loop (REPL)
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const parse = @import("parse");
 const types = @import("types");
@@ -655,34 +656,38 @@ pub const Repl = struct {
         }
 
         // Use DevEvaluator if backend is .dev and we have a DevEvaluator instance
-        if (self.backend == .dev) {
-            if (self.dev_evaluator) |*dev_eval| {
-                // Generate and execute native code
-                const all_module_envs = &.{module_env};
-                var code_result = dev_eval.generateCode(module_env, final_expr_idx, all_module_envs) catch {
-                    // Fall back to interpreter on unsupported expressions
-                    return self.evaluateWithInterpreter(module_env, final_expr_idx, &imported_modules, &checker);
-                };
-                defer code_result.deinit();
+        // ExecutableMemory is not available on freestanding targets (wasm32)
+        if (comptime builtin.os.tag != .freestanding) {
+            if (self.backend == .dev) {
+                if (self.dev_evaluator) |*dev_eval| {
+                    // Generate and execute native code
+                    const all_module_envs = &.{module_env};
+                    var code_result = dev_eval.generateCode(module_env, final_expr_idx, all_module_envs) catch {
+                        // Fall back to interpreter on unsupported expressions
+                        return self.evaluateWithInterpreter(module_env, final_expr_idx, &imported_modules, &checker);
+                    };
+                    defer code_result.deinit();
 
-                // Execute the compiled code
-                const backend = eval_mod;
-                var executable = backend.ExecutableMemory.init(code_result.code) catch {
-                    return self.evaluateWithInterpreter(module_env, final_expr_idx, &imported_modules, &checker);
-                };
-                defer executable.deinit();
+                    // Execute the compiled code
+                    var executable = eval_mod.ExecutableMemory.init(code_result.code) catch {
+                        return self.evaluateWithInterpreter(module_env, final_expr_idx, &imported_modules, &checker);
+                    };
+                    defer executable.deinit();
 
-                // Format result based on layout
-                const LayoutIdx = eval_mod.layout.Idx;
-                const output = switch (code_result.result_layout) {
-                    LayoutIdx.i64, LayoutIdx.i8, LayoutIdx.i16, LayoutIdx.i32 => try std.fmt.allocPrint(self.allocator, "{} : I64", .{executable.callReturnI64()}),
-                    LayoutIdx.u64, LayoutIdx.u8, LayoutIdx.u16, LayoutIdx.u32 => try std.fmt.allocPrint(self.allocator, "{} : U64", .{executable.callReturnU64()}),
-                    LayoutIdx.bool => if (executable.callReturnU64() != 0) try self.allocator.dupe(u8, "Bool.true : Bool") else try self.allocator.dupe(u8, "Bool.false : Bool"),
-                    LayoutIdx.f64, LayoutIdx.f32 => try std.fmt.allocPrint(self.allocator, "{d} : F64", .{executable.callReturnF64()}),
-                    LayoutIdx.dec => try std.fmt.allocPrint(self.allocator, "{} : Dec", .{executable.callReturnI64()}), // TODO: proper Dec formatting
-                    else => return self.evaluateWithInterpreter(module_env, final_expr_idx, &imported_modules, &checker),
-                };
-                return .{ .expression = output };
+                    // Format result based on layout
+                    const LayoutIdx = eval_mod.layout.Idx;
+                    const output = switch (code_result.result_layout) {
+                        LayoutIdx.i64, LayoutIdx.i8, LayoutIdx.i16, LayoutIdx.i32 => try std.fmt.allocPrint(self.allocator, "{} : I64", .{executable.callReturnI64()}),
+                        LayoutIdx.u64, LayoutIdx.u8, LayoutIdx.u16, LayoutIdx.u32 => try std.fmt.allocPrint(self.allocator, "{} : U64", .{executable.callReturnU64()}),
+                        LayoutIdx.bool => if (executable.callReturnU64() != 0) try self.allocator.dupe(u8, "Bool.true : Bool") else try self.allocator.dupe(u8, "Bool.false : Bool"),
+                        LayoutIdx.f64, LayoutIdx.f32 => blk: {
+                            break :blk try std.fmt.allocPrint(self.allocator, "{d} : F64", .{executable.callReturnF64()});
+                        },
+                        LayoutIdx.dec => try std.fmt.allocPrint(self.allocator, "{} : Dec", .{executable.callReturnI64()}), // TODO: proper Dec formatting
+                        else => return self.evaluateWithInterpreter(module_env, final_expr_idx, &imported_modules, &checker),
+                    };
+                    return .{ .expression = output };
+                }
             }
         }
 

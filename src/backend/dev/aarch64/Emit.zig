@@ -244,34 +244,67 @@ pub fn Emit(comptime target: RocTarget) type {
 
         /// ADD reg, reg, reg
         pub fn addRegRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
-            // ADD <Xd>, <Xn>, <Xm>
-            // 31 30 29 28 27 26 25 24 23 22 21 20    16 15      10 9    5 4    0
-            // sf  0  0  0  1  0  1  1  shift  0  Rm[4:0]  imm6[5:0]  Rn[4:0]  Rd[4:0]
-            const sf = width.sf();
-            const inst: u32 = (@as(u32, sf) << 31) |
-                (0b0001011 << 24) |
-                (0b00 << 22) | // shift = LSL
-                (0 << 21) |
-                (@as(u32, src2.enc()) << 16) |
-                (0b000000 << 10) | // imm6 = 0
-                (@as(u32, src1.enc()) << 5) |
-                dst.enc();
-            try self.emit32(inst);
+            // When dst or src1 is SP, must use extended register encoding
+            // (shifted register encoding treats reg 31 as XZR, not SP)
+            if (dst == .ZRSP or src1 == .ZRSP) {
+                // ADD (extended register): sf 0 0 01011 00 1 Rm option imm3 Rn Rd
+                // option=011 (UXTX for 64-bit), imm3=000
+                const sf = width.sf();
+                const inst: u32 = (@as(u32, sf) << 31) |
+                    (0b0001011 << 24) |
+                    (0b00 << 22) |
+                    (1 << 21) | // extended register flag
+                    (@as(u32, src2.enc()) << 16) |
+                    (0b011 << 13) | // option = UXTX
+                    (0b000 << 10) | // imm3 = 0
+                    (@as(u32, src1.enc()) << 5) |
+                    dst.enc();
+                try self.emit32(inst);
+            } else {
+                // ADD (shifted register): sf 0 0 01011 shift 0 Rm imm6 Rn Rd
+                const sf = width.sf();
+                const inst: u32 = (@as(u32, sf) << 31) |
+                    (0b0001011 << 24) |
+                    (0b00 << 22) | // shift = LSL
+                    (0 << 21) |
+                    (@as(u32, src2.enc()) << 16) |
+                    (0b000000 << 10) | // imm6 = 0
+                    (@as(u32, src1.enc()) << 5) |
+                    dst.enc();
+                try self.emit32(inst);
+            }
         }
 
         /// SUB reg, reg, reg
         pub fn subRegRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
-            // SUB <Xd>, <Xn>, <Xm>
-            const sf = width.sf();
-            const inst: u32 = (@as(u32, sf) << 31) |
-                (0b1001011 << 24) | // Different from ADD
-                (0b00 << 22) |
-                (0 << 21) |
-                (@as(u32, src2.enc()) << 16) |
-                (0b000000 << 10) |
-                (@as(u32, src1.enc()) << 5) |
-                dst.enc();
-            try self.emit32(inst);
+            // When dst or src1 is SP, must use extended register encoding
+            // (shifted register encoding treats reg 31 as XZR, not SP)
+            if (dst == .ZRSP or src1 == .ZRSP) {
+                // SUB (extended register): sf 1 0 01011 00 1 Rm option imm3 Rn Rd
+                const sf = width.sf();
+                const inst: u32 = (@as(u32, sf) << 31) |
+                    (0b1001011 << 24) |
+                    (0b00 << 22) |
+                    (1 << 21) | // extended register flag
+                    (@as(u32, src2.enc()) << 16) |
+                    (0b011 << 13) | // option = UXTX
+                    (0b000 << 10) | // imm3 = 0
+                    (@as(u32, src1.enc()) << 5) |
+                    dst.enc();
+                try self.emit32(inst);
+            } else {
+                // SUB (shifted register): sf 1 0 01011 shift 0 Rm imm6 Rn Rd
+                const sf = width.sf();
+                const inst: u32 = (@as(u32, sf) << 31) |
+                    (0b1001011 << 24) |
+                    (0b00 << 22) |
+                    (0 << 21) |
+                    (@as(u32, src2.enc()) << 16) |
+                    (0b000000 << 10) |
+                    (@as(u32, src1.enc()) << 5) |
+                    dst.enc();
+                try self.emit32(inst);
+            }
         }
 
         /// ADDS reg, reg, reg (add and set flags)
@@ -450,7 +483,21 @@ pub fn Emit(comptime target: RocTarget) type {
 
         /// NEG reg, reg (negate - alias for SUB from XZR)
         pub fn negRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg) !void {
-            try self.subRegRegReg(width, dst, .ZRSP, src);
+            // NEG is SUB Xd, XZR, Xm (shifted register encoding).
+            // Must NOT use subRegRegReg here because its SP detection would
+            // emit extended register encoding, interpreting reg 31 as SP
+            // instead of XZR. NEG needs the shifted register form where
+            // reg 31 in Rn means XZR.
+            const sf = width.sf();
+            const inst: u32 = (@as(u32, sf) << 31) |
+                (0b1001011 << 24) |
+                (0b00 << 22) |
+                (0 << 21) |
+                (@as(u32, src.enc()) << 16) |
+                (0b000000 << 10) |
+                (@as(u32, GeneralReg.ZRSP.enc()) << 5) |
+                dst.enc();
+            try self.emit32(inst);
         }
 
         /// CMP reg, reg (compare - alias for SUBS with XZR destination)
@@ -608,6 +655,21 @@ pub fn Emit(comptime target: RocTarget) type {
             // UDF #imm16
             // 0000 0000 0000 0000 imm16
             const inst: u32 = @as(u32, imm16);
+            try self.emit32(inst);
+        }
+
+        /// ADR Xd, #imm — compute PC-relative address
+        /// offset_bytes is a byte offset from the ADR instruction, range ±1 MB.
+        pub fn adr(self: *Self, rd: GeneralReg, offset_bytes: i21) !void {
+            // ADR: 0 immlo[1:0] 10000 immhi[18:0] Rd[4:0]
+            const imm: u21 = @bitCast(offset_bytes);
+            const immlo: u2 = @truncate(imm);
+            const immhi: u19 = @truncate(imm >> 2);
+            const inst: u32 = (0 << 31) |
+                (@as(u32, immlo) << 29) |
+                (0b10000 << 24) |
+                (@as(u32, immhi) << 5) |
+                @as(u32, rd.enc());
             try self.emit32(inst);
         }
 
@@ -845,6 +907,51 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.emit32(inst);
         }
 
+        /// LDURB (load register byte unscaled, zero-extend) with signed offset
+        pub fn ldurbRegMem(self: *Self, dst: GeneralReg, base: GeneralReg, offset: i9) !void {
+            // LDURB <Wt>, [<Xn|SP>, #<simm>]
+            // 00 111 0 00 01 0 imm9 00 Rn Rt
+            const imm9: u9 = @bitCast(offset);
+            const inst: u32 = (0b00 << 30) | // size = 00 for byte
+                (0b111000 << 24) |
+                (0b01 << 22) | // opc = 01 for load
+                (0 << 21) |
+                (@as(u32, imm9) << 12) |
+                (0b00 << 10) |
+                (@as(u32, base.enc()) << 5) |
+                dst.enc();
+            try self.emit32(inst);
+        }
+
+        /// LDURH (load register halfword unscaled, zero-extend) with signed offset
+        pub fn ldurhRegMem(self: *Self, dst: GeneralReg, base: GeneralReg, offset: i9) !void {
+            // LDURH <Wt>, [<Xn|SP>, #<simm>]
+            // 01 111 0 00 01 0 imm9 00 Rn Rt
+            const imm9: u9 = @bitCast(offset);
+            const inst: u32 = (0b01 << 30) | // size = 01 for halfword
+                (0b111000 << 24) |
+                (0b01 << 22) | // opc = 01 for load
+                (0 << 21) |
+                (@as(u32, imm9) << 12) |
+                (0b00 << 10) |
+                (@as(u32, base.enc()) << 5) |
+                dst.enc();
+            try self.emit32(inst);
+        }
+
+        /// LDRH (load register halfword, zero-extend) with unsigned offset
+        pub fn ldrhRegMem(self: *Self, dst: GeneralReg, base: GeneralReg, uoffset: u12) !void {
+            // LDRH <Wt>, [<Xn|SP>, #<pimm>]
+            // 01 111 0 01 01 imm12 Rn Rt
+            const inst: u32 = (0b01 << 30) |
+                (0b111001 << 24) |
+                (0b01 << 22) |
+                (@as(u32, uoffset) << 10) |
+                (@as(u32, base.enc()) << 5) |
+                dst.enc();
+            try self.emit32(inst);
+        }
+
         /// LDR with signed offset (i32)
         /// Handles arbitrary signed offsets by choosing appropriate encoding:
         /// - Small offsets (-256 to 255): use LDUR (unscaled)
@@ -992,6 +1099,62 @@ pub fn Emit(comptime target: RocTarget) type {
                 (0b101 << 27) |
                 (0b0 << 26) |
                 (0b001 << 23) | // Post-index mode: bits 25-23 = 001
+                (0b1 << 22) | // L=1 for LDP (load)
+                (@as(u32, imm7) << 15) |
+                (@as(u32, reg2.enc()) << 10) |
+                (@as(u32, base.enc()) << 5) |
+                reg1.enc();
+            try self.emit32(inst);
+        }
+
+        /// STP (store pair) with signed offset - no writeback
+        /// Used for saving registers to pre-allocated frame slots
+        pub fn stpSignedOffset(self: *Self, width: RegisterWidth, reg1: GeneralReg, reg2: GeneralReg, base: GeneralReg, imm_offset: i7) !void {
+            // STP <Xt1>, <Xt2>, [<Xn|SP>, #<imm>]
+            // ARM encoding: opc 101 V 010 L imm7 Rt2 Rn Rt
+            // bits 31-30: opc (10 for 64-bit, 00 for 32-bit)
+            // bits 29-27: 101
+            // bit 26: V (0 for scalar)
+            // bits 25-23: 010 (signed offset, no writeback)
+            // bit 22: L (0 for store STP)
+            // bits 21-15: imm7 (signed, scaled by register size)
+            // bits 14-10: Rt2
+            // bits 9-5: Rn (base register)
+            // bits 4-0: Rt
+            const opc: u2 = if (width == .w64) 0b10 else 0b00;
+            const imm7: u7 = @bitCast(imm_offset);
+            const inst: u32 = (@as(u32, opc) << 30) |
+                (0b101 << 27) |
+                (0b0 << 26) |
+                (0b010 << 23) | // Signed offset mode: bits 25-23 = 010
+                (0b0 << 22) | // L=0 for STP (store)
+                (@as(u32, imm7) << 15) |
+                (@as(u32, reg2.enc()) << 10) |
+                (@as(u32, base.enc()) << 5) |
+                reg1.enc();
+            try self.emit32(inst);
+        }
+
+        /// LDP (load pair) with signed offset - no writeback
+        /// Used for restoring registers from pre-allocated frame slots
+        pub fn ldpSignedOffset(self: *Self, width: RegisterWidth, reg1: GeneralReg, reg2: GeneralReg, base: GeneralReg, imm_offset: i7) !void {
+            // LDP <Xt1>, <Xt2>, [<Xn|SP>, #<imm>]
+            // ARM encoding: opc 101 V 010 L imm7 Rt2 Rn Rt
+            // bits 31-30: opc (10 for 64-bit, 00 for 32-bit)
+            // bits 29-27: 101
+            // bit 26: V (0 for scalar)
+            // bits 25-23: 010 (signed offset, no writeback)
+            // bit 22: L (1 for load LDP)
+            // bits 21-15: imm7 (signed, scaled by register size)
+            // bits 14-10: Rt2
+            // bits 9-5: Rn (base register)
+            // bits 4-0: Rt
+            const opc: u2 = if (width == .w64) 0b10 else 0b00;
+            const imm7: u7 = @bitCast(imm_offset);
+            const inst: u32 = (@as(u32, opc) << 30) |
+                (0b101 << 27) |
+                (0b0 << 26) |
+                (0b010 << 23) | // Signed offset mode: bits 25-23 = 010
                 (0b1 << 22) | // L=1 for LDP (load)
                 (@as(u32, imm7) << 15) |
                 (@as(u32, reg2.enc()) << 10) |

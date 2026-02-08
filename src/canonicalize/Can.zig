@@ -5126,7 +5126,7 @@ pub fn canonicalizeExpr(
             }
 
             const rounded_val = @round(scaled_val);
-            const i128_val = @as(i128, @intFromFloat(rounded_val));
+            const i128_val = builtins.compiler_rt_128.f64_to_i128(rounded_val);
 
             const int_value = CIR.IntValue{
                 .bytes = @bitCast(i128_val),
@@ -8992,7 +8992,7 @@ fn parseFracLiteral(token_text: []const u8) !FracLiteralResult {
                 };
             }
 
-            const dec_num = @as(i128, @intFromFloat(rounded_val));
+            const dec_num = builtins.compiler_rt_128.f64_to_i128(rounded_val);
 
             // Check if the value is too small (would round to 0 or near 0)
             // This prevents loss of precision for very small numbers like 1e-40

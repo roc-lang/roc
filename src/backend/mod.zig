@@ -23,12 +23,16 @@ pub const ExecutableMemory = dev.ExecutableMemory;
 pub const StaticDataInterner = dev.StaticDataInterner;
 pub const MonoExprCodeGen = dev.MonoExprCodeGen;
 pub const NativeMonoExprCodeGen = dev.NativeMonoExprCodeGen;
+pub const HostMonoExprCodeGen = dev.HostMonoExprCodeGen;
 pub const DevBackend = dev.DevBackend;
 pub const Storage = dev.Storage;
 pub const X86_64LinuxBackend = dev.X86_64LinuxBackend;
 pub const X86_64MacBackend = dev.X86_64MacBackend;
 pub const X86_64WinBackend = dev.X86_64WinBackend;
 pub const AArch64Backend = dev.AArch64Backend;
+pub const Entrypoint = dev.Entrypoint;
+pub const ObjectFileCompiler = dev.ObjectFileCompiler;
+pub const CompilationResult = dev.CompilationResult;
 pub const resolveBuiltinFunction = dev.resolveBuiltinFunction;
 
 test "backend tests" {

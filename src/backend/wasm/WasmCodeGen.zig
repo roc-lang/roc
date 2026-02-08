@@ -1212,6 +1212,8 @@ fn generateExpr(self: *Self, expr_id: MonoExprId) Allocator.Error!void {
         .str_escape_and_quote => |quote_expr| {
             try self.generateStrEscapeAndQuote(quote_expr);
         },
+        .tag_payload_access => unreachable,
+        .hosted_call => unreachable,
     }
 }
 

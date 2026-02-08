@@ -167,7 +167,7 @@ pub const WasmEvaluator = struct {
         const layout_store_ptr = try self.ensureGlobalLayoutStore(all_module_envs);
 
         // Lower CIR -> Mono IR
-        var lowerer = MonoLower.init(self.allocator, &mono_store, all_module_envs, null, layout_store_ptr);
+        var lowerer = MonoLower.init(self.allocator, &mono_store, all_module_envs, null, layout_store_ptr, null, null);
         defer lowerer.deinit();
 
         const lowered_expr_id = lowerer.lowerExpr(module_idx, expr_idx) catch {
