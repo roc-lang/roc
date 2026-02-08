@@ -1,9 +1,8 @@
-//! Code generation for the dev backend.
+//! Value storage and register allocation for the dev backend.
 //!
-//! This module translates Canonical IR (CIR) expressions directly to
-//! native machine code using the architecture-specific Emit modules.
-//! Unlike the LLVM backend, this generates code directly without an
-//! intermediate LLVM IR representation.
+//! This module provides infrastructure for tracking where computed values
+//! are stored (registers, stack, immediates) and managing register allocation.
+//! It serves as a foundation for the architecture-specific code generators.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -68,9 +67,9 @@ pub const NumKind = enum {
     }
 };
 
-/// Code generator that produces native machine code from high-level operations.
+/// Value storage manager that tracks register allocation and local variable locations.
 /// This is parameterized by the target architecture's types.
-pub fn CodeGen(
+pub fn ValueStorage(
     comptime GeneralReg: type,
     comptime FloatReg: type,
     comptime Emit: type,

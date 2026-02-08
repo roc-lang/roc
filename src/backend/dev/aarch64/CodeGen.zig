@@ -11,7 +11,8 @@ const EmitMod = @import("Emit.zig");
 const Registers = @import("Registers.zig");
 const Call = @import("Call.zig");
 const Relocation = @import("../Relocation.zig").Relocation;
-const GenericCodeGen = @import("../CodeGen.zig");
+const ValueStorageMod = @import("../ValueStorage.zig");
+const FrameBuilderMod = @import("../FrameBuilder.zig");
 
 const GeneralReg = Registers.GeneralReg;
 const FloatReg = Registers.FloatReg;
@@ -40,6 +41,10 @@ pub fn CodeGen(comptime target: RocTarget) type {
         /// Number of float registers
         const NUM_FLOAT_REGS = 32;
 
+        /// Size of callee-saved area in bytes (5 pairs * 16 bytes = 80)
+        /// Used by MonoExprCodeGen to reserve stack space for callee-saved registers
+        pub const CALLEE_SAVED_AREA_SIZE: i32 = 80;
+
         /// Bitmask of callee-saved general registers available for allocation
         /// X19-X28 (not FP/X29 or LR/X30 - they're special)
         pub const CALLEE_SAVED_GENERAL_MASK: u32 =
@@ -58,7 +63,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
         allocator: Allocator,
         stack_offset: i32,
         relocations: std.ArrayList(Relocation),
-        locals: std.AutoHashMap(u32, GenericCodeGen.ValueLoc),
+        locals: std.AutoHashMap(u32, ValueStorageMod.ValueLoc),
         free_general: u32,
         free_float: u32,
         callee_saved_used: u32, // Bitmask of callee-saved regs we used
@@ -76,7 +81,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
                 .allocator = allocator,
                 .stack_offset = 0,
                 .relocations = .{},
-                .locals = std.AutoHashMap(u32, GenericCodeGen.ValueLoc).init(allocator),
+                .locals = std.AutoHashMap(u32, ValueStorageMod.ValueLoc).init(allocator),
                 .free_general = CC.CALLER_SAVED_GENERAL_MASK,
                 .free_float = CC.CALLER_SAVED_FLOAT_MASK,
                 .callee_saved_used = 0,
@@ -412,56 +417,54 @@ pub fn CodeGen(comptime target: RocTarget) type {
 
         // Function prologue/epilogue
 
+        /// Deferred frame builder type for this architecture (mask-based, body generated first)
+        pub const DeferredFrameBuilder = FrameBuilderMod.DeferredFrameBuilder(Emit);
+
         /// Callee-saved registers in pairs for saving/restoring
         /// aarch64 saves registers in pairs for efficiency
-        const CALLEE_SAVED_PAIRS = [_][2]GeneralReg{
-            .{ .X19, .X20 },
-            .{ .X21, .X22 },
-            .{ .X23, .X24 },
-            .{ .X25, .X26 },
-            .{ .X27, .X28 },
-        };
+        pub const CALLEE_SAVED_PAIRS = DeferredFrameBuilder.CALLEE_SAVED_PAIRS;
 
         /// Check if any register in a pair is used
-        fn isPairUsed(self: *Self, pair: [2]GeneralReg) bool {
+        pub fn isPairUsed(self: *Self, pair: [2]GeneralReg) bool {
             const mask1 = @as(u32, 1) << @intFromEnum(pair[0]);
             const mask2 = @as(u32, 1) << @intFromEnum(pair[1]);
             return (self.callee_saved_used & (mask1 | mask2)) != 0;
+        }
+
+        /// Emit callee-saved register saves at fixed offsets from FP
+        /// Used by MonoExprCodeGen for procedures that pre-allocate the frame
+        /// Saves to [FP + 16], [FP + 32], etc. for each used pair
+        /// The offset is scaled by 8 for stp/ldp (i.e., offset=2 means 16 bytes)
+        pub fn emitSaveCalleeSavedToFrame(self: *Self) !void {
+            var builder = DeferredFrameBuilder.init();
+            builder.setCalleeSavedMask(self.callee_saved_used);
+            try builder.emitSaveCalleeSaved(&self.emit);
+        }
+
+        /// Emit callee-saved register restores from fixed offsets from FP
+        /// Used by MonoExprCodeGen for procedures that pre-allocate the frame
+        /// Restores from [FP + 16], [FP + 32], etc. for each used pair
+        /// The offset is scaled by 8 for stp/ldp (i.e., offset=2 means 16 bytes)
+        pub fn emitRestoreCalleeSavedFromFrame(self: *Self) !void {
+            var builder = DeferredFrameBuilder.init();
+            builder.setCalleeSavedMask(self.callee_saved_used);
+            try builder.emitRestoreCalleeSaved(&self.emit);
         }
 
         /// Emit function prologue (called at start of function)
         /// Note: Call this AFTER register allocation is complete to know which
         /// callee-saved registers need to be preserved.
         pub fn emitPrologue(self: *Self) !void {
-            // stp x29, x30, [sp, #-16]! (pre-index: push FP and LR)
-            try self.emit.stpPreIndex(.w64, .FP, .LR, .ZRSP, -2);
-            // mov x29, sp (set frame pointer)
-            try self.emit.movRegReg(.w64, .FP, .ZRSP);
-
-            // Save any callee-saved register pairs we used
-            for (CALLEE_SAVED_PAIRS) |pair| {
-                if (self.isPairUsed(pair)) {
-                    try self.emit.stpPreIndex(.w64, pair[0], pair[1], .ZRSP, -2);
-                }
-            }
+            var builder = DeferredFrameBuilder.init();
+            builder.setCalleeSavedMask(self.callee_saved_used);
+            _ = try builder.emitPrologue(&self.emit);
         }
 
         /// Emit function epilogue and return
         pub fn emitEpilogue(self: *Self) !void {
-            // Restore callee-saved register pairs in reverse order
-            var i: usize = CALLEE_SAVED_PAIRS.len;
-            while (i > 0) {
-                i -= 1;
-                const pair = CALLEE_SAVED_PAIRS[i];
-                if (self.isPairUsed(pair)) {
-                    try self.emit.ldpPostIndex(.w64, pair[0], pair[1], .ZRSP, 2);
-                }
-            }
-
-            // ldp x29, x30, [sp], #16 (post-index: pop FP and LR)
-            try self.emit.ldpPostIndex(.w64, .FP, .LR, .ZRSP, 2);
-            // ret
-            try self.emit.ret();
+            var builder = DeferredFrameBuilder.init();
+            builder.setCalleeSavedMask(self.callee_saved_used);
+            try builder.emitEpilogue(&self.emit);
         }
 
         /// Emit stack frame setup with given local size
@@ -670,6 +673,38 @@ pub fn CodeGen(comptime target: RocTarget) type {
                 try self.emit.movRegImm64(.IP0, @bitCast(@as(i64, offset)));
                 try self.emit.addRegRegReg(.w64, .IP0, .FP, .IP0);
                 try self.emit.strhRegMem(src, .IP0, 0);
+            }
+        }
+
+        /// Load byte (zero-extended) from stack slot
+        pub fn emitLoadStackByte(self: *Self, dst: GeneralReg, offset: i32) !void {
+            if (offset >= -256 and offset <= 255) {
+                try self.emit.ldurbRegMem(dst, .FP, @intCast(offset));
+            } else if (offset > 0) {
+                // Positive offset - use scaled unsigned form (byte: no shift needed)
+                const uoffset: u12 = @intCast(@as(u32, @intCast(offset)));
+                try self.emit.ldrbRegMem(dst, .FP, uoffset);
+            } else {
+                // Large negative offset - add offset to FP, then load
+                try self.emit.movRegImm64(.IP0, @bitCast(@as(i64, offset)));
+                try self.emit.addRegRegReg(.w64, .IP0, .FP, .IP0);
+                try self.emit.ldrbRegMem(dst, .IP0, 0);
+            }
+        }
+
+        /// Load halfword (zero-extended) from stack slot
+        pub fn emitLoadStackHalfword(self: *Self, dst: GeneralReg, offset: i32) !void {
+            if (offset >= -256 and offset <= 255) {
+                try self.emit.ldurhRegMem(dst, .FP, @intCast(offset));
+            } else if (offset > 0) {
+                // Positive offset - use scaled unsigned form (halfword: shift by 1)
+                const uoffset: u12 = @intCast(@as(u32, @intCast(offset)) >> 1);
+                try self.emit.ldrhRegMem(dst, .FP, uoffset);
+            } else {
+                // Large negative offset - add offset to FP, then load
+                try self.emit.movRegImm64(.IP0, @bitCast(@as(i64, offset)));
+                try self.emit.addRegRegReg(.w64, .IP0, .FP, .IP0);
+                try self.emit.ldrhRegMem(dst, .IP0, 0);
             }
         }
 
