@@ -10074,10 +10074,19 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
         fn callLambdaBodyDirect(self: *Self, lambda: anytype, args_span: anytype) Error!ValueLocation {
             const args = self.store.getExprSpan(args_span);
             const params = self.store.getPatternSpan(lambda.params);
-            for (params, 0..) |pattern_id, i| {
-                if (i >= args.len) break;
-                const arg_loc = try self.generateExpr(args[i]);
-                try self.bindPattern(pattern_id, arg_loc);
+            const num_args = @min(params.len, args.len);
+
+            // Evaluate ALL arguments before binding ANY patterns.
+            // This prevents nested inlining (e.g., recursive map2 calls in
+            // record builders) from clobbering parameter bindings that were
+            // already set by earlier iterations. Without this, the inner call
+            // overwrites shared symbol IDs (same lambda inlined multiple times).
+            var arg_locs: [32]ValueLocation = undefined;
+            for (0..num_args) |i| {
+                arg_locs[i] = try self.generateExpr(args[i]);
+            }
+            for (params[0..num_args], 0..) |pattern_id, i| {
+                try self.bindPattern(pattern_id, arg_locs[i]);
             }
 
             // Set up early return context for inlined lambda.

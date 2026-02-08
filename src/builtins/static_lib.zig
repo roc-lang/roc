@@ -16,6 +16,7 @@ comptime {
     // Export other core functions that might be needed
     @import("num.zig").exportAddWithOverflow(i128, "roc__num_add_with_overflow_");
     @import("num.zig").exportSubWithOverflow(i128, "roc__num_sub_with_overflow_");
+
 }
 
 // Export dev backend wrapper functions - these are used by `roc build --backend=dev`
@@ -101,10 +102,3 @@ comptime {
     @export(&dw.roc_builtins_int_from_str, .{ .name = "roc_builtins_int_from_str" });
 }
 
-// Ensure ___muloti4 symbol is available by using @mulWithOverflow
-export fn force_muloti4_symbol() i128 {
-    const a: i128 = 123456789;
-    const b: i128 = 987654321;
-    const result = @mulWithOverflow(a, b);
-    return result[0];
-}

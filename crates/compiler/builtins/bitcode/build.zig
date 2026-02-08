@@ -78,7 +78,7 @@ fn generateLlvmIrFile(
     obj.root_module.stack_check = false;
 
     if (target.result.cpu.arch != std.Target.Cpu.Arch.wasm32)
-        obj.bundle_compiler_rt = true;
+        obj.bundle_compiler_rt = false;
 
     // Generating the bin seems required to get zig to generate the llvm ir.
     _ = obj.getEmittedBin();
@@ -113,7 +113,7 @@ fn generateObjectFile(
     obj.root_module.stack_check = false;
 
     if (!is_wasm)
-        obj.bundle_compiler_rt = true;
+        obj.bundle_compiler_rt = false;
 
     const obj_file = obj.getEmittedBin();
 

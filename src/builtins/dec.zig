@@ -5,6 +5,7 @@
 //! parsing, formatting, and conversions for precise decimal calculations
 //! without floating-point precision issues.
 const std = @import("std");
+const i128h = @import("compiler_rt_128.zig");
 
 const U256 = @import("num.zig").U256;
 const TestEnv = @import("utils.zig").TestEnv;
@@ -42,7 +43,7 @@ pub const RocDec = extern struct {
     );
 
     pub fn fromU64(num: u64) RocDec {
-        return .{ .num = num * one_point_zero_i128 };
+        return .{ .num = i128h.mul_i128(@as(i128, num), one_point_zero_i128) };
     }
 
     /// Convert a fraction represented as numerator / 10^denominator_power to RocDec.
@@ -54,7 +55,7 @@ pub const RocDec = extern struct {
         else
             decimal_places - @as(u5, @intCast(denominator_power));
         const scale = math.pow(i128, 10, scale_power);
-        return .{ .num = numerator * scale };
+        return .{ .num = i128h.mul_i128(numerator, scale) };
     }
 
     pub fn fromF64(num: f64) ?RocDec {
@@ -68,12 +69,12 @@ pub const RocDec = extern struct {
             return null;
         }
 
-        const ret: RocDec = .{ .num = @as(i128, @intFromFloat(result)) };
+        const ret: RocDec = .{ .num = i128h.f64_to_i128(result) };
         return ret;
     }
 
     pub fn toF64(dec: RocDec) f64 {
-        return @as(f64, @floatFromInt(dec.num)) / comptime @as(f64, @floatFromInt(one_point_zero_i128));
+        return i128h.i128_to_f64(dec.num) / comptime @as(f64, @floatFromInt(one_point_zero_i128));
     }
 
     // TODO: If Str.toDec eventually supports more error types, return errors here.
@@ -122,7 +123,7 @@ pub const RocDec = extern struct {
 
             const after_str = roc_str_slice[pi + 1 .. length];
             const after_u64 = std.fmt.parseUnsigned(u64, after_str, 10) catch null;
-            after_val_i128 = if (after_u64) |f| @as(i128, @intCast(f)) * math.pow(i128, 10, diff_decimal_places) else null;
+            after_val_i128 = if (after_u64) |f| i128h.mul_i128(@as(i128, @intCast(f)), math.pow(i128, 10, diff_decimal_places)) else null;
         }
 
         const before_str = roc_str_slice[initial_index..before_str_length];
@@ -130,10 +131,10 @@ pub const RocDec = extern struct {
 
         var before_val_i128: ?i128 = null;
         if (before_val_not_adjusted) |before| {
-            const answer = @mulWithOverflow(before, one_point_zero_i128);
-            const result = answer[0];
-            const overflowed = answer[1];
-            if (overflowed == 1) {
+            const mul_ans = @import("num.zig").mulWithOverflow(i128, before, one_point_zero_i128);
+            const result = mul_ans.value;
+            const overflowed = mul_ans.has_overflowed;
+            if (overflowed) {
                 // TODO: runtime exception for overflow!
                 return null;
             }
@@ -271,14 +272,14 @@ pub const RocDec = extern struct {
     /// Extract the whole number part of a Dec via truncating division.
     /// Truncates toward zero: -1.5 → -1, 1.5 → 1
     pub fn toWholeInt(self: RocDec) i128 {
-        return @divTrunc(self.num, one_point_zero_i128);
+        return i128h.divTrunc_i128(self.num, one_point_zero_i128);
     }
 
     /// Convert a whole number to Dec representation.
     /// Returns null if the integer would overflow Dec's range.
     pub fn fromWholeInt(int: i128) ?RocDec {
-        const result = @mulWithOverflow(int, one_point_zero_i128);
-        return if (result[1] == 1) null else RocDec{ .num = result[0] };
+        const result = @import("num.zig").mulWithOverflow(i128, int, one_point_zero_i128);
+        return if (result.has_overflowed) null else RocDec{ .num = result.value };
     }
 
     pub fn eq(self: RocDec, other: RocDec) bool {
@@ -424,10 +425,11 @@ pub const RocDec = extern struct {
     }
 
     pub fn fract(self: RocDec) RocDec {
-        const sign = std.math.sign(self.num);
-        const digits = @mod(sign * self.num, RocDec.one_point_zero.num);
+        const abs_num: u128 = @abs(self.num);
+        const digits = i128h.rem_u128(abs_num, @as(u128, @intCast(RocDec.one_point_zero.num)));
+        const digits_i128: i128 = @intCast(digits);
 
-        return RocDec{ .num = sign * digits };
+        return RocDec{ .num = if (self.num < 0) -digits_i128 else digits_i128 };
     }
 
     // Returns the nearest integer to self. If a value is half-way between two integers, round away from 0.0.
@@ -438,13 +440,14 @@ pub const RocDec = extern struct {
         // this rounds towards zero
         const tmp = arg1.trunc(roc_ops);
 
-        const sign = std.math.sign(arg1.num);
-        const abs_fract = sign * arg1.fract().num;
+        const fract_num = arg1.fract().num;
+        const abs_fract: i128 = if (fract_num < 0) -fract_num else fract_num;
 
         if (abs_fract >= RocDec.zero_point_five.num) {
+            const one_signed: i128 = if (arg1.num < 0) -RocDec.one_point_zero.num else RocDec.one_point_zero.num;
             return RocDec.add(
                 tmp,
-                RocDec{ .num = sign * RocDec.one_point_zero.num },
+                RocDec{ .num = one_signed },
                 roc_ops,
             );
         } else {
@@ -492,7 +495,7 @@ pub const RocDec = extern struct {
         if (exponent == 0) {
             return RocDec.one_point_zero;
         } else if (exponent > 0) {
-            if (@mod(exponent, 2) == 0) {
+            if (exponent & 1 == 0) {
                 const half_power = RocDec.powInt(base, exponent >> 1, roc_ops); // `>> 1` == `/ 2`
                 return RocDec.mul(half_power, half_power, roc_ops);
             } else {
@@ -510,7 +513,7 @@ pub const RocDec = extern struct {
     ) RocDec {
         if (exponent.trunc(roc_ops).num == exponent.num) {
             return base.powInt(
-                @divTrunc(exponent.num, RocDec.one_point_zero_i128),
+                i128h.divTrunc_i128(exponent.num, RocDec.one_point_zero_i128),
                 roc_ops,
             );
         } else {
@@ -648,10 +651,10 @@ pub const RocDec = extern struct {
         const tmp = @as(i128, @intCast(mul_u128(@abs(dec), 249757942369376157886101012127821356963).hi >> (190 - 128)));
         const q0 = if (dec < 0) -tmp else tmp;
 
-        const upper = q0 * b0;
-        const answer = @mulWithOverflow(q0, b1);
-        const lower = answer[0];
-        const overflowed = answer[1];
+        const upper = i128h.mul_i128(q0, @as(i128, b0));
+        const mul_result = @import("num.zig").mulWithOverflow(i128, q0, @as(i128, b1));
+        const lower = mul_result.value;
+        const overflowed: u1 = @intFromBool(mul_result.has_overflowed);
         // TODO: maybe write this out branchlessly.
         // Currently is is probably cmovs, but could be just math?
         const q0_sign: i128 =
@@ -709,7 +712,7 @@ pub const RocDec = extern struct {
         }
 
         // For Dec, remainder is straightforward since both operands have the same scaling factor
-        return RocDec{ .num = @rem(self.num, other.num) };
+        return RocDec{ .num = i128h.rem_i128(self.num, other.num) };
     }
 };
 
@@ -724,7 +727,7 @@ inline fn count_trailing_zeros_base10(input: i128) u6 {
     var k: i128 = 1;
 
     while (true) {
-        if (@mod(input, std.math.pow(i128, 10, k)) == 0) {
+        if (i128h.mod_i128(input, std.math.pow(i128, 10, k)) == 0) {
             count += 1;
             k += 1;
         } else {
@@ -1113,7 +1116,7 @@ pub fn toF32Try(arg: RocDec) ?f32 {
 /// Convert Dec to integer by truncating the fractional part (wrapping on overflow)
 pub fn toIntWrap(comptime T: type, arg: RocDec) T {
     // Divide by one_point_zero_i128 to get the integer part
-    const whole_part = @divTrunc(arg.num, RocDec.one_point_zero_i128);
+    const whole_part = i128h.divTrunc_i128(arg.num, RocDec.one_point_zero_i128);
     // Truncate to the target type (wrapping)
     // First cast the i128 to u128, then truncate to the target size, then cast back to T if needed
     const as_u128: u128 = @bitCast(whole_part);
@@ -1124,7 +1127,7 @@ pub fn toIntWrap(comptime T: type, arg: RocDec) T {
 /// Convert Dec to integer by truncating the fractional part (returns null if out of range)
 pub fn toIntTry(comptime T: type, arg: RocDec) ?T {
     // Divide by one_point_zero_i128 to get the integer part
-    const whole_part = @divTrunc(arg.num, RocDec.one_point_zero_i128);
+    const whole_part = i128h.divTrunc_i128(arg.num, RocDec.one_point_zero_i128);
     // Check if it fits in the target type
     if (whole_part < math.minInt(T) or whole_part > math.maxInt(T)) {
         return null;
@@ -1141,11 +1144,11 @@ pub fn exportFromInt(comptime T: type, comptime name: []const u8) void {
         ) callconv(.c) i128 {
             const this = @as(i128, @intCast(self));
 
-            const answer = @mulWithOverflow(this, RocDec.one_point_zero_i128);
-            if (answer[1] == 1) {
+            const answer = @import("num.zig").mulWithOverflow(i128, this, RocDec.one_point_zero_i128);
+            if (answer.has_overflowed) {
                 roc_ops.crash("Decimal conversion from Integer failed!");
             } else {
-                return answer[0];
+                return answer.value;
             }
         }
     }.func;
@@ -1327,7 +1330,7 @@ pub fn exportRound(comptime T: type, comptime name: []const u8) void {
             input: RocDec,
             roc_ops: *RocOps,
         ) callconv(.c) T {
-            return @as(T, @intCast(@divFloor(input.round(roc_ops).num, RocDec.one_point_zero_i128)));
+            return @as(T, @intCast(i128h.divFloor_i128(input.round(roc_ops).num, RocDec.one_point_zero_i128)));
         }
     }.func;
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
@@ -1340,7 +1343,7 @@ pub fn exportFloor(comptime T: type, comptime name: []const u8) void {
             input: RocDec,
             roc_ops: *RocOps,
         ) callconv(.c) T {
-            return @as(T, @intCast(@divFloor(input.floor(roc_ops).num, RocDec.one_point_zero_i128)));
+            return @as(T, @intCast(i128h.divFloor_i128(input.floor(roc_ops).num, RocDec.one_point_zero_i128)));
         }
     }.func;
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
@@ -1353,7 +1356,7 @@ pub fn exportCeiling(comptime T: type, comptime name: []const u8) void {
             input: RocDec,
             roc_ops: *RocOps,
         ) callconv(.c) T {
-            return @as(T, @intCast(@divFloor(input.ceiling(roc_ops).num, RocDec.one_point_zero_i128)));
+            return @as(T, @intCast(i128h.divFloor_i128(input.ceiling(roc_ops).num, RocDec.one_point_zero_i128)));
         }
     }.func;
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });

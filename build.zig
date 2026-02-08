@@ -3176,7 +3176,7 @@ fn addMainExe(
         }),
         .linkage = .static,
     });
-    builtins_obj.bundle_compiler_rt = true;
+    builtins_obj.bundle_compiler_rt = false;
     configureBackend(builtins_obj, target);
 
     // Create shim static library at build time - fully static without libc
@@ -3202,8 +3202,7 @@ fn addMainExe(
     shim_lib.step.dependOn(&write_compiled_builtins.step);
     // Link against the pre-built builtins library
     shim_lib.linkLibrary(builtins_obj);
-    // Bundle compiler-rt for our math symbols
-    shim_lib.bundle_compiler_rt = true;
+    shim_lib.bundle_compiler_rt = false;
     // Install shim library to the output directory
     const install_shim = b.addInstallArtifact(shim_lib, .{});
     b.getInstallStep().dependOn(&install_shim.step);
@@ -3255,7 +3254,7 @@ fn addMainExe(
             }),
             .linkage = .static,
         });
-        cross_builtins_obj.bundle_compiler_rt = true;
+        cross_builtins_obj.bundle_compiler_rt = false;
         configureBackend(cross_builtins_obj, cross_resolved_target);
 
         // Build interpreter shim library for this target
@@ -3297,7 +3296,7 @@ fn addMainExe(
         cross_shim_lib.root_module.addImport("compiled_builtins", compiled_builtins_module);
         cross_shim_lib.step.dependOn(&write_compiled_builtins.step);
         cross_shim_lib.linkLibrary(cross_builtins_obj);
-        cross_shim_lib.bundle_compiler_rt = true;
+        cross_shim_lib.bundle_compiler_rt = false;
 
         // Copy to target-specific directory for embedding
         // Use .lib extension for Windows targets, .a for others
