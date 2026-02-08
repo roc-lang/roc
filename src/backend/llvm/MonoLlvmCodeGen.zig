@@ -149,6 +149,12 @@ pub const MonoLlvmCodeGen = struct {
     str_starts_with_addr: usize = 0,
     str_ends_with_addr: usize = 0,
 
+    /// Address of number-to-string wrappers.
+    i64_to_str_addr: usize = 0,
+    f64_to_str_addr: usize = 0,
+    f32_to_str_addr: usize = 0,
+    dec_to_str_addr: usize = 0,
+
     /// Layout store for resolving composite type layouts (records, tuples).
     /// Set by the evaluator before calling generateCode.
     layout_store: ?*const layout.Store = null,
@@ -729,6 +735,10 @@ pub const MonoLlvmCodeGen = struct {
 
             // Strings
             .str_literal => |str_idx| self.generateStrLiteral(str_idx),
+            .int_to_str => |its| self.generateIntToStr(its),
+            .float_to_str => |fts| self.generateFloatToStr(fts),
+            .dec_to_str => |dts| self.generateDecToStr(dts),
+            .str_escape_and_quote => |seq| self.generateStrEscapeAndQuote(seq),
 
             // Nominal wrappers are transparent
             .nominal => |nom| self.generateExpr(nom.backing_expr),
@@ -3047,6 +3057,110 @@ pub const MonoLlvmCodeGen = struct {
         _ = wip.store(.normal, len_val, ptr16, alignment) catch return error.CompilationFailed;
 
         return .none;
+    }
+
+    /// Generate int_to_str: calls wrapper fn(out, value, roc_ops)
+    fn generateIntToStr(self: *MonoLlvmCodeGen, its: anytype) Error!LlvmBuilder.Value {
+        // For now, only support i64 (most common). Other widths can be added later.
+        if (self.i64_to_str_addr == 0) return error.UnsupportedExpression;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
+        const roc_ops = self.roc_ops_arg orelse return error.CompilationFailed;
+        const dest_ptr = self.out_ptr orelse return error.UnsupportedExpression;
+        const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
+
+        const saved_out_ptr = self.out_ptr;
+        self.out_ptr = null;
+        defer self.out_ptr = saved_out_ptr;
+        const value = try self.generateExpr(its.value);
+
+        const fn_type = builder.fnType(.void, &.{ ptr_type, .i64, ptr_type }, .normal) catch return error.CompilationFailed;
+        const addr = builder.intValue(.i64, self.i64_to_str_addr) catch return error.CompilationFailed;
+        const fn_ptr = wip.cast(.inttoptr, addr, ptr_type, "") catch return error.CompilationFailed;
+
+        // Extend smaller int types to i64
+        const val_i64 = if (value.typeOfWip(wip) == .i64)
+            value
+        else
+            wip.cast(.sext, value, .i64, "") catch return error.CompilationFailed;
+
+        _ = wip.call(.normal, .ccc, .none, fn_type, fn_ptr, &.{ dest_ptr, val_i64, roc_ops }, "") catch return error.CompilationFailed;
+        return .none;
+    }
+
+    /// Generate float_to_str: calls wrapper fn(out, value, roc_ops)
+    fn generateFloatToStr(self: *MonoLlvmCodeGen, fts: anytype) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
+        const roc_ops = self.roc_ops_arg orelse return error.CompilationFailed;
+        const dest_ptr = self.out_ptr orelse return error.UnsupportedExpression;
+        const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
+
+        // Check for Dec precision
+        if (fts.float_precision == .dec) {
+            return self.generateDecToStr(fts.value);
+        }
+
+        const fn_addr_val = switch (fts.float_precision) {
+            .f64 => self.f64_to_str_addr,
+            .f32 => self.f32_to_str_addr,
+            .dec => unreachable,
+        };
+        if (fn_addr_val == 0) return error.UnsupportedExpression;
+
+        const saved_out_ptr = self.out_ptr;
+        self.out_ptr = null;
+        defer self.out_ptr = saved_out_ptr;
+        const value = try self.generateExpr(fts.value);
+
+        const float_type: LlvmBuilder.Type = switch (fts.float_precision) {
+            .f64 => .double,
+            .f32 => .float,
+            .dec => unreachable,
+        };
+
+        const fn_type = builder.fnType(.void, &.{ ptr_type, float_type, ptr_type }, .normal) catch return error.CompilationFailed;
+        const addr = builder.intValue(.i64, fn_addr_val) catch return error.CompilationFailed;
+        const fn_ptr = wip.cast(.inttoptr, addr, ptr_type, "") catch return error.CompilationFailed;
+
+        _ = wip.call(.normal, .ccc, .none, fn_type, fn_ptr, &.{ dest_ptr, value, roc_ops }, "") catch return error.CompilationFailed;
+        return .none;
+    }
+
+    /// Generate dec_to_str: decompose i128 into two u64s, call wrapper fn(out, lo, hi, roc_ops)
+    fn generateDecToStr(self: *MonoLlvmCodeGen, expr_id: anytype) Error!LlvmBuilder.Value {
+        if (self.dec_to_str_addr == 0) return error.UnsupportedExpression;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
+        const roc_ops = self.roc_ops_arg orelse return error.CompilationFailed;
+        const dest_ptr = self.out_ptr orelse return error.UnsupportedExpression;
+        const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
+
+        const saved_out_ptr = self.out_ptr;
+        self.out_ptr = null;
+        defer self.out_ptr = saved_out_ptr;
+        const value = try self.generateExpr(expr_id);
+
+        // Decompose i128 into lo (lower 64 bits) and hi (upper 64 bits)
+        const lo = wip.cast(.trunc, value, .i64, "") catch return error.CompilationFailed;
+        const sixty_four = builder.intValue(.i128, 64) catch return error.OutOfMemory;
+        const shifted = wip.bin(.lshr, value, sixty_four, "") catch return error.CompilationFailed;
+        const hi = wip.cast(.trunc, shifted, .i64, "") catch return error.CompilationFailed;
+
+        // fn(out, lo, hi, roc_ops)
+        const fn_type = builder.fnType(.void, &.{ ptr_type, .i64, .i64, ptr_type }, .normal) catch return error.CompilationFailed;
+        const addr = builder.intValue(.i64, self.dec_to_str_addr) catch return error.CompilationFailed;
+        const fn_ptr = wip.cast(.inttoptr, addr, ptr_type, "") catch return error.CompilationFailed;
+
+        _ = wip.call(.normal, .ccc, .none, fn_type, fn_ptr, &.{ dest_ptr, lo, hi, roc_ops }, "") catch return error.CompilationFailed;
+        return .none;
+    }
+
+    /// Generate str_escape_and_quote: wraps string in quotes with escaping.
+    /// For now, returns UnsupportedExpression.
+    fn generateStrEscapeAndQuote(self: *MonoLlvmCodeGen, _: anytype) Error!LlvmBuilder.Value {
+        _ = self;
+        return error.UnsupportedExpression;
     }
 
     /// Get the result layout of a mono expression (for determining operand types).

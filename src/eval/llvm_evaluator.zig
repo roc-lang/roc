@@ -293,6 +293,10 @@ pub const LlvmEvaluator = struct {
         codegen.list_append_unsafe_addr = @intFromPtr(&builtins.list.listAppendUnsafeC);
         codegen.rc_none_addr = @intFromPtr(&builtins.list.rcNone);
         codegen.list_prepend_addr = @intFromPtr(&builtins.list.listPrepend);
+        codegen.i64_to_str_addr = @intFromPtr(&wrapI64ToStr);
+        codegen.f64_to_str_addr = @intFromPtr(&wrapF64ToStr);
+        codegen.f32_to_str_addr = @intFromPtr(&wrapF32ToStr);
+        codegen.dec_to_str_addr = @intFromPtr(&wrapDecToStr);
         codegen.str_concat_addr = @intFromPtr(&wrapStrConcat);
         codegen.str_equal_addr = @intFromPtr(&wrapStrEqual);
         codegen.str_contains_addr = @intFromPtr(&wrapStrContains);
@@ -364,6 +368,33 @@ fn wrapStrEndsWith(a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8,
     const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
     const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
     return builtins.str.endsWith(a, b);
+}
+
+// C-compatible wrappers for number-to-string conversions.
+fn wrapI64ToStr(out: *RocStr, value: i64, roc_ops: *RocOps) callconv(.c) void {
+    var buf: [20]u8 = undefined;
+    const result = std.fmt.bufPrint(&buf, "{}", .{value}) catch unreachable;
+    out.* = RocStr.init(&buf, result.len, roc_ops);
+}
+
+fn wrapF64ToStr(out: *RocStr, value: f64, roc_ops: *RocOps) callconv(.c) void {
+    var buf: [400]u8 = undefined;
+    const result = std.fmt.bufPrint(&buf, "{d}", .{value}) catch unreachable;
+    out.* = RocStr.init(&buf, result.len, roc_ops);
+}
+
+fn wrapF32ToStr(out: *RocStr, value: f32, roc_ops: *RocOps) callconv(.c) void {
+    var buf: [400]u8 = undefined;
+    const result = std.fmt.bufPrint(&buf, "{d}", .{value}) catch unreachable;
+    out.* = RocStr.init(&buf, result.len, roc_ops);
+}
+
+fn wrapDecToStr(out: *RocStr, lo: u64, hi: u64, roc_ops: *RocOps) callconv(.c) void {
+    const value: i128 = @bitCast(@as(u128, hi) << 64 | @as(u128, lo));
+    const dec = builtins.dec.RocDec{ .num = value };
+    var buf: [builtins.dec.RocDec.max_str_length]u8 = undefined;
+    const result = dec.format_to_buf(&buf);
+    out.* = RocStr.init(&buf, result.len, roc_ops);
 }
 
 // Tests
