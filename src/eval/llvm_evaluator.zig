@@ -170,6 +170,7 @@ pub const LlvmEvaluator = struct {
             ls.deinit();
             self.allocator.destroy(ls);
         }
+        self.roc_env.deinit();
         self.allocator.destroy(self.roc_env);
         self.builtin_module.deinit();
     }
@@ -303,6 +304,7 @@ pub const LlvmEvaluator = struct {
         codegen.str_starts_with_addr = @intFromPtr(&wrapStrStartsWith);
         codegen.str_ends_with_addr = @intFromPtr(&wrapStrEndsWith);
         codegen.str_escape_and_quote_addr = @intFromPtr(&wrapStrEscapeAndQuote);
+        codegen.str_to_utf8_addr = @intFromPtr(&wrapStrToUtf8);
 
         // Provide layout store for composite types (records, tuples)
         codegen.layout_store = layout_store_ptr;
@@ -369,6 +371,11 @@ fn wrapStrEndsWith(a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8,
     const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
     const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
     return builtins.str.endsWith(a, b);
+}
+
+fn wrapStrToUtf8(out: *builtins.list.RocList, str_bytes: ?[*]u8, str_len: usize, str_cap: usize, roc_ops: *RocOps) callconv(.c) void {
+    const s = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
+    out.* = builtins.str.strToUtf8C(s, roc_ops);
 }
 
 fn wrapStrEscapeAndQuote(out: *RocStr, str_bytes: ?[*]u8, str_len: usize, str_cap: usize, roc_ops: *RocOps) callconv(.c) void {

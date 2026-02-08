@@ -810,7 +810,6 @@ pub fn compareWithLlvmEvaluator(allocator: std.mem.Allocator, interpreter_str: [
 
         if (termination_signal != 0) {
             posix.close(pipe_read);
-            std.debug.print("\nLLVM child killed by signal {d} during evaluation\n", .{termination_signal});
             return; // Skip comparison on crash
         }
 

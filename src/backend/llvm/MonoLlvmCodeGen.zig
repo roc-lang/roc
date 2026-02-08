@@ -149,6 +149,7 @@ pub const MonoLlvmCodeGen = struct {
     str_starts_with_addr: usize = 0,
     str_ends_with_addr: usize = 0,
     str_escape_and_quote_addr: usize = 0,
+    str_to_utf8_addr: usize = 0,
 
     /// Address of number-to-string wrappers.
     i64_to_str_addr: usize = 0,
@@ -2071,7 +2072,8 @@ pub const MonoLlvmCodeGen = struct {
             // Convert value to match element layout
             const store_val = try self.convertToFieldType(elem_val, list.elem_layout);
             const store_align = LlvmBuilder.Alignment.fromByteUnits(@intCast(elem_align));
-            _ = wip.store(.normal, store_val, elem_ptr, store_align) catch return error.CompilationFailed;
+            // Use volatile stores to prevent LLVM from optimizing away element writes
+            _ = wip.store(.@"volatile", store_val, elem_ptr, store_align) catch return error.CompilationFailed;
         }
 
         // Write RocList struct to out_ptr: {ptr, len, capacity}
@@ -2497,9 +2499,36 @@ pub const MonoLlvmCodeGen = struct {
             },
 
             .str_count_utf8_bytes => {
-                // For a RocStr, the length in bytes is stored at offset 8 for heap strings,
-                // or derived from byte 23 for small strings. This is complex; return unsupported for now.
-                return error.UnsupportedExpression;
+                // For small strings: length = byte[23] ^ 0x80
+                // For heap strings: length = *(u64*)(ptr + 8)
+                // Small string check: byte[23] & 0x80 != 0
+                if (args.len < 1) return error.UnsupportedExpression;
+                const str_ptr = try self.materializeAsPtr(args[0], 24);
+                const byte_align = LlvmBuilder.Alignment.fromByteUnits(1);
+                const word_align = LlvmBuilder.Alignment.fromByteUnits(8);
+
+                // Load byte 23 (small string marker)
+                const off23 = builder.intValue(.i32, 23) catch return error.OutOfMemory;
+                const last_byte_ptr = wip.gep(.inbounds, .i8, str_ptr, &.{off23}, "") catch return error.CompilationFailed;
+                const last_byte = wip.load(.normal, .i8, last_byte_ptr, byte_align, "") catch return error.CompilationFailed;
+
+                // Check if small string: byte[23] & 0x80 != 0
+                const mask = builder.intValue(.i8, 0x80) catch return error.OutOfMemory;
+                const masked = wip.bin(.@"and", last_byte, mask, "") catch return error.CompilationFailed;
+                const zero8 = builder.intValue(.i8, 0) catch return error.OutOfMemory;
+                const is_small = wip.icmp(.ne, masked, zero8, "") catch return error.OutOfMemory;
+
+                // Small string length: byte[23] ^ 0x80
+                const small_len_u8 = wip.bin(.xor, last_byte, mask, "") catch return error.CompilationFailed;
+                const small_len = wip.cast(.zext, small_len_u8, .i64, "") catch return error.CompilationFailed;
+
+                // Heap string length: offset 8
+                const off8 = builder.intValue(.i32, 8) catch return error.OutOfMemory;
+                const len_ptr = wip.gep(.inbounds, .i8, str_ptr, &.{off8}, "") catch return error.CompilationFailed;
+                const heap_len = wip.load(.normal, .i64, len_ptr, word_align, "") catch return error.CompilationFailed;
+
+                // Select based on small string flag
+                return wip.select(.normal, is_small, small_len, heap_len, "") catch return error.CompilationFailed;
             },
 
             // --- Dec truncation/conversion operations ---
@@ -2622,7 +2651,35 @@ pub const MonoLlvmCodeGen = struct {
             },
 
             // --- Unsupported string operations ---
-            .str_caseless_ascii_equals, .str_to_utf8, .str_from_utf8,
+            .str_to_utf8 => {
+                // str_to_utf8(str) -> List(U8) (written to out_ptr)
+                if (args.len < 1) return error.UnsupportedExpression;
+                if (self.str_to_utf8_addr == 0) return error.UnsupportedExpression;
+                const roc_ops = self.roc_ops_arg orelse return error.CompilationFailed;
+                const dest_ptr = self.out_ptr orelse return error.UnsupportedExpression;
+                const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
+                const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
+
+                const str_ptr = try self.materializeAsPtr(args[0], 24);
+
+                const off8 = builder.intValue(.i32, 8) catch return error.OutOfMemory;
+                const off16 = builder.intValue(.i32, 16) catch return error.OutOfMemory;
+                const str_bytes = wip.load(.normal, ptr_type, str_ptr, alignment, "") catch return error.CompilationFailed;
+                const str_len_ptr = wip.gep(.inbounds, .i8, str_ptr, &.{off8}, "") catch return error.CompilationFailed;
+                const str_len = wip.load(.normal, .i64, str_len_ptr, alignment, "") catch return error.CompilationFailed;
+                const str_cap_ptr = wip.gep(.inbounds, .i8, str_ptr, &.{off16}, "") catch return error.CompilationFailed;
+                const str_cap = wip.load(.normal, .i64, str_cap_ptr, alignment, "") catch return error.CompilationFailed;
+
+                // fn(out, str_bytes, str_len, str_cap, roc_ops)
+                const fn_type = builder.fnType(.void, &.{ ptr_type, ptr_type, .i64, .i64, ptr_type }, .normal) catch return error.CompilationFailed;
+                const addr = builder.intValue(.i64, self.str_to_utf8_addr) catch return error.CompilationFailed;
+                const fn_ptr = wip.cast(.inttoptr, addr, ptr_type, "") catch return error.CompilationFailed;
+
+                _ = wip.call(.normal, .ccc, .none, fn_type, fn_ptr, &.{ dest_ptr, str_bytes, str_len, str_cap, roc_ops }, "") catch return error.CompilationFailed;
+                return .none;
+            },
+
+            .str_caseless_ascii_equals, .str_from_utf8,
             .str_repeat, .str_trim, .str_trim_start, .str_trim_end,
             .str_split, .str_join_with, .str_reserve, .str_release_excess_capacity,
             .str_with_capacity, .str_drop_prefix, .str_drop_suffix,

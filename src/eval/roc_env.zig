@@ -25,9 +25,15 @@ const RocCrashed = builtins.host_abi.RocCrashed;
 /// while arenas handle actual memory deallocation.
 pub const RocEnv = struct {
     allocator: Allocator,
+    /// Track allocation sizes so realloc can copy the correct number of bytes.
+    alloc_sizes: std.AutoHashMapUnmanaged(usize, usize) = .{},
 
     pub fn init(allocator: Allocator) RocEnv {
         return .{ .allocator = allocator };
+    }
+
+    pub fn deinit(self: *RocEnv) void {
+        self.alloc_sizes.deinit(self.allocator);
     }
 
     /// Allocation function for RocOps.
@@ -47,6 +53,7 @@ pub const RocEnv = struct {
         };
 
         roc_alloc.answer = @ptrCast(ptr.ptr);
+        self.alloc_sizes.put(self.allocator, @intFromPtr(ptr.ptr), roc_alloc.length) catch {};
     }
 
     /// Deallocation function for RocOps.
@@ -75,14 +82,15 @@ pub const RocEnv = struct {
             @panic("RocEnv: Reallocation failed");
         };
 
-        // Copy old data from the existing allocation
-        // Note: The old pointer is in roc_realloc.answer
-        // We copy new_length bytes (assuming the old allocation was at least that large)
+        // Copy old data from the existing allocation (only copy the old size, not new size)
         const old_ptr: [*]u8 = @ptrCast(@alignCast(roc_realloc.answer));
-        @memcpy(new_ptr[0..roc_realloc.new_length], old_ptr[0..roc_realloc.new_length]);
+        const old_size = self.alloc_sizes.get(@intFromPtr(old_ptr)) orelse roc_realloc.new_length;
+        const copy_len = @min(old_size, roc_realloc.new_length);
+        @memcpy(new_ptr[0..copy_len], old_ptr[0..copy_len]);
 
-        // Return the new pointer
+        // Return the new pointer and track its size
         roc_realloc.answer = @ptrCast(new_ptr.ptr);
+        self.alloc_sizes.put(self.allocator, @intFromPtr(new_ptr.ptr), roc_realloc.new_length) catch {};
     }
 
     /// Debug output function.
