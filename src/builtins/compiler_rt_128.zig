@@ -1,8 +1,8 @@
-// 128-bit integer arithmetic helpers.
-//
-// Provides public Zig functions for 128-bit operations that would otherwise
-// trigger implicit compiler-rt calls. All operations decompose to native
-// 64-bit arithmetic only.
+//! 128-bit integer arithmetic helpers.
+//!
+//! Provides public Zig functions for 128-bit operations that would otherwise
+//! trigger implicit compiler-rt calls. All operations decompose to native
+//! 64-bit arithmetic only.
 //
 // Adapted from Zig's lib/compiler_rt/ sources, which are MIT licensed:
 // Copyright (c) Zig contributors
