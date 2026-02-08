@@ -169,6 +169,7 @@ pub const MonoLlvmCodeGen = struct {
     list_concat_addr: usize = 0,
     list_prepend_wrap_addr: usize = 0,
     list_reserve_addr: usize = 0,
+    list_sublist_addr: usize = 0,
     list_release_excess_capacity_addr: usize = 0,
 
     /// Address of number-to-string wrappers.
@@ -3328,8 +3329,85 @@ pub const MonoLlvmCodeGen = struct {
                 return wip.load(.normal, elem_type, elem_ptr, elem_align, "") catch return error.CompilationFailed;
             },
 
-            .list_set, .list_drop_first, .list_drop_last,
-            .list_take_first, .list_take_last, .list_contains, .list_reverse,
+            .list_take_first => {
+                // list_take_first(list, n) -> sublist(list, start=0, count=n)
+                if (args.len < 2) return error.UnsupportedExpression;
+                if (self.list_sublist_addr == 0) return error.UnsupportedExpression;
+                const zero = builder.intValue(.i64, 0) catch return error.OutOfMemory;
+                const saved = self.out_ptr;
+                self.out_ptr = null;
+                const n_val = try self.generateExpr(args[1]);
+                self.out_ptr = saved;
+                return try self.callListSublist(args[0], zero, n_val, ll);
+            },
+
+            .list_take_last => {
+                // list_take_last(list, n) -> sublist(list, start=max(0,len-n), count=n)
+                if (args.len < 2) return error.UnsupportedExpression;
+                if (self.list_sublist_addr == 0) return error.UnsupportedExpression;
+                const saved = self.out_ptr;
+                self.out_ptr = null;
+                const n_val = try self.generateExpr(args[1]);
+                self.out_ptr = saved;
+                // Load list length
+                const list_ptr = try self.materializeAsPtr(args[0], 24);
+                const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
+                const off8 = builder.intValue(.i32, 8) catch return error.OutOfMemory;
+                const len_ptr = wip.gep(.inbounds, .i8, list_ptr, &.{off8}, "") catch return error.CompilationFailed;
+                const list_len = wip.load(.normal, .i64, len_ptr, alignment, "") catch return error.CompilationFailed;
+                // start = max(0, len - n)
+                const diff = wip.bin(.sub, list_len, n_val, "") catch return error.CompilationFailed;
+                const zero = builder.intValue(.i64, 0) catch return error.OutOfMemory;
+                const is_neg = wip.icmp(.slt, diff, zero, "") catch return error.OutOfMemory;
+                const start = wip.select(.normal, is_neg, zero, diff, "") catch return error.CompilationFailed;
+                return try self.callListSublistFromPtr(list_ptr, start, n_val, ll);
+            },
+
+            .list_drop_first => {
+                // list_drop_first(list, n) -> sublist(list, start=n, count=max(0,len-n))
+                if (args.len < 2) return error.UnsupportedExpression;
+                if (self.list_sublist_addr == 0) return error.UnsupportedExpression;
+                const saved = self.out_ptr;
+                self.out_ptr = null;
+                const n_val = try self.generateExpr(args[1]);
+                self.out_ptr = saved;
+                // Load list length
+                const list_ptr = try self.materializeAsPtr(args[0], 24);
+                const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
+                const off8 = builder.intValue(.i32, 8) catch return error.OutOfMemory;
+                const len_ptr = wip.gep(.inbounds, .i8, list_ptr, &.{off8}, "") catch return error.CompilationFailed;
+                const list_len = wip.load(.normal, .i64, len_ptr, alignment, "") catch return error.CompilationFailed;
+                // count = max(0, len - n)
+                const diff = wip.bin(.sub, list_len, n_val, "") catch return error.CompilationFailed;
+                const zero = builder.intValue(.i64, 0) catch return error.OutOfMemory;
+                const is_neg = wip.icmp(.slt, diff, zero, "") catch return error.OutOfMemory;
+                const count = wip.select(.normal, is_neg, zero, diff, "") catch return error.CompilationFailed;
+                return try self.callListSublistFromPtr(list_ptr, n_val, count, ll);
+            },
+
+            .list_drop_last => {
+                // list_drop_last(list, n) -> sublist(list, start=0, count=max(0,len-n))
+                if (args.len < 2) return error.UnsupportedExpression;
+                if (self.list_sublist_addr == 0) return error.UnsupportedExpression;
+                const saved = self.out_ptr;
+                self.out_ptr = null;
+                const n_val = try self.generateExpr(args[1]);
+                self.out_ptr = saved;
+                // Load list length
+                const list_ptr = try self.materializeAsPtr(args[0], 24);
+                const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
+                const off8 = builder.intValue(.i32, 8) catch return error.OutOfMemory;
+                const len_ptr = wip.gep(.inbounds, .i8, list_ptr, &.{off8}, "") catch return error.CompilationFailed;
+                const list_len = wip.load(.normal, .i64, len_ptr, alignment, "") catch return error.CompilationFailed;
+                // count = max(0, len - n)
+                const diff = wip.bin(.sub, list_len, n_val, "") catch return error.CompilationFailed;
+                const zero = builder.intValue(.i64, 0) catch return error.OutOfMemory;
+                const is_neg = wip.icmp(.slt, diff, zero, "") catch return error.OutOfMemory;
+                const count = wip.select(.normal, is_neg, zero, diff, "") catch return error.CompilationFailed;
+                return try self.callListSublistFromPtr(list_ptr, zero, count, ll);
+            },
+
+            .list_set, .list_contains, .list_reverse,
             .list_split_first, .list_split_last,
             => return error.UnsupportedExpression,
 
@@ -3509,6 +3587,52 @@ pub const MonoLlvmCodeGen = struct {
         const fn_ptr = wip.cast(.inttoptr, addr, ptr_type, "") catch return error.CompilationFailed;
 
         _ = wip.call(.normal, .ccc, .none, fn_type, fn_ptr, &.{ dest_ptr, str_bytes, str_len, str_cap, u64_val, roc_ops }, "") catch return error.CompilationFailed;
+        return .none;
+    }
+
+    /// Helper: call listSublist wrapper, materializing list from expression.
+    fn callListSublist(self: *MonoLlvmCodeGen, list_arg: MonoExprId, start: LlvmBuilder.Value, count: LlvmBuilder.Value, ll: anytype) Error!LlvmBuilder.Value {
+        const list_ptr = try self.materializeAsPtr(list_arg, 24);
+        return try self.callListSublistFromPtr(list_ptr, start, count, ll);
+    }
+
+    /// Helper: call listSublist wrapper from pre-materialized list pointer.
+    /// wrapListSublist(out, list_bytes, list_len, list_cap, start, count, alignment, elem_width, roc_ops)
+    fn callListSublistFromPtr(self: *MonoLlvmCodeGen, list_ptr: LlvmBuilder.Value, start: LlvmBuilder.Value, count: LlvmBuilder.Value, ll: anytype) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
+        const ls = self.layout_store orelse return error.UnsupportedExpression;
+        const roc_ops = self.roc_ops_arg orelse return error.CompilationFailed;
+        const dest_ptr = self.out_ptr orelse return error.UnsupportedExpression;
+        const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
+        const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
+        const off8 = builder.intValue(.i32, 8) catch return error.OutOfMemory;
+        const off16 = builder.intValue(.i32, 16) catch return error.OutOfMemory;
+
+        const list_bytes = wip.load(.normal, ptr_type, list_ptr, alignment, "") catch return error.CompilationFailed;
+        const len_ptr = wip.gep(.inbounds, .i8, list_ptr, &.{off8}, "") catch return error.CompilationFailed;
+        const list_len = wip.load(.normal, .i64, len_ptr, alignment, "") catch return error.CompilationFailed;
+        const cap_ptr = wip.gep(.inbounds, .i8, list_ptr, &.{off16}, "") catch return error.CompilationFailed;
+        const list_cap = wip.load(.normal, .i64, cap_ptr, alignment, "") catch return error.CompilationFailed;
+
+        // Get element layout info
+        const ret_layout = ls.getLayout(ll.ret_layout);
+        const elem_layout_idx = if (ret_layout.tag == .list) ret_layout.data.list else return error.UnsupportedExpression;
+        const elem_sa = ls.layoutSizeAlign(ls.getLayout(elem_layout_idx));
+        const elem_size: u64 = elem_sa.size;
+        const elem_align: u32 = @intCast(elem_sa.alignment.toByteUnits());
+
+        const fn_type = builder.fnType(.void, &.{
+            ptr_type, ptr_type, .i64, .i64, .i64, .i64, .i32, .i64, ptr_type,
+        }, .normal) catch return error.CompilationFailed;
+        const fn_addr = builder.intValue(.i64, self.list_sublist_addr) catch return error.CompilationFailed;
+        const fn_ptr = wip.cast(.inttoptr, fn_addr, ptr_type, "") catch return error.CompilationFailed;
+        const align_val = builder.intValue(.i32, elem_align) catch return error.OutOfMemory;
+        const width_val = builder.intValue(.i64, elem_size) catch return error.OutOfMemory;
+
+        _ = wip.call(.normal, .ccc, .none, fn_type, fn_ptr, &.{
+            dest_ptr, list_bytes, list_len, list_cap, start, count, align_val, width_val, roc_ops,
+        }, "") catch return error.CompilationFailed;
         return .none;
     }
 

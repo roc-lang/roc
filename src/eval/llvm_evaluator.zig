@@ -322,6 +322,7 @@ pub const LlvmEvaluator = struct {
         codegen.list_concat_addr = @intFromPtr(&wrapListConcat);
         codegen.list_prepend_wrap_addr = @intFromPtr(&wrapListPrepend);
         codegen.list_reserve_addr = @intFromPtr(&wrapListReserve);
+        codegen.list_sublist_addr = @intFromPtr(&wrapListSublist);
         codegen.list_release_excess_capacity_addr = @intFromPtr(&wrapListReleaseExcessCapacity);
 
         // Provide layout store for composite types (records, tuples)
@@ -559,6 +560,11 @@ fn wrapListConcat(out: *builtins.list.RocList, a_bytes: ?[*]u8, a_len: usize, a_
 fn wrapListReserve(out: *builtins.list.RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, spare: u64, alignment: u32, elem_width: usize, roc_ops: *RocOps) callconv(.c) void {
     const list = builtins.list.RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
     out.* = builtins.list.listReserve(list, alignment, spare, elem_width, false, null, builtins.list.rcNone, .InPlace, roc_ops);
+}
+
+fn wrapListSublist(out: *builtins.list.RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, start: u64, count: u64, alignment: u32, elem_width: usize, roc_ops: *RocOps) callconv(.c) void {
+    const list = builtins.list.RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+    out.* = builtins.list.listSublist(list, alignment, elem_width, false, start, count, null, builtins.list.rcNone, roc_ops);
 }
 
 fn wrapListReleaseExcessCapacity(out: *builtins.list.RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, elem_width: usize, roc_ops: *RocOps) callconv(.c) void {
