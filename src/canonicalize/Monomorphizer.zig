@@ -218,6 +218,10 @@ specialization_stack: std.ArrayList(SpecializationKey),
 /// External specializations requested from other modules
 external_requests: std.ArrayList(ExternalSpecializationRequest),
 
+/// Fast lookup indexes for pending specialization deduplication (O(1) vs O(n) linear scan)
+pending_specialization_keys: std.AutoHashMap(SpecializationKey, void),
+pending_external_keys: std.AutoHashMap(ExternalSpecKey, void),
+
 /// Resolved external specializations: maps (source_module, original_ident, type_hash) to specialized_ident.
 /// Populated by resolveExternalSpecialization, used by requestExternalSpecialization.
 resolved_external_specs: std.AutoHashMap(ExternalSpecKey, base.Ident.Idx),
@@ -256,6 +260,8 @@ pub fn init(
         .specialization_stack = std.ArrayList(SpecializationKey).empty,
         .external_requests = std.ArrayList(ExternalSpecializationRequest).empty,
         .resolved_external_specs = std.AutoHashMap(ExternalSpecKey, base.Ident.Idx).init(allocator),
+        .pending_specialization_keys = std.AutoHashMap(SpecializationKey, void).init(allocator),
+        .pending_external_keys = std.AutoHashMap(ExternalSpecKey, void).init(allocator),
         .closure_transformer = null,
         .impl_lambda_sets = null,
     };
@@ -289,6 +295,8 @@ pub fn deinit(self: *Self) void {
     self.specialization_stack.deinit(self.allocator);
     self.external_requests.deinit(self.allocator);
     self.resolved_external_specs.deinit();
+    self.pending_specialization_keys.deinit();
+    self.pending_external_keys.deinit();
 }
 
 /// Result of looking up a static dispatch implementation for a concrete type.
@@ -876,16 +884,9 @@ pub fn requestSpecialization(
     }
 
     // Check if it's already pending - if so, look up or create the specialized name
-    for (self.pending_specializations.items) |pending| {
-        if (pending.original_ident == original_ident) {
-            const pending_hash = self.structuralTypeHash(pending.concrete_type);
-            if (pending_hash == type_hash) {
-                // Already pending - create and return the specialized name so call sites
-                // can reference it. The name will be reused when the spec is processed.
-                const specialized_name = try self.createSpecializedName(original_ident, concrete_type);
-                return specialized_name;
-            }
-        }
+    if (self.pending_specialization_keys.contains(key)) {
+        const specialized_name = try self.createSpecializedName(original_ident, concrete_type);
+        return specialized_name;
     }
 
     // Check if this function is registered as a partial proc
@@ -909,6 +910,7 @@ pub fn requestSpecialization(
         .call_site = call_site,
         .type_substitutions = type_subs,
     });
+    try self.pending_specialization_keys.put(key, {});
 
     return specialized_name;
 }
@@ -943,22 +945,12 @@ pub fn requestExternalSpecialization(
     }
 
     // Check if we already have a pending request
-    for (self.external_requests.items) |existing| {
-        if (existing.source_module == source_module and
-            existing.original_ident == original_ident)
-        {
-            // Compare concrete types using structural type hashing
-            const existing_type_hash = self.structuralTypeHash(existing.concrete_type);
-            if (existing_type_hash == new_type_hash) {
-                // Pending but not yet resolved - create/lookup the specialized name
-                // so all call sites use a consistent reference
-                const specialized_name = try self.createSpecializedName(original_ident, concrete_type);
-                return ExternalSpecializationResult{
-                    .specialized_ident = specialized_name,
-                    .is_new = false,
-                };
-            }
-        }
+    if (self.pending_external_keys.contains(ext_key)) {
+        const specialized_name = try self.createSpecializedName(original_ident, concrete_type);
+        return ExternalSpecializationResult{
+            .specialized_ident = specialized_name,
+            .is_new = false,
+        };
     }
 
     // Create the specialized name now so all call sites use a consistent reference.
@@ -972,6 +964,7 @@ pub fn requestExternalSpecialization(
         .concrete_type = concrete_type,
         .call_site = call_site,
     });
+    try self.pending_external_keys.put(ext_key, {});
 
     return ExternalSpecializationResult{
         .specialized_ident = specialized_name,
@@ -1071,6 +1064,7 @@ pub fn processPendingSpecializations(self: *Self) !void {
         pending.type_substitutions.deinit();
     }
 
+    self.pending_specialization_keys.clearRetainingCapacity();
     self.phase = .finding;
 }
 
