@@ -2283,6 +2283,12 @@ fn hashTypeRecursive(
         .alias => |alias| {
             hasher.update("alias");
             hasher.update(std.mem.asBytes(&alias.ident.ident_idx));
+            // Hash all vars (backing var + type arguments) to differentiate
+            // e.g. List(U64) from List(Str)
+            const vars = self.types_store.sliceVars(alias.vars.nonempty);
+            for (vars) |v| {
+                self.hashTypeRecursive(hasher, v, seen);
+            }
         },
         .err => hasher.update("err"),
     }
@@ -2827,4 +2833,132 @@ test "monomorphizer: allExternalSpecializationsResolved detects unresolved" {
 
     // Now all resolved
     try testing.expect(mono.allExternalSpecializationsResolved());
+}
+
+test "monomorphizer: alias types with different type args produce different hashes" {
+    const allocator = testing.allocator;
+
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, "test");
+    defer {
+        module_env.deinit();
+        allocator.destroy(module_env);
+    }
+
+    var mono = Self.init(allocator, module_env, &module_env.types);
+    defer mono.deinit();
+
+    // Create the alias name (e.g. "MyAlias")
+    const alias_ident = try module_env.insertIdent(base.Ident.for_text("MyAlias"));
+    const type_ident = types.types.TypeIdent{ .ident_idx = alias_ident };
+
+    // Create two different concrete types for the type argument
+    const arg1 = try module_env.types.fresh();
+    try module_env.types.setVarContent(arg1, .{ .structure = .empty_record });
+
+    const arg2 = try module_env.types.fresh();
+    try module_env.types.setVarContent(arg2, .{ .structure = .empty_tag_union });
+
+    // Create backing vars
+    const backing1 = try module_env.types.fresh();
+    const backing2 = try module_env.types.fresh();
+
+    // Create two alias types: MyAlias EmptyRecord vs MyAlias EmptyTagUnion
+    const alias_content1 = try module_env.types.mkAlias(type_ident, backing1, &.{arg1});
+    const alias_content2 = try module_env.types.mkAlias(type_ident, backing2, &.{arg2});
+
+    const var1 = try module_env.types.fresh();
+    try module_env.types.setVarContent(var1, alias_content1);
+
+    const var2 = try module_env.types.fresh();
+    try module_env.types.setVarContent(var2, alias_content2);
+
+    // These should produce DIFFERENT hashes because the type args differ
+    const hash1 = mono.structuralTypeHash(var1);
+    const hash2 = mono.structuralTypeHash(var2);
+    try testing.expect(hash1 != hash2);
+}
+
+test "monomorphizer: alias types with same type args produce same hash" {
+    const allocator = testing.allocator;
+
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, "test");
+    defer {
+        module_env.deinit();
+        allocator.destroy(module_env);
+    }
+
+    var mono = Self.init(allocator, module_env, &module_env.types);
+    defer mono.deinit();
+
+    const alias_ident = try module_env.insertIdent(base.Ident.for_text("MyAlias"));
+    const type_ident = types.types.TypeIdent{ .ident_idx = alias_ident };
+
+    // Create two identical concrete type args
+    const arg1 = try module_env.types.fresh();
+    try module_env.types.setVarContent(arg1, .{ .structure = .empty_record });
+
+    const arg2 = try module_env.types.fresh();
+    try module_env.types.setVarContent(arg2, .{ .structure = .empty_record });
+
+    const backing1 = try module_env.types.fresh();
+    try module_env.types.setVarContent(backing1, .{ .structure = .empty_record });
+
+    const backing2 = try module_env.types.fresh();
+    try module_env.types.setVarContent(backing2, .{ .structure = .empty_record });
+
+    // Create two alias types with the same structure
+    const alias_content1 = try module_env.types.mkAlias(type_ident, backing1, &.{arg1});
+    const alias_content2 = try module_env.types.mkAlias(type_ident, backing2, &.{arg2});
+
+    const var1 = try module_env.types.fresh();
+    try module_env.types.setVarContent(var1, alias_content1);
+
+    const var2 = try module_env.types.fresh();
+    try module_env.types.setVarContent(var2, alias_content2);
+
+    // These should produce the SAME hash because the structure is identical
+    const hash1 = mono.structuralTypeHash(var1);
+    const hash2 = mono.structuralTypeHash(var2);
+    try testing.expectEqual(hash1, hash2);
+}
+
+test "monomorphizer: alias types with different backing vars produce different hashes" {
+    const allocator = testing.allocator;
+
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, "test");
+    defer {
+        module_env.deinit();
+        allocator.destroy(module_env);
+    }
+
+    var mono = Self.init(allocator, module_env, &module_env.types);
+    defer mono.deinit();
+
+    const alias_ident = try module_env.insertIdent(base.Ident.for_text("MyAlias"));
+    const type_ident = types.types.TypeIdent{ .ident_idx = alias_ident };
+
+    // Create two different backing types (no type args)
+    const backing1 = try module_env.types.fresh();
+    try module_env.types.setVarContent(backing1, .{ .structure = .empty_record });
+
+    const backing2 = try module_env.types.fresh();
+    try module_env.types.setVarContent(backing2, .{ .structure = .empty_tag_union });
+
+    // Create alias types with no args but different backing vars
+    const alias_content1 = try module_env.types.mkAlias(type_ident, backing1, &.{});
+    const alias_content2 = try module_env.types.mkAlias(type_ident, backing2, &.{});
+
+    const var1 = try module_env.types.fresh();
+    try module_env.types.setVarContent(var1, alias_content1);
+
+    const var2 = try module_env.types.fresh();
+    try module_env.types.setVarContent(var2, alias_content2);
+
+    // These should produce DIFFERENT hashes because the backing types differ
+    const hash1 = mono.structuralTypeHash(var1);
+    const hash2 = mono.structuralTypeHash(var2);
+    try testing.expect(hash1 != hash2);
 }
