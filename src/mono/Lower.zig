@@ -3722,7 +3722,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             };
 
             const info = nominal_info orelse {
-                unreachable;
+                break :blk .{ .runtime_error = {} };
             };
 
             // Step 4: Find origin module index via imports

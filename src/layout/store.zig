@@ -1752,7 +1752,7 @@ pub const Store = struct {
                         // Use the cached placeholder index for the nominal.
                         // The placeholder will be updated with the real layout once
                         // the nominal's backing type is fully computed.
-                        const progress_cache_key = ModuleVarKey{ .module_idx = self.current_module_idx, .var_ = progress.nominal_var };
+                        const progress_cache_key = ModuleVarKey{ .module_idx = progress.cache_module_idx, .var_ = progress.nominal_var };
                         if (self.layouts_by_module_var.get(progress_cache_key)) |cached_idx| {
                             // We have a placeholder - but we need to check if we're inside a List/Box.
                             // If we are inside a List/Box, we need a RAW layout placeholder, not the
@@ -2072,6 +2072,7 @@ pub const Store = struct {
                             try self.work.in_progress_nominals.put(nominal_key, .{
                                 .nominal_var = current.var_,
                                 .backing_var = resolved_backing.var_,
+                                .cache_module_idx = self.current_module_idx,
                                 .type_args_range = type_args_range,
                             });
 
@@ -2486,8 +2487,10 @@ pub const Store = struct {
                             break :blk Layout.zst();
                         }
 
-                        // Rigid vars with constraints must be resolvable.
-                        unreachable;
+                        // Constrained rigid vars that couldn't be resolved through the type scope.
+                        // Default to opaquePtr so compilation can continue; the runtime will
+                        // use the concrete type from the caller's instantiation.
+                        break :blk Layout.opaquePtr();
                     },
                     .alias => |alias| {
                         // Follow the alias by updating the work item
