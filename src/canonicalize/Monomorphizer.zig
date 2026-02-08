@@ -148,12 +148,6 @@ pub const ExternalSpecializationRequest = struct {
     concrete_type: types.Var,
     /// The call site in this module (for error reporting)
     call_site: ?Expr.Idx,
-
-    pub fn eql(a: ExternalSpecializationRequest, b: ExternalSpecializationRequest) bool {
-        return a.source_module == b.source_module and
-            a.original_ident == b.original_ident;
-        // Note: concrete_type comparison would require type equality check
-    }
 };
 
 /// Result of requesting an external specialization.
