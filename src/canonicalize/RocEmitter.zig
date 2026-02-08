@@ -9,6 +9,9 @@
 
 const std = @import("std");
 const base = @import("base");
+const builtins = @import("builtins");
+
+const i128h = builtins.compiler_rt_128;
 
 const ModuleEnv = @import("ModuleEnv.zig");
 const CIR = @import("CIR.zig");
@@ -169,8 +172,8 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
             // Dec is stored scaled by 10^18, need to emit as decimal
             const value = dec.value.num;
             const scale: i128 = 1_000_000_000_000_000_000;
-            const whole = @divTrunc(value, scale);
-            const frac_part = @mod(@abs(value), @as(u128, @intCast(scale)));
+            const whole = i128h.divTrunc_i128(value, scale);
+            const frac_part = i128h.rem_u128(@abs(value), @as(u128, @intCast(scale)));
             if (frac_part == 0) {
                 try self.writer().print("{d}", .{whole});
             } else {
@@ -202,8 +205,8 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
             // Emit as decimal and add type suffix
             const value = typed.value.toI128();
             const scale: i128 = 1_000_000_000_000_000_000;
-            const whole = @divTrunc(value, scale);
-            const frac_part = @mod(@abs(value), @as(u128, @intCast(scale)));
+            const whole = i128h.divTrunc_i128(value, scale);
+            const frac_part = i128h.rem_u128(@abs(value), @as(u128, @intCast(scale)));
             if (frac_part == 0) {
                 try self.writer().print("{d}.0", .{whole});
             } else {
@@ -670,8 +673,8 @@ fn emitPatternValue(self: *Self, pattern: Pattern) EmitError!void {
         .dec_literal => |dec| {
             const value = dec.value.num;
             const scale: i128 = 1_000_000_000_000_000_000;
-            const whole = @divTrunc(value, scale);
-            const frac_part = @mod(@abs(value), @as(u128, @intCast(scale)));
+            const whole = i128h.divTrunc_i128(value, scale);
+            const frac_part = i128h.rem_u128(@abs(value), @as(u128, @intCast(scale)));
             if (frac_part == 0) {
                 try self.writer().print("{d}", .{whole});
             } else {

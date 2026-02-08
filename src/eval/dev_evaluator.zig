@@ -21,6 +21,7 @@ const backend = @import("backend");
 const mono = @import("mono");
 const builtin_loading = @import("builtin_loading.zig");
 const builtins = @import("builtins");
+const i128h = builtins.compiler_rt_128;
 
 // Cross-platform setjmp/longjmp for crash recovery.
 const sljmp = @import("sljmp");
@@ -771,8 +772,14 @@ pub const DevEvaluator = struct {
                 .i64_val => |v| try writer.print("{}", .{v}),
                 .u64_val => |v| try writer.print("{}", .{v}),
                 .f64_val => |v| try writer.print("{d}", .{v}),
-                .i128_val => |v| try writer.print("{}", .{v}),
-                .u128_val => |v| try writer.print("{}", .{v}),
+                .i128_val => |v| {
+                    var buf: [40]u8 = undefined;
+                    try writer.writeAll(i128h.i128_to_str(&buf, v).str);
+                },
+                .u128_val => |v| {
+                    var buf: [40]u8 = undefined;
+                    try writer.writeAll(i128h.u128_to_str(&buf, v).str);
+                },
                 .str_val => |v| try writer.print("\"{s}\"", .{v}),
             }
         }

@@ -564,13 +564,13 @@ pub const IntValue = struct {
     pub fn toFracRequirements(self: IntValue) types_mod.FracRequirements {
         // Convert to f64 for checking
         const f64_val: f64 = switch (self.kind) {
-            .i128 => @floatFromInt(@as(i128, @bitCast(self.bytes))),
+            .i128 => builtins.compiler_rt_128.i128_to_f64(@as(i128, @bitCast(self.bytes))),
             .u128 => blk: {
                 const val = @as(u128, @bitCast(self.bytes));
                 if (val > @as(u128, 1) << 64) {
                     break :blk std.math.inf(f64);
                 }
-                break :blk @floatFromInt(val);
+                break :blk builtins.compiler_rt_128.u128_to_f64(val);
             },
         };
 
@@ -743,7 +743,7 @@ pub fn toI128(self: RocDec) i128 {
 /// Creates a RocDec from an f64 value, returns null if conversion fails
 pub fn fromF64(f: f64) ?RocDec {
     // Simple conversion - the real implementation is in builtins/dec.zig
-    const scaled = @as(i128, @intFromFloat(f * 1_000_000_000_000_000_000.0));
+    const scaled = builtins.compiler_rt_128.f64_to_i128(f * 1_000_000_000_000_000_000.0);
     return RocDec{ .num = scaled };
 }
 

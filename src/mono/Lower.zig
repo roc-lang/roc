@@ -245,23 +245,6 @@ fn findModuleForOrigin(self: *Self, source_env: *const ModuleEnv, origin_module:
         }
     }
 
-    // Fallback: check if origin name matches source_env itself (by string).
-    // This handles cases where origin_module and module_name_idx are different
-    // Ident.Idx values that resolve to the same string (e.g., app modules
-    // where the type's origin_module ident differs from the module's own name ident).
-    if (std.mem.eql(u8, origin_name, source_env.module_name)) {
-        for (self.all_module_envs, 0..) |env, idx| {
-            if (env == source_env) return @intCast(idx);
-        }
-    }
-
-    // Last resort: check all module envs by name
-    for (self.all_module_envs, 0..) |env, idx| {
-        if (std.mem.eql(u8, env.module_name, origin_name)) {
-            return @intCast(idx);
-        }
-    }
-
     return null;
 }
 

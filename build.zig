@@ -2432,6 +2432,7 @@ pub fn build(b: *std.Build) void {
     // Add llvm_compile module for LLVM compilation pipeline
     snapshot_exe.root_module.addAnonymousImport("llvm_compile", .{
         .root_source_file = b.path("src/llvm_compile/mod.zig"),
+        .imports = &.{.{ .name = "builtins", .module = roc_modules.builtins }},
     });
 
     add_tracy(b, roc_modules.build_options, snapshot_exe, target, true, flag_enable_tracy);
@@ -2640,6 +2641,7 @@ pub fn build(b: *std.Build) void {
         try addStaticLlvmOptionsToModule(snapshot_test.root_module);
         snapshot_test.root_module.addAnonymousImport("llvm_compile", .{
             .root_source_file = b.path("src/llvm_compile/mod.zig"),
+            .imports = &.{.{ .name = "builtins", .module = roc_modules.builtins }},
         });
 
         add_tracy(b, roc_modules.build_options, snapshot_test, target, true, flag_enable_tracy);
@@ -3202,7 +3204,7 @@ fn addMainExe(
     shim_lib.step.dependOn(&write_compiled_builtins.step);
     // Link against the pre-built builtins library
     shim_lib.linkLibrary(builtins_obj);
-    shim_lib.bundle_compiler_rt = true; // interpreter needs compiler_rt for @floatFromInt on i128/u128
+    shim_lib.bundle_compiler_rt = false;
     // Install shim library to the output directory
     const install_shim = b.addInstallArtifact(shim_lib, .{});
     b.getInstallStep().dependOn(&install_shim.step);
@@ -3296,7 +3298,7 @@ fn addMainExe(
         cross_shim_lib.root_module.addImport("compiled_builtins", compiled_builtins_module);
         cross_shim_lib.step.dependOn(&write_compiled_builtins.step);
         cross_shim_lib.linkLibrary(cross_builtins_obj);
-        cross_shim_lib.bundle_compiler_rt = true; // interpreter needs compiler_rt for @floatFromInt on i128/u128
+        cross_shim_lib.bundle_compiler_rt = false;
 
         // Copy to target-specific directory for embedding
         // Use .lib extension for Windows targets, .a for others

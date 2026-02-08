@@ -287,7 +287,64 @@ pub fn mod_i128(a: i128, b: i128) i128 {
     return r;
 }
 
-// Public API: 128-bit <-> f64 conversions
+// Public API: 128-bit <-> float conversions
+
+/// Convert i128 to f32 using only 64-bit operations.
+pub fn i128_to_f32(x: i128) f32 {
+    if (x == 0) return 0.0;
+    const sign: u32 = if (x < 0) 1 else 0;
+    const abs_val: u128 = @abs(x);
+    const result = u128_to_f32_impl(abs_val);
+    return @bitCast(@as(u32, @bitCast(result)) | (sign << 31));
+}
+
+/// Convert u128 to f32 using only 64-bit operations.
+pub fn u128_to_f32(x: u128) f32 {
+    return u128_to_f32_impl(x);
+}
+
+fn u128_to_f32_impl(x: u128) f32 {
+    if (x == 0) return 0.0;
+
+    const leading_zeros: u8 = @clz(x);
+    const bit_pos: u8 = 127 - leading_zeros;
+
+    // f32 has 23 bits of mantissa (+ 1 implicit = 24 significant bits)
+    if (bit_pos <= 23) {
+        // Value fits exactly in f32 mantissa - truncate to u32 which is native
+        const lo_val: u32 = @truncate(x);
+        return @floatFromInt(lo_val);
+    }
+
+    // Check for overflow: f32 max exponent is 254 (bias 127), so bit_pos 128+ overflows
+    if (bit_pos >= 128) return std.math.inf(f32);
+
+    // Shift right to get 24 significant bits
+    const shift: u7 = @intCast(bit_pos - 23);
+    const shifted: u128 = x >> shift;
+    var mantissa: u32 = @truncate(shifted);
+
+    // Round to nearest even
+    const round_bit: u128 = (x >> (@as(u7, shift) - 1)) & 1;
+    const sticky_mask: u128 = (@as(u128, 1) << (@as(u7, shift) - 1)) - 1;
+    const sticky: u128 = if ((x & sticky_mask) != 0) @as(u128, 1) else 0;
+
+    if (round_bit != 0 and (sticky != 0 or (mantissa & 1) != 0)) {
+        mantissa += 1;
+        if (mantissa == (@as(u32, 1) << 24)) {
+            mantissa >>= 1;
+            const exponent: u32 = @as(u32, bit_pos) + 1 + 127;
+            if (exponent >= 255) return std.math.inf(f32);
+            const bits: u32 = (exponent << 23) | (mantissa & ((@as(u32, 1) << 23) - 1));
+            return @bitCast(bits);
+        }
+    }
+
+    const exponent: u32 = @as(u32, bit_pos) + 127;
+    if (exponent >= 255) return std.math.inf(f32);
+    const bits: u32 = (exponent << 23) | (mantissa & ((@as(u32, 1) << 23) - 1));
+    return @bitCast(bits);
+}
 
 /// Convert i128 to f64 using only 64-bit operations.
 pub fn i128_to_f64(x: i128) f64 {
@@ -412,4 +469,49 @@ pub fn f64_to_u128(x: f64) u128 {
         const shift: u7 = @intCast(52 - exp);
         return full_mantissa >> shift;
     }
+}
+
+// ─── Integer formatting (avoids std.fmt which calls @rem on u128) ────
+
+/// Format a u128 as a decimal string into the provided buffer.
+/// Returns the slice of `buf` that contains the formatted number.
+/// Buffer must be at least 39 bytes (max u128 is 39 digits).
+pub fn u128_to_str(buf: []u8, val: u128) FormatResult {
+    return u128_to_str_inner(buf, val);
+}
+
+/// Result of formatting a 128-bit integer into a buffer.
+pub const FormatResult = struct {
+    str: []const u8,
+    start: usize,
+};
+
+fn u128_to_str_inner(buf: []u8, val: u128) FormatResult {
+    if (val == 0) {
+        buf[buf.len - 1] = '0';
+        return .{ .str = buf[buf.len - 1 ..], .start = buf.len - 1 };
+    }
+
+    var v = val;
+    var pos: usize = buf.len;
+    while (v != 0) {
+        pos -= 1;
+        const digit: u8 = @truncate(rem_u128(v, 10));
+        buf[pos] = '0' + digit;
+        v = divTrunc_u128(v, 10);
+    }
+    return .{ .str = buf[pos..], .start = pos };
+}
+
+/// Format an i128 as a decimal string into the provided buffer.
+/// Returns the slice of `buf` that contains the formatted number.
+/// Buffer must be at least 40 bytes (max i128 is 39 digits + sign).
+pub fn i128_to_str(buf: []u8, val: i128) FormatResult {
+    if (val < 0) {
+        const result = u128_to_str_inner(buf, @abs(val));
+        const sign_pos = result.start - 1;
+        buf[sign_pos] = '-';
+        return .{ .str = buf[sign_pos..], .start = sign_pos };
+    }
+    return u128_to_str_inner(buf, @as(u128, @intCast(val)));
 }

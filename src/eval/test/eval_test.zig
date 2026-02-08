@@ -6,6 +6,7 @@ const base = @import("base");
 const can = @import("can");
 const check = @import("check");
 const builtins = @import("builtins");
+const i128h = builtins.compiler_rt_128;
 const collections = @import("collections");
 const compiled_builtins = @import("compiled_builtins");
 const roc_target = @import("roc_target");
@@ -816,7 +817,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
         } else blk: {
             const dec_value = result.asDec(ops);
             const RocDec = builtins.dec.RocDec;
-            break :blk @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
+            break :blk i128h.divTrunc_i128(dec_value.num, RocDec.one_point_zero_i128);
         };
         try testing.expectEqual(@as(i128, 13), int_value);
     }
@@ -911,7 +912,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
             } else blk: {
                 const dec_value = result.asDec(ops);
                 const RocDec = builtins.dec.RocDec;
-                break :blk @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
+                break :blk i128h.divTrunc_i128(dec_value.num, RocDec.one_point_zero_i128);
             };
             try testing.expectEqual(@as(i128, 13), int_value);
         }

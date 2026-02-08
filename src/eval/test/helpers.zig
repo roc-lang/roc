@@ -7,6 +7,7 @@ const base = @import("base");
 const can = @import("can");
 const check = @import("check");
 const builtins = @import("builtins");
+const i128h = builtins.compiler_rt_128;
 const compiled_builtins = @import("compiled_builtins");
 
 const layout = @import("layout");
@@ -196,9 +197,10 @@ noinline fn executeAndFormat(
 
             if (abs_val < one_point_zero / 10) {
                 // This is a raw integer, not Dec-scaled - format as "N.0"
-                const elem_str = try std.fmt.allocPrint(alloc, "{d}.0", .{raw_val});
-                defer alloc.free(elem_str);
-                try output.appendSlice(elem_str);
+                var fmt_buf: [40]u8 = undefined;
+                const num_str = i128h.i128_to_str(&fmt_buf, raw_val).str;
+                try output.appendSlice(num_str);
+                try output.appendSlice(".0");
             } else {
                 // This is a Dec-scaled value - format as Dec
                 const dec_val = builtins.dec.RocDec{ .num = raw_val };
@@ -239,7 +241,8 @@ noinline fn executeAndFormat(
         layout_mod.Idx.i128, layout_mod.Idx.u128 => blk: {
             var result: i128 align(16) = 0; // Initialize to 0 and ensure 16-byte alignment
             try dev_eval.callWithCrashProtection(executable, @ptrCast(&result));
-            break :blk std.fmt.allocPrint(alloc, "{}", .{result});
+            var str_buf: [40]u8 = undefined;
+            break :blk alloc.dupe(u8, i128h.i128_to_str(&str_buf, result).str);
         },
         layout_mod.Idx.dec => blk: {
             var result: i128 align(16) = 0; // Initialize to 0 and ensure 16-byte alignment
@@ -628,12 +631,13 @@ pub fn runExpectI64(src: []const u8, expected_int: i128, should_trace: enum { tr
         const dec_value = result.asDec(ops);
         const RocDec = builtins.dec.RocDec;
         // Convert Dec to integer by dividing by the decimal scale factor
-        break :blk @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
+        break :blk i128h.divTrunc_i128(dec_value.num, RocDec.one_point_zero_i128);
     };
 
     // Compare with DevEvaluator using integer string representation
     // DevEvaluator uses integer layouts, so we compare as integers
-    const int_str = try std.fmt.allocPrint(test_allocator, "{}", .{int_value});
+    var str_buf: [40]u8 = undefined;
+    const int_str = try test_allocator.dupe(u8, i128h.i128_to_str(&str_buf, int_value).str);
     defer test_allocator.free(int_str);
     try compareWithDevEvaluator(test_allocator, int_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
@@ -960,7 +964,7 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
             // Unsuffixed numeric literals default to Dec
             const dec_value = element.asDec(ops);
             const RocDec = builtins.dec.RocDec;
-            break :blk @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
+            break :blk i128h.divTrunc_i128(dec_value.num, RocDec.one_point_zero_i128);
         };
 
         // Store formatted string for comparison
@@ -970,7 +974,8 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
             const dec_slice = dec_value.format_to_buf(&dec_buf);
             break :blk try test_allocator.dupe(u8, dec_slice);
         } else blk: {
-            break :blk try std.fmt.allocPrint(test_allocator, "{}", .{int_val});
+            var fmt_buf: [40]u8 = undefined;
+            break :blk try test_allocator.dupe(u8, i128h.i128_to_str(&fmt_buf, int_val).str);
         };
         tuple_count += 1;
 
@@ -1059,7 +1064,7 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
                     // Unsuffixed numeric literals default to Dec
                     const dec_value = field_value.asDec(ops);
                     const RocDec = builtins.dec.RocDec;
-                    break :blk @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
+                    break :blk i128h.divTrunc_i128(dec_value.num, RocDec.one_point_zero_i128);
                 };
 
                 field_values[field_count] = int_val;
@@ -1190,7 +1195,8 @@ pub fn runExpectListI64(src: []const u8, expected_elements: []const i64, should_
         const int_val = element.asI128();
 
         if (i > 0) try list_str.appendSlice(test_allocator, ", ");
-        const elem_str = try std.fmt.allocPrint(test_allocator, "{}", .{int_val});
+        var fmt_buf: [40]u8 = undefined;
+        const elem_str = try test_allocator.dupe(u8, i128h.i128_to_str(&fmt_buf, int_val).str);
         defer test_allocator.free(elem_str);
         try list_str.appendSlice(test_allocator, elem_str);
 
@@ -1350,7 +1356,7 @@ fn rewriteNumericLiteralExpr(
     const f64_value: f64 = switch (current_expr) {
         .e_dec => |dec| blk: {
             // Dec is stored as i128 scaled by 10^18
-            const scaled = @as(f64, @floatFromInt(dec.value.num));
+            const scaled = builtins.compiler_rt_128.i128_to_f64(dec.value.num);
             break :blk scaled / 1e18;
         },
         .e_dec_small => |small| blk: {
@@ -1650,7 +1656,7 @@ test "interpreter reuse across multiple evaluations" {
                     try std.testing.expect(result.layout.data.scalar.data.frac == .dec);
                     const dec_value = result.asDec(ops);
                     // Dec stores values scaled by 10^18, divide to get the integer part
-                    break :blk @divTrunc(dec_value.num, builtins.dec.RocDec.one_point_zero_i128);
+                    break :blk i128h.divTrunc_i128(dec_value.num, builtins.dec.RocDec.one_point_zero_i128);
                 },
                 else => unreachable,
             };

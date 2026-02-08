@@ -22,7 +22,10 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const builtins = @import("builtins");
 const bindings = @import("bindings.zig");
+
+const i128h = builtins.compiler_rt_128;
 
 const Allocator = std.mem.Allocator;
 
@@ -88,12 +91,12 @@ fn formatDec(allocator: Allocator, num: i128) Allocator.Error![]const u8 {
         try out.append('-');
     }
 
-    const integer_part = @divTrunc(abs_value, @as(u128, @intCast(dec_scale_factor)));
-    const fractional_part = @rem(abs_value, @as(u128, @intCast(dec_scale_factor)));
+    const integer_part = i128h.divTrunc_u128(abs_value, @as(u128, @intCast(dec_scale_factor)));
+    const fractional_part = i128h.rem_u128(abs_value, @as(u128, @intCast(dec_scale_factor)));
 
     // Format integer part
     var int_buf: [40]u8 = undefined;
-    const int_str = std.fmt.bufPrint(&int_buf, "{d}", .{integer_part}) catch unreachable;
+    const int_str = i128h.u128_to_str(&int_buf, integer_part).str;
     try out.appendSlice(int_str);
 
     if (fractional_part == 0) {
@@ -108,9 +111,9 @@ fn formatDec(allocator: Allocator, num: i128) Allocator.Error![]const u8 {
     var remaining = fractional_part;
     var idx: usize = dec_decimal_places;
     while (idx > 0) : (idx -= 1) {
-        const digit: u8 = @intCast(@mod(remaining, 10));
+        const digit: u8 = @intCast(i128h.rem_u128(remaining, 10));
         digits[idx - 1] = digit + '0';
-        remaining = @divTrunc(remaining, 10);
+        remaining = i128h.divTrunc_u128(remaining, 10);
     }
 
     // Trim trailing zeros
@@ -420,14 +423,16 @@ pub fn compileAndExecute(
             const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
             var result: i128 = undefined;
             eval_fn(&result);
-            return std.fmt.allocPrint(allocator, "{d}", .{result}) catch return error.OutOfMemory;
+            var str_buf: [40]u8 = undefined;
+            return allocator.dupe(u8, i128h.i128_to_str(&str_buf, result).str) catch return error.OutOfMemory;
         },
         .u128 => {
             const EvalFn = *const fn (*i128) callconv(.c) void;
             const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
             var result: i128 = undefined;
             eval_fn(&result);
-            return std.fmt.allocPrint(allocator, "{d}", .{@as(u128, @bitCast(result))}) catch return error.OutOfMemory;
+            var str_buf: [40]u8 = undefined;
+            return allocator.dupe(u8, i128h.u128_to_str(&str_buf, @as(u128, @bitCast(result))).str) catch return error.OutOfMemory;
         },
         .f64 => {
             const EvalFn = *const fn (*f64) callconv(.c) void;

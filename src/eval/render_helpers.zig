@@ -6,6 +6,7 @@ const can = @import("can");
 const layout = @import("layout");
 const builtins = @import("builtins");
 const StackValue = @import("StackValue.zig");
+const i128h = builtins.compiler_rt_128;
 const RocDec = builtins.dec.RocDec;
 const TypeScope = types.TypeScope;
 
@@ -691,9 +692,10 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
         if (scalar.tag == .frac and scalar.data.frac == .dec) {
             const dec = @as(*const RocDec, @ptrCast(@alignCast(value.ptr.?))).*;
             // Check if this is a whole number (no fractional part)
-            if (@rem(@abs(dec.num), RocDec.one_point_zero_i128) == 0) {
-                const whole = @divTrunc(dec.num, RocDec.one_point_zero_i128);
-                return try std.fmt.allocPrint(gpa, "{d}", .{whole});
+            if (i128h.rem_u128(@abs(dec.num), @as(u128, @intCast(RocDec.one_point_zero_i128))) == 0) {
+                const whole = i128h.divTrunc_i128(dec.num, RocDec.one_point_zero_i128);
+                var str_buf: [40]u8 = undefined;
+                return try gpa.dupe(u8, i128h.i128_to_str(&str_buf, whole).str);
             }
         }
     }
@@ -726,9 +728,10 @@ pub fn renderValueRoc(ctx: *RenderCtx, value: StackValue) ![]u8 {
             .int => {
                 // Check if this is an unsigned type that needs asU128
                 const precision = value.getIntPrecision();
+                var str_buf: [40]u8 = undefined;
                 return switch (precision) {
-                    .u64, .u128 => try std.fmt.allocPrint(gpa, "{d}", .{value.asU128()}),
-                    else => try std.fmt.allocPrint(gpa, "{d}", .{value.asI128()}),
+                    .u64, .u128 => try gpa.dupe(u8, i128h.u128_to_str(&str_buf, value.asU128()).str),
+                    else => try gpa.dupe(u8, i128h.i128_to_str(&str_buf, value.asI128()).str),
                 };
             },
             .frac => {
@@ -746,10 +749,11 @@ pub fn renderValueRoc(ctx: *RenderCtx, value: StackValue) ![]u8 {
                         const dec = @as(*const RocDec, @ptrCast(@alignCast(value.ptr.?))).*;
                         // In REPL mode, strip .0 from whole-number Dec values
                         if (ctx.strip_unbound_numeral_decimal and
-                            @rem(@abs(dec.num), RocDec.one_point_zero_i128) == 0)
+                            i128h.rem_u128(@abs(dec.num), @as(u128, @intCast(RocDec.one_point_zero_i128))) == 0)
                         {
-                            const whole = @divTrunc(dec.num, RocDec.one_point_zero_i128);
-                            return try std.fmt.allocPrint(gpa, "{d}", .{whole});
+                            const whole = i128h.divTrunc_i128(dec.num, RocDec.one_point_zero_i128);
+                            var str_buf: [40]u8 = undefined;
+                            return try gpa.dupe(u8, i128h.i128_to_str(&str_buf, whole).str);
                         }
                         var buf: [RocDec.max_str_length]u8 = undefined;
                         const slice = dec.format_to_buf(&buf);
