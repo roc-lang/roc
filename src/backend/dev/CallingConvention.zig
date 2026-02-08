@@ -22,6 +22,8 @@ const RocTarget = @import("roc_target").RocTarget;
 const x86_64 = @import("x86_64/mod.zig");
 const aarch64 = @import("aarch64/mod.zig");
 
+const Relocation = @import("Relocation.zig").Relocation;
+
 /// Calling convention configuration for a specific target
 pub const CallingConvention = struct {
     /// Argument registers for integer/pointer arguments
@@ -135,8 +137,8 @@ pub fn CallBuilder(comptime EmitType: type) type {
     const is_aarch64 = roc_target.toCpuArch() == .aarch64 or roc_target.toCpuArch() == .aarch64_be;
     const is_windows = roc_target.isWindows();
 
-    // Represents a deferred stack argument to be stored after stack allocation
-    const StackArg = union(enum) {
+    // Represents a deferred argument source (used for both stack and register args)
+    const ArgSource = union(enum) {
         // Store from a register: mov [RSP+offset], reg
         from_reg: GeneralReg,
         // Store an immediate value: mov [RSP+offset], imm
@@ -146,6 +148,14 @@ pub fn CallBuilder(comptime EmitType: type) type {
         // Store memory value: mov scratch, [base+offset]; mov [RSP+stack_offset], scratch
         from_mem: struct { base: GeneralReg, offset: i32 },
     };
+
+    // A deferred register argument, resolved later via parallel move algorithm
+    const DeferredRegArg = struct {
+        dst_index: u8, // index into CC_EMIT.PARAM_REGS
+        src: ArgSource,
+    };
+
+    const MoveStatus = enum { to_move, being_moved, moved };
 
     // Maximum stack arguments we support (should be plenty for any real call)
     const MAX_STACK_ARGS = 16;
@@ -158,11 +168,14 @@ pub fn CallBuilder(comptime EmitType: type) type {
         /// Float argument index (separate from int_arg_index on System V, same on Windows)
         float_arg_index: usize = 0,
         stack_arg_count: usize = 0,
-        stack_args: [MAX_STACK_ARGS]StackArg = undefined,
+        stack_args: [MAX_STACK_ARGS]ArgSource = undefined,
         return_by_ptr: bool = false,
         /// RBP-relative offset where R12 is saved (only used on Windows x64)
         /// Set via saveR12 before adding arguments that might clobber R12
         r12_save_offset: ?i32 = null,
+        /// Deferred register arguments, resolved via parallel move before call
+        reg_args: [CC_EMIT.PARAM_REGS.len]DeferredRegArg = undefined,
+        reg_arg_count: u8 = 0,
 
         /// Initialize CallBuilder with automatic R12 handling for C function calls.
         ///
@@ -211,96 +224,68 @@ pub fn CallBuilder(comptime EmitType: type) type {
         /// Add argument from a general register
         pub fn addRegArg(self: *Self, src_reg: GeneralReg) !void {
             if (self.int_arg_index < CC_EMIT.PARAM_REGS.len) {
-                const dst = CC_EMIT.PARAM_REGS[self.int_arg_index];
-                if (dst != src_reg) {
-                    if (comptime is_aarch64) {
-                        try self.emit.movRegReg(.w64, dst, src_reg);
-                    } else {
-                        try self.emit.movRegReg(.w64, dst, src_reg);
-                    }
-                }
+                self.reg_args[self.reg_arg_count] = .{
+                    .dst_index = @intCast(self.int_arg_index),
+                    .src = .{ .from_reg = src_reg },
+                };
+                self.reg_arg_count += 1;
                 self.int_arg_index += 1;
             } else {
-                if (comptime is_aarch64) {
-                    // aarch64: push to stack (str with pre-decrement or stp)
-                    @panic("Stack args not yet implemented for aarch64 CallBuilder");
-                } else {
-                    // Defer stack arg - will be stored after stack allocation in call()
-                    std.debug.assert(self.stack_arg_count < MAX_STACK_ARGS);
-                    self.stack_args[self.stack_arg_count] = .{ .from_reg = src_reg };
-                    self.stack_arg_count += 1;
-                }
+                // Defer stack arg - will be stored after stack allocation in call()
+                std.debug.assert(self.stack_arg_count < MAX_STACK_ARGS);
+                self.stack_args[self.stack_arg_count] = .{ .from_reg = src_reg };
+                self.stack_arg_count += 1;
             }
         }
 
         /// Add argument by loading a pointer (LEA) to a stack location
         pub fn addLeaArg(self: *Self, base_reg: GeneralReg, offset: i32) !void {
             if (self.int_arg_index < CC_EMIT.PARAM_REGS.len) {
-                const dst = CC_EMIT.PARAM_REGS[self.int_arg_index];
-                if (comptime is_aarch64) {
-                    // aarch64: ADD dst, base, #offset (or SUB for negative offsets)
-                    if (offset >= 0) {
-                        try self.emit.addRegRegImm12(.w64, dst, base_reg, @intCast(offset));
-                    } else {
-                        try self.emit.subRegRegImm12(.w64, dst, base_reg, @intCast(-offset));
-                    }
-                } else {
-                    try self.emit.leaRegMem(dst, base_reg, offset);
-                }
+                self.reg_args[self.reg_arg_count] = .{
+                    .dst_index = @intCast(self.int_arg_index),
+                    .src = .{ .from_lea = .{ .base = base_reg, .offset = offset } },
+                };
+                self.reg_arg_count += 1;
                 self.int_arg_index += 1;
             } else {
-                if (comptime is_aarch64) {
-                    @panic("Stack args not yet implemented for aarch64 CallBuilder");
-                } else {
-                    // Defer stack arg - will be stored after stack allocation in call()
-                    std.debug.assert(self.stack_arg_count < MAX_STACK_ARGS);
-                    self.stack_args[self.stack_arg_count] = .{ .from_lea = .{ .base = base_reg, .offset = offset } };
-                    self.stack_arg_count += 1;
-                }
+                // Defer stack arg - will be stored after stack allocation in call()
+                std.debug.assert(self.stack_arg_count < MAX_STACK_ARGS);
+                self.stack_args[self.stack_arg_count] = .{ .from_lea = .{ .base = base_reg, .offset = offset } };
+                self.stack_arg_count += 1;
             }
         }
 
         /// Add argument by loading from stack memory
         pub fn addMemArg(self: *Self, base_reg: GeneralReg, offset: i32) !void {
             if (self.int_arg_index < CC_EMIT.PARAM_REGS.len) {
-                const dst = CC_EMIT.PARAM_REGS[self.int_arg_index];
-                if (comptime is_aarch64) {
-                    try self.emit.ldrRegMemSoff(.w64, dst, base_reg, offset);
-                } else {
-                    try self.emit.movRegMem(.w64, dst, base_reg, offset);
-                }
+                self.reg_args[self.reg_arg_count] = .{
+                    .dst_index = @intCast(self.int_arg_index),
+                    .src = .{ .from_mem = .{ .base = base_reg, .offset = offset } },
+                };
+                self.reg_arg_count += 1;
                 self.int_arg_index += 1;
             } else {
-                if (comptime is_aarch64) {
-                    @panic("Stack args not yet implemented for aarch64 CallBuilder");
-                } else {
-                    // Defer stack arg - will be stored after stack allocation in call()
-                    std.debug.assert(self.stack_arg_count < MAX_STACK_ARGS);
-                    self.stack_args[self.stack_arg_count] = .{ .from_mem = .{ .base = base_reg, .offset = offset } };
-                    self.stack_arg_count += 1;
-                }
+                // Defer stack arg - will be stored after stack allocation in call()
+                std.debug.assert(self.stack_arg_count < MAX_STACK_ARGS);
+                self.stack_args[self.stack_arg_count] = .{ .from_mem = .{ .base = base_reg, .offset = offset } };
+                self.stack_arg_count += 1;
             }
         }
 
         /// Add immediate value argument
         pub fn addImmArg(self: *Self, value: i64) !void {
             if (self.int_arg_index < CC_EMIT.PARAM_REGS.len) {
-                const dst = CC_EMIT.PARAM_REGS[self.int_arg_index];
-                if (comptime is_aarch64) {
-                    try self.emit.movRegImm64(dst, @bitCast(value));
-                } else {
-                    try self.emit.movRegImm64(dst, value);
-                }
+                self.reg_args[self.reg_arg_count] = .{
+                    .dst_index = @intCast(self.int_arg_index),
+                    .src = .{ .from_imm = value },
+                };
+                self.reg_arg_count += 1;
                 self.int_arg_index += 1;
             } else {
-                if (comptime is_aarch64) {
-                    @panic("Stack args not yet implemented for aarch64 CallBuilder");
-                } else {
-                    // Defer stack arg - will be stored after stack allocation in call()
-                    std.debug.assert(self.stack_arg_count < MAX_STACK_ARGS);
-                    self.stack_args[self.stack_arg_count] = .{ .from_imm = value };
-                    self.stack_arg_count += 1;
-                }
+                // Defer stack arg - will be stored after stack allocation in call()
+                std.debug.assert(self.stack_arg_count < MAX_STACK_ARGS);
+                self.stack_args[self.stack_arg_count] = .{ .from_imm = value };
+                self.stack_arg_count += 1;
             }
         }
 
@@ -432,6 +417,118 @@ pub fn CallBuilder(comptime EmitType: type) type {
             return CC_EMIT.FLOAT_PARAM_REGS[0];
         }
 
+        /// Emit a single argument instruction: move source to destination register.
+        fn emitArgInst(self: *Self, dst: GeneralReg, src: ArgSource) !void {
+            switch (src) {
+                .from_reg => |reg| {
+                    if (dst != reg) try self.emit.movRegReg(.w64, dst, reg);
+                },
+                .from_lea => |lea| {
+                    if (comptime is_aarch64) {
+                        if (lea.offset >= 0 and lea.offset <= 4095) {
+                            try self.emit.addRegRegImm12(.w64, dst, lea.base, @intCast(lea.offset));
+                        } else if (lea.offset < 0 and -lea.offset <= 4095) {
+                            try self.emit.subRegRegImm12(.w64, dst, lea.base, @intCast(-lea.offset));
+                        } else {
+                            // Offset too large for imm12 — use movRegImm64 + add
+                            try self.emit.movRegImm64(dst, @bitCast(@as(i64, lea.offset)));
+                            try self.emit.addRegRegReg(.w64, dst, lea.base, dst);
+                        }
+                    } else {
+                        try self.emit.leaRegMem(dst, lea.base, lea.offset);
+                    }
+                },
+                .from_mem => |mem| {
+                    if (comptime is_aarch64)
+                        try self.emit.ldrRegMemSoff(.w64, dst, mem.base, mem.offset)
+                    else
+                        try self.emit.movRegMem(.w64, dst, mem.base, mem.offset);
+                },
+                .from_imm => |value| {
+                    if (comptime is_aarch64)
+                        try self.emit.movRegImm64(dst, @bitCast(value))
+                    else
+                        try self.emit.movRegImm64(dst, value);
+                },
+            }
+        }
+
+        /// Emit a single stack argument for aarch64.
+        /// Stores the arg value at [SP + uoffset * 8] using SCRATCH_REG as temp.
+        fn emitStackArgAarch64(self: *Self, arg: ArgSource, uoffset: u12) !void {
+            switch (arg) {
+                .from_reg => |reg| {
+                    try self.emit.strRegMemUoff(.w64, reg, CC_EMIT.STACK_PTR, uoffset);
+                },
+                .from_imm => |value| {
+                    try self.emit.movRegImm64(CC_EMIT.SCRATCH_REG, @bitCast(value));
+                    try self.emit.strRegMemUoff(.w64, CC_EMIT.SCRATCH_REG, CC_EMIT.STACK_PTR, uoffset);
+                },
+                .from_lea => |lea| {
+                    if (lea.offset >= 0)
+                        try self.emit.addRegRegImm12(.w64, CC_EMIT.SCRATCH_REG, lea.base, @intCast(lea.offset))
+                    else
+                        try self.emit.subRegRegImm12(.w64, CC_EMIT.SCRATCH_REG, lea.base, @intCast(-lea.offset));
+                    try self.emit.strRegMemUoff(.w64, CC_EMIT.SCRATCH_REG, CC_EMIT.STACK_PTR, uoffset);
+                },
+                .from_mem => |mem| {
+                    try self.emit.ldrRegMemSoff(.w64, CC_EMIT.SCRATCH_REG, mem.base, mem.offset);
+                    try self.emit.strRegMemUoff(.w64, CC_EMIT.SCRATCH_REG, CC_EMIT.STACK_PTR, uoffset);
+                },
+            }
+        }
+
+        /// Resolve deferred register arguments using Rideau-Serpette-Leroy parallel move algorithm.
+        /// This handles arbitrary permutations of param registers without clobbering,
+        /// using SCRATCH_REG to break cycles. At most one scratch save per cycle.
+        fn emitDeferredRegArgs(self: *Self) !void {
+            if (self.reg_arg_count == 0) return;
+
+            var statuses = [_]MoveStatus{.to_move} ** CC_EMIT.PARAM_REGS.len;
+            // Mutable copy of sources — cycle breaking redirects sources to SCRATCH_REG
+            var sources: [CC_EMIT.PARAM_REGS.len]ArgSource = undefined;
+            for (self.reg_args[0..self.reg_arg_count], 0..) |arg, i| {
+                sources[i] = arg.src;
+            }
+
+            for (0..self.reg_arg_count) |i| {
+                if (statuses[i] == .to_move) {
+                    try self.moveOne(i, &statuses, &sources);
+                }
+            }
+        }
+
+        /// Process a single deferred register arg, recursing to resolve dependencies first.
+        fn moveOne(self: *Self, i: usize, statuses: *[CC_EMIT.PARAM_REGS.len]MoveStatus, sources: *[CC_EMIT.PARAM_REGS.len]ArgSource) !void {
+            statuses[i] = .being_moved;
+            const dst = CC_EMIT.PARAM_REGS[self.reg_args[i].dst_index];
+
+            // Check if any other arg j reads from our destination register
+            for (0..self.reg_arg_count) |j| {
+                if (j == i) continue;
+                const src_reg = switch (sources[j]) {
+                    .from_reg => |reg| reg,
+                    else => continue, // only reg sources can form conflicts
+                };
+                if (src_reg != dst) continue;
+
+                // Arg j reads from dst — we'd clobber it
+                switch (statuses[j]) {
+                    .to_move => try self.moveOne(j, statuses, sources),
+                    .being_moved => {
+                        // CYCLE: save j's source to SCRATCH_REG
+                        try self.emit.movRegReg(.w64, CC_EMIT.SCRATCH_REG, src_reg);
+                        sources[j] = .{ .from_reg = CC_EMIT.SCRATCH_REG };
+                    },
+                    .moved => {}, // already handled
+                }
+            }
+
+            // Now safe to emit our instruction
+            try self.emitArgInst(dst, sources[i]);
+            statuses[i] = .moved;
+        }
+
         /// Emit call instruction and handle cleanup.
         /// If R12 save was configured via init(), R12 is automatically
         /// restored after the call returns.
@@ -453,8 +550,10 @@ pub fn CallBuilder(comptime EmitType: type) type {
                     try self.emit.subRegImm32(.w64, CC_EMIT.STACK_PTR, @intCast(total_space));
                 }
 
-                // Store deferred stack arguments at correct offsets
-                // Stack args go after shadow space: [RSP+32], [RSP+40], etc.
+                // Store stack arguments BEFORE resolving deferred register args,
+                // because the parallel move may clobber registers that stack args
+                // source from (e.g., rhs operand in RCX/RDX when those are also
+                // param register destinations for the first 4 args).
                 for (self.stack_args[0..self.stack_arg_count], 0..) |arg, i| {
                     const stack_offset: i32 = @intCast(CC_EMIT.SHADOW_SPACE + i * 8);
                     // Assert stack args are placed after shadow space
@@ -478,11 +577,19 @@ pub fn CallBuilder(comptime EmitType: type) type {
                     }
                 }
             } else if (comptime is_aarch64) {
-                // aarch64 doesn't need shadow space, but may need stack args
-                if (self.stack_arg_count > 0) {
-                    @panic("Stack args not yet implemented for aarch64 CallBuilder");
+                // aarch64: allocate stack space and store stack args
+                if (total_space > 0) {
+                    try self.emit.subRegRegImm12(.w64, CC_EMIT.STACK_PTR, CC_EMIT.STACK_PTR, @intCast(total_space));
+                }
+
+                for (self.stack_args[0..self.stack_arg_count], 0..) |arg, i| {
+                    try self.emitStackArgAarch64(arg, @intCast(i));
                 }
             }
+
+            // Resolve deferred register args AFTER stack args are stored,
+            // so the parallel move doesn't clobber stack arg source registers.
+            try self.emitDeferredRegArgs();
 
             // Load function address into scratch register
             if (comptime is_aarch64) {
@@ -510,7 +617,9 @@ pub fn CallBuilder(comptime EmitType: type) type {
                     try self.emit.movRegMem(.w64, .R12, CC_EMIT.BASE_PTR, offset);
                 }
             } else if (comptime is_aarch64) {
-                // aarch64: stack cleanup would be different (restore SP)
+                if (total_space > 0) {
+                    try self.emit.addRegRegImm12(.w64, CC_EMIT.STACK_PTR, CC_EMIT.STACK_PTR, @intCast(total_space));
+                }
             }
         }
 
@@ -535,11 +644,9 @@ pub fn CallBuilder(comptime EmitType: type) type {
                     try self.emit.subRegImm32(.w64, CC_EMIT.STACK_PTR, @intCast(total_space));
                 }
 
-                // Store deferred stack arguments at correct offsets
-                // Stack args go after shadow space: [RSP+32], [RSP+40], etc.
+                // Store stack arguments BEFORE resolving deferred register args
                 for (self.stack_args[0..self.stack_arg_count], 0..) |arg, i| {
                     const stack_offset: i32 = @intCast(CC_EMIT.SHADOW_SPACE + i * 8);
-                    // Assert stack args are placed after shadow space
                     std.debug.assert(stack_offset >= CC_EMIT.SHADOW_SPACE);
                     switch (arg) {
                         .from_reg => |reg| {
@@ -560,10 +667,17 @@ pub fn CallBuilder(comptime EmitType: type) type {
                     }
                 }
             } else if (comptime is_aarch64) {
-                if (self.stack_arg_count > 0) {
-                    @panic("Stack args not yet implemented for aarch64 CallBuilder");
+                if (total_space > 0) {
+                    try self.emit.subRegRegImm12(.w64, CC_EMIT.STACK_PTR, CC_EMIT.STACK_PTR, @intCast(total_space));
+                }
+
+                for (self.stack_args[0..self.stack_arg_count], 0..) |arg, i| {
+                    try self.emitStackArgAarch64(arg, @intCast(i));
                 }
             }
+
+            // Resolve deferred register args AFTER stack args are stored
+            try self.emitDeferredRegArgs();
 
             if (comptime is_aarch64) {
                 try self.emit.blrReg(target);
@@ -582,6 +696,111 @@ pub fn CallBuilder(comptime EmitType: type) type {
                 if (self.r12_save_offset) |offset| {
                     try self.emit.movRegMem(.w64, .R12, CC_EMIT.BASE_PTR, offset);
                 }
+            } else if (comptime is_aarch64) {
+                if (total_space > 0) {
+                    try self.emit.addRegRegImm12(.w64, CC_EMIT.STACK_PTR, CC_EMIT.STACK_PTR, @intCast(total_space));
+                }
+            }
+        }
+
+        /// Call a function by symbol name, emitting a relocatable call instruction.
+        /// This is used for object file generation where we can't use direct function pointers.
+        /// The linker will patch the call offset during linking.
+        ///
+        /// Arguments:
+        /// - symbol_name: The symbol name to call (e.g., "roc_dev_str_concat")
+        /// - allocator: Allocator for the relocations list
+        /// - relocations: The relocations list to append the relocation entry to
+        ///
+        /// Note: On x86_64, this emits `call rel32` (E8 xx xx xx xx).
+        ///       On aarch64, this emits `bl offset` (26-bit signed offset).
+        pub fn callRelocatable(self: *Self, symbol_name: []const u8, allocator: std.mem.Allocator, relocations: *std.ArrayList(Relocation)) !void {
+            // Calculate total stack space needed (same as call/callReg)
+            const stack_args_space: u32 = @intCast(self.stack_arg_count * 8);
+            const total_unaligned: u32 = CC_EMIT.SHADOW_SPACE + stack_args_space;
+            const total_space: u32 = (total_unaligned + 15) & ~@as(u32, 15);
+
+            std.debug.assert(total_space % 16 == 0);
+            std.debug.assert(self.stack_arg_count == 0 or total_space >= CC_EMIT.SHADOW_SPACE + 8);
+
+            if (comptime is_x86_64) {
+                // Allocate all stack space at once
+                if (total_space > 0) {
+                    try self.emit.subRegImm32(.w64, CC_EMIT.STACK_PTR, @intCast(total_space));
+                }
+
+                // Store stack arguments BEFORE resolving deferred register args
+                for (self.stack_args[0..self.stack_arg_count], 0..) |arg, i| {
+                    const stack_offset: i32 = @intCast(CC_EMIT.SHADOW_SPACE + i * 8);
+                    std.debug.assert(stack_offset >= CC_EMIT.SHADOW_SPACE);
+                    switch (arg) {
+                        .from_reg => |reg| {
+                            try self.emit.movMemReg(.w64, CC_EMIT.STACK_PTR, stack_offset, reg);
+                        },
+                        .from_imm => |value| {
+                            try self.emit.movRegImm64(CC_EMIT.SCRATCH_REG, value);
+                            try self.emit.movMemReg(.w64, CC_EMIT.STACK_PTR, stack_offset, CC_EMIT.SCRATCH_REG);
+                        },
+                        .from_lea => |lea| {
+                            try self.emit.leaRegMem(CC_EMIT.SCRATCH_REG, lea.base, lea.offset);
+                            try self.emit.movMemReg(.w64, CC_EMIT.STACK_PTR, stack_offset, CC_EMIT.SCRATCH_REG);
+                        },
+                        .from_mem => |mem| {
+                            try self.emit.movRegMem(.w64, CC_EMIT.SCRATCH_REG, mem.base, mem.offset);
+                            try self.emit.movMemReg(.w64, CC_EMIT.STACK_PTR, stack_offset, CC_EMIT.SCRATCH_REG);
+                        },
+                    }
+                }
+            } else if (comptime is_aarch64) {
+                if (total_space > 0) {
+                    try self.emit.subRegRegImm12(.w64, CC_EMIT.STACK_PTR, CC_EMIT.STACK_PTR, @intCast(total_space));
+                }
+
+                for (self.stack_args[0..self.stack_arg_count], 0..) |arg, i| {
+                    try self.emitStackArgAarch64(arg, @intCast(i));
+                }
+            }
+
+            // Resolve deferred register args AFTER stack args are stored
+            try self.emitDeferredRegArgs();
+
+            // Emit relocatable call instruction
+            const code_offset = self.emit.buf.items.len;
+            if (comptime is_aarch64) {
+                // BL instruction with 0 offset placeholder
+                try self.emit.bl(0);
+                // Relocation points to the instruction itself for ARM64
+                try relocations.append(allocator, .{
+                    .linked_function = .{
+                        .offset = @intCast(code_offset),
+                        .name = symbol_name,
+                    },
+                });
+            } else {
+                // call rel32 with 0 offset placeholder
+                try self.emit.callRel32(0);
+                // For x86_64, relocation points to the 4-byte offset after the E8 opcode
+                try relocations.append(allocator, .{
+                    .linked_function = .{
+                        .offset = @intCast(code_offset + 1),
+                        .name = symbol_name,
+                    },
+                });
+            }
+
+            // Cleanup
+            if (comptime is_x86_64) {
+                if (total_space > 0) {
+                    try self.emit.addRegImm32(.w64, CC_EMIT.STACK_PTR, @intCast(total_space));
+                }
+
+                if (self.r12_save_offset) |offset| {
+                    try self.emit.movRegMem(.w64, .R12, CC_EMIT.BASE_PTR, offset);
+                }
+            } else if (comptime is_aarch64) {
+                if (total_space > 0) {
+                    try self.emit.addRegRegImm12(.w64, CC_EMIT.STACK_PTR, CC_EMIT.STACK_PTR, @intCast(total_space));
+                }
             }
         }
 
@@ -598,284 +817,6 @@ pub fn CallBuilder(comptime EmitType: type) type {
         /// Get argument register at index (for manual setup)
         pub fn getArgReg(index: usize) GeneralReg {
             return CC_EMIT.PARAM_REGS[index];
-        }
-    };
-}
-
-/// Callee-side function frame builder for cross-platform prologue/epilogue generation.
-///
-/// Handles differences between:
-/// - x86_64 System V (Linux, macOS, BSD): red zone available, RBX/R12-R15 callee-saved
-/// - x86_64 Windows Fastcall: NO red zone, RBX/RSI/RDI/R12-R15 callee-saved
-/// - aarch64 AAPCS64: X19-X28 callee-saved, FP/LR saved via STP
-///
-/// Usage:
-/// ```
-/// var frame = CalleeBuilder(Emit).init(&emit);
-/// frame.saveViaMove(.RBX);      // Save RBX using MOV [RBP-offset], reg
-/// frame.saveViaPush(.R12);      // Save R12 using PUSH (before stack alloc)
-/// frame.setStackSize(1024);     // Request 1024 bytes of stack space
-/// const initial_offset = try frame.emitPrologue();
-/// // ... generate function body ...
-/// try frame.emitEpilogue();
-/// ```
-pub fn CalleeBuilder(comptime EmitType: type) type {
-    const CC_EMIT = EmitType.CC;
-    const GeneralReg = EmitType.GeneralReg;
-    const roc_target = EmitType.roc_target;
-    const is_aarch64 = roc_target.toCpuArch() == .aarch64 or roc_target.toCpuArch() == .aarch64_be;
-
-    return struct {
-        const Self = @This();
-
-        emit: *EmitType,
-
-        // Configuration (set before emitPrologue)
-        stack_size: u32 = 0,
-        push_regs: [8]?GeneralReg = .{ null, null, null, null, null, null, null, null },
-        push_count: u8 = 0,
-        mov_save_regs: [8]?GeneralReg = .{ null, null, null, null, null, null, null, null },
-        mov_save_count: u8 = 0,
-
-        // State set by emitPrologue for use by emitEpilogue
-        actual_stack_alloc: u32 = 0,
-
-        /// Initialize a new callee frame builder
-        pub fn init(emit: *EmitType) Self {
-            return Self{ .emit = emit };
-        }
-
-        /// Set the stack size needed for local variables.
-        /// The actual allocation will be aligned to 16 bytes.
-        pub fn setStackSize(self: *Self, size: u32) void {
-            self.stack_size = size;
-        }
-
-        /// Mark a register to be saved via PUSH before stack allocation.
-        /// Use this for registers that need to be saved at fixed offsets relative to RBP.
-        /// Registers are pushed in the order they're added.
-        pub fn saveViaPush(self: *Self, reg: GeneralReg) void {
-            if (self.push_count < self.push_regs.len) {
-                self.push_regs[self.push_count] = reg;
-                self.push_count += 1;
-            }
-        }
-
-        /// Mark a register to be saved via MOV after stack allocation.
-        /// Use this for callee-saved registers in the deferred prologue pattern.
-        /// Saved at fixed RBP-relative offsets.
-        pub fn saveViaMove(self: *Self, reg: GeneralReg) void {
-            if (self.mov_save_count < self.mov_save_regs.len) {
-                self.mov_save_regs[self.mov_save_count] = reg;
-                self.mov_save_count += 1;
-            }
-        }
-
-        /// Get the RBP-relative offset for a MOV-saved register.
-        /// Offsets start at -8 and go down: -8, -16, -24, etc.
-        fn getMovSaveOffset(index: u8) i32 {
-            return -@as(i32, @intCast((index + 1) * 8));
-        }
-
-        /// Emit function prologue. Returns the initial stack_offset for allocStackSlot.
-        ///
-        /// Sequence (x86_64):
-        /// 1. push rbp; mov rbp, rsp (establish frame pointer)
-        /// 2. push <regs> (callee-saved via push, in order added)
-        /// 3. sub rsp, <aligned_size> (allocate stack space)
-        /// 4. mov [rbp-N], <regs> (callee-saved via mov, after allocation)
-        ///
-        /// On Windows x64, step 3 MUST happen before step 4 (no red zone).
-        pub fn emitPrologue(self: *Self) !i32 {
-            if (comptime is_aarch64) {
-                return self.emitPrologueAarch64();
-            } else {
-                return self.emitPrologueX86_64();
-            }
-        }
-
-        fn emitPrologueX86_64(self: *Self) !i32 {
-            // 1. Establish frame pointer
-            try self.emit.pushReg(.RBP);
-            try self.emit.movRegReg(.w64, .RBP, .RSP);
-
-            // 2. Push callee-saved registers (in order added)
-            for (self.push_regs[0..self.push_count]) |maybe_reg| {
-                if (maybe_reg) |reg| {
-                    try self.emit.pushReg(reg);
-                }
-            }
-
-            // Calculate stack offset after pushes (negative offset from RBP)
-            const push_bytes: i32 = @as(i32, self.push_count) * 8;
-
-            // 3. Allocate stack space (aligned to 16 bytes)
-            // Total frame must be 16-byte aligned. After pushes, RSP = RBP - push_bytes.
-            // We need (push_bytes + stack_alloc) to be 16-byte aligned.
-            const total_needed = self.stack_size + @as(u32, self.mov_save_count) * 8;
-            self.actual_stack_alloc = CC_EMIT.alignStackSize(total_needed);
-
-            if (self.actual_stack_alloc > 0) {
-                try self.emit.subRegImm32(.w64, CC_EMIT.STACK_PTR, @intCast(self.actual_stack_alloc));
-            }
-
-            // 4. Save MOV-based callee-saved registers (now safe - we've allocated stack)
-            for (0..self.mov_save_count) |i| {
-                if (self.mov_save_regs[i]) |reg| {
-                    const offset = getMovSaveOffset(@intCast(i));
-                    try self.emit.movMemReg(.w64, .RBP, offset, reg);
-                }
-            }
-
-            // Return initial stack_offset: accounts for push-saved registers
-            // First allocation should be below the pushed registers
-            return -push_bytes;
-        }
-
-        fn emitPrologueAarch64(self: *Self) !i32 {
-            // aarch64: Use STP for FP/LR and additional register pairs
-            // stp x29, x30, [sp, #-16]!  (push FP and LR, pre-decrement)
-            try self.emit.stpPreIndex(.w64, .FP, .LR, .ZRSP, -2);
-            // mov x29, sp (establish frame pointer)
-            try self.emit.movRegReg(.w64, .FP, .ZRSP);
-
-            // Save additional registers via STP (pairs only - aarch64 prefers paired ops)
-            // If odd count, the last register is handled via stack allocation + STR offset
-            const pair_count = self.push_count / 2;
-            var i: u8 = 0;
-            while (i < pair_count * 2) : (i += 2) {
-                const reg1 = self.push_regs[i] orelse break;
-                const reg2 = self.push_regs[i + 1] orelse break;
-                try self.emit.stpPreIndex(.w64, reg1, reg2, .ZRSP, -2);
-            }
-
-            // Calculate bytes used by STP operations
-            const stp_bytes: u32 = @as(u32, pair_count) * 16;
-
-            // Allocate remaining stack space (includes odd register + locals)
-            const odd_reg_space: u32 = if (self.push_count % 2 == 1) 16 else 0; // 16 for alignment
-            const total_needed = self.stack_size + @as(u32, self.mov_save_count) * 8 + odd_reg_space;
-            self.actual_stack_alloc = CC_EMIT.alignStackSize(total_needed);
-
-            if (self.actual_stack_alloc > 0) {
-                try self.emit.subRegRegImm12(.w64, .ZRSP, .ZRSP, @intCast(self.actual_stack_alloc));
-            }
-
-            // Handle odd register: store at [SP + actual_stack_alloc - 8]
-            if (self.push_count % 2 == 1) {
-                if (self.push_regs[self.push_count - 1]) |reg| {
-                    // STR to a fixed offset within allocated space
-                    const odd_offset: u12 = @intCast(self.actual_stack_alloc - 8);
-                    try self.emit.strRegMemUoff(.w64, reg, .ZRSP, odd_offset);
-                }
-            }
-
-            // Return initial stack_offset: accounts for STP-saved register pairs + odd register.
-            // FP/LR are at positive offsets from FP (FP+0, FP+8), so they don't
-            // affect the negative stack_offset used for local variable allocation.
-            // STP-saved registers are at FP-16, FP-8, etc.
-            // Odd register (if any) is stored at FP - stp_bytes - 8.
-            const odd_bytes: i32 = if (self.push_count % 2 == 1) 8 else 0;
-            return -@as(i32, @intCast(stp_bytes)) - odd_bytes;
-        }
-
-        /// Emit function epilogue. Mirrors the prologue automatically.
-        ///
-        /// Sequence (x86_64):
-        /// 1. mov <regs>, [rbp-N] (restore MOV-saved registers)
-        /// 2. add rsp, <aligned_size> OR mov rsp, rbp (deallocate stack)
-        /// 3. pop <regs> (restore PUSH-saved registers, reverse order)
-        /// 4. pop rbp; ret
-        pub fn emitEpilogue(self: *Self) !void {
-            if (comptime is_aarch64) {
-                return self.emitEpilogueAarch64();
-            } else {
-                return self.emitEpilogueX86_64();
-            }
-        }
-
-        fn emitEpilogueX86_64(self: *Self) !void {
-            // Compute actual_stack_alloc if not already set (allows separate prologue/epilogue instances)
-            if (self.actual_stack_alloc == 0 and self.stack_size > 0) {
-                self.actual_stack_alloc = self.computeActualStackAlloc();
-            }
-
-            // 1. Restore MOV-saved registers
-            for (0..self.mov_save_count) |i| {
-                if (self.mov_save_regs[i]) |reg| {
-                    const offset = getMovSaveOffset(@intCast(i));
-                    try self.emit.movRegMem(.w64, reg, .RBP, offset);
-                }
-            }
-
-            // 2. Deallocate stack space
-            if (self.actual_stack_alloc > 0) {
-                try self.emit.addRegImm32(.w64, CC_EMIT.STACK_PTR, @intCast(self.actual_stack_alloc));
-            }
-
-            // 3. Pop callee-saved registers (reverse order)
-            var i: i32 = @as(i32, self.push_count) - 1;
-            while (i >= 0) : (i -= 1) {
-                if (self.push_regs[@intCast(i)]) |reg| {
-                    try self.emit.popReg(reg);
-                }
-            }
-
-            // 4. Restore frame pointer and return
-            try self.emit.popReg(.RBP);
-            try self.emit.ret();
-        }
-
-        fn emitEpilogueAarch64(self: *Self) !void {
-            // Compute actual_stack_alloc if not already set (allows separate prologue/epilogue instances)
-            if (self.actual_stack_alloc == 0 and (self.stack_size > 0 or self.push_count % 2 == 1)) {
-                self.actual_stack_alloc = self.computeActualStackAlloc();
-            }
-
-            // Restore odd register first (stored at [SP + actual_stack_alloc - 8])
-            if (self.push_count % 2 == 1) {
-                if (self.push_regs[self.push_count - 1]) |reg| {
-                    const odd_offset: u12 = @intCast(self.actual_stack_alloc - 8);
-                    try self.emit.ldrRegMemUoff(.w64, reg, .ZRSP, odd_offset);
-                }
-            }
-
-            // Deallocate stack space
-            if (self.actual_stack_alloc > 0) {
-                try self.emit.addRegRegImm12(.w64, .ZRSP, .ZRSP, @intCast(self.actual_stack_alloc));
-            }
-
-            // Restore STP-saved register pairs (reverse order)
-            const pair_count = self.push_count / 2;
-            var i: i32 = @as(i32, pair_count) * 2 - 2;
-            while (i >= 0) : (i -= 2) {
-                const reg1 = self.push_regs[@intCast(i)] orelse break;
-                const reg2 = self.push_regs[@intCast(i + 1)] orelse break;
-                try self.emit.ldpPostIndex(.w64, reg1, reg2, .ZRSP, 2);
-            }
-
-            // Restore FP and LR, and return
-            try self.emit.ldpPostIndex(.w64, .FP, .LR, .ZRSP, 2);
-            try self.emit.ret();
-        }
-
-        /// Compute the actual stack allocation size based on configuration.
-        /// This is useful when you need to create separate CalleeBuilder instances
-        /// for prologue and epilogue (e.g., when storing frame state is impractical).
-        pub fn computeActualStackAlloc(self: *Self) u32 {
-            if (comptime is_aarch64) {
-                const odd_reg_space: u32 = if (self.push_count % 2 == 1) 16 else 0;
-                const total_needed = self.stack_size + @as(u32, self.mov_save_count) * 8 + odd_reg_space;
-                return CC_EMIT.alignStackSize(total_needed);
-            } else {
-                const total_needed = self.stack_size + @as(u32, self.mov_save_count) * 8;
-                return CC_EMIT.alignStackSize(total_needed);
-            }
-        }
-
-        /// Get the size of the callee-saved area (for MOV-saved registers)
-        pub fn getCalleeSavedSize(self: *const Self) u32 {
-            return @as(u32, self.mov_save_count) * 8;
         }
     };
 }
@@ -1851,115 +1792,6 @@ test "CallBuilder stack args at correct offsets on Windows" {
     try std.testing.expect(emit.buf.items.len > 50);
 }
 
-test "CalleeBuilder basic prologue/epilogue x86_64" {
-    const Emit = x86_64.LinuxEmit;
-    const Callee = CalleeBuilder(Emit);
-
-    var emit = Emit.init(std.testing.allocator);
-    defer emit.deinit();
-
-    var frame = Callee.init(&emit);
-    frame.setStackSize(64);
-
-    const initial_offset = try frame.emitPrologue();
-    // With no pushed registers, initial offset should be 0
-    try std.testing.expectEqual(@as(i32, 0), initial_offset);
-
-    try frame.emitEpilogue();
-
-    // Should have generated: push rbp, mov rbp rsp, sub rsp N, ..., add rsp N, pop rbp, ret
-    try std.testing.expect(emit.buf.items.len > 10);
-
-    // Check for push rbp (0x55)
-    try std.testing.expectEqual(@as(u8, 0x55), emit.buf.items[0]);
-}
-
-test "CalleeBuilder with pushed registers x86_64" {
-    const Emit = x86_64.LinuxEmit;
-    const Callee = CalleeBuilder(Emit);
-
-    var emit = Emit.init(std.testing.allocator);
-    defer emit.deinit();
-
-    var frame = Callee.init(&emit);
-    frame.saveViaPush(.RBX);
-    frame.saveViaPush(.R12);
-    frame.setStackSize(128);
-
-    const initial_offset = try frame.emitPrologue();
-    // With 2 pushed registers (16 bytes), initial offset should be -16
-    try std.testing.expectEqual(@as(i32, -16), initial_offset);
-
-    try frame.emitEpilogue();
-
-    // Should be longer due to push/pop of RBX and R12
-    try std.testing.expect(emit.buf.items.len > 20);
-}
-
-test "CalleeBuilder with MOV-saved registers x86_64" {
-    const Emit = x86_64.LinuxEmit;
-    const Callee = CalleeBuilder(Emit);
-
-    var emit = Emit.init(std.testing.allocator);
-    defer emit.deinit();
-
-    var frame = Callee.init(&emit);
-    frame.saveViaMove(.R13);
-    frame.saveViaMove(.R14);
-    frame.setStackSize(256);
-
-    _ = try frame.emitPrologue();
-    try frame.emitEpilogue();
-
-    // Should include MOV [rbp-8], r13 and MOV [rbp-16], r14 patterns
-    try std.testing.expect(emit.buf.items.len > 30);
-}
-
-test "CalleeBuilder stack alignment" {
-    const Emit = x86_64.LinuxEmit;
-    const Callee = CalleeBuilder(Emit);
-
-    var emit = Emit.init(std.testing.allocator);
-    defer emit.deinit();
-
-    var frame = Callee.init(&emit);
-    frame.setStackSize(50); // Not 16-byte aligned
-
-    _ = try frame.emitPrologue();
-
-    // The actual_stack_alloc should be rounded up to 16-byte alignment
-    try std.testing.expect(frame.actual_stack_alloc >= 50);
-    try std.testing.expectEqual(@as(u32, 0), frame.actual_stack_alloc % 16);
-}
-
-test "CalleeBuilder mixed push and MOV saves x86_64" {
-    const Emit = x86_64.LinuxEmit;
-    const Callee = CalleeBuilder(Emit);
-
-    var emit = Emit.init(std.testing.allocator);
-    defer emit.deinit();
-
-    var frame = Callee.init(&emit);
-    // Push RBX and R12 (like main expression does)
-    frame.saveViaPush(.RBX);
-    frame.saveViaPush(.R12);
-    // Also save R13 via MOV (like deferred prologue pattern)
-    frame.saveViaMove(.R13);
-    frame.setStackSize(1024);
-
-    const initial_offset = try frame.emitPrologue();
-    // 2 pushed registers = -16
-    try std.testing.expectEqual(@as(i32, -16), initial_offset);
-
-    try frame.emitEpilogue();
-
-    // Verify code was generated
-    // Prologue: push rbp(1) + mov rbp,rsp(3) + push RBX(1) + push R12(2) + sub rsp,N(7) + mov [rbp-8],R13(4) = 18
-    // Epilogue: mov R13,[rbp-8](4) + add rsp,N(7) + pop R12(2) + pop RBX(1) + pop rbp(1) + ret(1) = 16
-    // Total: ~34 bytes
-    try std.testing.expect(emit.buf.items.len > 30);
-}
-
 // Multi-target aarch64 calling convention tests
 
 test "aarch64 CC identical across all targets" {
@@ -2058,4 +1890,438 @@ test "CallBuilder macOS 6-arg call - all args in registers (System V)" {
     try linux_builder.call(0x12345678);
 
     try std.testing.expectEqualSlices(u8, linux_emit.buf.items, mac_code);
+}
+
+// Helper: search for a 3-byte pattern in a buffer, returning its position or null
+fn findPattern3(buf: []const u8, b0: u8, b1: u8, b2: u8) ?usize {
+    if (buf.len < 3) return null;
+    for (0..buf.len - 2) |i| {
+        if (buf[i] == b0 and buf[i + 1] == b1 and buf[i + 2] == b2) return i;
+    }
+    return null;
+}
+
+// x86_64 MOV reg,reg encoding reference (opcode 0x89, MOV r/m64, r64):
+// REX = 0x40 | (W<<3) | (R<<2) | B, where R=src.rexR, B=dst.rexB
+// ModRM = 0xC0 | (src.enc()<<3) | dst.enc()
+//
+// Common encodings:
+//   mov rdi, rax  = 48 89 C7     mov rsi, rax  = 48 89 C6
+//   mov rdi, rsi  = 48 89 F7     mov rsi, rdi  = 48 89 FE
+//   mov rdi, rdx  = 48 89 D7     mov rsi, rdx  = 48 89 D6
+//   mov rdi, rbx  = 48 89 DE     mov rdx, rdi  = 48 89 FA
+//   mov rdi, r11  = 4C 89 DF     mov r11, rsi  = 49 89 F3
+//   mov rsi, rbx  = 48 89 DE     mov rdx, r11  = 4C 89 DA
+
+test "parallel move: non-conflicting reg args" {
+    // Sources are non-param regs — no conflicts, no scratch needed
+    const Emit = x86_64.LinuxEmit;
+    const Builder = CallBuilder(Emit);
+
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var stack_offset: i32 = 0;
+    var builder = try Builder.init(&emit, &stack_offset);
+
+    try builder.addRegArg(.RAX); // RDI ← RAX
+    try builder.addRegArg(.RBX); // RSI ← RBX
+
+    try builder.call(0x12345678);
+
+    // mov rdi, rax = 48 89 C7
+    try std.testing.expect(findPattern3(emit.buf.items, 0x48, 0x89, 0xC7) != null);
+    // mov rsi, rbx = 48 89 DE
+    try std.testing.expect(findPattern3(emit.buf.items, 0x48, 0x89, 0xDE) != null);
+    // No scratch register involvement (no mov r11, ... = 49 89 F3 pattern)
+    try std.testing.expect(findPattern3(emit.buf.items, 0x49, 0x89, 0xF3) == null);
+}
+
+test "parallel move: 2-element swap cycle uses scratch" {
+    // RDI ← RSI, RSI ← RDI — a 2-cycle requiring SCRATCH_REG (R11)
+    const Emit = x86_64.LinuxEmit;
+    const Builder = CallBuilder(Emit);
+
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var stack_offset: i32 = 0;
+    var builder = try Builder.init(&emit, &stack_offset);
+
+    try builder.addRegArg(.RSI); // dst=RDI, src=RSI
+    try builder.addRegArg(.RDI); // dst=RSI, src=RDI
+
+    try builder.call(0x12345678);
+
+    // Algorithm breaks cycle: save RSI to R11, move RDI→RSI, move R11→RDI
+    // mov r11, rsi = 49 89 F3
+    const scratch_pos = findPattern3(emit.buf.items, 0x49, 0x89, 0xF3);
+    try std.testing.expect(scratch_pos != null);
+    // mov rsi, rdi = 48 89 FE
+    const mov_rsi_pos = findPattern3(emit.buf.items, 0x48, 0x89, 0xFE);
+    try std.testing.expect(mov_rsi_pos != null);
+    // mov rdi, r11 = 4C 89 DF
+    const mov_rdi_pos = findPattern3(emit.buf.items, 0x4C, 0x89, 0xDF);
+    try std.testing.expect(mov_rdi_pos != null);
+
+    // Verify ordering: scratch save < mov rsi < mov rdi (from scratch)
+    try std.testing.expect(scratch_pos.? < mov_rsi_pos.?);
+    try std.testing.expect(mov_rsi_pos.? < mov_rdi_pos.?);
+}
+
+test "parallel move: 3-element rotation cycle" {
+    // RDI ← RSI, RSI ← RDX, RDX ← RDI — 3-way rotation, one scratch save
+    const Emit = x86_64.LinuxEmit;
+    const Builder = CallBuilder(Emit);
+
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var stack_offset: i32 = 0;
+    var builder = try Builder.init(&emit, &stack_offset);
+
+    try builder.addRegArg(.RSI); // dst=RDI, src=RSI
+    try builder.addRegArg(.RDX); // dst=RSI, src=RDX
+    try builder.addRegArg(.RDI); // dst=RDX, src=RDI
+
+    try builder.call(0x12345678);
+
+    // Algorithm: save RSI→R11, RSI←RDX, RDX←RDI, RDI←R11
+    // mov r11, rsi = 49 89 F3
+    const p0 = findPattern3(emit.buf.items, 0x49, 0x89, 0xF3);
+    try std.testing.expect(p0 != null);
+    // mov rsi, rdx = 48 89 D6
+    const p1 = findPattern3(emit.buf.items, 0x48, 0x89, 0xD6);
+    try std.testing.expect(p1 != null);
+    // mov rdx, rdi = 48 89 FA
+    const p2 = findPattern3(emit.buf.items, 0x48, 0x89, 0xFA);
+    try std.testing.expect(p2 != null);
+    // mov rdi, r11 = 4C 89 DF
+    const p3 = findPattern3(emit.buf.items, 0x4C, 0x89, 0xDF);
+    try std.testing.expect(p3 != null);
+
+    // N+1 instructions for N-element cycle: 4 movs for 3 args
+    try std.testing.expect(p0.? < p1.?);
+    try std.testing.expect(p1.? < p2.?);
+    try std.testing.expect(p2.? < p3.?);
+}
+
+test "parallel move: LEA then REG reading same dest — reordered" {
+    // addLeaArg writes RDI, addRegArg reads RDI — old code would clobber
+    // The algorithm must emit mov RSI,RDI BEFORE lea RDI,[rbp-32]
+    const Emit = x86_64.LinuxEmit;
+    const Builder = CallBuilder(Emit);
+
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var stack_offset: i32 = 0;
+    var builder = try Builder.init(&emit, &stack_offset);
+
+    try builder.addLeaArg(.RBP, -32); // dst=RDI, lea [RBP-32]
+    try builder.addRegArg(.RDI); // dst=RSI, src=RDI
+
+    try builder.call(0x12345678);
+
+    // mov rsi, rdi = 48 89 FE (must come first — preserves original RDI)
+    const mov_pos = findPattern3(emit.buf.items, 0x48, 0x89, 0xFE);
+    try std.testing.expect(mov_pos != null);
+    // lea rdi, [rbp-32] = 48 8D BD ...
+    const lea_pos = findPattern3(emit.buf.items, 0x48, 0x8D, 0xBD);
+    try std.testing.expect(lea_pos != null);
+
+    // Critical: mov must precede lea (otherwise RDI is clobbered before read)
+    try std.testing.expect(mov_pos.? < lea_pos.?);
+
+    // No scratch needed (LEA source isn't a register, can't form cycle)
+    try std.testing.expect(findPattern3(emit.buf.items, 0x49, 0x89, 0xF3) == null);
+}
+
+test "parallel move: self-move eliminated" {
+    // addRegArg(RDI) on System V: dst=RDI, src=RDI → no mov emitted
+    const Emit = x86_64.LinuxEmit;
+    const Builder = CallBuilder(Emit);
+
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var stack_offset: i32 = 0;
+    var builder = try Builder.init(&emit, &stack_offset);
+
+    try builder.addRegArg(.RDI); // dst=RDI, src=RDI → self-move, elided
+
+    try builder.call(0x12345678);
+
+    // mov rdi, rdi would be 48 89 FF — should NOT appear
+    try std.testing.expect(findPattern3(emit.buf.items, 0x48, 0x89, 0xFF) == null);
+
+    // Verify the code is shorter than a call with an actual move
+    const self_move_len = emit.buf.items.len;
+
+    var emit2 = Emit.init(std.testing.allocator);
+    defer emit2.deinit();
+    var stack2: i32 = 0;
+    var builder2 = try Builder.init(&emit2, &stack2);
+    try builder2.addRegArg(.RAX); // dst=RDI, src=RAX → real move needed
+    try builder2.call(0x12345678);
+
+    try std.testing.expect(self_move_len < emit2.buf.items.len);
+}
+
+test "parallel move: chain dependency without cycle" {
+    // RDI ← RSI, RSI ← RDX: chain, not cycle (no arg reads from RDI or RSI as written)
+    const Emit = x86_64.LinuxEmit;
+    const Builder = CallBuilder(Emit);
+
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var stack_offset: i32 = 0;
+    var builder = try Builder.init(&emit, &stack_offset);
+
+    try builder.addRegArg(.RSI); // dst=RDI, src=RSI
+    try builder.addRegArg(.RDX); // dst=RSI, src=RDX
+
+    try builder.call(0x12345678);
+
+    // mov rdi, rsi = 48 89 F7
+    try std.testing.expect(findPattern3(emit.buf.items, 0x48, 0x89, 0xF7) != null);
+    // mov rsi, rdx = 48 89 D6
+    try std.testing.expect(findPattern3(emit.buf.items, 0x48, 0x89, 0xD6) != null);
+    // No scratch needed — no cycle
+    try std.testing.expect(findPattern3(emit.buf.items, 0x49, 0x89, 0xF3) == null);
+}
+
+test "parallel move: same source register for multiple args" {
+    // Both args read from RAX — no conflict (RAX isn't a param reg destination)
+    const Emit = x86_64.LinuxEmit;
+    const Builder = CallBuilder(Emit);
+
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var stack_offset: i32 = 0;
+    var builder = try Builder.init(&emit, &stack_offset);
+
+    try builder.addRegArg(.RAX); // dst=RDI, src=RAX
+    try builder.addRegArg(.RAX); // dst=RSI, src=RAX
+
+    try builder.call(0x12345678);
+
+    // mov rdi, rax = 48 89 C7
+    try std.testing.expect(findPattern3(emit.buf.items, 0x48, 0x89, 0xC7) != null);
+    // mov rsi, rax = 48 89 C6
+    try std.testing.expect(findPattern3(emit.buf.items, 0x48, 0x89, 0xC6) != null);
+    // No scratch
+    try std.testing.expect(findPattern3(emit.buf.items, 0x49, 0x89, 0xF3) == null);
+}
+
+test "parallel move: SCRATCH_REG (R11) as source without cycle" {
+    // R11 as source is valid when no cycle involves it (R11 is never a param reg)
+    const Emit = x86_64.LinuxEmit;
+    const Builder = CallBuilder(Emit);
+
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var stack_offset: i32 = 0;
+    var builder = try Builder.init(&emit, &stack_offset);
+
+    try builder.addRegArg(.R11); // dst=RDI, src=R11
+
+    try builder.call(0x12345678);
+
+    // mov rdi, r11 = 4C 89 DF
+    try std.testing.expect(findPattern3(emit.buf.items, 0x4C, 0x89, 0xDF) != null);
+}
+
+test "parallel move: all six System V param regs filled" {
+    // Fill all 6 System V register slots with non-conflicting sources
+    const Emit = x86_64.LinuxEmit;
+    const Builder = CallBuilder(Emit);
+
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var stack_offset: i32 = 0;
+    var builder = try Builder.init(&emit, &stack_offset);
+
+    try builder.addRegArg(.RAX); // RDI ← RAX
+    try builder.addRegArg(.RBX); // RSI ← RBX
+    try builder.addRegArg(.RAX); // RDX ← RAX
+    try builder.addRegArg(.RBX); // RCX ← RBX
+    try builder.addRegArg(.RAX); // R8  ← RAX
+    try builder.addRegArg(.RBX); // R9  ← RBX
+
+    try builder.call(0x12345678);
+
+    // Should have 6 mov instructions (3 bytes each = 18) + call sequence (~13)
+    try std.testing.expect(emit.buf.items.len > 25);
+
+    // Verify call instruction present (call r11 = 41 FF D3)
+    try std.testing.expect(findPattern3(emit.buf.items, 0x41, 0xFF, 0xD3) != null);
+    // No scratch needed (sources are non-param regs)
+    try std.testing.expect(findPattern3(emit.buf.items, 0x49, 0x89, 0xF3) == null);
+}
+
+test "parallel move: reg args + stack overflow args" {
+    // 8 args on System V: 6 in registers + 2 on stack
+    const Emit = x86_64.LinuxEmit;
+    const Builder = CallBuilder(Emit);
+
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var stack_offset: i32 = 0;
+    var builder = try Builder.init(&emit, &stack_offset);
+
+    // 6 register args
+    try builder.addRegArg(.RAX);
+    try builder.addRegArg(.RBX);
+    try builder.addImmArg(3);
+    try builder.addImmArg(4);
+    try builder.addImmArg(5);
+    try builder.addImmArg(6);
+    // 2 stack overflow args
+    try builder.addImmArg(7);
+    try builder.addImmArg(8);
+
+    try builder.call(0x12345678);
+
+    // Verify call instruction
+    try std.testing.expect(findPattern3(emit.buf.items, 0x41, 0xFF, 0xD3) != null);
+    // Verify stack allocation for 2 args: sub rsp, 16 = 48 81 EC 10 00 00 00
+    // (2 * 8 = 16 bytes, already 16-byte aligned)
+    var found_sub = false;
+    for (0..emit.buf.items.len -| 6) |i| {
+        if (emit.buf.items[i] == 0x48 and emit.buf.items[i + 1] == 0x81 and
+            emit.buf.items[i + 2] == 0xEC and emit.buf.items[i + 3] == 0x10)
+        {
+            found_sub = true;
+            break;
+        }
+    }
+    try std.testing.expect(found_sub);
+}
+
+test "parallel move: zero reg args call" {
+    // No register args, just a bare call — emitDeferredRegArgs should be a no-op
+    const Emit = x86_64.LinuxEmit;
+    const Builder = CallBuilder(Emit);
+
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var stack_offset: i32 = 0;
+    var builder = try Builder.init(&emit, &stack_offset);
+
+    // No args at all
+    try builder.call(0x12345678);
+
+    // Just the call sequence: mov r11, imm64 + call r11
+    // Should be quite short (10 bytes for movabs + 3 bytes for call = 13)
+    try std.testing.expect(emit.buf.items.len > 0);
+    try std.testing.expect(emit.buf.items.len < 20);
+    // Verify call instruction
+    try std.testing.expect(findPattern3(emit.buf.items, 0x41, 0xFF, 0xD3) != null);
+}
+
+test "parallel move: mixed LEA, MEM, IMM, REG without conflicts" {
+    // All four arg types in one call, no register conflicts
+    const Emit = x86_64.LinuxEmit;
+    const Builder = CallBuilder(Emit);
+
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var stack_offset: i32 = 0;
+    var builder = try Builder.init(&emit, &stack_offset);
+
+    try builder.addLeaArg(.RBP, -64); // RDI ← lea [RBP-64]
+    try builder.addMemArg(.RBP, -32); // RSI ← [RBP-32]
+    try builder.addImmArg(42); // RDX ← 42
+    try builder.addRegArg(.RAX); // RCX ← RAX
+
+    try builder.call(0x12345678);
+
+    // Verify all instructions emitted
+    // lea rdi, [rbp-64] = 48 8D BD
+    try std.testing.expect(findPattern3(emit.buf.items, 0x48, 0x8D, 0xBD) != null);
+    // mov rsi, [rbp-32] = 48 8B B5
+    try std.testing.expect(findPattern3(emit.buf.items, 0x48, 0x8B, 0xB5) != null);
+    // call r11 = 41 FF D3
+    try std.testing.expect(findPattern3(emit.buf.items, 0x41, 0xFF, 0xD3) != null);
+    // No scratch needed
+    try std.testing.expect(findPattern3(emit.buf.items, 0x49, 0x89, 0xF3) == null);
+}
+
+test "parallel move: swap cycle on Windows x64 (RCX/RDX)" {
+    // Windows uses RCX, RDX, R8, R9 — verify swap works with different param regs
+    const Emit = x86_64.WinEmit;
+    const Builder = CallBuilder(Emit);
+
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var stack_offset: i32 = 0;
+    var builder = try Builder.init(&emit, &stack_offset);
+
+    // Swap: RCX ← RDX, RDX ← RCX
+    try builder.addRegArg(.RDX); // dst=RCX, src=RDX
+    try builder.addRegArg(.RCX); // dst=RDX, src=RCX
+
+    try builder.call(0x12345678);
+
+    // mov r11, rdx = 49 89 D3 (scratch save)
+    // RDX: src in reg field, enc=2; R11: dst in r/m field, enc=3, rexB=1
+    // REX=0x49, ModRM = 11 010 011 = 0xD3
+    const scratch_pos = findPattern3(emit.buf.items, 0x49, 0x89, 0xD3);
+    try std.testing.expect(scratch_pos != null);
+
+    // mov rdx, rcx = 48 89 CA
+    // RCX: reg enc=1; RDX: r/m enc=2; ModRM = 11 001 010 = 0xCA
+    const mov_rdx_pos = findPattern3(emit.buf.items, 0x48, 0x89, 0xCA);
+    try std.testing.expect(mov_rdx_pos != null);
+
+    // mov rcx, r11 = 4C 89 D9
+    // R11: reg enc=3, rexR=1; RCX: r/m enc=1; REX=0x4C, ModRM = 11 011 001 = 0xD9
+    const mov_rcx_pos = findPattern3(emit.buf.items, 0x4C, 0x89, 0xD9);
+    try std.testing.expect(mov_rcx_pos != null);
+
+    // Correct ordering
+    try std.testing.expect(scratch_pos.? < mov_rdx_pos.?);
+    try std.testing.expect(mov_rdx_pos.? < mov_rcx_pos.?);
+}
+
+test "parallel move: callReg also resolves deferred args" {
+    // Verify callReg (indirect call) also runs the parallel move resolution
+    const Emit = x86_64.LinuxEmit;
+    const Builder = CallBuilder(Emit);
+
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var stack_offset: i32 = 0;
+    var builder = try Builder.init(&emit, &stack_offset);
+
+    // Simple swap to verify deferred resolution happens
+    try builder.addRegArg(.RSI); // dst=RDI, src=RSI
+    try builder.addRegArg(.RDI); // dst=RSI, src=RDI
+
+    try builder.callReg(.RAX);
+
+    // Scratch must be used for the swap
+    try std.testing.expect(findPattern3(emit.buf.items, 0x49, 0x89, 0xF3) != null); // mov r11, rsi
+    try std.testing.expect(findPattern3(emit.buf.items, 0x48, 0x89, 0xFE) != null); // mov rsi, rdi
+    try std.testing.expect(findPattern3(emit.buf.items, 0x4C, 0x89, 0xDF) != null); // mov rdi, r11
+
+    // call rax = FF D0
+    var found_call_rax = false;
+    for (0..emit.buf.items.len -| 1) |i| {
+        if (emit.buf.items[i] == 0xFF and emit.buf.items[i + 1] == 0xD0) {
+            found_call_rax = true;
+            break;
+        }
+    }
+    try std.testing.expect(found_call_rax);
 }

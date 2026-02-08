@@ -6,6 +6,7 @@
 //! and functions that are called from compiled Roc code to handle numeric
 //! operations efficiently and safely.
 const std = @import("std");
+const i128h = @import("compiler_rt_128.zig");
 
 const WithOverflow = @import("utils.zig").WithOverflow;
 const Ordering = @import("utils.zig").Ordering;
@@ -52,13 +53,21 @@ pub fn mul_u128(a: u128, b: u128) U256 {
     const bits_in_dword_2: u32 = 64;
     const lower_mask: u128 = math.maxInt(u128) >> bits_in_dword_2;
 
-    lo = (a & lower_mask) * (b & lower_mask);
+    // Truncate to u64 first, then widen to u128 for each partial product.
+    // This ensures all multiplications are u64*u64->u128 widening multiplies,
+    // which never trigger compiler-rt calls.
+    const a_lo: u64 = @truncate(a);
+    const a_hi: u64 = @truncate(a >> bits_in_dword_2);
+    const b_lo: u64 = @truncate(b);
+    const b_hi: u64 = @truncate(b >> bits_in_dword_2);
+
+    lo = @as(u128, a_lo) * @as(u128, b_lo);
 
     var t = lo >> bits_in_dword_2;
 
     lo &= lower_mask;
 
-    t += (a >> bits_in_dword_2) * (b & lower_mask);
+    t += @as(u128, a_hi) * @as(u128, b_lo);
 
     lo += (t & lower_mask) << bits_in_dword_2;
 
@@ -68,13 +77,13 @@ pub fn mul_u128(a: u128, b: u128) U256 {
 
     lo &= lower_mask;
 
-    t += (b >> bits_in_dword_2) * (a & lower_mask);
+    t += @as(u128, b_hi) * @as(u128, a_lo);
 
     lo += (t & lower_mask) << bits_in_dword_2;
 
     hi += t >> bits_in_dword_2;
 
-    hi += (a >> bits_in_dword_2) * (b >> bits_in_dword_2);
+    hi += @as(u128, a_hi) * @as(u128, b_hi);
 
     return .{ .hi = hi, .lo = lo };
 }
@@ -122,7 +131,15 @@ pub fn exportParseFloat(comptime T: type, comptime name: []const u8) void {
 pub fn exportNumToFloatCast(comptime T: type, comptime F: type, comptime name: []const u8) void {
     const f = struct {
         fn func(x: T) callconv(.c) F {
-            return @floatFromInt(x);
+            if (T == i128) {
+                const result = i128h.i128_to_f64(x);
+                return if (F == f32) @floatCast(result) else result;
+            } else if (T == u128) {
+                const result = i128h.u128_to_f64(x);
+                return if (F == f32) @floatCast(result) else result;
+            } else {
+                return @floatFromInt(x);
+            }
         }
     }.func;
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
@@ -345,6 +362,8 @@ pub fn exportDivTrunc(
             if (b == 0) {
                 roc_ops.crash("Integer division by 0!");
             }
+            if (T == i128) return i128h.divTrunc_i128(a, b);
+            if (T == u128) return i128h.divTrunc_u128(a, b);
             return @divTrunc(a, b);
         }
     }.func;
@@ -366,6 +385,8 @@ pub fn exportRemTrunc(
             if (b == 0) {
                 roc_ops.crash("Integer remainder by 0!");
             }
+            if (T == i128) return i128h.rem_i128(a, b);
+            if (T == u128) return i128h.rem_u128(a, b);
             return @rem(a, b);
         }
     }.func;
@@ -377,7 +398,7 @@ pub fn divTruncI128(a: i128, b: i128, roc_ops: *RocOps) callconv(.c) i128 {
     if (b == 0) {
         roc_ops.crash("Integer division by 0!");
     }
-    return @divTrunc(a, b);
+    return i128h.divTrunc_i128(a, b);
 }
 
 /// u128 division truncating towards zero - callable from generated code.
@@ -385,7 +406,7 @@ pub fn divTruncU128(a: u128, b: u128, roc_ops: *RocOps) callconv(.c) u128 {
     if (b == 0) {
         roc_ops.crash("Integer division by 0!");
     }
-    return @divTrunc(a, b);
+    return i128h.divTrunc_u128(a, b);
 }
 
 /// i128 remainder after truncating division - callable from generated code.
@@ -393,7 +414,7 @@ pub fn remTruncI128(a: i128, b: i128, roc_ops: *RocOps) callconv(.c) i128 {
     if (b == 0) {
         roc_ops.crash("Integer remainder by 0!");
     }
-    return @rem(a, b);
+    return i128h.rem_i128(a, b);
 }
 
 /// u128 remainder after truncating division - callable from generated code.
@@ -401,7 +422,7 @@ pub fn remTruncU128(a: u128, b: u128, roc_ops: *RocOps) callconv(.c) u128 {
     if (b == 0) {
         roc_ops.crash("Integer remainder by 0!");
     }
-    return @rem(a, b);
+    return i128h.rem_u128(a, b);
 }
 
 /// Result type for checked integer conversions.
@@ -451,7 +472,7 @@ pub fn isMultipleOf(comptime T: type, lhs: T, rhs: T) bool {
         // Note: lhs % 0 is a runtime panic, so we can't use @mod.
         return (rhs == -1) or (lhs == 0);
     } else {
-        const rem = @mod(lhs, rhs);
+        const rem = if (T == i128) i128h.mod_i128(lhs, rhs) else @mod(lhs, rhs);
         return rem == 0;
     }
 }
@@ -711,6 +732,8 @@ pub fn exportMulSaturatedInt(comptime T: type, comptime name: []const u8) void {
 pub fn exportMulWrappedInt(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(self: T, other: T) callconv(.c) T {
+            if (T == i128) return i128h.mul_i128(self, other);
+            if (T == u128) return i128h.mul_u128_lo(self, other);
             return self *% other;
         }
     }.func;

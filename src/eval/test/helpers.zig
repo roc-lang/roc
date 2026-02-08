@@ -360,8 +360,16 @@ noinline fn executeAndFormat(
                 .record => {
                     const record_idx = stored_layout.data.record.idx.int_idx;
                     const record_data = ls.record_data.items.items[record_idx];
+                    // Empty record (size 0) is the unit type - format as "{}"
+                    if (record_data.size == 0) {
+                        break :blk try alloc.dupe(u8, "{}");
+                    }
                     const field_count = record_data.fields.count;
                     break :blk std.fmt.allocPrint(alloc, "{{record with {d} fields}}", .{field_count});
+                },
+                .zst => {
+                    // Zero-sized type - format as "()"
+                    break :blk try alloc.dupe(u8, "()");
                 },
                 else => @panic("TODO: devEvaluatorStr for unsupported layout tag"),
             }
@@ -1238,6 +1246,61 @@ pub fn runExpectEmptyListI64(src: []const u8, should_trace: enum { trace, no_tra
 
     // Compare with DevEvaluator - empty list is "[]"
     try compareWithDevEvaluator(test_allocator, "[]", resources.module_env, resources.expr_idx, resources.builtin_module.env);
+}
+
+/// Helper function to run an expression and expect a unit/ZST result.
+/// This tests expressions that return `{}` (the unit type / empty record).
+/// Accepts both .zst layout and .record layout with size 0 (empty record).
+pub fn runExpectUnit(src: []const u8, should_trace: enum { trace, no_trace }) !void {
+    const resources = try parseAndCanonicalizeExpr(test_allocator, src);
+    defer cleanupParseAndCanonical(test_allocator, resources);
+
+    var test_env_instance = TestEnv.init(interpreter_allocator);
+    defer test_env_instance.deinit();
+
+    const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
+    var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
+    defer interpreter.deinit();
+
+    const enable_trace = should_trace == .trace;
+    if (enable_trace) {
+        interpreter.startTrace();
+    }
+    defer if (enable_trace) interpreter.endTrace();
+
+    const ops = test_env_instance.get_ops();
+    const result = try interpreter.eval(resources.expr_idx, ops);
+    const layout_cache = &interpreter.runtime_layout_store;
+    defer result.decref(layout_cache, ops);
+    defer interpreter.bindings.items.len = 0;
+
+    // Verify we got a ZST layout or an empty record (both represent unit/`{}`)
+    const is_zst = result.layout.tag == .zst;
+    const is_empty_record = result.layout.tag == .record and blk: {
+        const record_data = layout_cache.getRecordData(result.layout.data.record.idx);
+        break :blk record_data.size == 0;
+    };
+
+    if (!is_zst and !is_empty_record) {
+        std.debug.print("\nExpected .zst or empty .record layout but got .{s}\n", .{@tagName(result.layout.tag)});
+        return error.TestExpectedEqual;
+    }
+
+    // Compare with DevEvaluator - for unit/empty record, DevEvaluator may return "()" or "{}"
+    // We use a custom comparison since both are valid representations of unit
+    const dev_result = devEvaluatorStr(test_allocator, resources.module_env, resources.expr_idx, resources.builtin_module.env) catch |err| {
+        std.debug.print("\nDevEvaluator failed with error: {}\n", .{err});
+        return error.DevEvaluatorFailed;
+    };
+    defer test_allocator.free(dev_result);
+
+    // Accept both "()" and "{}" as valid unit representations
+    const valid_unit = std.mem.eql(u8, dev_result, "()") or std.mem.eql(u8, dev_result, "{}");
+    if (!valid_unit) {
+        std.debug.print("\nDevEvaluator returned unexpected result for unit: {s}\n", .{dev_result});
+        return error.TestExpectedEqual;
+    }
 }
 
 /// Parse and canonicalize an expression.

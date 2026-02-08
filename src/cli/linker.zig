@@ -6,6 +6,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
 const libc_finder = @import("libc_finder.zig");
+const stack_probe = @import("stack_probe.zig");
 const RocTarget = @import("roc_target").RocTarget;
 const cli_ctx = @import("CliContext.zig");
 const CliContext = cli_ctx.CliContext;
@@ -407,6 +408,23 @@ fn buildLinkArgs(ctx: *CliContext, config: LinkConfig) LinkError!std.array_list.
             if (build_options.enable_tracy) {
                 try args.append("/defaultlib:msvcprt");
             }
+
+            // Generate and link stack probe object for ___chkstk_ms
+            // This is needed when linking Zig-compiled code (like platform hosts) that uses
+            // the MinGW ABI, which requires ___chkstk_ms for functions with large stack frames.
+            if (target_arch == .x86_64) {
+                const stack_probe_obj = stack_probe.generateStackProbeObject(ctx.arena) catch return LinkError.OutOfMemory;
+                // Write to a temp file and add to link line
+                const stack_probe_path = std.fs.path.join(ctx.arena, &.{
+                    std.fs.selfExeDirPathAlloc(ctx.arena) catch return LinkError.OutOfMemory,
+                    "stack_probe.obj",
+                }) catch return LinkError.OutOfMemory;
+                std.fs.cwd().writeFile(.{
+                    .sub_path = stack_probe_path,
+                    .data = stack_probe_obj,
+                }) catch return LinkError.OutOfMemory;
+                try args.append(stack_probe_path);
+            }
         },
         .freestanding => {
             // WebAssembly linker (wasm-ld) for freestanding wasm32 target
@@ -458,25 +476,34 @@ fn buildLinkArgs(ctx: *CliContext, config: LinkConfig) LinkError!std.array_list.
     // not referenced by other code
     const is_wasm = config.target_format == .wasm;
     const is_macos = target_os == .macos;
+    const is_windows = target_os == .windows;
     if (is_wasm and config.platform_files_pre.len > 0) {
         try args.append("--whole-archive");
     }
 
     // Add platform-provided files that come before object files
-    // Use --whole-archive (or -all_load on macOS) to include all members from static libraries
-    // This ensures host-exported functions like init, handleEvent, update are included
-    // even though they're not referenced by the Roc app's compiled code
+    // Use --whole-archive (or -all_load on macOS, /wholearchive on Windows) to include
+    // all members from static libraries. This ensures host-exported functions like
+    // init, handleEvent, update are included even though they're not referenced by
+    // the Roc app's compiled code.
     if (config.platform_files_pre.len > 0) {
         if (is_macos) {
             // macOS uses -all_load to include all members from static libraries
             try args.append("-all_load");
-        } else {
+        } else if (!is_windows) {
+            // ELF targets use --whole-archive
             try args.append("--whole-archive");
         }
         for (config.platform_files_pre) |platform_file| {
-            try args.append(platform_file);
+            if (is_windows) {
+                // Windows COFF uses /wholearchive:filename for each file
+                const whole_arg = std.fmt.allocPrint(ctx.arena, "/wholearchive:{s}", .{platform_file}) catch return LinkError.OutOfMemory;
+                try args.append(whole_arg);
+            } else {
+                try args.append(platform_file);
+            }
         }
-        if (!is_macos) {
+        if (!is_macos and !is_windows) {
             try args.append("--no-whole-archive");
         }
     }
@@ -491,13 +518,18 @@ fn buildLinkArgs(ctx: *CliContext, config: LinkConfig) LinkError!std.array_list.
     if (config.platform_files_post.len > 0) {
         if (is_macos) {
             try args.append("-all_load");
-        } else {
+        } else if (!is_windows) {
             try args.append("--whole-archive");
         }
         for (config.platform_files_post) |platform_file| {
-            try args.append(platform_file);
+            if (is_windows) {
+                const whole_arg = std.fmt.allocPrint(ctx.arena, "/wholearchive:{s}", .{platform_file}) catch return LinkError.OutOfMemory;
+                try args.append(whole_arg);
+            } else {
+                try args.append(platform_file);
+            }
         }
-        if (!is_macos) {
+        if (!is_macos and !is_windows) {
             try args.append("--no-whole-archive");
         }
     }

@@ -16,17 +16,20 @@
 //!   fx-open   - Effectful with open union errors
 //!
 //! Options:
-//!   --target=<name>   Target to test (default: all for platform)
-//!                     Values: x64musl, arm64musl, x64glibc, arm64glibc, native
-//!   --mode=<mode>     Test mode (default: all applicable)
-//!                     Values: cross, native, valgrind
-//!   --verbose         Show detailed output
+//!   --target=<name>     Target to test (default: all for platform)
+//!                       Values: x64musl, arm64musl, x64glibc, arm64glibc, native
+//!   --mode=<mode>       Test mode (default: all applicable)
+//!                       Values: cross, native, valgrind
+//!   --backend=<name>    Roc backend (default: interpreter for run, llvm for build)
+//!                       Values: dev, llvm
+//!   --verbose           Show detailed output
 //!
 //! Examples:
 //!   test_runner ./zig-out/bin/roc int                    # All int tests
 //!   test_runner ./zig-out/bin/roc fx --target=x64musl    # fx cross-compile to x64musl
 //!   test_runner ./zig-out/bin/roc str --mode=valgrind    # str under valgrind
 //!   test_runner ./zig-out/bin/roc int --mode=native      # int native only
+//!   test_runner ./zig-out/bin/roc fx --backend=dev       # fx with dev backend
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -52,6 +55,7 @@ const Args = struct {
     platform_name: []const u8,
     target_filter: ?[]const u8,
     mode: TestMode,
+    backend: ?[]const u8,
     verbose: bool,
     /// Raw args buffer - caller must free via std.process.argsFree
     raw_args: [][:0]u8,
@@ -97,6 +101,9 @@ pub fn main() !void {
         std.debug.print("Target filter: {s}\n", .{t});
     }
     std.debug.print("Mode: {s}\n", .{@tagName(args.mode)});
+    if (args.backend) |backend| {
+        std.debug.print("Backend: {s}\n", .{backend});
+    }
     std.debug.print("\n", .{});
 
     var stats = TestStats{};
@@ -192,7 +199,7 @@ fn runCrossCompileTests(
                 const output_name = try std.fmt.allocPrint(allocator, "{s}_{s}", .{ platform.name, target.name });
                 defer allocator.free(output_name);
 
-                const result = try runner_core.crossCompile(allocator, args.roc_binary, roc_file, target.name, output_name);
+                const result = try runner_core.crossCompile(allocator, args.roc_binary, roc_file, target.name, output_name, args.backend);
                 stats.record(result);
             }
         },
@@ -220,7 +227,7 @@ fn runCrossCompileTests(
                     const output_name = try std.fmt.allocPrint(allocator, "{s}_{s}", .{ basename, target.name });
                     defer allocator.free(output_name);
 
-                    const result = try runner_core.crossCompile(allocator, args.roc_binary, spec.roc_file, target.name, output_name);
+                    const result = try runner_core.crossCompile(allocator, args.roc_binary, spec.roc_file, target.name, output_name, args.backend);
                     stats.record(result);
                 }
             }
@@ -249,7 +256,7 @@ fn runCrossCompileTests(
                     const output_name = try std.fmt.allocPrint(allocator, "{s}_{s}", .{ basename, target.name });
                     defer allocator.free(output_name);
 
-                    const result = try runner_core.crossCompile(allocator, args.roc_binary, spec.roc_file, target.name, output_name);
+                    const result = try runner_core.crossCompile(allocator, args.roc_binary, spec.roc_file, target.name, output_name, args.backend);
                     stats.record(result);
                 }
             }
@@ -286,7 +293,7 @@ fn runNativeTests(
 
             // Build
             std.debug.print("Building {s} native... ", .{app_name});
-            const build_result = try runner_core.buildNative(allocator, args.roc_binary, roc_file, output_name);
+            const build_result = try runner_core.buildNative(allocator, args.roc_binary, roc_file, output_name, args.backend);
             stats.record(build_result);
 
             if (build_result != .passed) {
@@ -314,7 +321,7 @@ fn runNativeTests(
                     const test_num = i + 1;
                     std.debug.print("[{d}/{d}] {s}... ", .{ test_num, specs.len, spec.roc_file });
 
-                    const result = try runner_core.runWithIoSpec(allocator, args.roc_binary, spec.roc_file, spec.io_spec);
+                    const result = try runner_core.runWithIoSpec(allocator, args.roc_binary, spec.roc_file, spec.io_spec, args.backend);
                     stats.record(result);
                 }
             } else {
@@ -326,7 +333,7 @@ fn runNativeTests(
                     defer allocator.free(output_name);
 
                     std.debug.print("[{d}/{d}] Building {s}... ", .{ test_num, specs.len, spec.roc_file });
-                    const build_result = try runner_core.buildNative(allocator, args.roc_binary, spec.roc_file, output_name);
+                    const build_result = try runner_core.buildNative(allocator, args.roc_binary, spec.roc_file, output_name, args.backend);
                     stats.record(build_result);
 
                     if (build_result == .passed) {
@@ -354,7 +361,7 @@ fn runNativeTests(
                 defer allocator.free(output_name);
 
                 std.debug.print("[{d}/{d}] Building {s}... ", .{ test_num, specs.len, spec.roc_file });
-                const build_result = try runner_core.buildNative(allocator, args.roc_binary, spec.roc_file, output_name);
+                const build_result = try runner_core.buildNative(allocator, args.roc_binary, spec.roc_file, output_name, args.backend);
                 stats.record(build_result);
 
                 if (build_result == .passed) {
@@ -453,6 +460,7 @@ fn parseArgs(allocator: Allocator) !Args {
         .platform_name = raw_args[2],
         .target_filter = null,
         .mode = .all,
+        .backend = null,
         .verbose = false,
         .raw_args = raw_args,
     };
@@ -479,6 +487,8 @@ fn parseArgs(allocator: Allocator) !Args {
                 std.debug.print("Available modes: cross, native, valgrind, all\n", .{});
                 std.process.exit(1);
             }
+        } else if (std.mem.startsWith(u8, arg, "--backend=")) {
+            args.backend = arg["--backend=".len..];
         } else if (std.mem.eql(u8, arg, "--verbose")) {
             args.verbose = true;
         } else {
@@ -502,17 +512,20 @@ fn printUsage() void {
         \\  fx-open   - Effectful with open union errors
         \\
         \\Options:
-        \\  --target=<name>   Target to test (default: all for platform)
-        \\                    Values: x64musl, arm64musl, x64glibc, arm64glibc, native
-        \\  --mode=<mode>     Test mode (default: all applicable)
-        \\                    Values: cross, native, valgrind, all
-        \\  --verbose         Show detailed output
+        \\  --target=<name>     Target to test (default: all for platform)
+        \\                      Values: x64musl, arm64musl, x64glibc, arm64glibc, native
+        \\  --mode=<mode>       Test mode (default: all applicable)
+        \\                      Values: cross, native, valgrind, all
+        \\  --backend=<name>    Roc backend to use (default: interpreter for run, llvm for build)
+        \\                      Values: dev, llvm
+        \\  --verbose           Show detailed output
         \\
         \\Examples:
         \\  test_runner ./zig-out/bin/roc int                    # All int tests
         \\  test_runner ./zig-out/bin/roc fx --target=x64musl    # fx cross-compile to x64musl
         \\  test_runner ./zig-out/bin/roc str --mode=valgrind    # str under valgrind
         \\  test_runner ./zig-out/bin/roc int --mode=native      # int native only
+        \\  test_runner ./zig-out/bin/roc fx --backend=dev       # fx with dev backend
         \\
     , .{});
 }
