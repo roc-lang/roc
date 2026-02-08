@@ -130,6 +130,18 @@ pub const MonoLlvmCodeGen = struct {
     /// Address of memcpy (for list copy fallback). Set by the evaluator.
     memcpy_addr: usize = 0,
 
+    /// Address of listWithCapacityC builtin. Set by the evaluator.
+    list_with_capacity_addr: usize = 0,
+
+    /// Address of listAppendUnsafeC builtin. Set by the evaluator.
+    list_append_unsafe_addr: usize = 0,
+
+    /// Address of rcNone (no-op refcount function). Set by the evaluator.
+    rc_none_addr: usize = 0,
+
+    /// Address of listPrepend builtin. Set by the evaluator.
+    list_prepend_addr: usize = 0,
+
     /// Layout store for resolving composite type layouts (records, tuples).
     /// Set by the evaluator before calling generateCode.
     layout_store: ?*const layout.Store = null,
@@ -2623,11 +2635,149 @@ pub const MonoLlvmCodeGen = struct {
                 return .none;
             },
 
+            .list_repeat => {
+                // list_repeat(element, count) -> List
+                // Implementation: allocate with capacity, then loop appending
+                if (args.len < 2) return error.UnsupportedExpression;
+                if (self.list_with_capacity_addr == 0 or self.list_append_unsafe_addr == 0 or self.rc_none_addr == 0)
+                    return error.UnsupportedExpression;
+                const ls = self.layout_store orelse return error.UnsupportedExpression;
+                const roc_ops = self.roc_ops_arg orelse return error.CompilationFailed;
+                const dest_ptr = self.out_ptr orelse return error.UnsupportedExpression;
+                const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
+                const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
+
+                // Get element size/alignment
+                const ret_layout = ls.getLayout(ll.ret_layout);
+                const elem_layout_idx = if (ret_layout.tag == .list) ret_layout.data.list else return error.UnsupportedExpression;
+                const elem_sa = ls.layoutSizeAlign(ls.getLayout(elem_layout_idx));
+                const elem_size: u64 = elem_sa.size;
+                const elem_align: u32 = @intCast(elem_sa.alignment.toByteUnits());
+
+                // Generate element and store to alloca
+                const elem_alignment = LlvmBuilder.Alignment.fromByteUnits(@max(elem_align, 1));
+                const elem_count_cast: i32 = @intCast(elem_size);
+                const elem_alloca = wip.alloca(.normal, .i8, builder.intValue(.i32, elem_count_cast) catch return error.OutOfMemory, elem_alignment, .default, "repeat_elem") catch return error.CompilationFailed;
+
+                const saved_out_ptr = self.out_ptr;
+                self.out_ptr = elem_alloca;
+                const elem_val = try self.generateExpr(args[0]);
+                self.out_ptr = saved_out_ptr;
+                if (elem_val != .none) {
+                    _ = wip.store(.normal, elem_val, elem_alloca, elem_alignment) catch return error.CompilationFailed;
+                }
+
+                // Generate count
+                const saved_out_ptr2 = self.out_ptr;
+                self.out_ptr = null;
+                const count_val = try self.generateExpr(args[1]);
+                self.out_ptr = saved_out_ptr2;
+
+                // Step 1: Call listWithCapacityC(out, capacity, alignment, elem_width, false, null, rcNone, roc_ops)
+                const cap_fn_type = builder.fnType(.void, &.{
+                    ptr_type, // out
+                    .i64, // capacity
+                    .i32, // alignment
+                    .i64, // element_width
+                    .i1, // elements_refcounted
+                    ptr_type, // inc_context (null)
+                    ptr_type, // inc (rcNone)
+                    ptr_type, // roc_ops
+                }, .normal) catch return error.CompilationFailed;
+
+                const cap_fn_addr = builder.intValue(.i64, self.list_with_capacity_addr) catch return error.CompilationFailed;
+                const cap_fn_ptr = wip.cast(.inttoptr, cap_fn_addr, ptr_type, "") catch return error.CompilationFailed;
+                const null_ptr_val = builder.intValue(.i64, 0) catch return error.OutOfMemory;
+                const null_opaque = wip.cast(.inttoptr, null_ptr_val, ptr_type, "") catch return error.CompilationFailed;
+                const rc_none_fn_addr = builder.intValue(.i64, self.rc_none_addr) catch return error.CompilationFailed;
+                const rc_none_fn_ptr = wip.cast(.inttoptr, rc_none_fn_addr, ptr_type, "") catch return error.CompilationFailed;
+                const align_val = builder.intValue(.i32, elem_align) catch return error.OutOfMemory;
+                const width_val = builder.intValue(.i64, elem_size) catch return error.OutOfMemory;
+                const false_val = builder.intValue(.i1, 0) catch return error.OutOfMemory;
+
+                _ = wip.call(.normal, .ccc, .none, cap_fn_type, cap_fn_ptr, &.{
+                    dest_ptr, count_val, align_val, width_val, false_val, null_opaque, rc_none_fn_ptr, roc_ops,
+                }, "") catch return error.CompilationFailed;
+
+                // Step 2: Build loop to append element `count` times
+                const header_block = wip.block(2, "repeat_hdr") catch return error.OutOfMemory;
+                const body_block = wip.block(1, "repeat_body") catch return error.OutOfMemory;
+                const exit_block = wip.block(1, "repeat_exit") catch return error.OutOfMemory;
+
+                // Entry → header
+                const zero = builder.intValue(.i64, 0) catch return error.OutOfMemory;
+                const entry_block = wip.cursor.block;
+                _ = wip.br(header_block) catch return error.CompilationFailed;
+
+                // Header: phi for counter, compare with count
+                wip.cursor = .{ .block = header_block };
+                const counter_phi = wip.phi(.i64, "ctr") catch return error.CompilationFailed;
+                const ctr_val = counter_phi.toValue();
+                const cond = wip.icmp(.ult, ctr_val, count_val, "") catch return error.OutOfMemory;
+                _ = wip.brCond(cond, body_block, exit_block, .none) catch return error.CompilationFailed;
+
+                // Body: load list fields, call appendUnsafe, store back, increment
+                wip.cursor = .{ .block = body_block };
+
+                // Load current list fields from dest_ptr
+                const cur_data = wip.load(.normal, ptr_type, dest_ptr, alignment, "") catch return error.CompilationFailed;
+                const off8 = builder.intValue(.i32, 8) catch return error.OutOfMemory;
+                const len_ptr = wip.gep(.inbounds, .i8, dest_ptr, &.{off8}, "") catch return error.CompilationFailed;
+                const cur_len = wip.load(.normal, .i64, len_ptr, alignment, "") catch return error.CompilationFailed;
+                const off16 = builder.intValue(.i32, 16) catch return error.OutOfMemory;
+                const cap_ptr = wip.gep(.inbounds, .i8, dest_ptr, &.{off16}, "") catch return error.CompilationFailed;
+                const cur_cap = wip.load(.normal, .i64, cap_ptr, alignment, "") catch return error.CompilationFailed;
+
+                // Temp output for appendUnsafe result
+                const tmp_alloca = wip.alloca(.normal, .i8, builder.intValue(.i32, 24) catch return error.OutOfMemory, alignment, .default, "tmp_list") catch return error.CompilationFailed;
+
+                // Call listAppendUnsafeC(tmp_out, data_ptr, len, cap, elem_ptr, elem_width, copy_fn)
+                const append_fn_type = builder.fnType(.void, &.{
+                    ptr_type, ptr_type, .i64, .i64, ptr_type, .i64, ptr_type,
+                }, .normal) catch return error.CompilationFailed;
+                const append_fn_addr_val = builder.intValue(.i64, self.list_append_unsafe_addr) catch return error.CompilationFailed;
+                const append_fn_ptr = wip.cast(.inttoptr, append_fn_addr_val, ptr_type, "") catch return error.CompilationFailed;
+                const copy_addr_val = builder.intValue(.i64, self.memcpy_addr) catch return error.CompilationFailed;
+                const copy_fn = wip.cast(.inttoptr, copy_addr_val, ptr_type, "") catch return error.CompilationFailed;
+
+                _ = wip.call(.normal, .ccc, .none, append_fn_type, append_fn_ptr, &.{
+                    tmp_alloca, cur_data, cur_len, cur_cap, elem_alloca, width_val, copy_fn,
+                }, "") catch return error.CompilationFailed;
+
+                // Copy tmp result back to dest_ptr (24 bytes)
+                const new_data = wip.load(.normal, ptr_type, tmp_alloca, alignment, "") catch return error.CompilationFailed;
+                _ = wip.store(.normal, new_data, dest_ptr, alignment) catch return error.CompilationFailed;
+                const tmp_len_ptr = wip.gep(.inbounds, .i8, tmp_alloca, &.{off8}, "") catch return error.CompilationFailed;
+                const new_len = wip.load(.normal, .i64, tmp_len_ptr, alignment, "") catch return error.CompilationFailed;
+                _ = wip.store(.normal, new_len, len_ptr, alignment) catch return error.CompilationFailed;
+                const tmp_cap_ptr = wip.gep(.inbounds, .i8, tmp_alloca, &.{off16}, "") catch return error.CompilationFailed;
+                const new_cap = wip.load(.normal, .i64, tmp_cap_ptr, alignment, "") catch return error.CompilationFailed;
+                _ = wip.store(.normal, new_cap, cap_ptr, alignment) catch return error.CompilationFailed;
+
+                // Increment counter and loop back
+                const one = builder.intValue(.i64, 1) catch return error.OutOfMemory;
+                const next_counter = wip.bin(.add, ctr_val, one, "") catch return error.CompilationFailed;
+                const body_end_block = wip.cursor.block;
+                _ = wip.br(header_block) catch return error.CompilationFailed;
+
+                // Finish phi: entry→0, body_end→next_counter
+                counter_phi.finish(
+                    &.{ zero, next_counter },
+                    &.{ entry_block, body_end_block },
+                    wip,
+                );
+
+                // Exit block
+                wip.cursor = .{ .block = exit_block };
+
+                return .none;
+            },
+
             .list_set, .list_prepend, .list_concat,
             .list_first, .list_last, .list_drop_first, .list_drop_last,
             .list_take_first, .list_take_last, .list_contains, .list_reverse,
             .list_reserve, .list_release_excess_capacity, .list_with_capacity,
-            .list_repeat, .list_split_first, .list_split_last,
+            .list_split_first, .list_split_last,
             => return error.UnsupportedExpression,
 
             else => return error.UnsupportedExpression,

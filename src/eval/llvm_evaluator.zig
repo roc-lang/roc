@@ -289,6 +289,10 @@ pub const LlvmEvaluator = struct {
         codegen.alloc_with_refcount_addr = @intFromPtr(&builtins.utils.allocateWithRefcountC);
         codegen.list_append_addr = @intFromPtr(&builtins.list.listAppendSafeC);
         codegen.memcpy_addr = @intFromPtr(&builtins.list.copy_fallback);
+        codegen.list_with_capacity_addr = @intFromPtr(&builtins.list.listWithCapacityC);
+        codegen.list_append_unsafe_addr = @intFromPtr(&builtins.list.listAppendUnsafeC);
+        codegen.rc_none_addr = @intFromPtr(&builtins.list.rcNone);
+        codegen.list_prepend_addr = @intFromPtr(&builtins.list.listPrepend);
 
         // Provide layout store for composite types (records, tuples)
         codegen.layout_store = layout_store_ptr;
