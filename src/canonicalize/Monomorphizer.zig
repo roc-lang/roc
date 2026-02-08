@@ -2296,7 +2296,7 @@ fn hashTypeRecursive(
             hasher.update("alias");
             hasher.update(std.mem.asBytes(&alias.ident.ident_idx));
             // Hash all vars (backing var + type arguments) to differentiate
-            // e.g. List U64 from List Str
+            // e.g. List(U64) from List(Str)
             const vars = self.types_store.sliceVars(alias.vars.nonempty);
             for (vars) |v| {
                 self.hashTypeRecursive(hasher, v, seen);
