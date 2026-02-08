@@ -3204,7 +3204,7 @@ fn addMainExe(
     shim_lib.step.dependOn(&write_compiled_builtins.step);
     // Link against the pre-built builtins library
     shim_lib.linkLibrary(builtins_obj);
-    shim_lib.bundle_compiler_rt = false;
+    shim_lib.bundle_compiler_rt = true;
     // Install shim library to the output directory
     const install_shim = b.addInstallArtifact(shim_lib, .{});
     b.getInstallStep().dependOn(&install_shim.step);
@@ -3298,7 +3298,7 @@ fn addMainExe(
         cross_shim_lib.root_module.addImport("compiled_builtins", compiled_builtins_module);
         cross_shim_lib.step.dependOn(&write_compiled_builtins.step);
         cross_shim_lib.linkLibrary(cross_builtins_obj);
-        cross_shim_lib.bundle_compiler_rt = false;
+        cross_shim_lib.bundle_compiler_rt = true;
 
         // Copy to target-specific directory for embedding
         // Use .lib extension for Windows targets, .a for others
