@@ -2584,6 +2584,11 @@ pub fn build(b: *std.Build) void {
             module_test.test_step.step.dependOn(&write_compiled_builtins.step);
         }
 
+        // Add bytebox to eval tests for wasm backend testing
+        if (std.mem.eql(u8, module_test.test_step.name, "eval")) {
+            module_test.test_step.root_module.addImport("bytebox", bytebox.module("bytebox"));
+        }
+
         if (run_args.len != 0) {
             module_test.run_step.addArgs(run_args);
         }

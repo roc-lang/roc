@@ -42,6 +42,9 @@ pub const EvalError = Interpreter.Error;
 pub const TestRunner = @import("test_runner.zig").TestRunner;
 /// LLVM-based evaluator for optimized code generation
 pub const LlvmEvaluator = @import("llvm_evaluator.zig").LlvmEvaluator;
+/// WebAssembly-based evaluator for wasm code generation
+const wasm_evaluator_mod = @import("wasm_evaluator.zig");
+pub const WasmEvaluator = wasm_evaluator_mod.WasmEvaluator;
 
 test "eval tests" {
     std.testing.refAllDecls(@This());
@@ -56,6 +59,7 @@ test "eval tests" {
     std.testing.refAllDecls(@import("StackValue.zig"));
     std.testing.refAllDecls(@import("render_helpers.zig"));
     std.testing.refAllDecls(@import("llvm_evaluator.zig"));
+    std.testing.refAllDecls(@import("wasm_evaluator.zig"));
     std.testing.refAllDecls(@import("stack.zig"));
     std.testing.refAllDecls(@import("test/TestEnv.zig"));
 
