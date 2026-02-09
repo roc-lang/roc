@@ -899,7 +899,7 @@ pub fn requestSpecialization(
         return specialized_name;
     }
 
-    // Check if it's already pending (O(1) via hash set with structural equality)
+    // Check if it's already pending
     if (self.pending_specialization_keys.contains(key)) {
         const specialized_name = try self.createSpecializedName(original_ident, concrete_type);
         return specialized_name;
