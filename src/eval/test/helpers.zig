@@ -332,7 +332,6 @@ fn forkAndExecute(
 /// Both sides now use `RocValue.format()` for canonical formatting.
 /// Accepted divergences:
 /// - f32/f64 epsilon (machine/CPU instruction differences)
-/// - Bool "True"/"1" (Mono IR block result_layout doesn't propagate Idx.bool)
 fn compareWithDevEvaluator(allocator: std.mem.Allocator, interpreter_str: []const u8, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) !void {
     const dev_str = devEvaluatorStr(allocator, module_env, expr_idx, builtin_module_env) catch |err| {
         switch (err) {
@@ -347,14 +346,6 @@ fn compareWithDevEvaluator(allocator: std.mem.Allocator, interpreter_str: []cons
     // f32/f64 epsilon: machine/CPU instruction differences can cause
     // small floating-point divergences between interpreter and dev backend.
     if (floatStringsWithinEpsilon(interpreter_str, dev_str)) return;
-
-    // Bool layout: Mono IR blocks may lose Idx.bool, falling back to int layout.
-    // The layout store correctly returns Idx.bool for Bool nominal types, but
-    // when the lowerer wraps the expression in a block, the block's result_layout
-    // may use the CIR type variable which resolves to an integer type.
-    if ((std.mem.eql(u8, interpreter_str, "True") and std.mem.eql(u8, dev_str, "1")) or
-        (std.mem.eql(u8, interpreter_str, "False") and std.mem.eql(u8, dev_str, "0")))
-        return;
 
     std.debug.print(
         "\nEvaluator mismatch! Interpreter: {s}, DevEvaluator: {s}\n",
