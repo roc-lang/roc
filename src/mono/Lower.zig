@@ -1253,6 +1253,28 @@ fn setupLocalCallLayoutHints(
                 const caller_arg_var = ModuleEnv.varFrom(arg_idx);
                 try self.buildLayoutVarOverrides(module_env, param_var, caller_arg_var);
             }
+
+            // Compose override chain into the type scope for fromTypeVar's
+            // recursive processing. layout_var_overrides maps inner_rigid →
+            // outer_rigid (both in this module), and the type scope maps
+            // outer_rigid → caller's concrete var. fromTypeVar only sees the
+            // type scope during recursive traversal (e.g., resolving the element
+            // type inside `List a`), so we need to compose the chain:
+            //   inner_rigid → caller's concrete var
+            // This lets fromTypeVar find inner function rigid vars directly.
+            if (self.type_scope.scopes.items.len > 0) {
+                const scope = &self.type_scope.scopes.items[0];
+                var override_iter = self.layout_var_overrides.iterator();
+                while (override_iter.next()) |entry| {
+                    const inner_var = entry.key_ptr.*;
+                    const outer_var = entry.value_ptr.*;
+                    // Look up the outer var in the type scope to get the
+                    // caller module's concrete var
+                    if (scope.get(outer_var)) |caller_var| {
+                        scope.put(inner_var, caller_var) catch {};
+                    }
+                }
+            }
         }
 
         // Store the caller's return type variable. This is used as a fallback
