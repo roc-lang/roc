@@ -2102,6 +2102,7 @@ pub fn build(b: *std.Build) void {
     const serialization_size_step = b.step("test-serialization-sizes", "Verify Serialized types have platform-independent sizes");
     const wasm_static_lib_test_step = b.step("test-wasm-static-lib", "Test WASM static library builds with bytebox");
     const test_cli_step = b.step("test-cli", "Test the roc CLI by running test programs");
+    const test_cli_dev_step = b.step("test-cli-dev", "Test the roc CLI with --backend=dev (informational, not in CI)");
     const test_platforms_step = b.step("test-platforms", "Build test platform host libraries");
     const coverage_step = b.step("coverage", "Run parser tests with kcov code coverage");
     const release_step = b.step("release", "Build optimized release binary for distribution");
@@ -2366,6 +2367,17 @@ pub fn build(b: *std.Build) void {
         run_roc_subcommands_test.step.dependOn(&install.step);
         run_roc_subcommands_test.step.dependOn(test_platforms_step);
         test_cli_step.dependOn(&run_roc_subcommands_test.step);
+
+        // Tests fx platform with --backend=dev to track dev backend progress
+        const run_fx_dev_tests = b.addRunArtifact(test_runner_exe);
+        run_fx_dev_tests.addArg("zig-out/bin/roc");
+        run_fx_dev_tests.addArg("fx");
+        run_fx_dev_tests.addArg("--mode=native");
+        run_fx_dev_tests.addArg("--backend=dev");
+        run_fx_dev_tests.step.dependOn(&install.step);
+        run_fx_dev_tests.step.dependOn(&install_runner.step);
+        run_fx_dev_tests.step.dependOn(test_platforms_step);
+        test_cli_dev_step.dependOn(&run_fx_dev_tests.step);
     }
 
     // Manual rebuild command: zig build rebuild-builtins
@@ -2420,6 +2432,7 @@ pub fn build(b: *std.Build) void {
     // Add llvm_compile module for LLVM compilation pipeline
     snapshot_exe.root_module.addAnonymousImport("llvm_compile", .{
         .root_source_file = b.path("src/llvm_compile/mod.zig"),
+        .imports = &.{.{ .name = "builtins", .module = roc_modules.builtins }},
     });
 
     add_tracy(b, roc_modules.build_options, snapshot_exe, target, true, flag_enable_tracy);
@@ -2628,6 +2641,7 @@ pub fn build(b: *std.Build) void {
         try addStaticLlvmOptionsToModule(snapshot_test.root_module);
         snapshot_test.root_module.addAnonymousImport("llvm_compile", .{
             .root_source_file = b.path("src/llvm_compile/mod.zig"),
+            .imports = &.{.{ .name = "builtins", .module = roc_modules.builtins }},
         });
 
         add_tracy(b, roc_modules.build_options, snapshot_test, target, true, flag_enable_tracy);
@@ -3150,7 +3164,9 @@ fn addMainExe(
     }
 
     // Create builtins static library at build time with minimal dependencies
-    const builtins_obj = b.addObject(.{
+    // Using a static library instead of object so we can bundle compiler_rt
+    // (needed for 128-bit integer operations used by Dec type)
+    const builtins_obj = b.addLibrary(.{
         .name = "roc_builtins",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/builtins/static_lib.zig"),
@@ -3160,7 +3176,9 @@ fn addMainExe(
             .omit_frame_pointer = omit_frame_pointer,
             .pic = true, // Enable Position Independent Code for PIE compatibility
         }),
+        .linkage = .static,
     });
+    builtins_obj.bundle_compiler_rt = false;
     configureBackend(builtins_obj, target);
 
     // Create shim static library at build time - fully static without libc
@@ -3185,8 +3203,7 @@ fn addMainExe(
     shim_lib.root_module.addImport("compiled_builtins", compiled_builtins_module);
     shim_lib.step.dependOn(&write_compiled_builtins.step);
     // Link against the pre-built builtins library
-    shim_lib.addObject(builtins_obj);
-    // Bundle compiler-rt for our math symbols
+    shim_lib.linkLibrary(builtins_obj);
     shim_lib.bundle_compiler_rt = true;
     // Install shim library to the output directory
     const install_shim = b.addInstallArtifact(shim_lib, .{});
@@ -3198,6 +3215,13 @@ fn addMainExe(
     const interpreter_shim_filename = if (target.result.os.tag == .windows) "roc_interpreter_shim.lib" else "libroc_interpreter_shim.a";
     copy_shim.addCopyFileToSource(shim_lib.getEmittedBin(), b.pathJoin(&.{ "src/cli", interpreter_shim_filename }));
     exe.step.dependOn(&copy_shim.step);
+
+    // Copy builtins library for the host target for embedding into CLI
+    // This is used by `roc build --backend=dev` to link the app object with builtins
+    const copy_builtins = b.addUpdateSourceFiles();
+    const host_builtins_filename = if (target.result.os.tag == .windows) "roc_builtins.lib" else "libroc_builtins.a";
+    copy_builtins.addCopyFileToSource(builtins_obj.getEmittedBin(), b.pathJoin(&.{ "src/cli", host_builtins_filename }));
+    exe.step.dependOn(&copy_builtins.step);
 
     // Add tracy support (required by parse/can/check modules)
     add_tracy(b, roc_modules.build_options, shim_lib, b.graph.host, false, flag_enable_tracy);
@@ -3212,13 +3236,15 @@ fn addMainExe(
         .{ .name = "wasm32", .query = .{ .cpu_arch = .wasm32, .os_tag = .freestanding, .abi = .none } },
         .{ .name = "x64win", .query = .{ .cpu_arch = .x86_64, .os_tag = .windows, .abi = .gnu } },
         .{ .name = "arm64win", .query = .{ .cpu_arch = .aarch64, .os_tag = .windows, .abi = .gnu } },
+        .{ .name = "x64mac", .query = .{ .cpu_arch = .x86_64, .os_tag = .macos, .abi = .none } },
+        .{ .name = "arm64mac", .query = .{ .cpu_arch = .aarch64, .os_tag = .macos, .abi = .none } },
     };
 
     for (cross_compile_shim_targets) |cross_target| {
         const cross_resolved_target = b.resolveTargetQuery(cross_target.query);
 
-        // Build builtins object for this target
-        const cross_builtins_obj = b.addObject(.{
+        // Build builtins library for this target (with compiler_rt for 128-bit ops)
+        const cross_builtins_obj = b.addLibrary(.{
             .name = b.fmt("roc_builtins_{s}", .{cross_target.name}),
             .root_module = b.createModule(.{
                 .root_source_file = b.path("src/builtins/static_lib.zig"),
@@ -3228,7 +3254,9 @@ fn addMainExe(
                 .omit_frame_pointer = omit_frame_pointer,
                 .pic = true,
             }),
+            .linkage = .static,
         });
+        cross_builtins_obj.bundle_compiler_rt = false;
         configureBackend(cross_builtins_obj, cross_resolved_target);
 
         // Build interpreter shim library for this target
@@ -3269,7 +3297,7 @@ fn addMainExe(
         }
         cross_shim_lib.root_module.addImport("compiled_builtins", compiled_builtins_module);
         cross_shim_lib.step.dependOn(&write_compiled_builtins.step);
-        cross_shim_lib.addObject(cross_builtins_obj);
+        cross_shim_lib.linkLibrary(cross_builtins_obj);
         cross_shim_lib.bundle_compiler_rt = true;
 
         // Copy to target-specific directory for embedding
@@ -3281,6 +3309,16 @@ fn addMainExe(
             b.pathJoin(&.{ "src/cli/targets", cross_target.name, shim_ext }),
         );
         exe.step.dependOn(&copy_cross_shim.step);
+
+        // Copy builtins library for this target for embedding into CLI
+        // Used by `roc build --backend=dev --target=X` to link the app object with builtins
+        const builtins_ext = if (cross_target.query.os_tag == .windows) "roc_builtins.lib" else "libroc_builtins.a";
+        const copy_cross_builtins = b.addUpdateSourceFiles();
+        copy_cross_builtins.addCopyFileToSource(
+            cross_builtins_obj.getEmittedBin(),
+            b.pathJoin(&.{ "src/cli/targets", cross_target.name, builtins_ext }),
+        );
+        exe.step.dependOn(&copy_cross_builtins.step);
     }
 
     const config = b.addOptions();

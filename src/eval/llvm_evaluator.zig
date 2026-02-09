@@ -17,6 +17,8 @@ const can = @import("can");
 const parse = @import("parse");
 const check = @import("check");
 const compiled_builtins = @import("compiled_builtins");
+const builtins = @import("builtins");
+const i128h = builtins.compiler_rt_128;
 const eval_mod = @import("mod.zig");
 
 // LLVM Builder from Zig's standard library (for IR generation)
@@ -391,8 +393,8 @@ pub const LlvmEvaluator = struct {
                 const int_value = num.value.toI128();
                 // Handle float suffixes (e.g., 42f32, 42f64)
                 return switch (num.kind) {
-                    .f32 => builder.floatConst(@floatFromInt(int_value)) catch return error.CompilationFailed,
-                    .f64 => builder.doubleConst(@floatFromInt(int_value)) catch return error.CompilationFailed,
+                    .f32 => builder.floatConst(i128h.i128_to_f32(int_value)) catch return error.CompilationFailed,
+                    .f64 => builder.doubleConst(i128h.i128_to_f64(int_value)) catch return error.CompilationFailed,
                     else => blk: {
                         const llvm_type = try self.getExprLlvmType(builder, expr);
                         break :blk builder.intConst(llvm_type, int_value) catch return error.CompilationFailed;

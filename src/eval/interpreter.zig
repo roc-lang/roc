@@ -28,6 +28,7 @@ const stack = @import("stack.zig");
 const StackValue = @import("StackValue.zig");
 const render_helpers = @import("render_helpers.zig");
 const builtins = @import("builtins");
+const i128h = builtins.compiler_rt_128;
 const RocOps = builtins.host_abi.RocOps;
 const RocExpectFailed = builtins.host_abi.RocExpectFailed;
 const RocStr = builtins.str.RocStr;
@@ -1645,7 +1646,7 @@ pub const Interpreter = struct {
                     .int => |v| @intCast(v),
                     .f32 => |v| @intFromFloat(v),
                     .f64 => |v| @intFromFloat(v),
-                    .dec => |v| @intCast(@divTrunc(v.num, RocDec.one_point_zero.num)),
+                    .dec => |v| @intCast(i128h.divTrunc_i128(v.num, RocDec.one_point_zero.num)),
                 };
 
                 // Call repeatC to repeat the string
@@ -3612,12 +3613,12 @@ pub const Interpreter = struct {
                     .int => |l| switch (rhs) {
                         .int => |r| {
                             if (r == 0) return error.DivisionByZero;
-                            try out.setInt(@divTrunc(l, r));
+                            try out.setInt(i128h.divTrunc_i128(l, r));
                         },
                         .dec => |r| {
                             const r_int = r.toWholeInt();
                             if (r_int == 0) return error.DivisionByZero;
-                            try out.setInt(@divTrunc(l, r_int));
+                            try out.setInt(i128h.divTrunc_i128(l, r_int));
                         },
                         else => return error.TypeMismatch,
                     },
@@ -3664,12 +3665,12 @@ pub const Interpreter = struct {
                     .int => |l| switch (rhs) {
                         .int => |r| {
                             if (r == 0) return error.DivisionByZero;
-                            try out.setInt(@divTrunc(l, r));
+                            try out.setInt(i128h.divTrunc_i128(l, r));
                         },
                         .dec => |r| {
                             const r_int = r.toWholeInt();
                             if (r_int == 0) return error.DivisionByZero;
-                            try out.setInt(@divTrunc(l, r_int));
+                            try out.setInt(i128h.divTrunc_i128(l, r_int));
                         },
                         else => return error.TypeMismatch,
                     },
@@ -3717,12 +3718,12 @@ pub const Interpreter = struct {
                     .int => |l| switch (rhs) {
                         .int => |r| {
                             if (r == 0) return error.DivisionByZero;
-                            try out.setInt(@rem(l, r));
+                            try out.setInt(i128h.rem_i128(l, r));
                         },
                         .dec => |r| {
                             const r_int = r.toWholeInt();
                             if (r_int == 0) return error.DivisionByZero;
-                            try out.setInt(@rem(l, r_int));
+                            try out.setInt(i128h.rem_i128(l, r_int));
                         },
                         else => return error.TypeMismatch,
                     },
@@ -3769,7 +3770,7 @@ pub const Interpreter = struct {
                     .int => |l| switch (rhs) {
                         .int => |r| {
                             if (r == 0) return error.DivisionByZero;
-                            try out.setInt(@mod(l, r));
+                            try out.setInt(i128h.mod_i128(l, r));
                         },
                         else => return error.TypeMismatch,
                     },
@@ -3790,7 +3791,7 @@ pub const Interpreter = struct {
                 out.is_initialized = false;
 
                 // rhs must be an integer (U8)
-                const shift_amount_u8 = @as(u8, @intCast(@mod(rhs.int, 256)));
+                const shift_amount_u8 = @as(u8, @intCast(i128h.mod_i128(rhs.int, 256)));
                 const shift_amount = @as(u7, @intCast(@min(shift_amount_u8, 127)));
 
                 switch (lhs) {
@@ -3827,7 +3828,7 @@ pub const Interpreter = struct {
                 out.is_initialized = false;
 
                 // rhs must be an integer (U8)
-                const shift_amount_u8 = @as(u8, @intCast(@mod(rhs.int, 256)));
+                const shift_amount_u8 = @as(u8, @intCast(i128h.mod_i128(rhs.int, 256)));
                 const shift_amount = @as(u7, @intCast(@min(shift_amount_u8, 127)));
 
                 switch (lhs) {
@@ -3850,7 +3851,7 @@ pub const Interpreter = struct {
                 out.is_initialized = false;
 
                 // rhs must be an integer (U8)
-                const shift_amount_u8 = @as(u8, @intCast(@mod(rhs.int, 256)));
+                const shift_amount_u8 = @as(u8, @intCast(i128h.mod_i128(rhs.int, 256)));
                 const shift_amount = @as(u7, @intCast(@min(shift_amount_u8, 127)));
 
                 // Helper function to perform zero-fill shift for a given type
@@ -4231,9 +4232,9 @@ pub const Interpreter = struct {
                                 // Floating-point and Dec types
                                 const frac_precision = num_layout.data.scalar.data.frac;
                                 const float_value: f64 = if (is_negative)
-                                    -@as(f64, @floatFromInt(value))
+                                    -i128h.u128_to_f64(value)
                                 else
-                                    @as(f64, @floatFromInt(value));
+                                    i128h.u128_to_f64(value);
 
                                 // Handle fractional part for floats
                                 var final_value = float_value;
@@ -4433,9 +4434,9 @@ pub const Interpreter = struct {
                                 // Floating-point and Dec types
                                 const frac_precision = num_layout.data.scalar.data.frac;
                                 const float_value: f64 = if (is_negative)
-                                    -@as(f64, @floatFromInt(value))
+                                    -i128h.u128_to_f64(value)
                                 else
-                                    @as(f64, @floatFromInt(value));
+                                    i128h.u128_to_f64(value);
 
                                 // Handle fractional part for floats
                                 var frac_part: f64 = 0;
@@ -4558,9 +4559,9 @@ pub const Interpreter = struct {
                         } else if (num_layout.tag == .scalar and num_layout.data.scalar.tag == .frac) {
                             const frac_precision = num_layout.data.scalar.data.frac;
                             const float_value: f64 = if (is_negative)
-                                -@as(f64, @floatFromInt(value))
+                                -i128h.u128_to_f64(value)
                             else
-                                @as(f64, @floatFromInt(value));
+                                i128h.u128_to_f64(value);
 
                             var frac_part: f64 = 0;
                             if (digits_after.len > 0) {
@@ -4981,14 +4982,19 @@ pub const Interpreter = struct {
 
         const int_value: T = builtins.utils.readAs(T, int_arg.ptr.?, @src());
 
-        // Use std.fmt to format the integer
+        // Format the integer without using std.fmt (which calls @rem on i128/u128)
         var buf: [40]u8 = undefined; // 40 is enough for i128
-        const result = std.fmt.bufPrint(&buf, "{}", .{int_value}) catch debugUnreachable(roc_ops, "buffer too small for integer formatting", @src());
+        const result: []const u8 = if (T == i128)
+            i128h.i128_to_str(&buf, int_value).str
+        else if (T == u128)
+            i128h.u128_to_str(&buf, int_value).str
+        else
+            std.fmt.bufPrint(&buf, "{}", .{int_value}) catch debugUnreachable(roc_ops, "buffer too small for integer formatting", @src());
 
         const str_rt_var = try self.getCanonicalStrRuntimeVar();
         const value = try self.pushStr(str_rt_var);
         const roc_str_ptr = value.asRocStr().?;
-        roc_str_ptr.* = RocStr.init(&buf, result.len, roc_ops);
+        roc_str_ptr.* = RocStr.init(result.ptr, result.len, roc_ops);
         return value;
     }
 
@@ -4999,14 +5005,16 @@ pub const Interpreter = struct {
 
         const float_value: T = builtins.utils.readAs(T, float_arg.ptr.?, @src());
 
-        // Use std.fmt to format the float
-        var buf: [400]u8 = undefined;
-        const result = std.fmt.bufPrint(&buf, "{d}", .{float_value}) catch debugUnreachable(roc_ops, "buffer too small for float formatting", @src());
+        var float_buf: [400]u8 = undefined;
+        const str_bytes = if (T == f32)
+            i128h.f32_to_str(&float_buf, float_value)
+        else
+            i128h.f64_to_str(&float_buf, float_value);
 
         const str_rt_var = try self.getCanonicalStrRuntimeVar();
         const value = try self.pushStr(str_rt_var);
         const roc_str_ptr = value.asRocStr().?;
-        roc_str_ptr.* = RocStr.init(&buf, result.len, roc_ops);
+        roc_str_ptr.* = RocStr.init(str_bytes.ptr, str_bytes.len, roc_ops);
         return value;
     }
 
@@ -5230,7 +5238,16 @@ pub const Interpreter = struct {
         std.debug.assert(int_arg.ptr != null);
 
         const from_value = builtins.utils.readAs(From, int_arg.ptr.?, @src());
-        const to_value: To = @floatFromInt(from_value);
+        const to_value: To = if (From == i128 and To == f64)
+            i128h.i128_to_f64(from_value)
+        else if (From == i128 and To == f32)
+            i128h.i128_to_f32(from_value)
+        else if (From == u128 and To == f64)
+            i128h.u128_to_f64(from_value)
+        else if (From == u128 and To == f32)
+            i128h.u128_to_f32(from_value)
+        else
+            @floatFromInt(from_value);
 
         const to_layout = Layout.frac(comptime fracTypeFromZigType(To));
         const result_rt_var = try self.runtime_types.fresh();
@@ -5323,7 +5340,13 @@ pub const Interpreter = struct {
         const max_val: From = @floatFromInt(std.math.maxInt(To));
         const in_range = from_value >= min_val and from_value <= max_val;
 
-        const val: To = if (is_int and in_range) @intFromFloat(from_value) else 0;
+        const val: To = if (is_int and in_range) blk: {
+            if (To == i128 or To == u128) {
+                const as_f64: f64 = if (From == f32) @floatCast(from_value) else from_value;
+                break :blk if (To == i128) i128h.f64_to_i128(as_f64) else i128h.f64_to_u128(as_f64);
+            }
+            break :blk @intFromFloat(from_value);
+        } else 0;
 
         // Build the result record: { is_int: Bool, in_range: Bool, val_or_memory_garbage: To }
         return try self.buildIsIntInRangeValRecord(is_int, in_range, To, val);
@@ -5417,7 +5440,7 @@ pub const Interpreter = struct {
         const dec_value = builtins.utils.readAs(RocDec, dec_arg.ptr.?, @src());
 
         // Check if it's an integer (no fractional part)
-        const remainder = @rem(dec_value.num, RocDec.one_point_zero_i128);
+        const remainder = i128h.rem_i128(dec_value.num, RocDec.one_point_zero_i128);
         const is_int = remainder == 0;
 
         // Get the whole number part
@@ -5441,7 +5464,7 @@ pub const Interpreter = struct {
         const dec_value = builtins.utils.readAs(RocDec, dec_arg.ptr.?, @src());
 
         // Check if it's an integer (no fractional part)
-        const remainder = @rem(dec_value.num, RocDec.one_point_zero_i128);
+        const remainder = i128h.rem_i128(dec_value.num, RocDec.one_point_zero_i128);
         const is_int = remainder == 0;
 
         // Get the whole number part - always fits in i128
@@ -5610,6 +5633,10 @@ pub const Interpreter = struct {
         if (value <= min_val) return std.math.minInt(To);
         if (value >= max_val) return std.math.maxInt(To);
 
+        if (To == i128 or To == u128) {
+            const as_f64: f64 = if (From == f32) @floatCast(value) else value;
+            return if (To == i128) i128h.f64_to_i128(as_f64) else i128h.f64_to_u128(as_f64);
+        }
         return @intFromFloat(value);
     }
 
@@ -6224,7 +6251,7 @@ pub const Interpreter = struct {
                 .int => |l| switch (rhs_val) {
                     .int => |r| {
                         if (r == 0) return error.DivisionByZero;
-                        try out.setInt(@divTrunc(l, r));
+                        try out.setInt(i128h.divTrunc_i128(l, r));
                     },
                     else => return error.TypeMismatch,
                 },
@@ -6266,7 +6293,7 @@ pub const Interpreter = struct {
                 .int => |l| switch (rhs_val) {
                     .int => |r| {
                         if (r == 0) return error.DivisionByZero;
-                        try out.setInt(@rem(l, r));
+                        try out.setInt(i128h.rem_i128(l, r));
                     },
                     else => return error.TypeMismatch,
                 },
@@ -6365,11 +6392,11 @@ pub const Interpreter = struct {
         return switch (rhs) {
             .int => std.math.order(lhs, rhs.int),
             .f32 => {
-                const lhs_f: f32 = @floatFromInt(lhs);
+                const lhs_f: f32 = i128h.i128_to_f32(lhs);
                 return std.math.order(lhs_f, rhs.f32);
             },
             .f64 => {
-                const lhs_f: f64 = @floatFromInt(lhs);
+                const lhs_f: f64 = i128h.i128_to_f64(lhs);
                 return std.math.order(lhs_f, rhs.f64);
             },
             .dec => {
@@ -6381,7 +6408,7 @@ pub const Interpreter = struct {
     fn orderF32(_: *Interpreter, lhs: f32, rhs: NumericValue) !std.math.Order {
         return switch (rhs) {
             .int => {
-                const rhs_f: f32 = @floatFromInt(rhs.int);
+                const rhs_f: f32 = i128h.i128_to_f32(rhs.int);
                 return std.math.order(lhs, rhs_f);
             },
             .f32 => std.math.order(lhs, rhs.f32),
@@ -6396,7 +6423,7 @@ pub const Interpreter = struct {
     fn orderF64(_: *Interpreter, lhs: f64, rhs: NumericValue) !std.math.Order {
         return switch (rhs) {
             .int => {
-                const rhs_f: f64 = @floatFromInt(rhs.int);
+                const rhs_f: f64 = i128h.i128_to_f64(rhs.int);
                 return std.math.order(lhs, rhs_f);
             },
             .f32 => {
@@ -9783,10 +9810,17 @@ pub const Interpreter = struct {
                         buf[i] = try self.translateTypeVar(module, ct_arg);
                     }
                     // Translate the alias's ident from source module's ident store to runtime ident store
-                    const source_alias_str = module.getIdent(alias.ident.ident_idx);
-                    const rt_alias_ident_idx = try self.runtime_layout_store.getMutableEnv().?.insertIdent(base_pkg.Ident.for_text(source_alias_str));
-                    const rt_alias_ident = types.TypeIdent{ .ident_idx = rt_alias_ident_idx };
-                    const content = try self.runtime_types.mkAlias(rt_alias_ident, rt_backing, buf);
+                    const layout_env = self.runtime_layout_store.getMutableEnv().?;
+                    const needs_translation = @intFromPtr(&module.common.idents.interner) != @intFromPtr(&layout_env.common.idents.interner);
+                    const translated_ident = if (needs_translation) ident_blk: {
+                        const type_name_str = module.getIdent(alias.ident.ident_idx);
+                        break :ident_blk types.TypeIdent{ .ident_idx = try layout_env.insertIdent(base_pkg.Ident.for_text(type_name_str)) };
+                    } else alias.ident;
+                    const translated_origin = if (needs_translation) origin_blk: {
+                        const origin_str = module.getIdent(alias.origin_module);
+                        break :origin_blk try layout_env.insertIdent(base_pkg.Ident.for_text(origin_str));
+                    } else alias.origin_module;
+                    const content = try self.runtime_types.mkAlias(translated_ident, rt_backing, buf, translated_origin);
                     break :blk try self.runtime_types.freshFromContent(content);
                 },
                 .flex => |flex| {
@@ -13146,18 +13180,18 @@ pub const Interpreter = struct {
                         const ptr = builtins.utils.alignedPtrCast(*f32, value.ptr.?, @src());
                         if (num_lit.value.kind == .u128) {
                             const u128_val: u128 = @bitCast(num_lit.value.bytes);
-                            ptr.* = @floatFromInt(u128_val);
+                            ptr.* = i128h.u128_to_f32(u128_val);
                         } else {
-                            ptr.* = @floatFromInt(num_lit.value.toI128());
+                            ptr.* = i128h.i128_to_f32(num_lit.value.toI128());
                         }
                     },
                     .f64 => {
                         const ptr = builtins.utils.alignedPtrCast(*f64, value.ptr.?, @src());
                         if (num_lit.value.kind == .u128) {
                             const u128_val: u128 = @bitCast(num_lit.value.bytes);
-                            ptr.* = @floatFromInt(u128_val);
+                            ptr.* = i128h.u128_to_f64(u128_val);
                         } else {
-                            ptr.* = @floatFromInt(num_lit.value.toI128());
+                            ptr.* = i128h.i128_to_f64(num_lit.value.toI128());
                         }
                     },
                     .dec => {
@@ -13382,18 +13416,18 @@ pub const Interpreter = struct {
                         const ptr = builtins.utils.alignedPtrCast(*f32, value.ptr.?, @src());
                         if (typed_int.value.kind == .u128) {
                             const u128_val: u128 = @bitCast(typed_int.value.bytes);
-                            ptr.* = @floatFromInt(u128_val);
+                            ptr.* = i128h.u128_to_f32(u128_val);
                         } else {
-                            ptr.* = @floatFromInt(typed_int.value.toI128());
+                            ptr.* = i128h.i128_to_f32(typed_int.value.toI128());
                         }
                     },
                     .f64 => {
                         const ptr = builtins.utils.alignedPtrCast(*f64, value.ptr.?, @src());
                         if (typed_int.value.kind == .u128) {
                             const u128_val: u128 = @bitCast(typed_int.value.bytes);
-                            ptr.* = @floatFromInt(u128_val);
+                            ptr.* = i128h.u128_to_f64(u128_val);
                         } else {
-                            ptr.* = @floatFromInt(typed_int.value.toI128());
+                            ptr.* = i128h.i128_to_f64(typed_int.value.toI128());
                         }
                     },
                     .dec => {
@@ -13456,12 +13490,12 @@ pub const Interpreter = struct {
                     .f32 => {
                         const ptr = builtins.utils.alignedPtrCast(*f32, value.ptr.?, @src());
                         // Convert from scaled i128 (10^18) to f32
-                        ptr.* = @as(f32, @floatFromInt(scaled_value)) / @as(f32, @floatFromInt(RocDec.one_point_zero_i128));
+                        ptr.* = i128h.i128_to_f32(scaled_value) / @as(f32, @floatFromInt(RocDec.one_point_zero_i128));
                     },
                     .f64 => {
                         const ptr = builtins.utils.alignedPtrCast(*f64, value.ptr.?, @src());
                         // Convert from scaled i128 (10^18) to f64
-                        ptr.* = @as(f64, @floatFromInt(scaled_value)) / @as(f64, @floatFromInt(RocDec.one_point_zero_i128));
+                        ptr.* = i128h.i128_to_f64(scaled_value) / @as(f64, @floatFromInt(RocDec.one_point_zero_i128));
                     },
                     .dec => {
                         const ptr = builtins.utils.alignedPtrCast(*RocDec, value.ptr.?, @src());
@@ -13471,7 +13505,7 @@ pub const Interpreter = struct {
                 },
                 .int => {
                     // Converting fractional to integer - truncate
-                    const int_val = @divTrunc(scaled_value, RocDec.one_point_zero_i128);
+                    const int_val = i128h.divTrunc_i128(scaled_value, RocDec.one_point_zero_i128);
                     const bytes: [16]u8 = @bitCast(int_val);
                     try value.setIntFromBytes(bytes, false);
                 },
@@ -20104,7 +20138,7 @@ test "interpreter: translateTypeVar for alias of Str" {
     };
     const ct_str = try env.types.freshFromContent(.{ .structure = .{ .nominal_type = str_nominal } });
 
-    const ct_alias_content = try env.types.mkAlias(type_ident, ct_str, &.{});
+    const ct_alias_content = try env.types.mkAlias(type_ident, ct_str, &.{}, alias_name);
     const ct_alias_var = try env.types.freshFromContent(ct_alias_content);
 
     const rt_var = try interp.translateTypeVar(&env, ct_alias_var);

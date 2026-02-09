@@ -156,12 +156,6 @@ pub const ExternalSpecializationRequest = struct {
     concrete_type: types.Var,
     /// The call site in this module (for error reporting)
     call_site: ?Expr.Idx,
-
-    pub fn eql(a: ExternalSpecializationRequest, b: ExternalSpecializationRequest) bool {
-        return a.source_module == b.source_module and
-            a.original_ident == b.original_ident;
-        // Note: concrete_type comparison would require type equality check
-    }
 };
 
 /// Result of requesting an external specialization.
@@ -226,6 +220,10 @@ specialization_stack: std.ArrayList(SpecializationKey),
 /// External specializations requested from other modules
 external_requests: std.ArrayList(ExternalSpecializationRequest),
 
+/// Fast lookup indexes for pending specialization deduplication (O(1) vs O(n) linear scan)
+pending_specialization_keys: std.AutoHashMap(SpecializationKey, void),
+pending_external_keys: std.AutoHashMap(ExternalSpecKey, void),
+
 /// Resolved external specializations: maps (source_module, original_ident, type_hash) to specialized_ident.
 /// Populated by resolveExternalSpecialization, used by requestExternalSpecialization.
 resolved_external_specs: std.AutoHashMap(ExternalSpecKey, base.Ident.Idx),
@@ -264,6 +262,8 @@ pub fn init(
         .specialization_stack = std.ArrayList(SpecializationKey).empty,
         .external_requests = std.ArrayList(ExternalSpecializationRequest).empty,
         .resolved_external_specs = std.AutoHashMap(ExternalSpecKey, base.Ident.Idx).init(allocator),
+        .pending_specialization_keys = std.AutoHashMap(SpecializationKey, void).init(allocator),
+        .pending_external_keys = std.AutoHashMap(ExternalSpecKey, void).init(allocator),
         .closure_transformer = null,
         .impl_lambda_sets = null,
     };
@@ -297,6 +297,8 @@ pub fn deinit(self: *Self) void {
     self.specialization_stack.deinit(self.allocator);
     self.external_requests.deinit(self.allocator);
     self.resolved_external_specs.deinit();
+    self.pending_specialization_keys.deinit();
+    self.pending_external_keys.deinit();
 }
 
 /// Result of looking up a static dispatch implementation for a concrete type.
@@ -655,9 +657,6 @@ pub fn resolveEntriesForTypeVar(
         }
     }
 
-    // Sort by region DESCENDING (innermost first - higher region numbers first)
-    std.mem.sort(EntryWithExpected, all_entries.items, {}, compareByRegionDesc);
-
     var resolved_count: usize = 0;
 
     // Step 3: Process each entry in region order
@@ -698,17 +697,6 @@ pub fn resolveEntriesForTypeVar(
     tracker.removeVar(type_var);
 
     return resolved_count;
-}
-
-/// Comparison function for sorting entries by region descending.
-fn compareByRegionDesc(
-    _: void,
-    a: EntryWithExpected,
-    b: EntryWithExpected,
-) bool {
-    std.debug.assert(a.index < a.lambda_set.unspecialized.items.len);
-    std.debug.assert(b.index < b.lambda_set.unspecialized.items.len);
-    return a.lambda_set.unspecialized.items[a.index].region > b.lambda_set.unspecialized.items[b.index].region;
 }
 
 /// Unify ambient function types when resolving an unspecialized entry.
@@ -779,19 +767,10 @@ pub fn resolveEntriesForTypeVarWithUnification(
 
     if (entry_refs.len == 0) return 0;
 
-    // Copy to slice for sorting, capturing expected member for debug validation
-    const entries = try self.allocator.alloc(EntryWithExpected, entry_refs.len);
+    // Copy to mutable slice so swapRemove index fixups can update later entries
+    const entries = try self.allocator.alloc(ClosureTransformer.UnspecializedEntryRef, entry_refs.len);
     defer self.allocator.free(entries);
-    for (entry_refs, 0..) |entry_ref, i| {
-        entries[i] = .{
-            .lambda_set = entry_ref.lambda_set,
-            .index = entry_ref.index,
-            .expected_member = entry_ref.lambda_set.unspecialized.items[entry_ref.index].member,
-        };
-    }
-
-    // Sort by region DESCENDING (innermost first)
-    std.mem.sort(EntryWithExpected, entries, {}, compareByRegionDesc);
+    @memcpy(entries, entry_refs);
 
     var resolved_count: usize = 0;
 
@@ -799,7 +778,6 @@ pub fn resolveEntriesForTypeVarWithUnification(
         std.debug.assert(entry.index < entry.lambda_set.unspecialized.items.len);
 
         const unspec = entry.lambda_set.unspecialized.items[entry.index];
-        std.debug.assert(unspec.member == entry.expected_member);
 
         if (self.lookupStaticDispatch(concrete_type, unspec.member)) |impl| {
             // Perform ambient function unification if we have the implementation's lambda set
@@ -886,16 +864,9 @@ pub fn requestSpecialization(
     }
 
     // Check if it's already pending - if so, look up or create the specialized name
-    for (self.pending_specializations.items) |pending| {
-        if (pending.original_ident == original_ident) {
-            const pending_hash = try self.structuralTypeHash(pending.concrete_type);
-            if (pending_hash == type_hash) {
-                // Already pending - create and return the specialized name so call sites
-                // can reference it. The name will be reused when the spec is processed.
-                const specialized_name = try self.createSpecializedName(original_ident, concrete_type);
-                return specialized_name;
-            }
-        }
+    if (self.pending_specialization_keys.contains(key)) {
+        const specialized_name = try self.createSpecializedName(original_ident, concrete_type);
+        return specialized_name;
     }
 
     // Check if this function is registered as a partial proc
@@ -919,6 +890,7 @@ pub fn requestSpecialization(
         .call_site = call_site,
         .type_substitutions = type_subs,
     });
+    try self.pending_specialization_keys.put(key, {});
 
     return specialized_name;
 }
@@ -953,22 +925,12 @@ pub fn requestExternalSpecialization(
     }
 
     // Check if we already have a pending request
-    for (self.external_requests.items) |existing| {
-        if (existing.source_module == source_module and
-            existing.original_ident == original_ident)
-        {
-            // Compare concrete types using structural type hashing
-            const existing_type_hash = try self.structuralTypeHash(existing.concrete_type);
-            if (existing_type_hash == new_type_hash) {
-                // Pending but not yet resolved - create/lookup the specialized name
-                // so all call sites use a consistent reference
-                const specialized_name = try self.createSpecializedName(original_ident, concrete_type);
-                return ExternalSpecializationResult{
-                    .specialized_ident = specialized_name,
-                    .is_new = false,
-                };
-            }
-        }
+    if (self.pending_external_keys.contains(ext_key)) {
+        const specialized_name = try self.createSpecializedName(original_ident, concrete_type);
+        return ExternalSpecializationResult{
+            .specialized_ident = specialized_name,
+            .is_new = false,
+        };
     }
 
     // Create the specialized name now so all call sites use a consistent reference.
@@ -982,6 +944,7 @@ pub fn requestExternalSpecialization(
         .concrete_type = concrete_type,
         .call_site = call_site,
     });
+    try self.pending_external_keys.put(ext_key, {});
 
     return ExternalSpecializationResult{
         .specialized_ident = specialized_name,
@@ -1081,6 +1044,7 @@ pub fn processPendingSpecializations(self: *Self) !void {
         pending.type_substitutions.deinit();
     }
 
+    self.pending_specialization_keys.clearRetainingCapacity();
     self.phase = .finding;
 }
 
@@ -1299,6 +1263,24 @@ fn buildFlatTypeSubstitutions(
                 .tag_union => |u| u,
                 else => return,
             };
+
+            // Compare tag payload types (tags are sorted by name, so positional match is correct)
+            const poly_tags = self.types_store.getTagsSlice(poly_union.tags);
+            const concrete_tags = self.types_store.getTagsSlice(concrete_union.tags);
+
+            const poly_args_slice = poly_tags.items(.args);
+            const concrete_args_slice = concrete_tags.items(.args);
+
+            const min_tags = @min(poly_args_slice.len, concrete_args_slice.len);
+            for (0..min_tags) |i| {
+                const poly_tag_args = self.types_store.sliceVars(poly_args_slice[i]);
+                const concrete_tag_args = self.types_store.sliceVars(concrete_args_slice[i]);
+
+                const min_args = @min(poly_tag_args.len, concrete_tag_args.len);
+                for (0..min_args) |j| {
+                    try self.buildTypeSubstitutions(poly_tag_args[j], concrete_tag_args[j], var_map);
+                }
+            }
 
             // Compare extension types
             try self.buildTypeSubstitutions(poly_union.ext, concrete_union.ext, var_map);
@@ -2295,6 +2277,12 @@ fn hashTypeRecursive(
         .alias => |alias| {
             hasher.update("alias");
             hasher.update(std.mem.asBytes(&alias.ident.ident_idx));
+            // Hash all vars (backing var + type arguments) to differentiate
+            // e.g. List(U64) from List(Str)
+            const vars = self.types_store.sliceVars(alias.vars.nonempty);
+            for (vars) |v| {
+                try self.hashTypeRecursive(hasher, v, seen);
+            }
         },
         .err => hasher.update("err"),
     }
@@ -2818,4 +2806,132 @@ test "monomorphizer: allExternalSpecializationsResolved detects unresolved" {
 
     // Now all resolved
     try testing.expect(try mono.allExternalSpecializationsResolved());
+}
+
+test "monomorphizer: alias types with different type args produce different hashes" {
+    const allocator = testing.allocator;
+
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, "test");
+    defer {
+        module_env.deinit();
+        allocator.destroy(module_env);
+    }
+
+    var mono = Self.init(allocator, module_env, &module_env.types);
+    defer mono.deinit();
+
+    // Create the alias name (e.g. "MyAlias")
+    const alias_ident = try module_env.insertIdent(base.Ident.for_text("MyAlias"));
+    const type_ident = types.types.TypeIdent{ .ident_idx = alias_ident };
+
+    // Create two different concrete types for the type argument
+    const arg1 = try module_env.types.fresh();
+    try module_env.types.setVarContent(arg1, .{ .structure = .empty_record });
+
+    const arg2 = try module_env.types.fresh();
+    try module_env.types.setVarContent(arg2, .{ .structure = .empty_tag_union });
+
+    // Create backing vars
+    const backing1 = try module_env.types.fresh();
+    const backing2 = try module_env.types.fresh();
+
+    // Create two alias types: MyAlias EmptyRecord vs MyAlias EmptyTagUnion
+    const alias_content1 = try module_env.types.mkAlias(type_ident, backing1, &.{arg1}, alias_ident);
+    const alias_content2 = try module_env.types.mkAlias(type_ident, backing2, &.{arg2}, alias_ident);
+
+    const var1 = try module_env.types.fresh();
+    try module_env.types.setVarContent(var1, alias_content1);
+
+    const var2 = try module_env.types.fresh();
+    try module_env.types.setVarContent(var2, alias_content2);
+
+    // These should produce DIFFERENT hashes because the type args differ
+    const hash1 = try mono.structuralTypeHash(var1);
+    const hash2 = try mono.structuralTypeHash(var2);
+    try testing.expect(hash1 != hash2);
+}
+
+test "monomorphizer: alias types with same type args produce same hash" {
+    const allocator = testing.allocator;
+
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, "test");
+    defer {
+        module_env.deinit();
+        allocator.destroy(module_env);
+    }
+
+    var mono = Self.init(allocator, module_env, &module_env.types);
+    defer mono.deinit();
+
+    const alias_ident = try module_env.insertIdent(base.Ident.for_text("MyAlias"));
+    const type_ident = types.types.TypeIdent{ .ident_idx = alias_ident };
+
+    // Create two identical concrete type args
+    const arg1 = try module_env.types.fresh();
+    try module_env.types.setVarContent(arg1, .{ .structure = .empty_record });
+
+    const arg2 = try module_env.types.fresh();
+    try module_env.types.setVarContent(arg2, .{ .structure = .empty_record });
+
+    const backing1 = try module_env.types.fresh();
+    try module_env.types.setVarContent(backing1, .{ .structure = .empty_record });
+
+    const backing2 = try module_env.types.fresh();
+    try module_env.types.setVarContent(backing2, .{ .structure = .empty_record });
+
+    // Create two alias types with the same structure
+    const alias_content1 = try module_env.types.mkAlias(type_ident, backing1, &.{arg1}, alias_ident);
+    const alias_content2 = try module_env.types.mkAlias(type_ident, backing2, &.{arg2}, alias_ident);
+
+    const var1 = try module_env.types.fresh();
+    try module_env.types.setVarContent(var1, alias_content1);
+
+    const var2 = try module_env.types.fresh();
+    try module_env.types.setVarContent(var2, alias_content2);
+
+    // These should produce the SAME hash because the structure is identical
+    const hash1 = try mono.structuralTypeHash(var1);
+    const hash2 = try mono.structuralTypeHash(var2);
+    try testing.expectEqual(hash1, hash2);
+}
+
+test "monomorphizer: alias types with different backing vars produce different hashes" {
+    const allocator = testing.allocator;
+
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, "test");
+    defer {
+        module_env.deinit();
+        allocator.destroy(module_env);
+    }
+
+    var mono = Self.init(allocator, module_env, &module_env.types);
+    defer mono.deinit();
+
+    const alias_ident = try module_env.insertIdent(base.Ident.for_text("MyAlias"));
+    const type_ident = types.types.TypeIdent{ .ident_idx = alias_ident };
+
+    // Create two different backing types (no type args)
+    const backing1 = try module_env.types.fresh();
+    try module_env.types.setVarContent(backing1, .{ .structure = .empty_record });
+
+    const backing2 = try module_env.types.fresh();
+    try module_env.types.setVarContent(backing2, .{ .structure = .empty_tag_union });
+
+    // Create alias types with no args but different backing vars
+    const alias_content1 = try module_env.types.mkAlias(type_ident, backing1, &.{}, alias_ident);
+    const alias_content2 = try module_env.types.mkAlias(type_ident, backing2, &.{}, alias_ident);
+
+    const var1 = try module_env.types.fresh();
+    try module_env.types.setVarContent(var1, alias_content1);
+
+    const var2 = try module_env.types.fresh();
+    try module_env.types.setVarContent(var2, alias_content2);
+
+    // These should produce DIFFERENT hashes because the backing types differ
+    const hash1 = try mono.structuralTypeHash(var1);
+    const hash2 = try mono.structuralTypeHash(var2);
+    try testing.expect(hash1 != hash2);
 }
