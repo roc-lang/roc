@@ -21,6 +21,7 @@ const backend = @import("backend");
 const mono = @import("mono");
 const builtin_loading = @import("builtin_loading.zig");
 const builtins = @import("builtins");
+const i128h = builtins.compiler_rt_128;
 
 // Cross-platform setjmp/longjmp for crash recovery.
 const sljmp = @import("sljmp");
@@ -678,7 +679,9 @@ pub const DevEvaluator = struct {
         const layout_store_ptr = try self.ensureGlobalLayoutStore(all_module_envs);
 
         // Create the lowerer with the layout store
-        var lowerer = MonoLower.init(self.allocator, &mono_store, all_module_envs, null, layout_store_ptr);
+        // Note: app_module_idx is null for JIT evaluation (no platform/app distinction)
+        // Note: hosted_functions is null because dev evaluator uses interpreter for hosted calls
+        var lowerer = MonoLower.init(self.allocator, &mono_store, all_module_envs, null, layout_store_ptr, null, null);
         defer lowerer.deinit();
 
         // Lower CIR expression to Mono IR
@@ -713,8 +716,8 @@ pub const DevEvaluator = struct {
             1;
 
         // Create the code generator with the layout store
-        // Use NativeMonoExprCodeGen since we're executing on the host machine
-        var codegen = backend.NativeMonoExprCodeGen.init(
+        // Use HostMonoExprCodeGen since we're executing on the host machine
+        var codegen = backend.HostMonoExprCodeGen.init(
             self.allocator,
             &mono_store,
             layout_store_ptr,
@@ -768,9 +771,18 @@ pub const DevEvaluator = struct {
             switch (self_val) {
                 .i64_val => |v| try writer.print("{}", .{v}),
                 .u64_val => |v| try writer.print("{}", .{v}),
-                .f64_val => |v| try writer.print("{d}", .{v}),
-                .i128_val => |v| try writer.print("{}", .{v}),
-                .u128_val => |v| try writer.print("{}", .{v}),
+                .f64_val => |v| {
+                    var float_buf: [400]u8 = undefined;
+                    try writer.writeAll(i128h.f64_to_str(&float_buf, v));
+                },
+                .i128_val => |v| {
+                    var buf: [40]u8 = undefined;
+                    try writer.writeAll(i128h.i128_to_str(&buf, v).str);
+                },
+                .u128_val => |v| {
+                    var buf: [40]u8 = undefined;
+                    try writer.writeAll(i128h.u128_to_str(&buf, v).str);
+                },
                 .str_val => |v| try writer.print("\"{s}\"", .{v}),
             }
         }

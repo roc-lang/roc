@@ -7,6 +7,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const base = @import("base");
 const builtins = @import("builtins");
+const i128h = builtins.compiler_rt_128;
 const can = @import("can");
 const check_mod = @import("check");
 const types_mod = @import("types");
@@ -421,7 +422,7 @@ pub const ComptimeEvaluator = struct {
                         const scaled_value = dec_value.num;
 
                         // Unscale by dividing by 10^18 to get the original literal value
-                        const unscaled_value = @divTrunc(scaled_value, builtins.dec.RocDec.one_point_zero_i128);
+                        const unscaled_value = i128h.divTrunc_i128(scaled_value, builtins.dec.RocDec.one_point_zero_i128);
 
                         // Create IntValue and fold as Dec
                         const int_value = CIR.IntValue{
@@ -869,7 +870,7 @@ pub const ComptimeEvaluator = struct {
                     .dec => {
                         const dec_value = stack_value.asDec(self.get_ops());
                         const scaled_value = dec_value.num;
-                        const unscaled_value = @divTrunc(scaled_value, builtins.dec.RocDec.one_point_zero_i128);
+                        const unscaled_value = i128h.divTrunc_i128(scaled_value, builtins.dec.RocDec.one_point_zero_i128);
 
                         const int_value = CIR.IntValue{
                             .bytes = @bitCast(unscaled_value),
@@ -1463,7 +1464,7 @@ pub const ComptimeEvaluator = struct {
         const f64_value: f64 = switch (current_expr) {
             .e_dec => |dec| blk: {
                 // Dec is stored as i128 scaled by 10^18
-                const scaled = @as(f64, @floatFromInt(dec.value.num));
+                const scaled = builtins.compiler_rt_128.i128_to_f64(dec.value.num);
                 break :blk scaled / 1e18;
             },
             .e_dec_small => |small| blk: {

@@ -1,59 +1,14 @@
-//! Unified dev backend for generating native object files.
+//! Object file writer for the dev backend.
 //!
-//! This module integrates code generation with object file writing
-//! to produce complete relocatable object files from CIR.
+//! This module takes generated machine code and produces relocatable
+//! object files in platform-specific formats (ELF, Mach-O, COFF).
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const object = @import("object/mod.zig");
-const x86_64 = @import("x86_64/mod.zig");
-const aarch64 = @import("aarch64/mod.zig");
+const RocTarget = @import("roc_target").RocTarget;
 const Relocation = @import("Relocation.zig").Relocation;
-
-/// Target architecture for code generation
-pub const Architecture = enum {
-    x86_64,
-    aarch64,
-
-    pub fn fromTarget(target: anytype) Architecture {
-        const arch = if (@hasField(@TypeOf(target), "cpu"))
-            target.cpu.arch
-        else if (@hasField(@TypeOf(target), "arch"))
-            target.arch
-        else
-            @compileError("Unknown target type");
-
-        return switch (arch) {
-            .x86_64 => .x86_64,
-            .aarch64 => .aarch64,
-            else => @panic("Unsupported architecture for dev backend"),
-        };
-    }
-};
-
-/// Target operating system
-pub const OperatingSystem = enum {
-    linux,
-    macos,
-    windows,
-
-    pub fn fromTarget(target: anytype) OperatingSystem {
-        const os_tag = if (@hasField(@TypeOf(target), "os"))
-            target.os.tag
-        else if (@hasField(@TypeOf(target), "os_tag"))
-            target.os_tag
-        else
-            @compileError("Unknown target type");
-
-        return switch (os_tag) {
-            .linux => .linux,
-            .macos => .macos,
-            .windows => .windows,
-            else => .linux, // Default to Linux for other Unix-like systems
-        };
-    }
-};
 
 /// Generate an object file from code and relocations.
 ///
@@ -61,19 +16,23 @@ pub const OperatingSystem = enum {
 /// machine code and produces a relocatable object file.
 pub fn generateObjectFile(
     allocator: Allocator,
-    arch: Architecture,
-    os: OperatingSystem,
+    target: RocTarget,
     code: []const u8,
     symbols: []const Symbol,
     relocations: []const Relocation,
     output: *std.ArrayList(u8),
 ) !void {
-    switch (os) {
-        .linux => {
-            var elf = try object.ElfWriter.init(allocator, switch (arch) {
+    const cpu_arch = target.toCpuArch();
+    const os_tag = target.toOsTag();
+
+    switch (os_tag) {
+        .linux, .freebsd, .openbsd, .netbsd => {
+            const elf_arch: object.elf.Architecture = switch (cpu_arch) {
                 .x86_64 => .x86_64,
                 .aarch64 => .aarch64,
-            });
+                else => return error.UnsupportedTarget,
+            };
+            var elf = try object.ElfWriter.init(allocator, elf_arch);
             defer elf.deinit();
 
             try elf.setCode(code);
@@ -85,11 +44,13 @@ pub fn generateObjectFile(
                     .section = if (sym.is_external) .undef else .text,
                     .offset = sym.offset,
                     .size = sym.size,
-                    .is_global = sym.is_global,
+                    .is_global = sym.is_global or sym.is_external,
                     .is_function = sym.is_function,
                 });
 
                 // Add relocations for this symbol
+                // x86_64 R_X86_64_PLT32 needs addend -4 (PC-relative from end of 4-byte field)
+                const reloc_addend: i64 = if (cpu_arch == .x86_64) -4 else 0;
                 for (relocations) |rel| {
                     const rel_name = switch (rel) {
                         .linked_function => |f| f.name,
@@ -97,7 +58,7 @@ pub fn generateObjectFile(
                         else => continue,
                     };
                     if (std.mem.eql(u8, rel_name, sym.name)) {
-                        try elf.addTextRelocation(rel.getOffset(), sym_idx, 0);
+                        try elf.addTextRelocation(rel.getOffset(), sym_idx, reloc_addend);
                     }
                 }
             }
@@ -105,15 +66,17 @@ pub fn generateObjectFile(
             try elf.write(output);
         },
         .macos => {
-            var macho = try object.MachOWriter.init(allocator, switch (arch) {
+            const macho_arch: object.macho.Architecture = switch (cpu_arch) {
                 .x86_64 => .x86_64,
                 .aarch64 => .aarch64,
-            });
+                else => return error.UnsupportedTarget,
+            };
+            var macho = try object.MachOWriter.init(allocator, macho_arch);
             defer macho.deinit();
 
             try macho.setCode(code);
 
-            // Add symbols
+            // Add symbols (underscore prefix for C ABI is added in MachOWriter.write())
             for (symbols) |sym| {
                 const sym_idx = try macho.addSymbol(.{
                     .name = sym.name,
@@ -138,21 +101,23 @@ pub fn generateObjectFile(
             try macho.write(output);
         },
         .windows => {
-            var coff_writer = try object.CoffWriter.init(allocator, switch (arch) {
+            const coff_arch: object.coff.Architecture = switch (cpu_arch) {
                 .x86_64 => .x86_64,
                 .aarch64 => .aarch64,
-            });
+                else => return error.UnsupportedTarget,
+            };
+            var coff_writer = try object.CoffWriter.init(allocator, coff_arch);
             defer coff_writer.deinit();
 
             try coff_writer.setCode(code);
 
-            // Add symbols
+            // Add symbols and function info for unwind tables
             for (symbols) |sym| {
                 const sym_idx = try coff_writer.addSymbol(.{
                     .name = sym.name,
                     .section = if (sym.is_external) .undef else .text,
                     .offset = @intCast(sym.offset),
-                    .is_global = sym.is_global,
+                    .is_global = sym.is_global or sym.is_external,
                     .is_function = sym.is_function,
                 });
 
@@ -167,10 +132,23 @@ pub fn generateObjectFile(
                         try coff_writer.addTextRelocation(@intCast(rel.getOffset()), sym_idx);
                     }
                 }
+
+                // Add function info for Windows x64 unwind tables
+                if (coff_arch == .x86_64 and sym.is_function and !sym.is_external) {
+                    try coff_writer.addFunctionInfo(.{
+                        .start_offset = @intCast(sym.offset),
+                        .end_offset = @intCast(sym.offset + sym.size),
+                        .prologue_size = sym.prologue_size,
+                        .frame_reg_offset = 0, // RSP offset not scaled for our simple case
+                        .uses_frame_pointer = sym.uses_frame_pointer,
+                        .stack_alloc = sym.stack_alloc,
+                    });
+                }
             }
 
             try coff_writer.write(output);
         },
+        else => return error.UnsupportedTarget,
     }
 }
 
@@ -182,6 +160,10 @@ pub const Symbol = struct {
     is_global: bool,
     is_function: bool,
     is_external: bool,
+    // Unwind info for Windows x64
+    prologue_size: u8 = 0,
+    stack_alloc: u32 = 0,
+    uses_frame_pointer: bool = true,
 };
 
 // Tests
@@ -208,8 +190,7 @@ test "generate x86_64 linux object" {
 
     try generateObjectFile(
         allocator,
-        .x86_64,
-        .linux,
+        .x64linux,
         code,
         symbols,
         &.{},
@@ -226,9 +207,10 @@ test "generate x86_64 macos object" {
     // Simple x86_64 code: ret
     const code = &[_]u8{0xC3};
 
+    // Symbol name without underscore - prefix is added automatically for Mach-O
     const symbols = &[_]Symbol{
         .{
-            .name = "_test_func",
+            .name = "test_func",
             .offset = 0,
             .size = 1,
             .is_global = true,
@@ -242,8 +224,7 @@ test "generate x86_64 macos object" {
 
     try generateObjectFile(
         allocator,
-        .x86_64,
-        .macos,
+        .x64mac,
         code,
         symbols,
         &.{},
@@ -277,8 +258,7 @@ test "generate aarch64 linux object" {
 
     try generateObjectFile(
         allocator,
-        .aarch64,
-        .linux,
+        .arm64linux,
         code,
         symbols,
         &.{},
@@ -311,8 +291,7 @@ test "generate x86_64 windows object" {
 
     try generateObjectFile(
         allocator,
-        .x86_64,
-        .windows,
+        .x64win,
         code,
         symbols,
         &.{},
@@ -346,8 +325,7 @@ test "generate aarch64 windows object" {
 
     try generateObjectFile(
         allocator,
-        .aarch64,
-        .windows,
+        .arm64win,
         code,
         symbols,
         &.{},

@@ -6,6 +6,7 @@ const base = @import("base");
 const can = @import("can");
 const check = @import("check");
 const builtins = @import("builtins");
+const i128h = builtins.compiler_rt_128;
 const collections = @import("collections");
 const compiled_builtins = @import("compiled_builtins");
 const roc_target = @import("roc_target");
@@ -33,6 +34,7 @@ const runExpectStr = helpers.runExpectStr;
 const runExpectRecord = helpers.runExpectRecord;
 const runExpectListI64 = helpers.runExpectListI64;
 const runExpectListZst = helpers.runExpectListZst;
+const runExpectUnit = helpers.runExpectUnit;
 const ExpectedField = helpers.ExpectedField;
 
 const TraceWriterState = struct {
@@ -377,6 +379,15 @@ test "lambdas with unary minus" {
     try runExpectI64("(|x| -5.I64)(999.I64)", -5, .no_trace);
     try runExpectI64("(|x| if True -x else 0.I64)(5.I64)", -5, .no_trace);
     try runExpectI64("(|x| if True -10.I64 else x)(999.I64)", -10, .no_trace);
+}
+
+test "lambdas returning unit (ZST)" {
+    // Regression test for ZST return handling - these would crash before the fix
+    // because we tried to store to ret_ptr even when return type is zero-sized
+    try runExpectUnit("(|_x| {})(42.I64)", .no_trace);
+    try runExpectUnit("(|_a, _b| {})(1.I64, 2.I64)", .no_trace);
+    // Multi-arg lambda returning unit
+    try runExpectUnit("(|_x, _y, _z| {})(1.I64, 2.I64, 3.I64)", .no_trace);
 }
 
 test "lambdas closures" {
@@ -806,7 +817,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
         } else blk: {
             const dec_value = result.asDec(ops);
             const RocDec = builtins.dec.RocDec;
-            break :blk @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
+            break :blk i128h.divTrunc_i128(dec_value.num, RocDec.one_point_zero_i128);
         };
         try testing.expectEqual(@as(i128, 13), int_value);
     }
@@ -901,7 +912,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
             } else blk: {
                 const dec_value = result.asDec(ops);
                 const RocDec = builtins.dec.RocDec;
-                break :blk @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
+                break :blk i128h.divTrunc_i128(dec_value.num, RocDec.one_point_zero_i128);
             };
             try testing.expectEqual(@as(i128, 13), int_value);
         }
@@ -3070,6 +3081,55 @@ test "Bool in record field - bug confirmation" {
     try runExpectBool("{ flag: Bool.False }.flag", false, .no_trace);
 }
 
+test "polymorphic tag union payload substitution: extract payload" {
+    // Tests that `a -> I64` is discovered from the Ok tag's payload
+    try runExpectI64(
+        \\{
+        \\    second : [Left(a), Right(b)] -> b
+        \\    second = |either| match either {
+        \\        Left(_) => 0i64
+        \\        Right(val) => val
+        \\    }
+        \\
+        \\    input : [Left(I64), Right(I64)]
+        \\    input = Right(42i64)
+        \\    second(input)
+        \\}
+    , 42, .no_trace);
+}
+
+test "polymorphic tag union payload substitution: multiple type vars" {
+    // Tests that `e -> Str` is discovered from the Err tag's payload
+    try runExpectStr(
+        \\{
+        \\    get_err : [Ok(a), Err(e)] -> e
+        \\    get_err = |result| match result {
+        \\        Ok(_) => ""
+        \\        Err(e) => e
+        \\    }
+        \\
+        \\    val : [Ok(I64), Err(Str)]
+        \\    val = Err("hello")
+        \\    get_err(val)
+        \\}
+    , "hello", .no_trace);
+}
+
+test "polymorphic tag union payload substitution: wrap and unwrap" {
+    // Tests that `a -> I64` is discovered from the return type's tag payload
+    try runExpectI64(
+        \\{
+        \\    wrap : a -> [Val(a)]
+        \\    wrap = |x| Val(x)
+        \\
+        \\    result = wrap(42)
+        \\    match result {
+        \\        Val(n) => n
+        \\    }
+        \\}
+    , 42, .no_trace);
+}
+
 test "Bool in record with mixed alignment fields - bug confirmation" {
     // Test Bool in a record with fields of different alignments
     // Similar to the bug report: { key: U64, childCount: U32, isElement: Bool }
@@ -3077,4 +3137,138 @@ test "Bool in record with mixed alignment fields - bug confirmation" {
     try runExpectBool("{ key: 42u64, flag: Bool.False }.flag", false, .no_trace);
     try runExpectBool("{ key: 42u64, count: 1u32, flag: Bool.True }.flag", true, .no_trace);
     try runExpectBool("{ key: 42u64, count: 1u32, flag: Bool.False }.flag", false, .no_trace);
+}
+
+test "U8 in record field access" {
+    try runExpectI64("{ x: 42u8 }.x", 42, .no_trace);
+}
+
+test "U16 in record field access" {
+    try runExpectI64("{ x: 1000u16 }.x", 1000, .no_trace);
+}
+
+test "large record - 4 string fields access each field" {
+    // 4 strings × 24 bytes = 96 bytes total, exceeds 72-byte register limit
+    try runExpectStr(
+        \\{ w: "alpha", x: "beta", y: "gamma", z: "delta" }.w
+    , "alpha", .no_trace);
+    try runExpectStr(
+        \\{ w: "alpha", x: "beta", y: "gamma", z: "delta" }.x
+    , "beta", .no_trace);
+    try runExpectStr(
+        \\{ w: "alpha", x: "beta", y: "gamma", z: "delta" }.y
+    , "gamma", .no_trace);
+    try runExpectStr(
+        \\{ w: "alpha", x: "beta", y: "gamma", z: "delta" }.z
+    , "delta", .no_trace);
+}
+
+test "large record - 5 string fields access each field" {
+    // 5 strings × 24 bytes = 120 bytes, well beyond register limit
+    try runExpectStr(
+        \\{ a: "one", b: "two", c: "three", d: "four", e: "five" }.a
+    , "one", .no_trace);
+    try runExpectStr(
+        \\{ a: "one", b: "two", c: "three", d: "four", e: "five" }.e
+    , "five", .no_trace);
+}
+
+test "large record - function returning 4-field record" {
+    // Lambda returns a large record; caller accesses fields
+    try runExpectStr(
+        \\{
+        \\    make_config = |w, x, y, z| { w, x, y, z }
+        \\    config = make_config("10", "20", "30", "40")
+        \\    config.z
+        \\}
+    , "40", .no_trace);
+    try runExpectStr(
+        \\{
+        \\    make_config = |w, x, y, z| { w, x, y, z }
+        \\    config = make_config("10", "20", "30", "40")
+        \\    config.w
+        \\}
+    , "10", .no_trace);
+}
+
+test "large record - nested function calls with large intermediates" {
+    // Nested calls: inner function returns large record, outer uses it
+    try runExpectStr(
+        \\{
+        \\    make_pair = |a, b| { a, b }
+        \\    wrap = |a, b| { data: make_pair(a, b), tag: "wrapped" }
+        \\    result = wrap("hello", "world")
+        \\    result.data.a
+        \\}
+    , "hello", .no_trace);
+    try runExpectStr(
+        \\{
+        \\    make_pair = |a, b| { a, b }
+        \\    wrap = |a, b| { data: make_pair(a, b), tag: "wrapped" }
+        \\    result = wrap("hello", "world")
+        \\    result.tag
+        \\}
+    , "wrapped", .no_trace);
+}
+
+test "large record - higher-order function returning large struct" {
+    // map2-like pattern: higher-order function calls a mapper that returns a large record
+    try runExpectStr(
+        \\{
+        \\    apply = |a, b, f| f(a, b)
+        \\    result = apply("foo", "bar", |x, y| { x, y, combined: Str.concat(x, y) })
+        \\    result.combined
+        \\}
+    , "foobar", .no_trace);
+    try runExpectStr(
+        \\{
+        \\    apply = |a, b, f| f(a, b)
+        \\    result = apply("foo", "bar", |x, y| { x, y, combined: Str.concat(x, y) })
+        \\    result.x
+        \\}
+    , "foo", .no_trace);
+}
+
+test "polymorphic closure capture duplication during monomorphization" {
+    // Regression test: when a polymorphic function creates a closure that captures
+    // its argument, each specialization must get independent copies of the captures.
+    // Without proper duplication, specializations share capture data, causing corruption.
+
+    // Polymorphic function that returns a closure capturing its argument,
+    // called with both integer and string types.
+    try runExpectI64(
+        \\{
+        \\    make_getter = |n| |_x| n
+        \\    get_num = make_getter(42)
+        \\    get_num(0)
+        \\}
+    , 42, .no_trace);
+
+    try runExpectStr(
+        \\{
+        \\    make_getter = |n| |_x| n
+        \\    get_str = make_getter("hello")
+        \\    get_str(0)
+        \\}
+    , "hello", .no_trace);
+}
+
+test "large record - chained higher-order calls with growing intermediates" {
+    // Simulates the record builder pattern: nested apply calls build up larger types
+    try runExpectStr(
+        \\{
+        \\    apply2 = |a, b, f| f(a, b)
+        \\    step1 = apply2("x_val", "y_val", |x, y| { x, y })
+        \\    result = apply2("w_val", step1.y, |w, y| { w, y })
+        \\    result.w
+        \\}
+    , "w_val", .no_trace);
+    try runExpectStr(
+        \\{
+        \\    apply2 = |a, b, f| f(a, b)
+        \\    step1 = apply2("x_val", "y_val", |x, y| { x, y })
+        \\    result = apply2("w_val", step1.y, |w, y| { w, y })
+        \\    result.y
+        \\}
+    , "y_val", .no_trace);
 }

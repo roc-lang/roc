@@ -7,6 +7,7 @@ const base = @import("base");
 const can = @import("can");
 const check = @import("check");
 const builtins = @import("builtins");
+const i128h = builtins.compiler_rt_128;
 const compiled_builtins = @import("compiled_builtins");
 
 const layout = @import("layout");
@@ -112,6 +113,72 @@ const DevEvalError = error{
     PipeCreationFailed,
 };
 
+/// Resolve a ZST type variable to its display string.
+/// Unwraps aliases, but stops at nominal/opaque types (rendering them as
+/// `<nominal>` or `<opaque>`). For bare tag unions, returns the tag name.
+fn resolveZstName(module_env: *ModuleEnv, expr_type_var: types.Var) []const u8 {
+    var resolved = module_env.types.resolveVar(expr_type_var);
+
+    // Unwrap aliases only — nominal/opaque types are NOT unwrapped
+    for (0..100) |_| {
+        switch (resolved.desc.content) {
+            .alias => |al| {
+                const backing = module_env.types.getAliasBackingVar(al);
+                resolved = module_env.types.resolveVar(backing);
+            },
+            else => break,
+        }
+    }
+
+    switch (resolved.desc.content) {
+        .structure => |st| switch (st) {
+            .nominal_type => |nt| {
+                return if (nt.is_opaque) "<opaque>" else "<nominal>";
+            },
+            .tag_union => |tu| {
+                const tags = module_env.types.getTagsSlice(tu.tags);
+                if (tags.len == 1) {
+                    const tag_name_idx = tags.items(.name)[0];
+                    return module_env.getIdent(tag_name_idx);
+                }
+                return "{}";
+            },
+            .empty_record => return "{}",
+            else => return "{}",
+        },
+        else => return "{}",
+    }
+}
+
+/// Resolve the element type of a List type variable to its ZST display string.
+/// The type is expected to be `List(item)` where `item` is a ZST type.
+fn resolveListElemZstName(module_env: *ModuleEnv, expr_type_var: types.Var) []const u8 {
+    var resolved = module_env.types.resolveVar(expr_type_var);
+
+    // Unwrap aliases to find the nominal List type
+    for (0..100) |_| {
+        switch (resolved.desc.content) {
+            .alias => |al| {
+                const backing = module_env.types.getAliasBackingVar(al);
+                resolved = module_env.types.resolveVar(backing);
+            },
+            .structure => |st| switch (st) {
+                .nominal_type => |nt| {
+                    // This should be the List nominal - get the element type arg
+                    const args = module_env.types.sliceNominalArgs(nt);
+                    if (args.len >= 1) {
+                        return resolveZstName(module_env, args[0]);
+                    }
+                    return "{}";
+                },
+                else => break,
+            },
+            else => break,
+        }
+    }
+    return "{}";
+}
+
 /// Evaluate an expression using the DevEvaluator and return the result as a string.
 fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) DevEvalError![]const u8 {
     // Initialize DevEvaluator
@@ -148,9 +215,9 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
     defer executable.deinit();
 
     if (has_fork) {
-        return forkAndExecute(allocator, &dev_eval, &executable, &code_result);
+        return forkAndExecute(allocator, &dev_eval, &executable, &code_result, module_env, expr_idx);
     } else {
-        return executeAndFormat(allocator, &dev_eval, &executable, &code_result);
+        return executeAndFormat(allocator, &dev_eval, &executable, &code_result, module_env, expr_idx);
     }
 }
 
@@ -163,6 +230,8 @@ noinline fn executeAndFormat(
     dev_eval: *DevEvaluator,
     executable: *backend.ExecutableMemory,
     code_result: *DevEvaluator.CodeResult,
+    module_env: *ModuleEnv,
+    expr_idx: CIR.Expr.Idx,
 ) DevEvalError![]const u8 {
     // Compiler barrier: std.debug.print with empty string acts as a full
     // memory barrier, ensuring all struct fields are properly materialized
@@ -196,9 +265,10 @@ noinline fn executeAndFormat(
 
             if (abs_val < one_point_zero / 10) {
                 // This is a raw integer, not Dec-scaled - format as "N.0"
-                const elem_str = try std.fmt.allocPrint(alloc, "{d}.0", .{raw_val});
-                defer alloc.free(elem_str);
-                try output.appendSlice(elem_str);
+                var fmt_buf: [40]u8 = undefined;
+                const num_str = i128h.i128_to_str(&fmt_buf, raw_val).str;
+                try output.appendSlice(num_str);
+                try output.appendSlice(".0");
             } else {
                 // This is a Dec-scaled value - format as Dec
                 const dec_val = builtins.dec.RocDec{ .num = raw_val };
@@ -228,18 +298,21 @@ noinline fn executeAndFormat(
         layout_mod.Idx.f64 => blk: {
             var result: f64 = 0;
             try dev_eval.callWithCrashProtection(executable, @ptrCast(&result));
-            break :blk std.fmt.allocPrint(alloc, "{d}", .{result});
+            var fbuf: [400]u8 = undefined;
+            break :blk alloc.dupe(u8, i128h.f64_to_str(&fbuf, result));
         },
         layout_mod.Idx.f32 => blk: {
-            // F32 stores 4 bytes, use f32 buffer and print at f32 precision
+            // F32 stores 4 bytes, cast to f64 for consistent display precision
             var result: f32 = 0;
             try dev_eval.callWithCrashProtection(executable, @ptrCast(&result));
-            break :blk std.fmt.allocPrint(alloc, "{d}", .{result});
+            var fbuf: [400]u8 = undefined;
+            break :blk alloc.dupe(u8, i128h.f64_to_str(&fbuf, @as(f64, result)));
         },
         layout_mod.Idx.i128, layout_mod.Idx.u128 => blk: {
             var result: i128 align(16) = 0; // Initialize to 0 and ensure 16-byte alignment
             try dev_eval.callWithCrashProtection(executable, @ptrCast(&result));
-            break :blk std.fmt.allocPrint(alloc, "{}", .{result});
+            var str_buf: [40]u8 = undefined;
+            break :blk alloc.dupe(u8, i128h.i128_to_str(&str_buf, result).str);
         },
         layout_mod.Idx.dec => blk: {
             var result: i128 align(16) = 0; // Initialize to 0 and ensure 16-byte alignment
@@ -303,7 +376,11 @@ noinline fn executeAndFormat(
                     };
                     try dev_eval.callWithCrashProtection(executable, @ptrCast(&result));
 
-                    // Format as [(), (), ...] based on the length
+                    // Resolve the element type for proper ZST rendering
+                    const type_var = can.ModuleEnv.varFrom(expr_idx);
+                    const elem_name = resolveListElemZstName(module_env, type_var);
+
+                    // Format as [ElemName, ElemName, ...] based on the length
                     var output = std.array_list.Managed(u8).initCapacity(alloc, 64) catch
                         return error.OutOfMemory;
                     errdefer output.deinit();
@@ -313,7 +390,7 @@ noinline fn executeAndFormat(
                         if (i > 0) {
                             try output.appendSlice(", ");
                         }
-                        try output.appendSlice("()");
+                        try output.appendSlice(elem_name);
                     }
 
                     try output.append(']');
@@ -360,8 +437,20 @@ noinline fn executeAndFormat(
                 .record => {
                     const record_idx = stored_layout.data.record.idx.int_idx;
                     const record_data = ls.record_data.items.items[record_idx];
+                    // Empty record (size 0) - resolve via type info
+                    if (record_data.size == 0) {
+                        const type_var = can.ModuleEnv.varFrom(expr_idx);
+                        const zst_name = resolveZstName(module_env, type_var);
+                        break :blk try alloc.dupe(u8, zst_name);
+                    }
                     const field_count = record_data.fields.count;
                     break :blk std.fmt.allocPrint(alloc, "{{record with {d} fields}}", .{field_count});
+                },
+                .zst => {
+                    // Resolve the type to render the correct ZST representation
+                    const type_var = can.ModuleEnv.varFrom(expr_idx);
+                    const zst_name = resolveZstName(module_env, type_var);
+                    break :blk try alloc.dupe(u8, zst_name);
                 },
                 else => @panic("TODO: devEvaluatorStr for unsupported layout tag"),
             }
@@ -377,6 +466,8 @@ fn forkAndExecute(
     dev_eval: *DevEvaluator,
     executable: *backend.ExecutableMemory,
     code_result: *DevEvaluator.CodeResult,
+    module_env: *ModuleEnv,
+    expr_idx: CIR.Expr.Idx,
 ) DevEvalError![]const u8 {
     const pipe_fds = posix.pipe() catch {
         return error.PipeCreationFailed;
@@ -398,7 +489,7 @@ fn forkAndExecute(
         // meaningless since we exit via _exit and no defers run.
         const child_alloc = std.heap.page_allocator;
 
-        const result_str = executeAndFormat(child_alloc, dev_eval, executable, code_result) catch {
+        const result_str = executeAndFormat(child_alloc, dev_eval, executable, code_result, module_env, expr_idx) catch {
             posix.close(pipe_write);
             posix.exit(1);
         };
@@ -620,12 +711,13 @@ pub fn runExpectI64(src: []const u8, expected_int: i128, should_trace: enum { tr
         const dec_value = result.asDec(ops);
         const RocDec = builtins.dec.RocDec;
         // Convert Dec to integer by dividing by the decimal scale factor
-        break :blk @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
+        break :blk i128h.divTrunc_i128(dec_value.num, RocDec.one_point_zero_i128);
     };
 
     // Compare with DevEvaluator using integer string representation
     // DevEvaluator uses integer layouts, so we compare as integers
-    const int_str = try std.fmt.allocPrint(test_allocator, "{}", .{int_value});
+    var str_buf: [40]u8 = undefined;
+    const int_str = try test_allocator.dupe(u8, i128h.i128_to_str(&str_buf, int_value).str);
     defer test_allocator.free(int_str);
     try compareWithDevEvaluator(test_allocator, int_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
@@ -706,14 +798,14 @@ pub fn runExpectF32(src: []const u8, expected_f32: f32, should_trace: enum { tra
     const actual = result.asF32();
 
     // Compare with DevEvaluator using string representation
-    const float_str = try std.fmt.allocPrint(test_allocator, "{d}", .{actual});
-    defer test_allocator.free(float_str);
+    var float_buf: [400]u8 = undefined;
+    const float_str = i128h.f64_to_str(&float_buf, @as(f64, actual));
     try compareWithDevEvaluator(test_allocator, float_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     const epsilon: f32 = 0.0001;
     const diff = @abs(actual - expected_f32);
     if (diff > epsilon) {
-        std.debug.print("Expected {d}, got {d}, diff {d}\n", .{ expected_f32, actual, diff });
+        std.debug.print("Expected {d}, got {d}, diff {d}\n", .{ @as(f64, expected_f32), @as(f64, actual), @as(f64, diff) });
         return error.TestExpectedEqual;
     }
 }
@@ -746,8 +838,8 @@ pub fn runExpectF64(src: []const u8, expected_f64: f64, should_trace: enum { tra
     const actual = result.asF64();
 
     // Compare with DevEvaluator using string representation
-    const float_str = try std.fmt.allocPrint(test_allocator, "{d}", .{actual});
-    defer test_allocator.free(float_str);
+    var float_buf2: [400]u8 = undefined;
+    const float_str = i128h.f64_to_str(&float_buf2, actual);
     try compareWithDevEvaluator(test_allocator, float_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     const epsilon: f64 = 0.000000001;
@@ -798,7 +890,9 @@ pub fn runExpectIntDec(src: []const u8, expected_int: i128, should_trace: enum {
 
     const expected_dec = expected_int * dec_scale;
     if (actual_dec.num != expected_dec) {
-        std.debug.print("Expected Dec({d}), got Dec({d})\n", .{ expected_dec, actual_dec.num });
+        var exp_buf: [40]u8 = undefined;
+        var act_buf: [40]u8 = undefined;
+        std.debug.print("Expected Dec({s}), got Dec({s})\n", .{ i128h.i128_to_str(&exp_buf, expected_dec).str, i128h.i128_to_str(&act_buf, actual_dec.num).str });
         return error.TestExpectedEqual;
     }
 }
@@ -840,7 +934,9 @@ pub fn runExpectDec(src: []const u8, expected_dec_num: i128, should_trace: enum 
     try compareWithDevEvaluator(test_allocator, dec_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     if (actual_dec.num != expected_dec_num) {
-        std.debug.print("Expected Dec({d}), got Dec({d})\n", .{ expected_dec_num, actual_dec.num });
+        var exp_buf2: [40]u8 = undefined;
+        var act_buf2: [40]u8 = undefined;
+        std.debug.print("Expected Dec({s}), got Dec({s})\n", .{ i128h.i128_to_str(&exp_buf2, expected_dec_num).str, i128h.i128_to_str(&act_buf2, actual_dec.num).str });
         return error.TestExpectedEqual;
     }
 }
@@ -952,7 +1048,7 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
             // Unsuffixed numeric literals default to Dec
             const dec_value = element.asDec(ops);
             const RocDec = builtins.dec.RocDec;
-            break :blk @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
+            break :blk i128h.divTrunc_i128(dec_value.num, RocDec.one_point_zero_i128);
         };
 
         // Store formatted string for comparison
@@ -962,7 +1058,8 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
             const dec_slice = dec_value.format_to_buf(&dec_buf);
             break :blk try test_allocator.dupe(u8, dec_slice);
         } else blk: {
-            break :blk try std.fmt.allocPrint(test_allocator, "{}", .{int_val});
+            var fmt_buf: [40]u8 = undefined;
+            break :blk try test_allocator.dupe(u8, i128h.i128_to_str(&fmt_buf, int_val).str);
         };
         tuple_count += 1;
 
@@ -1051,7 +1148,7 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
                     // Unsuffixed numeric literals default to Dec
                     const dec_value = field_value.asDec(ops);
                     const RocDec = builtins.dec.RocDec;
-                    break :blk @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
+                    break :blk i128h.divTrunc_i128(dec_value.num, RocDec.one_point_zero_i128);
                 };
 
                 field_values[field_count] = int_val;
@@ -1113,13 +1210,16 @@ pub fn runExpectListZst(src: []const u8, expected_element_count: usize, should_t
     try std.testing.expectEqual(expected_element_count, list_accessor.len());
 
     // Build string representation for comparison with DevEvaluator
-    // ZST lists are formatted as [(), (), ...] or [] for empty
+    // Resolve element type for proper ZST rendering
+    const type_var = can.ModuleEnv.varFrom(resources.expr_idx);
+    const elem_name = resolveListElemZstName(resources.module_env, type_var);
+
     var list_str: std.ArrayList(u8) = .empty;
     defer list_str.deinit(test_allocator);
     try list_str.appendSlice(test_allocator, "[");
     for (0..expected_element_count) |i| {
         if (i > 0) try list_str.appendSlice(test_allocator, ", ");
-        try list_str.appendSlice(test_allocator, "()");
+        try list_str.appendSlice(test_allocator, elem_name);
     }
     try list_str.appendSlice(test_allocator, "]");
 
@@ -1182,7 +1282,8 @@ pub fn runExpectListI64(src: []const u8, expected_elements: []const i64, should_
         const int_val = element.asI128();
 
         if (i > 0) try list_str.appendSlice(test_allocator, ", ");
-        const elem_str = try std.fmt.allocPrint(test_allocator, "{}", .{int_val});
+        var fmt_buf: [40]u8 = undefined;
+        const elem_str = try test_allocator.dupe(u8, i128h.i128_to_str(&fmt_buf, int_val).str);
         defer test_allocator.free(elem_str);
         try list_str.appendSlice(test_allocator, elem_str);
 
@@ -1240,6 +1341,49 @@ pub fn runExpectEmptyListI64(src: []const u8, should_trace: enum { trace, no_tra
     try compareWithDevEvaluator(test_allocator, "[]", resources.module_env, resources.expr_idx, resources.builtin_module.env);
 }
 
+/// Helper function to run an expression and expect a unit/ZST result.
+/// This tests expressions that return `{}` (the unit type / empty record).
+/// Accepts both .zst layout and .record layout with size 0 (empty record).
+pub fn runExpectUnit(src: []const u8, should_trace: enum { trace, no_trace }) !void {
+    const resources = try parseAndCanonicalizeExpr(test_allocator, src);
+    defer cleanupParseAndCanonical(test_allocator, resources);
+
+    var test_env_instance = TestEnv.init(interpreter_allocator);
+    defer test_env_instance.deinit();
+
+    const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
+    var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
+    defer interpreter.deinit();
+
+    const enable_trace = should_trace == .trace;
+    if (enable_trace) {
+        interpreter.startTrace();
+    }
+    defer if (enable_trace) interpreter.endTrace();
+
+    const ops = test_env_instance.get_ops();
+    const result = try interpreter.eval(resources.expr_idx, ops);
+    const layout_cache = &interpreter.runtime_layout_store;
+    defer result.decref(layout_cache, ops);
+    defer interpreter.bindings.items.len = 0;
+
+    // Verify we got a ZST layout or an empty record (both represent unit/`{}`)
+    const is_zst = result.layout.tag == .zst;
+    const is_empty_record = result.layout.tag == .record and blk: {
+        const record_data = layout_cache.getRecordData(result.layout.data.record.idx);
+        break :blk record_data.size == 0;
+    };
+
+    if (!is_zst and !is_empty_record) {
+        std.debug.print("\nExpected .zst or empty .record layout but got .{s}\n", .{@tagName(result.layout.tag)});
+        return error.TestExpectedEqual;
+    }
+
+    // Compare with DevEvaluator using exact match
+    try compareWithDevEvaluator(test_allocator, "{}", resources.module_env, resources.expr_idx, resources.builtin_module.env);
+}
+
 /// Parse and canonicalize an expression.
 /// Rewrite deferred numeric literals to match their inferred types
 /// This is similar to what ComptimeEvaluator does but for test expressions
@@ -1287,7 +1431,7 @@ fn rewriteNumericLiteralExpr(
     const f64_value: f64 = switch (current_expr) {
         .e_dec => |dec| blk: {
             // Dec is stored as i128 scaled by 10^18
-            const scaled = @as(f64, @floatFromInt(dec.value.num));
+            const scaled = builtins.compiler_rt_128.i128_to_f64(dec.value.num);
             break :blk scaled / 1e18;
         },
         .e_dec_small => |small| blk: {
@@ -1587,7 +1731,7 @@ test "interpreter reuse across multiple evaluations" {
                     try std.testing.expect(result.layout.data.scalar.data.frac == .dec);
                     const dec_value = result.asDec(ops);
                     // Dec stores values scaled by 10^18, divide to get the integer part
-                    break :blk @divTrunc(dec_value.num, builtins.dec.RocDec.one_point_zero_i128);
+                    break :blk i128h.divTrunc_i128(dec_value.num, builtins.dec.RocDec.one_point_zero_i128);
                 },
                 else => unreachable,
             };
