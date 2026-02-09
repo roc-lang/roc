@@ -279,6 +279,17 @@ pub const Store = struct {
         self.mutable_env = env;
     }
 
+    /// Update module environments and clear stale type variable caches.
+    /// This is needed for REPL sessions where the same module_idx gets a fresh type store
+    /// on each evaluation. Without clearing, cached (module_idx, type_var) entries from
+    /// the previous evaluation would map to wrong layouts.
+    pub fn resetModuleCache(self: *Self, new_module_envs: []const *const ModuleEnv) void {
+        self.all_module_envs = new_module_envs;
+        self.layouts_by_module_var.clearRetainingCapacity();
+        self.recursive_boxed_layouts.clearRetainingCapacity();
+        self.raw_layout_placeholders.clearRetainingCapacity();
+    }
+
     pub fn deinit(self: *Self) void {
         self.layouts.deinit(self.allocator);
         self.tuple_elems.deinit(self.allocator);
