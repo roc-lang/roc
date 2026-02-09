@@ -75,14 +75,6 @@ const Instantiator = types.instantiate.Instantiator;
 
 const Self = @This();
 
-/// An unspecialized entry paired with the member it's expected to resolve to.
-/// Used during lambda set resolution to detect index invalidation from swapRemove.
-const EntryWithExpected = struct {
-    lambda_set: *ClosureTransformer.LambdaSet,
-    index: usize,
-    expected_member: base.Ident.Idx,
-};
-
 /// Key for looking up specializations
 pub const SpecializationKey = struct {
     original_ident: base.Ident.Idx,
@@ -634,37 +626,31 @@ pub fn resolveEntriesForTypeVar(
     // We need to re-fetch entry_refs since flattening may have modified indices
     const updated_entry_refs = tracker.getEntriesForVar(type_var) orelse return 0;
 
-    var all_entries = std.ArrayList(EntryWithExpected).empty;
+    var all_entries = std.ArrayList(ClosureTransformer.UnspecializedEntryRef).empty;
     defer all_entries.deinit(self.allocator);
 
     // Add original entries
     for (updated_entry_refs) |entry_ref| {
-        try all_entries.append(self.allocator, .{
-            .lambda_set = entry_ref.lambda_set,
-            .index = entry_ref.index,
-            .expected_member = entry_ref.lambda_set.unspecialized.items[entry_ref.index].member,
-        });
+        try all_entries.append(self.allocator, entry_ref);
     }
 
     // Add entries from flattened lambda sets
     for (flattened_lambda_sets.items) |lambda_set| {
-        for (lambda_set.unspecialized.items, 0..) |unspec, i| {
+        for (0..lambda_set.unspecialized.items.len) |i| {
             try all_entries.append(self.allocator, .{
                 .lambda_set = lambda_set,
                 .index = i,
-                .expected_member = unspec.member,
             });
         }
     }
 
     var resolved_count: usize = 0;
 
-    // Step 3: Process each entry in region order
+    // Step 3: Process each entry
     for (all_entries.items, 0..) |entry, entry_i| {
         std.debug.assert(entry.index < entry.lambda_set.unspecialized.items.len);
 
         const unspec = entry.lambda_set.unspecialized.items[entry.index];
-        std.debug.assert(unspec.member == entry.expected_member);
 
         // Look up the static dispatch implementation for the concrete type
         if (self.lookupStaticDispatch(concrete_type, unspec.member)) |impl| {
