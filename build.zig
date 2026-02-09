@@ -2371,7 +2371,6 @@ pub fn build(b: *std.Build) void {
         run_roc_subcommands_test.step.dependOn(test_platforms_step);
         test_cli_step.dependOn(&run_roc_subcommands_test.step);
 
-<<<<<<< HEAD
         // Tests fx platform with --backend=dev to track dev backend progress
         const run_fx_dev_tests = b.addRunArtifact(test_runner_exe);
         run_fx_dev_tests.addArg("zig-out/bin/roc");
@@ -2382,7 +2381,7 @@ pub fn build(b: *std.Build) void {
         run_fx_dev_tests.step.dependOn(&install_runner.step);
         run_fx_dev_tests.step.dependOn(test_platforms_step);
         test_cli_dev_step.dependOn(&run_fx_dev_tests.step);
-=======
+        
         // Glue command integration test
         const glue_test = b.addTest(.{
             .name = "glue_test",
@@ -2401,7 +2400,6 @@ pub fn build(b: *std.Build) void {
         run_glue_test.step.dependOn(&install.step);
         run_glue_test_step = &run_glue_test.step;
         test_cli_step.dependOn(&run_glue_test.step);
->>>>>>> 9fa3a38cda48085c69c75d22f75be8a6c2704286
     }
 
     // Manual rebuild command: zig build rebuild-builtins
