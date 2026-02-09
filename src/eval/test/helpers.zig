@@ -130,6 +130,76 @@ const DevEvalError = error{
     PipeCreationFailed,
 };
 
+/// Resolve a ZST type variable to its display string.
+/// Unwraps aliases and nominal types, then returns the tag name for single-tag unions
+/// or "{}" for empty records.
+fn resolveZstName(module_env: *ModuleEnv, expr_type_var: types.Var) []const u8 {
+    var resolved = module_env.types.resolveVar(expr_type_var);
+
+    // Unwrap aliases and nominal types to get the backing type
+    for (0..100) |_| {
+        switch (resolved.desc.content) {
+            .alias => |al| {
+                const backing = module_env.types.getAliasBackingVar(al);
+                resolved = module_env.types.resolveVar(backing);
+            },
+            .structure => |st| switch (st) {
+                .nominal_type => |nt| {
+                    const backing = module_env.types.getNominalBackingVar(nt);
+                    resolved = module_env.types.resolveVar(backing);
+                },
+                else => break,
+            },
+            else => break,
+        }
+    }
+
+    switch (resolved.desc.content) {
+        .structure => |st| switch (st) {
+            .tag_union => |tu| {
+                const tags = module_env.types.getTagsSlice(tu.tags);
+                if (tags.len == 1) {
+                    const tag_name_idx = tags.items(.name)[0];
+                    return module_env.getIdent(tag_name_idx);
+                }
+                return "{}";
+            },
+            .empty_record => return "{}",
+            else => return "{}",
+        },
+        else => return "{}",
+    }
+}
+
+/// Resolve the element type of a List type variable to its ZST display string.
+/// The type is expected to be `List elem` where `elem` is a ZST type.
+fn resolveListElemZstName(module_env: *ModuleEnv, expr_type_var: types.Var) []const u8 {
+    var resolved = module_env.types.resolveVar(expr_type_var);
+
+    // Unwrap aliases to find the nominal List type
+    for (0..100) |_| {
+        switch (resolved.desc.content) {
+            .alias => |al| {
+                const backing = module_env.types.getAliasBackingVar(al);
+                resolved = module_env.types.resolveVar(backing);
+            },
+            .structure => |st| switch (st) {
+                .nominal_type => |nt| {
+                    // This should be the List nominal - get the element type arg
+                    const args = module_env.types.sliceNominalArgs(nt);
+                    if (args.len >= 1) {
+                        return resolveZstName(module_env, args[0]);
+                    }
+                    return "{}";
+                },
+                else => break,
+            },
+            else => break,
+        }
+    }
+    return "{}";
+}
+
 /// Evaluate an expression using the DevEvaluator and return the result as a string.
 fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) DevEvalError![]const u8 {
     // Initialize DevEvaluator
@@ -166,9 +236,9 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
     defer executable.deinit();
 
     if (has_fork) {
-        return forkAndExecute(allocator, &dev_eval, &executable, &code_result);
+        return forkAndExecute(allocator, &dev_eval, &executable, &code_result, module_env, expr_idx);
     } else {
-        return executeAndFormat(allocator, &dev_eval, &executable, &code_result);
+        return executeAndFormat(allocator, &dev_eval, &executable, &code_result, module_env, expr_idx);
     }
 }
 
@@ -181,6 +251,8 @@ noinline fn executeAndFormat(
     dev_eval: *DevEvaluator,
     executable: *backend.ExecutableMemory,
     code_result: *DevEvaluator.CodeResult,
+    module_env: *ModuleEnv,
+    expr_idx: CIR.Expr.Idx,
 ) DevEvalError![]const u8 {
     // Compiler barrier: std.debug.print with empty string acts as a full
     // memory barrier, ensuring all struct fields are properly materialized
@@ -235,6 +307,8 @@ fn forkAndExecute(
     dev_eval: *DevEvaluator,
     executable: *backend.ExecutableMemory,
     code_result: *DevEvaluator.CodeResult,
+    module_env: *ModuleEnv,
+    expr_idx: CIR.Expr.Idx,
 ) DevEvalError![]const u8 {
     const pipe_fds = posix.pipe() catch {
         return error.PipeCreationFailed;
@@ -256,7 +330,7 @@ fn forkAndExecute(
         // meaningless since we exit via _exit and no defers run.
         const child_alloc = std.heap.page_allocator;
 
-        const result_str = executeAndFormat(child_alloc, dev_eval, executable, code_result) catch {
+        const result_str = executeAndFormat(child_alloc, dev_eval, executable, code_result, module_env, expr_idx) catch {
             posix.close(pipe_write);
             posix.exit(1);
         };
