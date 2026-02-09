@@ -10403,7 +10403,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             if (comptime target.toCpuArch() == .aarch64) {
                                 try self.codegen.emit.adr(temp, @intCast(rel));
                             } else {
-                                try self.codegen.emit.leaRegRipRel(temp, @intCast(rel));
+                                // Displacement is relative to end of LEA instruction (7 bytes)
+                                const lea_size: i64 = 7;
+                                try self.codegen.emit.leaRegRipRel(temp, @intCast(rel - lea_size));
                             }
                             try self.codegen.emitStoreStack(.w64, base_offset + offset, temp);
                             self.codegen.freeGeneral(temp);
@@ -10445,9 +10447,24 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                 }
                             },
                             .lambda_code => |lc| {
-                                // Capturing a lambda (function pointer) - store the code address
+                                // Capturing a lambda (function pointer) - store the absolute
+                                // code address using RIP-relative LEA, same as the main path.
+                                // Using emitLoadImm would store the raw code buffer offset
+                                // (not an absolute address), causing a segfault when called.
                                 const temp = try self.allocTempGeneral();
-                                try self.codegen.emitLoadImm(temp, @intCast(lc.code_offset));
+                                const current = self.codegen.currentOffset();
+                                const rel: i64 = @as(i64, @intCast(lc.code_offset)) - @as(i64, @intCast(current));
+                                try self.internal_addr_patches.append(self.allocator, .{
+                                    .instr_offset = current,
+                                    .target_offset = lc.code_offset,
+                                });
+                                if (comptime target.toCpuArch() == .aarch64) {
+                                    try self.codegen.emit.adr(temp, @intCast(rel));
+                                } else {
+                                    // Displacement is relative to end of LEA instruction (7 bytes)
+                                    const lea_size: i64 = 7;
+                                    try self.codegen.emit.leaRegRipRel(temp, @intCast(rel - lea_size));
+                                }
                                 try self.codegen.emitStoreStack(.w64, base_offset + offset, temp);
                                 self.codegen.freeGeneral(temp);
                             },
@@ -10660,8 +10677,24 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 const capture_layout = ls.getLayout(capture.layout_idx);
                 const capture_size = ls.layoutSizeAlign(capture_layout).size;
                 const capture_offset = cv.stack_offset + offset;
-                // Use the appropriate ValueLocation based on the layout type
-                if (capture.layout_idx == .i128 or capture.layout_idx == .u128 or capture.layout_idx == .dec) {
+
+                // Check if the capture is itself a closure or lambda. The old
+                // symbol_locations entry (from the outer scope) carries the
+                // representation metadata needed to dispatch closure calls. If
+                // we just store .stack here, that metadata is lost and the body
+                // will try to call the raw stack bytes as a function pointer,
+                // causing a segfault. Preserve .closure_value / .lambda_code.
+                const old_loc = self.symbol_locations.get(symbol_key);
+                if (old_loc != null and old_loc.? == .closure_value) {
+                    var new_cv = old_loc.?.closure_value;
+                    new_cv.stack_offset = capture_offset;
+                    try self.symbol_locations.put(symbol_key, .{ .closure_value = new_cv });
+                } else if (old_loc != null and old_loc.? == .lambda_code) {
+                    // Lambda code was materialized as a function pointer on the
+                    // stack by materializeCaptures. Keep it as .stack so
+                    // generateIndirectCall can load and call it.
+                    try self.symbol_locations.put(symbol_key, .{ .stack = .{ .offset = capture_offset } });
+                } else if (capture.layout_idx == .i128 or capture.layout_idx == .u128 or capture.layout_idx == .dec) {
                     try self.symbol_locations.put(symbol_key, .{ .stack_i128 = capture_offset });
                 } else if (capture.layout_idx == .str) {
                     try self.symbol_locations.put(symbol_key, .{ .stack_str = capture_offset });
@@ -11503,7 +11536,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         try self.codegen.emit.adr(temp, @intCast(rel));
                         try self.codegen.emit.strRegMemSoff(.w64, temp, .FP, slot);
                     } else {
-                        try self.codegen.emit.leaRegRipRel(temp, @intCast(rel));
+                        // Displacement is relative to end of LEA instruction (7 bytes)
+                        const lea_size: i64 = 7;
+                        try self.codegen.emit.leaRegRipRel(temp, @intCast(rel - lea_size));
                         try self.codegen.emit.movMemReg(.w64, .RBP, slot, temp);
                     }
                     self.codegen.freeGeneral(temp);
