@@ -961,7 +961,7 @@ pub fn requestExternalSpecialization(
         };
     }
 
-    // Check if we already have a pending request (O(1) via hash set with structural equality)
+    // Check if we already have a pending request
     if (self.pending_external_keys.contains(ext_key)) {
         const specialized_name = try self.createSpecializedName(original_ident, concrete_type);
         return ExternalSpecializationResult{
