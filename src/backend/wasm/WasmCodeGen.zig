@@ -5298,7 +5298,6 @@ fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
         },
         else => unreachable, // Call target should be lambda, closure, lookup, nominal, call, or block
     }
-
 }
 
 /// Emit a call instruction.
