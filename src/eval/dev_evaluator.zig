@@ -300,6 +300,11 @@ const DevRocEnv = struct {
             }
             return 0;
         }
+
+        fn reset() void {
+            offset = 0;
+            alloc_count = 0;
+        }
     };
 
     /// Allocation function for RocOps.
@@ -661,6 +666,9 @@ pub const DevEvaluator = struct {
         expr_idx: CIR.Expr.Idx,
         all_module_envs: []const *ModuleEnv,
     ) Error!CodeResult {
+        // Reset the static bump allocator so each evaluation starts fresh
+        DevRocEnv.StaticAlloc.reset();
+
         // Create a Mono IR store for lowered expressions
         var mono_store = MonoExprStore.init(self.allocator);
         defer mono_store.deinit();

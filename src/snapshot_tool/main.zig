@@ -19,6 +19,55 @@ const fmt = @import("fmt");
 const repl = @import("repl");
 const eval_mod = @import("eval");
 const tracy = @import("tracy");
+const sljmp = @import("sljmp");
+
+/// Custom panic handler that enables catching Zig panics (e.g., `unreachable` in
+/// the dev backend) during snapshot testing. When `panic_jmp` is set, longjmps back
+/// to the saved point instead of aborting; otherwise falls through to the default handler.
+pub const panic = std.debug.FullPanic(panicHandler);
+
+threadlocal var panic_jmp: ?*sljmp.JmpBuf = null;
+threadlocal var panic_msg: ?[]const u8 = null;
+
+fn panicHandler(msg: []const u8, _: ?usize) noreturn {
+    if (panic_jmp) |jmp| {
+        panic_msg = msg;
+        panic_jmp = null; // prevent re-entry
+        sljmp.longjmp(jmp, 1);
+    }
+    // No protection active — use default behavior.
+    std.debug.defaultPanic(msg, @returnAddress());
+}
+
+/// Unix signal handler for catching segfaults and illegal instructions from
+/// generated code. Uses the same panic_jmp mechanism as the panic handler.
+fn crashSignalHandler(_: i32) callconv(.c) void {
+    if (panic_jmp) |jmp| {
+        panic_msg = "signal: segfault or illegal instruction in generated code";
+        panic_jmp = null;
+        sljmp.longjmp(jmp, 2);
+    }
+    // No protection active — reset to default handler and re-raise.
+    const dfl = std.posix.Sigaction{
+        .handler = .{ .handler = std.posix.SIG.DFL },
+        .mask = std.posix.sigemptyset(),
+        .flags = 0,
+    };
+    std.posix.sigaction(std.posix.SIG.SEGV, &dfl, null);
+    std.posix.sigaction(std.posix.SIG.BUS, &dfl, null);
+    std.posix.sigaction(std.posix.SIG.ILL, &dfl, null);
+}
+
+fn installCrashSignalHandlers() void {
+    const sa = std.posix.Sigaction{
+        .handler = .{ .handler = &crashSignalHandler },
+        .mask = std.posix.sigemptyset(),
+        .flags = std.os.linux.SA.NODEFER,
+    };
+    std.posix.sigaction(std.posix.SIG.SEGV, &sa, null);
+    std.posix.sigaction(std.posix.SIG.BUS, &sa, null);
+    std.posix.sigaction(std.posix.SIG.ILL, &sa, null);
+}
 
 const Repl = repl.Repl;
 const CrashContext = eval_mod.CrashContext;
@@ -4235,6 +4284,59 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
         try actual_outputs.append(repl_output);
     }
 
+    // Run dev backend for comparison with panic protection.
+    // The dev backend may hit `unreachable` or other panics for unimplemented
+    // features. The custom panic handler longjmps back here instead of aborting,
+    // so we can report the failure and continue with the next snapshot.
+    // Install signal handlers for SIGSEGV/SIGBUS/SIGILL from generated code.
+    installCrashSignalHandlers();
+    var dev_snapshot_ops = SnapshotOps.init(output.gpa);
+    defer dev_snapshot_ops.deinit();
+    if (Repl.initWithBackend(output.gpa, dev_snapshot_ops.get_ops(), dev_snapshot_ops.crashContextPtr(), .dev)) |dev_repl_val| {
+        var dev_repl = dev_repl_val;
+        defer dev_repl.deinit();
+
+        for (inputs.items, 0..) |input, i| {
+            // Set up panic protection via setjmp. If the dev backend panics,
+            // the custom panic handler longjmps back here with jmp_result != 0.
+            var jmp_buf: sljmp.JmpBuf = undefined;
+            const jmp_result = sljmp.setjmp(&jmp_buf);
+            if (jmp_result != 0) {
+                // Returned from a panic — report it and stop this snapshot's dev run.
+                // The dev_repl state is corrupted after a panic, so we can't continue.
+                const msg = panic_msg orelse "unknown";
+                std.debug.print("Dev REPL panic at input {d} in {s}: {s}\n", .{ i, snapshot_path, msg });
+                panic_msg = null;
+                break;
+            }
+            panic_jmp = &jmp_buf;
+            defer {
+                panic_jmp = null;
+            }
+
+            const dev_output = dev_repl.step(input) catch |err| {
+                std.debug.print("Dev REPL error at input {d} in {s}: {}\n", .{ i, snapshot_path, err });
+                continue;
+            };
+            defer output.gpa.free(dev_output);
+
+            if (i < actual_outputs.items.len) {
+                const interp_output = actual_outputs.items[i];
+                if (!std.mem.eql(u8, interp_output, dev_output)) {
+                    if (!floatStringsWithinEpsilon(interp_output, dev_output)) {
+                        std.debug.print(
+                            "REPL backend mismatch at input {d} in {s}:\n  interpreter: '{s}'\n  dev:         '{s}'\n",
+                            .{ i, snapshot_path, interp_output, dev_output },
+                        );
+                        // Note: mismatches are diagnostic only — they don't fail the
+                        // snapshot check. Set success = false here once the dev backend
+                        // is mature enough that mismatches indicate regressions.
+                    }
+                }
+            }
+        }
+    } else |_| {} // Dev init failed — skip comparison
+
     switch (config.output_section_command) {
         .update => {
             try output.begin_section("OUTPUT");
@@ -4471,6 +4573,22 @@ test "TODO: cross-module function calls - string_ordering_unsupported" {}
 
 test "LambdaLifter" {
     std.testing.refAllDecls(LambdaLifter);
+}
+
+/// Check if two strings represent float values within a small epsilon.
+/// This tolerates small f32/f64 differences between interpreter and dev backend
+/// due to CPU instruction differences.
+fn floatStringsWithinEpsilon(a: []const u8, b: []const u8) bool {
+    const fa = std.fmt.parseFloat(f64, a) catch return false;
+    const fb = std.fmt.parseFloat(f64, b) catch return false;
+    // Only tolerate epsilon for actual float values (contain '.' or 'e')
+    const a_is_float = std.mem.indexOfScalar(u8, a, '.') != null or std.mem.indexOfScalar(u8, a, 'e') != null;
+    const b_is_float = std.mem.indexOfScalar(u8, b, '.') != null or std.mem.indexOfScalar(u8, b, 'e') != null;
+    if (!a_is_float and !b_is_float) return false;
+    const diff = @abs(fa - fb);
+    const magnitude = @max(@abs(fa), @abs(fb));
+    const epsilon: f64 = if (magnitude > 1.0) magnitude * 1e-10 else 1e-10;
+    return diff <= epsilon;
 }
 
 /// An implementation of RocOps for snapshot testing.

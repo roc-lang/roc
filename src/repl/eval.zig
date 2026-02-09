@@ -617,7 +617,12 @@ pub const Repl = struct {
         };
         const final_expr_idx = canonical_expr.get_idx();
 
-        const imported_modules = [_]*const ModuleEnv{self.builtin_module.env};
+        // Build imported_modules with REPL module at index 0, Builtin at index 1.
+        // This order must match the all_module_envs passed to the dev evaluator's lowerer
+        // and the layout store. The lowerer uses resolved import indices to look up modules
+        // in all_module_envs, so the arrays must agree. This matches the test helpers
+        // (helpers.zig:1341-1347) which document: "index 0 = user module, index 1 = builtin".
+        const imported_modules = [_]*const ModuleEnv{ module_env, self.builtin_module.env };
 
         // Resolve imports - map each import to its index in imported_modules
         module_env.imports.resolveImports(module_env, &imported_modules);
@@ -660,8 +665,11 @@ pub const Repl = struct {
         if (comptime builtin.os.tag != .freestanding) {
             if (self.backend == .dev) {
                 if (self.dev_evaluator) |*dev_eval| {
-                    // Generate and execute native code
-                    const all_module_envs = &.{module_env};
+                    // Build module envs array matching imported_modules order:
+                    // index 0 = REPL module, index 1 = Builtin module.
+                    // This must match the resolveImports call above so that resolved
+                    // import indices correctly map to the right module in the lowerer.
+                    const all_module_envs: []const *ModuleEnv = &.{ module_env, self.builtin_module.env };
                     var code_result = dev_eval.generateCode(module_env, final_expr_idx, all_module_envs) catch {
                         // Fall back to interpreter on unsupported expressions
                         return self.evaluateWithInterpreter(module_env, final_expr_idx, &imported_modules, &checker);
@@ -675,8 +683,10 @@ pub const Repl = struct {
                     defer executable.deinit();
 
                     // Execute and write result into a stack buffer
-                    var result_buf: [256]u8 align(16) = undefined;
-                    executable.callWithResultPtr(@ptrCast(&result_buf));
+                    var result_buf: [512]u8 align(16) = undefined;
+                    dev_eval.callWithCrashProtection(&executable, @ptrCast(&result_buf)) catch {
+                        return self.evaluateWithInterpreter(module_env, final_expr_idx, &imported_modules, &checker);
+                    };
 
                     // Format using shared RocValue
                     const values = @import("values");
@@ -708,7 +718,7 @@ pub const Repl = struct {
     }
 
     /// Evaluate using the interpreter (fallback path)
-    fn evaluateWithInterpreter(self: *Repl, module_env: *ModuleEnv, final_expr_idx: can.CIR.Expr.Idx, imported_modules: *const [1]*const ModuleEnv, checker: *Check) !StepResult {
+    fn evaluateWithInterpreter(self: *Repl, module_env: *ModuleEnv, final_expr_idx: can.CIR.Expr.Idx, imported_modules: []const *const ModuleEnv, checker: *Check) !StepResult {
         const builtin_types_for_eval = BuiltinTypes.init(self.builtin_indices, self.builtin_module.env, self.builtin_module.env, self.builtin_module.env);
         var interpreter = eval_mod.Interpreter.init(self.allocator, module_env, builtin_types_for_eval, self.builtin_module.env, imported_modules, &checker.import_mapping, null, null, roc_target.RocTarget.detectNative()) catch |err| {
             return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "Interpreter init error: {}", .{err}) };

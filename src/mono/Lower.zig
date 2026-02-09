@@ -1215,23 +1215,44 @@ fn setupLocalCallLayoutHints(
     // Also populate the type scope by walking the function's type signature.
     // This handles nested type variables (e.g., the element type `a` inside `List a`)
     // that are not directly represented by the parameter patterns.
+    //
+    // Only add type scope entries when the current module matches type_scope_caller_module
+    // (or caller is not set yet). When inside an external def from a different module,
+    // the type_scope_caller_module points to the outer caller, and adding same-module
+    // mappings to the scope would cause fromTypeVar to resolve the mapped vars in the
+    // wrong module's type store. Use buildLayoutVarOverrides for that case instead.
     const func_type_var = ModuleEnv.varFrom(def_expr_idx);
     const func_resolved = module_env.types.resolveVar(func_type_var);
     if (func_resolved.desc.content.unwrapFunc()) |func| {
         const param_vars = module_env.types.sliceVars(func.args);
         const num_type_mappings = @min(param_vars.len, arg_indices.len);
 
-        // Ensure we have a scope
-        if (self.type_scope.scopes.items.len == 0) {
-            try self.type_scope.scopes.append(types.VarMap.init(self.allocator));
-        }
-        const scope = &self.type_scope.scopes.items[0];
+        const in_own_module = self.type_scope_caller_module == null or
+            self.type_scope_caller_module.? == self.current_module_idx;
 
-        for (0..num_type_mappings) |i| {
-            const param_var = param_vars[i];
-            const arg_idx = arg_indices[i];
-            const caller_arg_var = ModuleEnv.varFrom(arg_idx);
-            try self.collectTypeMappingsWithExpr(scope, module_env, param_var, module_env, caller_arg_var, arg_idx);
+        if (in_own_module) {
+            // Safe to add type scope entries — mapped vars belong to the same module
+            // as type_scope_caller_module.
+            if (self.type_scope.scopes.items.len == 0) {
+                try self.type_scope.scopes.append(types.VarMap.init(self.allocator));
+            }
+            const scope = &self.type_scope.scopes.items[0];
+
+            for (0..num_type_mappings) |i| {
+                const param_var = param_vars[i];
+                const arg_idx = arg_indices[i];
+                const caller_arg_var = ModuleEnv.varFrom(arg_idx);
+                try self.collectTypeMappingsWithExpr(scope, module_env, param_var, module_env, caller_arg_var, arg_idx);
+            }
+        } else {
+            // Inside an external def from a different module — use layout var
+            // overrides instead to avoid cross-module type store resolution errors.
+            for (0..num_type_mappings) |i| {
+                const param_var = param_vars[i];
+                const arg_idx = arg_indices[i];
+                const caller_arg_var = ModuleEnv.varFrom(arg_idx);
+                try self.buildLayoutVarOverrides(module_env, param_var, caller_arg_var);
+            }
         }
 
         // Store the caller's return type variable. This is used as a fallback
@@ -2852,46 +2873,72 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                         .ident_idx = qualified_method,
                     };
 
-                    // Set up type scope for the method call so that the method's
+                    // Set up type mappings for the method call so that the method's
                     // generic type parameters are mapped to concrete types from the
                     // call site (e.g., ok_or's `ok` type param → Str).
                     const old_caller_module = self.type_scope_caller_module;
+                    const is_cross_module_method = origin_module_idx != self.current_module_idx;
                     {
                         const ext_type_var = ModuleEnv.varFrom(method_def.expr);
                         const ext_resolved = origin_env.types.resolveVar(ext_type_var);
 
                         if (ext_resolved.desc.content.unwrapFunc()) |func| {
-                            if (self.type_scope.scopes.items.len == 0) {
-                                try self.type_scope.scopes.append(types.VarMap.init(self.allocator));
-                            }
-                            const scope = &self.type_scope.scopes.items[0];
-
-                            if (self.type_scope_caller_module == null) {
-                                self.type_scope_caller_module = self.current_module_idx;
-                            }
-
                             const param_vars = origin_env.types.sliceVars(func.args);
 
-                            // Map first parameter (receiver) type
-                            if (param_vars.len > 0) {
-                                const receiver_var = ModuleEnv.varFrom(dot.receiver);
-                                try self.collectTypeMappings(scope, origin_env, param_vars[0], module_env, receiver_var);
-                            }
+                            if (is_cross_module_method) {
+                                // Cross-module: use type scope to map external rigid/flex vars
+                                // to caller module vars (existing behavior).
+                                if (self.type_scope.scopes.items.len == 0) {
+                                    try self.type_scope.scopes.append(types.VarMap.init(self.allocator));
+                                }
+                                const scope = &self.type_scope.scopes.items[0];
 
-                            // Map extra argument types
-                            if (dot.args) |extra_args_span| {
-                                const extra_arg_indices = module_env.store.sliceExpr(extra_args_span);
-                                for (extra_arg_indices, 0..) |arg_idx, i| {
-                                    if (i + 1 < param_vars.len) {
-                                        const arg_var = ModuleEnv.varFrom(arg_idx);
-                                        try self.collectTypeMappings(scope, origin_env, param_vars[i + 1], module_env, arg_var);
+                                if (self.type_scope_caller_module == null) {
+                                    self.type_scope_caller_module = self.current_module_idx;
+                                }
+
+                                // Map first parameter (receiver) type
+                                if (param_vars.len > 0) {
+                                    const receiver_var = ModuleEnv.varFrom(dot.receiver);
+                                    try self.collectTypeMappings(scope, origin_env, param_vars[0], module_env, receiver_var);
+                                }
+
+                                // Map extra argument types
+                                if (dot.args) |extra_args_span| {
+                                    const extra_arg_indices = module_env.store.sliceExpr(extra_args_span);
+                                    for (extra_arg_indices, 0..) |arg_idx, i| {
+                                        if (i + 1 < param_vars.len) {
+                                            const arg_var = ModuleEnv.varFrom(arg_idx);
+                                            try self.collectTypeMappings(scope, origin_env, param_vars[i + 1], module_env, arg_var);
+                                        }
                                     }
                                 }
-                            }
 
-                            // Map return type
-                            const caller_return_var = ModuleEnv.varFrom(expr_idx);
-                            try self.collectTypeMappings(scope, origin_env, func.ret, module_env, caller_return_var);
+                                // Map return type
+                                const caller_return_var = ModuleEnv.varFrom(expr_idx);
+                                try self.collectTypeMappings(scope, origin_env, func.ret, module_env, caller_return_var);
+                            } else {
+                                // Same-module: use layout var overrides instead of type scope.
+                                // The type scope's caller_module_idx may point to an outer
+                                // caller (different module), so adding same-module mappings
+                                // to the type scope would cause fromTypeVar to resolve the
+                                // mapped vars in the wrong module's type store.
+                                if (param_vars.len > 0) {
+                                    const receiver_var = ModuleEnv.varFrom(dot.receiver);
+                                    try self.buildLayoutVarOverrides(origin_env, param_vars[0], receiver_var);
+                                }
+                                if (dot.args) |extra_args_span| {
+                                    const extra_arg_indices = module_env.store.sliceExpr(extra_args_span);
+                                    for (extra_arg_indices, 0..) |arg_idx, i| {
+                                        if (i + 1 < param_vars.len) {
+                                            const arg_var = ModuleEnv.varFrom(arg_idx);
+                                            try self.buildLayoutVarOverrides(origin_env, param_vars[i + 1], arg_var);
+                                        }
+                                    }
+                                }
+                                const caller_return_var = ModuleEnv.varFrom(expr_idx);
+                                try self.buildLayoutVarOverrides(origin_env, func.ret, caller_return_var);
+                            }
                         }
                     }
 
@@ -2972,10 +3019,20 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                     }
                     const args_span = try self.store.addExprSpan(all_args.items);
 
-                    // Clean up type scope after lowering arguments
+                    // Clean up type mappings after lowering arguments
                     self.type_scope_caller_module = old_caller_module;
-                    if (self.type_scope.scopes.items.len > 0) {
-                        self.type_scope.scopes.items[0].clearRetainingCapacity();
+                    if (is_cross_module_method) {
+                        // Cross-module: clear type scope entries.
+                        // Only clear if we were the outermost caller (old_caller_module
+                        // was null). Inner calls must preserve outer scope entries.
+                        if (old_caller_module == null) {
+                            if (self.type_scope.scopes.items.len > 0) {
+                                self.type_scope.scopes.items[0].clearRetainingCapacity();
+                            }
+                        }
+                    } else {
+                        // Same-module: clear layout var overrides
+                        self.layout_var_overrides.clearRetainingCapacity();
                     }
 
                     break :blk .{
