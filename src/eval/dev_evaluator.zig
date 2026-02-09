@@ -686,8 +686,8 @@ pub const DevEvaluator = struct {
         // This is a single store shared across all modules for cross-module correctness
         const layout_store_ptr = try self.ensureGlobalLayoutStore(all_module_envs);
 
-        // In REPL sessions, the REPL module gets a fresh type store on each evaluation,
-        // but the global layout store persists. Clear stale type variable cache entries
+        // In REPL sessions, module type stores get fresh type variables on each evaluation,
+        // but the global layout store persists. Clear all type variable cache entries
         // so that recycled type_var indices don't map to wrong layouts from previous evals.
         layout_store_ptr.resetModuleCache(all_module_envs);
 

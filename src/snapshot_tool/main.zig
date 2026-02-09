@@ -29,9 +29,19 @@ pub const panic = std.debug.FullPanic(panicHandler);
 threadlocal var panic_jmp: ?*sljmp.JmpBuf = null;
 threadlocal var panic_msg: ?[]const u8 = null;
 
-fn panicHandler(msg: []const u8, _: ?usize) noreturn {
+fn panicHandler(msg: []const u8, ret_addr: ?usize) noreturn {
     if (panic_jmp) |jmp| {
         panic_msg = msg;
+        // Print stack trace before longjmp so we can identify the unreachable location
+        if (verbose_log) {
+            std.debug.print("  PANIC TRACE: {s}\n", .{msg});
+            if (ret_addr) |addr| {
+                std.debug.print("  return address: 0x{x}\n", .{addr});
+            }
+            const trace = @returnAddress();
+            std.debug.print("  handler address: 0x{x}\n", .{trace});
+            std.debug.dumpCurrentStackTrace(ret_addr);
+        }
         panic_jmp = null; // prevent re-entry
         sljmp.longjmp(jmp, 1);
     }
