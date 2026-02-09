@@ -377,7 +377,7 @@ pub const Store = struct {
     pub fn resetModuleCache(self: *Self, new_module_envs: []const *const ModuleEnv) void {
         self.all_module_envs = new_module_envs;
         self.layouts_by_module_var.clearRetainingCapacity();
-        self.recursive_boxed_layouts.clearRetainingCapacity();
+        self.recursive_nominal_registry.overrides.clearRetainingCapacity();
         self.raw_layout_placeholders.clearRetainingCapacity();
         // Also clear work state that may be dirty from a previous evaluation that
         // was interrupted mid-way (e.g. by the snapshot tool's panic handler).
@@ -1719,7 +1719,7 @@ pub const Store = struct {
                 // nominal sharing the same backing type), check if any in-progress
                 // nominals should be finalized with this cached layout.
                 if (!is_in_progress_recursive) {
-                    var nominals_to_remove_cache = std.ArrayList(work.NominalKey){};
+                    var nominals_to_remove_cache = std.ArrayList(work.NominalKey).empty;
                     defer nominals_to_remove_cache.deinit(self.allocator);
 
                     var nominal_iter_cache = self.work.in_progress_nominals.iterator();
@@ -1749,6 +1749,11 @@ pub const Store = struct {
                         if (self.work.in_progress_nominals.get(key)) |progress| {
                             const nck = ModuleVarKey{ .module_idx = progress.cache_module_idx, .var_ = progress.nominal_var };
                             if (self.layouts_by_module_var.get(nck)) |final_idx| {
+                                if (comptime std.debug.runtime_safety) {
+                                    if (self.computed_nominals.get(key)) |existing| {
+                                        std.debug.assert(existing.layout_idx == final_idx);
+                                    }
+                                }
                                 try self.computed_nominals.put(key, .{ .layout_idx = final_idx, .module_idx = progress.cache_module_idx });
                             }
                         }
@@ -1803,15 +1808,19 @@ pub const Store = struct {
                         layout_idx = try self.insertLayout(Layout.opaquePtr());
                         skip_layout_computation = true;
 
-                        // Mark all in-progress nominals as recursive.
-                        // A var cycle within a heap container means the type is recursive.
-                        // The cycle may go through intermediate vars (not just the nominal's
-                        // backing var directly), so we can't check backing_var == current.var_.
-                        // All in-progress nominals have their backing types on the work stack,
-                        // so any cycle detected here is within their computation tree.
+                        // Mark only the in-progress nominals whose backing type is part of
+                        // the current computation as recursive. A var cycle within a heap
+                        // container means the type is recursive, but when multiple unrelated
+                        // nominals are in-progress simultaneously (e.g., A := [X(B)], B := [Y(Str)]),
+                        // a cycle in A's tree should not mark B as recursive.
+                        // We check if the nominal's backing_var is in the in_progress_vars set,
+                        // which means it's actively being computed and part of the current recursion chain.
                         var nom_cycle_iter = self.work.in_progress_nominals.iterator();
                         while (nom_cycle_iter.next()) |entry| {
-                            entry.value_ptr.is_recursive = true;
+                            const progress = entry.value_ptr.*;
+                            if (self.work.in_progress_vars.contains(.{ .module_idx = progress.cache_module_idx, .var_ = progress.backing_var })) {
+                                entry.value_ptr.is_recursive = true;
+                            }
                         }
                     } else {
                         // Invalid: recursive type without heap allocation would have infinite size.
@@ -2671,7 +2680,7 @@ pub const Store = struct {
 
                 // Check if any in-progress nominals need their reserved layouts updated.
                 // When a nominal type's backing type finishes, update the nominal's placeholder.
-                var nominals_to_remove = std.ArrayList(work.NominalKey){};
+                var nominals_to_remove = std.ArrayList(work.NominalKey).empty;
                 defer nominals_to_remove.deinit(self.allocator);
 
                 var nominal_iter = self.work.in_progress_nominals.iterator();
@@ -2732,6 +2741,11 @@ pub const Store = struct {
                     if (self.work.in_progress_nominals.get(key)) |progress| {
                         const nck = ModuleVarKey{ .module_idx = progress.cache_module_idx, .var_ = progress.nominal_var };
                         if (self.layouts_by_module_var.get(nck)) |final_idx| {
+                            if (comptime std.debug.runtime_safety) {
+                                if (self.computed_nominals.get(key)) |existing| {
+                                    std.debug.assert(existing.layout_idx == final_idx);
+                                }
+                            }
                             try self.computed_nominals.put(key, .{ .layout_idx = final_idx, .module_idx = progress.cache_module_idx });
                         }
                     }
@@ -2896,7 +2910,7 @@ pub const Store = struct {
 
                     // Check if any in-progress nominals need their reserved layouts updated.
                     // This handles the case where a nominal's backing type is a container (e.g., tag union).
-                    var nominals_to_remove_container = std.ArrayList(work.NominalKey){};
+                    var nominals_to_remove_container = std.ArrayList(work.NominalKey).empty;
                     defer nominals_to_remove_container.deinit(self.allocator);
 
                     var nominal_iter_container = self.work.in_progress_nominals.iterator();
@@ -2966,6 +2980,11 @@ pub const Store = struct {
                         if (self.work.in_progress_nominals.get(key)) |progress| {
                             const nck = ModuleVarKey{ .module_idx = progress.cache_module_idx, .var_ = progress.nominal_var };
                             if (self.layouts_by_module_var.get(nck)) |final_idx| {
+                                if (comptime std.debug.runtime_safety) {
+                                    if (self.computed_nominals.get(key)) |existing| {
+                                        std.debug.assert(existing.layout_idx == final_idx);
+                                    }
+                                }
                                 try self.computed_nominals.put(key, .{ .layout_idx = final_idx, .module_idx = progress.cache_module_idx });
                             }
                         }

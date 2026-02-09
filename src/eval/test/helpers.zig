@@ -251,8 +251,8 @@ noinline fn executeAndFormat(
     dev_eval: *DevEvaluator,
     executable: *backend.ExecutableMemory,
     code_result: *DevEvaluator.CodeResult,
-    module_env: *ModuleEnv,
-    expr_idx: CIR.Expr.Idx,
+    _: *ModuleEnv,
+    _: CIR.Expr.Idx,
 ) DevEvalError![]const u8 {
     // Compiler barrier: std.debug.print with empty string acts as a full
     // memory barrier, ensuring all struct fields are properly materialized
@@ -427,7 +427,10 @@ fn compareWithDevEvaluator(allocator: std.mem.Allocator, interpreter_str: []cons
     // may use the CIR type variable which resolves to an integer type.
     if ((std.mem.eql(u8, interpreter_str, "True") and std.mem.eql(u8, dev_str, "1")) or
         (std.mem.eql(u8, interpreter_str, "False") and std.mem.eql(u8, dev_str, "0")))
+    {
+        std.debug.print("KNOWN DIVERGENCE: Bool layout mismatch (True/1 or False/0) - see Mono IR block result_layout issue\n", .{});
         return;
+    }
 
     std.debug.print(
         "\nEvaluator mismatch! Interpreter: {s}, DevEvaluator: {s}\n",

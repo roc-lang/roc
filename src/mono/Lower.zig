@@ -1710,6 +1710,10 @@ fn needsDotAccessReSpec(
 /// Set up type scope mappings for an external function call.
 /// This maps the external function's rigid type variables to concrete types from the call site.
 /// The call_expr_idx is the call expression itself, used to map return type params.
+///
+/// IMPORTANT: This function assigns `self.type_scope_caller_module`. Callers MUST
+/// save and restore `type_scope_caller_module` around calls to this function
+/// (typically via `const old = self.type_scope_caller_module; defer self.type_scope_caller_module = old;`).
 fn setupExternalCallTypeScope(
     self: *Self,
     caller_module_env: *ModuleEnv,
@@ -2417,7 +2421,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             // create a fresh copy with the correct layouts for this call's argument types.
             if (is_external_call) {
                 const lookup = fn_expr.e_lookup_external;
-                const symbol = self.externalToSymbol(lookup.module_idx, lookup.ident_idx);
+                const symbol = self.externalToSymbol(module_env, lookup.module_idx, lookup.ident_idx);
                 const symbol_key: u48 = @bitCast(symbol);
                 if (self.lowered_symbols.contains(symbol_key)) {
                     if (self.needsReSpecialization(module_env, symbol_key, call.args)) {
@@ -2602,9 +2606,11 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
         },
 
         .e_closure => |closure| blk: {
-            // Check binding status and recursion BEFORE lowering the lambda body.
-            // This is important because current_binding_pattern must not leak into
-            // nested closures within the lambda body.
+            // ORDERING INVARIANT: detectClosureRecursion must be called BEFORE clearing
+            // binding context (it needs to see the current binding to detect self-recursion).
+            // lowerExprFromIdx must be called AFTER clearing binding context (to prevent
+            // nested closures from inheriting the parent's binding pattern).
+            // lowerClosureToProc must receive the already-lowered lambda_id.
             const is_bound = self.current_binding_pattern != null;
             const recursion_info = self.detectClosureRecursion(module_env, closure.lambda_idx);
 
@@ -3434,14 +3440,20 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
 
             // For recursive nominals (box layout), hint the backing expression
             // to use the canonical inner tag_union layout.
+            var hint_var: ?types.Var = null;
             if (nominal_layout.tag == .box) {
                 const inner_layout_idx = nominal_layout.data.box;
                 const backing_var = ModuleEnv.varFrom(nom.backing_expr);
                 const resolved = module_env.types.resolveVar(backing_var);
                 try self.expr_layout_hints.put(resolved.var_, inner_layout_idx);
+                hint_var = resolved.var_;
             }
 
             const backing = try self.lowerExprFromIdx(module_env, nom.backing_expr);
+            // Clean up the hint to prevent stale entries affecting subsequent expressions
+            if (hint_var) |hv| {
+                _ = self.expr_layout_hints.remove(hv);
+            }
             break :blk .{
                 .nominal = .{
                     .backing_expr = backing,
@@ -3457,14 +3469,20 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
 
             // For recursive nominals (box layout), hint the backing expression
             // to use the canonical inner tag_union layout.
+            var hint_var: ?types.Var = null;
             if (nominal_layout.tag == .box) {
                 const inner_layout_idx = nominal_layout.data.box;
                 const backing_var = ModuleEnv.varFrom(nom.backing_expr);
                 const resolved = module_env.types.resolveVar(backing_var);
                 try self.expr_layout_hints.put(resolved.var_, inner_layout_idx);
+                hint_var = resolved.var_;
             }
 
             const backing = try self.lowerExprFromIdx(module_env, nom.backing_expr);
+            // Clean up the hint to prevent stale entries affecting subsequent expressions
+            if (hint_var) |hv| {
+                _ = self.expr_layout_hints.remove(hv);
+            }
             break :blk .{
                 .nominal = .{
                     .backing_expr = backing,
