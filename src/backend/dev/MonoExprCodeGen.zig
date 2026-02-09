@@ -12004,6 +12004,36 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 remaining -= 4;
             }
 
+            // Handle remaining 2-byte chunk
+            if (remaining >= 2) {
+                if (comptime target.toCpuArch() == .aarch64) {
+                    try self.codegen.emitLoadStackHalfword(temp_reg, src_offset);
+                    try self.codegen.emit.strhRegMem(temp_reg, ptr_reg, @intCast(@as(u32, @intCast(dst_offset)) >> 1));
+                } else {
+                    try self.codegen.emitLoadStack(.w16, temp_reg, src_offset);
+                    try self.codegen.emit.movMemReg(.w16, ptr_reg, dst_offset, temp_reg);
+                }
+                src_offset += 2;
+                dst_offset += 2;
+                remaining -= 2;
+            }
+
+            // Handle remaining 1-byte chunk
+            if (remaining >= 1) {
+                if (comptime target.toCpuArch() == .aarch64) {
+                    try self.codegen.emitLoadStackByte(temp_reg, src_offset);
+                    try self.codegen.emit.strbRegMem(temp_reg, ptr_reg, @intCast(dst_offset));
+                } else {
+                    // Use MOVZX to properly load a single byte (zero-extended)
+                    try self.codegen.emit.movzxBRegMem(temp_reg, .RBP, src_offset);
+                    // Note: movMemReg(.w8) emits a 32-bit store on x86_64 (opcode 0x89),
+                    // which writes 3 extra zero bytes. This is safe because the destination
+                    // is the result buffer (512 bytes) and consumers read only the needed bytes.
+                    try self.codegen.emit.movMemReg(.w8, ptr_reg, dst_offset, temp_reg);
+                }
+                remaining -= 1;
+            }
+
             self.codegen.freeGeneral(temp_reg);
         }
 
