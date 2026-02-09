@@ -5110,12 +5110,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 .u32, .i32 => 4,
                 .u64, .i64 => 8,
                 else => {
-                    // For u128/i128/float/dec, fall back to tag union size
-                    if (idx_int >= 3 and idx_int <= 12) {
-                        unreachable; // Should have matched above
-                    }
-                    // Non-integer num_from_str not yet supported
-                    unreachable;
+                    // u128/i128/float/dec num_from_str not yet supported
+                    return Error.NotImplemented;
                 },
             };
             const is_signed: bool = (idx_int % 2 == 0); // i8=4, i16=6, i32=8, i64=10 are even
@@ -10223,7 +10219,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     return try self.generateLookupCall(lookup, call.args, call.ret_layout);
                 },
 
-                else => unreachable,
+                else => return Error.NotImplemented,
             };
         }
 
@@ -13525,7 +13521,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             .stack => |s| s.offset,
                             .list_stack => |li| li.struct_offset,
                             .stack_str => |off| off,
-                            else => unreachable,
+                            else => return Error.NotImplemented,
                         };
                         const reg0 = self.getArgumentRegister(reg_idx);
                         const reg1 = self.getArgumentRegister(reg_idx + 1);

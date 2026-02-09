@@ -279,15 +279,21 @@ pub const Store = struct {
         self.mutable_env = env;
     }
 
-    /// Update module environments and clear stale type variable caches.
-    /// This is needed for REPL sessions where the same module_idx gets a fresh type store
+    /// Update module environments and clear all type variable caches.
+    /// This is needed for REPL sessions where module type stores get fresh type variables
     /// on each evaluation. Without clearing, cached (module_idx, type_var) entries from
-    /// the previous evaluation would map to wrong layouts.
+    /// the previous evaluation would map to wrong layouts. Both the REPL module and
+    /// builtin module caches must be cleared because polymorphic builtin functions
+    /// (e.g. List.repeat) have type variables that get unified differently per call.
     pub fn resetModuleCache(self: *Self, new_module_envs: []const *const ModuleEnv) void {
         self.all_module_envs = new_module_envs;
         self.layouts_by_module_var.clearRetainingCapacity();
         self.recursive_boxed_layouts.clearRetainingCapacity();
         self.raw_layout_placeholders.clearRetainingCapacity();
+        // Also clear work state that may be dirty from a previous evaluation that
+        // was interrupted mid-way (e.g. by the snapshot tool's panic handler).
+        self.work.in_progress_vars.clearRetainingCapacity();
+        self.work.in_progress_nominals.clearRetainingCapacity();
     }
 
     pub fn deinit(self: *Self) void {
@@ -1543,13 +1549,15 @@ pub const Store = struct {
     /// in the type_scope mappings. When a flex/rigid var is looked up in type_scope and
     /// found, the mapped var belongs to caller_module_idx, not module_idx. This is critical
     /// for cross-module polymorphic function calls.
+    pub const FromTypeVarError = std.mem.Allocator.Error || error{NotImplemented};
+
     pub fn fromTypeVar(
         self: *Self,
         module_idx: u16,
         unresolved_var: Var,
         type_scope: *const TypeScope,
         caller_module_idx: ?u16,
-    ) std.mem.Allocator.Error!Idx {
+    ) FromTypeVarError!Idx {
         // Set the current module for this computation
         self.current_module_idx = module_idx;
 
@@ -1702,7 +1710,7 @@ pub const Store = struct {
                         skip_layout_computation = true;
                     } else {
                         // Invalid: recursive type without heap allocation would have infinite size.
-                        unreachable;
+                        return error.NotImplemented;
                     }
                 }
             } else if (current.desc.content == .structure) blk: {
