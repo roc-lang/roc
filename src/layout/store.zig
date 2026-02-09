@@ -94,6 +94,14 @@ pub const RecursiveNominalRegistry = struct {
 /// This is a GLOBAL layout store that serves all modules in the build.
 /// Layout indices are only meaningful within their originating store, so using
 /// per-module stores causes crashes when layout indices cross module boundaries.
+/// Entry in the computed_nominals cache. Stores both the layout index and the
+/// module that computed it, so cross-module lookups can resolve per-module
+/// Ident.Idx values to their text for comparison.
+const ComputedNominalEntry = struct {
+    layout_idx: Idx,
+    module_idx: u16,
+};
+
 pub const Store = struct {
     const Self = @This();
 
@@ -136,7 +144,11 @@ pub const Store = struct {
     // always produce the same layout. Without this, each type variable would trigger
     // a separate tag union computation that could produce inconsistent sizes due to
     // different recursive placeholder states.
-    computed_nominals: std.AutoHashMap(work.NominalKey, Idx),
+    //
+    // IMPORTANT: NominalKey uses per-module Ident.Idx values, which differ across modules
+    // for the same nominal type. Use findComputedNominal() for lookups, which falls back
+    // to cross-module text comparison when the exact key doesn't match.
+    computed_nominals: std.AutoHashMap(work.NominalKey, ComputedNominalEntry),
 
     // Cache for RAW (unboxed) layouts of recursive nominal types.
     // When a recursive nominal is encountered INSIDE a Box/List container during cycle
@@ -267,7 +279,7 @@ pub const Store = struct {
             .tag_union_data = try collections.SafeList(TagUnionData).initCapacity(allocator, 64),
             .layouts_by_module_var = std.AutoHashMap(ModuleVarKey, Idx).init(allocator),
             .recursive_nominal_registry = RecursiveNominalRegistry.init(allocator),
-            .computed_nominals = std.AutoHashMap(work.NominalKey, Idx).init(allocator),
+            .computed_nominals = std.AutoHashMap(work.NominalKey, ComputedNominalEntry).init(allocator),
             .raw_layout_placeholders = std.AutoHashMap(ModuleVarKey, Idx).init(allocator),
             .work = try Work.initCapacity(allocator, 32),
             .builtin_str_ident = builtin_str_ident,
@@ -303,6 +315,34 @@ pub const Store = struct {
     /// Get the current module environment
     fn currentEnv(self: *const Self) *const ModuleEnv {
         return self.all_module_envs[self.current_module_idx];
+    }
+
+    /// Look up a nominal type in the computed_nominals cache, supporting cross-module lookups.
+    ///
+    /// NominalKey uses per-module Ident.Idx values (ident_idx, origin_module), which are
+    /// different across modules even for the same nominal type. This function first tries
+    /// an exact key match (fast path for same-module lookups), then falls back to comparing
+    /// identifier text strings across all cached entries.
+    fn findComputedNominal(self: *const Self, nk: work.NominalKey) ?Idx {
+        // Fast path: exact key match (same module)
+        if (self.computed_nominals.get(nk)) |entry| return entry.layout_idx;
+
+        // Slow path: cross-module text comparison
+        const current_store = self.currentEnv().getIdentStoreConst();
+        const target_ident = current_store.getText(nk.ident_idx);
+        const target_origin = current_store.getText(nk.origin_module);
+
+        var iter = self.computed_nominals.iterator();
+        while (iter.next()) |entry| {
+            const other_env = self.all_module_envs[entry.value_ptr.module_idx];
+            const other_store = other_env.getIdentStoreConst();
+            const other_ident = other_store.getText(entry.key_ptr.ident_idx);
+            const other_origin = other_store.getText(entry.key_ptr.origin_module);
+            if (std.mem.eql(u8, target_ident, other_ident) and std.mem.eql(u8, target_origin, other_origin)) {
+                return entry.value_ptr.layout_idx;
+            }
+        }
+        return null;
     }
 
     /// Set an override types store for runtime type resolution (used by interpreter).
@@ -1709,7 +1749,7 @@ pub const Store = struct {
                         if (self.work.in_progress_nominals.get(key)) |progress| {
                             const nck = ModuleVarKey{ .module_idx = progress.cache_module_idx, .var_ = progress.nominal_var };
                             if (self.layouts_by_module_var.get(nck)) |final_idx| {
-                                try self.computed_nominals.put(key, final_idx);
+                                try self.computed_nominals.put(key, .{ .layout_idx = final_idx, .module_idx = progress.cache_module_idx });
                             }
                         }
                         _ = self.work.in_progress_nominals.swapRemove(key);
@@ -1864,8 +1904,23 @@ pub const Store = struct {
                     if (current.desc.content.structure == .nominal_type) {
                         const nt = current.desc.content.structure.nominal_type;
                         const nk = work.NominalKey{ .ident_idx = nt.ident.ident_idx, .origin_module = nt.origin_module };
-                        if (self.computed_nominals.get(nk)) |existing_idx| {
-                            layout_idx = existing_idx;
+                        if (self.findComputedNominal(nk)) |existing_idx| {
+                            // For recursive nominals (Box layout) inside List/Box containers,
+                            // use the inner (raw) layout instead of the Box. The container
+                            // itself provides heap allocation, so using the Box would cause
+                            // double-boxing. This mirrors the logic in the layouts_by_module_var
+                            // cache hit path above.
+                            const existing_layout = self.getLayout(existing_idx);
+                            if (existing_layout.tag == .box and self.work.pending_containers.len > 0) {
+                                const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
+                                if (pending_item.container == .list or pending_item.container == .box) {
+                                    layout_idx = existing_layout.data.box;
+                                } else {
+                                    layout_idx = existing_idx;
+                                }
+                            } else {
+                                layout_idx = existing_idx;
+                            }
                             try self.layouts_by_module_var.put(current_cache_key, existing_idx);
                             skip_layout_computation = true;
                         }
@@ -1980,6 +2035,7 @@ pub const Store = struct {
                                     nominal_type.ident.ident_idx == list_ident
                             else
                                 false;
+
                             if (is_builtin_list) {
                                 // Extract the element type from the type arguments
                                 const type_args = self.getTypesStore().sliceNominalArgs(nominal_type);
@@ -2676,7 +2732,7 @@ pub const Store = struct {
                     if (self.work.in_progress_nominals.get(key)) |progress| {
                         const nck = ModuleVarKey{ .module_idx = progress.cache_module_idx, .var_ = progress.nominal_var };
                         if (self.layouts_by_module_var.get(nck)) |final_idx| {
-                            try self.computed_nominals.put(key, final_idx);
+                            try self.computed_nominals.put(key, .{ .layout_idx = final_idx, .module_idx = progress.cache_module_idx });
                         }
                     }
                     _ = self.work.in_progress_nominals.swapRemove(key);
@@ -2910,7 +2966,7 @@ pub const Store = struct {
                         if (self.work.in_progress_nominals.get(key)) |progress| {
                             const nck = ModuleVarKey{ .module_idx = progress.cache_module_idx, .var_ = progress.nominal_var };
                             if (self.layouts_by_module_var.get(nck)) |final_idx| {
-                                try self.computed_nominals.put(key, final_idx);
+                                try self.computed_nominals.put(key, .{ .layout_idx = final_idx, .module_idx = progress.cache_module_idx });
                             }
                         }
                         _ = self.work.in_progress_nominals.swapRemove(key);
