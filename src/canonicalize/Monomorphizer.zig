@@ -1485,15 +1485,15 @@ fn duplicateExpr(
             switch (lambda_expr) {
                 .e_lambda => |lambda| {
                     const new_body = try self.duplicateExpr(lambda.body, type_subs);
-                    const new_args = try self.duplicatePatternSpan(lambda.args);
-                    const new_captures = try self.duplicateCaptureSpan(closure.captures);
 
-                    if (new_body == lambda.body and
-                        new_args.span.start == lambda.args.span.start and
-                        new_captures.span.start == closure.captures.span.start)
-                    {
+                    if (new_body == lambda.body) {
                         return expr_idx;
                     }
+
+                    // Body changed due to type substitutions, so create independent
+                    // copies of args and captures for this specialization.
+                    const new_args = try self.duplicatePatternSpan(lambda.args);
+                    const new_captures = try self.duplicateCaptureSpan(closure.captures);
 
                     const new_lambda = try self.module_env.store.addExpr(Expr{
                         .e_lambda = .{
@@ -2883,8 +2883,20 @@ test "monomorphizer: closure capture duplication" {
     try module_env.store.addScratchCapture(capture_idx);
     const captures_span = try module_env.store.capturesSpanFrom(captures_start);
 
-    // Create a simple body expression (a local lookup referring to the captured variable)
-    const body_expr = try module_env.store.addExpr(Expr{ .e_lookup_local = .{ .pattern_idx = pattern_idx } }, base.Region.zero());
+    // Create a body expression that will change during duplication.
+    // Use a nested lambda (since duplicatePatternSpan always creates new patterns,
+    // a lambda with args always gets a new expression index).
+    const inner_body = try module_env.store.addExpr(Expr{ .e_lookup_local = .{ .pattern_idx = pattern_idx } }, base.Region.zero());
+    const inner_arg = try module_env.store.addPattern(Pattern.underscore, base.Region.zero());
+    const inner_args_start = module_env.store.scratchPatternTop();
+    try module_env.store.addScratchPattern(inner_arg);
+    const inner_args_span = try module_env.store.patternSpanFrom(inner_args_start);
+    const body_expr = try module_env.store.addExpr(Expr{
+        .e_lambda = .{
+            .args = inner_args_span,
+            .body = inner_body,
+        },
+    }, base.Region.zero());
 
     // Create a lambda arg pattern
     const arg_pattern = try module_env.store.addPattern(Pattern.underscore, base.Region.zero());
