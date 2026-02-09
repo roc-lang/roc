@@ -13,6 +13,7 @@ const Idx = layout.Idx;
 const RocDec = builtins.dec.RocDec;
 const RocStr = builtins.str.RocStr;
 const RocList = builtins.list.RocList;
+const i128h = builtins.compiler_rt_128;
 const Ident = base.Ident;
 
 const RocValue = @This();
@@ -190,9 +191,9 @@ pub fn format(self: RocValue, allocator: std.mem.Allocator, ctx: FormatContext) 
                     .dec => {
                         const dec = self.readDec();
                         if (ctx.strip_whole_number_decimal and
-                            @rem(@abs(dec.num), RocDec.one_point_zero_i128) == 0)
+                            i128h.rem_u128(@abs(dec.num), @intCast(RocDec.one_point_zero_i128)) == 0)
                         {
-                            const whole = @divTrunc(dec.num, RocDec.one_point_zero_i128);
+                            const whole = i128h.divTrunc_i128(dec.num, RocDec.one_point_zero_i128);
                             return try std.fmt.allocPrint(allocator, "{d}", .{whole});
                         }
                         var buf: [RocDec.max_str_length]u8 = undefined;
