@@ -1489,19 +1489,40 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     // Generate element value
                     const elem_loc = try self.generateExpr(args[1]);
                     // Determine element size from layout.
-                    // Cross-module layout resolution can produce incorrect ret_layout
-                    // (e.g., list_of_zst instead of list(i64)) when the builtin function's
-                    // layout index refers to a layout in the wrong module context.
-                    // When this happens, derive the correct element size from the list
-                    // argument's layout.
                     const elem_size_align: layout.SizeAlign = blk: {
+                        // Check the element's value location for the ground truth size.
+                        const actual_elem_size: ?u29 = switch (elem_loc) {
+                            .stack => |s| s.size.byteCount(),
+                            .stack_i128 => 16,
+                            .immediate_i64 => 8,
+                            .immediate_i128 => 16,
+                            .immediate_f64 => 8,
+                            .general_reg => 8,
+                            .float_reg => 8,
+                            else => null,
+                        };
+
                         const ret_layout_val = ls.getLayout(ll.ret_layout);
                         if (ret_layout_val.tag == .list) {
                             const sa = ls.layoutSizeAlign(ls.getLayout(ret_layout_val.data.list));
-                            if (sa.size > 0) break :blk sa;
+                            if (sa.size > 0) {
+                                // If the layout says the element is larger than its actual value,
+                                // the layout is wrong (polymorphic inlining). Use actual size.
+                                if (actual_elem_size) |aes| {
+                                    if (aes < sa.size) {
+                                        break :blk .{
+                                            .size = aes,
+                                            .alignment = if (std.math.isPowerOfTwo(aes))
+                                                layout.RocAlignment.fromByteUnits(@intCast(aes))
+                                            else
+                                                sa.alignment,
+                                        };
+                                    }
+                                }
+                                break :blk sa;
+                            }
                         }
-                        // ret_layout is list_of_zst or has ZST element — try deriving
-                        // the correct element size from the list argument's layout
+                        // ret_layout has ZST element — try deriving from the list argument's layout
                         if (self.getExprLayout(args[0])) |list_layout_idx| {
                             const list_layout = ls.getLayout(list_layout_idx);
                             if (list_layout.tag == .list) {
@@ -4436,11 +4457,39 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
         /// Generate code for a binary operation
         fn generateBinop(self: *Self, binop: anytype) Error!ValueLocation {
-            // Generate code for LHS first (always stable due to generateExpr wrapper)
-            const lhs_loc = try self.generateExpr(binop.lhs);
+            // Polymorphic numeric literal coercion:
+            // In polymorphic functions like `range_until`, numeric literals are lowered
+            // as `dec_literal` (the default numeric type). When the function is inlined
+            // at an integer call site, the binop's result_layout is the correct integer
+            // type, but operand literals are still Dec-encoded. Coerce them here.
+            const result_is_int = switch (binop.result_layout) {
+                .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64 => true,
+                else => false,
+            };
 
-            // Evaluate RHS (safe — LHS is in a stable location, never a bare register)
-            const rhs_loc = try self.generateExpr(binop.rhs);
+            const lhs_loc = blk: {
+                if (result_is_int) {
+                    const expr = self.store.getExpr(binop.lhs);
+                    if (expr == .dec_literal) {
+                        const dec_val: i128 = expr.dec_literal;
+                        const int_val: i64 = @intCast(@divTrunc(dec_val, 1_000_000_000_000_000_000));
+                        break :blk ValueLocation{ .immediate_i64 = int_val };
+                    }
+                }
+                break :blk try self.generateExpr(binop.lhs);
+            };
+
+            const rhs_loc = blk: {
+                if (result_is_int) {
+                    const expr = self.store.getExpr(binop.rhs);
+                    if (expr == .dec_literal) {
+                        const dec_val: i128 = expr.dec_literal;
+                        const int_val: i64 = @intCast(@divTrunc(dec_val, 1_000_000_000_000_000_000));
+                        break :blk ValueLocation{ .immediate_i64 = int_val };
+                    }
+                }
+                break :blk try self.generateExpr(binop.rhs);
+            };
 
             // Check if this is a structural comparison (records/tuples/lists)
             // We need to check the layout, not the expression type, since the LHS
@@ -13016,6 +13065,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                             .data_offset = 0,
                                             .num_elements = 0,
                                         } });
+                                        if (bind.symbol.ident_idx.attributes.reassignable) {
+                                            try self.mutable_var_slots.put(symbol_key, .{ .slot = stack_offset, .size = roc_str_size });
+                                        }
                                         reg_idx += 3;
                                         continue;
                                     }
@@ -13029,6 +13081,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                                 try self.codegen.emitStoreStack(.w64, local_stack_offset + @as(i32, ri) * 8, arg_r);
                                             }
                                             try self.symbol_locations.put(symbol_key, .{ .stack = .{ .offset = local_stack_offset } });
+                                            if (bind.symbol.ident_idx.attributes.reassignable) {
+                                                try self.mutable_var_slots.put(symbol_key, .{ .slot = local_stack_offset, .size = size });
+                                            }
                                             reg_idx += num_regs;
                                             continue;
                                         }
@@ -13056,6 +13111,31 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             try self.symbol_locations.put(symbol_key, .{ .stack = .{ .offset = local_stack_offset } });
                             stack_arg_offset += @as(i32, num_regs) * 8;
                             reg_idx = max_arg_regs; // Mark all registers as consumed
+                        }
+
+                        // Register mutable (var) parameters in mutable_var_slots so that
+                        // re-assignments in loop bodies update the SAME stack slot that
+                        // was already referenced by generated condition code.
+                        if (bind.symbol.ident_idx.attributes.reassignable) {
+                            if (self.symbol_locations.get(symbol_key)) |loc| {
+                                const mutable_slot: ?i32 = switch (loc) {
+                                    .stack => |s| s.offset,
+                                    .stack_str => |off| off,
+                                    .stack_i128 => |off| off,
+                                    .list_stack => |info| info.struct_offset,
+                                    else => null,
+                                };
+                                if (mutable_slot) |slot| {
+                                    const mutable_size: u32 = if (self.layout_store) |ls| blk: {
+                                        if (@intFromEnum(bind.layout_idx) < ls.layouts.len()) {
+                                            const lv = ls.getLayout(bind.layout_idx);
+                                            break :blk ls.layoutSizeAlign(lv).size;
+                                        }
+                                        break :blk 8;
+                                    } else 8;
+                                    try self.mutable_var_slots.put(symbol_key, .{ .slot = slot, .size = mutable_size });
+                                }
+                            }
                         }
                     },
                     .wildcard => |wc| {

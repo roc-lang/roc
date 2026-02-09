@@ -2149,6 +2149,54 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                 }
             }
 
+            // Check if this external call needs re-specialization.
+            // When a polymorphic external function (like range_until) was already lowered
+            // for a previous call with different type arguments (e.g., Dec), we need to
+            // create a fresh copy with the correct layouts for this call's argument types.
+            if (is_external_call) {
+                const lookup = fn_expr.e_lookup_external;
+                const symbol = self.externalToSymbol(lookup.module_idx, lookup.ident_idx);
+                const symbol_key: u48 = @bitCast(symbol);
+                if (self.lowered_symbols.contains(symbol_key)) {
+                    if (self.needsReSpecialization(module_env, symbol_key, call.args)) {
+                        const ext_module_idx = module_env.imports.getResolvedModule(lookup.module_idx) orelse break :blk .{ .runtime_error = {} };
+                        if (ext_module_idx < self.all_module_envs.len) {
+                            // Create a fresh symbol for the re-specialized version
+                            const fresh_ident = Ident.Idx{
+                                .attributes = .{ .effectful = false, .ignored = false, .reassignable = false },
+                                .idx = self.next_synthetic_idx,
+                            };
+                            self.next_synthetic_idx -= 1;
+                            const fresh_symbol = MonoSymbol{
+                                .module_idx = @intCast(ext_module_idx),
+                                .ident_idx = fresh_ident,
+                            };
+
+                            // Re-lower with the type scope already set up by
+                            // setupExternalCallTypeScope above, which maps the external
+                            // function's rigid/flex vars to the caller's concrete types.
+                            try self.lowerExternalDefByIdx(fresh_symbol, lookup.target_node_idx);
+
+                            // Build call with fresh symbol
+                            const args = try self.lowerExprSpan(module_env, call.args);
+                            const fn_expr_id = try self.store.addExpr(.{ .lookup = .{
+                                .symbol = fresh_symbol,
+                                .layout_idx = self.getExprLayoutFromIdx(module_env, call.func),
+                            } }, region);
+                            break :blk .{
+                                .call = .{
+                                    .fn_expr = fn_expr_id,
+                                    .fn_layout = self.getExprLayoutFromIdx(module_env, call.func),
+                                    .args = args,
+                                    .ret_layout = self.getExprLayoutFromIdx(module_env, expr_idx),
+                                    .called_via = call.called_via,
+                                },
+                            };
+                        }
+                    }
+                }
+            }
+
             // For external calls to low-level lambdas, emit the operation directly.
             // This avoids going through lowerExternalDefByIdx which would compute
             // ret_layout in the builtins module context with potentially unmapped rigid vars.
