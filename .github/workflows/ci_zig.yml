@@ -206,23 +206,6 @@ jobs:
             exit 1;
           }
 
-      - name: test with valgrind (ubuntu)
-        # Sadly, with zig 0.14.1, this had to be disabled on arm.
-        # Valgrind as of 3.25.1 does not support some arm instructions zig generates.
-        # So valgrind only works happily on x86_64 linux.
-        # We can re-evaluate as new version of zig/valgrind come out.
-        if: ${{ matrix.os == 'ubuntu-22.04' }}
-        run: |
-          # Install libc6-dbg which is required for Valgrind's function redirections
-          sudo apt-get update && sudo apt-get install -y libc6-dbg
-          sudo snap install valgrind --classic
-          valgrind --version
-          ./ci/custom_valgrind.sh ./zig-out/bin/snapshot --debug --verbose
-          ./ci/custom_valgrind.sh ./zig-out/bin/roc --no-cache test/str/app.roc
-          ./ci/custom_valgrind.sh ./zig-out/bin/roc --no-cache test/int/app.roc
-          # valgrind all app files in test/fx except those that read from stdin
-          # find test/fx -maxdepth 1 -name "*.roc" -type f -exec grep -l "app \[main" {} + | xargs -I {} sh -c 'grep -L "Stdin" {} || true' | xargs -I {} ./ci/custom_valgrind.sh ./zig-out/bin/roc --no-cache {}
-
       - name: check if statically linked (ubuntu)
         if: startsWith(matrix.os, 'ubuntu')
         run: |
@@ -271,6 +254,24 @@ jobs:
 
           echo "=== Files found ==="
           cat kcov-output/parser/parse_unit_coverage/coverage.json | jq -r '.files[].file' | head -10
+
+      - name: test with valgrind (ubuntu)
+        # Sadly, with zig 0.14.1, this had to be disabled on arm.
+        # Valgrind as of 3.25.1 does not support some arm instructions zig generates.
+        # So valgrind only works happily on x86_64 linux.
+        # We can re-evaluate as new version of zig/valgrind come out.
+        if: ${{ matrix.os == 'ubuntu-22.04' }}
+        run: |
+          # clean build
+          git clean -fdx
+          zig build -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast ${{ matrix.cpu_flag }} ${{ matrix.target_flag }} -Dstrip=false
+          # Install libc6-dbg which is required for Valgrind's function redirections
+          sudo apt-get update && sudo apt-get install -y libc6-dbg
+          sudo snap install valgrind --classic
+          valgrind --version
+          ./ci/custom_valgrind.sh ./zig-out/bin/snapshot --debug --verbose
+          ./ci/custom_valgrind.sh ./zig-out/bin/roc --no-cache test/str/app.roc
+          ./ci/custom_valgrind.sh ./zig-out/bin/roc --no-cache test/int/app.roc
 
   zig-cross-compile:
     needs: check-once
