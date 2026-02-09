@@ -2853,8 +2853,8 @@ test "monomorphizer: alias types with different type args produce different hash
     const backing2 = try module_env.types.fresh();
 
     // Create two alias types: MyAlias EmptyRecord vs MyAlias EmptyTagUnion
-    const alias_content1 = try module_env.types.mkAlias(type_ident, backing1, &.{arg1});
-    const alias_content2 = try module_env.types.mkAlias(type_ident, backing2, &.{arg2});
+    const alias_content1 = try module_env.types.mkAlias(type_ident, backing1, &.{arg1}, alias_ident);
+    const alias_content2 = try module_env.types.mkAlias(type_ident, backing2, &.{arg2}, alias_ident);
 
     const var1 = try module_env.types.fresh();
     try module_env.types.setVarContent(var1, alias_content1);
@@ -2898,8 +2898,8 @@ test "monomorphizer: alias types with same type args produce same hash" {
     try module_env.types.setVarContent(backing2, .{ .structure = .empty_record });
 
     // Create two alias types with the same structure
-    const alias_content1 = try module_env.types.mkAlias(type_ident, backing1, &.{arg1});
-    const alias_content2 = try module_env.types.mkAlias(type_ident, backing2, &.{arg2});
+    const alias_content1 = try module_env.types.mkAlias(type_ident, backing1, &.{arg1}, alias_ident);
+    const alias_content2 = try module_env.types.mkAlias(type_ident, backing2, &.{arg2}, alias_ident);
 
     const var1 = try module_env.types.fresh();
     try module_env.types.setVarContent(var1, alias_content1);
@@ -2937,8 +2937,8 @@ test "monomorphizer: alias types with different backing vars produce different h
     try module_env.types.setVarContent(backing2, .{ .structure = .empty_tag_union });
 
     // Create alias types with no args but different backing vars
-    const alias_content1 = try module_env.types.mkAlias(type_ident, backing1, &.{});
-    const alias_content2 = try module_env.types.mkAlias(type_ident, backing2, &.{});
+    const alias_content1 = try module_env.types.mkAlias(type_ident, backing1, &.{}, alias_ident);
+    const alias_content2 = try module_env.types.mkAlias(type_ident, backing2, &.{}, alias_ident);
 
     const var1 = try module_env.types.fresh();
     try module_env.types.setVarContent(var1, alias_content1);

@@ -59,7 +59,6 @@ const MkSafeList = collections.SafeList;
 const ResolvedVarDesc = types_mod.ResolvedVarDesc;
 const ResolvedVarDescs = types_mod.ResolvedVarDescs;
 
-const TypeIdent = types_mod.TypeIdent;
 const Var = types_mod.Var;
 const Rank = types_mod.Rank;
 const Flex = types_mod.Flex;
