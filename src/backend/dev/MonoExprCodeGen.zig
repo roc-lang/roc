@@ -11139,36 +11139,6 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        /// Copy a value location to a stack slot.
-        fn copyToStackSlot(self: *Self, slot: i32, loc: ValueLocation) Error!void {
-            switch (loc) {
-                .general_reg => |reg| {
-                    try self.codegen.emitStoreStack(.w64, slot, reg);
-                },
-                .stack => |s| {
-                    const src_offset = s.offset;
-                    const temp = try self.allocTempGeneral();
-                    try self.codegen.emitLoadStack(.w64, temp, src_offset);
-                    try self.codegen.emitStoreStack(.w64, slot, temp);
-                    self.codegen.freeGeneral(temp);
-                },
-                .immediate_i64 => |val| {
-                    const temp = try self.allocTempGeneral();
-                    try self.codegen.emitLoadImm(temp, @bitCast(val));
-                    try self.codegen.emitStoreStack(.w64, slot, temp);
-                    self.codegen.freeGeneral(temp);
-                },
-                else => {
-                    // For other types, load to temp and store
-                    const temp_slot = try self.ensureOnStack(loc, 8);
-                    const temp = try self.allocTempGeneral();
-                    try self.codegen.emitLoadStack(.w64, temp, temp_slot);
-                    try self.codegen.emitStoreStack(.w64, slot, temp);
-                    self.codegen.freeGeneral(temp);
-                },
-            }
-        }
-
         /// Emit compare immediate instruction
         fn emitCmpImm(self: *Self, reg: GeneralReg, value: i64) !void {
             if (comptime target.toCpuArch() == .aarch64) {

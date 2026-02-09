@@ -2476,30 +2476,6 @@ pub const Store = struct {
                                 if (!rigid.constraints.isEmpty()) {
                                     break :blk Layout.default_num();
                                 }
-                                // When a polymorphic function (e.g., List.keep_if) calls another
-                                // polymorphic function (e.g., List.walk), the inner function's type
-                                // parameters are different rigid vars that aren't in the type scope.
-                                // However, in a monomorphized context, they should resolve to the
-                                // same concrete type. Try to find ANY rigid mapping in the scope
-                                // as a fallback before defaulting to opaque_ptr.
-                                if (caller_module_idx != null) {
-                                    if (type_scope.scopes.items.len > 0) {
-                                        var fallback_iter = type_scope.scopes.items[0].iterator();
-                                        while (fallback_iter.next()) |entry| {
-                                            const ext_env = self.all_module_envs[self.current_module_idx];
-                                            const key_resolved = ext_env.types.resolveVar(entry.key_ptr.*);
-                                            if (key_resolved.desc.content == .rigid) {
-                                                // Found a rigid mapping - use it to resolve this var.
-                                                // Remove from in_progress_vars before recursive call.
-                                                _ = self.work.in_progress_vars.swapRemove(.{ .module_idx = self.current_module_idx, .var_ = current.var_ });
-                                                const target_module = caller_module_idx.?;
-                                                layout_idx = try self.fromTypeVar(target_module, entry.value_ptr.*, type_scope, target_module);
-                                                skip_layout_computation = true;
-                                                break :blk self.getLayout(layout_idx);
-                                            }
-                                        }
-                                    }
-                                }
                                 break :blk Layout.opaquePtr();
                             }
                         }
