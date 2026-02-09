@@ -7,6 +7,7 @@ const layout = @import("layout");
 const builtins = @import("builtins");
 const StackValue = @import("StackValue.zig");
 const RocDec = builtins.dec.RocDec;
+const i128h = builtins.compiler_rt_128;
 const TypeScope = types.TypeScope;
 
 /// Copy tags and sort them alphabetically, returning the tag at the given index.
@@ -691,8 +692,8 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
         if (scalar.tag == .frac and scalar.data.frac == .dec) {
             const dec = @as(*const RocDec, @ptrCast(@alignCast(value.ptr.?))).*;
             // Check if this is a whole number (no fractional part)
-            if (@rem(@abs(dec.num), RocDec.one_point_zero_i128) == 0) {
-                const whole = @divTrunc(dec.num, RocDec.one_point_zero_i128);
+            if (i128h.rem_u128(@abs(dec.num), @intCast(RocDec.one_point_zero_i128)) == 0) {
+                const whole = i128h.divTrunc_i128(dec.num, RocDec.one_point_zero_i128);
                 return try std.fmt.allocPrint(gpa, "{d}", .{whole});
             }
         }
