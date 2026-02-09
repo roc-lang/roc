@@ -484,6 +484,66 @@ pub const Store = struct {
         return try self.insertLayout(tuple_layout);
     }
 
+    /// Create a tuple layout representing the sequential layout of closure captures.
+    /// Matches the layout used by `materializeCaptures` in the dev backend: captures
+    /// are stored sequentially with no alignment padding between them.
+    pub fn putCaptureStruct(self: *Self, capture_layout_idxs: []const Idx) std.mem.Allocator.Error!Idx {
+        var temp_fields = std.ArrayList(TupleField).empty;
+        defer temp_fields.deinit(self.allocator);
+
+        var total_size: u32 = 0;
+        var max_alignment: usize = 1;
+        for (capture_layout_idxs, 0..) |cap_idx, i| {
+            try temp_fields.append(self.allocator, .{ .index = @intCast(i), .layout = cap_idx });
+            const cap_layout = self.getLayout(cap_idx);
+            const cap_sa = self.layoutSizeAlign(cap_layout);
+            total_size += cap_sa.size;
+            max_alignment = @max(max_alignment, cap_sa.alignment.toByteUnits());
+        }
+
+        const fields_start = self.tuple_fields.items.len;
+        for (temp_fields.items) |field| {
+            _ = try self.tuple_fields.append(self.allocator, field);
+        }
+
+        const fields_range = collections.NonEmptyRange{ .start = @intCast(fields_start), .count = @intCast(temp_fields.items.len) };
+        const tuple_idx = TupleIdx{ .int_idx = @intCast(self.tuple_data.len()) };
+        _ = try self.tuple_data.append(self.allocator, TupleData{ .size = total_size, .fields = fields_range });
+        const capture_layout = Layout.tuple(std.mem.Alignment.fromByteUnits(max_alignment), tuple_idx);
+        return try self.insertLayout(capture_layout);
+    }
+
+    /// Create a tuple layout representing the sequential layout of a lambda set union.
+    /// The layout is: 8-byte tag + max(capture struct size per variant).
+    /// This matches how `generateClosure` in the dev backend stores union_repr closures.
+    pub fn putCaptureUnion(self: *Self, variants: []const []const Idx) std.mem.Allocator.Error!Idx {
+        // Find the maximum payload size across all variants
+        var max_payload_size: u32 = 0;
+        var max_alignment: usize = 8; // At least 8 for the tag
+        for (variants) |capture_idxs| {
+            var variant_size: u32 = 0;
+            for (capture_idxs) |cap_idx| {
+                const cap_layout = self.getLayout(cap_idx);
+                const cap_sa = self.layoutSizeAlign(cap_layout);
+                variant_size += cap_sa.size;
+                max_alignment = @max(max_alignment, cap_sa.alignment.toByteUnits());
+            }
+            max_payload_size = @max(max_payload_size, variant_size);
+        }
+
+        // Total size = 8 (tag) + max_payload_size
+        const total_size: u32 = 8 + max_payload_size;
+
+        // Create a tuple layout with a single dummy field (TupleData requires NonEmptyRange)
+        const fields_start = self.tuple_fields.items.len;
+        _ = try self.tuple_fields.append(self.allocator, .{ .index = 0, .layout = .u64 });
+        const fields_range = collections.NonEmptyRange{ .start = @intCast(fields_start), .count = 1 };
+        const tuple_idx = TupleIdx{ .int_idx = @intCast(self.tuple_data.len()) };
+        _ = try self.tuple_data.append(self.allocator, TupleData{ .size = total_size, .fields = fields_range });
+        const union_layout = Layout.tuple(std.mem.Alignment.fromByteUnits(max_alignment), tuple_idx);
+        return try self.insertLayout(union_layout);
+    }
+
     pub fn getLayout(self: *const Self, idx: Idx) Layout {
         return self.layouts.get(@enumFromInt(@intFromEnum(idx))).*;
     }

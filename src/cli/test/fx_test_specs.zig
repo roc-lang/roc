@@ -312,6 +312,18 @@ pub const io_spec_tests = [_]TestSpec{
         .io_spec = "1>Hello, World!",
         .description = "Regression test: Hosted effects on opaque types with data (not just [])",
     },
+
+    // Closure capture tests
+    .{
+        .roc_file = "test/fx/multi_capture_closure.roc",
+        .io_spec = "1>1005.0",
+        .description = "Closure capturing two variables (struct_captures representation)",
+    },
+    .{
+        .roc_file = "test/fx/lambda_set_captures.roc",
+        .io_spec = "1>35.0",
+        .description = "Lambda set with multiple capturing closures (union_repr representation)",
+    },
 };
 
 /// Get the total number of IO spec tests
