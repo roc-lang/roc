@@ -490,6 +490,7 @@ pub const RocModules = struct {
         step.root_module.addImport("roc_target", self.roc_target);
         step.root_module.addImport("backend", self.backend);
         step.root_module.addImport("mono", self.mono);
+        step.root_module.addImport("sljmp", self.sljmp);
 
         // Don't add thread-dependent modules for WASM targets (threads not supported)
         if (!is_wasm) {
