@@ -205,11 +205,12 @@ fn monoExprResultLayout(store: *const MonoExprStore, expr_id: mono.MonoIR.MonoEx
         .nominal => |n| n.nominal_layout,
         // Note: .list and .empty_list store element layout, not the overall list layout.
         // They are handled by the fromTypeVar fallback.
-        .i64_literal => .i64,
+        // Integer literals don't carry signedness — an i64_literal could be
+        // U8, I32, U128, etc. and an i128_literal could be I128 or U128.
+        // Fall through to fromTypeVar which has the actual type.
         .f64_literal => .f64,
         .f32_literal => .f32,
         .bool_literal => .bool,
-        .i128_literal => .i128,
         .dec_literal => .dec,
         .str_literal => .str,
         .unary_not => .bool,

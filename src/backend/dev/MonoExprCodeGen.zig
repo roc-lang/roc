@@ -1962,6 +1962,14 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     const n_loc = try self.generateExpr(args[1]);
                     return try self.callListSublist(ll, list_loc, n_loc, .take_last);
                 },
+                .list_sublist => {
+                    // list_sublist(list, {len: U64, start: U64}) -> List
+                    // The record fields are sorted alphabetically: len at offset 0, start at offset 8
+                    if (args.len != 2) unreachable;
+                    const list_loc = try self.generateExpr(args[0]);
+                    const rec_loc = try self.generateExpr(args[1]);
+                    return try self.callListSublistDirect(ll, list_loc, rec_loc);
+                },
                 .list_repeat => {
                     // list_repeat(element, count) -> List
                     // Implementation: create list with capacity, then append the element count times
@@ -3573,6 +3581,52 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
         }
 
+        /// Helper for list_sublist with a record argument containing {len, start}
+        /// Fields are sorted alphabetically: len at offset 0, start at offset 8
+        fn callListSublistDirect(self: *Self, ll: anytype, list_loc: ValueLocation, rec_loc: ValueLocation) Error!ValueLocation {
+            const ls = self.layout_store orelse unreachable;
+            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+
+            const elem_size_align: layout.SizeAlign = blk: {
+                const ret_layout = ls.getLayout(ll.ret_layout);
+                break :blk switch (ret_layout.tag) {
+                    .list => ls.layoutSizeAlign(ls.getLayout(ret_layout.data.list)),
+                    .list_of_zst => .{ .size = 0, .alignment = .@"1" },
+                    else => unreachable,
+                };
+            };
+
+            const list_off = try self.ensureOnStack(list_loc, roc_list_size);
+            const rec_off = try self.ensureOnStack(rec_loc, 16);
+
+            // Record fields sorted alphabetically: len at offset 0, start at offset 8
+            const len_field_off = rec_off; // len field
+            const start_field_off = rec_off + 8; // start field
+
+            const result_offset = self.codegen.allocStackSlot(roc_str_size);
+            const alignment_bytes = elem_size_align.alignment.toByteUnits();
+            const fn_addr: usize = @intFromPtr(&wrapListSublist);
+
+            {
+                const base_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .FP else .RBP;
+                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+
+                try builder.addLeaArg(base_reg, result_offset);
+                try builder.addMemArg(base_reg, list_off);
+                try builder.addMemArg(base_reg, list_off + 8);
+                try builder.addMemArg(base_reg, list_off + 16);
+                try builder.addImmArg(@intCast(alignment_bytes));
+                try builder.addImmArg(@intCast(elem_size_align.size));
+                try builder.addMemArg(base_reg, start_field_off);
+                try builder.addMemArg(base_reg, len_field_off);
+                try builder.addRegArg(roc_ops_reg);
+
+                try self.callBuiltin(&builder, fn_addr, .list_sublist);
+            }
+
+            return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
+        }
+
         /// Get element at constant index 0 from a list
         fn listGetAtConstIndex(self: *Self, list_loc: ValueLocation, index: u64, ret_layout_idx: layout.Idx) Error!ValueLocation {
             const list_base: i32 = switch (list_loc) {
@@ -4445,6 +4499,24 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 }
             }
 
+            // For ordered comparisons on small signed integers, extract operand layout
+            // to enable proper sign-extended comparison (values are zero-extended when loaded)
+            const operand_layout_for_cmp: ?layout.Idx = if (binop.op == .lt or binop.op == .lte or binop.op == .gt or binop.op == .gte) blk: {
+                const le = self.store.getExpr(binop.lhs);
+                const re = self.store.getExpr(binop.rhs);
+                break :blk switch (le) {
+                    .call => |call| call.ret_layout,
+                    .lookup => |lookup| lookup.layout_idx,
+                    .block => |block| block.result_layout,
+                    else => switch (re) {
+                        .call => |call| call.ret_layout,
+                        .lookup => |lookup| lookup.layout_idx,
+                        .block => |block| block.result_layout,
+                        else => null,
+                    },
+                };
+            } else null;
+
             // Check if operands are i128/Dec (need special handling even for comparisons that return bool)
             const operands_are_i128 = switch (lhs_loc) {
                 .immediate_i128, .stack_i128 => true,
@@ -4471,7 +4543,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 const adj_rhs = if (is_dec_op and rhs_loc == .stack) ValueLocation{ .stack_i128 = rhs_loc.stack.offset } else rhs_loc;
                 return self.generateI128Binop(binop.op, adj_lhs, adj_rhs, binop.result_layout);
             } else {
-                return self.generateIntBinop(binop.op, lhs_loc, rhs_loc, binop.result_layout);
+                return self.generateIntBinop(binop.op, lhs_loc, rhs_loc, binop.result_layout, operand_layout_for_cmp);
             }
         }
 
@@ -4482,6 +4554,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             lhs_loc: ValueLocation,
             rhs_loc: ValueLocation,
             result_layout: layout.Idx,
+            operand_layout: ?layout.Idx,
         ) Error!ValueLocation {
             // Load operands into registers
             const rhs_reg = try self.ensureInGeneralReg(rhs_loc);
@@ -4495,6 +4568,43 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 layout.Idx.u8, layout.Idx.u16, layout.Idx.u32, layout.Idx.u64, layout.Idx.u128 => true,
                 else => false,
             };
+
+            // For ordered comparisons with signed small integer types, sign-extend
+            // operands to 64-bit. Values are zero-extended when loaded from the stack,
+            // so e.g. -1 as i8 (0xFF) becomes 0x00000000000000FF (255) in a 64-bit
+            // register. We need to sign-extend to get 0xFFFFFFFFFFFFFFFF (-1) for
+            // correct signed comparison.
+            const sign_ext_shift: ?u8 = if (operand_layout) |op_layout| switch (op_layout) {
+                layout.Idx.i8 => 56,
+                layout.Idx.i16 => 48,
+                layout.Idx.i32 => 32,
+                else => null,
+            } else null;
+
+            var cmp_lhs = lhs_reg;
+            var cmp_rhs = rhs_reg;
+            var ext_lhs_temp: ?GeneralReg = null;
+            var ext_rhs_temp: ?GeneralReg = null;
+
+            if (sign_ext_shift) |shift| {
+                ext_lhs_temp = try self.allocTempGeneral();
+                ext_rhs_temp = try self.allocTempGeneral();
+                if (comptime target.toCpuArch() == .aarch64) {
+                    try self.codegen.emit.lslRegRegImm(.w64, ext_lhs_temp.?, lhs_reg, @intCast(shift));
+                    try self.codegen.emit.asrRegRegImm(.w64, ext_lhs_temp.?, ext_lhs_temp.?, @intCast(shift));
+                    try self.codegen.emit.lslRegRegImm(.w64, ext_rhs_temp.?, rhs_reg, @intCast(shift));
+                    try self.codegen.emit.asrRegRegImm(.w64, ext_rhs_temp.?, ext_rhs_temp.?, @intCast(shift));
+                } else {
+                    try self.codegen.emit.movRegReg(.w64, ext_lhs_temp.?, lhs_reg);
+                    try self.codegen.emit.shlRegImm8(.w64, ext_lhs_temp.?, shift);
+                    try self.codegen.emit.sarRegImm8(.w64, ext_lhs_temp.?, shift);
+                    try self.codegen.emit.movRegReg(.w64, ext_rhs_temp.?, rhs_reg);
+                    try self.codegen.emit.shlRegImm8(.w64, ext_rhs_temp.?, shift);
+                    try self.codegen.emit.sarRegImm8(.w64, ext_rhs_temp.?, shift);
+                }
+                cmp_lhs = ext_lhs_temp.?;
+                cmp_rhs = ext_rhs_temp.?;
+            }
 
             switch (op) {
                 .add => try self.codegen.emitAdd(.w64, result_reg, lhs_reg, rhs_reg),
@@ -4515,21 +4625,23 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         try self.codegen.emitSMod(.w64, result_reg, lhs_reg, rhs_reg);
                     }
                 },
-                // Comparison operations
-                .eq => {
-                    try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, condEqual());
-                },
+                // Comparison operations — use sign-extended operands for ordered comparisons
+                .eq => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, condEqual()),
                 .neq => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, condNotEqual()),
-                .lt => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, condLess()),
-                .lte => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, condLessOrEqual()),
-                .gt => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, condGreater()),
-                .gte => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, condGreaterOrEqual()),
+                .lt => try self.codegen.emitCmp(.w64, result_reg, cmp_lhs, cmp_rhs, condLess()),
+                .lte => try self.codegen.emitCmp(.w64, result_reg, cmp_lhs, cmp_rhs, condLessOrEqual()),
+                .gt => try self.codegen.emitCmp(.w64, result_reg, cmp_lhs, cmp_rhs, condGreater()),
+                .gte => try self.codegen.emitCmp(.w64, result_reg, cmp_lhs, cmp_rhs, condGreaterOrEqual()),
                 // Boolean operations - AND/OR two values
                 // Boolean values in Roc are represented as 0 (false) or 1 (true).
                 // Bitwise AND/OR work correctly for single-bit boolean values.
                 .@"and" => try self.codegen.emitAnd(.w64, result_reg, lhs_reg, rhs_reg),
                 .@"or" => try self.codegen.emitOr(.w64, result_reg, lhs_reg, rhs_reg),
             }
+
+            // Free sign-extension temps if allocated
+            if (ext_lhs_temp) |reg| self.codegen.freeGeneral(reg);
+            if (ext_rhs_temp) |reg| self.codegen.freeGeneral(reg);
 
             // Free operand registers if they were temporary
             self.codegen.freeGeneral(lhs_reg);
@@ -4783,7 +4895,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     self.codegen.freeGeneral(result_low);
                     self.codegen.freeGeneral(lhs_parts.high);
                     self.codegen.freeGeneral(rhs_parts.high);
-                    return self.generateIntBinop(op, .{ .general_reg = lhs_parts.low }, .{ .general_reg = rhs_parts.low }, .i64);
+                    return self.generateIntBinop(op, .{ .general_reg = lhs_parts.low }, .{ .general_reg = rhs_parts.low }, .i64, null);
                 },
             }
 
@@ -9559,7 +9671,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                 // Dec/i128 values are 16 bytes - preserve .stack_i128
                                 try self.symbol_locations.put(symbol_key, .{ .stack_i128 = fixed_slot });
                             } else {
-                                try self.symbol_locations.put(symbol_key, .{ .stack = .{ .offset = fixed_slot } });
+                                try self.symbol_locations.put(symbol_key, .{ .stack = .{ .offset = fixed_slot, .size = ValueSize.fromByteCount(@min(size, 8)) } });
                             }
                         }
                     } else {
