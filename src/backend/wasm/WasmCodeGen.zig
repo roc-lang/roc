@@ -840,6 +840,25 @@ fn generateExpr(self: *Self, expr_id: MonoExprId) Allocator.Error!void {
                             const vt = self.resolveValType(bind.layout_idx);
                             // Generate the expression value
                             try self.generateExpr(stmt.expr);
+
+                            // After a function call returns a composite value (record, list,
+                            // string), the result pointer references the callee's now-freed
+                            // stack frame. Copy to the caller's frame so subsequent calls
+                            // don't overwrite the data.
+                            if (stmt_expr == .call and target_is_composite) {
+                                const ret_size = self.layoutByteSize(bind.layout_idx);
+                                if (ret_size > 0) {
+                                    const src_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+                                    try self.emitLocalSet(src_local);
+                                    const dst_offset = try self.allocStackMemory(ret_size, 4);
+                                    const dst_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+                                    try self.emitFpOffset(dst_offset);
+                                    try self.emitLocalSet(dst_local);
+                                    try self.emitMemCopy(dst_local, 0, src_local, ret_size);
+                                    try self.emitLocalGet(dst_local);
+                                }
+                            }
+
                             // Convert if the expression produced a different wasm type
                             const expr_vt = self.exprValType(stmt.expr);
                             try self.emitConversion(expr_vt, vt);
@@ -5279,6 +5298,7 @@ fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
         },
         else => unreachable, // Call target should be lambda, closure, lookup, nominal, call, or block
     }
+
 }
 
 /// Emit a call instruction.
@@ -7439,10 +7459,10 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
 
                 if (elem_is_composite) {
-                    // Composite element: store the element POINTER in the payload.
-                    // Tag union payloads for composite types hold a 4-byte pointer
-                    // to the actual data (matching generateTag's convention).
-                    try self.emitStoreToMemSized(result_local, 0, .i32, 4);
+                    // Composite element: copy the full data into the tag union payload.
+                    const src_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+                    try self.emitLocalSet(src_local);
+                    try self.emitMemCopy(result_local, 0, src_local, elem_size);
                 } else {
                     // Load element and store to result payload area
                     const elem_vt = self.resolveValType(elem_layout_idx);
