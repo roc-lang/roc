@@ -52,7 +52,7 @@ fn configureBackend(step: *Step.Compile, target: ResolvedTarget) void {
 
 fn isNativeishOrMusl(target: ResolvedTarget) bool {
     return target.result.cpu.arch == builtin.target.cpu.arch and
-        target.query.isNativeOs() and
+        target.result.os.tag == builtin.target.os.tag and
         (target.query.isNativeAbi() or target.result.abi.isMusl());
 }
 
@@ -2323,6 +2323,9 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(test_runner_exe);
 
+    // Store glue test step reference so we can add glue host dependency later
+    var run_glue_test_step: ?*std.Build.Step = null;
+
     // CLI integration tests - run actual roc programs like CI does
     // These tests can run in parallel since each build uses content-hashed shim files
     if (!no_bin) {
@@ -2368,6 +2371,7 @@ pub fn build(b: *std.Build) void {
         run_roc_subcommands_test.step.dependOn(test_platforms_step);
         test_cli_step.dependOn(&run_roc_subcommands_test.step);
 
+<<<<<<< HEAD
         // Tests fx platform with --backend=dev to track dev backend progress
         const run_fx_dev_tests = b.addRunArtifact(test_runner_exe);
         run_fx_dev_tests.addArg("zig-out/bin/roc");
@@ -2378,6 +2382,26 @@ pub fn build(b: *std.Build) void {
         run_fx_dev_tests.step.dependOn(&install_runner.step);
         run_fx_dev_tests.step.dependOn(test_platforms_step);
         test_cli_dev_step.dependOn(&run_fx_dev_tests.step);
+=======
+        // Glue command integration test
+        const glue_test = b.addTest(.{
+            .name = "glue_test",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/cli/test/glue_test.zig"),
+                .target = target,
+                .optimize = optimize,
+            }),
+            .filters = test_filters,
+        });
+
+        const run_glue_test = b.addRunArtifact(glue_test);
+        if (run_args.len != 0) {
+            run_glue_test.addArgs(run_args);
+        }
+        run_glue_test.step.dependOn(&install.step);
+        run_glue_test_step = &run_glue_test.step;
+        test_cli_step.dependOn(&run_glue_test.step);
+>>>>>>> 9fa3a38cda48085c69c75d22f75be8a6c2704286
     }
 
     // Manual rebuild command: zig build rebuild-builtins
@@ -2961,6 +2985,74 @@ pub fn build(b: *std.Build) void {
         // Ensure roc binary is built before running the test (tests invoke roc CLI)
         run_fx_platform_test.step.dependOn(roc_step);
         tests_summary.addRun(&run_fx_platform_test.step);
+    }
+
+    // Build glue platform host at runtime for the native platform.
+    if (run_glue_test_step) |glue_test_step| {
+        if (isNativeishOrMusl(target)) {
+            // Determine the appropriate target for the glue platform host library.
+            // On Linux, we need to use musl explicitly because the platform's
+            // findHostLibrary looks for targets/x64musl/libhost.a.
+            const glue_host_target, const glue_host_target_dir: ?[]const u8 = switch (target.result.os.tag) {
+                .linux => switch (target.result.cpu.arch) {
+                    .x86_64 => .{ b.resolveTargetQuery(.{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl }), "x64musl" },
+                    .aarch64 => .{ b.resolveTargetQuery(.{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .musl }), "arm64musl" },
+                    else => .{ target, null },
+                },
+                .windows => switch (target.result.cpu.arch) {
+                    .x86_64 => .{ target, "x64win" },
+                    .aarch64 => .{ target, "arm64win" },
+                    else => .{ target, null },
+                },
+                .macos => switch (target.result.cpu.arch) {
+                    .x86_64 => .{ target, "x64mac" },
+                    .aarch64 => .{ target, "arm64mac" },
+                    else => .{ target, null },
+                },
+                else => .{ target, null },
+            };
+
+            if (glue_host_target_dir) |target_dir| {
+                const glue_platform_host_lib = createTestPlatformHostLib(
+                    b,
+                    "glue_platform_host_runtime",
+                    "src/glue/platform/host.zig",
+                    glue_host_target,
+                    optimize,
+                    roc_modules,
+                    strip,
+                    omit_frame_pointer,
+                );
+
+                // Add compiler modules to glue platform host for type extraction
+                glue_platform_host_lib.root_module.addImport("base", roc_modules.base);
+                glue_platform_host_lib.root_module.addImport("can", roc_modules.can);
+                glue_platform_host_lib.root_module.addImport("types", roc_modules.types);
+                glue_platform_host_lib.root_module.addImport("layout", roc_modules.layout);
+                glue_platform_host_lib.root_module.addImport("eval", roc_modules.eval);
+                glue_platform_host_lib.root_module.addImport("collections", roc_modules.collections);
+
+                // Copy to the target-specific directory
+                const copy_glue_host = b.addUpdateSourceFiles();
+                const glue_host_filename = if (target.result.os.tag == .windows) "host.lib" else "libhost.a";
+                const target_path = b.pathJoin(&.{ "src/glue/platform/targets", target_dir, glue_host_filename });
+
+                // Ensure the target directory exists
+                const dir_path = b.pathJoin(&.{ "src/glue/platform/targets", target_dir });
+                std.fs.cwd().makePath(dir_path) catch {};
+
+                copy_glue_host.addCopyFileToSource(glue_platform_host_lib.getEmittedBin(), target_path);
+
+                // Apply archive padding fix for non-Windows targets
+                const final_step: *Step = if (target.result.os.tag != .windows) blk: {
+                    const fix_target = FixArchivePaddingStep.create(b, target_path);
+                    fix_target.step.dependOn(&copy_glue_host.step);
+                    break :blk &fix_target.step;
+                } else &copy_glue_host.step;
+
+                glue_test_step.dependOn(final_step);
+            }
+        }
     }
 
     var build_afl = false;
