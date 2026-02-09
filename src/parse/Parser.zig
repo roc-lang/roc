@@ -1070,10 +1070,6 @@ pub fn parseExposedItem(self: *Parser) Error!AST.ExposedItem.Idx {
     }
 }
 
-// -----------------------------------------------------------------
-// Target section parsing functions
-// -----------------------------------------------------------------
-
 /// Parses a single file item in a target list: "crt1.o" or app
 pub fn parseTargetFile(self: *Parser) Error!AST.TargetFile.Idx {
     const trace = tracy.trace(@src());

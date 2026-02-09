@@ -67,16 +67,12 @@ pub fn startBackgroundCleanup(allocator: Allocator) !CleanupThread {
 
 /// Run the full cleanup process (called on background thread).
 fn runCleanup(allocator: Allocator) void {
-    // ---------------------------------------------------------------------------
     // TODO: REMOVE THIS FOR THE 0.1.0 RELEASE - NOT NEEDED ANYMORE
     // This is just to clean up people who have old stale Roc caches from before
     // we restructured the cache directories to use roc/{version}/ structure.
-    // ---------------------------------------------------------------------------
     cleanupLegacyTempDirs(allocator, null);
     cleanupLegacyPersistentCache(allocator, null);
-    // ---------------------------------------------------------------------------
     // END OF LEGACY CLEANUP - REMOVE ABOVE FOR 0.1.0
-    // ---------------------------------------------------------------------------
 
     // Clean up temp directories (5 minute threshold)
     cleanupTempDirs(allocator, null);
@@ -276,12 +272,9 @@ pub fn deleteTempDir(allocator: Allocator, temp_dir_path: []const u8) void {
     std.fs.cwd().deleteFile(txt_path) catch {};
 }
 
-// ---------------------------------------------------------------------------
-// LEGACY CLEANUP FUNCTIONS
 // TODO: REMOVE THESE FOR THE 0.1.0 RELEASE - NOT NEEDED ANYMORE
 // These clean up old cache directories from before we restructured to use
 // the roc/{version}/ directory structure.
-// ---------------------------------------------------------------------------
 
 /// Clean up legacy temp directories that used the old "roc-*" prefix pattern.
 /// Old structure: /tmp/roc-{random}/ (directly in temp, with roc- prefix)
@@ -383,14 +376,6 @@ fn isLegacyHashDir(name: []const u8) bool {
 
     return true;
 }
-
-// ---------------------------------------------------------------------------
-// END OF LEGACY CLEANUP FUNCTIONS - REMOVE FOR 0.1.0
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 test "Config constants are reasonable" {
     // 5 minutes in nanoseconds
