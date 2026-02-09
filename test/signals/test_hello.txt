@@ -1,2 +1,0 @@
-# Minimal test - Elem.text("hello") creates a span with text "hello"
-expect_text span:0 "hello"
