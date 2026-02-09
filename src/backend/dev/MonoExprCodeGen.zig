@@ -1506,10 +1506,11 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         if (ret_layout_val.tag == .list) {
                             const sa = ls.layoutSizeAlign(ls.getLayout(ret_layout_val.data.list));
                             if (sa.size > 0) {
-                                // If the layout says the element is larger than its actual value,
-                                // the layout is wrong (polymorphic inlining). Use actual size.
+                                // If the layout disagrees with the actual element size
+                                // (due to polymorphic inlining or cross-module layout resolution),
+                                // use the actual size from the value location.
                                 if (actual_elem_size) |aes| {
-                                    if (aes < sa.size) {
+                                    if (aes != sa.size) {
                                         break :blk .{
                                             .size = aes,
                                             .alignment = if (std.math.isPowerOfTwo(aes))
@@ -1878,11 +1879,23 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
                     const elem_size_align: layout.SizeAlign = blk: {
                         const ret_layout = ls.getLayout(ll.ret_layout);
-                        break :blk switch (ret_layout.tag) {
-                            .list => ls.layoutSizeAlign(ls.getLayout(ret_layout.data.list)),
-                            .list_of_zst => .{ .size = 0, .alignment = .@"1" },
+                        switch (ret_layout.tag) {
+                            .list => {
+                                const elem_layout_idx = ret_layout.data.list;
+                                const elem_layout_val = ls.getLayout(elem_layout_idx);
+                                const sa = ls.layoutSizeAlign(elem_layout_val);
+                                // Override for known 16-byte types where layout store may report wrong size
+                                if (elem_layout_idx == .dec or elem_layout_idx == .i128 or elem_layout_idx == .u128) {
+                                    break :blk .{ .size = 16, .alignment = .@"16" };
+                                }
+                                if (sa.size != 16 and (elem_layout_val.tag == .scalar and self.isScalar16Layout(elem_layout_idx))) {
+                                    break :blk .{ .size = 16, .alignment = .@"16" };
+                                }
+                                break :blk sa;
+                            },
+                            .list_of_zst => break :blk .{ .size = 0, .alignment = .@"1" },
                             else => unreachable,
-                        };
+                        }
                     };
 
                     const list_a_off = try self.ensureOnStack(list_a_loc, roc_list_size);
@@ -3159,7 +3172,25 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     if (args.len != 2) unreachable;
                     const list_loc = try self.generateExpr(args[0]);
                     const needle_loc = try self.generateExpr(args[1]);
-                    return try self.generateListContains(list_loc, needle_loc);
+
+                    // Determine element size from the needle's layout or value location.
+                    // The needle's ValueLocation is the ground truth for size; the layout
+                    // store can return wrong sizes due to cross-module resolution issues.
+                    const actual_needle_size: u32 = switch (needle_loc) {
+                        .immediate_i128, .stack_i128 => @as(u32, 16),
+                        else => @as(u32, 0), // unknown, use layout
+                    };
+                    const elem_size: u32 = blk: {
+                        if (actual_needle_size > 0) break :blk actual_needle_size;
+                        if (self.layout_store) |ls_inner| {
+                            if (self.getExprLayout(args[1])) |elem_layout_idx| {
+                                const sa = ls_inner.layoutSizeAlign(ls_inner.getLayout(elem_layout_idx));
+                                if (sa.size > 0) break :blk sa.size;
+                            }
+                        }
+                        break :blk 8;
+                    };
+                    return try self.generateListContains(list_loc, needle_loc, elem_size);
                 },
                 .list_reverse => {
                     // list_reverse(list) -> List
@@ -3937,6 +3968,24 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     const src_offset = s.offset;
                     try self.copyStackToStack(src_offset, dest_offset, size);
                 },
+                .immediate_i128 => |val| {
+                    const low: i64 = @truncate(val);
+                    const high: i64 = @truncate(val >> 64);
+                    const temp = try self.allocTempGeneral();
+                    try self.codegen.emitLoadImm(temp, low);
+                    if (arch == .aarch64 or arch == .aarch64_be) {
+                        try self.codegen.emit.strRegMemSoff(.w64, temp, .FP, dest_offset);
+                    } else {
+                        try self.codegen.emit.movMemReg(.w64, .RBP, dest_offset, temp);
+                    }
+                    try self.codegen.emitLoadImm(temp, high);
+                    if (arch == .aarch64 or arch == .aarch64_be) {
+                        try self.codegen.emit.strRegMemSoff(.w64, temp, .FP, dest_offset + 8);
+                    } else {
+                        try self.codegen.emit.movMemReg(.w64, .RBP, dest_offset + 8, temp);
+                    }
+                    self.codegen.freeGeneral(temp);
+                },
                 .stack_i128 => |src_offset| {
                     try self.copyStackToStack(src_offset, dest_offset, 16);
                 },
@@ -4013,7 +4062,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
         }
 
         /// Generate list_contains: linear scan comparing each element
-        fn generateListContains(self: *Self, list_loc: ValueLocation, needle_loc: ValueLocation) Error!ValueLocation {
+        fn generateListContains(self: *Self, list_loc: ValueLocation, needle_loc: ValueLocation, elem_size: u32) Error!ValueLocation {
+            const is_wide = elem_size > 8;
+
             const list_base: i32 = switch (list_loc) {
                 .stack => |s| s.offset,
                 .list_stack => |ls_info| ls_info.struct_offset,
@@ -4026,14 +4077,20 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             };
 
             // Save needle to stack
-            const needle_reg = try self.ensureInGeneralReg(needle_loc);
-            const needle_slot = self.codegen.allocStackSlot(8);
-            if (comptime target.toCpuArch() == .aarch64) {
-                try self.codegen.emit.strRegMemSoff(.w64, needle_reg, .FP, needle_slot);
+            const needle_size: u32 = if (is_wide) 16 else 8;
+            const needle_slot = self.codegen.allocStackSlot(needle_size);
+            if (is_wide) {
+                // Save full 128-bit needle
+                try self.copyValueToStack(needle_loc, needle_slot, 16);
             } else {
-                try self.codegen.emit.movMemReg(.w64, .RBP, needle_slot, needle_reg);
+                const needle_reg = try self.ensureInGeneralReg(needle_loc);
+                if (comptime target.toCpuArch() == .aarch64) {
+                    try self.codegen.emit.strRegMemSoff(.w64, needle_reg, .FP, needle_slot);
+                } else {
+                    try self.codegen.emit.movMemReg(.w64, .RBP, needle_slot, needle_reg);
+                }
+                self.codegen.freeGeneral(needle_reg);
             }
-            self.codegen.freeGeneral(needle_reg);
 
             // Load list ptr and len
             const ptr_reg = try self.allocTempGeneral();
@@ -4066,63 +4123,160 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             try self.codegen.emit.cmpRegReg(.w64, ctr_reg, len_reg);
             const exit_patch = try self.codegen.emitCondJump(condGreaterOrEqual());
 
-            // Load element at ptr[ctr * 8] (assuming 8-byte elements for I64)
-            const elem_reg = try self.allocTempGeneral();
+            // Compute element address: ptr + ctr * elem_size
             const offset_reg = try self.allocTempGeneral();
             try self.codegen.emit.movRegReg(.w64, offset_reg, ctr_reg);
-            // Multiply by 8 (shift left 3)
+
+            // Compute stride shift or use multiplication
+            const shift_amt: ?u6 = switch (elem_size) {
+                1 => 0,
+                2 => 1,
+                4 => 2,
+                8 => 3,
+                16 => 4,
+                else => null,
+            };
+
+            if (shift_amt) |shift| {
+                if (shift > 0) {
+                    if (comptime target.toCpuArch() == .aarch64) {
+                        try self.codegen.emit.lslRegRegImm(.w64, offset_reg, offset_reg, shift);
+                    } else {
+                        try self.codegen.emit.shlRegImm8(.w64, offset_reg, @intCast(shift));
+                    }
+                }
+            } else {
+                // General case: multiply by elem_size
+                const size_reg = try self.allocTempGeneral();
+                try self.codegen.emitLoadImm(size_reg, @intCast(elem_size));
+                if (comptime target.toCpuArch() == .aarch64) {
+                    try self.codegen.emit.mulRegRegReg(.w64, offset_reg, offset_reg, size_reg);
+                } else {
+                    try self.codegen.emit.imulRegReg(.w64, offset_reg, size_reg);
+                }
+                self.codegen.freeGeneral(size_reg);
+            }
+
             if (comptime target.toCpuArch() == .aarch64) {
-                try self.codegen.emit.lslRegRegImm(.w64, offset_reg, offset_reg, 3);
                 try self.codegen.emit.addRegRegReg(.w64, offset_reg, ptr_reg, offset_reg);
-                try self.codegen.emit.ldrRegMemSoff(.w64, elem_reg, offset_reg, 0);
             } else {
-                try self.codegen.emit.shlRegImm8(.w64, offset_reg, 3);
                 try self.codegen.emit.addRegReg(.w64, offset_reg, ptr_reg);
-                try self.codegen.emit.movRegMem(.w64, elem_reg, offset_reg, 0);
             }
-            self.codegen.freeGeneral(offset_reg);
 
-            // Compare with needle
-            const ndl_reg = try self.allocTempGeneral();
-            if (comptime target.toCpuArch() == .aarch64) {
-                try self.codegen.emit.ldrRegMemSoff(.w64, ndl_reg, .FP, needle_slot);
+            if (is_wide) {
+                // Load both halves of the element and compare with needle
+                const elem_lo = try self.allocTempGeneral();
+                const elem_hi = try self.allocTempGeneral();
+                const ndl_lo = try self.allocTempGeneral();
+                const ndl_hi = try self.allocTempGeneral();
+
+                if (comptime target.toCpuArch() == .aarch64) {
+                    try self.codegen.emit.ldrRegMemSoff(.w64, elem_lo, offset_reg, 0);
+                    try self.codegen.emit.ldrRegMemSoff(.w64, elem_hi, offset_reg, 8);
+                    try self.codegen.emit.ldrRegMemSoff(.w64, ndl_lo, .FP, needle_slot);
+                    try self.codegen.emit.ldrRegMemSoff(.w64, ndl_hi, .FP, needle_slot + 8);
+                } else {
+                    try self.codegen.emit.movRegMem(.w64, elem_lo, offset_reg, 0);
+                    try self.codegen.emit.movRegMem(.w64, elem_hi, offset_reg, 8);
+                    try self.codegen.emit.movRegMem(.w64, ndl_lo, .RBP, needle_slot);
+                    try self.codegen.emit.movRegMem(.w64, ndl_hi, .RBP, needle_slot + 8);
+                }
+
+                self.codegen.freeGeneral(offset_reg);
+
+                // Compare low halves
+                try self.codegen.emit.cmpRegReg(.w64, elem_lo, ndl_lo);
+                self.codegen.freeGeneral(elem_lo);
+                self.codegen.freeGeneral(ndl_lo);
+                const lo_ne_patch = try self.codegen.emitCondJump(condNotEqual());
+
+                // Compare high halves
+                try self.codegen.emit.cmpRegReg(.w64, elem_hi, ndl_hi);
+                self.codegen.freeGeneral(elem_hi);
+                self.codegen.freeGeneral(ndl_hi);
+                const hi_ne_patch = try self.codegen.emitCondJump(condNotEqual());
+
+                // Both halves equal: set result = 1 and jump to end
+                const one_reg = try self.allocTempGeneral();
+                try self.codegen.emitLoadImm(one_reg, 1);
+                if (comptime target.toCpuArch() == .aarch64) {
+                    try self.codegen.emit.strRegMemSoff(.w64, one_reg, .FP, result_slot);
+                } else {
+                    try self.codegen.emit.movMemReg(.w64, .RBP, result_slot, one_reg);
+                }
+                self.codegen.freeGeneral(one_reg);
+                const found_patch = try self.codegen.emitJump();
+
+                // Not equal: patch both branches here
+                self.codegen.patchJump(lo_ne_patch, self.codegen.currentOffset());
+                self.codegen.patchJump(hi_ne_patch, self.codegen.currentOffset());
+
+                // Increment counter
+                if (comptime target.toCpuArch() == .aarch64) {
+                    try self.codegen.emit.addRegRegImm12(.w64, ctr_reg, ctr_reg, 1);
+                } else {
+                    try self.codegen.emit.addImm(ctr_reg, 1);
+                }
+
+                // Jump back to loop start
+                const back_patch = try self.codegen.emitJump();
+                self.codegen.patchJump(back_patch, loop_start);
+
+                // End: patch exit and found jumps
+                self.codegen.patchJump(exit_patch, self.codegen.currentOffset());
+                self.codegen.patchJump(found_patch, self.codegen.currentOffset());
             } else {
-                try self.codegen.emit.movRegMem(.w64, ndl_reg, .RBP, needle_slot);
+                // Load 8-byte element
+                const elem_reg = try self.allocTempGeneral();
+                if (comptime target.toCpuArch() == .aarch64) {
+                    try self.codegen.emit.ldrRegMemSoff(.w64, elem_reg, offset_reg, 0);
+                } else {
+                    try self.codegen.emit.movRegMem(.w64, elem_reg, offset_reg, 0);
+                }
+                self.codegen.freeGeneral(offset_reg);
+
+                // Compare with needle
+                const ndl_reg = try self.allocTempGeneral();
+                if (comptime target.toCpuArch() == .aarch64) {
+                    try self.codegen.emit.ldrRegMemSoff(.w64, ndl_reg, .FP, needle_slot);
+                } else {
+                    try self.codegen.emit.movRegMem(.w64, ndl_reg, .RBP, needle_slot);
+                }
+                try self.codegen.emit.cmpRegReg(.w64, elem_reg, ndl_reg);
+                self.codegen.freeGeneral(elem_reg);
+                self.codegen.freeGeneral(ndl_reg);
+
+                // If equal, set result = true and jump to end
+                const not_equal_patch = try self.codegen.emitCondJump(condNotEqual());
+                // Found! Set result = 1
+                const one_reg = try self.allocTempGeneral();
+                try self.codegen.emitLoadImm(one_reg, 1);
+                if (comptime target.toCpuArch() == .aarch64) {
+                    try self.codegen.emit.strRegMemSoff(.w64, one_reg, .FP, result_slot);
+                } else {
+                    try self.codegen.emit.movMemReg(.w64, .RBP, result_slot, one_reg);
+                }
+                self.codegen.freeGeneral(one_reg);
+                // Jump to end
+                const found_patch = try self.codegen.emitJump();
+                // Not equal: continue
+                self.codegen.patchJump(not_equal_patch, self.codegen.currentOffset());
+
+                // Increment counter
+                if (comptime target.toCpuArch() == .aarch64) {
+                    try self.codegen.emit.addRegRegImm12(.w64, ctr_reg, ctr_reg, 1);
+                } else {
+                    try self.codegen.emit.addImm(ctr_reg, 1);
+                }
+
+                // Jump back to loop start
+                const back_patch = try self.codegen.emitJump();
+                self.codegen.patchJump(back_patch, loop_start);
+
+                // End: patch exit jumps
+                self.codegen.patchJump(exit_patch, self.codegen.currentOffset());
+                self.codegen.patchJump(found_patch, self.codegen.currentOffset());
             }
-            try self.codegen.emit.cmpRegReg(.w64, elem_reg, ndl_reg);
-            self.codegen.freeGeneral(elem_reg);
-            self.codegen.freeGeneral(ndl_reg);
-
-            // If equal, set result = true and jump to end
-            const not_equal_patch = try self.codegen.emitCondJump(condNotEqual());
-            // Found! Set result = 1
-            const one_reg = try self.allocTempGeneral();
-            try self.codegen.emitLoadImm(one_reg, 1);
-            if (comptime target.toCpuArch() == .aarch64) {
-                try self.codegen.emit.strRegMemSoff(.w64, one_reg, .FP, result_slot);
-            } else {
-                try self.codegen.emit.movMemReg(.w64, .RBP, result_slot, one_reg);
-            }
-            self.codegen.freeGeneral(one_reg);
-            // Jump to end
-            const found_patch = try self.codegen.emitJump();
-            // Not equal: continue
-            self.codegen.patchJump(not_equal_patch, self.codegen.currentOffset());
-
-            // Increment counter
-            if (comptime target.toCpuArch() == .aarch64) {
-                try self.codegen.emit.addRegRegImm12(.w64, ctr_reg, ctr_reg, 1);
-            } else {
-                try self.codegen.emit.addImm(ctr_reg, 1);
-            }
-
-            // Jump back to loop start
-            const back_patch = try self.codegen.emitJump();
-            self.codegen.patchJump(back_patch, loop_start);
-
-            // End: patch exit jumps
-            self.codegen.patchJump(exit_patch, self.codegen.currentOffset());
-            self.codegen.patchJump(found_patch, self.codegen.currentOffset());
 
             self.codegen.freeGeneral(ctr_reg);
             self.codegen.freeGeneral(len_reg);
@@ -4467,25 +4621,36 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 else => false,
             };
 
+            const result_is_i128 = switch (binop.result_layout) {
+                .i128, .u128 => true,
+                else => false,
+            };
+
             const lhs_loc = blk: {
-                if (result_is_int) {
+                if (result_is_int or result_is_i128) {
                     const expr = self.store.getExpr(binop.lhs);
                     if (expr == .dec_literal) {
                         const dec_val: i128 = expr.dec_literal;
-                        const int_val: i64 = @intCast(@divTrunc(dec_val, 1_000_000_000_000_000_000));
-                        break :blk ValueLocation{ .immediate_i64 = int_val };
+                        const int_val: i128 = @divTrunc(dec_val, 1_000_000_000_000_000_000);
+                        if (result_is_i128) {
+                            break :blk ValueLocation{ .immediate_i128 = int_val };
+                        }
+                        break :blk ValueLocation{ .immediate_i64 = @intCast(int_val) };
                     }
                 }
                 break :blk try self.generateExpr(binop.lhs);
             };
 
             const rhs_loc = blk: {
-                if (result_is_int) {
+                if (result_is_int or result_is_i128) {
                     const expr = self.store.getExpr(binop.rhs);
                     if (expr == .dec_literal) {
                         const dec_val: i128 = expr.dec_literal;
-                        const int_val: i64 = @intCast(@divTrunc(dec_val, 1_000_000_000_000_000_000));
-                        break :blk ValueLocation{ .immediate_i64 = int_val };
+                        const int_val: i128 = @divTrunc(dec_val, 1_000_000_000_000_000_000);
+                        if (result_is_i128) {
+                            break :blk ValueLocation{ .immediate_i128 = int_val };
+                        }
+                        break :blk ValueLocation{ .immediate_i64 = @intCast(int_val) };
                     }
                 }
                 break :blk try self.generateExpr(binop.rhs);
@@ -7601,8 +7766,14 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             const ls = self.layout_store orelse unreachable;
             const elem_layout_data = ls.getLayout(list.elem_layout);
             const elem_size_align = ls.layoutSizeAlign(elem_layout_data);
-            const elem_size: u32 = elem_size_align.size;
-            const elem_alignment: u32 = @intCast(elem_size_align.alignment.toByteUnits());
+            // The layout store can return wrong sizes for Dec/i128/u128 due to
+            // cross-module resolution issues. Override when we know the element
+            // is a 16-byte scalar (builtin or resolved).
+            const elem_size: u32 = if (list.elem_layout == .dec or list.elem_layout == .i128 or list.elem_layout == .u128 or self.isScalar16Layout(list.elem_layout))
+                16
+            else
+                elem_size_align.size;
+            const elem_alignment: u32 = if (elem_size >= 16) 16 else @intCast(elem_size_align.alignment.toByteUnits());
 
             const num_elems: u32 = @intCast(elems.len);
             const total_data_bytes: usize = @as(usize, elem_size) * @as(usize, num_elems);
@@ -10039,6 +10210,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             const resolved = ls.getLayout(layout_idx);
             if (resolved.tag == .list or resolved.tag == .list_of_zst)
                 return .{ .list_stack = .{ .struct_offset = stack_offset, .data_offset = 0, .num_elements = 0 } };
+            // Check for 16-byte scalars (non-builtin indices that resolve to Dec/i128/u128)
+            if (resolved.tag == .scalar and ls.layoutSizeAlign(resolved).size == 16)
+                return .{ .stack_i128 = stack_offset };
             const size = ls.layoutSizeAlign(resolved).size;
             return .{ .stack = .{ .offset = stack_offset, .size = ValueSize.fromByteCount(size) } };
         }
@@ -10675,7 +10849,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     return try self.dispatchEnumClosure(cv.stack_offset, repr.lambda_set, args_span, ret_layout);
                 },
                 .union_repr => |repr| {
-                    return try self.dispatchUnionClosure(cv.stack_offset, repr, args_span);
+                    return try self.dispatchUnionClosure(cv.stack_offset, repr, args_span, ret_layout);
                 },
                 .unwrapped_capture => {
                     // Single function - call with the captured value
@@ -10730,8 +10904,19 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             const tag_reg = try self.allocTempGeneral();
             try self.codegen.emitLoadStack(.w64, tag_reg, tag_offset);
 
-            // Allocate result slot
-            const result_slot = self.codegen.allocStackSlot(8);
+            // Allocate result slot with correct size for the return type
+            const ret_size: u32 = blk: {
+                if (ret_layout == .i128 or ret_layout == .u128 or ret_layout == .dec or self.isScalar16Layout(ret_layout)) break :blk 16;
+                if (ret_layout == .str) break :blk roc_str_size;
+                if (self.layout_store) |ls| {
+                    const layout_val = ls.getLayout(ret_layout);
+                    if (layout_val.tag == .list or layout_val.tag == .list_of_zst) break :blk roc_str_size;
+                    const sa = ls.layoutSizeAlign(layout_val);
+                    if (sa.size > 0) break :blk sa.size;
+                }
+                break :blk 8;
+            };
+            const result_slot = self.codegen.allocStackSlot(ret_size);
 
             // Track end jumps for patching
             var end_jumps = std.ArrayList(usize).empty;
@@ -10747,7 +10932,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
                     // Generate code for this branch
                     const result = try self.compileLambdaAndCall(member.lambda_body, args_span, ret_layout);
-                    try self.copyToStackSlot(result_slot, result);
+                    try self.copyBytesToStackOffset(result_slot, result, ret_size);
 
                     // Jump to end
                     try end_jumps.append(self.allocator, try self.codegen.emitJump());
@@ -10757,7 +10942,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 } else {
                     // Last case - no comparison needed (fallthrough)
                     const result = try self.compileLambdaAndCall(member.lambda_body, args_span, ret_layout);
-                    try self.copyToStackSlot(result_slot, result);
+                    try self.copyBytesToStackOffset(result_slot, result, ret_size);
                 }
             }
 
@@ -10767,7 +10952,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             }
 
             self.codegen.freeGeneral(tag_reg);
-            return .{ .stack = .{ .offset = result_slot } };
+            return self.stackLocationForLayout(ret_layout, result_slot);
         }
 
         /// Dispatch a union closure (multiple functions, some with captures).
@@ -10776,6 +10961,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             union_offset: i32,
             repr: anytype,
             args_span: anytype,
+            ret_layout: layout.Idx,
         ) Error!ValueLocation {
             const members = self.store.getLambdaSetMembers(repr.lambda_set);
 
@@ -10794,8 +10980,19 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             const tag_reg = try self.allocTempGeneral();
             try self.codegen.emitLoadStack(.w64, tag_reg, union_offset);
 
-            // Allocate result slot
-            const result_slot = self.codegen.allocStackSlot(8);
+            // Allocate result slot with correct size for the return type
+            const ret_size: u32 = blk: {
+                if (ret_layout == .i128 or ret_layout == .u128 or ret_layout == .dec or self.isScalar16Layout(ret_layout)) break :blk 16;
+                if (ret_layout == .str) break :blk roc_str_size;
+                if (self.layout_store) |ls| {
+                    const layout_val = ls.getLayout(ret_layout);
+                    if (layout_val.tag == .list or layout_val.tag == .list_of_zst) break :blk roc_str_size;
+                    const sa = ls.layoutSizeAlign(layout_val);
+                    if (sa.size > 0) break :blk sa.size;
+                }
+                break :blk 8;
+            };
+            const result_slot = self.codegen.allocStackSlot(ret_size);
 
             // Track end jumps for patching
             var end_jumps = std.ArrayList(usize).empty;
@@ -10811,7 +11008,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
                     // Generate code for this branch (captures at +8 after tag with padding)
                     const result = try self.compileLambdaAndCallWithCaptures(member, union_offset + 8, args_span);
-                    try self.copyToStackSlot(result_slot, result);
+                    try self.copyBytesToStackOffset(result_slot, result, ret_size);
 
                     // Jump to end
                     try end_jumps.append(self.allocator, try self.codegen.emitJump());
@@ -10821,7 +11018,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 } else {
                     // Last case - no comparison needed (fallthrough)
                     const result = try self.compileLambdaAndCallWithCaptures(member, union_offset + 8, args_span);
-                    try self.copyToStackSlot(result_slot, result);
+                    try self.copyBytesToStackOffset(result_slot, result, ret_size);
                 }
             }
 
@@ -10831,7 +11028,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             }
 
             self.codegen.freeGeneral(tag_reg);
-            return .{ .stack = .{ .offset = result_slot } };
+            return self.stackLocationForLayout(ret_layout, result_slot);
         }
 
         /// Call a single closure (unwrapped_capture or struct_captures) by binding
@@ -10868,18 +11065,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     // stack by materializeCaptures. Keep it as .stack so
                     // generateIndirectCall can load and call it.
                     try self.symbol_locations.put(symbol_key, .{ .stack = .{ .offset = capture_offset } });
-                } else if (capture.layout_idx == .i128 or capture.layout_idx == .u128 or capture.layout_idx == .dec) {
-                    try self.symbol_locations.put(symbol_key, .{ .stack_i128 = capture_offset });
-                } else if (capture.layout_idx == .str) {
-                    try self.symbol_locations.put(symbol_key, .{ .stack_str = capture_offset });
-                } else if (capture_layout.tag == .list or capture_layout.tag == .list_of_zst) {
-                    try self.symbol_locations.put(symbol_key, .{ .list_stack = .{
-                        .struct_offset = capture_offset,
-                        .data_offset = 0,
-                        .num_elements = 0,
-                    } });
                 } else {
-                    try self.symbol_locations.put(symbol_key, .{ .stack = .{ .offset = capture_offset } });
+                    try self.symbol_locations.put(symbol_key, self.stackLocationForLayout(capture.layout_idx, capture_offset));
                 }
                 offset += @intCast(capture_size);
             }
@@ -10946,7 +11133,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 const ls = self.layout_store orelse unreachable;
                 const capture_layout = ls.getLayout(capture.layout_idx);
                 const capture_size = ls.layoutSizeAlign(capture_layout).size;
-                try self.symbol_locations.put(symbol_key, .{ .stack = .{ .offset = captures_offset + offset } });
+                try self.symbol_locations.put(symbol_key, self.stackLocationForLayout(capture.layout_idx, captures_offset + offset));
                 offset += @intCast(capture_size);
             }
 
@@ -11267,9 +11454,10 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 // Check if this argument fits in registers
                 if (reg_idx + info.num_regs <= max_arg_regs) {
                     // Place in registers (existing logic)
+                    // Check both builtin sentinels and layout store for 16-byte scalars.
                     const is_i128_arg = (arg_loc == .stack_i128 or arg_loc == .immediate_i128) or
                         (arg_loc == .stack and arg_layout != null and
-                            (arg_layout.? == .dec or arg_layout.? == .i128 or arg_layout.? == .u128));
+                            (arg_layout.? == .dec or arg_layout.? == .i128 or arg_layout.? == .u128 or self.isScalar16Layout(arg_layout.?)));
                     if (is_i128_arg) {
                         const low_reg = self.getArgumentRegister(reg_idx);
                         const high_reg = self.getArgumentRegister(reg_idx + 1);
@@ -11358,7 +11546,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             }
 
             // Handle i128/Dec return values (returned in two registers)
-            if (ret_layout == .i128 or ret_layout == .u128 or ret_layout == .dec) {
+            // Check both builtin sentinels and layout store for 16-byte scalars,
+            // since cross-module layout resolution may use non-builtin indices for Dec.
+            if (ret_layout == .i128 or ret_layout == .u128 or ret_layout == .dec or self.isScalar16Layout(ret_layout)) {
                 const stack_offset = self.codegen.allocStackSlot(16);
                 if (comptime target.toCpuArch() == .aarch64) {
                     try self.codegen.emitStoreStack(.w64, stack_offset, .X0);
@@ -11497,9 +11687,10 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
         /// Calculate the number of registers an argument needs based on its location and layout.
         fn calcArgRegCount(self: *Self, arg_loc: ValueLocation, arg_layout: ?layout.Idx) u8 {
             // Check for 128-bit types (i128, u128, Dec) - need 2 registers
+            // Check both builtin sentinels and layout store for 16-byte scalars.
             const is_i128_arg = (arg_loc == .stack_i128 or arg_loc == .immediate_i128) or
                 (arg_loc == .stack and arg_layout != null and
-                    (arg_layout.? == .dec or arg_layout.? == .i128 or arg_layout.? == .u128));
+                    (arg_layout.? == .dec or arg_layout.? == .i128 or arg_layout.? == .u128 or self.isScalar16Layout(arg_layout.?)));
             if (is_i128_arg) return 2;
 
             // Check for list/string types - need 3 registers (24 bytes: ptr, len, capacity)
@@ -12893,6 +13084,12 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     const layout_val = ls.getLayout(layout_idx);
                     // List parameters need 3 registers (24 bytes)
                     if (layout_val.tag == .list or layout_val.tag == .list_of_zst) return 3;
+                    // Scalar types that are 16 bytes (e.g., Dec resolved through a
+                    // non-builtin layout index) need 2 registers
+                    if (layout_val.tag == .scalar) {
+                        const size = ls.layoutSizeAlign(layout_val).size;
+                        if (size > 8) return @intCast((size + 7) / 8);
+                    }
                     // Record, tag union, and tuple parameters may need multiple registers
                     if (layout_val.tag == .record or layout_val.tag == .tag_union or layout_val.tag == .tuple) {
                         const size = ls.layoutSizeAlign(layout_val).size;
@@ -12902,6 +13099,18 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             }
             // Default: single register
             return 1;
+        }
+
+        /// Check if a layout index resolves to a 16-byte scalar (Dec/i128/u128)
+        /// through the layout store, even when the index is not a builtin sentinel.
+        fn isScalar16Layout(self: *Self, layout_idx: layout.Idx) bool {
+            const ls = self.layout_store orelse return false;
+            if (@intFromEnum(layout_idx) >= ls.layouts.len()) return false;
+            const layout_val = ls.getLayout(layout_idx);
+            if (layout_val.tag == .scalar) {
+                return ls.layoutSizeAlign(layout_val).size == 16;
+            }
+            return false;
         }
 
         /// Copy parameter data from caller's stack frame to local stack.
@@ -13021,6 +13230,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             // Set up symbol location based on type
                             if (bind.layout_idx == .str) {
                                 try self.symbol_locations.put(symbol_key, .{ .stack_str = local_stack_offset });
+                            } else if (bind.layout_idx == .i128 or bind.layout_idx == .u128 or bind.layout_idx == .dec) {
+                                try self.symbol_locations.put(symbol_key, .{ .stack_i128 = local_stack_offset });
                             } else if (self.layout_store) |ls| {
                                 if (@intFromEnum(bind.layout_idx) < ls.layouts.len()) {
                                     const layout_val = ls.getLayout(bind.layout_idx);
@@ -13030,6 +13241,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                             .data_offset = 0,
                                             .num_elements = 0,
                                         } });
+                                    } else if (layout_val.tag == .scalar and ls.layoutSizeAlign(layout_val).size == 16) {
+                                        // 16-byte scalar (Dec/i128/u128 resolved through non-builtin index)
+                                        try self.symbol_locations.put(symbol_key, .{ .stack_i128 = local_stack_offset });
                                     } else {
                                         try self.symbol_locations.put(symbol_key, .{ .stack = .{ .offset = local_stack_offset } });
                                     }
@@ -13054,7 +13268,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
                                 try self.symbol_locations.put(symbol_key, .{ .stack_str = stack_offset });
                                 reg_idx += 3;
-                            } else if (bind.layout_idx == .i128 or bind.layout_idx == .u128 or bind.layout_idx == .dec) {
+                            } else if (bind.layout_idx == .i128 or bind.layout_idx == .u128 or bind.layout_idx == .dec or
+                                (num_regs == 2 and self.isScalar16Layout(bind.layout_idx)))
+                            {
                                 const arg_reg0 = self.getArgumentRegister(reg_idx);
                                 const arg_reg1 = self.getArgumentRegister(reg_idx + 1);
 
@@ -13386,7 +13602,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 }
             }
             // i128/u128/Dec need two registers (X0/X1 or RAX/RDX)
-            if (ret_layout == .i128 or ret_layout == .u128 or ret_layout == .dec) {
+            // Check both builtin sentinels and layout store for 16-byte scalars.
+            if (ret_layout == .i128 or ret_layout == .u128 or ret_layout == .dec or self.isScalar16Layout(ret_layout)) {
                 switch (loc) {
                     .stack_i128 => |offset| {
                         if (comptime target.toCpuArch() == .aarch64) {
@@ -13709,9 +13926,10 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 // Check if this argument fits in registers
                 if (reg_idx + info.num_regs <= max_arg_regs) {
                     // Handle i128/Dec arguments (need two registers)
+                    // Check both builtin sentinels and layout store for 16-byte scalars.
                     const is_i128_arg = (arg_loc == .stack_i128 or arg_loc == .immediate_i128) or
                         (arg_loc == .stack and arg_layout != null and
-                            (arg_layout.? == .dec or arg_layout.? == .i128 or arg_layout.? == .u128));
+                            (arg_layout.? == .dec or arg_layout.? == .i128 or arg_layout.? == .u128 or self.isScalar16Layout(arg_layout.?)));
                     if (is_i128_arg) {
                         const low_reg = self.getArgumentRegister(reg_idx);
                         const high_reg = self.getArgumentRegister(reg_idx + 1);
@@ -13861,7 +14079,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             }
 
             // Handle i128/Dec return values (returned in two registers)
-            if (ret_layout == .i128 or ret_layout == .u128 or ret_layout == .dec) {
+            // Check both builtin sentinels and layout store for 16-byte scalars,
+            // since cross-module layout resolution may use non-builtin indices for Dec.
+            if (ret_layout == .i128 or ret_layout == .u128 or ret_layout == .dec or self.isScalar16Layout(ret_layout)) {
                 const stack_offset = self.codegen.allocStackSlot(16);
                 if (comptime target.toCpuArch() == .aarch64) {
                     try self.codegen.emitStoreStack(.w64, stack_offset, .X0);
@@ -14227,7 +14447,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             }
 
             // Handle return values (same logic as generateCallToLambda)
-            if (ret_layout == .i128 or ret_layout == .u128 or ret_layout == .dec) {
+            // Check both builtin sentinels and layout store for 16-byte scalars.
+            if (ret_layout == .i128 or ret_layout == .u128 or ret_layout == .dec or self.isScalar16Layout(ret_layout)) {
                 const stack_offset = self.codegen.allocStackSlot(16);
                 if (comptime target.toCpuArch() == .aarch64) {
                     try self.codegen.emitStoreStack(.w64, stack_offset, .X0);
