@@ -114,24 +114,17 @@ const DevEvalError = error{
 };
 
 /// Resolve a ZST type variable to its display string.
-/// Unwraps aliases and nominal types, then returns the tag name for single-tag unions
-/// or "{}" for empty records.
+/// Unwraps aliases, but stops at nominal/opaque types (rendering them as
+/// `<nominal>` or `<opaque>`). For bare tag unions, returns the tag name.
 fn resolveZstName(module_env: *ModuleEnv, expr_type_var: types.Var) []const u8 {
     var resolved = module_env.types.resolveVar(expr_type_var);
 
-    // Unwrap aliases and nominal types to get the backing type
+    // Unwrap aliases only — nominal/opaque types are NOT unwrapped
     for (0..100) |_| {
         switch (resolved.desc.content) {
             .alias => |al| {
                 const backing = module_env.types.getAliasBackingVar(al);
                 resolved = module_env.types.resolveVar(backing);
-            },
-            .structure => |st| switch (st) {
-                .nominal_type => |nt| {
-                    const backing = module_env.types.getNominalBackingVar(nt);
-                    resolved = module_env.types.resolveVar(backing);
-                },
-                else => break,
             },
             else => break,
         }
@@ -139,6 +132,9 @@ fn resolveZstName(module_env: *ModuleEnv, expr_type_var: types.Var) []const u8 {
 
     switch (resolved.desc.content) {
         .structure => |st| switch (st) {
+            .nominal_type => |nt| {
+                return if (nt.is_opaque) "<opaque>" else "<nominal>";
+            },
             .tag_union => |tu| {
                 const tags = module_env.types.getTagsSlice(tu.tags);
                 if (tags.len == 1) {
