@@ -2349,8 +2349,9 @@ const VarPair = struct {
 
 /// Check structural equality of two types.
 /// Two types are structurally equal if they have the same shape when fully resolved.
-/// Uses an internal seen-set for cycle detection. On allocation failure, returns
-/// false (conservative — may create a duplicate specialization but never wrong code).
+/// Uses an explicit work stack (not recursion) to avoid stack overflow.
+/// On allocation failure, returns false (conservative — may create a duplicate
+/// specialization but never wrong code).
 pub fn structuralTypeEqual(
     types_store: *types.Store,
     allocator: std.mem.Allocator,
@@ -2359,76 +2360,77 @@ pub fn structuralTypeEqual(
 ) bool {
     var seen = std.AutoHashMap(VarPair, void).init(allocator);
     defer seen.deinit();
-    return structuralTypeEqualRecursive(types_store, var_a, var_b, &seen);
+
+    // Explicit work stack of pairs to compare
+    var work = std.ArrayList(VarPair).empty;
+    defer work.deinit(allocator);
+    work.append(allocator, .{ .a = var_a, .b = var_b }) catch return false;
+
+    while (work.items.len > 0) {
+        const item = work.pop().?;
+        if (!enqueueTypeEqual(types_store, item.a, item.b, &seen, &work, allocator)) {
+            return false;
+        }
+    }
+    return true;
 }
 
-fn structuralTypeEqualRecursive(
+/// Compare one pair of vars. Returns false if definitely not equal.
+/// Pushes child pairs onto `work` for further comparison.
+fn enqueueTypeEqual(
     store: *types.Store,
-    var_a: types.Var,
-    var_b: types.Var,
+    va: types.Var,
+    vb: types.Var,
     seen: *std.AutoHashMap(VarPair, void),
+    work: *std.ArrayList(VarPair),
+    allocator: std.mem.Allocator,
 ) bool {
-    const ra = store.resolveVar(var_a);
-    const rb = store.resolveVar(var_b);
+    const ra = store.resolveVar(va);
+    const rb = store.resolveVar(vb);
 
-    // Same resolved variable — trivially equal
     if (ra.var_ == rb.var_) return true;
 
-    // Cycle detection using resolved var pair
     const pair = VarPair{ .a = ra.var_, .b = rb.var_ };
-    if (seen.contains(pair)) return true; // assumed equal (co-inductive)
+    if (seen.contains(pair)) return true;
     seen.put(pair, {}) catch return false;
 
-    // Content must match
     switch (ra.desc.content) {
         .structure => |flat_a| {
             const flat_b = switch (rb.desc.content) {
                 .structure => |fb| fb,
                 else => return false,
             };
-            return structuralFlatTypeEqual(store, flat_a, flat_b, seen);
+            return enqueueFlatTypeEqual(store, flat_a, flat_b, work, allocator);
         },
-        .flex, .rigid => {
-            // Unresolved vars: equal only if same resolved var (checked above)
-            return switch (rb.desc.content) {
-                .flex, .rigid => false,
-                else => false,
-            };
-        },
+        .flex, .rigid => return false,
         .alias => |alias_a| {
             const alias_b = switch (rb.desc.content) {
                 .alias => |ab| ab,
                 else => return false,
             };
-            // Must be same alias ident
             if (alias_a.ident.ident_idx != alias_b.ident.ident_idx) return false;
-
-            // Compare alias args
             const args_a = store.sliceAliasArgs(alias_a);
             const args_b = store.sliceAliasArgs(alias_b);
             if (args_a.len != args_b.len) return false;
             for (args_a, args_b) |aa, ab| {
-                if (!structuralTypeEqualRecursive(store, aa, ab, seen)) return false;
+                work.append(allocator, .{ .a = aa, .b = ab }) catch return false;
             }
-
-            // Compare backing var
             const backing_a = store.getAliasBackingVar(alias_a);
             const backing_b = store.getAliasBackingVar(alias_b);
-            return structuralTypeEqualRecursive(store, backing_a, backing_b, seen);
+            work.append(allocator, .{ .a = backing_a, .b = backing_b }) catch return false;
+            return true;
         },
-        .err => {
-            return rb.desc.content == .err;
-        },
+        .err => return rb.desc.content == .err,
     }
 }
 
-fn structuralFlatTypeEqual(
+fn enqueueFlatTypeEqual(
     store: *types.Store,
     flat_a: types.FlatType,
     flat_b: types.FlatType,
-    seen: *std.AutoHashMap(VarPair, void),
+    work: *std.ArrayList(VarPair),
+    allocator: std.mem.Allocator,
 ) bool {
-    // Must be same variant
     if (@intFromEnum(flat_a) != @intFromEnum(flat_b)) return false;
 
     switch (flat_a) {
@@ -2438,8 +2440,8 @@ fn structuralFlatTypeEqual(
             const vars_a = store.sliceVars(nom_a.vars.nonempty);
             const vars_b = store.sliceVars(nom_b.vars.nonempty);
             if (vars_a.len != vars_b.len) return false;
-            for (vars_a, vars_b) |va, vb| {
-                if (!structuralTypeEqualRecursive(store, va, vb, seen)) return false;
+            for (vars_a, vars_b) |v_a, v_b| {
+                work.append(allocator, .{ .a = v_a, .b = v_b }) catch return false;
             }
             return true;
         },
@@ -2451,10 +2453,11 @@ fn structuralFlatTypeEqual(
             const args_a = store.sliceVars(func_a.args);
             const args_b = store.sliceVars(func_b.args);
             if (args_a.len != args_b.len) return false;
-            for (args_a, args_b) |va, vb| {
-                if (!structuralTypeEqualRecursive(store, va, vb, seen)) return false;
+            for (args_a, args_b) |v_a, v_b| {
+                work.append(allocator, .{ .a = v_a, .b = v_b }) catch return false;
             }
-            return structuralTypeEqualRecursive(store, func_a.ret, func_b.ret, seen);
+            work.append(allocator, .{ .a = func_a.ret, .b = func_b.ret }) catch return false;
+            return true;
         },
         .record => |rec_a| {
             const rec_b = flat_b.record;
@@ -2465,11 +2468,12 @@ fn structuralFlatTypeEqual(
             const names_b = fields_b.items(.name);
             const vars_a = fields_a.items(.var_);
             const vars_b = fields_b.items(.var_);
-            for (names_a, names_b, vars_a, vars_b) |na, nb, va, vb| {
+            for (names_a, names_b, vars_a, vars_b) |na, nb, v_a, v_b| {
                 if (na != nb) return false;
-                if (!structuralTypeEqualRecursive(store, va, vb, seen)) return false;
+                work.append(allocator, .{ .a = v_a, .b = v_b }) catch return false;
             }
-            return structuralTypeEqualRecursive(store, rec_a.ext, rec_b.ext, seen);
+            work.append(allocator, .{ .a = rec_a.ext, .b = rec_b.ext }) catch return false;
+            return true;
         },
         .tag_union => |tu_a| {
             const tu_b = flat_b.tag_union;
@@ -2486,10 +2490,11 @@ fn structuralFlatTypeEqual(
                 const payload_b = store.sliceVars(ab);
                 if (payload_a.len != payload_b.len) return false;
                 for (payload_a, payload_b) |pa, pb| {
-                    if (!structuralTypeEqualRecursive(store, pa, pb, seen)) return false;
+                    work.append(allocator, .{ .a = pa, .b = pb }) catch return false;
                 }
             }
-            return structuralTypeEqualRecursive(store, tu_a.ext, tu_b.ext, seen);
+            work.append(allocator, .{ .a = tu_a.ext, .b = tu_b.ext }) catch return false;
+            return true;
         },
         .tuple => |tup_a| {
             const tup_b = flat_b.tuple;
@@ -2497,7 +2502,7 @@ fn structuralFlatTypeEqual(
             const elems_b = store.sliceVars(tup_b.elems);
             if (elems_a.len != elems_b.len) return false;
             for (elems_a, elems_b) |ea, eb| {
-                if (!structuralTypeEqualRecursive(store, ea, eb, seen)) return false;
+                work.append(allocator, .{ .a = ea, .b = eb }) catch return false;
             }
             return true;
         },
@@ -2510,9 +2515,9 @@ fn structuralFlatTypeEqual(
             const names_b = fields_b.items(.name);
             const vars_a = fields_a.items(.var_);
             const vars_b = fields_b.items(.var_);
-            for (names_a, names_b, vars_a, vars_b) |na, nb, va, vb| {
+            for (names_a, names_b, vars_a, vars_b) |na, nb, v_a, v_b| {
                 if (na != nb) return false;
-                if (!structuralTypeEqualRecursive(store, va, vb, seen)) return false;
+                work.append(allocator, .{ .a = v_a, .b = v_b }) catch return false;
             }
             return true;
         },
