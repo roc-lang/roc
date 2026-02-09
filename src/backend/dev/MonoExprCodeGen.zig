@@ -1304,9 +1304,10 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 // Hosted function calls (platform-provided effects)
                 .hosted_call => |hc| try self.generateHostedCall(hc),
 
-                // Nominal types: transparent wrapper — boxing is handled by
-                // generateTag when the tag's union_layout is a box.
-                .nominal => |nom| try self.generateExpr(nom.backing_expr),
+                // Nominal types: may be transparent (non-recursive) or boxed (recursive).
+                // generateNominal handles both cases: boxed nominals heap-allocate,
+                // non-recursive nominals are transparent wrappers.
+                .nominal => |nom| try self.generateNominal(nom),
 
                 // String literals
                 .str_literal => |str_idx| try self.generateStrLiteral(str_idx),
@@ -8483,54 +8484,13 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     return .{ .immediate_i64 = tag.discriminant };
                 }
                 // For larger boxed unions without payloads, allocate heap and store discriminant
-                const roc_ops_reg = self.roc_ops_reg orelse unreachable;
                 const base_offset = self.codegen.allocStackSlot(inner_stack_size);
                 try self.zeroStackArea(base_offset, inner_stack_size);
                 const disc_offset_inner = tu_data_inner.discriminant_offset;
                 const disc_size_inner = tu_data_inner.discriminant_size;
                 try self.storeDiscriminant(base_offset + @as(i32, @intCast(disc_offset_inner)), tag.discriminant, disc_size_inner);
 
-                const heap_ptr_slot = self.codegen.allocStackSlot(8);
-                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                try builder.addImmArg(@intCast(inner_stack_size));
-                try builder.addImmArg(@intCast(inner_layout.data.tag_union.alignment.toByteUnits()));
-                try builder.addImmArg(0);
-                try builder.addRegArg(roc_ops_reg);
-                try self.callBuiltin(&builder, @intFromPtr(&allocateWithRefcountC), .allocate_with_refcount);
-
-                const ret_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X0 else .RAX;
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emit.strRegMemSoff(.w64, ret_reg, .FP, heap_ptr_slot);
-                } else {
-                    try self.codegen.emit.movMemReg(.w64, .RBP, heap_ptr_slot, ret_reg);
-                }
-                const heap_ptr = try self.allocTempGeneral();
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emit.ldrRegMemSoff(.w64, heap_ptr, .FP, heap_ptr_slot);
-                } else {
-                    try self.codegen.emit.movRegMem(.w64, heap_ptr, .RBP, heap_ptr_slot);
-                }
-                const temp_reg = try self.allocTempGeneral();
-                var copied: u32 = 0;
-                while (copied < inner_stack_size) : (copied += 8) {
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, base_offset + @as(i32, @intCast(copied)));
-                        try self.codegen.emit.strRegMemSoff(.w64, temp_reg, heap_ptr, @intCast(copied));
-                    } else {
-                        try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, base_offset + @as(i32, @intCast(copied)));
-                        try self.codegen.emit.movMemReg(.w64, heap_ptr, @intCast(copied), temp_reg);
-                    }
-                }
-                self.codegen.freeGeneral(temp_reg);
-                self.codegen.freeGeneral(heap_ptr);
-
-                const result_reg = try self.allocTempGeneral();
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emit.ldrRegMemSoff(.w64, result_reg, .FP, heap_ptr_slot);
-                } else {
-                    try self.codegen.emit.movRegMem(.w64, result_reg, .RBP, heap_ptr_slot);
-                }
-                return .{ .general_reg = result_reg };
+                return try self.heapBoxStackData(base_offset, inner_stack_size, inner_layout.data.tag_union.alignment, false);
             }
 
             if (union_layout.tag != .tag_union) {
@@ -8649,56 +8609,62 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             if (is_boxed) {
                 // Boxed tag union (recursive type): allocate heap memory, copy stack data to heap,
                 // return the heap pointer.
-                const roc_ops_reg = self.roc_ops_reg orelse unreachable;
-                const heap_ptr_slot = self.codegen.allocStackSlot(8);
-
-                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                try builder.addImmArg(@intCast(stack_size));
-                try builder.addImmArg(@intCast(tu_alignment.toByteUnits()));
-                try builder.addImmArg(1); // refcounted (tag unions with payloads may contain refcounted data)
-                try builder.addRegArg(roc_ops_reg);
-                try self.callBuiltin(&builder, @intFromPtr(&allocateWithRefcountC), .allocate_with_refcount);
-
-                // Save heap pointer
-                const ret_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X0 else .RAX;
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emit.strRegMemSoff(.w64, ret_reg, .FP, heap_ptr_slot);
-                } else {
-                    try self.codegen.emit.movMemReg(.w64, .RBP, heap_ptr_slot, ret_reg);
-                }
-
-                // Copy tag union data from stack to heap
-                const heap_ptr = try self.allocTempGeneral();
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emit.ldrRegMemSoff(.w64, heap_ptr, .FP, heap_ptr_slot);
-                } else {
-                    try self.codegen.emit.movRegMem(.w64, heap_ptr, .RBP, heap_ptr_slot);
-                }
-                const temp_reg = try self.allocTempGeneral();
-                var copied: u32 = 0;
-                while (copied < stack_size) : (copied += 8) {
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, base_offset + @as(i32, @intCast(copied)));
-                        try self.codegen.emit.strRegMemSoff(.w64, temp_reg, heap_ptr, @intCast(copied));
-                    } else {
-                        try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, base_offset + @as(i32, @intCast(copied)));
-                        try self.codegen.emit.movMemReg(.w64, heap_ptr, @intCast(copied), temp_reg);
-                    }
-                }
-                self.codegen.freeGeneral(temp_reg);
-                self.codegen.freeGeneral(heap_ptr);
-
-                // Return the heap pointer
-                const result_reg = try self.allocTempGeneral();
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emit.ldrRegMemSoff(.w64, result_reg, .FP, heap_ptr_slot);
-                } else {
-                    try self.codegen.emit.movRegMem(.w64, result_reg, .RBP, heap_ptr_slot);
-                }
-                return .{ .general_reg = result_reg };
+                return try self.heapBoxStackData(base_offset, stack_size, tu_alignment, true);
             }
 
             return .{ .stack = .{ .offset = base_offset } };
+        }
+
+        /// Allocate heap memory, copy stack data to heap, return the heap pointer.
+        /// This is the common pattern for boxing values (recursive tag unions, nominals, etc.).
+        fn heapBoxStackData(self: *Self, base_offset: i32, data_size: u32, alignment: std.mem.Alignment, refcounted: bool) Error!ValueLocation {
+            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+            const heap_ptr_slot = self.codegen.allocStackSlot(8);
+
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addImmArg(@intCast(data_size));
+            try builder.addImmArg(@intCast(alignment.toByteUnits()));
+            try builder.addImmArg(@intFromBool(refcounted));
+            try builder.addRegArg(roc_ops_reg);
+            try self.callBuiltin(&builder, @intFromPtr(&allocateWithRefcountC), .allocate_with_refcount);
+
+            // Save heap pointer from return register
+            const ret_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X0 else .RAX;
+            if (comptime target.toCpuArch() == .aarch64) {
+                try self.codegen.emit.strRegMemSoff(.w64, ret_reg, .FP, heap_ptr_slot);
+            } else {
+                try self.codegen.emit.movMemReg(.w64, .RBP, heap_ptr_slot, ret_reg);
+            }
+
+            // Copy data from stack to heap in 8-byte chunks
+            const heap_ptr = try self.allocTempGeneral();
+            if (comptime target.toCpuArch() == .aarch64) {
+                try self.codegen.emit.ldrRegMemSoff(.w64, heap_ptr, .FP, heap_ptr_slot);
+            } else {
+                try self.codegen.emit.movRegMem(.w64, heap_ptr, .RBP, heap_ptr_slot);
+            }
+            const temp_reg = try self.allocTempGeneral();
+            var copied: u32 = 0;
+            while (copied < data_size) : (copied += 8) {
+                if (comptime target.toCpuArch() == .aarch64) {
+                    try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, base_offset + @as(i32, @intCast(copied)));
+                    try self.codegen.emit.strRegMemSoff(.w64, temp_reg, heap_ptr, @intCast(copied));
+                } else {
+                    try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, base_offset + @as(i32, @intCast(copied)));
+                    try self.codegen.emit.movMemReg(.w64, heap_ptr, @intCast(copied), temp_reg);
+                }
+            }
+            self.codegen.freeGeneral(temp_reg);
+            self.codegen.freeGeneral(heap_ptr);
+
+            // Return the heap pointer
+            const result_reg = try self.allocTempGeneral();
+            if (comptime target.toCpuArch() == .aarch64) {
+                try self.codegen.emit.ldrRegMemSoff(.w64, result_reg, .FP, heap_ptr_slot);
+            } else {
+                try self.codegen.emit.movRegMem(.w64, result_reg, .RBP, heap_ptr_slot);
+            }
+            return .{ .general_reg = result_reg };
         }
 
         /// Generate code for a nominal type wrapper.
@@ -8753,54 +8719,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     },
                 };
 
-                // Allocate heap memory
-                const roc_ops_reg = self.roc_ops_reg orelse unreachable;
-                const heap_ptr_slot = self.codegen.allocStackSlot(8);
-
-                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                try builder.addImmArg(@intCast(inner_size));
-                try builder.addImmArg(@intCast(inner_align.toByteUnits()));
-                try builder.addImmArg(1); // refcounted
-                try builder.addRegArg(roc_ops_reg);
-                try self.callBuiltin(&builder, @intFromPtr(&allocateWithRefcountC), .allocate_with_refcount);
-
-                // Save heap pointer from return register
-                const ret_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X0 else .RAX;
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emit.strRegMemSoff(.w64, ret_reg, .FP, heap_ptr_slot);
-                } else {
-                    try self.codegen.emit.movMemReg(.w64, .RBP, heap_ptr_slot, ret_reg);
-                }
-
-                // Copy raw value from stack to heap
-                const heap_ptr = try self.allocTempGeneral();
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emit.ldrRegMemSoff(.w64, heap_ptr, .FP, heap_ptr_slot);
-                } else {
-                    try self.codegen.emit.movRegMem(.w64, heap_ptr, .RBP, heap_ptr_slot);
-                }
-                const temp_reg = try self.allocTempGeneral();
-                var copied: u32 = 0;
-                while (copied < inner_size) : (copied += 8) {
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, base_offset + @as(i32, @intCast(copied)));
-                        try self.codegen.emit.strRegMemSoff(.w64, temp_reg, heap_ptr, @intCast(copied));
-                    } else {
-                        try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, base_offset + @as(i32, @intCast(copied)));
-                        try self.codegen.emit.movMemReg(.w64, heap_ptr, @intCast(copied), temp_reg);
-                    }
-                }
-                self.codegen.freeGeneral(temp_reg);
-                self.codegen.freeGeneral(heap_ptr);
-
-                // Return the heap pointer
-                const result_reg = try self.allocTempGeneral();
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emit.ldrRegMemSoff(.w64, result_reg, .FP, heap_ptr_slot);
-                } else {
-                    try self.codegen.emit.movRegMem(.w64, result_reg, .RBP, heap_ptr_slot);
-                }
-                return .{ .general_reg = result_reg };
+                // Allocate heap memory, copy raw value from stack to heap, return pointer
+                return try self.heapBoxStackData(base_offset, inner_size, inner_align, true);
             } else {
                 // Non-recursive nominal: transparent wrapper
                 return try self.generateExpr(nom.backing_expr);
