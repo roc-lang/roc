@@ -3173,6 +3173,50 @@ test "Str.with_prefix" {
     try runExpectStr("Str.with_prefix(\"bar\", \"\")", "bar", .no_trace);
 }
 
+test "polymorphic closure capture duplication during monomorphization" {
+    // Regression test: when a polymorphic function creates a closure that captures
+    // its argument, each specialization must get independent copies of the captures.
+    // Without proper duplication, specializations share capture data, causing corruption.
+
+    // Polymorphic function that returns a closure capturing its argument,
+    // called with both integer and string types.
+    try runExpectI64(
+        \\{
+        \\    make_getter = |n| |_x| n
+        \\    get_num = make_getter(42)
+        \\    get_num(0)
+        \\}
+    , 42, .no_trace);
+
+    try runExpectStr(
+        \\{
+        \\    make_getter = |n| |_x| n
+        \\    get_str = make_getter("hello")
+        \\    get_str(0)
+        \\}
+    , "hello", .no_trace);
+}
+
+test "large record - chained higher-order calls with growing intermediates" {
+    // Simulates the record builder pattern: nested apply calls build up larger types
+    try runExpectStr(
+        \\{
+        \\    apply2 = |a, b, f| f(a, b)
+        \\    step1 = apply2("x_val", "y_val", |x, y| { x, y })
+        \\    result = apply2("w_val", step1.y, |w, y| { w, y })
+        \\    result.w
+        \\}
+    , "w_val", .no_trace);
+    try runExpectStr(
+        \\{
+        \\    apply2 = |a, b, f| f(a, b)
+        \\    step1 = apply2("x_val", "y_val", |x, y| { x, y })
+        \\    result = apply2("w_val", step1.y, |w, y| { w, y })
+        \\    result.y
+        \\}
+    , "y_val", .no_trace);
+}
+
 test "Str.drop_prefix" {
     try runExpectStr("Str.drop_prefix(\"foobar\", \"foo\")", "bar", .no_trace);
     try runExpectStr("Str.drop_prefix(\"foobar\", \"baz\")", "foobar", .no_trace);
