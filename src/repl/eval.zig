@@ -683,7 +683,15 @@ pub const Repl = struct {
                         LayoutIdx.f64, LayoutIdx.f32 => blk: {
                             break :blk try std.fmt.allocPrint(self.allocator, "{d} : F64", .{executable.callReturnF64()});
                         },
-                        LayoutIdx.dec => try std.fmt.allocPrint(self.allocator, "{} : Dec", .{executable.callReturnI64()}), // TODO: proper Dec formatting
+                        LayoutIdx.dec => blk: {
+                            var dec_bytes: [16]u8 align(16) = undefined;
+                            executable.callWithResultPtr(@ptrCast(&dec_bytes));
+                            const dec_val: i128 = @bitCast(dec_bytes);
+                            const d = builtins.dec.RocDec{ .num = dec_val };
+                            var buf: [builtins.dec.RocDec.max_str_length]u8 = undefined;
+                            const formatted = d.format_to_buf(&buf);
+                            break :blk try std.fmt.allocPrint(self.allocator, "{s} : Dec", .{formatted});
+                        },
                         else => return self.evaluateWithInterpreter(module_env, final_expr_idx, &imported_modules, &checker),
                     };
                     return .{ .expression = output };

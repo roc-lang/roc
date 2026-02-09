@@ -3070,6 +3070,55 @@ test "Bool in record field - bug confirmation" {
     try runExpectBool("{ flag: Bool.False }.flag", false, .no_trace);
 }
 
+test "polymorphic tag union payload substitution: extract payload" {
+    // Tests that `a -> I64` is discovered from the Ok tag's payload
+    try runExpectI64(
+        \\{
+        \\    second : [Left(a), Right(b)] -> b
+        \\    second = |either| match either {
+        \\        Left(_) => 0i64
+        \\        Right(val) => val
+        \\    }
+        \\
+        \\    input : [Left(I64), Right(I64)]
+        \\    input = Right(42i64)
+        \\    second(input)
+        \\}
+    , 42, .no_trace);
+}
+
+test "polymorphic tag union payload substitution: multiple type vars" {
+    // Tests that `e -> Str` is discovered from the Err tag's payload
+    try runExpectStr(
+        \\{
+        \\    get_err : [Ok(a), Err(e)] -> e
+        \\    get_err = |result| match result {
+        \\        Ok(_) => ""
+        \\        Err(e) => e
+        \\    }
+        \\
+        \\    val : [Ok(I64), Err(Str)]
+        \\    val = Err("hello")
+        \\    get_err(val)
+        \\}
+    , "hello", .no_trace);
+}
+
+test "polymorphic tag union payload substitution: wrap and unwrap" {
+    // Tests that `a -> I64` is discovered from the return type's tag payload
+    try runExpectI64(
+        \\{
+        \\    wrap : a -> [Val(a)]
+        \\    wrap = |x| Val(x)
+        \\
+        \\    result = wrap(42)
+        \\    match result {
+        \\        Val(n) => n
+        \\    }
+        \\}
+    , 42, .no_trace);
+}
+
 test "Bool in record with mixed alignment fields - bug confirmation" {
     // Test Bool in a record with fields of different alignments
     // Similar to the bug report: { key: U64, childCount: U32, isElement: Bool }
