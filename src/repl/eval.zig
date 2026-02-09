@@ -688,25 +688,20 @@ pub const Repl = struct {
                         return self.evaluateWithInterpreter(module_env, final_expr_idx, &imported_modules, &checker);
                     };
 
-                    // Format using shared RocValue
-                    const values = @import("values");
-                    const result_layout = if (code_result.layout_store) |ls|
-                        ls.getLayout(code_result.result_layout)
-                    else
+                    // Format using type-driven rendering (walks type var for tag names)
+                    const ls = code_result.layout_store orelse
                         return self.evaluateWithInterpreter(module_env, final_expr_idx, &imported_modules, &checker);
+                    const result_layout = ls.getLayout(code_result.result_layout);
+                    const expr_type_var = ModuleEnv.varFrom(final_expr_idx);
 
-                    const roc_val = values.RocValue{
-                        .ptr = &result_buf,
-                        .lay = result_layout,
-                        .layout_idx = code_result.result_layout,
-                    };
-                    const fmt_ctx = values.RocValue.FormatContext{
-                        .layout_store = code_result.layout_store orelse
-                            return self.evaluateWithInterpreter(module_env, final_expr_idx, &imported_modules, &checker),
-                        .ident_store = module_env.getIdentStoreConst(),
-                        .strip_whole_number_decimal = true,
-                    };
-                    const output = roc_val.format(self.allocator, fmt_ctx) catch {
+                    const output = formatWithTypes(
+                        self.allocator,
+                        &result_buf,
+                        result_layout,
+                        expr_type_var,
+                        module_env,
+                        ls,
+                    ) catch {
                         return self.evaluateWithInterpreter(module_env, final_expr_idx, &imported_modules, &checker);
                     };
                     return .{ .expression = output };
@@ -752,3 +747,407 @@ pub const Repl = struct {
         return .{ .expression = output };
     }
 };
+
+// ---------------------------------------------------------------------------
+// Type-driven value formatting — walks type vars + layout for proper rendering
+// ---------------------------------------------------------------------------
+
+const layout_mod = @import("layout");
+const Layout = layout_mod.Layout;
+const RocValue = @import("values").RocValue;
+
+const FormatError = error{OutOfMemory};
+
+/// Format a dev backend result using the type variable for semantic info (tag names,
+/// list element types, etc.) and the layout for memory structure. This is the dev
+/// backend analog of the interpreter's `renderValueRocWithType`.
+fn formatWithTypes(
+    allocator: Allocator,
+    ptr: ?[*]const u8,
+    lay: Layout,
+    type_var: types.Var,
+    module_env: *const ModuleEnv,
+    layout_store: *const layout_mod.Store,
+) FormatError![]u8 {
+    const types_store = &module_env.types;
+    const ident_store = module_env.getIdentStoreConst();
+    var resolved = types_store.resolveVar(type_var);
+
+    // Unwrap aliases and nominal types to get the underlying structural type
+    var guard: u32 = 0;
+    while (guard < 100) : (guard += 1) {
+        switch (resolved.desc.content) {
+            .alias => |al| {
+                const backing = types_store.getAliasBackingVar(al);
+                resolved = types_store.resolveVar(backing);
+            },
+            .structure => |st| switch (st) {
+                .nominal_type => |nt| {
+                    // Check for List and Box before unwrapping — they need special handling
+                    const ident_text = ident_store.getText(nt.ident.ident_idx);
+                    if (std.mem.eql(u8, ident_text, "List")) {
+                        return formatList(allocator, ptr, lay, nt, module_env, layout_store);
+                    }
+                    const backing = types_store.getNominalBackingVar(nt);
+                    resolved = types_store.resolveVar(backing);
+                },
+                else => break,
+            },
+            else => break,
+        }
+    }
+
+    // Now dispatch based on the resolved structural content + layout
+    if (resolved.desc.content == .structure) switch (resolved.desc.content.structure) {
+        .tag_union => |tu| {
+            return formatTagUnion(allocator, ptr, lay, tu, module_env, layout_store);
+        },
+        .record => |rec| {
+            if (lay.tag == .record) {
+                return formatRecord(allocator, ptr, lay, rec, module_env, layout_store);
+            }
+        },
+        .tuple => |tup| {
+            if (lay.tag == .tuple) {
+                return formatTuple(allocator, ptr, lay, tup, module_env, layout_store);
+            }
+        },
+        .empty_record => return try allocator.dupe(u8, "{}"),
+        .empty_tag_union => return try allocator.dupe(u8, "{}"),
+        else => {},
+    };
+
+    // Fall back to layout-only formatting for scalars and other types
+    const roc_val = RocValue{ .ptr = ptr, .lay = lay };
+    const fmt_ctx = RocValue.FormatContext{
+        .layout_store = layout_store,
+        .ident_store = ident_store,
+        .strip_whole_number_decimal = true,
+    };
+    return roc_val.format(allocator, fmt_ctx);
+}
+
+/// Format a tag union using type info for tag names and recursive payload formatting.
+fn formatTagUnion(
+    allocator: Allocator,
+    ptr: ?[*]const u8,
+    lay: Layout,
+    tu: types.TagUnion,
+    module_env: *const ModuleEnv,
+    layout_store: *const layout_mod.Store,
+) FormatError![]u8 {
+    const types_store = &module_env.types;
+    const ident_store = module_env.getIdentStoreConst();
+
+    // Get the sorted tag at a given discriminant index
+    const sorted_tag = getSortedTag(allocator, types_store, ident_store, tu);
+
+    if (lay.tag == .zst) {
+        // Single-variant ZST tag union — just output the tag name
+        if (sorted_tag) |tags| {
+            defer allocator.free(tags);
+            if (tags.len > 0) {
+                return try allocator.dupe(u8, ident_store.getText(tags[0].name));
+            }
+        }
+        return try allocator.dupe(u8, "{}");
+    }
+
+    if (lay.tag == .scalar) {
+        // Tag union optimized to scalar — discriminant only, no multi-variant payload
+        if (sorted_tag) |tags| {
+            defer allocator.free(tags);
+            if (lay.data.scalar.tag == .int) {
+                const raw = ptr orelse return try allocator.dupe(u8, "<null>");
+                const disc: usize = switch (lay.data.scalar.data.int) {
+                    .u8 => raw[0],
+                    .u16 => @as(u16, raw[0]) | (@as(u16, raw[1]) << 8),
+                    .u32 => @intCast(@as(u32, raw[0]) | (@as(u32, raw[1]) << 8) | (@as(u32, raw[2]) << 16) | (@as(u32, raw[3]) << 24)),
+                    else => 0,
+                };
+                if (disc < tags.len) {
+                    const tag = tags[disc];
+                    const tag_name = ident_store.getText(tag.name);
+                    // Check if this tag has payload args
+                    const args = types_store.sliceVars(toVarRange(tag.args));
+                    if (args.len == 0) {
+                        return try allocator.dupe(u8, tag_name);
+                    }
+                }
+            }
+        }
+        // Fall through to default scalar formatting
+        const roc_val = RocValue{ .ptr = ptr, .lay = lay };
+        const fmt_ctx = RocValue.FormatContext{
+            .layout_store = layout_store,
+            .ident_store = ident_store,
+            .strip_whole_number_decimal = true,
+        };
+        return roc_val.format(allocator, fmt_ctx);
+    }
+
+    if (lay.tag == .tag_union) {
+        const tu_idx = lay.data.tag_union.idx;
+        const tu_data = layout_store.getTagUnionData(tu_idx);
+        const disc_offset = layout_store.getTagUnionDiscriminantOffset(tu_idx);
+
+        const raw = ptr orelse return try allocator.dupe(u8, "<tag_union>");
+        const discriminant = tu_data.readDiscriminantFromPtr(raw + disc_offset);
+
+        if (sorted_tag) |tags| {
+            defer allocator.free(tags);
+            if (discriminant < tags.len) {
+                const tag = tags[discriminant];
+                const tag_name = ident_store.getText(tag.name);
+                const arg_vars = types_store.sliceVars(toVarRange(tag.args));
+
+                var out = std.array_list.AlignedManaged(u8, null).init(allocator);
+                errdefer out.deinit();
+                try out.appendSlice(tag_name);
+
+                if (arg_vars.len > 0) {
+                    try out.append('(');
+                    // Get the payload layout from the variant
+                    const variants = layout_store.getTagUnionVariants(tu_data);
+                    const payload_layout = layout_store.getLayout(variants.get(discriminant).payload_layout);
+
+                    if (arg_vars.len == 1) {
+                        const rendered = try formatWithTypes(allocator, raw, payload_layout, arg_vars[0], module_env, layout_store);
+                        defer allocator.free(rendered);
+                        try out.appendSlice(rendered);
+                    } else {
+                        // Multi-arg: payload is a tuple
+                        for (arg_vars, 0..) |arg_var, i| {
+                            const rendered = try formatWithTypes(allocator, raw, payload_layout, arg_var, module_env, layout_store);
+                            defer allocator.free(rendered);
+                            try out.appendSlice(rendered);
+                            if (i + 1 < arg_vars.len) try out.appendSlice(", ");
+                        }
+                    }
+                    try out.append(')');
+                }
+                return out.toOwnedSlice();
+            }
+        }
+
+        // Fallback: no type info
+        return try std.fmt.allocPrint(allocator, "<tag_union variant={d}>", .{discriminant});
+    }
+
+    // Unknown layout for tag union type — use layout-only formatting
+    const roc_val = RocValue{ .ptr = ptr, .lay = lay };
+    const fmt_ctx = RocValue.FormatContext{
+        .layout_store = layout_store,
+        .ident_store = ident_store,
+        .strip_whole_number_decimal = true,
+    };
+    return roc_val.format(allocator, fmt_ctx);
+}
+
+/// Format a list using element type info from the nominal List type.
+fn formatList(
+    allocator: Allocator,
+    ptr: ?[*]const u8,
+    lay: Layout,
+    nt: types.NominalType,
+    module_env: *const ModuleEnv,
+    layout_store: *const layout_mod.Store,
+) FormatError![]u8 {
+    const types_store = &module_env.types;
+    const arg_vars = types_store.sliceNominalArgs(nt);
+    const elem_type_var = if (arg_vars.len == 1) arg_vars[0] else return try allocator.dupe(u8, "<list>");
+
+    var out = std.array_list.AlignedManaged(u8, null).init(allocator);
+    errdefer out.deinit();
+    try out.append('[');
+
+    if (lay.tag == .list) {
+        const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(ptr.?));
+        const len = roc_list.len();
+        if (len > 0) {
+            const elem_layout_idx = lay.data.list;
+            const elem_layout = layout_store.getLayout(elem_layout_idx);
+            const elem_size = layout_store.layoutSize(elem_layout);
+            var i: usize = 0;
+            while (i < len) : (i += 1) {
+                if (roc_list.bytes) |bytes| {
+                    const elem_ptr: [*]const u8 = bytes + i * elem_size;
+                    const rendered = try formatWithTypes(allocator, elem_ptr, elem_layout, elem_type_var, module_env, layout_store);
+                    defer allocator.free(rendered);
+                    try out.appendSlice(rendered);
+                    if (i + 1 < len) try out.appendSlice(", ");
+                }
+            }
+        }
+    } else if (lay.tag == .list_of_zst) {
+        const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(ptr.?));
+        const len = roc_list.len();
+        const zst_layout = Layout{ .tag = .zst, .data = .{ .zst = {} } };
+        var i: usize = 0;
+        while (i < len) : (i += 1) {
+            const rendered = try formatWithTypes(allocator, null, zst_layout, elem_type_var, module_env, layout_store);
+            defer allocator.free(rendered);
+            try out.appendSlice(rendered);
+            if (i + 1 < len) try out.appendSlice(", ");
+        }
+    }
+
+    try out.append(']');
+    return out.toOwnedSlice();
+}
+
+/// Format a record using type info for field names and recursive field formatting.
+fn formatRecord(
+    allocator: Allocator,
+    ptr: ?[*]const u8,
+    lay: Layout,
+    rec: types.Record,
+    module_env: *const ModuleEnv,
+    layout_store: *const layout_mod.Store,
+) FormatError![]u8 {
+    const types_store = &module_env.types;
+    const ident_store = module_env.getIdentStoreConst();
+    const rec_data = layout_store.getRecordData(lay.data.record.idx);
+
+    if (rec_data.fields.count == 0) {
+        return try allocator.dupe(u8, "{}");
+    }
+
+    var out = std.array_list.AlignedManaged(u8, null).init(allocator);
+    errdefer out.deinit();
+    try out.appendSlice("{ ");
+
+    const layout_fields = layout_store.record_fields.sliceRange(rec_data.getFields());
+    const type_fields = types_store.getRecordFieldsSlice(rec.fields);
+    const count = @min(layout_fields.len, type_fields.len);
+
+    for (0..count) |i| {
+        const l_fld = layout_fields.get(i);
+        const t_fld = type_fields.get(i);
+        const name_text = ident_store.getText(l_fld.name);
+        try out.appendSlice(name_text);
+        try out.appendSlice(": ");
+
+        const offset = layout_store.getRecordFieldOffset(lay.data.record.idx, @intCast(i));
+        const field_layout = layout_store.getLayout(l_fld.layout);
+        const base_ptr = ptr.?;
+        const field_ptr = base_ptr + offset;
+        const rendered = try formatWithTypes(allocator, field_ptr, field_layout, t_fld.var_, module_env, layout_store);
+        defer allocator.free(rendered);
+        try out.appendSlice(rendered);
+        if (i + 1 < count) try out.appendSlice(", ");
+    }
+
+    try out.appendSlice(" }");
+    return out.toOwnedSlice();
+}
+
+/// Format a tuple using type info for element types.
+fn formatTuple(
+    allocator: Allocator,
+    ptr: ?[*]const u8,
+    lay: Layout,
+    tup: types.Tuple,
+    module_env: *const ModuleEnv,
+    layout_store: *const layout_mod.Store,
+) FormatError![]u8 {
+    const types_store = &module_env.types;
+    const tuple_data = layout_store.getTupleData(lay.data.tuple.idx);
+    const layout_fields = layout_store.tuple_fields.sliceRange(tuple_data.getFields());
+    const elem_vars = types_store.sliceVars(tup.elems);
+    const count = @min(layout_fields.len, elem_vars.len);
+
+    var out = std.array_list.AlignedManaged(u8, null).init(allocator);
+    errdefer out.deinit();
+    try out.append('(');
+
+    // Iterate by original source index
+    var original_idx: usize = 0;
+    while (original_idx < count) : (original_idx += 1) {
+        const sorted_idx = blk: {
+            for (0..count) |si| {
+                if (layout_fields.get(si).index == original_idx) break :blk si;
+            }
+            unreachable;
+        };
+        const fld = layout_fields.get(sorted_idx);
+        const field_layout = layout_store.getLayout(fld.layout);
+        const elem_offset = layout_store.getTupleElementOffset(lay.data.tuple.idx, @intCast(sorted_idx));
+        const base_ptr = ptr.?;
+        const elem_ptr = base_ptr + elem_offset;
+        const rendered = try formatWithTypes(allocator, elem_ptr, field_layout, elem_vars[original_idx], module_env, layout_store);
+        defer allocator.free(rendered);
+        try out.appendSlice(rendered);
+        if (original_idx + 1 < count) try out.appendSlice(", ");
+    }
+
+    try out.append(')');
+    return out.toOwnedSlice();
+}
+
+/// Collect all tags from a tag union (following extension chains), sort alphabetically,
+/// and return as an owned slice. Caller must free the returned slice.
+fn getSortedTag(
+    allocator: Allocator,
+    types_store: *const types.Store,
+    ident_store: *const base.Ident.Store,
+    tu: types.TagUnion,
+) ?[]types.Tag {
+    var all_tags = std.ArrayList(types.Tag).empty;
+
+    // Collect from initial row
+    const tags_slice = types_store.getTagsSlice(tu.tags);
+    const names = tags_slice.items(.name);
+    const args = tags_slice.items(.args);
+    for (names, args) |name, arg| {
+        all_tags.append(allocator, .{ .name = name, .args = arg }) catch return null;
+    }
+
+    // Follow extension variable chain
+    var current_ext = tu.ext;
+    var guard: u32 = 0;
+    while (guard < 100) : (guard += 1) {
+        const ext_resolved = types_store.resolveVar(current_ext);
+        switch (ext_resolved.desc.content) {
+            .structure => |ext_flat| switch (ext_flat) {
+                .tag_union => |ext_tu| {
+                    const ext_tags = types_store.getTagsSlice(ext_tu.tags);
+                    const ext_names = ext_tags.items(.name);
+                    const ext_args = ext_tags.items(.args);
+                    for (ext_names, ext_args) |name, arg| {
+                        all_tags.append(allocator, .{ .name = name, .args = arg }) catch return null;
+                    }
+                    current_ext = ext_tu.ext;
+                },
+                .empty_tag_union => break,
+                .nominal_type => |nominal| {
+                    const backing_var = types_store.getNominalBackingVar(nominal);
+                    current_ext = backing_var;
+                },
+                else => break,
+            },
+            .alias => |alias| {
+                current_ext = types_store.getAliasBackingVar(alias);
+            },
+            .flex, .rigid => break,
+            else => break,
+        }
+    }
+
+    if (all_tags.items.len == 0) {
+        all_tags.deinit(allocator);
+        return null;
+    }
+
+    // Sort alphabetically — matches discriminant assignment order
+    std.mem.sort(types.Tag, all_tags.items, ident_store, types.Tag.sortByNameAsc);
+    return all_tags.toOwnedSlice(allocator) catch null;
+}
+
+fn toVarRange(range: anytype) types.Var.SafeList.Range {
+    const RangeType = types.Var.SafeList.Range;
+    if (comptime @hasField(@TypeOf(range), "nonempty")) {
+        return @field(range, "nonempty");
+    }
+    return @as(RangeType, range);
+}
