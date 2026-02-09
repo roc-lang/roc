@@ -909,11 +909,13 @@ fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_i
         },
         layout_mod.Idx.f64 => blk: {
             const val: f64 = @bitCast(returns[0].I64);
-            break :blk std.fmt.allocPrint(allocator, "{d}", .{val});
+            var fbuf: [400]u8 = undefined;
+            break :blk allocator.dupe(u8, i128h.f64_to_str(&fbuf, val));
         },
         layout_mod.Idx.f32 => blk: {
             const val: f32 = @bitCast(returns[0].I32);
-            break :blk std.fmt.allocPrint(allocator, "{d}", .{val});
+            var fbuf: [400]u8 = undefined;
+            break :blk allocator.dupe(u8, i128h.f64_to_str(&fbuf, @as(f64, val)));
         },
         layout_mod.Idx.dec => blk: {
             // Dec is i128 stored in linear memory. The function returned an i32 pointer.
