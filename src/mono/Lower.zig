@@ -812,7 +812,7 @@ fn convertToMonoLowLevel(op: CIR.Expr.LowLevel) ?ir.MonoExpr.LowLevel {
         .list_concat => .list_concat,
         .list_with_capacity => .list_with_capacity,
         .list_drop_at => .list_drop_first,
-        .list_sublist => .list_take_first,
+        .list_sublist => .list_sublist,
 
         // String operations
         .str_is_empty => .str_is_empty,
