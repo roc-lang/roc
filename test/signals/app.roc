@@ -4,5 +4,8 @@ import pf.Elem
 
 main! : {} => Elem
 main! = |{}| {
-    Elem.text("hello")
+    Elem.div([
+        Elem.text("hello"),
+        Elem.text("world"),
+    ])
 }

@@ -112,7 +112,7 @@ if $BUILD_APP; then
     rm -f "$APP"
 
     echo "==> Building app (dev backend)..."
-    "$ROC" build --backend=dev "$APP_ROC" 2>&1
+    "$ROC" build --backend=dev --no-cache "$APP_ROC" 2>&1
 fi
 
 # --- Step 4: Check binary exists ---
