@@ -810,13 +810,15 @@ pub fn compareWithLlvmEvaluator(allocator: std.mem.Allocator, interpreter_str: [
 
         if (termination_signal != 0) {
             posix.close(pipe_read);
-            return; // Skip comparison on crash
+            std.debug.print("\nLLVM evaluator crashed with signal {d}\n", .{termination_signal});
+            return error.LlvmEvaluatorCrashed;
         }
 
         const exit_code: u8 = @truncate((status >> 8) & 0xff);
         if (exit_code != 0) {
             posix.close(pipe_read);
-            return; // LLVM backend couldn't handle this expression, skip
+            std.debug.print("\nLLVM evaluator returned unsupported expression\n", .{});
+            return error.LlvmEvaluatorUnsupported;
         }
 
         // Read result string from pipe
