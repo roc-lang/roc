@@ -3448,18 +3448,6 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     const list_loc = try self.generateExpr(args[0]);
                     return try self.callListReleaseExcessCapOp(list_loc, ll);
                 },
-                .list_split_first => {
-                    // list_split_first(list) -> {element, List}
-                    // Returns the first element and the rest of the list
-                    // TODO: Complex - returns a record/tuple
-                    unreachable;
-                },
-                .list_split_last => {
-                    // list_split_last(list) -> {List, element}
-                    // TODO: Complex - returns a record/tuple
-                    unreachable;
-                },
-
                 // ── Integer-to-integer try conversions ──
                 // Returns a tag union: Ok(To) | Err({}).
                 // Uses C wrappers that check bounds and write the tag union to a buffer.
@@ -3583,17 +3571,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 .num_round,
                 .num_floor,
                 .num_ceiling,
-                .num_to_str,
-                .num_from_str,
-                .num_from_numeral,
                 .compare,
                 => {
                     if (std.debug.runtime_safety) unreachable;
-                    unreachable;
-                },
-                .box_box,
-                .box_unbox,
-                => {
                     unreachable;
                 },
                 .crash => {

@@ -2499,10 +2499,6 @@ pub const MonoLlvmCodeGen = struct {
                 if (float_type != .float and float_type != .double) return error.UnsupportedExpression;
                 return wip.callIntrinsic(.normal, .none, .log, &.{float_type}, &.{operand}, "") catch return error.CompilationFailed;
             },
-            .num_to_str, .num_from_str, .num_from_numeral => {
-                return error.UnsupportedExpression;
-            },
-
             // --- String operations ---
             .str_is_empty => {
                 // A string is empty when its last byte (position 23) is 0
@@ -2648,9 +2644,6 @@ pub const MonoLlvmCodeGen = struct {
                 wip.cursor = .{ .block = dead_block };
                 return builder.intValue(.i64, 0) catch return error.OutOfMemory;
             },
-
-            // --- Box operations (not yet implemented) ---
-            .box_box, .box_unbox => return error.UnsupportedExpression,
 
             // --- String operations via decomposed wrappers ---
             .str_concat => {
@@ -3627,9 +3620,6 @@ pub const MonoLlvmCodeGen = struct {
                 );
                 return result_phi.toValue();
             },
-
-            .list_split_first, .list_split_last,
-            => return error.UnsupportedExpression,
 
             else => return error.UnsupportedExpression,
         }
