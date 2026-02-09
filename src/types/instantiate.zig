@@ -216,7 +216,7 @@ pub const Instantiator = struct {
         const backing_var = self.store.getAliasBackingVar(alias);
         const fresh_backing_var = try self.instantiateVar(backing_var);
 
-        return self.store.mkAlias(alias.ident, fresh_backing_var, fresh_vars.items);
+        return self.store.mkAlias(alias.ident, fresh_backing_var, fresh_vars.items, alias.origin_module);
     }
 
     fn instantiateFlatType(self: *Self, flat_type: FlatType) std.mem.Allocator.Error!FlatType {

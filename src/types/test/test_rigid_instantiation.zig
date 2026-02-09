@@ -336,7 +336,7 @@ test "instantiate - alias preserves structure" {
         false,
     );
     const backing = try env.types.freshFromContentWithRank(backing_content, .generalized);
-    const alias_content = try env.mkAlias("MyList", backing, &[_]Var{rigid_a});
+    const alias_content = try env.mkAlias("MyList", backing, &[_]Var{rigid_a}, builtin_module_idx);
     const original = try env.types.freshFromContentWithRank(alias_content, .generalized);
 
     var instantiator = Instantiator{
@@ -521,8 +521,8 @@ const TestEnv = struct {
 
     // helpers - alias //
 
-    fn mkAlias(self: *Self, name: []const u8, backing_var: Var, args: []const Var) std.mem.Allocator.Error!Content {
-        return try self.types.mkAlias(try self.mkTypeIdent(name), backing_var, args);
+    fn mkAlias(self: *Self, name: []const u8, backing_var: Var, args: []const Var, module_idx: Ident.Idx) std.mem.Allocator.Error!Content {
+        return try self.types.mkAlias(try self.mkTypeIdent(name), backing_var, args, module_idx);
     }
 
     // helpers - rigid var //

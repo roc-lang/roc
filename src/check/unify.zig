@@ -59,7 +59,6 @@ const MkSafeList = collections.SafeList;
 const ResolvedVarDesc = types_mod.ResolvedVarDesc;
 const ResolvedVarDescs = types_mod.ResolvedVarDescs;
 
-const TypeIdent = types_mod.TypeIdent;
 const Var = types_mod.Var;
 const Rank = types_mod.Rank;
 const Flex = types_mod.Flex;
@@ -494,7 +493,9 @@ const Unifier = struct {
             },
             .alias => |b_alias| {
                 const b_backing_var = self.types_store.getAliasBackingVar(b_alias);
-                if (TypeIdent.eql(self.module_env.getIdentStore(), a_alias.ident, b_alias.ident)) {
+                if (a_alias.origin_module == b_alias.origin_module and
+                    a_alias.ident.ident_idx == b_alias.ident.ident_idx)
+                {
                     try self.unifyTwoAliases(vars, a_alias, b_alias);
                 } else {
                     try self.unifyGuarded(backing_var, b_backing_var);
@@ -539,15 +540,34 @@ const Unifier = struct {
         const trace = tracy.trace(@src());
         defer trace.end();
 
-        if (a_alias.vars.nonempty.count != b_alias.vars.nonempty.count) {
-            return error.TypeMismatch;
-        }
+        var did_arg_error = false;
 
         // Unify each pair of arguments
-        const a_args_slice = self.types_store.sliceAliasArgs(a_alias);
-        const b_args_slice = self.types_store.sliceAliasArgs(b_alias);
-        for (a_args_slice, b_args_slice) |a_arg, b_arg| {
-            try self.unifyGuarded(a_arg, b_arg);
+        var a_args_iter = self.types_store.iterAliasArgs(a_alias);
+        var b_args_iter = self.types_store.iterAliasArgs(b_alias);
+        while (true) {
+            const mb_a_arg = a_args_iter.next();
+            const mb_b_arg = b_args_iter.next();
+
+            if (mb_a_arg != null and mb_b_arg != null) {
+                self.unifyGuarded(mb_a_arg.?, mb_b_arg.?) catch |err| switch (err) {
+                    error.TypeMismatch => {
+                        // Defer mismatch to check all args
+                        did_arg_error = true;
+                    },
+                    else => return err,
+                };
+            } else if (mb_a_arg == null and mb_b_arg == null) {
+                break;
+            } else {
+                did_arg_error = true;
+                break;
+            }
+        }
+
+        // If any field errored, then error
+        if (did_arg_error) {
+            return error.TypeMismatch;
         }
 
         // Rust compiler comment:
@@ -974,9 +994,11 @@ const Unifier = struct {
         }
 
         // Unify element types first (recursion guard in unifyGuarded prevents infinite loops)
-        const a_elems = self.types_store.sliceVars(a_tuple.elems);
-        const b_elems = self.types_store.sliceVars(b_tuple.elems);
-        for (a_elems, b_elems) |a_elem, b_elem| {
+        // Use iterators instead of slices because unifyGuarded may trigger reallocations
+        var a_elems_iter = self.types_store.iterVars(a_tuple.elems);
+        var b_elems_iter = self.types_store.iterVars(b_tuple.elems);
+        while (a_elems_iter.next()) |a_elem| {
+            const b_elem = b_elems_iter.next().?; // Safe: lengths verified equal
             try self.unifyGuarded(a_elem, b_elem);
         }
 
@@ -1002,7 +1024,9 @@ const Unifier = struct {
             return;
         }
 
-        if (!TypeIdent.eql(self.module_env.getIdentStore(), a_type.ident, b_type.ident)) {
+        if (a_type.origin_module != b_type.origin_module or
+            a_type.ident.ident_idx != b_type.ident.ident_idx)
+        {
             return error.TypeMismatch;
         }
 
@@ -1011,9 +1035,11 @@ const Unifier = struct {
         }
 
         // Unify each pair of arguments first (recursion guard in unifyGuarded prevents infinite loops)
-        const a_slice = self.types_store.sliceNominalArgs(a_type);
-        const b_slice = self.types_store.sliceNominalArgs(b_type);
-        for (a_slice, b_slice) |a_arg, b_arg| {
+        // Use iterators instead of slices because unifyGuarded may trigger reallocations
+        var a_args_iter = self.types_store.iterNominalArgs(a_type);
+        var b_args_iter = self.types_store.iterNominalArgs(b_type);
+        while (a_args_iter.next()) |a_arg| {
+            const b_arg = b_args_iter.next().?; // Safe: lengths verified equal
             try self.unifyGuarded(a_arg, b_arg);
         }
 
@@ -1216,9 +1242,11 @@ const Unifier = struct {
             return error.TypeMismatch;
         }
 
-        const a_args = self.types_store.sliceVars(a_func.args);
-        const b_args = self.types_store.sliceVars(b_func.args);
-        for (a_args, b_args) |a_arg, b_arg| {
+        // Use iterators instead of slices because unifyGuarded may trigger reallocations
+        var a_args_iter = self.types_store.iterVars(a_func.args);
+        var b_args_iter = self.types_store.iterVars(b_func.args);
+        while (a_args_iter.next()) |a_arg| {
+            const b_arg = b_args_iter.next().?; // Safe: lengths verified equal
             try self.unifyGuarded(a_arg, b_arg);
         }
 
@@ -1417,6 +1445,9 @@ const Unifier = struct {
                 );
             },
             .both_extend => {
+                // Create a new ext var
+                const new_ext_var = try self.fresh(vars, .{ .flex = Flex.init() });
+
                 // Create a new variable of a record with only a's uniq fields
                 // This copies fields from scratch into type_store
                 const only_in_a_fields_range = try self.types_store.appendRecordFields(
@@ -1424,7 +1455,7 @@ const Unifier = struct {
                 );
                 const only_in_a_var = try self.fresh(vars, Content{ .structure = FlatType{ .record = .{
                     .fields = only_in_a_fields_range,
-                    .ext = a_gathered_ext,
+                    .ext = new_ext_var,
                 } } });
 
                 // Create a new variable of a record with only b's uniq fields
@@ -1434,15 +1465,14 @@ const Unifier = struct {
                 );
                 const only_in_b_var = try self.fresh(vars, Content{ .structure = FlatType{ .record = .{
                     .fields = only_in_b_fields_range,
-                    .ext = b_gathered_ext,
+                    .ext = new_ext_var,
                 } } });
 
-                // Create a new ext var
-                const new_ext_var = try self.fresh(vars, .{ .flex = Flex.init() });
-
                 // Unify the sub records with exts
-                try self.unifyGuarded(a_gathered_ext, only_in_b_var);
+                // The order we unify is important! If these are flipped, then
+                // you can get into weird partial-merge states
                 try self.unifyGuarded(only_in_a_var, b_gathered_ext);
+                try self.unifyGuarded(a_gathered_ext, only_in_b_var);
 
                 // Unify shared fields
                 // This copies fields from scratch into type_store
@@ -1645,6 +1675,8 @@ const Unifier = struct {
         const trace = tracy.trace(@src());
         defer trace.end();
 
+        var did_field_error = false;
+
         // First, unify all field types. This may cause nested record unifications
         // which will append their own fields to the store. We must NOT interleave
         // our field appends with these nested calls.
@@ -1653,7 +1685,18 @@ const Unifier = struct {
         // cause `in_both_fields` to reallocate, invalidating the slice pointer.
         var shared_fields_iter = self.scratch.in_both_fields.iterRange(shared_fields_range);
         while (shared_fields_iter.next()) |shared| {
-            try self.unifyGuarded(shared.a.var_, shared.b.var_);
+            self.unifyGuarded(shared.a.var_, shared.b.var_) catch |err| switch (err) {
+                error.TypeMismatch => {
+                    // Defer mismatch to check all fields
+                    did_field_error = true;
+                },
+                else => return err,
+            };
+        }
+
+        // If any field errored, then error
+        if (did_field_error) {
+            return error.TypeMismatch;
         }
 
         // Now that all nested unifications are complete, append OUR fields.
@@ -2101,12 +2144,13 @@ const Unifier = struct {
         // cause `in_both_tags` to reallocate, invalidating the slice pointer.
         var shared_tags_iter = self.scratch.in_both_tags.iterRange(shared_tags_range);
         while (shared_tags_iter.next()) |tags| {
-            const tag_a_args = self.types_store.sliceVars(tags.a.args);
-            const tag_b_args = self.types_store.sliceVars(tags.b.args);
+            if (tags.a.args.len() != tags.b.args.len()) return error.TypeMismatch;
 
-            if (tag_a_args.len != tag_b_args.len) return error.TypeMismatch;
-
-            for (tag_a_args, tag_b_args) |a_arg, b_arg| {
+            // Use iterators instead of slices because unifyGuarded may trigger reallocations
+            var tag_a_args_iter = self.types_store.iterVars(tags.a.args);
+            var tag_b_args_iter = self.types_store.iterVars(tags.b.args);
+            while (tag_a_args_iter.next()) |a_arg| {
+                const b_arg = tag_b_args_iter.next().?; // Safe: lengths verified equal
                 try self.unifyGuarded(a_arg, b_arg);
             }
         }

@@ -9,6 +9,9 @@
 
 const std = @import("std");
 const base = @import("base");
+const builtins = @import("builtins");
+
+const i128h = builtins.compiler_rt_128;
 
 const ModuleEnv = @import("ModuleEnv.zig");
 const CIR = @import("CIR.zig");
@@ -169,19 +172,31 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
             // Dec is stored scaled by 10^18, need to emit as decimal
             const value = dec.value.num;
             const scale: i128 = 1_000_000_000_000_000_000;
-            const whole = @divTrunc(value, scale);
-            const frac_part = @mod(@abs(value), @as(u128, @intCast(scale)));
+            const whole = i128h.divTrunc_i128(value, scale);
+            const frac_part = i128h.rem_u128(@abs(value), @as(u128, @intCast(scale)));
             if (frac_part == 0) {
-                try self.writer().print("{d}", .{whole});
+                var str_buf: [40]u8 = undefined;
+                try self.writer().writeAll(i128h.i128_to_str(&str_buf, whole).str);
             } else {
-                try self.writer().print("{d}.{d:0>18}", .{ whole, frac_part });
+                var str_buf: [40]u8 = undefined;
+                try self.writer().writeAll(i128h.i128_to_str(&str_buf, whole).str);
+                try self.writer().writeAll(".");
+                // Format frac_part with leading zeros (18 digits)
+                var frac_buf: [40]u8 = undefined;
+                const frac_str = i128h.u128_to_str(&frac_buf, frac_part).str;
+                // Pad with leading zeros to 18 digits
+                var pad: usize = 18 - frac_str.len;
+                while (pad > 0) : (pad -= 1) {
+                    try self.writer().writeAll("0");
+                }
+                try self.writer().writeAll(frac_str);
             }
         },
         .e_dec_small => |small| {
             const numerator = small.value.numerator;
             const power = small.value.denominator_power_of_ten;
             if (power == 0) {
-                try self.writer().print("{d}", .{numerator});
+                try self.writer().print("{}", .{numerator});
             } else {
                 // Convert to decimal string
                 var divisor: i32 = 1;
@@ -190,7 +205,7 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
                 }
                 const whole = @divTrunc(numerator, @as(i16, @intCast(divisor)));
                 const frac_part = @mod(@abs(numerator), @as(u16, @intCast(divisor)));
-                try self.writer().print("{d}.{d}", .{ whole, frac_part });
+                try self.writer().print("{}.{}", .{ whole, frac_part });
             }
         },
         .e_typed_int => |typed| {
@@ -202,8 +217,8 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
             // Emit as decimal and add type suffix
             const value = typed.value.toI128();
             const scale: i128 = 1_000_000_000_000_000_000;
-            const whole = @divTrunc(value, scale);
-            const frac_part = @mod(@abs(value), @as(u128, @intCast(scale)));
+            const whole = i128h.divTrunc_i128(value, scale);
+            const frac_part = i128h.rem_u128(@abs(value), @as(u128, @intCast(scale)));
             if (frac_part == 0) {
                 try self.writer().print("{d}.0", .{whole});
             } else {
@@ -656,7 +671,7 @@ fn emitPatternValue(self: *Self, pattern: Pattern) EmitError!void {
             const numerator = dec.value.numerator;
             const power = dec.value.denominator_power_of_ten;
             if (power == 0) {
-                try self.writer().print("{d}", .{numerator});
+                try self.writer().print("{}", .{numerator});
             } else {
                 var divisor: i32 = 1;
                 for (0..power) |_| {
@@ -664,25 +679,39 @@ fn emitPatternValue(self: *Self, pattern: Pattern) EmitError!void {
                 }
                 const whole = @divTrunc(numerator, @as(i16, @intCast(divisor)));
                 const frac_part = @mod(@abs(numerator), @as(u16, @intCast(divisor)));
-                try self.writer().print("{d}.{d}", .{ whole, frac_part });
+                try self.writer().print("{}.{}", .{ whole, frac_part });
             }
         },
         .dec_literal => |dec| {
             const value = dec.value.num;
             const scale: i128 = 1_000_000_000_000_000_000;
-            const whole = @divTrunc(value, scale);
-            const frac_part = @mod(@abs(value), @as(u128, @intCast(scale)));
+            const whole = i128h.divTrunc_i128(value, scale);
+            const frac_part = i128h.rem_u128(@abs(value), @as(u128, @intCast(scale)));
             if (frac_part == 0) {
-                try self.writer().print("{d}", .{whole});
+                var str_buf: [40]u8 = undefined;
+                try self.writer().writeAll(i128h.i128_to_str(&str_buf, whole).str);
             } else {
-                try self.writer().print("{d}.{d:0>18}", .{ whole, frac_part });
+                var str_buf: [40]u8 = undefined;
+                try self.writer().writeAll(i128h.i128_to_str(&str_buf, whole).str);
+                try self.writer().writeAll(".");
+                var frac_buf: [40]u8 = undefined;
+                const frac_str = i128h.u128_to_str(&frac_buf, frac_part).str;
+                var pad: usize = 18 - frac_str.len;
+                while (pad > 0) : (pad -= 1) {
+                    try self.writer().writeAll("0");
+                }
+                try self.writer().writeAll(frac_str);
             }
         },
         .frac_f32_literal => |frac| {
-            try self.writer().print("{d}f32", .{frac.value});
+            var float_buf: [400]u8 = undefined;
+            try self.writer().writeAll(i128h.f32_to_str(&float_buf, frac.value));
+            try self.writer().writeAll("f32");
         },
         .frac_f64_literal => |frac| {
-            try self.writer().print("{d}f64", .{frac.value});
+            var float_buf: [400]u8 = undefined;
+            try self.writer().writeAll(i128h.f64_to_str(&float_buf, frac.value));
+            try self.writer().writeAll("f64");
         },
     }
 }

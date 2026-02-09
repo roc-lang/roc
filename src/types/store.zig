@@ -361,7 +361,13 @@ pub const Store = struct {
 
     /// Make alias data type
     /// Does not insert content into the types store
-    pub fn mkAlias(self: *Self, ident: TypeIdent, backing_var: Var, args: []const Var) std.mem.Allocator.Error!Content {
+    pub fn mkAlias(
+        self: *Self,
+        ident: TypeIdent,
+        backing_var: Var,
+        args: []const Var,
+        origin_module: base.Ident.Idx,
+    ) std.mem.Allocator.Error!Content {
         const backing_idx = try self.appendVar(backing_var);
         var span = try self.appendVars(args);
 
@@ -373,6 +379,7 @@ pub const Store = struct {
             .alias = Alias{
                 .ident = ident,
                 .vars = .{ .nonempty = span },
+                .origin_module = origin_module,
             },
         };
     }
@@ -596,6 +603,21 @@ pub const Store = struct {
     /// Given a range, get a slice of vars from the backing array
     pub fn sliceVars(self: *const Self, range: VarSafeList.Range) []Var {
         return self.vars.sliceRange(range);
+    }
+
+    /// Get an iterator over vars for the given range.
+    /// Use this instead of sliceVars when the iteration may trigger
+    /// reallocations (e.g., during unification).
+    pub fn iterVars(self: *const Self, range: VarSafeList.Range) VarSafeList.Iterator {
+        return self.vars.iterRange(range);
+    }
+
+    /// Get a var at a specific offset within a range.
+    /// Use this for index-based iteration when unification may trigger reallocations.
+    pub fn getVarAt(self: *const Self, range: VarSafeList.Range, offset: u32) Var {
+        std.debug.assert(offset < range.count);
+        const idx: VarSafeList.Idx = @enumFromInt(@intFromEnum(range.start) + offset);
+        return self.vars.get(idx).*;
     }
 
     /// Given a range, get a slice of record fields from the backing array
