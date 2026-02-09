@@ -3199,7 +3199,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             break :blk .{
                 .nominal = .{
                     .backing_expr = backing,
-                    .nominal_layout = .i64, // TODO
+                    .nominal_layout = self.getExprLayoutFromIdx(module_env, expr_idx),
                 },
             };
         },
@@ -3209,7 +3209,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             break :blk .{
                 .nominal = .{
                     .backing_expr = backing,
-                    .nominal_layout = .i64, // TODO
+                    .nominal_layout = self.getExprLayoutFromIdx(module_env, expr_idx),
                 },
             };
         },
