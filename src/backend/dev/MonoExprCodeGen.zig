@@ -1304,8 +1304,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 // Hosted function calls (platform-provided effects)
                 .hosted_call => |hc| try self.generateHostedCall(hc),
 
-                // Nominal types (transparent wrappers)
-                .nominal => |nom| try self.generateExpr(nom.backing_expr),
+                // Nominal types (box recursive, transparent otherwise)
+                .nominal => |nom| try self.generateNominal(nom),
 
                 // String literals
                 .str_literal => |str_idx| try self.generateStrLiteral(str_idx),
@@ -7153,12 +7153,24 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             var result_size: u32 = ls.layoutSizeAlign(result_layout_val).size;
             var use_stack_result = result_size > 8;
             const value_layout_val = ls.getLayout(when_expr.value_layout);
+            const is_boxed_tag_union = value_layout_val.tag == .box and blk: {
+                const inner = ls.getLayout(value_layout_val.data.box);
+                break :blk inner.tag == .tag_union;
+            };
             const tu_disc_offset: i32 = if (value_layout_val.tag == .tag_union) blk: {
                 const tu_data = ls.getTagUnionData(value_layout_val.data.tag_union.idx);
+                break :blk @intCast(tu_data.discriminant_offset);
+            } else if (is_boxed_tag_union) blk: {
+                const inner = ls.getLayout(value_layout_val.data.box);
+                const tu_data = ls.getTagUnionData(inner.data.tag_union.idx);
                 break :blk @intCast(tu_data.discriminant_offset);
             } else 0;
             const tu_total_size: u32 = if (value_layout_val.tag == .tag_union) blk: {
                 const tu_data = ls.getTagUnionData(value_layout_val.data.tag_union.idx);
+                break :blk tu_data.size;
+            } else if (is_boxed_tag_union) blk: {
+                const inner = ls.getLayout(value_layout_val.data.box);
+                const tu_data = ls.getTagUnionData(inner.data.tag_union.idx);
                 break :blk tu_data.size;
             } else 0;
             const tu_disc_size: u8 = if (value_layout_val.tag == .tag_union) blk: {
@@ -7317,8 +7329,20 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                 }
                             },
                             .general_reg => |reg| {
-                                // Value is directly in register (zero-arg tag case)
-                                try self.emitMovRegReg(disc_reg, reg);
+                                if (is_boxed_tag_union) {
+                                    // Boxed tag union: register holds a heap pointer.
+                                    // Dereference to read discriminant from heap memory.
+                                    if (comptime target.toCpuArch() == .aarch64) {
+                                        const w = if (disc_use_w32) aarch64.RegisterWidth.w32 else aarch64.RegisterWidth.w64;
+                                        try self.codegen.emit.ldrRegMemSoff(w, disc_reg, reg, tu_disc_offset);
+                                    } else {
+                                        const w = if (disc_use_w32) x86_64.RegisterWidth.w32 else x86_64.RegisterWidth.w64;
+                                        try self.codegen.emit.movRegMem(w, disc_reg, reg, tu_disc_offset);
+                                    }
+                                } else {
+                                    // Value is directly in register (zero-arg tag case)
+                                    try self.emitMovRegReg(disc_reg, reg);
+                                }
                             },
                             .immediate_i64 => |val| {
                                 // Immediate discriminant value
@@ -7366,6 +7390,15 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                     break :vl_blk variant.payload_layout;
                                 }
                                 break :vl_blk null;
+                            } else if (is_boxed_tag_union) vl_blk: {
+                                const inner = ls.getLayout(value_layout_val.data.box);
+                                const tu_data = ls.getTagUnionData(inner.data.tag_union.idx);
+                                const variants = ls.getTagUnionVariants(tu_data);
+                                if (tag_pattern.discriminant < variants.len) {
+                                    const variant = variants.get(tag_pattern.discriminant);
+                                    break :vl_blk variant.payload_layout;
+                                }
+                                break :vl_blk null;
                             } else null;
 
                             // Determine if payload is a tuple (multi-field payload)
@@ -7379,7 +7412,70 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                 switch (arg_pattern) {
                                     .bind => |arg_bind| {
                                         const symbol_key: u48 = @bitCast(arg_bind.symbol);
-                                        switch (value_loc) {
+                                        if (is_boxed_tag_union) {
+                                            // Boxed tag union: value_loc is a register holding a heap pointer.
+                                            // Copy payload from heap to stack, then bind to stack location.
+                                            const box_reg = try self.ensureInGeneralReg(value_loc);
+                                            const payload_size: u32 = if (variant_payload_layout) |pl| blk_ps: {
+                                                const pl_val = ls.getLayout(pl);
+                                                break :blk_ps ls.layoutSizeAlign(pl_val).size;
+                                            } else 8;
+                                            // For tuple payloads, copy the whole tuple
+                                            const copy_size: u32 = if (payload_is_tuple) tu_total_size else payload_size;
+                                            const dest_offset = self.codegen.allocStackSlot(if (copy_size < 8) 8 else copy_size);
+
+                                            // Zero the destination first
+                                            var zeroed: u32 = 0;
+                                            while (zeroed < copy_size) : (zeroed += 8) {
+                                                const zero_reg = try self.allocTempGeneral();
+                                                try self.codegen.emitLoadImm(zero_reg, 0);
+                                                if (comptime target.toCpuArch() == .aarch64) {
+                                                    try self.codegen.emit.strRegMemSoff(.w64, zero_reg, .FP, dest_offset + @as(i32, @intCast(zeroed)));
+                                                } else {
+                                                    try self.codegen.emit.movMemReg(.w64, .RBP, dest_offset + @as(i32, @intCast(zeroed)), zero_reg);
+                                                }
+                                                self.codegen.freeGeneral(zero_reg);
+                                            }
+
+                                            // Copy from heap to stack
+                                            var copied: u32 = 0;
+                                            while (copied < copy_size) : (copied += 8) {
+                                                const tmp_reg = try self.allocTempGeneral();
+                                                if (comptime target.toCpuArch() == .aarch64) {
+                                                    try self.codegen.emit.ldrRegMemSoff(.w64, tmp_reg, box_reg, @intCast(copied));
+                                                    try self.codegen.emit.strRegMemSoff(.w64, tmp_reg, .FP, dest_offset + @as(i32, @intCast(copied)));
+                                                } else {
+                                                    try self.codegen.emit.movRegMem(.w64, tmp_reg, box_reg, @intCast(copied));
+                                                    try self.codegen.emit.movMemReg(.w64, .RBP, dest_offset + @as(i32, @intCast(copied)), tmp_reg);
+                                                }
+                                                self.codegen.freeGeneral(tmp_reg);
+                                            }
+
+                                            const arg_loc: ValueLocation = if (payload_is_tuple and variant_payload_layout != null) plblk: {
+                                                const pl_val = ls.getLayout(variant_payload_layout.?);
+                                                const elem_offset = ls.getTupleElementOffsetByOriginalIndex(pl_val.data.tuple.idx, @intCast(arg_idx));
+                                                const elem_layout = ls.getTupleElementLayoutByOriginalIndex(pl_val.data.tuple.idx, @intCast(arg_idx));
+                                                const arg_offset = dest_offset + @as(i32, @intCast(elem_offset));
+                                                break :plblk self.stackLocationForLayout(elem_layout, arg_offset);
+                                            } else if (variant_payload_layout) |pl| plblk: {
+                                                if (pl == .i128 or pl == .u128 or pl == .dec) {
+                                                    break :plblk .{ .stack_i128 = dest_offset };
+                                                } else if (pl == .str) {
+                                                    break :plblk .{ .stack_str = dest_offset };
+                                                } else {
+                                                    const pl_val = ls.getLayout(pl);
+                                                    if (pl_val.tag == .list or pl_val.tag == .list_of_zst) {
+                                                        break :plblk .{ .list_stack = .{
+                                                            .struct_offset = dest_offset,
+                                                            .data_offset = 0,
+                                                            .num_elements = 0,
+                                                        } };
+                                                    }
+                                                    break :plblk .{ .stack = .{ .offset = dest_offset } };
+                                                }
+                                            } else .{ .stack = .{ .offset = dest_offset } };
+                                            try self.symbol_locations.put(symbol_key, arg_loc);
+                                        } else switch (value_loc) {
                                             .stack => |s| {
                                                 const base_offset = s.offset;
                                                 const arg_loc: ValueLocation = if (payload_is_tuple and variant_payload_layout != null) plblk: {
@@ -8388,6 +8484,73 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 return .{ .immediate_i64 = tag.discriminant };
             }
 
+            // Handle boxed tag unions (recursive types) — for no-payload tags,
+            // check if the inner type is scalar/ZST (discriminant only) or a full tag union.
+            if (union_layout.tag == .box) {
+                const inner_layout = ls.getLayout(union_layout.data.box);
+                if (inner_layout.tag == .scalar or inner_layout.tag == .zst) {
+                    return .{ .immediate_i64 = tag.discriminant };
+                }
+                if (inner_layout.tag != .tag_union) {
+                    return .{ .immediate_i64 = tag.discriminant };
+                }
+                // Boxed tag union with payloads: need to allocate and store on heap
+                const tu_data_inner = ls.getTagUnionData(inner_layout.data.tag_union.idx);
+                const inner_stack_size = tu_data_inner.size;
+                if (inner_stack_size <= 8) {
+                    return .{ .immediate_i64 = tag.discriminant };
+                }
+                // For larger boxed unions without payloads, allocate heap and store discriminant
+                const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+                const base_offset = self.codegen.allocStackSlot(inner_stack_size);
+                try self.zeroStackArea(base_offset, inner_stack_size);
+                const disc_offset_inner = tu_data_inner.discriminant_offset;
+                const disc_size_inner = tu_data_inner.discriminant_size;
+                try self.storeDiscriminant(base_offset + @as(i32, @intCast(disc_offset_inner)), tag.discriminant, disc_size_inner);
+
+                const heap_ptr_slot = self.codegen.allocStackSlot(8);
+                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                try builder.addImmArg(@intCast(inner_stack_size));
+                try builder.addImmArg(@intCast(inner_layout.data.tag_union.alignment.toByteUnits()));
+                try builder.addImmArg(0);
+                try builder.addRegArg(roc_ops_reg);
+                try self.callBuiltin(&builder, @intFromPtr(&allocateWithRefcountC), .allocate_with_refcount);
+
+                const ret_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X0 else .RAX;
+                if (comptime target.toCpuArch() == .aarch64) {
+                    try self.codegen.emit.strRegMemSoff(.w64, ret_reg, .FP, heap_ptr_slot);
+                } else {
+                    try self.codegen.emit.movMemReg(.w64, .RBP, heap_ptr_slot, ret_reg);
+                }
+                const heap_ptr = try self.allocTempGeneral();
+                if (comptime target.toCpuArch() == .aarch64) {
+                    try self.codegen.emit.ldrRegMemSoff(.w64, heap_ptr, .FP, heap_ptr_slot);
+                } else {
+                    try self.codegen.emit.movRegMem(.w64, heap_ptr, .RBP, heap_ptr_slot);
+                }
+                const temp_reg = try self.allocTempGeneral();
+                var copied: u32 = 0;
+                while (copied < inner_stack_size) : (copied += 8) {
+                    if (comptime target.toCpuArch() == .aarch64) {
+                        try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, base_offset + @as(i32, @intCast(copied)));
+                        try self.codegen.emit.strRegMemSoff(.w64, temp_reg, heap_ptr, @intCast(copied));
+                    } else {
+                        try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, base_offset + @as(i32, @intCast(copied)));
+                        try self.codegen.emit.movMemReg(.w64, heap_ptr, @intCast(copied), temp_reg);
+                    }
+                }
+                self.codegen.freeGeneral(temp_reg);
+                self.codegen.freeGeneral(heap_ptr);
+
+                const result_reg = try self.allocTempGeneral();
+                if (comptime target.toCpuArch() == .aarch64) {
+                    try self.codegen.emit.ldrRegMemSoff(.w64, result_reg, .FP, heap_ptr_slot);
+                } else {
+                    try self.codegen.emit.movRegMem(.w64, result_reg, .RBP, heap_ptr_slot);
+                }
+                return .{ .general_reg = result_reg };
+            }
+
             if (union_layout.tag != .tag_union) {
                 // Might be a simple enum represented as a scalar
                 return .{ .immediate_i64 = tag.discriminant };
@@ -8419,16 +8582,35 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
         fn generateTag(self: *Self, tag: anytype) Error!ValueLocation {
             const ls = self.layout_store orelse unreachable;
 
-            // Get the union layout
+            // Get the union layout — may be direct .tag_union or .box wrapping a .tag_union
+            // (recursive tag unions like `Elem := [Div(List(Elem)), ...]` are boxed)
             const union_layout = ls.getLayout(tag.union_layout);
-            if (union_layout.tag != .tag_union) {
-                // TODO: support tag construction for boxed tag unions (e.g., Result
-                // represented as Box(opaque_ptr)). Requires heap allocation for the
-                // boxed payload. For now, fall back to interpreter.
-                return Error.NotImplemented;
-            }
+            const is_boxed = union_layout.tag == .box;
 
-            const tu_data = ls.getTagUnionData(union_layout.data.tag_union.idx);
+            const tu_data: *const layout.TagUnionData = if (union_layout.tag == .tag_union)
+                ls.getTagUnionData(union_layout.data.tag_union.idx)
+            else if (is_boxed) blk: {
+                const inner_layout = ls.getLayout(union_layout.data.box);
+                if (inner_layout.tag == .tag_union) {
+                    break :blk ls.getTagUnionData(inner_layout.data.tag_union.idx);
+                } else {
+                    // Box of scalar/ZST — no payload to store
+                    return .{ .immediate_i64 = @as(i64, @intCast(tag.discriminant)) };
+                }
+            } else {
+                // Layout could not be resolved (e.g., unresolved polymorphic type parameter).
+                // Emit a crash so the build can continue.
+                try self.emitRocCrash("tag expression has unresolved layout");
+                return .{ .immediate_i64 = 0 };
+            };
+            // Get alignment from the tag_union layout (either direct or through box)
+            const tu_alignment: std.mem.Alignment = if (union_layout.tag == .tag_union)
+                union_layout.data.tag_union.alignment
+            else if (is_boxed) blk: {
+                const inner_layout = ls.getLayout(union_layout.data.box);
+                break :blk inner_layout.data.tag_union.alignment;
+            } else .@"8";
+
             const stack_size = tu_data.size;
 
             // Allocate stack space for the tag union
@@ -8482,7 +8664,165 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             const disc_size = tu_data.discriminant_size;
             try self.storeDiscriminant(base_offset + @as(i32, @intCast(disc_offset)), tag.discriminant, disc_size);
 
+            if (is_boxed) {
+                // Boxed tag union (recursive type): allocate heap memory, copy stack data to heap,
+                // return the heap pointer.
+                const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+                const heap_ptr_slot = self.codegen.allocStackSlot(8);
+
+                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                try builder.addImmArg(@intCast(stack_size));
+                try builder.addImmArg(@intCast(tu_alignment.toByteUnits()));
+                try builder.addImmArg(1); // refcounted (tag unions with payloads may contain refcounted data)
+                try builder.addRegArg(roc_ops_reg);
+                try self.callBuiltin(&builder, @intFromPtr(&allocateWithRefcountC), .allocate_with_refcount);
+
+                // Save heap pointer
+                const ret_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X0 else .RAX;
+                if (comptime target.toCpuArch() == .aarch64) {
+                    try self.codegen.emit.strRegMemSoff(.w64, ret_reg, .FP, heap_ptr_slot);
+                } else {
+                    try self.codegen.emit.movMemReg(.w64, .RBP, heap_ptr_slot, ret_reg);
+                }
+
+                // Copy tag union data from stack to heap
+                const heap_ptr = try self.allocTempGeneral();
+                if (comptime target.toCpuArch() == .aarch64) {
+                    try self.codegen.emit.ldrRegMemSoff(.w64, heap_ptr, .FP, heap_ptr_slot);
+                } else {
+                    try self.codegen.emit.movRegMem(.w64, heap_ptr, .RBP, heap_ptr_slot);
+                }
+                const temp_reg = try self.allocTempGeneral();
+                var copied: u32 = 0;
+                while (copied < stack_size) : (copied += 8) {
+                    if (comptime target.toCpuArch() == .aarch64) {
+                        try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, base_offset + @as(i32, @intCast(copied)));
+                        try self.codegen.emit.strRegMemSoff(.w64, temp_reg, heap_ptr, @intCast(copied));
+                    } else {
+                        try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, base_offset + @as(i32, @intCast(copied)));
+                        try self.codegen.emit.movMemReg(.w64, heap_ptr, @intCast(copied), temp_reg);
+                    }
+                }
+                self.codegen.freeGeneral(temp_reg);
+                self.codegen.freeGeneral(heap_ptr);
+
+                // Return the heap pointer
+                const result_reg = try self.allocTempGeneral();
+                if (comptime target.toCpuArch() == .aarch64) {
+                    try self.codegen.emit.ldrRegMemSoff(.w64, result_reg, .FP, heap_ptr_slot);
+                } else {
+                    try self.codegen.emit.movRegMem(.w64, result_reg, .RBP, heap_ptr_slot);
+                }
+                return .{ .general_reg = result_reg };
+            }
+
             return .{ .stack = .{ .offset = base_offset } };
+        }
+
+        /// Generate code for a nominal type wrapper.
+        /// For recursive nominals (box layout), generate the backing expression,
+        /// then heap-allocate and copy the raw value into it, returning the pointer.
+        /// For non-recursive nominals, this is transparent (just generate backing expr).
+        fn generateNominal(self: *Self, nom: anytype) Error!ValueLocation {
+            const ls = self.layout_store orelse unreachable;
+            const nom_layout = ls.getLayout(nom.nominal_layout);
+
+            if (nom_layout.tag == .box) {
+                // Recursive nominal: generate backing expr (raw tag_union), then box it
+                const inner_layout_idx = nom_layout.data.box;
+                const inner_layout = ls.getLayout(inner_layout_idx);
+                const size_align = ls.layoutSizeAlign(inner_layout);
+                const inner_size = size_align.size;
+                const inner_align: std.mem.Alignment = if (inner_layout.tag == .tag_union)
+                    inner_layout.data.tag_union.alignment
+                else
+                    .@"8";
+
+                // Generate the backing expression - its result is the raw value
+                const backing_loc = try self.generateExpr(nom.backing_expr);
+
+                // Ensure the raw value is on the stack so we can copy it to heap
+                const base_offset: i32 = switch (backing_loc) {
+                    .stack => |s| s.offset,
+                    .stack_i128 => |off| off,
+                    .stack_str => |off| off,
+                    .immediate_i64 => |val| blk: {
+                        const slot = self.codegen.allocStackSlot(inner_size);
+                        try self.zeroStackArea(slot, inner_size);
+                        const reg = try self.allocTempGeneral();
+                        try self.codegen.emitLoadImm(reg, val);
+                        try self.codegen.emitStoreStack(.w64, slot, reg);
+                        self.codegen.freeGeneral(reg);
+                        break :blk slot;
+                    },
+                    .general_reg => |reg| blk: {
+                        const slot = self.codegen.allocStackSlot(inner_size);
+                        try self.zeroStackArea(slot, inner_size);
+                        try self.codegen.emitStoreStack(.w64, slot, reg);
+                        self.codegen.freeGeneral(reg);
+                        break :blk slot;
+                    },
+                    else => blk: {
+                        // Fallback: allocate stack slot and copy the value
+                        const slot = self.codegen.allocStackSlot(inner_size);
+                        try self.zeroStackArea(slot, inner_size);
+                        try self.copyBytesToStackOffset(slot, backing_loc, @min(inner_size, 8));
+                        break :blk slot;
+                    },
+                };
+
+                // Allocate heap memory
+                const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+                const heap_ptr_slot = self.codegen.allocStackSlot(8);
+
+                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                try builder.addImmArg(@intCast(inner_size));
+                try builder.addImmArg(@intCast(inner_align.toByteUnits()));
+                try builder.addImmArg(1); // refcounted
+                try builder.addRegArg(roc_ops_reg);
+                try self.callBuiltin(&builder, @intFromPtr(&allocateWithRefcountC), .allocate_with_refcount);
+
+                // Save heap pointer from return register
+                const ret_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X0 else .RAX;
+                if (comptime target.toCpuArch() == .aarch64) {
+                    try self.codegen.emit.strRegMemSoff(.w64, ret_reg, .FP, heap_ptr_slot);
+                } else {
+                    try self.codegen.emit.movMemReg(.w64, .RBP, heap_ptr_slot, ret_reg);
+                }
+
+                // Copy raw value from stack to heap
+                const heap_ptr = try self.allocTempGeneral();
+                if (comptime target.toCpuArch() == .aarch64) {
+                    try self.codegen.emit.ldrRegMemSoff(.w64, heap_ptr, .FP, heap_ptr_slot);
+                } else {
+                    try self.codegen.emit.movRegMem(.w64, heap_ptr, .RBP, heap_ptr_slot);
+                }
+                const temp_reg = try self.allocTempGeneral();
+                var copied: u32 = 0;
+                while (copied < inner_size) : (copied += 8) {
+                    if (comptime target.toCpuArch() == .aarch64) {
+                        try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, base_offset + @as(i32, @intCast(copied)));
+                        try self.codegen.emit.strRegMemSoff(.w64, temp_reg, heap_ptr, @intCast(copied));
+                    } else {
+                        try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, base_offset + @as(i32, @intCast(copied)));
+                        try self.codegen.emit.movMemReg(.w64, heap_ptr, @intCast(copied), temp_reg);
+                    }
+                }
+                self.codegen.freeGeneral(temp_reg);
+                self.codegen.freeGeneral(heap_ptr);
+
+                // Return the heap pointer
+                const result_reg = try self.allocTempGeneral();
+                if (comptime target.toCpuArch() == .aarch64) {
+                    try self.codegen.emit.ldrRegMemSoff(.w64, result_reg, .FP, heap_ptr_slot);
+                } else {
+                    try self.codegen.emit.movRegMem(.w64, result_reg, .RBP, heap_ptr_slot);
+                }
+                return .{ .general_reg = result_reg };
+            } else {
+                // Non-recursive nominal: transparent wrapper
+                return try self.generateExpr(nom.backing_expr);
+            }
         }
 
         /// Copy a value to a stack offset
@@ -12407,13 +12747,16 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                 // Zero-sized type — nothing to store.
                                 return;
                             },
+                            .box, .box_of_zst => {
+                                // Box is a heap pointer (8 bytes on 64-bit)
+                                const reg = try self.ensureInGeneralReg(loc);
+                                try self.emitStoreToMem(saved_ptr_reg, reg);
+                                return;
+                            },
                             .closure => {
                                 const sa = ls.layoutSizeAlign(layout_val);
                                 try self.copyStackToPtr(loc, saved_ptr_reg, sa.size);
                                 return;
-                            },
-                            else => {
-                                unreachable;
                             },
                         }
                     } else {
