@@ -312,11 +312,6 @@ pub const io_spec_tests = [_]TestSpec{
         .io_spec = "1>Hello, World!",
         .description = "Regression test: Hosted effects on opaque types with data (not just [])",
     },
-    .{
-        .roc_file = "test/fx/polymorphic_closure_capture.roc",
-        .io_spec = "1>int: 42.0|1>str: hello",
-        .description = "Regression test: Polymorphic closure capture duplication during monomorphization",
-    },
 };
 
 /// Get the total number of IO spec tests

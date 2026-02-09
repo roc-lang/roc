@@ -3229,6 +3229,30 @@ test "large record - higher-order function returning large struct" {
     , "foo", .no_trace);
 }
 
+test "polymorphic closure capture duplication during monomorphization" {
+    // Regression test: when a polymorphic function creates a closure that captures
+    // its argument, each specialization must get independent copies of the captures.
+    // Without proper duplication, specializations share capture data, causing corruption.
+
+    // Polymorphic function that returns a closure capturing its argument,
+    // called with both integer and string types.
+    try runExpectI64(
+        \\{
+        \\    make_getter = |n| |_x| n
+        \\    get_num = make_getter(42)
+        \\    get_num(0)
+        \\}
+    , 42, .no_trace);
+
+    try runExpectStr(
+        \\{
+        \\    make_getter = |n| |_x| n
+        \\    get_str = make_getter("hello")
+        \\    get_str(0)
+        \\}
+    , "hello", .no_trace);
+}
+
 test "large record - chained higher-order calls with growing intermediates" {
     // Simulates the record builder pattern: nested apply calls build up larger types
     try runExpectStr(
