@@ -151,7 +151,7 @@ fn resolveZstName(module_env: *ModuleEnv, expr_type_var: types.Var) []const u8 {
 }
 
 /// Resolve the element type of a List type variable to its ZST display string.
-/// The type is expected to be `List elem` where `elem` is a ZST type.
+/// The type is expected to be `List(item)` where `item` is a ZST type.
 fn resolveListElemZstName(module_env: *ModuleEnv, expr_type_var: types.Var) []const u8 {
     var resolved = module_env.types.resolveVar(expr_type_var);
 
