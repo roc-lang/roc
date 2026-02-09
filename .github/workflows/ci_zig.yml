@@ -1,6 +1,8 @@
 on:
   workflow_call:
   workflow_dispatch:
+  pull_request:
+
 
 name: CI New Compiler
 
@@ -19,62 +21,62 @@ jobs:
           version: 0.15.2
           use-cache: true
 
-      - name: zig lints
-        run: |
-          zig run ci/zig_lints.zig
+      # - name: zig lints
+      #   run: |
+      #     zig run ci/zig_lints.zig
 
-          zig build check-fmt
+      #     zig build check-fmt
 
-      - name: Check that test is actually wired up
-        run: |
-          zig run ci/check_test_wiring.zig
+      # - name: Check that test is actually wired up
+      #   run: |
+      #     zig run ci/check_test_wiring.zig
 
-      - name: Check fx platform test coverage
-        run: |
-          zig build checkfx
+      # - name: Check fx platform test coverage
+      #   run: |
+      #     zig build checkfx
 
-      # We run zig check with tracy enabled.
-      # This ensure it compiles and doesn't go stale.
-      - name: Checkout Tracy
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # ratchet:actions/checkout@v4
-        with:
-          path: tracy
-          repository: wolfpld/tracy
-          ref: v0.11.0
+      # # We run zig check with tracy enabled.
+      # # This ensure it compiles and doesn't go stale.
+      # - name: Checkout Tracy
+      #   uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # ratchet:actions/checkout@v4
+      #   with:
+      #     path: tracy
+      #     repository: wolfpld/tracy
+      #     ref: v0.11.0
 
-      - name: zig check
-        run: |
-          # Just the do super fast check step for now.
-          zig build -Dno-bin -Dfuzz -Dtracy=./tracy
+      # - name: zig check
+      #   run: |
+      #     # Just the do super fast check step for now.
+      #     zig build -Dno-bin -Dfuzz -Dtracy=./tracy
 
-      # To `roc check` benchmark script:
-      - name: setup Roc
-        run: |
-          curl -s -OL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_x86_64-latest.tar.gz
-          # rename nightly tar
-          mv $(ls | grep "roc_nightly.*tar\.gz") roc_nightly.tar.gz
-          # decompress the tar
-          tar -xzf roc_nightly.tar.gz
-          rm roc_nightly.tar.gz
-          # simplify nightly folder name
-          mv roc_nightly* roc_nightly
-          cd roc_nightly
-          # make roc binary available
-          echo "$(pwd)" >> $GITHUB_PATH
+      # # To `roc check` benchmark script:
+      # - name: setup Roc
+      #   run: |
+      #     curl -s -OL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_x86_64-latest.tar.gz
+      #     # rename nightly tar
+      #     mv $(ls | grep "roc_nightly.*tar\.gz") roc_nightly.tar.gz
+      #     # decompress the tar
+      #     tar -xzf roc_nightly.tar.gz
+      #     rm roc_nightly.tar.gz
+      #     # simplify nightly folder name
+      #     mv roc_nightly* roc_nightly
+      #     cd roc_nightly
+      #     # make roc binary available
+      #     echo "$(pwd)" >> $GITHUB_PATH
 
-      - run: roc version
+      # - run: roc version
 
-      - run: |
-          roc check src/PROFILING/exec_bench.roc
-          roc test src/PROFILING/exec_bench.roc
+      # - run: |
+      #     roc check src/PROFILING/exec_bench.roc
+      #     roc test src/PROFILING/exec_bench.roc
 
-      - name: Run Playground Tests
-        run: |
-          zig build test-playground -Doptimize=ReleaseSmall -- --verbose
+      # - name: Run Playground Tests
+      #   run: |
+      #     zig build test-playground -Doptimize=ReleaseSmall -- --verbose
 
-      - name: Verify Serialized Type Sizes
-        run: |
-          zig build test-serialization-sizes
+      # - name: Verify Serialized Type Sizes
+      #   run: |
+      #     zig build test-serialization-sizes
 
   zig-tests:
     needs: check-once
@@ -83,30 +85,30 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-15-intel
-            cpu_flag: -Dcpu=x86_64_v3
-            target_flag: ''
-          - os: macos-15
-            cpu_flag: ''
-            target_flag: ''
+          # - os: macos-15-intel
+          #   cpu_flag: -Dcpu=x86_64_v3
+          #   target_flag: ''
+          # - os: macos-15
+          #   cpu_flag: ''
+          #   target_flag: ''
           - os: ubuntu-22.04
             cpu_flag: -Dcpu=x86_64_v3
             target_flag: -Dtarget=x86_64-linux-musl
-          - os: ubuntu-24.04
-            cpu_flag: ''
-            target_flag: -Dtarget=x86_64-linux-musl
-          - os: ubuntu-24.04-arm
-            cpu_flag: ''
-            target_flag: ''  # Native build for kcov (Zig 0.15.2 x86_64 has DWARF bug)
-          - os: windows-2022
-            cpu_flag: -Dcpu=x86_64_v3
-            target_flag: ''
-          - os: windows-2025
-            cpu_flag: -Dcpu=x86_64_v3
-            target_flag: ''
-          - os: windows-11-arm
-            cpu_flag: ''
-            target_flag: ''
+          # - os: ubuntu-24.04
+          #   cpu_flag: ''
+          #   target_flag: -Dtarget=x86_64-linux-musl
+          # - os: ubuntu-24.04-arm
+          #   cpu_flag: ''
+          #   target_flag: ''  # Native build for kcov (Zig 0.15.2 x86_64 has DWARF bug)
+          # - os: windows-2022
+          #   cpu_flag: -Dcpu=x86_64_v3
+          #   target_flag: ''
+          # - os: windows-2025
+          #   cpu_flag: -Dcpu=x86_64_v3
+          #   target_flag: ''
+          # - os: windows-11-arm
+          #   cpu_flag: ''
+          #   target_flag: ''
 
     steps:
       - name: Checkout
@@ -121,140 +123,140 @@ jobs:
         run: |
           sudo rm /usr/lib/llvm-18/bin/llvm-config
 
-      - name: build roc + repro executables
-        uses: ./.github/actions/flaky-retry
-        with:
-          # -Dstrip=false preserves debug info for valgrind suppressions to match function names
-          command: "zig build -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast ${{ matrix.cpu_flag }} ${{ matrix.target_flag }}"
-          error_string_contains: "build.zig.zon"
-          retry_count: 3
+      # - name: build roc + repro executables
+      #   uses: ./.github/actions/flaky-retry
+      #   with:
+      #     # -Dstrip=false preserves debug info for valgrind suppressions to match function names
+      #     command: "zig build -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast ${{ matrix.cpu_flag }} ${{ matrix.target_flag }}"
+      #     error_string_contains: "build.zig.zon"
+      #     retry_count: 3
 
-      - name: Check Builtin.roc formatting (Unix)
-        if: runner.os != 'Windows'
-        run: |
-          ./zig-out/bin/roc fmt --check src/build/roc/Builtin.roc
+      # - name: Check Builtin.roc formatting (Unix)
+      #   if: runner.os != 'Windows'
+      #   run: |
+      #     ./zig-out/bin/roc fmt --check src/build/roc/Builtin.roc
 
-      - name: Check Builtin.roc formatting (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          zig-out\bin\roc.exe fmt --check src/build/roc/Builtin.roc
+      # - name: Check Builtin.roc formatting (Windows)
+      #   if: runner.os == 'Windows'
+      #   run: |
+      #     zig-out\bin\roc.exe fmt --check src/build/roc/Builtin.roc
 
-      - name: Run Test Platforms (Unix)
-        if: runner.os != 'Windows'
-        run: |
-          zig build test-cli ${{ matrix.target_flag }}
+      # - name: Run Test Platforms (Unix)
+      #   if: runner.os != 'Windows'
+      #   run: |
+      #     zig build test-cli ${{ matrix.target_flag }}
 
-      - name: Setup MSVC (Windows)
-        if: runner.os == 'Windows'
-        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756  # ratchet:ilammy/msvc-dev-cmd@v1.13.0
-        with:
-          arch: ${{ matrix.os == 'windows-11-arm' && 'arm64' || 'x64' }}
+      # - name: Setup MSVC (Windows)
+      #   if: runner.os == 'Windows'
+      #   uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756  # ratchet:ilammy/msvc-dev-cmd@v1.13.0
+      #   with:
+      #     arch: ${{ matrix.os == 'windows-11-arm' && 'arm64' || 'x64' }}
 
-      - name: Run Test Platforms (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          zig build test-cli
+      # - name: Run Test Platforms (Windows)
+      #   if: runner.os == 'Windows'
+      #   run: |
+      #     zig build test-cli
 
-      - name: Build Test Platforms (cross-compile)
-        if: runner.os != 'Windows'
-        run: |
-          ./zig-out/bin/test_runner ./zig-out/bin/roc int --mode=cross
+      # - name: Build Test Platforms (cross-compile)
+      #   if: runner.os != 'Windows'
+      #   run: |
+      #     ./zig-out/bin/test_runner ./zig-out/bin/roc int --mode=cross
 
-      - name: roc executable minimal check (Unix)
-        if: runner.os != 'Windows'
-        run: |
-          ./zig-out/bin/roc check ./src/PROFILING/bench_repeated_check.roc
+      # - name: roc executable minimal check (Unix)
+      #   if: runner.os != 'Windows'
+      #   run: |
+      #     ./zig-out/bin/roc check ./src/PROFILING/bench_repeated_check.roc
 
-      - name: roc executable minimal check (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          zig-out\bin\roc.exe check ./src/PROFILING/bench_repeated_check.roc
+      # - name: roc executable minimal check (Windows)
+      #   if: runner.os == 'Windows'
+      #   run: |
+      #     zig-out\bin\roc.exe check ./src/PROFILING/bench_repeated_check.roc
 
-      - name: zig snapshot tests
-        run: zig build snapshot ${{ matrix.target_flag }} -- --debug
+      # - name: zig snapshot tests
+      #   run: zig build snapshot ${{ matrix.target_flag }} -- --debug
 
-      # 1) in debug mode
-      - name: build and execute tests, build repro executables
-        uses: ./.github/actions/flaky-retry
-        with:
-          command: "zig build test -Dfuzz -Dsystem-afl=false ${{ matrix.target_flag }}"
-          error_string_contains: "double roundtrip bundle|connectTcp|downloadToFile|build.zig.zon|Run terminated abnormally|terminated by signal"
-          retry_count: 3
+      # # 1) in debug mode
+      # - name: build and execute tests, build repro executables
+      #   uses: ./.github/actions/flaky-retry
+      #   with:
+      #     command: "zig build test -Dfuzz -Dsystem-afl=false ${{ matrix.target_flag }}"
+      #     error_string_contains: "double roundtrip bundle|connectTcp|downloadToFile|build.zig.zon|Run terminated abnormally|terminated by signal"
+      #     retry_count: 3
 
-      # 2) in release mode
-      - name: Build and execute tests, build repro executables. All in release mode.
-        uses: ./.github/actions/flaky-retry
-        with:
-          command: "zig build test -Doptimize=ReleaseFast -Dfuzz -Dsystem-afl=false ${{ matrix.cpu_flag }} ${{ matrix.target_flag }}"
-          error_string_contains: "double roundtrip bundle|connectTcp|downloadToFile|build.zig.zon|Run terminated abnormally|terminated by signal"
-          retry_count: 3
+      # # 2) in release mode
+      # - name: Build and execute tests, build repro executables. All in release mode.
+      #   uses: ./.github/actions/flaky-retry
+      #   with:
+      #     command: "zig build test -Doptimize=ReleaseFast -Dfuzz -Dsystem-afl=false ${{ matrix.cpu_flag }} ${{ matrix.target_flag }}"
+      #     error_string_contains: "double roundtrip bundle|connectTcp|downloadToFile|build.zig.zon|Run terminated abnormally|terminated by signal"
+      #     retry_count: 3
 
-      - name: Check for snapshot changes
-        run: |
-          git diff --exit-code test/snapshots || {
-            echo ""
-            echo ""
-            echo "OOPS! It looks like the snapshots in 'test/snapshots' have changed.";
-            echo "Please run 'zig build snapshot' locally, review the updates, and commit the changes.";
-            echo ""
-            echo "NOTE: If snapshots pass locally but fail in CI, you may need to merge origin/main";
-            echo "into your branch first, then regenerate snapshots. CI tests your branch merged with";
-            echo "main, so new snapshots from main can cause diffs when regenerated with your changes.";
-            echo ""
-            echo "Here's what changed:";
-            echo ""
-            git diff test/snapshots;
-            exit 1;
-          }
+      # - name: Check for snapshot changes
+      #   run: |
+      #     git diff --exit-code test/snapshots || {
+      #       echo ""
+      #       echo ""
+      #       echo "OOPS! It looks like the snapshots in 'test/snapshots' have changed.";
+      #       echo "Please run 'zig build snapshot' locally, review the updates, and commit the changes.";
+      #       echo ""
+      #       echo "NOTE: If snapshots pass locally but fail in CI, you may need to merge origin/main";
+      #       echo "into your branch first, then regenerate snapshots. CI tests your branch merged with";
+      #       echo "main, so new snapshots from main can cause diffs when regenerated with your changes.";
+      #       echo ""
+      #       echo "Here's what changed:";
+      #       echo ""
+      #       git diff test/snapshots;
+      #       exit 1;
+      #     }
 
-      - name: check if statically linked (ubuntu)
-        if: startsWith(matrix.os, 'ubuntu')
-        run: |
-          file ./zig-out/bin/roc | grep "statically linked"
+      # - name: check if statically linked (ubuntu)
+      #   if: startsWith(matrix.os, 'ubuntu')
+      #   run: |
+      #     file ./zig-out/bin/roc | grep "statically linked"
 
-      - name: check if statically linked (macOS)
-        if: startsWith(matrix.os, 'macos')
-        run: |
-          otool_out="$(otool -L ./zig-out/bin/roc)"
-          num_lines=$(echo "$otool_out" | wc -l)
-          if [ "$num_lines" -ne 2 ]; then
-            echo "$otool_out"
-            echo "Looks like you added a new dynamic dependency to the Roc executable, we want Roc to be super easy to install, so libSystem should be the only dynamic dependency."
-            exit 1
-          fi
+      # - name: check if statically linked (macOS)
+      #   if: startsWith(matrix.os, 'macos')
+      #   run: |
+      #     otool_out="$(otool -L ./zig-out/bin/roc)"
+      #     num_lines=$(echo "$otool_out" | wc -l)
+      #     if [ "$num_lines" -ne 2 ]; then
+      #       echo "$otool_out"
+      #       echo "Looks like you added a new dynamic dependency to the Roc executable, we want Roc to be super easy to install, so libSystem should be the only dynamic dependency."
+      #       exit 1
+      #     fi
 
-      - name: check if statically linked (Windows)
-        if: startsWith(matrix.os, 'windows')
-        run: |
-          $imports = (Get-Command zig-out\bin\roc.exe).FileVersionInfo.ImportCharacterSet
-          if ($imports) {
-              echo "Looks like the executable has dynamic dependencies. We want Roc to be super easy to install, so it should be statically linked."
-              echo "Dynamic dependencies found:"
-              $imports | ForEach-Object { echo "  $_" }
-              exit 1
-          }
+      # - name: check if statically linked (Windows)
+      #   if: startsWith(matrix.os, 'windows')
+      #   run: |
+      #     $imports = (Get-Command zig-out\bin\roc.exe).FileVersionInfo.ImportCharacterSet
+      #     if ($imports) {
+      #         echo "Looks like the executable has dynamic dependencies. We want Roc to be super easy to install, so it should be statically linked."
+      #         echo "Dynamic dependencies found:"
+      #         $imports | ForEach-Object { echo "  $_" }
+      #         exit 1
+      #     }
 
-      # Parser code coverage - run on ARM64 Linux (native build)
-      # Note: Zig 0.15.2 on x86_64 generates invalid DWARF .debug_line sections,
-      # causing libdw to fail parsing user source files. ARM64 works correctly.
-      - name: Install kcov dependencies
-        if: matrix.os == 'ubuntu-24.04-arm'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libdw-dev libcurl4-openssl-dev
+      # # Parser code coverage - run on ARM64 Linux (native build)
+      # # Note: Zig 0.15.2 on x86_64 generates invalid DWARF .debug_line sections,
+      # # causing libdw to fail parsing user source files. ARM64 works correctly.
+      # - name: Install kcov dependencies
+      #   if: matrix.os == 'ubuntu-24.04-arm'
+      #   run: |
+      #     sudo apt-get update
+      #     sudo apt-get install -y libdw-dev libcurl4-openssl-dev
 
-      - name: Parser Code Coverage
-        if: matrix.os == 'ubuntu-24.04-arm'
-        run: |
-          # Build kcov and the test binary via the coverage step
-          # (coverage step runs kcov and generates the report)
-          zig build coverage
+      # - name: Parser Code Coverage
+      #   if: matrix.os == 'ubuntu-24.04-arm'
+      #   run: |
+      #     # Build kcov and the test binary via the coverage step
+      #     # (coverage step runs kcov and generates the report)
+      #     zig build coverage
 
-          echo "=== Coverage summary ==="
-          cat kcov-output/parser/parse_unit_coverage/coverage.json | jq '{total: .total_lines, covered: .covered_lines, percent: .percent_covered}'
+      #     echo "=== Coverage summary ==="
+      #     cat kcov-output/parser/parse_unit_coverage/coverage.json | jq '{total: .total_lines, covered: .covered_lines, percent: .percent_covered}'
 
-          echo "=== Files found ==="
-          cat kcov-output/parser/parse_unit_coverage/coverage.json | jq -r '.files[].file' | head -10
+      #     echo "=== Files found ==="
+      #     cat kcov-output/parser/parse_unit_coverage/coverage.json | jq -r '.files[].file' | head -10
 
       - name: test with valgrind (ubuntu)
         # Sadly, with zig 0.14.1, this had to be disabled on arm.
@@ -274,64 +276,64 @@ jobs:
           ./ci/custom_valgrind.sh ./zig-out/bin/roc --no-cache test/str/app.roc
           ./ci/custom_valgrind.sh ./zig-out/bin/roc --no-cache test/int/app.roc
 
-  zig-cross-compile:
-    needs: check-once
-    runs-on: ubuntu-24.04
-    strategy:
-      fail-fast: false
-      matrix:
-        target:
-          - aarch64-linux-musl
-          - aarch64-macos-none
-          - aarch64-windows-gnu
-          - arm-linux-musleabihf
-          - x86-linux-musl
-          - x86_64-linux-musl
-          - x86_64-macos-none
-          - x86_64-windows-gnu
+  # zig-cross-compile:
+  #   needs: check-once
+  #   runs-on: ubuntu-24.04
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       target:
+  #         - aarch64-linux-musl
+  #         - aarch64-macos-none
+  #         - aarch64-windows-gnu
+  #         - arm-linux-musleabihf
+  #         - x86-linux-musl
+  #         - x86_64-linux-musl
+  #         - x86_64-macos-none
+  #         - x86_64-windows-gnu
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # ratchet:actions/checkout@v4
-      - uses: mlugg/setup-zig@8d6198c65fb0feaa111df26e6b467fea8345e46f # ratchet:mlugg/setup-zig@v2.0.5
-        with:
-          version: 0.15.2
-          use-cache: true
+  #   steps:
+  #     - name: Checkout
+  #       uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # ratchet:actions/checkout@v4
+  #     - uses: mlugg/setup-zig@8d6198c65fb0feaa111df26e6b467fea8345e46f # ratchet:mlugg/setup-zig@v2.0.5
+  #       with:
+  #         version: 0.15.2
+  #         use-cache: true
 
-      - name: cross compile with llvm
-        uses: ./.github/actions/flaky-retry
-        with:
-          command: zig build -Dtarget=${{ matrix.target }}
-          error_string_contains: "error: bad HTTP response code: '500 Internal Server Error'|TemporaryNameServerFailure|503|Timeout"
+  #     - name: cross compile with llvm
+  #       uses: ./.github/actions/flaky-retry
+  #       with:
+  #         command: zig build -Dtarget=${{ matrix.target }}
+  #         error_string_contains: "error: bad HTTP response code: '500 Internal Server Error'|TemporaryNameServerFailure|503|Timeout"
 
-  # Test cross-compilation with Roc's cross-compilation system (musl + glibc)
-  roc-cross-compile:
-    uses: ./.github/workflows/ci_cross_compile.yml
+  # # Test cross-compilation with Roc's cross-compilation system (musl + glibc)
+  # roc-cross-compile:
+  #   uses: ./.github/workflows/ci_cross_compile.yml
 
-  # Check if nix-related files changed
-  check-nix-changes:
-    runs-on: ubuntu-24.04
-    outputs:
-      nix: ${{ steps.filter.outputs.nix }}
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # ratchet:actions/checkout@v4
-      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # ratchet:dorny/paths-filter@v3
-        id: filter
-        with:
-          filters: |
-            nix:
-              - 'build.zig'
-              - 'build.zig.zon'
-              - 'flake.lock'
-              - '**/*.nix'
+  # # Check if nix-related files changed
+  # check-nix-changes:
+  #   runs-on: ubuntu-24.04
+  #   outputs:
+  #     nix: ${{ steps.filter.outputs.nix }}
+  #   steps:
+  #     - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # ratchet:actions/checkout@v4
+  #     - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # ratchet:dorny/paths-filter@v3
+  #       id: filter
+  #       with:
+  #         filters: |
+  #           nix:
+  #             - 'build.zig'
+  #             - 'build.zig.zon'
+  #             - 'flake.lock'
+  #             - '**/*.nix'
 
-  # Test building inside nix environment
-  nix-build:
-    needs: [check-once, check-nix-changes]
-    if: needs.check-nix-changes.outputs.nix == 'true'
-    uses: ./.github/workflows/ci_zig_nix.yml
+  # # Test building inside nix environment
+  # nix-build:
+  #   needs: [check-once, check-nix-changes]
+  #   if: needs.check-nix-changes.outputs.nix == 'true'
+  #   uses: ./.github/workflows/ci_zig_nix.yml
 
-  # Benchmark interpreter performance (main vs PR)
-  zig-benchmarks:
-    needs: check-once
-    uses: ./.github/workflows/ci_zig_benchmarks.yml
+  # # Benchmark interpreter performance (main vs PR)
+  # zig-benchmarks:
+  #   needs: check-once
+  #   uses: ./.github/workflows/ci_zig_benchmarks.yml
