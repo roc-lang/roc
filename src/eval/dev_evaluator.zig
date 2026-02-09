@@ -310,15 +310,17 @@ const DevRocEnv = struct {
 
     /// Allocation function for RocOps.
     fn rocAllocFn(roc_alloc: *RocAlloc, env: *anyopaque) callconv(.c) void {
-        _ = env; // unused with static buffer workaround
-
         // Align the offset to the requested alignment
         const alignment = roc_alloc.alignment;
         const mask = alignment - 1;
         const aligned_offset = (StaticAlloc.offset + mask) & ~mask;
 
         if (aligned_offset + roc_alloc.length > StaticAlloc.buffer.len) {
-            @panic("DevRocEnv: static buffer overflow");
+            const self: *DevRocEnv = @ptrCast(@alignCast(env));
+            self.crashed = true;
+            if (self.crash_message) |old| self.allocator.free(old);
+            self.crash_message = self.allocator.dupe(u8, "static buffer overflow in alloc") catch null;
+            longjmp(&self.jmp_buf, 1);
         }
 
         const ptr: [*]u8 = @ptrCast(&StaticAlloc.buffer[aligned_offset]);
@@ -338,14 +340,18 @@ const DevRocEnv = struct {
 
     /// Reallocation function for RocOps.
     /// With static buffer, we allocate new space and copy data (old space is not reclaimed).
-    fn rocReallocFn(roc_realloc: *RocRealloc, _: *anyopaque) callconv(.c) void {
+    fn rocReallocFn(roc_realloc: *RocRealloc, env: *anyopaque) callconv(.c) void {
         // Align the offset to the requested alignment
         const alignment = roc_realloc.alignment;
         const mask = alignment - 1;
         const aligned_offset = (StaticAlloc.offset + mask) & ~mask;
 
         if (aligned_offset + roc_realloc.new_length > StaticAlloc.buffer.len) {
-            @panic("DevRocEnv: static buffer overflow in realloc");
+            const self: *DevRocEnv = @ptrCast(@alignCast(env));
+            self.crashed = true;
+            if (self.crash_message) |old| self.allocator.free(old);
+            self.crash_message = self.allocator.dupe(u8, "static buffer overflow in realloc") catch null;
+            longjmp(&self.jmp_buf, 1);
         }
 
         const new_ptr: [*]u8 = @ptrCast(&StaticAlloc.buffer[aligned_offset]);
