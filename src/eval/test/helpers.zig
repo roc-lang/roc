@@ -28,10 +28,7 @@ const values = @import("values");
 
 const posix = std.posix;
 
-const has_fork = switch (builtin.os.tag) {
-    .macos, .linux, .freebsd, .openbsd, .netbsd => true,
-    else => false,
-};
+const has_fork = builtin.os.tag != .windows;
 
 const Check = check.Check;
 const Can = can.Can;
