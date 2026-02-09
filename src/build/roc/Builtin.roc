@@ -32,7 +32,7 @@ Builtin :: [].{
 		release_excess_capacity : Str -> Str
 		to_utf8 : Str -> List(U8)
 		from_utf8_lossy : List(U8) -> Str
-		from_utf8 : List(U8) -> Try(Str, [BadUtf8({ problem : Str.Utf8Problem, index : U64 }), ..others])
+		from_utf8 : List(U8) -> Try(Str, [BadUtf8({ problem : Str.Utf8Problem, index : U64 }), ..])
 		split_on : Str, Str -> List(Str)
 		join_with : List(Str), Str -> Str
 
@@ -45,6 +45,13 @@ Builtin :: [].{
 			where [fmt.encode_str : fmt, Str -> Try(encoded, err)]
 		encode = |self, format| {
 			format.encode_str(self)
+		}
+
+		decode : src, fmt -> (Try(Str, err), src)
+			where [fmt.decode_str : fmt, src -> (Try(Str, err), src)]
+		decode = |source, format| {
+			Fmt : fmt
+			Fmt.decode_str(format, source)
 		}
 	}
 
@@ -77,14 +84,14 @@ Builtin :: [].{
 
 		append : List(a), a -> List(a)
 
-		first : List(item) -> Try(item, [ListWasEmpty, ..others])
+		first : List(item) -> Try(item, [ListWasEmpty, ..])
 		first = |list| if List.is_empty(list) {
 			Try.Err(ListWasEmpty)
 		} else {
 			Try.Ok(list_get_unsafe(list, 0))
 		}
 
-		get : List(item), U64 -> Try(item, [OutOfBounds, ..others])
+		get : List(item), U64 -> Try(item, [OutOfBounds, ..])
 		get = |list, index| if index < List.len(list) {
 			Try.Ok(list_get_unsafe(list, index))
 		} else {
@@ -195,7 +202,7 @@ Builtin :: [].{
 			True
 		}
 
-		last : List(item) -> Try(item, [ListWasEmpty, ..others])
+		last : List(item) -> Try(item, [ListWasEmpty, ..])
 		last = |list| if List.is_empty(list) {
 			Try.Err(ListWasEmpty)
 		} else {
@@ -269,6 +276,18 @@ Builtin :: [].{
 			format.encode_list(self, |elem, f| elem.encode(f))
 		}
 
+		# Decode a list using a format that provides decode_list
+		decode : src, fmt -> (Try(List(item), err), src)
+			where [
+				fmt.decode_list : fmt, src, (src, fmt -> (Try(item, err), src)) -> (Try(List(item), err), src),
+				item.decode : src, fmt -> (Try(item, err), src),
+			]
+		decode = |source, format| {
+			Fmt : fmt
+			Item : item
+			Fmt.decode_list(format, source, |s, f| Item.decode(s, f))
+		}
+
 	}
 
 	Bool := [False, True].{
@@ -280,11 +299,19 @@ Builtin :: [].{
 
 		is_eq : Bool, Bool -> Bool
 
-		# encoder : Bool -> Encoder(fmt, [])
-		# 	where [fmt implements EncoderFormatting]
-		# encoder =
+		# Encode a bool using a format that provides encode_bool
+		encode : Bool, fmt -> Try(encoded, err)
+			where [fmt.encode_bool : fmt, Bool -> Try(encoded, err)]
+		encode = |self, format| {
+			format.encode_bool(self)
+		}
 
-		# Encoder fmt := List U8, fmt -> List U8 where fmt implements EncoderFormatting
+		decode : src, fmt -> (Try(Bool, err), src)
+			where [fmt.decode_bool : fmt, src -> (Try(Bool, err), src)]
+		decode = |source, format| {
+			Fmt : fmt
+			Fmt.decode_bool(format, source)
+		}
 	}
 
 	Box(item) :: [ProvidedByCompiler].{
@@ -400,7 +427,7 @@ Builtin :: [].{
 
 		U8 :: [].{
 			default : () -> U8
-			default = || 0u8
+			default = || 0
 
 			to_str : U8 -> Str
 			is_zero : U8 -> Bool
@@ -423,9 +450,9 @@ Builtin :: [].{
 			shift_right_by : U8, U8 -> U8
 			shift_right_zf_by : U8, U8 -> U8
 
-			from_int_digits : List(U8) -> Try(U8, [OutOfRange, ..others])
-			from_numeral : Numeral -> Try(U8, [InvalidNumeral(Str), ..others])
-			from_str : Str -> Try(U8, [BadNumStr, ..others])
+			from_int_digits : List(U8) -> Try(U8, [OutOfRange, ..])
+			from_numeral : Numeral -> Try(U8, [InvalidNumeral(Str), ..])
+			from_str : Str -> Try(U8, [BadNumStr, ..])
 
 			# # List of integers beginning with this `U8` and ending with the other `U8`.
 			# # (Use [until] instead to end with the other `U8` minus one.)
@@ -441,7 +468,7 @@ Builtin :: [].{
 
 			# Conversions to signed integers (I8 is lossy, others are safe)
 			to_i8_wrap : U8 -> I8
-			to_i8_try : U8 -> Try(I8, [OutOfRange, ..others])
+			to_i8_try : U8 -> Try(I8, [OutOfRange, ..])
 			to_i16 : U8 -> I16
 			to_i32 : U8 -> I32
 			to_i64 : U8 -> I64
@@ -457,11 +484,25 @@ Builtin :: [].{
 			to_f32 : U8 -> F32
 			to_f64 : U8 -> F64
 			to_dec : U8 -> Dec
+
+			# Encode a U8 using a format that provides encode_u8
+			encode : U8, fmt -> Try(encoded, err)
+				where [fmt.encode_u8 : fmt, U8 -> Try(encoded, err)]
+			encode = |self, format| {
+				format.encode_u8(self)
+			}
+
+			decode : src, fmt -> (Try(U8, err), src)
+				where [fmt.decode_u8 : fmt, src -> (Try(U8, err), src)]
+			decode = |source, format| {
+				Fmt : fmt
+				Fmt.decode_u8(format, source)
+			}
 		}
 
 		I8 :: [].{
 			default : () -> I8
-			default = || 0i8
+			default = || 0
 
 			to_str : I8 -> Str
 			is_zero : I8 -> Bool
@@ -500,9 +541,9 @@ Builtin :: [].{
 			until : I8, I8 -> List(I8)
 			until = |start, end| range_until(start, end)
 
-			from_int_digits : List(U8) -> Try(I8, [OutOfRange, ..others])
-			from_numeral : Numeral -> Try(I8, [InvalidNumeral(Str), ..others])
-			from_str : Str -> Try(I8, [BadNumStr, ..others])
+			from_int_digits : List(U8) -> Try(I8, [OutOfRange, ..])
+			from_numeral : Numeral -> Try(I8, [InvalidNumeral(Str), ..])
+			from_str : Str -> Try(I8, [BadNumStr, ..])
 
 			# Conversions to signed integers (all safe widening)
 			to_i16 : I8 -> I16
@@ -512,25 +553,39 @@ Builtin :: [].{
 
 			# Conversions to unsigned integers (all lossy for negative values)
 			to_u8_wrap : I8 -> U8
-			to_u8_try : I8 -> Try(U8, [OutOfRange, ..others])
+			to_u8_try : I8 -> Try(U8, [OutOfRange, ..])
 			to_u16_wrap : I8 -> U16
-			to_u16_try : I8 -> Try(U16, [OutOfRange, ..others])
+			to_u16_try : I8 -> Try(U16, [OutOfRange, ..])
 			to_u32_wrap : I8 -> U32
-			to_u32_try : I8 -> Try(U32, [OutOfRange, ..others])
+			to_u32_try : I8 -> Try(U32, [OutOfRange, ..])
 			to_u64_wrap : I8 -> U64
-			to_u64_try : I8 -> Try(U64, [OutOfRange, ..others])
+			to_u64_try : I8 -> Try(U64, [OutOfRange, ..])
 			to_u128_wrap : I8 -> U128
-			to_u128_try : I8 -> Try(U128, [OutOfRange, ..others])
+			to_u128_try : I8 -> Try(U128, [OutOfRange, ..])
 
 			# Conversions to floating point (all safe)
 			to_f32 : I8 -> F32
 			to_f64 : I8 -> F64
 			to_dec : I8 -> Dec
+
+			# Encode an I8 using a format that provides encode_i8
+			encode : I8, fmt -> Try(encoded, err)
+				where [fmt.encode_i8 : fmt, I8 -> Try(encoded, err)]
+			encode = |self, format| {
+				format.encode_i8(self)
+			}
+
+			decode : src, fmt -> (Try(I8, err), src)
+				where [fmt.decode_i8 : fmt, src -> (Try(I8, err), src)]
+			decode = |source, format| {
+				Fmt : fmt
+				Fmt.decode_i8(format, source)
+			}
 		}
 
 		U16 :: [].{
 			default : () -> U16
-			default = || 0u16
+			default = || 0
 
 			to_str : U16 -> Str
 			is_zero : U16 -> Bool
@@ -565,22 +620,22 @@ Builtin :: [].{
 			until : U16, U16 -> List(U16)
 			until = |start, end| range_until(start, end)
 
-			from_int_digits : List(U8) -> Try(U16, [OutOfRange, ..others])
-			from_numeral : Numeral -> Try(U16, [InvalidNumeral(Str), ..others])
-			from_str : Str -> Try(U16, [BadNumStr, ..others])
+			from_int_digits : List(U8) -> Try(U16, [OutOfRange, ..])
+			from_numeral : Numeral -> Try(U16, [InvalidNumeral(Str), ..])
+			from_str : Str -> Try(U16, [BadNumStr, ..])
 
 			# Conversions to signed integers
 			to_i8_wrap : U16 -> I8
-			to_i8_try : U16 -> Try(I8, [OutOfRange, ..others])
+			to_i8_try : U16 -> Try(I8, [OutOfRange, ..])
 			to_i16_wrap : U16 -> I16
-			to_i16_try : U16 -> Try(I16, [OutOfRange, ..others])
+			to_i16_try : U16 -> Try(I16, [OutOfRange, ..])
 			to_i32 : U16 -> I32
 			to_i64 : U16 -> I64
 			to_i128 : U16 -> I128
 
 			# Conversions to unsigned integers
 			to_u8_wrap : U16 -> U8
-			to_u8_try : U16 -> Try(U8, [OutOfRange, ..others])
+			to_u8_try : U16 -> Try(U8, [OutOfRange, ..])
 			to_u32 : U16 -> U32
 			to_u64 : U16 -> U64
 			to_u128 : U16 -> U128
@@ -589,11 +644,25 @@ Builtin :: [].{
 			to_f32 : U16 -> F32
 			to_f64 : U16 -> F64
 			to_dec : U16 -> Dec
+
+			# Encode a U16 using a format that provides encode_u16
+			encode : U16, fmt -> Try(encoded, err)
+				where [fmt.encode_u16 : fmt, U16 -> Try(encoded, err)]
+			encode = |self, format| {
+				format.encode_u16(self)
+			}
+
+			decode : src, fmt -> (Try(U16, err), src)
+				where [fmt.decode_u16 : fmt, src -> (Try(U16, err), src)]
+			decode = |source, format| {
+				Fmt : fmt
+				Fmt.decode_u16(format, source)
+			}
 		}
 
 		I16 :: [].{
 			default : () -> I16
-			default = || 0i16
+			default = || 0
 
 			to_str : I16 -> Str
 			is_zero : I16 -> Bool
@@ -632,38 +701,52 @@ Builtin :: [].{
 			until : I16, I16 -> List(I16)
 			until = |start, end| range_until(start, end)
 
-			from_int_digits : List(U8) -> Try(I16, [OutOfRange, ..others])
-			from_numeral : Numeral -> Try(I16, [InvalidNumeral(Str), ..others])
-			from_str : Str -> Try(I16, [BadNumStr, ..others])
+			from_int_digits : List(U8) -> Try(I16, [OutOfRange, ..])
+			from_numeral : Numeral -> Try(I16, [InvalidNumeral(Str), ..])
+			from_str : Str -> Try(I16, [BadNumStr, ..])
 
 			# Conversions to signed integers
 			to_i8_wrap : I16 -> I8
-			to_i8_try : I16 -> Try(I8, [OutOfRange, ..others])
+			to_i8_try : I16 -> Try(I8, [OutOfRange, ..])
 			to_i32 : I16 -> I32
 			to_i64 : I16 -> I64
 			to_i128 : I16 -> I128
 
 			# Conversions to unsigned integers (all lossy for negative values)
 			to_u8_wrap : I16 -> U8
-			to_u8_try : I16 -> Try(U8, [OutOfRange, ..others])
+			to_u8_try : I16 -> Try(U8, [OutOfRange, ..])
 			to_u16_wrap : I16 -> U16
-			to_u16_try : I16 -> Try(U16, [OutOfRange, ..others])
+			to_u16_try : I16 -> Try(U16, [OutOfRange, ..])
 			to_u32_wrap : I16 -> U32
-			to_u32_try : I16 -> Try(U32, [OutOfRange, ..others])
+			to_u32_try : I16 -> Try(U32, [OutOfRange, ..])
 			to_u64_wrap : I16 -> U64
-			to_u64_try : I16 -> Try(U64, [OutOfRange, ..others])
+			to_u64_try : I16 -> Try(U64, [OutOfRange, ..])
 			to_u128_wrap : I16 -> U128
-			to_u128_try : I16 -> Try(U128, [OutOfRange, ..others])
+			to_u128_try : I16 -> Try(U128, [OutOfRange, ..])
 
 			# Conversions to floating point (all safe)
 			to_f32 : I16 -> F32
 			to_f64 : I16 -> F64
 			to_dec : I16 -> Dec
+
+			# Encode an I16 using a format that provides encode_i16
+			encode : I16, fmt -> Try(encoded, err)
+				where [fmt.encode_i16 : fmt, I16 -> Try(encoded, err)]
+			encode = |self, format| {
+				format.encode_i16(self)
+			}
+
+			decode : src, fmt -> (Try(I16, err), src)
+				where [fmt.decode_i16 : fmt, src -> (Try(I16, err), src)]
+			decode = |source, format| {
+				Fmt : fmt
+				Fmt.decode_i16(format, source)
+			}
 		}
 
 		U32 :: [].{
 			default : () -> U32
-			default = || 0u32
+			default = || 0
 
 			to_str : U32 -> Str
 			is_zero : U32 -> Bool
@@ -698,25 +781,25 @@ Builtin :: [].{
 			until : U32, U32 -> List(U32)
 			until = |start, end| range_until(start, end)
 
-			from_int_digits : List(U8) -> Try(U32, [OutOfRange, ..others])
-			from_numeral : Numeral -> Try(U32, [InvalidNumeral(Str), ..others])
-			from_str : Str -> Try(U32, [BadNumStr, ..others])
+			from_int_digits : List(U8) -> Try(U32, [OutOfRange, ..])
+			from_numeral : Numeral -> Try(U32, [InvalidNumeral(Str), ..])
+			from_str : Str -> Try(U32, [BadNumStr, ..])
 
 			# Conversions to signed integers
 			to_i8_wrap : U32 -> I8
-			to_i8_try : U32 -> Try(I8, [OutOfRange, ..others])
+			to_i8_try : U32 -> Try(I8, [OutOfRange, ..])
 			to_i16_wrap : U32 -> I16
-			to_i16_try : U32 -> Try(I16, [OutOfRange, ..others])
+			to_i16_try : U32 -> Try(I16, [OutOfRange, ..])
 			to_i32_wrap : U32 -> I32
-			to_i32_try : U32 -> Try(I32, [OutOfRange, ..others])
+			to_i32_try : U32 -> Try(I32, [OutOfRange, ..])
 			to_i64 : U32 -> I64
 			to_i128 : U32 -> I128
 
 			# Conversions to unsigned integers
 			to_u8_wrap : U32 -> U8
-			to_u8_try : U32 -> Try(U8, [OutOfRange, ..others])
+			to_u8_try : U32 -> Try(U8, [OutOfRange, ..])
 			to_u16_wrap : U32 -> U16
-			to_u16_try : U32 -> Try(U16, [OutOfRange, ..others])
+			to_u16_try : U32 -> Try(U16, [OutOfRange, ..])
 			to_u64 : U32 -> U64
 			to_u128 : U32 -> U128
 
@@ -724,11 +807,25 @@ Builtin :: [].{
 			to_f32 : U32 -> F32
 			to_f64 : U32 -> F64
 			to_dec : U32 -> Dec
+
+			# Encode a U32 using a format that provides encode_u32
+			encode : U32, fmt -> Try(encoded, err)
+				where [fmt.encode_u32 : fmt, U32 -> Try(encoded, err)]
+			encode = |self, format| {
+				format.encode_u32(self)
+			}
+
+			decode : src, fmt -> (Try(U32, err), src)
+				where [fmt.decode_u32 : fmt, src -> (Try(U32, err), src)]
+			decode = |source, format| {
+				Fmt : fmt
+				Fmt.decode_u32(format, source)
+			}
 		}
 
 		I32 :: [].{
 			default : () -> I32
-			default = || 0i32
+			default = || 0
 
 			to_str : I32 -> Str
 			is_zero : I32 -> Bool
@@ -767,39 +864,54 @@ Builtin :: [].{
 			until : I32, I32 -> List(I32)
 			until = |start, end| range_until(start, end)
 
-			from_int_digits : List(U8) -> Try(I32, [OutOfRange, ..others])
-			from_numeral : Numeral -> Try(I32, [InvalidNumeral(Str), ..others])
-			from_str : Str -> Try(I32, [BadNumStr, ..others])
+			from_int_digits : List(U8) -> Try(I32, [OutOfRange, ..])
+			from_numeral : Numeral -> Try(I32, [InvalidNumeral(Str), ..])
+			from_str : Str -> Try(I32, [BadNumStr, ..])
 
 			# Conversions to signed integers
 			to_i8_wrap : I32 -> I8
-			to_i8_try : I32 -> Try(I8, [OutOfRange, ..others])
+			to_i8_try : I32 -> Try(I8, [OutOfRange, ..])
 			to_i16_wrap : I32 -> I16
-			to_i16_try : I32 -> Try(I16, [OutOfRange, ..others])
+			to_i16_try : I32 -> Try(I16, [OutOfRange, ..])
 			to_i64 : I32 -> I64
 			to_i128 : I32 -> I128
 
 			# Conversions to unsigned integers (all lossy for negative values)
 			to_u8_wrap : I32 -> U8
-			to_u8_try : I32 -> Try(U8, [OutOfRange, ..others])
+			to_u8_try : I32 -> Try(U8, [OutOfRange, ..])
 			to_u16_wrap : I32 -> U16
-			to_u16_try : I32 -> Try(U16, [OutOfRange, ..others])
+			to_u16_try : I32 -> Try(U16, [OutOfRange, ..])
 			to_u32_wrap : I32 -> U32
-			to_u32_try : I32 -> Try(U32, [OutOfRange, ..others])
+			to_u32_try : I32 -> Try(U32, [OutOfRange, ..])
 			to_u64_wrap : I32 -> U64
-			to_u64_try : I32 -> Try(U64, [OutOfRange, ..others])
+			to_u64_try : I32 -> Try(U64, [OutOfRange, ..])
 			to_u128_wrap : I32 -> U128
-			to_u128_try : I32 -> Try(U128, [OutOfRange, ..others])
+			to_u128_try : I32 -> Try(U128, [OutOfRange, ..])
 
 			# Conversions to floating point (all safe)
 			to_f32 : I32 -> F32
 			to_f64 : I32 -> F64
 			to_dec : I32 -> Dec
+
+			# Encode an I32 using a format that provides encode_i32
+			encode : I32, fmt -> Try(encoded, err)
+				where [fmt.encode_i32 : fmt, I32 -> Try(encoded, err)]
+			encode = |self, format| {
+				format.encode_i32(self)
+			}
+
+			# Decode an I32 using a format that provides decode_i32
+			decode : src, fmt -> (Try(I32, err), src)
+				where [fmt.decode_i32 : fmt, src -> (Try(I32, err), src)]
+			decode = |source, format| {
+				Fmt : fmt
+				Fmt.decode_i32(format, source)
+			}
 		}
 
 		U64 :: [].{
 			default : () -> U64
-			default = || 0u64
+			default = || 0
 
 			to_str : U64 -> Str
 			is_zero : U64 -> Bool
@@ -834,39 +946,53 @@ Builtin :: [].{
 			until : U64, U64 -> List(U64)
 			until = |start, end| range_until(start, end)
 
-			from_int_digits : List(U8) -> Try(U64, [OutOfRange, ..others])
-			from_numeral : Numeral -> Try(U64, [InvalidNumeral(Str), ..others])
-			from_str : Str -> Try(U64, [BadNumStr, ..others])
+			from_int_digits : List(U8) -> Try(U64, [OutOfRange, ..])
+			from_numeral : Numeral -> Try(U64, [InvalidNumeral(Str), ..])
+			from_str : Str -> Try(U64, [BadNumStr, ..])
 
 			# Conversions to signed integers
 			to_i8_wrap : U64 -> I8
-			to_i8_try : U64 -> Try(I8, [OutOfRange, ..others])
+			to_i8_try : U64 -> Try(I8, [OutOfRange, ..])
 			to_i16_wrap : U64 -> I16
-			to_i16_try : U64 -> Try(I16, [OutOfRange, ..others])
+			to_i16_try : U64 -> Try(I16, [OutOfRange, ..])
 			to_i32_wrap : U64 -> I32
-			to_i32_try : U64 -> Try(I32, [OutOfRange, ..others])
+			to_i32_try : U64 -> Try(I32, [OutOfRange, ..])
 			to_i64_wrap : U64 -> I64
-			to_i64_try : U64 -> Try(I64, [OutOfRange, ..others])
+			to_i64_try : U64 -> Try(I64, [OutOfRange, ..])
 			to_i128 : U64 -> I128
 
 			# Conversions to unsigned integers
 			to_u8_wrap : U64 -> U8
-			to_u8_try : U64 -> Try(U8, [OutOfRange, ..others])
+			to_u8_try : U64 -> Try(U8, [OutOfRange, ..])
 			to_u16_wrap : U64 -> U16
-			to_u16_try : U64 -> Try(U16, [OutOfRange, ..others])
+			to_u16_try : U64 -> Try(U16, [OutOfRange, ..])
 			to_u32_wrap : U64 -> U32
-			to_u32_try : U64 -> Try(U32, [OutOfRange, ..others])
+			to_u32_try : U64 -> Try(U32, [OutOfRange, ..])
 			to_u128 : U64 -> U128
 
 			# Conversions to floating point (all safe)
 			to_f32 : U64 -> F32
 			to_f64 : U64 -> F64
 			to_dec : U64 -> Dec
+
+			# Encode a U64 using a format that provides encode_u64
+			encode : U64, fmt -> Try(encoded, err)
+				where [fmt.encode_u64 : fmt, U64 -> Try(encoded, err)]
+			encode = |self, format| {
+				format.encode_u64(self)
+			}
+
+			decode : src, fmt -> (Try(U64, err), src)
+				where [fmt.decode_u64 : fmt, src -> (Try(U64, err), src)]
+			decode = |source, format| {
+				Fmt : fmt
+				Fmt.decode_u64(format, source)
+			}
 		}
 
 		I64 :: [].{
 			default : () -> I64
-			default = || 0i64
+			default = || 0
 
 			to_str : I64 -> Str
 			is_zero : I64 -> Bool
@@ -905,40 +1031,54 @@ Builtin :: [].{
 			until : I64, I64 -> List(I64)
 			until = |start, end| range_until(start, end)
 
-			from_int_digits : List(U8) -> Try(I64, [OutOfRange, ..others])
-			from_numeral : Numeral -> Try(I64, [InvalidNumeral(Str), ..others])
-			from_str : Str -> Try(I64, [BadNumStr, ..others])
+			from_int_digits : List(U8) -> Try(I64, [OutOfRange, ..])
+			from_numeral : Numeral -> Try(I64, [InvalidNumeral(Str), ..])
+			from_str : Str -> Try(I64, [BadNumStr, ..])
 
 			# Conversions to signed integers
 			to_i8_wrap : I64 -> I8
-			to_i8_try : I64 -> Try(I8, [OutOfRange, ..others])
+			to_i8_try : I64 -> Try(I8, [OutOfRange, ..])
 			to_i16_wrap : I64 -> I16
-			to_i16_try : I64 -> Try(I16, [OutOfRange, ..others])
+			to_i16_try : I64 -> Try(I16, [OutOfRange, ..])
 			to_i32_wrap : I64 -> I32
-			to_i32_try : I64 -> Try(I32, [OutOfRange, ..others])
+			to_i32_try : I64 -> Try(I32, [OutOfRange, ..])
 			to_i128 : I64 -> I128
 
 			# Conversions to unsigned integers (all lossy for negative values)
 			to_u8_wrap : I64 -> U8
-			to_u8_try : I64 -> Try(U8, [OutOfRange, ..others])
+			to_u8_try : I64 -> Try(U8, [OutOfRange, ..])
 			to_u16_wrap : I64 -> U16
-			to_u16_try : I64 -> Try(U16, [OutOfRange, ..others])
+			to_u16_try : I64 -> Try(U16, [OutOfRange, ..])
 			to_u32_wrap : I64 -> U32
-			to_u32_try : I64 -> Try(U32, [OutOfRange, ..others])
+			to_u32_try : I64 -> Try(U32, [OutOfRange, ..])
 			to_u64_wrap : I64 -> U64
-			to_u64_try : I64 -> Try(U64, [OutOfRange, ..others])
+			to_u64_try : I64 -> Try(U64, [OutOfRange, ..])
 			to_u128_wrap : I64 -> U128
-			to_u128_try : I64 -> Try(U128, [OutOfRange, ..others])
+			to_u128_try : I64 -> Try(U128, [OutOfRange, ..])
 
 			# Conversions to floating point (all safe)
 			to_f32 : I64 -> F32
 			to_f64 : I64 -> F64
 			to_dec : I64 -> Dec
+
+			# Encode an I64 using a format that provides encode_i64
+			encode : I64, fmt -> Try(encoded, err)
+				where [fmt.encode_i64 : fmt, I64 -> Try(encoded, err)]
+			encode = |self, format| {
+				format.encode_i64(self)
+			}
+
+			decode : src, fmt -> (Try(I64, err), src)
+				where [fmt.decode_i64 : fmt, src -> (Try(I64, err), src)]
+			decode = |source, format| {
+				Fmt : fmt
+				Fmt.decode_i64(format, source)
+			}
 		}
 
 		U128 :: [].{
 			default : () -> U128
-			default = || 0u128
+			default = || 0
 
 			to_str : U128 -> Str
 			is_zero : U128 -> Bool
@@ -973,43 +1113,57 @@ Builtin :: [].{
 			until : U128, U128 -> List(U128)
 			until = |start, end| range_until(start, end)
 
-			from_int_digits : List(U8) -> Try(U128, [OutOfRange, ..others])
-			from_numeral : Numeral -> Try(U128, [InvalidNumeral(Str), ..others])
-			from_str : Str -> Try(U128, [BadNumStr, ..others])
+			from_int_digits : List(U8) -> Try(U128, [OutOfRange, ..])
+			from_numeral : Numeral -> Try(U128, [InvalidNumeral(Str), ..])
+			from_str : Str -> Try(U128, [BadNumStr, ..])
 
 			# Conversions to signed integers
 			to_i8_wrap : U128 -> I8
-			to_i8_try : U128 -> Try(I8, [OutOfRange, ..others])
+			to_i8_try : U128 -> Try(I8, [OutOfRange, ..])
 			to_i16_wrap : U128 -> I16
-			to_i16_try : U128 -> Try(I16, [OutOfRange, ..others])
+			to_i16_try : U128 -> Try(I16, [OutOfRange, ..])
 			to_i32_wrap : U128 -> I32
-			to_i32_try : U128 -> Try(I32, [OutOfRange, ..others])
+			to_i32_try : U128 -> Try(I32, [OutOfRange, ..])
 			to_i64_wrap : U128 -> I64
-			to_i64_try : U128 -> Try(I64, [OutOfRange, ..others])
+			to_i64_try : U128 -> Try(I64, [OutOfRange, ..])
 			to_i128_wrap : U128 -> I128
-			to_i128_try : U128 -> Try(I128, [OutOfRange, ..others])
+			to_i128_try : U128 -> Try(I128, [OutOfRange, ..])
 
 			# Conversions to unsigned integers
 			to_u8_wrap : U128 -> U8
-			to_u8_try : U128 -> Try(U8, [OutOfRange, ..others])
+			to_u8_try : U128 -> Try(U8, [OutOfRange, ..])
 			to_u16_wrap : U128 -> U16
-			to_u16_try : U128 -> Try(U16, [OutOfRange, ..others])
+			to_u16_try : U128 -> Try(U16, [OutOfRange, ..])
 			to_u32_wrap : U128 -> U32
-			to_u32_try : U128 -> Try(U32, [OutOfRange, ..others])
+			to_u32_try : U128 -> Try(U32, [OutOfRange, ..])
 			to_u64_wrap : U128 -> U64
-			to_u64_try : U128 -> Try(U64, [OutOfRange, ..others])
+			to_u64_try : U128 -> Try(U64, [OutOfRange, ..])
 
 			# Conversions to floating point (all safe)
 			to_f32 : U128 -> F32
 			to_f64 : U128 -> F64
 
 			# Conversion to Dec (can overflow)
-			to_dec_try : U128 -> Try(Dec, [OutOfRange, ..others])
+			to_dec_try : U128 -> Try(Dec, [OutOfRange, ..])
+
+			# Encode a U128 using a format that provides encode_u128
+			encode : U128, fmt -> Try(encoded, err)
+				where [fmt.encode_u128 : fmt, U128 -> Try(encoded, err)]
+			encode = |self, format| {
+				format.encode_u128(self)
+			}
+
+			decode : src, fmt -> (Try(U128, err), src)
+				where [fmt.decode_u128 : fmt, src -> (Try(U128, err), src)]
+			decode = |source, format| {
+				Fmt : fmt
+				Fmt.decode_u128(format, source)
+			}
 		}
 
 		I128 :: [].{
 			default : () -> I128
-			default = || 0i128
+			default = || 0
 
 			to_str : I128 -> Str
 			is_zero : I128 -> Bool
@@ -1048,43 +1202,57 @@ Builtin :: [].{
 			until : I128, I128 -> List(I128)
 			until = |start, end| range_until(start, end)
 
-			from_int_digits : List(U8) -> Try(I128, [OutOfRange, ..others])
-			from_numeral : Numeral -> Try(I128, [InvalidNumeral(Str), ..others])
-			from_str : Str -> Try(I128, [BadNumStr, ..others])
+			from_int_digits : List(U8) -> Try(I128, [OutOfRange, ..])
+			from_numeral : Numeral -> Try(I128, [InvalidNumeral(Str), ..])
+			from_str : Str -> Try(I128, [BadNumStr, ..])
 
 			# Conversions to signed integers
 			to_i8_wrap : I128 -> I8
-			to_i8_try : I128 -> Try(I8, [OutOfRange, ..others])
+			to_i8_try : I128 -> Try(I8, [OutOfRange, ..])
 			to_i16_wrap : I128 -> I16
-			to_i16_try : I128 -> Try(I16, [OutOfRange, ..others])
+			to_i16_try : I128 -> Try(I16, [OutOfRange, ..])
 			to_i32_wrap : I128 -> I32
-			to_i32_try : I128 -> Try(I32, [OutOfRange, ..others])
+			to_i32_try : I128 -> Try(I32, [OutOfRange, ..])
 			to_i64_wrap : I128 -> I64
-			to_i64_try : I128 -> Try(I64, [OutOfRange, ..others])
+			to_i64_try : I128 -> Try(I64, [OutOfRange, ..])
 
 			# Conversions to unsigned integers (all lossy for negative values)
 			to_u8_wrap : I128 -> U8
-			to_u8_try : I128 -> Try(U8, [OutOfRange, ..others])
+			to_u8_try : I128 -> Try(U8, [OutOfRange, ..])
 			to_u16_wrap : I128 -> U16
-			to_u16_try : I128 -> Try(U16, [OutOfRange, ..others])
+			to_u16_try : I128 -> Try(U16, [OutOfRange, ..])
 			to_u32_wrap : I128 -> U32
-			to_u32_try : I128 -> Try(U32, [OutOfRange, ..others])
+			to_u32_try : I128 -> Try(U32, [OutOfRange, ..])
 			to_u64_wrap : I128 -> U64
-			to_u64_try : I128 -> Try(U64, [OutOfRange, ..others])
+			to_u64_try : I128 -> Try(U64, [OutOfRange, ..])
 			to_u128_wrap : I128 -> U128
-			to_u128_try : I128 -> Try(U128, [OutOfRange, ..others])
+			to_u128_try : I128 -> Try(U128, [OutOfRange, ..])
 
 			# Conversions to floating point (all safe)
 			to_f32 : I128 -> F32
 			to_f64 : I128 -> F64
 
 			# Conversion to Dec (can overflow)
-			to_dec_try : I128 -> Try(Dec, [OutOfRange, ..others])
+			to_dec_try : I128 -> Try(Dec, [OutOfRange, ..])
+
+			# Encode an I128 using a format that provides encode_i128
+			encode : I128, fmt -> Try(encoded, err)
+				where [fmt.encode_i128 : fmt, I128 -> Try(encoded, err)]
+			encode = |self, format| {
+				format.encode_i128(self)
+			}
+
+			decode : src, fmt -> (Try(I128, err), src)
+				where [fmt.decode_i128 : fmt, src -> (Try(I128, err), src)]
+			decode = |source, format| {
+				Fmt : fmt
+				Fmt.decode_i128(format, source)
+			}
 		}
 
 		Dec :: [].{
 			default : () -> Dec
-			default = || 0.0dec
+			default = || 0.0
 
 			to_str : Dec -> Str
 			is_zero : Dec -> Bool
@@ -1106,38 +1274,38 @@ Builtin :: [].{
 			rem_by : Dec, Dec -> Dec
 			abs_diff : Dec, Dec -> Dec
 
-			from_int_digits : List(U8) -> Try(Dec, [OutOfRange, ..others])
-			from_dec_digits : (List(U8), List(U8)) -> Try(Dec, [OutOfRange, ..others])
-			from_numeral : Numeral -> Try(Dec, [InvalidNumeral(Str), ..others])
-			from_str : Str -> Try(Dec, [BadNumStr, ..others])
+			from_int_digits : List(U8) -> Try(Dec, [OutOfRange, ..])
+			from_dec_digits : (List(U8), List(U8)) -> Try(Dec, [OutOfRange, ..])
+			from_numeral : Numeral -> Try(Dec, [InvalidNumeral(Str), ..])
+			from_str : Str -> Try(Dec, [BadNumStr, ..])
 
 			# Conversions to signed integers (all lossy - truncates fractional part)
 			to_i8_wrap : Dec -> I8
-			to_i8_try : Dec -> Try(I8, [OutOfRange, ..others])
+			to_i8_try : Dec -> Try(I8, [OutOfRange, ..])
 			to_i16_wrap : Dec -> I16
-			to_i16_try : Dec -> Try(I16, [OutOfRange, ..others])
+			to_i16_try : Dec -> Try(I16, [OutOfRange, ..])
 			to_i32_wrap : Dec -> I32
-			to_i32_try : Dec -> Try(I32, [OutOfRange, ..others])
+			to_i32_try : Dec -> Try(I32, [OutOfRange, ..])
 			to_i64_wrap : Dec -> I64
-			to_i64_try : Dec -> Try(I64, [OutOfRange, ..others])
+			to_i64_try : Dec -> Try(I64, [OutOfRange, ..])
 			to_i128_wrap : Dec -> I128
-			to_i128_try : Dec -> Try(I128, [OutOfRange, ..others])
+			to_i128_try : Dec -> Try(I128, [OutOfRange, ..])
 
 			# Conversions to unsigned integers (all lossy - truncates fractional part)
 			to_u8_wrap : Dec -> U8
-			to_u8_try : Dec -> Try(U8, [OutOfRange, ..others])
+			to_u8_try : Dec -> Try(U8, [OutOfRange, ..])
 			to_u16_wrap : Dec -> U16
-			to_u16_try : Dec -> Try(U16, [OutOfRange, ..others])
+			to_u16_try : Dec -> Try(U16, [OutOfRange, ..])
 			to_u32_wrap : Dec -> U32
-			to_u32_try : Dec -> Try(U32, [OutOfRange, ..others])
+			to_u32_try : Dec -> Try(U32, [OutOfRange, ..])
 			to_u64_wrap : Dec -> U64
-			to_u64_try : Dec -> Try(U64, [OutOfRange, ..others])
+			to_u64_try : Dec -> Try(U64, [OutOfRange, ..])
 			to_u128_wrap : Dec -> U128
-			to_u128_try : Dec -> Try(U128, [OutOfRange, ..others])
+			to_u128_try : Dec -> Try(U128, [OutOfRange, ..])
 
 			# Conversions to floating point (lossy - Dec has more precision)
 			to_f32_wrap : Dec -> F32
-			to_f32_try : Dec -> Try(F32, [OutOfRange, ..others])
+			to_f32_try : Dec -> Try(F32, [OutOfRange, ..])
 			to_f64 : Dec -> F64
 
 			# # List of decimals beginning with this `Dec` and ending with the other `Dec`.
@@ -1151,11 +1319,25 @@ Builtin :: [].{
 			# # Returns an empty list if this `Dec` is greater than or equal to the other.
 			until : Dec, Dec -> List(Dec)
 			until = |start, end| range_until(start, end)
+
+			# Encode a Dec using a format that provides encode_dec
+			encode : Dec, fmt -> Try(encoded, err)
+				where [fmt.encode_dec : fmt, Dec -> Try(encoded, err)]
+			encode = |self, format| {
+				format.encode_dec(self)
+			}
+
+			decode : src, fmt -> (Try(Dec, err), src)
+				where [fmt.decode_dec : fmt, src -> (Try(Dec, err), src)]
+			decode = |source, format| {
+				Fmt : fmt
+				Fmt.decode_dec(format, source)
+			}
 		}
 
 		F32 :: [].{
 			default : () -> F32
-			default = || 0.0f32
+			default = || 0.0
 
 			to_str : F32 -> Str
 			is_zero : F32 -> Bool
@@ -1176,42 +1358,56 @@ Builtin :: [].{
 			rem_by : F32, F32 -> F32
 			abs_diff : F32, F32 -> F32
 
-			from_int_digits : List(U8) -> Try(F32, [OutOfRange, ..others])
-			from_dec_digits : (List(U8), List(U8)) -> Try(F32, [OutOfRange, ..others])
-			from_numeral : Numeral -> Try(F32, [InvalidNumeral(Str), ..others])
-			from_str : Str -> Try(F32, [BadNumStr, ..others])
+			from_int_digits : List(U8) -> Try(F32, [OutOfRange, ..])
+			from_dec_digits : (List(U8), List(U8)) -> Try(F32, [OutOfRange, ..])
+			from_numeral : Numeral -> Try(F32, [InvalidNumeral(Str), ..])
+			from_str : Str -> Try(F32, [BadNumStr, ..])
 
 			# Conversions to signed integers (all lossy - truncation + range check)
 			to_i8_wrap : F32 -> I8
-			to_i8_try : F32 -> Try(I8, [OutOfRange, ..others])
+			to_i8_try : F32 -> Try(I8, [OutOfRange, ..])
 			to_i16_wrap : F32 -> I16
-			to_i16_try : F32 -> Try(I16, [OutOfRange, ..others])
+			to_i16_try : F32 -> Try(I16, [OutOfRange, ..])
 			to_i32_wrap : F32 -> I32
-			to_i32_try : F32 -> Try(I32, [OutOfRange, ..others])
+			to_i32_try : F32 -> Try(I32, [OutOfRange, ..])
 			to_i64_wrap : F32 -> I64
-			to_i64_try : F32 -> Try(I64, [OutOfRange, ..others])
+			to_i64_try : F32 -> Try(I64, [OutOfRange, ..])
 			to_i128_wrap : F32 -> I128
-			to_i128_try : F32 -> Try(I128, [OutOfRange, ..others])
+			to_i128_try : F32 -> Try(I128, [OutOfRange, ..])
 
 			# Conversions to unsigned integers (all lossy - truncation + range check)
 			to_u8_wrap : F32 -> U8
-			to_u8_try : F32 -> Try(U8, [OutOfRange, ..others])
+			to_u8_try : F32 -> Try(U8, [OutOfRange, ..])
 			to_u16_wrap : F32 -> U16
-			to_u16_try : F32 -> Try(U16, [OutOfRange, ..others])
+			to_u16_try : F32 -> Try(U16, [OutOfRange, ..])
 			to_u32_wrap : F32 -> U32
-			to_u32_try : F32 -> Try(U32, [OutOfRange, ..others])
+			to_u32_try : F32 -> Try(U32, [OutOfRange, ..])
 			to_u64_wrap : F32 -> U64
-			to_u64_try : F32 -> Try(U64, [OutOfRange, ..others])
+			to_u64_try : F32 -> Try(U64, [OutOfRange, ..])
 			to_u128_wrap : F32 -> U128
-			to_u128_try : F32 -> Try(U128, [OutOfRange, ..others])
+			to_u128_try : F32 -> Try(U128, [OutOfRange, ..])
 
 			# Conversion to F64 (safe widening)
 			to_f64 : F32 -> F64
+
+			# Encode an F32 using a format that provides encode_f32
+			encode : F32, fmt -> Try(encoded, err)
+				where [fmt.encode_f32 : fmt, F32 -> Try(encoded, err)]
+			encode = |self, format| {
+				format.encode_f32(self)
+			}
+
+			decode : src, fmt -> (Try(F32, err), src)
+				where [fmt.decode_f32 : fmt, src -> (Try(F32, err), src)]
+			decode = |source, format| {
+				Fmt : fmt
+				Fmt.decode_f32(format, source)
+			}
 		}
 
 		F64 :: [].{
 			default : () -> F64
-			default = || 0.0f64
+			default = || 0.0
 
 			to_str : F64 -> Str
 			is_zero : F64 -> Bool
@@ -1232,39 +1428,39 @@ Builtin :: [].{
 			rem_by : F64, F64 -> F64
 			abs_diff : F64, F64 -> F64
 
-			from_int_digits : List(U8) -> Try(F64, [OutOfRange, ..others])
-			from_dec_digits : (List(U8), List(U8)) -> Try(F64, [OutOfRange, ..others])
-			from_numeral : Numeral -> Try(F64, [InvalidNumeral(Str), ..others])
-			from_str : Str -> Try(F64, [BadNumStr, ..others])
+			from_int_digits : List(U8) -> Try(F64, [OutOfRange, ..])
+			from_dec_digits : (List(U8), List(U8)) -> Try(F64, [OutOfRange, ..])
+			from_numeral : Numeral -> Try(F64, [InvalidNumeral(Str), ..])
+			from_str : Str -> Try(F64, [BadNumStr, ..])
 
 			# Conversions to signed integers (all lossy - truncation + range check)
 			to_i8_wrap : F64 -> I8
-			to_i8_try : F64 -> Try(I8, [OutOfRange, ..others])
+			to_i8_try : F64 -> Try(I8, [OutOfRange, ..])
 			to_i16_wrap : F64 -> I16
-			to_i16_try : F64 -> Try(I16, [OutOfRange, ..others])
+			to_i16_try : F64 -> Try(I16, [OutOfRange, ..])
 			to_i32_wrap : F64 -> I32
-			to_i32_try : F64 -> Try(I32, [OutOfRange, ..others])
+			to_i32_try : F64 -> Try(I32, [OutOfRange, ..])
 			to_i64_wrap : F64 -> I64
-			to_i64_try : F64 -> Try(I64, [OutOfRange, ..others])
+			to_i64_try : F64 -> Try(I64, [OutOfRange, ..])
 			to_i128_wrap : F64 -> I128
-			to_i128_try : F64 -> Try(I128, [OutOfRange, ..others])
+			to_i128_try : F64 -> Try(I128, [OutOfRange, ..])
 
 			# Conversions to unsigned integers (all lossy - truncation + range check)
 			to_u8_wrap : F64 -> U8
-			to_u8_try : F64 -> Try(U8, [OutOfRange, ..others])
+			to_u8_try : F64 -> Try(U8, [OutOfRange, ..])
 			to_u16_wrap : F64 -> U16
-			to_u16_try : F64 -> Try(U16, [OutOfRange, ..others])
+			to_u16_try : F64 -> Try(U16, [OutOfRange, ..])
 			to_u32_wrap : F64 -> U32
-			to_u32_try : F64 -> Try(U32, [OutOfRange, ..others])
+			to_u32_try : F64 -> Try(U32, [OutOfRange, ..])
 			to_u64_wrap : F64 -> U64
-			to_u64_try : F64 -> Try(U64, [OutOfRange, ..others])
+			to_u64_try : F64 -> Try(U64, [OutOfRange, ..])
 			to_u128_wrap : F64 -> U128
-			to_u128_try : F64 -> Try(U128, [OutOfRange, ..others])
+			to_u128_try : F64 -> Try(U128, [OutOfRange, ..])
 
 			# Conversion to F32 (lossy narrowing)
 			to_f32_wrap : F64 -> F32
 
-			to_f32_try : F64 -> Try(F32, [OutOfRange, ..others])
+			to_f32_try : F64 -> Try(F32, [OutOfRange, ..])
 			to_f32_try = |num| {
 				answer = f64_to_f32_try_unsafe(num)
 				if answer.success != 0 {
@@ -1273,8 +1469,23 @@ Builtin :: [].{
 					Err(OutOfRange)
 				}
 			}
+
+			# Encode an F64 using a format that provides encode_f64
+			encode : F64, fmt -> Try(encoded, err)
+				where [fmt.encode_f64 : fmt, F64 -> Try(encoded, err)]
+			encode = |self, format| {
+				format.encode_f64(self)
+			}
+
+			decode : src, fmt -> (Try(F64, err), src)
+				where [fmt.decode_f64 : fmt, src -> (Try(F64, err), src)]
+			decode = |source, format| {
+				Fmt : fmt
+				Fmt.decode_f64(format, source)
+			}
 		}
 	}
+
 }
 
 range_to = |var $current, end| {

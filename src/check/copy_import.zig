@@ -60,7 +60,6 @@ pub fn copyVar(
     try dest_store.dangerousSetVarDesc(placeholder_var, .{
         .content = dest_content,
         .rank = types_mod.Rank.generalized,
-        .mark = types_mod.Mark.none,
     });
 
     return placeholder_var;
@@ -179,9 +178,14 @@ fn copyAlias(
 
     const dest_vars_span = try dest_store.appendVars(dest_args.items);
 
+    // Translate the type name ident
+    const module_name_str = source_idents.getText(source_alias.origin_module);
+    const translated_module_ident = try dest_idents.insert(allocator, base.Ident.for_text(module_name_str));
+
     return Alias{
         .ident = types_mod.TypeIdent{ .ident_idx = translated_ident },
         .vars = .{ .nonempty = dest_vars_span },
+        .origin_module = translated_module_ident,
     };
 }
 
@@ -417,11 +421,10 @@ fn copyStaticDispatchConstraints(
             const fn_name_bytes = source_idents.getText(source_constraint.fn_name);
             const translated_fn_name = try dest_idents.insert(allocator, base.Ident.for_text(fn_name_bytes));
 
-            try dest_constraints.append(StaticDispatchConstraint{
-                .fn_name = translated_fn_name,
-                .fn_var = try copyVar(source_store, dest_store, source_constraint.fn_var, var_mapping, source_idents, dest_idents, allocator),
-                .origin = source_constraint.origin,
-            });
+            var dest_constraint = source_constraint;
+            dest_constraint.fn_name = translated_fn_name;
+            dest_constraint.fn_var = try copyVar(source_store, dest_store, source_constraint.fn_var, var_mapping, source_idents, dest_idents, allocator);
+            try dest_constraints.append(dest_constraint);
         }
 
         const dest_constraints_range = try dest_store.appendStaticDispatchConstraints(dest_constraints.items);

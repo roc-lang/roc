@@ -8,17 +8,55 @@ type=expr
 [1, "hello", [3, "world"]]
 ~~~
 # EXPECTED
-INCOMPATIBLE LIST ELEMENTS - can_list_mismatch_then_nested_error.md:1:5:1:5
-MISSING METHOD - can_list_mismatch_then_nested_error.md:1:2:1:3
-MISSING METHOD - can_list_mismatch_then_nested_error.md:1:15:1:16
+TYPE MISMATCH - can_list_mismatch_then_nested_error.md:1:2:1:3
+TYPE MISMATCH - can_list_mismatch_then_nested_error.md:1:15:1:16
+TYPE MISMATCH - can_list_mismatch_then_nested_error.md:1:14:1:26
 # PROBLEMS
-**INCOMPATIBLE LIST ELEMENTS**
-The second and third elements in this list have incompatible types:
-**can_list_mismatch_then_nested_error.md:1:5:**
+**TYPE MISMATCH**
+This number is being used where a non-number type is needed:
+**can_list_mismatch_then_nested_error.md:1:2:1:3:**
 ```roc
 [1, "hello", [3, "world"]]
 ```
-    ^^^^^^^  ^^^^^^^^^^^^
+ ^
+
+The type was determined to be non-numeric here:
+**can_list_mismatch_then_nested_error.md:1:5:1:12:**
+```roc
+[1, "hello", [3, "world"]]
+```
+    ^^^^^^^
+
+Other code expects this to have the type:
+
+    Str
+
+**TYPE MISMATCH**
+This number is being used where a non-number type is needed:
+**can_list_mismatch_then_nested_error.md:1:15:1:16:**
+```roc
+[1, "hello", [3, "world"]]
+```
+              ^
+
+The type was determined to be non-numeric here:
+**can_list_mismatch_then_nested_error.md:1:18:1:25:**
+```roc
+[1, "hello", [3, "world"]]
+```
+                 ^^^^^^^
+
+Other code expects this to have the type:
+
+    Str
+
+**TYPE MISMATCH**
+The second and third elements in this list have incompatible types:
+**can_list_mismatch_then_nested_error.md:1:14:1:26:**
+```roc
+[1, "hello", [3, "world"]]
+```
+             ^^^^^^^^^^^^
 
 The second element has this type:
 
@@ -29,37 +67,8 @@ However, the third element has this type:
     List(Str)
 
 All elements in a list must have compatible types.
-
-Note: You can wrap each element in a tag to make them compatible.
+__Note:__ You can wrap each element in a tag to make them compatible.
 To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
-
-**MISSING METHOD**
-This **from_numeral** method is being called on a value whose type doesn't have that method:
-**can_list_mismatch_then_nested_error.md:1:2:1:3:**
-```roc
-[1, "hello", [3, "world"]]
-```
- ^
-
-The value's type, which does not have a method named **from_numeral**, is:
-
-    Str
-
-**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
-
-**MISSING METHOD**
-This **from_numeral** method is being called on a value whose type doesn't have that method:
-**can_list_mismatch_then_nested_error.md:1:15:1:16:**
-```roc
-[1, "hello", [3, "world"]]
-```
-              ^
-
-The value's type, which does not have a method named **from_numeral**, is:
-
-    Str
-
-**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig

@@ -14,7 +14,7 @@ result = add_one(5)
 one : Dec
 one = 1
 
-add_one : Dec -> Dec
+add_one : a -> a where [a.plus : a, Dec -> a]
 add_one = |x| x + one
 
 result : Dec
@@ -81,11 +81,11 @@ EndOfFile,
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a]"))
-		(patt (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a]"))
-		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a]")))
+		(patt (type "Dec"))
+		(patt (type "a -> a where [a.plus : a, Dec -> a]"))
+		(patt (type "Dec")))
 	(expressions
-		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a]"))
-		(expr (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a]"))
-		(expr (type "_a where [_b.plus : c, c -> c, _d.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))))
+		(expr (type "Dec"))
+		(expr (type "a -> a where [a.plus : a, Dec -> a]"))
+		(expr (type "_a where [_b.plus : c, Dec -> c]"))))
 ~~~

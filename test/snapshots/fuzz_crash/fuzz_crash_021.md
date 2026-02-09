@@ -143,14 +143,14 @@ Pair(a, b+ : (
 
 
 **TYPE MODULE MISSING MATCHING TYPE**
-Type modules must have a type declaration matching the module name.
+Type modules must have a nominal type declaration matching the module name.
 
-This file is named `fuzz_crash_021`.roc, but no top-level type declaration named `fuzz_crash_021` was found.
+This file is named `fuzz_crash_021`.roc, but no top-level nominal type named `fuzz_crash_021` was found.
 
-Add either:
-`fuzz_crash_021 := ...` (nominal type)
+Add a nominal type like:
+`fuzz_crash_021 := ...`
 or:
-`fuzz_crash_021 : ...` (type alias)
+`fuzz_crash_021 :: ...` (opaque nominal type)
 **fuzz_crash_021.md:1:1:3:15:**
 ```roc
 Fli/main.roc" }

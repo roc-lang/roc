@@ -9,7 +9,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-const RocOps = @import("host_abi.zig").RocOps;
+pub const RocOps = @import("host_abi.zig").RocOps;
 const RocDealloc = @import("host_abi.zig").RocDealloc;
 const RocAlloc = @import("host_abi.zig").RocAlloc;
 const RocRealloc = @import("host_abi.zig").RocRealloc;
@@ -50,6 +50,40 @@ pub inline fn alignedPtrCast(comptime T: type, ptr: anytype, src: std.builtin.So
         }
     }
     return @ptrCast(@alignCast(ptr));
+}
+
+/// Reads a typed value from a raw pointer with debug-mode alignment verification.
+///
+/// In debug builds, verifies that the pointer is properly aligned for the target type
+/// and panics with diagnostic information if alignment is incorrect.
+/// In release builds, this is equivalent to `@as(*const T, @ptrCast(@alignCast(ptr))).*`.
+///
+/// Usage:
+/// ```
+/// const value = readAs(u64, raw_ptr, @src());
+/// ```
+///
+/// The `src` parameter should always be `@src()` at the call site - this captures
+/// the file, function, and line number to aid in reproducing alignment bugs.
+pub inline fn readAs(comptime T: type, ptr: anytype, src: std.builtin.SourceLocation) T {
+    return alignedPtrCast(*const T, ptr, src).*;
+}
+
+/// Writes a typed value to a raw pointer with debug-mode alignment verification.
+///
+/// In debug builds, verifies that the pointer is properly aligned for the target type
+/// and panics with diagnostic information if alignment is incorrect.
+/// In release builds, this is equivalent to `@as(*T, @ptrCast(@alignCast(ptr))).* = value`.
+///
+/// Usage:
+/// ```
+/// writeAs(u64, raw_ptr, 42, @src());
+/// ```
+///
+/// The `src` parameter should always be `@src()` at the call site - this captures
+/// the file, function, and line number to aid in reproducing alignment bugs.
+pub inline fn writeAs(comptime T: type, ptr: anytype, value: T, src: std.builtin.SourceLocation) void {
+    alignedPtrCast(*T, ptr, src).* = value;
 }
 
 /// Tracks allocations for testing purposes with C ABI compatibility. Uses a single global testing allocator to track allocations. If we need multiple independent allocators we will need to modify this and use comptime.
@@ -422,16 +456,7 @@ pub fn increfDataPtrC(
 
     const ptr = @intFromPtr(bytes);
 
-    // Verify original pointer is properly aligned (can fail if seamless slice encoding produces bad pointer)
-    if (comptime builtin.mode == .Debug) {
-        if (ptr % @alignOf(usize) != 0) {
-            var buf: [128]u8 = undefined;
-            const msg = std.fmt.bufPrint(&buf, "increfDataPtrC: ORIGINAL ptr=0x{x} is not {d}-byte aligned", .{ ptr, @alignOf(usize) }) catch "increfDataPtrC: original alignment error";
-            roc_ops.crash(msg);
-            return;
-        }
-    }
-
+    // Strip tag bits from the pointer - recursive tag unions may store tag IDs in low bits
     const tag_mask: usize = if (@sizeOf(usize) == 8) 0b111 else 0b11;
     const masked_ptr = ptr & ~tag_mask;
     const rc_addr = masked_ptr - @sizeOf(usize);

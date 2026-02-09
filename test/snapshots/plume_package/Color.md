@@ -221,7 +221,7 @@ This **to_frac** method is being called on a value whose type doesn't have that 
 ```
                 ^^^^^^^
 
-The value's type, which does not have a method named **to_frac**, is:
+The value's type, which does not have a method named**to_frac**, is:
 
     U8
 
@@ -235,7 +235,7 @@ This **is_char_in_hex_range** method is being called on a value whose type doesn
 ```
                   ^^^^^^^^^^^^^^^^^^^^
 
-The value's type, which does not have a method named **is_char_in_hex_range**, is:
+The value's type, which does not have a method named**is_char_in_hex_range**, is:
 
     U8
 
@@ -249,7 +249,7 @@ This **is_char_in_hex_range** method is being called on a value whose type doesn
 ```
                       ^^^^^^^^^^^^^^^^^^^^
 
-The value's type, which does not have a method named **is_char_in_hex_range**, is:
+The value's type, which does not have a method named**is_char_in_hex_range**, is:
 
     U8
 
@@ -263,7 +263,7 @@ This **is_char_in_hex_range** method is being called on a value whose type doesn
 ```
                       ^^^^^^^^^^^^^^^^^^^^
 
-The value's type, which does not have a method named **is_char_in_hex_range**, is:
+The value's type, which does not have a method named**is_char_in_hex_range**, is:
 
     U8
 
@@ -277,7 +277,7 @@ This **is_char_in_hex_range** method is being called on a value whose type doesn
 ```
                       ^^^^^^^^^^^^^^^^^^^^
 
-The value's type, which does not have a method named **is_char_in_hex_range**, is:
+The value's type, which does not have a method named**is_char_in_hex_range**, is:
 
     U8
 
@@ -291,7 +291,7 @@ This **is_char_in_hex_range** method is being called on a value whose type doesn
 ```
                       ^^^^^^^^^^^^^^^^^^^^
 
-The value's type, which does not have a method named **is_char_in_hex_range**, is:
+The value's type, which does not have a method named**is_char_in_hex_range**, is:
 
     U8
 
@@ -305,7 +305,7 @@ This **is_char_in_hex_range** method is being called on a value whose type doesn
 ```
                       ^^^^^^^^^^^^^^^^^^^^
 
-The value's type, which does not have a method named **is_char_in_hex_range**, is:
+The value's type, which does not have a method named**is_char_in_hex_range**, is:
 
     U8
 
@@ -319,7 +319,7 @@ This **is_named_color** method is being called on a value whose type doesn't hav
 ```
            ^^^^^^^^^^^^^^
 
-The value's type, which does not have a method named **is_named_color**, is:
+The value's type, which does not have a method named**is_named_color**, is:
 
     Str
 
@@ -333,7 +333,7 @@ expect rgb(124, 56, 245).to_str() == "rgb(124, 56, 245)"
 ```
                          ^^^^^^
 
-The value's type, which does not have a method named **to_str**, is:
+The value's type, which does not have a method named**to_str**, is:
 
     Color
 
@@ -347,7 +347,7 @@ expect rgba(124, 56, 245, 255).to_str() == "rgba(124, 56, 245, 1.0)"
 ```
                                ^^^^^^
 
-The value's type, which does not have a method named **to_str**, is:
+The value's type, which does not have a method named**to_str**, is:
 
     Color
 
@@ -1294,7 +1294,7 @@ is_named_color = |str| {
 		(expr (type "U8, U8, U8 -> Color"))
 		(expr (type "U8, U8, U8, U8 -> Color"))
 		(expr (type "Str -> Try(Color, [InvalidHex(Str)])"))
-		(expr (type "Color -> Error"))
+		(expr (type "Color -> Str"))
 		(expr (type "Str -> Try(Color, [UnknownColor(Str)])"))
 		(expr (type "_arg -> Error"))))
 ~~~

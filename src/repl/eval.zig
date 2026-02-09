@@ -1,6 +1,7 @@
 //! The evaluation part of the Read-Eval-Print-Loop (REPL)
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const parse = @import("parse");
 const types = @import("types");
@@ -10,6 +11,9 @@ const check = @import("check");
 const Check = check.Check;
 const builtins = @import("builtins");
 const eval_mod = @import("eval");
+const roc_target = @import("roc_target");
+const compile = @import("compile");
+const single_module = compile.single_module;
 const CrashContext = eval_mod.CrashContext;
 const BuiltinTypes = eval_mod.BuiltinTypes;
 const builtin_loading = eval_mod.builtin_loading;
@@ -19,6 +23,49 @@ const Allocator = std.mem.Allocator;
 const ModuleEnv = can.ModuleEnv;
 const RocOps = builtins.host_abi.RocOps;
 const LoadedModule = builtin_loading.LoadedModule;
+const DevEvaluator = eval_mod.DevEvaluator;
+
+pub const Backend = @import("backend").EvalBackend;
+const CommonEnv = base.CommonEnv;
+
+/// Render a parse diagnostic for REPL output (without source context for cleaner display).
+/// The REPL already shows the input, so we don't need to repeat it in error messages.
+fn renderParseDiagnosticForRepl(
+    ast: *AST,
+    env: *const CommonEnv,
+    diagnostic: AST.Diagnostic,
+    allocator: Allocator,
+) ![]const u8 {
+    // Create the report (this includes source context, but we'll only render the message part)
+    var report = try ast.parseDiagnosticToReport(env, diagnostic, allocator, "repl");
+    defer report.deinit();
+
+    // Render to markdown
+    var output = std.array_list.Managed(u8).init(allocator);
+    var unmanaged = output.moveToUnmanaged();
+    var writer_alloc = std.Io.Writer.Allocating.fromArrayList(allocator, &unmanaged);
+    report.render(&writer_alloc.writer, .markdown) catch |err| switch (err) {
+        error.WriteFailed => return error.OutOfMemory,
+        else => return err,
+    };
+    unmanaged = writer_alloc.toArrayList();
+    output = unmanaged.toManaged(allocator);
+    const full_result = try output.toOwnedSlice();
+    defer allocator.free(full_result);
+
+    // Strip trailing source context (everything after the last blank line before code block)
+    // The format is: **TITLE**\nmessage\n\n**location:**\n```roc\ncode\n```\n^^^^^^
+    // We want just: **TITLE**\nmessage
+    var end_pos: usize = full_result.len;
+
+    // Find the last occurrence of "\n\n**" which marks the start of the source location section
+    if (std.mem.lastIndexOf(u8, full_result, "\n\n**")) |pos| {
+        end_pos = pos;
+    }
+
+    const trimmed = std.mem.trimRight(u8, full_result[0..end_pos], "\n");
+    return try allocator.dupe(u8, trimmed);
+}
 
 /// REPL state that tracks past definitions and evaluates expressions
 pub const Repl = struct {
@@ -29,8 +76,10 @@ pub const Repl = struct {
     roc_ops: *RocOps,
     /// Shared crash context managed by the host (optional)
     crash_ctx: ?*CrashContext,
-    /// Optional trace writer for debugging evaluation
-    //trace_writer: ?std.io.AnyWriter,
+    /// Backend for code evaluation
+    backend: Backend,
+    /// DevEvaluator instance (only initialized when backend is .dev)
+    dev_evaluator: ?DevEvaluator,
     /// ModuleEnv from last successful evaluation (for snapshot generation)
     last_module_env: ?*ModuleEnv,
     /// Debug flag to store rendered HTML for snapshot generation
@@ -45,6 +94,10 @@ pub const Repl = struct {
     builtin_module: LoadedModule,
 
     pub fn init(allocator: Allocator, roc_ops: *RocOps, crash_ctx: ?*CrashContext) !Repl {
+        return initWithBackend(allocator, roc_ops, crash_ctx, .interpreter);
+    }
+
+    pub fn initWithBackend(allocator: Allocator, roc_ops: *RocOps, crash_ctx: ?*CrashContext, backend: Backend) !Repl {
         const compiled_builtins = @import("compiled_builtins");
 
         // Load builtin indices once at startup (generated at build time)
@@ -55,12 +108,19 @@ pub const Repl = struct {
         var builtin_module = try builtin_loading.loadCompiledModule(allocator, compiled_builtins.builtin_bin, "Builtin", builtin_source);
         errdefer builtin_module.deinit();
 
+        // Initialize DevEvaluator if using dev backend
+        var dev_evaluator: ?DevEvaluator = null;
+        if (backend == .dev) {
+            dev_evaluator = DevEvaluator.init(allocator) catch null;
+        }
+
         return Repl{
             .allocator = allocator,
             .definitions = std.StringHashMap([]const u8).init(allocator),
             .roc_ops = roc_ops,
             .crash_ctx = crash_ctx,
-            //.trace_writer = null,
+            .backend = backend,
+            .dev_evaluator = dev_evaluator,
             .last_module_env = null,
             .debug_store_snapshots = false,
             .debug_can_html = std.array_list.Managed([]const u8).init(allocator),
@@ -168,6 +228,11 @@ pub const Repl = struct {
             self.allocator.free(kv.value_ptr.*); // Free the source string
         }
         self.definitions.deinit();
+
+        // Clean up DevEvaluator if it exists
+        if (self.dev_evaluator) |*dev_eval| {
+            dev_eval.deinit();
+        }
 
         // Clean up debug HTML storage
         for (self.debug_can_html.items) |html| {
@@ -348,56 +413,77 @@ pub const Repl = struct {
 
     /// Try to parse input as a statement
     fn tryParseStatement(self: *Repl, input: []const u8) !ParseResult {
-        var arena = std.heap.ArenaAllocator.init(self.allocator);
-        defer arena.deinit();
-
         var module_env = try ModuleEnv.init(self.allocator, input);
         defer module_env.deinit();
 
-        // Try statement parsing
-        if (parse.parseStatement(&module_env.common, self.allocator)) |ast_const| {
-            var ast = ast_const;
-            defer ast.deinit(self.allocator);
+        var allocators: single_module.Allocators = undefined;
+        allocators.initInPlace(self.allocator);
+        defer allocators.deinit();
 
-            if (ast.root_node_idx != 0) {
-                const stmt_idx: AST.Statement.Idx = @enumFromInt(ast.root_node_idx);
-                const stmt = ast.store.getStatement(stmt_idx);
-
-                switch (stmt) {
-                    .decl => |decl| {
-                        const pattern = ast.store.getPattern(decl.pattern);
-                        if (pattern == .ident) {
-                            // Extract the identifier name from the pattern
-                            const ident_tok = pattern.ident.ident_tok;
-                            const token_region = ast.tokens.resolve(ident_tok);
-                            const ident_name = module_env.common.source[token_region.start.offset..token_region.end.offset];
-
-                            // Return borrowed strings (no duplication needed)
-                            return ParseResult{ .assignment = .{
-                                .source = input,
-                                .var_name = ident_name,
-                            } };
-                        }
-                        return ParseResult.expression;
-                    },
-                    .import => return ParseResult.import,
-                    .type_decl => return ParseResult.type_decl,
-                    else => return ParseResult.expression,
-                }
-            }
-        } else |_| {
+        // Try statement parsing using the unified compile_module interface
+        const stmt_ast = single_module.parseSingleModule(
+            &allocators,
+            &module_env,
+            .statement,
+            .{ .module_name = "REPL", .init_cir_fields = false },
+        ) catch {
             // Statement parse failed, continue to try expression parsing
+            return self.tryParseExpressionOnly(input);
+        };
+        defer stmt_ast.deinit();
+
+        if (stmt_ast.root_node_idx != 0) {
+            const stmt_idx: AST.Statement.Idx = @enumFromInt(stmt_ast.root_node_idx);
+            const stmt = stmt_ast.store.getStatement(stmt_idx);
+
+            switch (stmt) {
+                .decl => |decl| {
+                    const pattern = stmt_ast.store.getPattern(decl.pattern);
+                    if (pattern == .ident) {
+                        // Extract the identifier name from the pattern
+                        const ident_tok = pattern.ident.ident_tok;
+                        const token_region = stmt_ast.tokens.resolve(ident_tok);
+                        const ident_name = module_env.common.source[token_region.start.offset..token_region.end.offset];
+
+                        // Return borrowed strings (no duplication needed)
+                        return ParseResult{ .assignment = .{
+                            .source = input,
+                            .var_name = ident_name,
+                        } };
+                    }
+                    return ParseResult.expression;
+                },
+                .import => return ParseResult.import,
+                .type_decl => return ParseResult.type_decl,
+                else => return ParseResult.expression,
+            }
         }
 
-        // Try expression parsing
-        if (parse.parseExpr(&module_env.common, self.allocator)) |ast_const| {
-            var ast = ast_const;
-            defer ast.deinit(self.allocator);
-            if (ast.root_node_idx != 0) {
-                return ParseResult.expression;
-            }
-        } else |_| {
-            // Expression parse failed too
+        // No valid statement root, try expression
+        return self.tryParseExpressionOnly(input);
+    }
+
+    /// Helper to try parsing as expression only
+    fn tryParseExpressionOnly(self: *Repl, input: []const u8) !ParseResult {
+        var module_env = try ModuleEnv.init(self.allocator, input);
+        defer module_env.deinit();
+
+        var allocators: single_module.Allocators = undefined;
+        allocators.initInPlace(self.allocator);
+        defer allocators.deinit();
+
+        const expr_ast = single_module.parseSingleModule(
+            &allocators,
+            &module_env,
+            .expr,
+            .{ .module_name = "REPL", .init_cir_fields = false },
+        ) catch {
+            return ParseResult{ .parse_error = try self.allocator.dupe(u8, "Failed to parse input") };
+        };
+        defer expr_ast.deinit();
+
+        if (expr_ast.root_node_idx != 0) {
+            return ParseResult.expression;
         }
 
         return ParseResult{ .parse_error = try self.allocator.dupe(u8, "Failed to parse input") };
@@ -443,19 +529,21 @@ pub const Repl = struct {
 
     /// Evaluate a program (which may contain definitions) - returns structured result
     fn evaluatePureExpressionStructured(self: *Repl, module_env: *ModuleEnv) !StepResult {
-        // Determine if we have definitions (which means we built a block expression)
-        const has_definitions = self.definitions.count() > 0;
+        var allocators: single_module.Allocators = undefined;
+        allocators.initInPlace(self.allocator);
+        defer allocators.deinit();
 
-        // Parse appropriately based on whether we have definitions
-        var parse_ast = if (has_definitions)
-            parse.parseExpr(&module_env.common, self.allocator) catch |err| {
-                return .{ .parse_error = try std.fmt.allocPrint(self.allocator, "Parse error: {}", .{err}) };
-            }
-        else
-            parse.parseExpr(&module_env.common, self.allocator) catch |err| {
-                return .{ .parse_error = try std.fmt.allocPrint(self.allocator, "Parse error: {}", .{err}) };
-            };
-        defer parse_ast.deinit(self.allocator);
+        // Parse using the unified compile_module interface
+        // Note: init_cir_fields=false because we call initCIRFields after parsing
+        const parse_ast = single_module.parseSingleModule(
+            &allocators,
+            module_env,
+            .expr,
+            .{ .module_name = "repl", .init_cir_fields = false },
+        ) catch |err| {
+            return .{ .parse_error = try std.fmt.allocPrint(self.allocator, "Parse error: {}", .{err}) };
+        };
+        defer parse_ast.deinit();
 
         // Check for parse errors and render them
         if (parse_ast.hasErrors()) {
@@ -478,32 +566,12 @@ pub const Repl = struct {
                 output = unmanaged.toManaged(self.allocator);
                 return .{ .parse_error = try output.toOwnedSlice() };
             } else if (parse_ast.parse_diagnostics.items.len > 0) {
-                var report = try parse_ast.parseDiagnosticToReport(
-                    &module_env.common,
-                    parse_ast.parse_diagnostics.items[0],
-                    self.allocator,
-                    "repl",
-                );
-                defer report.deinit();
-
-                var output = std.array_list.Managed(u8).init(self.allocator);
-                var unmanaged = output.moveToUnmanaged();
-                var writer_alloc = std.Io.Writer.Allocating.fromArrayList(self.allocator, &unmanaged);
-                report.render(&writer_alloc.writer, .markdown) catch |err| switch (err) {
-                    error.WriteFailed => return error.OutOfMemory,
-                    else => return err,
-                };
-                unmanaged = writer_alloc.toArrayList();
-                output = unmanaged.toManaged(self.allocator);
-                const full_result = try output.toOwnedSlice();
-                defer self.allocator.free(full_result);
-                const trimmed = std.mem.trimRight(u8, full_result, "\n");
-                return .{ .parse_error = try self.allocator.dupe(u8, trimmed) };
+                // Render parse diagnostic without source context for cleaner REPL output
+                const diagnostic = parse_ast.parse_diagnostics.items[0];
+                const error_text = try renderParseDiagnosticForRepl(parse_ast, &module_env.common, diagnostic, self.allocator);
+                return .{ .parse_error = error_text };
             }
         }
-
-        // Empty scratch space
-        parse_ast.store.emptyScratch();
 
         // Create CIR
         const cir = module_env;
@@ -520,7 +588,7 @@ pub const Repl = struct {
             self.builtin_indices,
         );
 
-        var czer = Can.init(cir, &parse_ast, &module_envs_map) catch |err| {
+        var czer = Can.init(&allocators, cir, parse_ast, &module_envs_map) catch |err| {
             return .{ .canonicalize_error = try std.fmt.allocPrint(self.allocator, "Canonicalize init error: {}", .{err}) };
         };
         defer czer.deinit();
@@ -587,8 +655,49 @@ pub const Repl = struct {
             return .{ .type_error = try self.allocator.dupe(u8, "TYPE MISMATCH") };
         }
 
+        // Use DevEvaluator if backend is .dev and we have a DevEvaluator instance
+        // ExecutableMemory is not available on freestanding targets (wasm32)
+        if (comptime builtin.os.tag != .freestanding) {
+            if (self.backend == .dev) {
+                if (self.dev_evaluator) |*dev_eval| {
+                    // Generate and execute native code
+                    const all_module_envs = &.{module_env};
+                    var code_result = dev_eval.generateCode(module_env, final_expr_idx, all_module_envs) catch {
+                        // Fall back to interpreter on unsupported expressions
+                        return self.evaluateWithInterpreter(module_env, final_expr_idx, &imported_modules, &checker);
+                    };
+                    defer code_result.deinit();
+
+                    // Execute the compiled code
+                    var executable = eval_mod.ExecutableMemory.init(code_result.code) catch {
+                        return self.evaluateWithInterpreter(module_env, final_expr_idx, &imported_modules, &checker);
+                    };
+                    defer executable.deinit();
+
+                    // Format result based on layout
+                    const LayoutIdx = eval_mod.layout.Idx;
+                    const output = switch (code_result.result_layout) {
+                        LayoutIdx.i64, LayoutIdx.i8, LayoutIdx.i16, LayoutIdx.i32 => try std.fmt.allocPrint(self.allocator, "{} : I64", .{executable.callReturnI64()}),
+                        LayoutIdx.u64, LayoutIdx.u8, LayoutIdx.u16, LayoutIdx.u32 => try std.fmt.allocPrint(self.allocator, "{} : U64", .{executable.callReturnU64()}),
+                        LayoutIdx.bool => if (executable.callReturnU64() != 0) try self.allocator.dupe(u8, "Bool.true : Bool") else try self.allocator.dupe(u8, "Bool.false : Bool"),
+                        LayoutIdx.f64, LayoutIdx.f32 => blk: {
+                            break :blk try std.fmt.allocPrint(self.allocator, "{d} : F64", .{executable.callReturnF64()});
+                        },
+                        LayoutIdx.dec => try std.fmt.allocPrint(self.allocator, "{} : Dec", .{executable.callReturnI64()}), // TODO: proper Dec formatting
+                        else => return self.evaluateWithInterpreter(module_env, final_expr_idx, &imported_modules, &checker),
+                    };
+                    return .{ .expression = output };
+                }
+            }
+        }
+
+        return self.evaluateWithInterpreter(module_env, final_expr_idx, &imported_modules, &checker);
+    }
+
+    /// Evaluate using the interpreter (fallback path)
+    fn evaluateWithInterpreter(self: *Repl, module_env: *ModuleEnv, final_expr_idx: can.CIR.Expr.Idx, imported_modules: *const [1]*const ModuleEnv, checker: *Check) !StepResult {
         const builtin_types_for_eval = BuiltinTypes.init(self.builtin_indices, self.builtin_module.env, self.builtin_module.env, self.builtin_module.env);
-        var interpreter = eval_mod.Interpreter.init(self.allocator, module_env, builtin_types_for_eval, self.builtin_module.env, &imported_modules, &checker.import_mapping, null) catch |err| {
+        var interpreter = eval_mod.Interpreter.init(self.allocator, module_env, builtin_types_for_eval, self.builtin_module.env, imported_modules, &checker.import_mapping, null, null, roc_target.RocTarget.detectNative()) catch |err| {
             return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "Interpreter init error: {}", .{err}) };
         };
         defer interpreter.deinitAndFreeOtherEnvs();
@@ -613,7 +722,7 @@ pub const Repl = struct {
             try self.generateAndStoreDebugHtml(module_env, final_expr_idx);
         }
 
-        const output = try interpreter.renderValueRocWithType(result, result.rt_var, self.roc_ops);
+        const output = try interpreter.renderValueRocForRepl(result, result.rt_var, self.roc_ops);
 
         result.decref(&interpreter.runtime_layout_store, self.roc_ops);
         interpreter.cleanupBindings(self.roc_ops);

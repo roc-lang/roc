@@ -122,24 +122,13 @@ EndOfFile,
 		(s-type-anno (name "open_record_with_comma")
 			(ty-record
 				(anno-record-field (name "a")
-					(ty (name "U8")))))))
+					(ty (name "U8")))
+				(ty-record-ext
+					(_))))))
 ~~~
 # FORMATTED
 ~~~roc
-foo : U64
-bar : Thing(_a, _b, _)
-baz : (_a, _b, _c)
-add_one : (U8, U16 -> U32)
-main! : List(String) -> Try({}, _)
-tag_tuple : Value((_a, _b, _c))
-
-closed_record_with_comma : {
-	a : U8,
-}
-
-open_record_with_comma : {
-	a : U8,
-}
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
@@ -212,7 +201,7 @@ open_record_with_comma : {
 		(patt (type "List(Error) -> Try({  }, _b)"))
 		(patt (type "Error"))
 		(patt (type "{ a: U8 }"))
-		(patt (type "{ a: U8 }")))
+		(patt (type "{ .., a: U8 }")))
 	(expressions
 		(expr (type "U64"))
 		(expr (type "Error"))
@@ -221,5 +210,5 @@ open_record_with_comma : {
 		(expr (type "List(Error) -> Try({  }, _b)"))
 		(expr (type "Error"))
 		(expr (type "{ a: U8 }"))
-		(expr (type "{ a: U8 }"))))
+		(expr (type "{ .., a: U8 }"))))
 ~~~

@@ -33,11 +33,11 @@ makeAdder = |x| |y| x + y
 ```
                     ^^^^^
 
-The value's type, which does not have a method named **plus**, is:
+The value's type, which does not have a method named**plus**, is:
 
     a
 
-**Hint:** The **+** operator requires the type to have a **plus** method. Did you forget to specify it in the type annotation?
+**Hint:** The **+** operator calls a method named **plus** on the value preceding it, passing the value after the operator as the one argument.
 
 # TOKENS
 ~~~zig
@@ -215,7 +215,7 @@ NO CHANGE
 		(patt (type "(a -> a), a -> a"))
 		(patt (type "I64 -> I64")))
 	(expressions
-		(expr (type "Error -> (Error -> Error)"))
+		(expr (type "a -> (a -> a)"))
 		(expr (type "I64 -> I64"))
 		(expr (type "(a -> a), a -> a"))
 		(expr (type "I64 -> I64"))))

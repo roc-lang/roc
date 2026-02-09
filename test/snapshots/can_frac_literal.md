@@ -47,7 +47,7 @@ NO CHANGE
 		(e-dec-small (numerator "314") (denominator-power-of-ten "2") (value "3.14")))
 	(d-let
 		(p-assign (ident "y"))
-		(e-frac-f64 (value "1.23e45")))
+		(e-frac-f64 (value "1230000000000000000000000000000000000000000000")))
 	(d-let
 		(p-assign (ident "z"))
 		(e-dec-small (numerator "5") (denominator-power-of-ten "1") (value "0.5"))))
@@ -56,11 +56,11 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec")))
 	(expressions
-		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))))
 ~~~

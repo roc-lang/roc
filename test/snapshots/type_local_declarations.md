@@ -306,20 +306,72 @@ multipleTypes = |_| {
 						(field (field "b")
 							(ty-lookup (name "Str") (builtin)))))
 				(e-string
-					(e-literal (string "result")))))))
+					(e-literal (string "result"))))))
+	(s-alias-decl
+		(ty-header (name "MyNum"))
+		(ty-lookup (name "U64") (builtin)))
+	(s-alias-decl
+		(ty-header (name "MyRecord"))
+		(ty-record
+			(field (field "value")
+				(ty-lookup (name "U64") (builtin)))))
+	(s-alias-decl
+		(ty-header (name "OuterType"))
+		(ty-lookup (name "Str") (builtin)))
+	(s-alias-decl
+		(ty-header (name "InnerType"))
+		(ty-lookup (name "U64") (builtin)))
+	(s-nominal-decl
+		(ty-header (name "Counter"))
+		(ty-lookup (name "U64") (builtin)))
+	(s-nominal-decl
+		(ty-header (name "Secret"))
+		(ty-lookup (name "Str") (builtin)))
+	(s-alias-decl
+		(ty-header (name "First"))
+		(ty-lookup (name "U64") (builtin)))
+	(s-alias-decl
+		(ty-header (name "Second"))
+		(ty-lookup (name "Str") (builtin)))
+	(s-alias-decl
+		(ty-header (name "Third"))
+		(ty-record
+			(field (field "a")
+				(ty-lookup (name "U64") (builtin)))
+			(field (field "b")
+				(ty-lookup (name "Str") (builtin))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_arg -> c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
-		(patt (type "_arg -> c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
+		(patt (type "_arg -> Dec"))
+		(patt (type "_arg -> Dec"))
 		(patt (type "c -> c"))
 		(patt (type "c -> c"))
 		(patt (type "_arg -> Str")))
+	(type_decls
+		(alias (type "Error")
+			(ty-header (name "MyNum")))
+		(alias (type "Error")
+			(ty-header (name "MyRecord")))
+		(alias (type "Error")
+			(ty-header (name "OuterType")))
+		(alias (type "Error")
+			(ty-header (name "InnerType")))
+		(nominal (type "Counter")
+			(ty-header (name "Counter")))
+		(nominal (type "Secret")
+			(ty-header (name "Secret")))
+		(alias (type "Error")
+			(ty-header (name "First")))
+		(alias (type "Error")
+			(ty-header (name "Second")))
+		(alias (type "Error")
+			(ty-header (name "Third"))))
 	(expressions
-		(expr (type "_arg -> c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
-		(expr (type "_arg -> c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
+		(expr (type "_arg -> Dec"))
+		(expr (type "_arg -> Dec"))
 		(expr (type "c -> c"))
 		(expr (type "c -> c"))
 		(expr (type "_arg -> Str"))))

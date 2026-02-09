@@ -13,11 +13,11 @@ getName = |_person| "hello"
 main! = |_| getName({namee: "luke", age:21})
 ~~~
 # EXPECTED
-TYPE MISMATCH - type_record_basic.md:6:21:6:44
+TYPE MISMATCH - type_record_basic.md:6:13:6:13
 # PROBLEMS
 **TYPE MISMATCH**
 The first argument being passed to this function has the wrong type:
-**type_record_basic.md:6:21:6:44:**
+**type_record_basic.md:6:13:**
 ```roc
 main! = |_| getName({namee: "luke", age:21})
 ```
@@ -31,6 +31,8 @@ This argument has the type:
 But `getName` needs the first argument to be:
 
     { age: U64, name: Str }
+
+**Hint:** Maybe `namee` should be `name`?
 
 # TOKENS
 ~~~zig
@@ -134,9 +136,9 @@ main! = |_| getName({ namee: "luke", age: 21 })
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "{ age: U64, name: Str } -> Str"))
+		(patt (type "Error -> Str"))
 		(patt (type "_arg -> Error")))
 	(expressions
-		(expr (type "{ age: U64, name: Str } -> Str"))
+		(expr (type "Error -> Str"))
 		(expr (type "_arg -> Error"))))
 ~~~

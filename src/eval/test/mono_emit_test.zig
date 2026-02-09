@@ -12,9 +12,11 @@ const std = @import("std");
 const base = @import("base");
 const can = @import("can");
 const builtins = @import("builtins");
+const i128h = builtins.compiler_rt_128;
 
 const helpers = @import("helpers.zig");
 const eval_mod = @import("../mod.zig");
+const roc_target = @import("roc_target");
 const TestEnv = @import("TestEnv.zig");
 const Interpreter = eval_mod.Interpreter;
 const BuiltinTypes = eval_mod.BuiltinTypes;
@@ -23,7 +25,8 @@ const Emitter = can.RocEmitter;
 const Monomorphizer = can.Monomorphizer;
 
 const testing = std.testing;
-const test_allocator = testing.allocator;
+// Use interpreter_allocator for interpreter tests (doesn't track leaks)
+const test_allocator = helpers.interpreter_allocator;
 
 /// Helper to check if output contains a closure tag (format: C followed by digit)
 /// Closure tags use internal format #N_hint which RocEmitter transforms to CN_hint
@@ -195,15 +198,15 @@ fn evalToInt(allocator: std.mem.Allocator, source: []const u8) !i128 {
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
-    var interpreter = try Interpreter.init(allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null);
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
+    var interpreter = try Interpreter.init(allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interpreter.deinit();
 
     const ops = test_env_instance.get_ops();
     const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
-    defer interpreter.cleanupBindings(ops);
+    defer interpreter.bindings.items.len = 0;
 
     // Check if this is an integer or Dec
     if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int) {
@@ -212,7 +215,7 @@ fn evalToInt(allocator: std.mem.Allocator, source: []const u8) !i128 {
         // Unsuffixed numeric literals default to Dec
         const dec_value = result.asDec(ops);
         const RocDec = builtins.dec.RocDec;
-        return @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
+        return i128h.divTrunc_i128(dec_value.num, RocDec.one_point_zero_i128);
     }
     return error.NotAnInteger;
 }
@@ -226,15 +229,15 @@ fn evalToBool(allocator: std.mem.Allocator, source: []const u8) !bool {
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
-    var interpreter = try Interpreter.init(allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null);
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
+    var interpreter = try Interpreter.init(allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interpreter.deinit();
 
     const ops = test_env_instance.get_ops();
     const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
-    defer interpreter.cleanupBindings(ops);
+    defer interpreter.bindings.items.len = 0;
 
     // Boolean represented as integer (discriminant)
     if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int) {
@@ -385,11 +388,6 @@ fn checkForCapturesRecursive(module_env: *can.ModuleEnv, expr_idx: can.CIR.Expr.
                 const stmt = module_env.store.getStatement(stmt_idx);
                 switch (stmt) {
                     .s_decl => |decl| {
-                        if (checkForCapturesRecursive(module_env, decl.expr)) {
-                            return true;
-                        }
-                    },
-                    .s_decl_gen => |decl| {
                         if (checkForCapturesRecursive(module_env, decl.expr)) {
                             return true;
                         }
@@ -746,15 +744,15 @@ fn evalTupleFirst(allocator: std.mem.Allocator, source: []const u8) !i128 {
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
-    var interpreter = try Interpreter.init(allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null);
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
+    var interpreter = try Interpreter.init(allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interpreter.deinit();
 
     const ops = test_env_instance.get_ops();
     const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
-    defer interpreter.cleanupBindings(ops);
+    defer interpreter.bindings.items.len = 0;
 
     // Get the first element of the tuple
     if (result.layout.tag == .tuple) {
@@ -768,7 +766,7 @@ fn evalTupleFirst(allocator: std.mem.Allocator, source: []const u8) !i128 {
             const tmp_sv = eval_mod.StackValue{ .layout = first_elem.layout, .ptr = first_elem.ptr, .is_initialized = true, .rt_var = fresh_var };
             const dec_value = tmp_sv.asDec(ops);
             const RocDec = builtins.dec.RocDec;
-            return @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
+            return i128h.divTrunc_i128(dec_value.num, RocDec.one_point_zero_i128);
         }
     }
     return error.NotATuple;

@@ -8,30 +8,18 @@ type=snippet
 foo = asd.0
 ~~~
 # EXPECTED
-PARSE ERROR - expr_no_space_dot_int.md:1:10:1:12
-UNRECOGNIZED SYNTAX - expr_no_space_dot_int.md:1:10:1:12
+UNDEFINED VARIABLE - expr_no_space_dot_int.md:1:7:1:10
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `expr_no_space_dot_int`
-This is an unexpected parsing error. Please check your syntax.
+**UNDEFINED VARIABLE**
+Nothing is named `asd` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**expr_no_space_dot_int.md:1:10:1:12:**
+**expr_no_space_dot_int.md:1:7:1:10:**
 ```roc
 foo = asd.0
 ```
-         ^^
+      ^^^
 
-
-**UNRECOGNIZED SYNTAX**
-I don't recognize this syntax.
-
-**expr_no_space_dot_int.md:1:10:1:12:**
-```roc
-foo = asd.0
-```
-         ^^
-
-This might be a syntax error, an unsupported language feature, or a typo.
 
 # TOKENS
 ~~~zig
@@ -45,18 +33,21 @@ EndOfFile,
 	(statements
 		(s-decl
 			(p-ident (raw "foo"))
-			(e-malformed (reason "expr_no_space_dot_int")))))
+			(e-tuple-access
+				(e-ident (raw "asd"))
+				".0"))))
 ~~~
 # FORMATTED
 ~~~roc
-foo = 
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
 (can-ir
 	(d-let
 		(p-assign (ident "foo"))
-		(e-runtime-error (tag "expr_not_canonicalized"))))
+		(e-tuple-access (index "0")
+			(e-runtime-error (tag "ident_not_in_scope")))))
 ~~~
 # TYPES
 ~~~clojure

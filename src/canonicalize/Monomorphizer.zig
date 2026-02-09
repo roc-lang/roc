@@ -241,6 +241,10 @@ in_progress: SpecInProgressMap,
 /// Counter for generating unique specialization names
 specialization_counter: u32,
 
+/// Counter for generating unique synthetic argument names (e.g., #arg0, #arg1)
+/// Used during argument normalization to convert complex call arguments into let-bindings
+synthetic_arg_counter: u32,
+
 /// Current phase
 phase: Phase,
 
@@ -255,6 +259,10 @@ specialization_stack: std.ArrayList(SpecializationKey),
 
 /// External specializations requested from other modules
 external_requests: std.ArrayList(ExternalSpecializationRequest),
+
+/// Fast lookup indexes for pending specialization deduplication (O(1) vs O(n) linear scan)
+pending_specialization_keys: SpecInProgressMap,
+pending_external_keys: std.HashMap(ExternalSpecKey, void, ExtSpecKeyContext, 80),
 
 /// Resolved external specializations: maps (source_module, original_ident, concrete_type) to specialized_ident.
 /// Populated by resolveExternalSpecialization, used by requestExternalSpecialization.
@@ -289,12 +297,15 @@ pub fn init(
         .specialization_names = SpecNameMap.initContext(allocator, spec_ctx),
         .in_progress = SpecInProgressMap.initContext(allocator, spec_ctx),
         .specialization_counter = 0,
+        .synthetic_arg_counter = 0,
         .phase = .finding,
         .recursion_depth = 0,
         .max_recursion_depth = DEFAULT_MAX_RECURSION_DEPTH,
         .specialization_stack = std.ArrayList(SpecializationKey).empty,
         .external_requests = std.ArrayList(ExternalSpecializationRequest).empty,
         .resolved_external_specs = ExtSpecMap.initContext(allocator, ext_ctx),
+        .pending_specialization_keys = SpecInProgressMap.initContext(allocator, spec_ctx),
+        .pending_external_keys = (std.HashMap(ExternalSpecKey, void, ExtSpecKeyContext, 80)).initContext(allocator, ext_ctx),
         .closure_transformer = null,
         .impl_lambda_sets = null,
     };
@@ -328,6 +339,8 @@ pub fn deinit(self: *Self) void {
     self.specialization_stack.deinit(self.allocator);
     self.external_requests.deinit(self.allocator);
     self.resolved_external_specs.deinit();
+    self.pending_specialization_keys.deinit();
+    self.pending_external_keys.deinit();
 }
 
 /// Result of looking up a static dispatch implementation for a concrete type.
@@ -535,27 +548,72 @@ pub fn resolveUnspecializedClosuresWithSubstitutions(
 ///
 /// Note: For static dispatch implementations that are simple functions (not closures with
 /// captures), this creates a "pure lambda" closure info with no captures.
+///
+/// INVARIANT: This function requires closure_transformer to be set. All call sites
+/// are guarded by `if (self.closure_transformer) |transformer|`, so this is always true.
 pub fn addResolvedToLambdaSet(
     self: *Self,
     lambda_set: *ClosureTransformer.LambdaSet,
     resolved: ResolvedClosure,
 ) !void {
-    // Create a ClosureInfo for the resolved static dispatch implementation.
-    // Static dispatch implementations are typically top-level functions without captures,
-    // so we create a simple closure with the method ident as the tag name.
-    //
-    // Note: The lambda_body is set to the member_expr from the original unspecialized
-    // closure. This allows dispatch generation to reference the correct function.
+    // closure_transformer must be set - callers are guarded by if (self.closure_transformer)
+    const transformer = self.closure_transformer orelse unreachable;
+
+    // Get the actual method's expression instead of the e_type_var_dispatch expression.
+    // If we have a node_idx, use it to get the method definition's expression.
+    // Otherwise, fall back to the member_expr from the unspecialized closure.
+    const lambda_body = if (resolved.impl_lookup.node_idx) |node_idx| blk: {
+        const def_idx: CIR.Def.Idx = @enumFromInt(node_idx);
+        const def = self.module_env.store.getDef(def_idx);
+        break :blk def.expr;
+    } else resolved.unspecialized.member_expr;
+
+    // Check if the implementation has captures
+    const has_captures = self.checkExpressionHasCaptures(lambda_body);
+
+    // Create lifted function patterns - always required for dispatch generation
+    const lifted_patterns = try transformer.createLiftedFunctionPatterns(
+        resolved.impl_lookup.method_ident,
+        has_captures,
+    );
+
+    // Extract lambda args if available
+    const lambda_args = blk: {
+        const expr = self.module_env.store.getExpr(lambda_body);
+        switch (expr) {
+            .e_lambda => |lambda| break :blk lambda.args,
+            .e_closure => |closure| {
+                const lambda_expr = self.module_env.store.getExpr(closure.lambda_idx);
+                switch (lambda_expr) {
+                    .e_lambda => |lambda| break :blk lambda.args,
+                    else => break :blk CIR.Pattern.Span{ .span = base.DataSpan.empty() },
+                }
+            },
+            else => break :blk CIR.Pattern.Span{ .span = base.DataSpan.empty() },
+        }
+    };
+
     const closure_info = ClosureTransformer.ClosureInfo{
         .tag_name = resolved.impl_lookup.method_ident,
-        .lambda_body = resolved.unspecialized.member_expr,
-        .lambda_args = CIR.Pattern.Span{ .span = base.DataSpan.empty() },
+        .source_module = self.module_env.module_name_idx,
+        .lambda_body = lambda_body,
+        .lambda_args = lambda_args,
         .capture_names = std.ArrayList(base.Ident.Idx).empty,
-        .lifted_fn_pattern = null, // Will be set during further processing if needed
-        .lifted_captures_pattern = null, // No captures for top-level static dispatch impls
+        .lifted_fn_pattern = lifted_patterns.fn_pattern,
+        .lifted_captures_pattern = lifted_patterns.captures_pattern,
     };
 
     try lambda_set.addClosure(self.allocator, closure_info);
+}
+
+/// Check if an expression has captures (is a closure with non-empty captures span).
+/// Static dispatch implementations are typically pure lambdas without captures.
+fn checkExpressionHasCaptures(self: *const Self, expr_idx: Expr.Idx) bool {
+    const expr = self.module_env.store.getExpr(expr_idx);
+    return switch (expr) {
+        .e_closure => |closure| closure.captures.span.len > 0,
+        else => false,
+    };
 }
 
 /// Process all resolved closures and add them to the lambda set.
@@ -652,9 +710,6 @@ pub fn resolveEntriesForTypeVar(
         }
     }
 
-    // Sort by region DESCENDING (innermost first - higher region numbers first)
-    std.mem.sort(ClosureTransformer.UnspecializedEntryRef, all_entries.items, {}, compareByRegionDesc);
-
     var resolved_count: usize = 0;
 
     // Step 3: Process each entry in region order
@@ -691,24 +746,6 @@ pub fn resolveEntriesForTypeVar(
     tracker.removeVar(type_var);
 
     return resolved_count;
-}
-
-/// Comparison function for sorting UnspecializedEntryRef by region descending.
-fn compareByRegionDesc(
-    _: void,
-    a: ClosureTransformer.UnspecializedEntryRef,
-    b: ClosureTransformer.UnspecializedEntryRef,
-) bool {
-    // Handle potential out-of-bounds indices gracefully
-    const a_region = if (a.index < a.lambda_set.unspecialized.items.len)
-        a.lambda_set.unspecialized.items[a.index].region
-    else
-        0;
-    const b_region = if (b.index < b.lambda_set.unspecialized.items.len)
-        b.lambda_set.unspecialized.items[b.index].region
-    else
-        0;
-    return a_region > b_region; // Descending order
 }
 
 /// Unify ambient function types when resolving an unspecialized entry.
@@ -779,17 +816,9 @@ pub fn resolveEntriesForTypeVarWithUnification(
 
     if (entry_refs.len == 0) return 0;
 
-    // Copy to slice for sorting
-    const entries = try self.allocator.alloc(ClosureTransformer.UnspecializedEntryRef, entry_refs.len);
-    defer self.allocator.free(entries);
-    @memcpy(entries, entry_refs);
-
-    // Sort by region DESCENDING (innermost first)
-    std.mem.sort(ClosureTransformer.UnspecializedEntryRef, entries, {}, compareByRegionDesc);
-
     var resolved_count: usize = 0;
 
-    for (entries) |entry_ref| {
+    for (entry_refs) |entry_ref| {
         if (entry_ref.index >= entry_ref.lambda_set.unspecialized.items.len) {
             continue;
         }
@@ -870,16 +899,10 @@ pub fn requestSpecialization(
         return specialized_name;
     }
 
-    // Check if it's already pending - if so, look up or create the specialized name
-    for (self.pending_specializations.items) |pending| {
-        if (pending.original_ident == original_ident) {
-            if (structuralTypeEqual(self.types_store, self.allocator, pending.concrete_type, concrete_type)) {
-                // Already pending - create and return the specialized name so call sites
-                // can reference it. The name will be reused when the spec is processed.
-                const specialized_name = try self.createSpecializedName(original_ident, concrete_type);
-                return specialized_name;
-            }
-        }
+    // Check if it's already pending (O(1) via hash set with structural equality)
+    if (self.pending_specialization_keys.contains(key)) {
+        const specialized_name = try self.createSpecializedName(original_ident, concrete_type);
+        return specialized_name;
     }
 
     // Check if this function is registered as a partial proc
@@ -903,6 +926,7 @@ pub fn requestSpecialization(
         .call_site = call_site,
         .type_substitutions = type_subs,
     });
+    try self.pending_specialization_keys.put(key, {});
 
     return specialized_name;
 }
@@ -937,22 +961,13 @@ pub fn requestExternalSpecialization(
         };
     }
 
-    // Check if we already have a pending request
-    for (self.external_requests.items) |existing| {
-        if (existing.source_module == source_module and
-            existing.original_ident == original_ident)
-        {
-            // Compare concrete types using structural type equality
-            if (structuralTypeEqual(self.types_store, self.allocator, existing.concrete_type, concrete_type)) {
-                // Pending but not yet resolved - create/lookup the specialized name
-                // so all call sites use a consistent reference
-                const specialized_name = try self.createSpecializedName(original_ident, concrete_type);
-                return ExternalSpecializationResult{
-                    .specialized_ident = specialized_name,
-                    .is_new = false,
-                };
-            }
-        }
+    // Check if we already have a pending request (O(1) via hash set with structural equality)
+    if (self.pending_external_keys.contains(ext_key)) {
+        const specialized_name = try self.createSpecializedName(original_ident, concrete_type);
+        return ExternalSpecializationResult{
+            .specialized_ident = specialized_name,
+            .is_new = false,
+        };
     }
 
     // Create the specialized name now so all call sites use a consistent reference.
@@ -966,6 +981,7 @@ pub fn requestExternalSpecialization(
         .concrete_type = concrete_type,
         .call_site = call_site,
     });
+    try self.pending_external_keys.put(ext_key, {});
 
     return ExternalSpecializationResult{
         .specialized_ident = specialized_name,
@@ -1069,6 +1085,7 @@ pub fn processPendingSpecializations(self: *Self) !void {
         pending.type_substitutions.deinit();
     }
 
+    self.pending_specialization_keys.clearRetainingCapacity();
     self.phase = .finding;
 }
 
@@ -1289,6 +1306,24 @@ fn buildFlatTypeSubstitutions(
                 else => return,
             };
 
+            // Compare tag payload types (tags are sorted by name, so positional match is correct)
+            const poly_tags = self.types_store.getTagsSlice(poly_union.tags);
+            const concrete_tags = self.types_store.getTagsSlice(concrete_union.tags);
+
+            const poly_args_slice = poly_tags.items(.args);
+            const concrete_args_slice = concrete_tags.items(.args);
+
+            const min_tags = @min(poly_args_slice.len, concrete_args_slice.len);
+            for (0..min_tags) |i| {
+                const poly_tag_args = self.types_store.sliceVars(poly_args_slice[i]);
+                const concrete_tag_args = self.types_store.sliceVars(concrete_args_slice[i]);
+
+                const min_args = @min(poly_tag_args.len, concrete_tag_args.len);
+                for (0..min_args) |j| {
+                    try self.buildTypeSubstitutions(poly_tag_args[j], concrete_tag_args[j], var_map);
+                }
+            }
+
             // Compare extension types
             try self.buildTypeSubstitutions(poly_union.ext, concrete_union.ext, var_map);
         },
@@ -1322,7 +1357,7 @@ pub fn instantiateType(
         .store = self.types_store,
         .idents = self.module_env.getIdentStoreConst(),
         .var_map = var_map,
-        .current_rank = types.Rank.top_level,
+        .current_rank = types.Rank.outermost,
         .rigid_behavior = .fresh_flex,
     };
 
@@ -1388,24 +1423,98 @@ fn duplicateExpr(
             // Use the specialized function if available, otherwise duplicate the original
             const new_func = specialized_func orelse try self.duplicateExpr(call.func, type_subs);
 
-            // Duplicate arguments
+            // Normalize arguments: complex expressions become let-bindings, simple lookups stay as-is.
+            // This ensures all call arguments are simple symbol references,
+            // matching the architecture of crates/compiler/mono/src/inc_dec.rs.
             const args = self.module_env.store.sliceExpr(call.args);
             const args_start = self.module_env.store.scratch.?.exprs.top();
+            const stmts_start = self.module_env.store.scratchTop("statements");
+            var needs_block = false;
 
             for (args) |arg_idx| {
                 const new_arg = try self.duplicateExpr(arg_idx, type_subs);
-                try self.module_env.store.scratch.?.exprs.append(new_arg);
+                const arg_expr = self.module_env.store.getExpr(new_arg);
+
+                // Check if this argument needs normalization (is not a simple lookup)
+                const is_simple = switch (arg_expr) {
+                    .e_lookup_local => true,
+                    // Literals and other non-refcounted values don't need normalization
+                    .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_zero_argument_tag, .e_empty_record => true,
+                    else => false,
+                };
+
+                if (is_simple) {
+                    try self.module_env.store.scratch.?.exprs.append(new_arg);
+                } else {
+                    // Create a synthetic let-binding for this complex argument
+                    // Use # prefix which is invalid in Roc syntax (starts a comment)
+                    var name_buf: [32]u8 = undefined;
+                    const name = std.fmt.bufPrint(&name_buf, "#arg{d}", .{self.synthetic_arg_counter}) catch "#arg";
+                    self.synthetic_arg_counter += 1;
+
+                    // Create the synthetic identifier and pattern
+                    const ident = base.Ident.for_text(name);
+                    const ident_idx = try self.module_env.insertIdent(ident);
+                    const pattern_idx = try self.module_env.store.addPattern(
+                        Pattern{ .assign = .{ .ident = ident_idx } },
+                        base.Region.zero(),
+                    );
+
+                    // Set the synthetic pattern's type to match the ORIGINAL expression's type.
+                    // We use arg_idx (original) not new_arg (duplicated) because the original
+                    // has valid type info from type checking, while the duplicate may not.
+                    // Later stages (lambda set specialization) need valid type info.
+                    const pattern_var = ModuleEnv.varFrom(pattern_idx);
+                    const expr_var = ModuleEnv.varFrom(arg_idx);
+                    // Extend type store to cover the new pattern index (created after type checking)
+                    try self.module_env.types.extendToVar(pattern_var);
+                    try self.module_env.types.dangerousSetVarRedirect(pattern_var, expr_var);
+
+                    // Create the let-binding statement: #argN = complex_expr
+                    const decl_stmt = try self.module_env.store.addStatement(
+                        .{ .s_decl = .{
+                            .pattern = pattern_idx,
+                            .expr = new_arg,
+                            .anno = null,
+                        } },
+                        base.Region.zero(),
+                    );
+                    try self.module_env.store.addScratchStatement(decl_stmt);
+                    needs_block = true;
+
+                    // Replace the argument with a lookup to the synthetic binding
+                    const lookup_expr = try self.module_env.store.addExpr(
+                        Expr{ .e_lookup_local = .{ .pattern_idx = pattern_idx } },
+                        base.Region.zero(),
+                    );
+                    try self.module_env.store.scratch.?.exprs.append(lookup_expr);
+                }
             }
 
             const new_args_span = try self.module_env.store.exprSpanFrom(args_start);
 
-            return try self.module_env.store.addExpr(Expr{
+            // Create the call expression
+            const call_expr = try self.module_env.store.addExpr(Expr{
                 .e_call = .{
                     .func = new_func,
                     .args = new_args_span,
                     .called_via = call.called_via,
                 },
             }, base.Region.zero());
+
+            // If we created synthetic bindings, wrap the call in a block
+            if (needs_block) {
+                const stmts_span = try self.module_env.store.statementSpanFrom(stmts_start);
+                return try self.module_env.store.addExpr(
+                    Expr{ .e_block = .{
+                        .stmts = stmts_span,
+                        .final_expr = call_expr,
+                    } },
+                    base.Region.zero(),
+                );
+            }
+
+            return call_expr;
         },
 
         .e_lambda => |lambda| {
@@ -1469,18 +1578,6 @@ fn duplicateExpr(
                         const new_expr = try self.duplicateExpr(decl.expr, type_subs);
                         const new_stmt_idx = try self.module_env.store.addStatement(
                             CIR.Statement{ .s_decl = .{
-                                .pattern = decl.pattern,
-                                .expr = new_expr,
-                                .anno = decl.anno,
-                            } },
-                            base.Region.zero(),
-                        );
-                        try self.module_env.store.scratch.?.statements.append(new_stmt_idx);
-                    },
-                    .s_decl_gen => |decl| {
-                        const new_expr = try self.duplicateExpr(decl.expr, type_subs);
-                        const new_stmt_idx = try self.module_env.store.addStatement(
-                            CIR.Statement{ .s_decl_gen = .{
                                 .pattern = decl.pattern,
                                 .expr = new_expr,
                                 .anno = decl.anno,
@@ -1582,6 +1679,21 @@ fn duplicateExpr(
             }, base.Region.zero());
         },
 
+        .e_tuple_access => |tuple_access| {
+            const new_tuple = try self.duplicateExpr(tuple_access.tuple, type_subs);
+
+            if (new_tuple == tuple_access.tuple) {
+                return expr_idx;
+            }
+
+            return try self.module_env.store.addExpr(Expr{
+                .e_tuple_access = .{
+                    .tuple = new_tuple,
+                    .elem_index = tuple_access.elem_index,
+                },
+            }, base.Region.zero());
+        },
+
         .e_record => |record| {
             const field_indices = self.module_env.store.sliceRecordFields(record.fields);
             const fields_start = self.module_env.store.scratch.?.record_fields.top();
@@ -1672,7 +1784,7 @@ fn duplicateExpr(
             const new_expr = try self.duplicateExpr(ret.expr, type_subs);
             if (new_expr == ret.expr) return expr_idx;
             return try self.module_env.store.addExpr(Expr{
-                .e_return = .{ .expr = new_expr },
+                .e_return = .{ .expr = new_expr, .lambda = ret.lambda, .context = ret.context },
             }, base.Region.zero());
         },
 
@@ -1731,6 +1843,7 @@ fn duplicateExpr(
                     .cond = new_cond,
                     .branches = new_branches_span,
                     .exhaustive = match.exhaustive,
+                    .is_try_suffix = match.is_try_suffix,
                 },
             }, base.Region.zero());
         },
@@ -1772,16 +1885,23 @@ fn duplicateExpr(
             }, base.Region.zero());
         },
 
+        .e_type_var_dispatch => |dispatch| {
+            return try self.resolveTypeVarDispatch(dispatch, type_subs);
+        },
+
         // Pass through simple expressions unchanged
         .e_num,
         .e_frac_f32,
         .e_frac_f64,
         .e_dec,
         .e_dec_small,
+        .e_typed_int,
+        .e_typed_frac,
         .e_str_segment,
         .e_str,
         .e_lookup_local,
         .e_lookup_external,
+        .e_lookup_pending,
         .e_empty_list,
         .e_empty_record,
         .e_zero_argument_tag,
@@ -1789,11 +1909,89 @@ fn duplicateExpr(
         .e_ellipsis,
         .e_anno_only,
         .e_lookup_required,
-        .e_type_var_dispatch,
         .e_hosted_lambda,
         .e_low_level_lambda,
         .e_crash,
         => return expr_idx,
+    }
+}
+
+/// Resolve a type variable dispatch expression to a concrete method call.
+///
+/// This function is called during monomorphization when we have concrete type
+/// information available. It:
+/// 1. Gets the type variable from the s_type_var_alias statement
+/// 2. Looks up the concrete type using type substitutions
+/// 3. Finds the method implementation for that concrete type
+/// 4. Creates an e_call expression to the resolved method
+fn resolveTypeVarDispatch(
+    self: *Self,
+    dispatch: std.meta.fieldInfo(Expr, .e_type_var_dispatch).type,
+    type_subs: *const types.VarMap,
+) std.mem.Allocator.Error!Expr.Idx {
+    // 1. Get the type var alias statement
+    const stmt = self.module_env.store.getStatement(dispatch.type_var_alias_stmt);
+    const alias_data = stmt.s_type_var_alias;
+
+    // 2. Get the type variable and look up its concrete type
+    const type_var_anno = alias_data.type_var_anno;
+    const ct_var = ModuleEnv.varFrom(type_var_anno);
+
+    // Look up the concrete type in the substitution map
+    const concrete_type = type_subs.get(ct_var) orelse ct_var;
+
+    // 3. Look up the method implementation for the concrete type
+    if (self.lookupStaticDispatch(concrete_type, dispatch.method_name)) |impl| {
+        // 4. Get the method's expression from its definition
+        // Use node_idx to look up the def and get the method's expression
+        const method_expr: Expr.Idx = if (impl.node_idx) |node_idx| blk: {
+            const def_idx: CIR.Def.Idx = @enumFromInt(node_idx);
+            const def = self.module_env.store.getDef(def_idx);
+            break :blk def.expr;
+        } else blk: {
+            // Fallback: create a lookup if we don't have the node_idx
+            const method_pattern = try self.module_env.store.addPattern(
+                Pattern{ .assign = .{ .ident = impl.method_ident } },
+                base.Region.zero(),
+            );
+            break :blk try self.module_env.store.addExpr(
+                Expr{ .e_lookup_local = .{ .pattern_idx = method_pattern } },
+                base.Region.zero(),
+            );
+        };
+
+        // Duplicate the arguments
+        const args = self.module_env.store.sliceExpr(dispatch.args);
+        const args_start = self.module_env.store.scratch.?.exprs.top();
+
+        for (args) |arg_idx| {
+            const new_arg = try self.duplicateExpr(arg_idx, type_subs);
+            try self.module_env.store.scratch.?.exprs.append(new_arg);
+        }
+
+        const new_args_span = try self.module_env.store.exprSpanFrom(args_start);
+
+        // Create the call expression with the resolved method
+        return try self.module_env.store.addExpr(
+            Expr{ .e_call = .{
+                .func = method_expr,
+                .args = new_args_span,
+                .called_via = .apply,
+            } },
+            base.Region.zero(),
+        );
+    } else {
+        // Method not found - create a diagnostic for this error
+        // TODO: Create a more specific diagnostic for method resolution failures
+        const diagnostic_idx = try self.module_env.addDiagnostic(.{
+            .expr_not_canonicalized = .{ .region = base.Region.zero() },
+        });
+        return try self.module_env.store.addExpr(
+            Expr{ .e_runtime_error = .{
+                .diagnostic = diagnostic_idx,
+            } },
+            base.Region.zero(),
+        );
     }
 }
 
@@ -2132,14 +2330,12 @@ fn hashTypeRecursive(
         .alias => |alias| {
             hasher.update("alias");
             hasher.update(std.mem.asBytes(&alias.ident.ident_idx));
-            // Recurse into alias args
-            const alias_args = self.types_store.sliceAliasArgs(alias);
-            for (alias_args) |arg| {
-                self.hashTypeRecursive(hasher, arg, seen);
+            // Hash all vars (backing var + type arguments) to differentiate
+            // e.g. List(U64) from List(Str)
+            const vars = self.types_store.sliceVars(alias.vars.nonempty);
+            for (vars) |v| {
+                self.hashTypeRecursive(hasher, v, seen);
             }
-            // Recurse into backing var
-            const backing = self.types_store.getAliasBackingVar(alias);
-            self.hashTypeRecursive(hasher, backing, seen);
         },
         .err => hasher.update("err"),
     }
@@ -2903,4 +3099,132 @@ test "monomorphizer: allExternalSpecializationsResolved detects unresolved" {
 
     // Now all resolved
     try testing.expect(mono.allExternalSpecializationsResolved());
+}
+
+test "monomorphizer: alias types with different type args produce different hashes" {
+    const allocator = testing.allocator;
+
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, "test");
+    defer {
+        module_env.deinit();
+        allocator.destroy(module_env);
+    }
+
+    var mono = Self.init(allocator, module_env, &module_env.types);
+    defer mono.deinit();
+
+    // Create the alias name (e.g. "MyAlias")
+    const alias_ident = try module_env.insertIdent(base.Ident.for_text("MyAlias"));
+    const type_ident = types.types.TypeIdent{ .ident_idx = alias_ident };
+
+    // Create two different concrete types for the type argument
+    const arg1 = try module_env.types.fresh();
+    try module_env.types.setVarContent(arg1, .{ .structure = .empty_record });
+
+    const arg2 = try module_env.types.fresh();
+    try module_env.types.setVarContent(arg2, .{ .structure = .empty_tag_union });
+
+    // Create backing vars
+    const backing1 = try module_env.types.fresh();
+    const backing2 = try module_env.types.fresh();
+
+    // Create two alias types: MyAlias EmptyRecord vs MyAlias EmptyTagUnion
+    const alias_content1 = try module_env.types.mkAlias(type_ident, backing1, &.{arg1}, alias_ident);
+    const alias_content2 = try module_env.types.mkAlias(type_ident, backing2, &.{arg2}, alias_ident);
+
+    const var1 = try module_env.types.fresh();
+    try module_env.types.setVarContent(var1, alias_content1);
+
+    const var2 = try module_env.types.fresh();
+    try module_env.types.setVarContent(var2, alias_content2);
+
+    // These should produce DIFFERENT hashes because the type args differ
+    const hash1 = mono.structuralTypeHash(var1);
+    const hash2 = mono.structuralTypeHash(var2);
+    try testing.expect(hash1 != hash2);
+}
+
+test "monomorphizer: alias types with same type args produce same hash" {
+    const allocator = testing.allocator;
+
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, "test");
+    defer {
+        module_env.deinit();
+        allocator.destroy(module_env);
+    }
+
+    var mono = Self.init(allocator, module_env, &module_env.types);
+    defer mono.deinit();
+
+    const alias_ident = try module_env.insertIdent(base.Ident.for_text("MyAlias"));
+    const type_ident = types.types.TypeIdent{ .ident_idx = alias_ident };
+
+    // Create two identical concrete type args
+    const arg1 = try module_env.types.fresh();
+    try module_env.types.setVarContent(arg1, .{ .structure = .empty_record });
+
+    const arg2 = try module_env.types.fresh();
+    try module_env.types.setVarContent(arg2, .{ .structure = .empty_record });
+
+    const backing1 = try module_env.types.fresh();
+    try module_env.types.setVarContent(backing1, .{ .structure = .empty_record });
+
+    const backing2 = try module_env.types.fresh();
+    try module_env.types.setVarContent(backing2, .{ .structure = .empty_record });
+
+    // Create two alias types with the same structure
+    const alias_content1 = try module_env.types.mkAlias(type_ident, backing1, &.{arg1}, alias_ident);
+    const alias_content2 = try module_env.types.mkAlias(type_ident, backing2, &.{arg2}, alias_ident);
+
+    const var1 = try module_env.types.fresh();
+    try module_env.types.setVarContent(var1, alias_content1);
+
+    const var2 = try module_env.types.fresh();
+    try module_env.types.setVarContent(var2, alias_content2);
+
+    // These should produce the SAME hash because the structure is identical
+    const hash1 = mono.structuralTypeHash(var1);
+    const hash2 = mono.structuralTypeHash(var2);
+    try testing.expectEqual(hash1, hash2);
+}
+
+test "monomorphizer: alias types with different backing vars produce different hashes" {
+    const allocator = testing.allocator;
+
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, "test");
+    defer {
+        module_env.deinit();
+        allocator.destroy(module_env);
+    }
+
+    var mono = Self.init(allocator, module_env, &module_env.types);
+    defer mono.deinit();
+
+    const alias_ident = try module_env.insertIdent(base.Ident.for_text("MyAlias"));
+    const type_ident = types.types.TypeIdent{ .ident_idx = alias_ident };
+
+    // Create two different backing types (no type args)
+    const backing1 = try module_env.types.fresh();
+    try module_env.types.setVarContent(backing1, .{ .structure = .empty_record });
+
+    const backing2 = try module_env.types.fresh();
+    try module_env.types.setVarContent(backing2, .{ .structure = .empty_tag_union });
+
+    // Create alias types with no args but different backing vars
+    const alias_content1 = try module_env.types.mkAlias(type_ident, backing1, &.{}, alias_ident);
+    const alias_content2 = try module_env.types.mkAlias(type_ident, backing2, &.{}, alias_ident);
+
+    const var1 = try module_env.types.fresh();
+    try module_env.types.setVarContent(var1, alias_content1);
+
+    const var2 = try module_env.types.fresh();
+    try module_env.types.setVarContent(var2, alias_content2);
+
+    // These should produce DIFFERENT hashes because the backing types differ
+    const hash1 = mono.structuralTypeHash(var1);
+    const hash2 = mono.structuralTypeHash(var2);
+    try testing.expect(hash1 != hash2);
 }

@@ -1,4 +1,4 @@
-app [main!] { pf: platform "../basic-cli/main.roc" }
+app [main!] { pf: platform "../fx/platform/main.roc" }
 
 import pf.Stdout
 
@@ -13,7 +13,7 @@ findValue = |limit| {
     -1
 }
 
-main! = |_| {
+main! = || {
     result = findValue 42
 
     if result == 42 {

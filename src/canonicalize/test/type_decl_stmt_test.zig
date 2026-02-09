@@ -11,6 +11,7 @@ const ModuleEnv = @import("../ModuleEnv.zig");
 const Can = @import("../Can.zig");
 const CIR = @import("../CIR.zig");
 
+const Allocators = base.Allocators;
 const testing = std.testing;
 const Ident = base.Ident;
 const Statement = CIR.Statement;
@@ -272,10 +273,14 @@ test "scopeLookupTypeDecl API is accessible" {
 
     try env.initCIRFields("test");
 
-    var ast = try parse.parseExpr(&env.common, gpa);
-    defer ast.deinit(gpa);
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(gpa);
+    defer allocators.deinit();
 
-    var can = try Can.init(&env, &ast, null);
+    const ast = try parse.parseExpr(&allocators, &env.common);
+    defer ast.deinit();
+
+    var can = try Can.init(&allocators, &env, ast, null);
     defer can.deinit();
 
     // Enter a scope
@@ -297,10 +302,14 @@ test "introduceType API is accessible" {
 
     try env.initCIRFields("test");
 
-    var ast = try parse.parseExpr(&env.common, gpa);
-    defer ast.deinit(gpa);
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(gpa);
+    defer allocators.deinit();
 
-    var can = try Can.init(&env, &ast, null);
+    const ast = try parse.parseExpr(&allocators, &env.common);
+    defer ast.deinit();
+
+    var can = try Can.init(&allocators, &env, ast, null);
     defer can.deinit();
 
     // Enter a scope for local type declarations
@@ -342,10 +351,14 @@ test "local type scoping - not visible after exiting block" {
 
     try env.initCIRFields("test");
 
-    var ast = try parse.parseExpr(&env.common, gpa);
-    defer ast.deinit(gpa);
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(gpa);
+    defer allocators.deinit();
 
-    var can = try Can.init(&env, &ast, null);
+    const ast = try parse.parseExpr(&allocators, &env.common);
+    defer ast.deinit();
+
+    var can = try Can.init(&allocators, &env, ast, null);
     defer can.deinit();
 
     // Enter outer scope

@@ -1825,6 +1825,22 @@ test "I128: rem_by" {
 //
 // F32 Tests (32-bit floating point)
 
+test "F32: literal only" {
+    // Simplest possible F32 test - just return a literal
+    try runExpectF32("3.14f32", 3.14, .no_trace);
+}
+
+test "F32: variable assignment" {
+    // Test F32 variable assignment without any operations
+    try runExpectF32(
+        \\{
+        \\    a : F32
+        \\    a = 3.14f32
+        \\    a
+        \\}
+    , 3.14, .no_trace);
+}
+
 test "F32: negate" {
     try runExpectF32(
         \\{
@@ -2357,4 +2373,50 @@ test "Dec: to_str" {
         \\    Dec.to_str(a)
         \\}
     , "0.0", .no_trace);
+}
+
+// Mixed Dec-Int Operations
+// These tests verify that mixing Dec and Int types produces a TYPE MISMATCH error
+// at compile time, and crashes at runtime. Roc requires explicit type conversions.
+
+// Dec + Int: Should be a type mismatch - Dec and I64 are different types
+test "Dec + Int: plus - type mismatch" {
+    // TODO: Re-enable when error-type-to-runtime-crash pass is implemented
+    return error.SkipZigTest;
+}
+
+test "Dec + Int: minus - type mismatch" {
+    // TODO: Re-enable when error-type-to-runtime-crash pass is implemented
+    return error.SkipZigTest;
+}
+
+test "Dec + Int: times - type mismatch" {
+    // TODO: Re-enable when error-type-to-runtime-crash pass is implemented
+    return error.SkipZigTest;
+}
+
+test "Dec + Int: div_by - type mismatch" {
+    // TODO: Re-enable when error-type-to-runtime-crash pass is implemented
+    return error.SkipZigTest;
+}
+
+// Int + Dec: Should be a type mismatch - I64 and Dec are different types
+test "Int + Dec: plus - type mismatch" {
+    // TODO: Re-enable when error-type-to-runtime-crash pass is implemented
+    return error.SkipZigTest;
+}
+
+test "Int + Dec: minus - type mismatch" {
+    // TODO: Re-enable when error-type-to-runtime-crash pass is implemented
+    return error.SkipZigTest;
+}
+
+test "Int + Dec: times - type mismatch" {
+    // TODO: Re-enable when error-type-to-runtime-crash pass is implemented
+    return error.SkipZigTest;
+}
+
+test "Int + Dec: div_by - type mismatch" {
+    // TODO: Re-enable when error-type-to-runtime-crash pass is implemented
+    return error.SkipZigTest;
 }

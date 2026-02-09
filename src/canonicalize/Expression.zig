@@ -97,6 +97,21 @@ pub const Expr = union(enum) {
         value: CIR.SmallDecValue,
         has_suffix: bool, // If the value had a `dec` suffix
     },
+    /// An integer literal with explicit type annotation: `123.U64`
+    /// The type_name stores the type identifier (e.g., "U64", "I32")
+    /// At compile time, from_numeral is called to validate and convert the value.
+    e_typed_int: struct {
+        value: CIR.IntValue,
+        type_name: Ident.Idx,
+    },
+    /// A fractional literal with explicit type annotation: `3.14.Dec`
+    /// The type_name stores the type identifier (e.g., "Dec", "F64")
+    /// At compile time, from_numeral is called to validate and convert the value.
+    /// The value is stored as scaled i128 (like Dec, scaled by 10^18).
+    e_typed_frac: struct {
+        value: CIR.IntValue,
+        type_name: Ident.Idx,
+    },
     // A single segment of a string literal
     // a single string may be made up of a span sequential segments
     // for example if it was split across multiple lines
@@ -124,6 +139,18 @@ pub const Expr = union(enum) {
     e_lookup_external: struct {
         module_idx: CIR.Import.Idx,
         target_node_idx: u16,
+        ident_idx: Ident.Idx,
+        region: Region,
+    },
+    /// Deferred external module lookup - member name stored but target_node_idx not yet resolved.
+    /// Used during independent canonicalization when the target module hasn't been canonicalized yet.
+    /// Gets resolved to e_lookup_external before type-checking.
+    /// ```roc
+    /// import Message  # Message not yet canonicalized
+    /// foo = Message.msg()  # Creates e_lookup_pending until resolved
+    /// ```
+    e_lookup_pending: struct {
+        module_idx: CIR.Import.Idx,
         ident_idx: Ident.Idx,
         region: Region,
     },
@@ -317,6 +344,18 @@ pub const Expr = union(enum) {
         field_name_region: base.Region, // Region of just the field/method name for error reporting
         args: ?Expr.Span, // Optional arguments for method calls (e.g., `fn` in `list.map(fn)`)
     },
+    /// Tuple element access by numeric index.
+    /// Accesses an element of a tuple using dot notation with a numeric index.
+    ///
+    /// ```roc
+    /// point.0       # Access first element
+    /// coords.1      # Access second element
+    /// (1, 2, 3).2   # Access third element of inline tuple
+    /// ```
+    e_tuple_access: struct {
+        tuple: Expr.Idx, // The tuple expression being accessed
+        elem_index: u32, // The 0-based index of the element to access
+    },
     /// Runtime error expression that crashes when executed.
     /// These are inserted during canonicalization when the compiler encounters
     /// semantic errors but continues compilation following the "inform don't block" philosophy.
@@ -376,7 +415,10 @@ pub const Expr = union(enum) {
     /// ```roc
     /// foo : {} -> {}
     /// ```
-    e_anno_only: struct {},
+    e_anno_only: struct {
+        /// The identifier being defined (extracted from the pattern to avoid cross-module node index issues)
+        ident: Ident.Idx,
+    },
 
     /// Early return expression that exits the enclosing function with a value.
     /// This is used when `return` appears as the final expression in a block.
@@ -390,6 +432,17 @@ pub const Expr = union(enum) {
     /// ```
     e_return: struct {
         expr: Expr.Idx,
+        /// The lambda this return belongs to (for type unification).
+        lambda: Expr.Idx,
+        /// Context indicating where this return came from.
+        context: ReturnContext,
+
+        pub const ReturnContext = enum(u8) {
+            /// Explicit `return` expression
+            return_expr,
+            /// `?` suffix operator (try operator) desugaring
+            try_suffix,
+        };
     },
 
     /// Type variable dispatch expression for calling methods on type variable aliases.
@@ -1282,13 +1335,8 @@ pub const Expr = union(enum) {
                 const region = ir.store.getExprRegion(expr_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
-                var value_buf: [512]u8 = undefined;
-                const value_str = if (e.value == 0)
-                    "0.0"
-                else if (@abs(e.value) < 1e-10 or @abs(e.value) > 1e10)
-                    std.fmt.bufPrint(&value_buf, "{e}", .{e.value}) catch "fmt_error"
-                else
-                    std.fmt.bufPrint(&value_buf, "{d}", .{e.value}) catch "fmt_error";
+                var value_buf: [400]u8 = undefined;
+                const value_str = builtins.compiler_rt_128.f32_to_str(&value_buf, e.value);
                 try tree.pushStringPair("value", value_str);
 
                 const attrs = tree.beginNode();
@@ -1300,13 +1348,8 @@ pub const Expr = union(enum) {
                 const region = ir.store.getExprRegion(expr_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
-                var value_buf: [512]u8 = undefined;
-                const value_str = if (e.value == 0)
-                    "0.0"
-                else if (@abs(e.value) < 1e-10 or @abs(e.value) > 1e10)
-                    std.fmt.bufPrint(&value_buf, "{e}", .{e.value}) catch "fmt_error"
-                else
-                    std.fmt.bufPrint(&value_buf, "{d}", .{e.value}) catch "fmt_error";
+                var value_buf: [400]u8 = undefined;
+                const value_str = builtins.compiler_rt_128.f64_to_str(&value_buf, e.value);
                 try tree.pushStringPair("value", value_str);
 
                 const attrs = tree.beginNode();
@@ -1318,14 +1361,9 @@ pub const Expr = union(enum) {
                 const region = ir.store.getExprRegion(expr_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
-                const dec_value_f64: f64 = @as(f64, @floatFromInt(e.value.num)) / std.math.pow(f64, 10, 18);
-                var value_buf: [512]u8 = undefined;
-                const value_str = if (dec_value_f64 == 0)
-                    "0.0"
-                else if (@abs(dec_value_f64) < 1e-10 or @abs(dec_value_f64) > 1e10)
-                    std.fmt.bufPrint(&value_buf, "{e}", .{dec_value_f64}) catch "fmt_error"
-                else
-                    std.fmt.bufPrint(&value_buf, "{d}", .{dec_value_f64}) catch "fmt_error";
+                const dec_value_f64: f64 = builtins.compiler_rt_128.i128_to_f64(e.value.num) / std.math.pow(f64, 10, 18);
+                var value_buf: [400]u8 = undefined;
+                const value_str = builtins.compiler_rt_128.f64_to_str(&value_buf, dec_value_f64);
                 try tree.pushStringPair("value", value_str);
 
                 const attrs = tree.beginNode();
@@ -1349,14 +1387,41 @@ pub const Expr = union(enum) {
                 const denominator_f64: f64 = std.math.pow(f64, 10, @floatFromInt(e.value.denominator_power_of_ten));
                 const value_f64 = numerator_f64 / denominator_f64;
 
-                var value_buf: [512]u8 = undefined;
-                const value_str = if (value_f64 == 0)
-                    "0.0"
-                else if (@abs(value_f64) < 1e-10 or @abs(value_f64) > 1e10)
-                    std.fmt.bufPrint(&value_buf, "{e}", .{value_f64}) catch "fmt_error"
-                else
-                    std.fmt.bufPrint(&value_buf, "{d}", .{value_f64}) catch "fmt_error";
+                var value_buf: [400]u8 = undefined;
+                const value_str = builtins.compiler_rt_128.f64_to_str(&value_buf, value_f64);
                 try tree.pushStringPair("value", value_str);
+
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .e_typed_int => |e| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-typed-int");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+
+                var value_buf: [40]u8 = undefined;
+                const value_str = e.value.bufPrint(&value_buf) catch unreachable;
+                try tree.pushStringPair("value", value_str);
+
+                const type_name = ir.getIdent(e.type_name);
+                try tree.pushStringPair("type", type_name);
+
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .e_typed_frac => |e| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-typed-frac");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+
+                var value_buf: [40]u8 = undefined;
+                const value_str = e.value.bufPrint(&value_buf) catch unreachable;
+                try tree.pushStringPair("value", value_str);
+
+                const type_name = ir.getIdent(e.type_name);
+                try tree.pushStringPair("type", type_name);
 
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
@@ -1458,6 +1523,23 @@ pub const Expr = union(enum) {
                 } else {
                     try tree.pushStringPair("external-module", module_name);
                 }
+
+                try tree.endNode(begin, attrs);
+            },
+            .e_lookup_pending => |e| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-lookup-pending");
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, e.region);
+                const attrs = tree.beginNode();
+
+                const module_idx_int = @intFromEnum(e.module_idx);
+                std.debug.assert(module_idx_int < ir.imports.imports.items.items.len);
+                const string_lit_idx = ir.imports.imports.items.items[module_idx_int];
+                const module_name = ir.common.strings.get(string_lit_idx);
+                try tree.pushStringPair("pending-module", module_name);
+
+                const ident_name = ir.getIdent(e.ident_idx);
+                try tree.pushStringPair("pending-member", ident_name);
 
                 try tree.endNode(begin, attrs);
             },
@@ -1780,6 +1862,23 @@ pub const Expr = union(enum) {
 
                 try tree.endNode(begin, attrs);
             },
+            .e_tuple_access => |e| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-tuple-access");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+
+                // Push the index as an attribute
+                var buf: [16]u8 = undefined;
+                const index_str = std.fmt.bufPrint(&buf, "{d}", .{e.elem_index}) catch "?";
+                try tree.pushStringPair("index", index_str);
+                const attrs = tree.beginNode();
+
+                // Push the tuple expression
+                try ir.store.getExpr(e.tuple).pushToSExprTree(ir, tree, e.tuple);
+
+                try tree.endNode(begin, attrs);
+            },
             .e_runtime_error => |e| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("e-runtime-error");
@@ -1958,6 +2057,9 @@ pub const Expr = union(enum) {
         branches: Branch.Span,
         /// Marks whether a match expression is exhaustive using a variable.
         exhaustive: TypeVar,
+        /// Whether this match was desugared from the `?` (try suffix) operator.
+        /// When true, we need to verify the condition is actually a Try type.
+        is_try_suffix: bool,
 
         pub const Idx = enum(u32) { _ };
         pub const Span = extern struct { span: base.DataSpan };

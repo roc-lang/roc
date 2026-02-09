@@ -9,6 +9,7 @@ Foo : [A, B, C].{ x = 5 }
 ~~~
 # EXPECTED
 TYPE ALIAS WITH ASSOCIATED ITEMS - type_alias_with_associated.md:1:16:1:17
+TYPE MODULE REQUIRES NOMINAL TYPE - type_alias_with_associated.md:1:1:1:26
 # PROBLEMS
 **TYPE ALIAS WITH ASSOCIATED ITEMS**
 Type aliases cannot have associated items (such as types or methods).
@@ -20,6 +21,27 @@ Only nominal types (defined with **:=**) can have associated items. Type aliases
 Foo : [A, B, C].{ x = 5 }
 ```
                ^
+
+
+**TYPE MODULE REQUIRES NOMINAL TYPE**
+This file is named `Foo`.roc, and contains a type alias `Foo`.
+
+Type modules must use nominal types (`:=` or `::`), not type aliases (`:`).
+
+Nominal types must be records or tag unions:
+
+# Record example:
+`Foo := { data: List(U8) }.{}`
+
+# Tag union example:
+`Foo := [ State(List(U8)) ].{}`
+
+Tip: Nominal types have their own identity and can have associated functions. Type aliases (`:`) are just shorthand for another type and cannot define modules.
+**type_alias_with_associated.md:1:1:1:26:**
+```roc
+Foo : [A, B, C].{ x = 5 }
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 # TOKENS
@@ -68,10 +90,10 @@ Foo : [A, B, C].{
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")))
+		(patt (type "Dec")))
 	(type_decls
 		(alias (type "Foo")
 			(ty-header (name "Foo"))))
 	(expressions
-		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))))
+		(expr (type "Dec"))))
 ~~~

@@ -1,3 +1,3 @@
-main! = |_| {}
+main! = || {}
 
 result = "hello" + 123

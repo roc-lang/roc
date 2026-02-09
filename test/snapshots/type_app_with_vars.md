@@ -13,19 +13,21 @@ mapList = |list, fn| list.map(fn)
 main! = |_| mapList([1,2,3,4,5])
 ~~~
 # EXPECTED
-TOO FEW ARGUMENTS - type_app_with_vars.md:6:13:6:33
+TOO FEW ARGS - type_app_with_vars.md:6:13:6:33
 # PROBLEMS
-**TOO FEW ARGUMENTS**
-The function `mapList` expects 2 arguments, but 1 was provided:
+**TOO FEW ARGS**
+The `mapList` function expects 2 arguments, but it got 1 instead:
 **type_app_with_vars.md:6:13:6:33:**
 ```roc
 main! = |_| mapList([1,2,3,4,5])
 ```
             ^^^^^^^^^^^^^^^^^^^^
 
-The function has the signature:
+The `mapList` function has the type:
 
     List(a), (a -> b) -> List(b)
+
+Are there any missing commas?
 
 # TOKENS
 ~~~zig
@@ -145,8 +147,8 @@ main! = |_| mapList([1, 2, 3, 4, 5])
 (inferred-types
 	(defs
 		(patt (type "List(a), (a -> b) -> List(b)"))
-		(patt (type "_arg -> Error")))
+		(patt (type "_arg -> _ret")))
 	(expressions
 		(expr (type "List(a), (a -> b) -> List(b)"))
-		(expr (type "_arg -> Error"))))
+		(expr (type "_arg -> _ret"))))
 ~~~

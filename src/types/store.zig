@@ -14,7 +14,6 @@ const Desc = types.Descriptor;
 const Var = types.Var;
 const Content = types.Content;
 const Rank = types.Rank;
-const Mark = types.Mark;
 const Flex = types.Flex;
 const Rigid = types.Rigid;
 const RecordField = types.RecordField;
@@ -90,6 +89,10 @@ pub const Store = struct {
     tags: TagSafeMultiList,
     static_dispatch_constraints: StaticDispatchConstraint.SafeList,
 
+    /// Count of flex vars that currently have a from_numeral constraint.
+    /// Used to skip the finalization walk when no numeric defaults need resolving.
+    from_numeral_flex_count: u32,
+
     /// Init the unification table with default capacity.
     /// For production use with source files, prefer initFromSourceLen() which
     /// computes capacity based on source file size.
@@ -123,6 +126,7 @@ pub const Store = struct {
             .record_fields = try RecordFieldSafeMultiList.initCapacity(gpa, child_capacity),
             .tags = try TagSafeMultiList.initCapacity(gpa, child_capacity),
             .static_dispatch_constraints = try StaticDispatchConstraint.SafeList.initCapacity(gpa, child_capacity),
+            .from_numeral_flex_count = 0,
         };
     }
 
@@ -130,6 +134,14 @@ pub const Store = struct {
     pub fn ensureTotalCapacity(self: *Self, capacity: usize) Allocator.Error!void {
         try self.descs.backing.ensureTotalCapacity(self.gpa, capacity);
         try self.slots.backing.items.ensureTotalCapacity(self.gpa, capacity);
+    }
+
+    pub fn extendToVar(self: *Self, var_: Var) Allocator.Error!void {
+        const needed_len = @intFromEnum(var_) + 1;
+        while (self.slots.backing.len() < needed_len) {
+            // Create a placeholder flex variable for each new slot
+            _ = try self.fresh();
+        }
     }
 
     /// Deinit the unification table
@@ -228,17 +240,19 @@ pub const Store = struct {
 
     /// Create a new variable with the provided desc
     /// Used in tests
+    /// TODO: Can we remove this function? It hardcodes rank, which is fine for
+    /// test but we can never use this in actual typechecking
     pub fn freshFromContent(self: *Self, content: Content) std.mem.Allocator.Error!Var {
         const trace = tracy.traceNamed(@src(), "typesStore.freshFromContent");
         defer trace.end();
-        const desc_idx = try self.descs.insert(self.gpa, .{ .content = content, .rank = Rank.top_level, .mark = Mark.none });
+        const desc_idx = try self.descs.insert(self.gpa, .{ .content = content, .rank = Rank.outermost });
         const slot_idx = try self.slots.insert(self.gpa, .{ .root = desc_idx });
         return Self.slotIdxToVar(slot_idx);
     }
 
     /// Create a new variable with the given content and rank
     pub fn freshFromContentWithRank(self: *Self, content: Content, rank: Rank) std.mem.Allocator.Error!Var {
-        const desc_idx = try self.descs.insert(self.gpa, .{ .content = content, .rank = rank, .mark = Mark.none });
+        const desc_idx = try self.descs.insert(self.gpa, .{ .content = content, .rank = rank });
         const slot_idx = try self.slots.insert(self.gpa, .{ .root = desc_idx });
         return Self.slotIdxToVar(slot_idx);
     }
@@ -259,7 +273,7 @@ pub const Store = struct {
 
     /// Create a new variable with the provided content assuming there is capacity
     pub fn appendFromContentAssumeCapacity(self: *Self, content: Content, rank: Rank) Var {
-        const desc_idx = self.descs.appendAssumeCapacity(.{ .content = content, .rank = rank, .mark = Mark.none });
+        const desc_idx = self.descs.appendAssumeCapacity(.{ .content = content, .rank = rank });
         const slot_idx = self.slots.appendAssumeCapacity(.{ .root = desc_idx });
         return Self.slotIdxToVar(slot_idx);
     }
@@ -347,7 +361,13 @@ pub const Store = struct {
 
     /// Make alias data type
     /// Does not insert content into the types store
-    pub fn mkAlias(self: *Self, ident: TypeIdent, backing_var: Var, args: []const Var) std.mem.Allocator.Error!Content {
+    pub fn mkAlias(
+        self: *Self,
+        ident: TypeIdent,
+        backing_var: Var,
+        args: []const Var,
+        origin_module: base.Ident.Idx,
+    ) std.mem.Allocator.Error!Content {
         const backing_idx = try self.appendVar(backing_var);
         var span = try self.appendVars(args);
 
@@ -359,6 +379,7 @@ pub const Store = struct {
             .alias = Alias{
                 .ident = ident,
                 .vars = .{ .nonempty = span },
+                .origin_module = origin_module,
             },
         };
     }
@@ -584,6 +605,21 @@ pub const Store = struct {
         return self.vars.sliceRange(range);
     }
 
+    /// Get an iterator over vars for the given range.
+    /// Use this instead of sliceVars when the iteration may trigger
+    /// reallocations (e.g., during unification).
+    pub fn iterVars(self: *const Self, range: VarSafeList.Range) VarSafeList.Iterator {
+        return self.vars.iterRange(range);
+    }
+
+    /// Get a var at a specific offset within a range.
+    /// Use this for index-based iteration when unification may trigger reallocations.
+    pub fn getVarAt(self: *const Self, range: VarSafeList.Range, offset: u32) Var {
+        std.debug.assert(offset < range.count);
+        const idx: VarSafeList.Idx = @enumFromInt(@intFromEnum(range.start) + offset);
+        return self.vars.get(idx).*;
+    }
+
     /// Given a range, get a slice of record fields from the backing array
     pub fn getRecordFieldsSlice(self: *const Self, range: RecordFieldSafeMultiList.Range) RecordFieldSafeMultiList.Slice {
         return self.record_fields.sliceRange(range);
@@ -643,6 +679,17 @@ pub const Store = struct {
         return slice[1..];
     }
 
+    /// Get the arg vars range for this nominal type.
+    /// Returns a range (start index + count) which can be stored safely.
+    /// Unlike sliceNominalArgs, this returns indices that remain valid even if
+    /// the underlying storage is reallocated.
+    pub fn getNominalArgsRange(nominal: NominalType) VarSafeList.Range {
+        std.debug.assert(nominal.vars.nonempty.count > 0);
+        var span = nominal.vars.nonempty;
+        span.dropFirstElem();
+        return span;
+    }
+
     /// Get the an iterator arg vars for this nominal type
     pub fn iterNominalArgs(self: *const Self, nominal: NominalType) VarSafeList.Iterator {
         std.debug.assert(nominal.vars.nonempty.count > 0);
@@ -651,14 +698,7 @@ pub const Store = struct {
         return self.vars.iterRange(span);
     }
 
-    // mark & rank //
-
-    /// Set the mark for a descriptor
-    pub fn setDescMark(self: *Self, desc_idx: DescStore.Idx, mark: Mark) void {
-        var desc = self.descs.get(desc_idx);
-        desc.mark = mark;
-        self.descs.set(desc_idx, desc);
-    }
+    // rank //
 
     /// Set the rank for a descriptor
     pub fn setDescRank(self: *Self, desc_idx: DescStore.Idx, rank: Rank) void {
@@ -852,26 +892,36 @@ pub const Store = struct {
             self.gpa = .{ 0, 0 };
         }
 
-        /// Deserialize this Serialized struct into a Store
+        /// Deserialize into a Store value (no in-place modification of cache buffer).
         /// The base parameter is the base address of the serialized buffer in memory.
-        pub fn deserialize(self: *Serialized, base_addr: usize, gpa: Allocator) *Store {
-            // Note: Serialized may be smaller than the runtime struct because:
-            // - Uses u64 offsets instead of usize pointers
-            // - Omits runtime-only fields like the allocator
-            // We deserialize by overwriting the Serialized memory with the runtime struct.
-            const store = @as(*Store, @ptrFromInt(@intFromPtr(self)));
-
-            store.* = Store{
+        /// WARNING: The returned Store points into the cache buffer and CANNOT be mutated.
+        /// Use deserializeWithCopy() if the store needs to be mutable.
+        pub fn deserializeInto(self: *const Serialized, base_addr: usize, gpa: Allocator) Store {
+            return Store{
                 .gpa = gpa,
-                .slots = self.slots.deserialize(base_addr).*,
-                .descs = self.descs.deserialize(base_addr).*,
-                .vars = self.vars.deserialize(base_addr).*,
-                .record_fields = self.record_fields.deserialize(base_addr).*,
-                .tags = self.tags.deserialize(base_addr).*,
-                .static_dispatch_constraints = self.static_dispatch_constraints.deserialize(base_addr).*,
+                .slots = self.slots.deserializeInto(base_addr),
+                .descs = self.descs.deserializeInto(base_addr),
+                .vars = self.vars.deserializeInto(base_addr),
+                .record_fields = self.record_fields.deserializeInto(base_addr),
+                .tags = self.tags.deserializeInto(base_addr),
+                .static_dispatch_constraints = self.static_dispatch_constraints.deserializeInto(base_addr),
+                .from_numeral_flex_count = 0,
             };
+        }
 
-            return store;
+        /// Deserialize into a Store value with fresh memory allocation.
+        /// The returned Store owns its memory and can be safely grown/mutated.
+        pub fn deserializeWithCopy(self: *const Serialized, base_addr: usize, gpa: Allocator) Allocator.Error!Store {
+            return Store{
+                .gpa = gpa,
+                .slots = try self.slots.deserializeWithCopy(base_addr, gpa),
+                .descs = try self.descs.deserializeWithCopy(base_addr, gpa),
+                .vars = try self.vars.deserializeWithCopy(base_addr, gpa),
+                .record_fields = try self.record_fields.deserializeWithCopy(base_addr, gpa),
+                .tags = try self.tags.deserializeWithCopy(base_addr, gpa),
+                .static_dispatch_constraints = try self.static_dispatch_constraints.deserializeWithCopy(base_addr, gpa),
+                .from_numeral_flex_count = 0,
+            };
         }
     };
 
@@ -893,6 +943,7 @@ pub const Store = struct {
             .record_fields = (try self.record_fields.serialize(allocator, writer)).*,
             .tags = (try self.tags.serialize(allocator, writer)).*,
             .static_dispatch_constraints = (try self.static_dispatch_constraints.serialize(allocator, writer)).*,
+            .from_numeral_flex_count = 0,
         };
 
         return @constCast(offset_self);
@@ -1040,18 +1091,20 @@ const SlotStore = struct {
             try self.backing.serialize(&slot_store.backing, allocator, writer);
         }
 
-        /// Deserialize this Serialized struct into a SlotStore
+        /// Deserialize into a SlotStore value (no in-place modification of cache buffer).
         /// The base parameter is the base address of the serialized buffer in memory.
-        pub fn deserialize(self: *Serialized, base_addr: usize) *SlotStore {
-            // Note: Serialized may be smaller than the runtime struct.
-            // We deserialize by overwriting the Serialized memory with the runtime struct.
-            const slot_store = @as(*SlotStore, @ptrFromInt(@intFromPtr(self)));
-
-            slot_store.* = SlotStore{
-                .backing = self.backing.deserialize(base_addr).*,
+        pub fn deserializeInto(self: *const Serialized, base_addr: usize) SlotStore {
+            return SlotStore{
+                .backing = self.backing.deserializeInto(base_addr),
             };
+        }
 
-            return slot_store;
+        /// Deserialize into a SlotStore value with fresh memory allocation.
+        /// The returned SlotStore owns its memory and can be safely grown/mutated.
+        pub fn deserializeWithCopy(self: *const Serialized, base_addr: usize, gpa: Allocator) Allocator.Error!SlotStore {
+            return SlotStore{
+                .backing = try self.backing.deserializeWithCopy(base_addr, gpa),
+            };
         }
     };
 
@@ -1147,18 +1200,20 @@ const DescStore = struct {
             try self.backing.serialize(&desc_store.backing, allocator, writer);
         }
 
-        /// Deserialize this Serialized struct into a DescStore
+        /// Deserialize into a DescStore value (no in-place modification of cache buffer).
         /// The base parameter is the base address of the serialized buffer in memory.
-        pub fn deserialize(self: *Serialized, base_addr: usize) *DescStore {
-            // Note: Serialized may be smaller than the runtime struct.
-            // We deserialize by overwriting the Serialized memory with the runtime struct.
-            const desc_store = @as(*DescStore, @ptrFromInt(@intFromPtr(self)));
-
-            desc_store.* = DescStore{
-                .backing = self.backing.deserialize(base_addr).*,
+        pub fn deserializeInto(self: *const Serialized, base_addr: usize) DescStore {
+            return DescStore{
+                .backing = self.backing.deserializeInto(base_addr),
             };
+        }
 
-            return desc_store;
+        /// Deserialize into a DescStore value with fresh memory allocation.
+        /// The returned DescStore owns its memory and can be safely grown/mutated.
+        pub fn deserializeWithCopy(self: *const Serialized, base_addr: usize, gpa: Allocator) Allocator.Error!DescStore {
+            return DescStore{
+                .backing = try self.backing.deserializeWithCopy(base_addr, gpa),
+            };
         }
     };
 
@@ -1544,7 +1599,7 @@ test "SlotStore.Serialized roundtrip" {
 
     // Deserialize - find the Serialized struct at the beginning of the buffer
     const deser_ptr = @as(*SlotStore.Serialized, @ptrCast(@alignCast(buffer.ptr)));
-    const deserialized = deser_ptr.deserialize(@intFromPtr(buffer.ptr));
+    const deserialized = deser_ptr.deserializeInto(@intFromPtr(buffer.ptr));
 
     // Verify using captured indices
     try std.testing.expectEqual(@as(u64, 3), deserialized.backing.len());
@@ -1564,12 +1619,10 @@ test "DescStore.Serialized roundtrip" {
     const desc1 = Descriptor{
         .content = Content{ .flex = Flex.init() },
         .rank = Rank.generalized,
-        .mark = Mark.none,
     };
     const desc2 = Descriptor{
         .content = Content{ .structure = .empty_record },
-        .rank = Rank.top_level,
-        .mark = Mark.visited,
+        .rank = Rank.outermost,
     };
 
     const desc_idx_1 = try desc_store.insert(gpa, desc1);
@@ -1608,7 +1661,7 @@ test "DescStore.Serialized roundtrip" {
 
     // Deserialize - find the Serialized struct at the beginning of the buffer
     const deser_ptr = @as(*DescStore.Serialized, @ptrCast(@alignCast(buffer.ptr)));
-    const deserialized = deser_ptr.deserialize(@intFromPtr(buffer.ptr));
+    const deserialized = deser_ptr.deserializeInto(@intFromPtr(buffer.ptr));
     // Note: deserialize already handles relocation, don't call relocate again
 
     // Verify using captured indices
@@ -1658,7 +1711,7 @@ test "Store.Serialized roundtrip" {
 
     // Deserialize - Store.Serialized is at the beginning of the buffer
     const deser_ptr = @as(*Store.Serialized, @ptrCast(@alignCast(buffer.ptr)));
-    const deserialized = deser_ptr.deserialize(@intFromPtr(buffer.ptr), gpa);
+    const deserialized = deser_ptr.deserializeInto(@intFromPtr(buffer.ptr), gpa);
 
     // Verify the store was deserialized correctly
     try std.testing.expectEqual(@as(usize, 3), deserialized.len());

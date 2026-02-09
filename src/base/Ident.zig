@@ -89,6 +89,18 @@ pub const Idx = packed struct(u32) {
     pub fn isNone(self: Idx) bool {
         return self.idx == NONE.idx and @as(u3, @bitCast(self.attributes)) == @as(u3, @bitCast(NONE.attributes));
     }
+
+    /// Custom formatter for std.fmt - allows printing with `{}`
+    pub fn format(
+        self: Idx,
+        comptime _: []const u8,
+        _: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        // Extract from packed struct to avoid formatting issues
+        const idx_val: u32 = @intCast(self.idx);
+        try writer.print("Ident({?})", .{idx_val});
+    }
 };
 
 /// Identifier attributes such as if it is effectful, ignored, or reassignable.
@@ -278,36 +290,16 @@ pub const Store = struct {
             self.next_unique_name = store.next_unique_name;
         }
 
-        /// Deserialize this Serialized struct into a Store
+        /// Deserialize into a Store value (no in-place modification of cache buffer).
         /// The base parameter is the base address of the serialized buffer in memory.
-        pub fn deserialize(self: *Serialized, base: usize) *Store {
-            // Note: Serialized may be smaller than the runtime struct.
-            // We deserialize by overwriting the Serialized memory with the runtime struct.
-            const store = @as(*Store, @ptrFromInt(@intFromPtr(self)));
-
-            // Check struct sizes - if Store > Serialized, we'd write past the end!
-            comptime {
-                const store_size = @sizeOf(Store);
-                const serialized_size = @sizeOf(Serialized);
-                if (store_size > serialized_size) {
-                    @compileError(std.fmt.comptimePrint(
-                        "STRUCT SIZE MISMATCH: Store ({d} bytes) > Serialized ({d} bytes). " ++
-                            "Writing Store to Serialized memory will corrupt adjacent data!",
-                        .{ store_size, serialized_size },
-                    ));
-                }
-            }
-
-            store.* = Store{
-                .interner = self.interner.deserialize(base).*,
-                .attributes = self.attributes.deserialize(base).*,
+        pub fn deserializeInto(self: *const Serialized, base: usize) Store {
+            return Store{
+                .interner = self.interner.deserializeInto(base),
+                .attributes = self.attributes.deserializeInto(base),
                 .next_unique_name = self.next_unique_name,
             };
-
             // Note: We don't register deserialized stores for debug tracking.
             // This is fine because the debug tracking is meant to catch bugs during fresh compilation.
-
-            return store;
         }
     };
 

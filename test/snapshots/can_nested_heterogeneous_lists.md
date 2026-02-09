@@ -8,36 +8,46 @@ type=expr
 [[1, "hello"], [2, 3]]
 ~~~
 # EXPECTED
-MISSING METHOD - can_nested_heterogeneous_lists.md:1:3:1:4
-MISSING METHOD - can_nested_heterogeneous_lists.md:1:20:1:21
+TYPE MISMATCH - can_nested_heterogeneous_lists.md:1:3:1:4
+TYPE MISMATCH - can_nested_heterogeneous_lists.md:1:20:1:21
 # PROBLEMS
-**MISSING METHOD**
-This **from_numeral** method is being called on a value whose type doesn't have that method:
+**TYPE MISMATCH**
+This number is being used where a non-number type is needed:
 **can_nested_heterogeneous_lists.md:1:3:1:4:**
 ```roc
 [[1, "hello"], [2, 3]]
 ```
   ^
 
-The value's type, which does not have a method named **from_numeral**, is:
+The type was determined to be non-numeric here:
+**can_nested_heterogeneous_lists.md:1:6:1:13:**
+```roc
+[[1, "hello"], [2, 3]]
+```
+     ^^^^^^^
+
+Other code expects this to have the type:
 
     Str
 
-**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
-
-**MISSING METHOD**
-This **from_numeral** method is being called on a value whose type doesn't have that method:
+**TYPE MISMATCH**
+This number is being used where a non-number type is needed:
 **can_nested_heterogeneous_lists.md:1:20:1:21:**
 ```roc
 [[1, "hello"], [2, 3]]
 ```
                    ^
 
-The value's type, which does not have a method named **from_numeral**, is:
+The type was determined to be non-numeric here:
+**can_nested_heterogeneous_lists.md:1:17:1:18:**
+```roc
+[[1, "hello"], [2, 3]]
+```
+                ^
+
+Other code expects this to have the type:
 
     Str
-
-**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig

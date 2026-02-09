@@ -27,8 +27,11 @@
 
 const std = @import("std");
 const base = @import("base");
+const builtins = @import("builtins");
+const i128h = builtins.compiler_rt_128;
 const Can = @import("can");
 const types = @import("types");
+const problem = @import("problem.zig");
 
 const Ident = base.Ident;
 const Region = base.Region;
@@ -2104,9 +2107,12 @@ fn collectCtorsSketched(
     }
 
     if (found_list) {
-        if (found_wildcard) {
-            return .non_exhaustive_wildcards;
-        }
+        // When we have both list patterns and wildcards, we still need to check
+        // all list arities. The wildcards will be expanded during specialization
+        // (specializeByListAritySketched handles wildcards by expanding them).
+        // Previously this returned .non_exhaustive_wildcards when wildcards were
+        // present, which caused false non-exhaustive errors because wildcards
+        // covering all list arities weren't being considered.
         var arities: std.ArrayList(ListArity) = .empty;
         for (first_col) |pat| {
             if (pat == .list) {
@@ -2375,7 +2381,14 @@ pub fn checkExhaustiveSketched(
                         };
                         const inner_missing = try checkExhaustiveSketched(allocator, type_store, builtin_idents, specialized, specialized_types);
 
-                        if (inner_missing.len > 0) {
+                        // For arity-0 constructors with no matching rows, the specialized matrix
+                        // is empty with 0 columns, which returns empty inner_missing. But we still
+                        // need to report the constructor as missing.
+                        // Note: We skip the #Open synthetic tag (arity-0 with no name) - it represents
+                        // "possibly more constructors" and is handled by the union's has_flex_extension flag.
+                        const is_open_synthetic = alt.name.tag.isNone();
+                        const is_missing = inner_missing.len > 0 or (alt.arity == 0 and specialized.isEmpty() and !is_open_synthetic);
+                        if (is_missing) {
                             const missing_pattern = Pattern{ .ctor = .{
                                 .union_info = ctor_info.union_info,
                                 .tag_id = alt.tag_id,
@@ -2468,7 +2481,11 @@ pub fn checkExhaustiveSketched(
                 const specialized_types = try column_types.specializeForList(allocator, min_len);
                 const missing = try checkExhaustiveSketched(allocator, type_store, builtin_idents, specialized, specialized_types);
 
-                if (missing.len > 0) {
+                // For length-0 lists (empty list) with no matching rows, the specialized matrix
+                // is empty with 0 columns, which returns empty missing. But we still
+                // need to report the empty list as missing.
+                const is_missing = missing.len > 0 or (min_len == 0 and specialized.isEmpty());
+                if (is_missing) {
                     const elements = try allocator.alloc(Pattern, min_len);
                     for (0..min_len) |i| {
                         if (i < missing.len) {
@@ -3109,62 +3126,63 @@ pub fn checkMatch(
 }
 
 /// Format a pattern for display in error messages.
+const ByteList = std.array_list.Managed(u8);
+const ByteListRange = problem.ExtraStringIdx;
+
+/// Format a pattern as a string, into the provided buffer
+/// Returns a rank of the inserted text
 pub fn formatPattern(
-    allocator: std.mem.Allocator,
+    buf: *ByteList,
     ident_store: *const Ident.Store,
     string_store: *const StringLiteral.Store,
     pattern: Pattern,
-) error{OutOfMemory}![]const u8 {
-    var buf: std.ArrayList(u8) = .empty;
+) error{OutOfMemory}!ByteListRange {
+    const start = buf.items.len;
+    var writer = buf.writer();
+    try formatPatternInto(&writer, ident_store, string_store, pattern);
+    const end = buf.items.len;
 
-    try formatPatternInto(&buf, allocator, ident_store, string_store, pattern);
-
-    return try buf.toOwnedSlice(allocator);
+    return ByteListRange{
+        .start = start,
+        .count = end - start,
+    };
 }
 
+/// Format a pattern as a string, into the provided writer
 fn formatPatternInto(
-    buf: *std.ArrayList(u8),
-    allocator: std.mem.Allocator,
+    writer: *ByteList.Writer,
     ident_store: *const Ident.Store,
     string_store: *const StringLiteral.Store,
     pattern: Pattern,
-) error{OutOfMemory}!void {
+) ByteList.Writer.Error!void {
     switch (pattern) {
-        .anything => try buf.appendSlice(allocator, "_"),
+        .anything => try writer.writeAll("_"),
 
         .literal => |lit| switch (lit) {
             .int => |i| {
-                var tmp: [40]u8 = undefined;
-                const str = std.fmt.bufPrint(&tmp, "{d}", .{i}) catch "<int>";
-                try buf.appendSlice(allocator, str);
+                var str_buf: [40]u8 = undefined;
+                try writer.writeAll(i128h.i128_to_str(&str_buf, i).str);
             },
             .uint => |u| {
-                var tmp: [40]u8 = undefined;
-                const str = std.fmt.bufPrint(&tmp, "{d}", .{u}) catch "<uint>";
-                try buf.appendSlice(allocator, str);
+                var str_buf: [40]u8 = undefined;
+                try writer.writeAll(i128h.u128_to_str(&str_buf, u).str);
             },
-            .bit => |b| try buf.appendSlice(allocator, if (b) "Bool.true" else "Bool.false"),
-            .byte => |b| {
-                var tmp: [4]u8 = undefined;
-                const str = std.fmt.bufPrint(&tmp, "{d}", .{b}) catch "<byte>";
-                try buf.appendSlice(allocator, str);
-            },
+            .bit => |b| try writer.writeAll(if (b) "Bool.true" else "Bool.false"),
+            .byte => |b| try writer.print("{}", .{b}),
             .float => |f| {
                 const float_val: f64 = @bitCast(f);
-                var tmp: [32]u8 = undefined;
-                const str = std.fmt.bufPrint(&tmp, "{d}", .{float_val}) catch "<float>";
-                try buf.appendSlice(allocator, str);
+                var float_buf: [400]u8 = undefined;
+                try writer.writeAll(i128h.f64_to_str(&float_buf, float_val));
             },
             .decimal => |d| {
-                var tmp: [40]u8 = undefined;
-                const str = std.fmt.bufPrint(&tmp, "{d}", .{d}) catch "<decimal>";
-                try buf.appendSlice(allocator, str);
+                var str_buf: [40]u8 = undefined;
+                try writer.writeAll(i128h.i128_to_str(&str_buf, d).str);
             },
             .str => |idx| {
-                try buf.appendSlice(allocator, "\"");
+                try writer.writeAll("\"");
                 const text = string_store.get(idx);
-                try buf.appendSlice(allocator, text);
-                try buf.appendSlice(allocator, "\"");
+                try writer.writeAll(text);
+                try writer.writeAll("\"");
             },
         },
 
@@ -3176,53 +3194,53 @@ fn formatPatternInto(
                         .tag => |t| {
                             if (t == Ident.Idx.NONE) {
                                 // This is the #Open synthetic tag - show as wildcard
-                                try buf.appendSlice(allocator, "_");
+                                try writer.writeAll("_");
                                 return;
                             }
-                            try buf.appendSlice(allocator, ident_store.getText(t));
+                            try writer.writeAll(ident_store.getText(t));
                         },
                         .opaque_type => |o| {
-                            try buf.appendSlice(allocator, ident_store.getText(o));
+                            try writer.writeAll(ident_store.getText(o));
                         },
                     }
                     // Add arguments
                     if (c.args.len > 0) {
                         for (c.args) |arg| {
-                            try buf.appendSlice(allocator, " ");
-                            try formatPatternInto(buf, allocator, ident_store, string_store, arg);
+                            try writer.writeAll(" ");
+                            try formatPatternInto(writer, ident_store, string_store, arg);
                         }
                     }
                 },
 
                 .record => |field_names| {
-                    try buf.appendSlice(allocator, "{ ");
+                    try writer.writeAll("{ ");
                     for (c.args, 0..) |arg, i| {
-                        if (i > 0) try buf.appendSlice(allocator, ", ");
+                        if (i > 0) try writer.writeAll(", ");
                         if (i < field_names.len) {
-                            try buf.appendSlice(allocator, ident_store.getText(field_names[i]));
+                            try writer.writeAll(ident_store.getText(field_names[i]));
                         } else {
-                            try buf.appendSlice(allocator, "_");
+                            try writer.writeAll("_");
                         }
-                        try buf.appendSlice(allocator, ": ");
-                        try formatPatternInto(buf, allocator, ident_store, string_store, arg);
+                        try writer.writeAll(": ");
+                        try formatPatternInto(writer, ident_store, string_store, arg);
                     }
-                    try buf.appendSlice(allocator, " }");
+                    try writer.writeAll(" }");
                 },
 
                 .tuple => {
-                    try buf.appendSlice(allocator, "(");
+                    try writer.writeAll("(");
                     for (c.args, 0..) |arg, i| {
-                        if (i > 0) try buf.appendSlice(allocator, ", ");
-                        try formatPatternInto(buf, allocator, ident_store, string_store, arg);
+                        if (i > 0) try writer.writeAll(", ");
+                        try formatPatternInto(writer, ident_store, string_store, arg);
                     }
-                    try buf.appendSlice(allocator, ")");
+                    try writer.writeAll(")");
                 },
 
                 .guard => {
                     // Unwrap the guard - show the actual pattern (second arg)
                     if (c.args.len >= 2) {
-                        try formatPatternInto(buf, allocator, ident_store, string_store, c.args[1]);
-                        try buf.appendSlice(allocator, " (with guard)");
+                        try formatPatternInto(writer, ident_store, string_store, c.args[1]);
+                        try writer.writeAll(" (with guard)");
                     }
                 },
 
@@ -3230,52 +3248,52 @@ fn formatPatternInto(
                     const alt = c.union_info.alternatives[c.tag_id.toInt()];
                     switch (alt.name) {
                         .opaque_type => |o| {
-                            try buf.appendSlice(allocator, ident_store.getText(o));
+                            try writer.writeAll(ident_store.getText(o));
                         },
                         .tag => |t| {
-                            try buf.appendSlice(allocator, ident_store.getText(t));
+                            try writer.writeAll(ident_store.getText(t));
                         },
                     }
                     if (c.args.len > 0) {
-                        try buf.appendSlice(allocator, " ");
-                        try formatPatternInto(buf, allocator, ident_store, string_store, c.args[0]);
+                        try writer.writeAll(" ");
+                        try formatPatternInto(writer, ident_store, string_store, c.args[0]);
                     }
                 },
             }
         },
 
         .list => |l| {
-            try buf.appendSlice(allocator, "[");
+            try writer.writeAll("[");
             switch (l.arity) {
                 .exact => {
                     for (l.elements, 0..) |elem, i| {
-                        if (i > 0) try buf.appendSlice(allocator, ", ");
-                        try formatPatternInto(buf, allocator, ident_store, string_store, elem);
+                        if (i > 0) try writer.writeAll(", ");
+                        try formatPatternInto(writer, ident_store, string_store, elem);
                     }
                 },
                 .slice => |s| {
                     // Format as [prefix.., suffix]
                     for (0..s.prefix) |i| {
-                        if (i > 0) try buf.appendSlice(allocator, ", ");
-                        try formatPatternInto(buf, allocator, ident_store, string_store, l.elements[i]);
+                        if (i > 0) try writer.writeAll(", ");
+                        try formatPatternInto(writer, ident_store, string_store, l.elements[i]);
                     }
                     if (s.prefix > 0 and s.suffix > 0) {
-                        try buf.appendSlice(allocator, ", .., ");
+                        try writer.writeAll(", .., ");
                     } else if (s.prefix > 0) {
-                        try buf.appendSlice(allocator, ", ..");
+                        try writer.writeAll(", ..");
                     } else if (s.suffix > 0) {
-                        try buf.appendSlice(allocator, ".., ");
+                        try writer.writeAll(".., ");
                     } else {
-                        try buf.appendSlice(allocator, "..");
+                        try writer.writeAll("..");
                     }
                     const suffix_start = l.elements.len - s.suffix;
                     for (suffix_start..l.elements.len) |i| {
-                        if (i > suffix_start) try buf.appendSlice(allocator, ", ");
-                        try formatPatternInto(buf, allocator, ident_store, string_store, l.elements[i]);
+                        if (i > suffix_start) try writer.writeAll(", ");
+                        try formatPatternInto(writer, ident_store, string_store, l.elements[i]);
                     }
                 },
             }
-            try buf.appendSlice(allocator, "]");
+            try writer.writeAll("]");
         },
     }
 }

@@ -96,7 +96,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a, a.times : a, a -> a]")))
+		(patt (type "a -> a where [a.plus : a, a -> a, a.times : a, Dec -> a]")))
 	(expressions
-		(expr (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a, a.times : a, a -> a]"))))
+		(expr (type "a -> a where [a.plus : a, a -> a, a.times : a, Dec -> a]"))))
 ~~~

@@ -1,9 +1,4 @@
-/*
- * Copyright (c) 2015 Andrew Kelley
- *
- * This file is part of zig, which is MIT licensed.
- * See http://opensource.org/licenses/MIT
- */
+// Adapted from the Zig compiler at https://codeberg.org/ziglang/zig and licensed under the MIT license. Thanks, Zig team!
 
 
 /*

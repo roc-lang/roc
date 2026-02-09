@@ -155,11 +155,12 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
 
             for (0..len) |read_index| {
                 const entry = self.entries.items[read_index];
-                const is_last = read_index == len - 1;
 
-                // Check if next entry has the same key (if not last)
-                const has_duplicate_after = if (is_last) false else blk: {
-                    const next_entry = self.entries.items[read_index + 1];
+                // Check if next entry has the same key (bounds check first)
+                const has_duplicate_after: bool = blk: {
+                    const next_index = read_index + 1;
+                    if (next_index >= self.entries.items.len) break :blk false;
+                    const next_entry = self.entries.items[next_index];
                     break :blk if (K == []const u8)
                         std.mem.eql(u8, entry.key, next_entry.key)
                     else
@@ -318,40 +319,30 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
                 self.deduplicated = builder.deduplicated;
             }
 
-            /// Deserialize this Serialized struct into a SortedArrayBuilder
+            /// Deserialize into a SortedArrayBuilder value (no in-place modification of cache buffer).
             /// The base_addr parameter is the base address of the serialized buffer in memory.
-            pub fn deserialize(self: *Serialized, base_addr: usize) *SortedArrayBuilder(K, V) {
-                // Note: Serialized may be smaller than the runtime struct because:
-                // - Uses u64 offsets instead of usize pointers
-                // - Omits runtime-only fields like allocators
-                // - May have different alignment/padding requirements
-                // We deserialize by overwriting the Serialized memory with the runtime struct.
-
-                // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
-                const builder = @as(*SortedArrayBuilder(K, V), @ptrFromInt(@intFromPtr(self)));
-
+            /// WARNING: The returned SortedArrayBuilder points into the cache buffer and CANNOT be grown.
+            pub fn deserializeInto(self: *const Serialized, base_addr: usize) SortedArrayBuilder(K, V) {
                 // Handle empty array case
                 if (self.entries_len == 0) {
-                    builder.* = SortedArrayBuilder(K, V){
+                    return SortedArrayBuilder(K, V){
                         .entries = .{},
-                        .sorted = self.sorted,
-                        .deduplicated = self.deduplicated,
-                    };
-                } else {
-                    // Apply the base address to convert from serialized offset to actual pointer
-                    const entries_ptr: [*]Entry = @ptrFromInt(base_addr +% @as(usize, @intCast(self.entries_offset)));
-
-                    builder.* = SortedArrayBuilder(K, V){
-                        .entries = .{
-                            .items = entries_ptr[0..@intCast(self.entries_len)],
-                            .capacity = @intCast(self.entries_capacity),
-                        },
                         .sorted = self.sorted,
                         .deduplicated = self.deduplicated,
                     };
                 }
 
-                return builder;
+                // Apply the base address to convert from serialized offset to actual pointer
+                const entries_ptr: [*]Entry = @ptrFromInt(base_addr +% @as(usize, @intCast(self.entries_offset)));
+
+                return SortedArrayBuilder(K, V){
+                    .entries = .{
+                        .items = entries_ptr[0..@intCast(self.entries_len)],
+                        .capacity = @intCast(self.entries_capacity),
+                    },
+                    .sorted = self.sorted,
+                    .deduplicated = self.deduplicated,
+                };
             }
         };
     };

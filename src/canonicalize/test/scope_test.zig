@@ -10,6 +10,7 @@ const Scope = @import("../Scope.zig");
 const Ident = base.Ident;
 const Pattern = CIR.Pattern;
 const TypeAnno = CIR.TypeAnno;
+const Allocators = base.Allocators;
 
 /// Context helper for Scope tests
 const ScopeTestContext = struct {
@@ -23,8 +24,12 @@ const ScopeTestContext = struct {
         module_env.* = try ModuleEnv.init(gpa, "");
         try module_env.initCIRFields("test");
 
+        var allocators: Allocators = undefined;
+        allocators.initInPlace(gpa);
+        defer allocators.deinit();
+
         return ScopeTestContext{
-            .self = try Can.init(module_env, undefined, null),
+            .self = try Can.init(&allocators, module_env, undefined, null),
             .module_env = module_env,
             .gpa = gpa,
         };

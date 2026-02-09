@@ -31,8 +31,8 @@ const expected_safelist_u8_size = 24;
 const expected_safelist_u32_size = 24;
 const expected_safemultilist_teststruct_size = 24;
 const expected_safemultilist_node_size = 24;
-const expected_moduleenv_size = 1152; // Platform-independent size
-const expected_nodestore_size = 96; // Platform-independent size
+const expected_moduleenv_size = 1432; // Platform-independent size
+const expected_nodestore_size = 360; // Platform-independent size
 
 // Compile-time assertions - build will fail if sizes don't match expected values
 comptime {

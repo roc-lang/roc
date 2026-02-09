@@ -39,7 +39,6 @@ const Check = check.Check;
 const SExprTree = base.SExprTree;
 const ModuleEnv = can.ModuleEnv;
 const Allocator = std.mem.Allocator;
-const problem = check.problem;
 const AST = parse.AST;
 const Repl = repl.Repl;
 const RocOps = builtins.host_abi.RocOps;
@@ -128,7 +127,7 @@ const Diagnostic = struct {
 /// Compiler stage data
 const CompilerStageData = struct {
     module_env: *ModuleEnv,
-    parse_ast: ?parse.AST = null,
+    parse_ast: ?*parse.AST = null,
     solver: ?Check = null,
     bool_stmt: ?can.CIR.Statement.Idx = null,
     builtin_types: ?eval.BuiltinTypes = null,
@@ -200,8 +199,8 @@ const CompilerStageData = struct {
         self.type_reports.deinit();
 
         // Deinit the AST, which depends on the ModuleEnv's allocator and source
-        if (self.parse_ast) |*ast| {
-            ast.deinit(allocator);
+        if (self.parse_ast) |ast| {
+            ast.deinit();
         }
 
         // Finally, deinit the ModuleEnv and free its memory
@@ -273,12 +272,18 @@ var host_message_buffer: ?[]u8 = null;
 var host_response_buffer: ?[]u8 = null;
 var last_error: ?[:0]const u8 = null;
 
+/// Flag to defer FBA reset until next processAndRespond call.
+/// This avoids resetting the allocator while there are in-flight allocations.
+var pending_fba_reset: bool = false;
+
 /// In-memory debug log buffer for WASM
 var debug_log_buffer: [4096]u8 = undefined;
 var debug_log_pos: usize = 0;
 var debug_log_oom: bool = false;
 
-/// Reset all global state and allocator
+/// Reset all global state and schedule allocator reset.
+/// The actual FBA reset is deferred to the start of the next processAndRespond call
+/// to avoid invalidating in-flight allocations.
 fn resetGlobalState() void {
     // Make sure everything is null
     compiler_data = null;
@@ -286,8 +291,15 @@ fn resetGlobalState() void {
     host_message_buffer = null;
     host_response_buffer = null;
 
-    // Reset allocator to clear all allocations
-    fba.reset();
+    // Schedule allocator reset for next processAndRespond call
+    pending_fba_reset = true;
+}
+
+fn performPendingAllocatorReset() void {
+    if (pending_fba_reset) {
+        fba.reset();
+        pending_fba_reset = false;
+    }
 }
 
 /// Writes a formatted string to the in-memory debug log.
@@ -489,6 +501,7 @@ export fn init() void {
 /// Allocate a buffer for incoming messages from the host.
 /// Returns null on allocation failure.
 export fn allocateMessageBuffer(size: usize) ?[*]u8 {
+    performPendingAllocatorReset();
     if (host_message_buffer) |buf| {
         allocator.free(buf);
         host_message_buffer = null;
@@ -500,6 +513,7 @@ export fn allocateMessageBuffer(size: usize) ?[*]u8 {
 /// Allocate a buffer for responses to the host.
 /// Returns null on allocation failure.
 export fn allocateResponseBuffer(size: usize) ?[*]u8 {
+    performPendingAllocatorReset();
     if (host_response_buffer) |buf| {
         allocator.free(buf);
         host_response_buffer = null;
@@ -604,6 +618,21 @@ fn handleReadyState(message_type: MessageType, root: std.json.Value, response_bu
 
             const source = source_value.string;
 
+            // Extract optional filename and derive module name
+            const filename = if (root.object.get("filename")) |filename_value|
+                filename_value.string
+            else
+                "main.roc";
+
+            // Set filename in filesystem for file operations
+            WasmFilesystem.setFilename(allocator, filename);
+
+            // Derive module name from filename (strip .roc extension)
+            const module_name = if (std.mem.endsWith(u8, filename, ".roc"))
+                filename[0 .. filename.len - 4]
+            else
+                filename;
+
             // Clean up previous compilation if any
             if (compiler_data) |*data| {
                 data.deinit();
@@ -611,7 +640,7 @@ fn handleReadyState(message_type: MessageType, root: std.json.Value, response_bu
             }
 
             // Compile the source through all stages
-            const result = compileSource(source) catch |err| {
+            const result = compileSource(source, module_name) catch |err| {
                 try writeErrorResponse(response_buffer, .ERROR, @errorName(err));
                 return;
             };
@@ -813,7 +842,8 @@ fn handleReplState(message_type: MessageType, root: std.json.Value, response_buf
 }
 
 /// Compile source through all compiler stages.
-fn compileSource(source: []const u8) !CompilerStageData {
+/// module_name should be the filename without the .roc extension (e.g., "Person" for "Person.roc")
+fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData {
     // Handle empty input gracefully to prevent crashes
     if (source.len == 0) {
         // Return empty compiler stage data for completely empty input
@@ -834,15 +864,20 @@ fn compileSource(source: []const u8) !CompilerStageData {
         return CompilerStageData.init(allocator, module_env);
     }
 
-    // Set up the source in WASM filesystem
+    // Set up the source in WASM filesystem - this creates a properly allocated copy
     WasmFilesystem.setSource(allocator, source);
 
-    logDebug("compileSource: Starting compilation (source len={})\n", .{source.len});
+    // Use the duplicated source from WasmFilesystem for the rest of compilation.
+    // The original `source` slice points to JSON parser memory which will be freed
+    // when processMessage returns, so we must use the stable copy stored in global_source.
+    const stable_source = WasmFilesystem.global_source orelse return error.OutOfMemory;
+
+    logDebug("compileSource: Starting compilation (source len={})\n", .{stable_source.len});
 
     // Initialize the ModuleEnv
     var module_env = try allocator.create(ModuleEnv);
 
-    module_env.* = try ModuleEnv.init(allocator, source);
+    module_env.* = try ModuleEnv.init(allocator, stable_source);
     try module_env.common.calcLineStarts(module_env.gpa);
     logDebug("compileSource: ModuleEnv initialized\n", .{});
 
@@ -850,7 +885,11 @@ fn compileSource(source: []const u8) !CompilerStageData {
 
     // Stage 1: Parse (includes tokenization)
     logDebug("compileSource: Starting parse stage\n", .{});
-    var parse_ast = try parse.parse(&module_env.common, module_env.gpa);
+    var allocators: base.Allocators = undefined;
+    allocators.initInPlace(allocator);
+    // NOTE: allocators is not freed here - cleanup happens in CompilerStageData.deinit
+
+    const parse_ast = try parse.parse(&allocators, &module_env.common);
     result.parse_ast = parse_ast;
     logDebug("compileSource: Parse complete\n", .{});
 
@@ -863,7 +902,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
     // Generate Tokens HTML
     logDebug("compileSource: Generating tokens HTML\n", .{});
     var tokens_writer: std.Io.Writer.Allocating = .init(temp_alloc);
-    AST.tokensToHtml(&parse_ast, &module_env.common, &tokens_writer.writer) catch |err| {
+    AST.tokensToHtml(parse_ast, &module_env.common, &tokens_writer.writer) catch |err| {
         logDebug("compileSource: tokensToHtml failed: {}\n", .{err});
     };
     logDebug("compileSource: Tokens HTML generated, duping to main allocator\n", .{});
@@ -881,7 +920,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
     var tree = SExprTree.init(temp_alloc);
 
     logDebug("compileSource: Call pushToSExprTree\n", .{});
-    try file.pushToSExprTree(module_env.gpa, &module_env.common, &parse_ast, &tree);
+    try file.pushToSExprTree(module_env.gpa, &module_env.common, parse_ast, &tree);
 
     logDebug("compileSource: Call toHtml\n", .{});
     try tree.toHtml(&ast_writer.writer, .include_linecol);
@@ -897,7 +936,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
     logDebug("compileSource: Generating formatted code\n", .{});
     var formatted_code_buffer: std.Io.Writer.Allocating = .init(temp_alloc);
     defer formatted_code_buffer.deinit();
-    fmt.formatAst(parse_ast, &formatted_code_buffer.writer) catch |err| {
+    fmt.formatAst(parse_ast.*, &formatted_code_buffer.writer) catch |err| {
         logDebug("compileSource: formatAst failed: {}\n", .{err});
         return err;
     };
@@ -932,7 +971,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
     // Stage 2: Canonicalization (always run, even with parse errors)
     // The canonicalizer handles malformed parse nodes and continues processing
     const env = result.module_env;
-    try env.initCIRFields("main");
+    try env.initCIRFields(module_name);
 
     // Load builtin modules and inject Bool and Result type declarations
     // (following the pattern from eval.zig and TestEnv.zig)
@@ -968,31 +1007,31 @@ fn compileSource(source: []const u8) !CompilerStageData {
             const base_ptr = @intFromPtr(buffer.ptr);
 
             logDebug("loadCompiledModule: About to deserialize common\n", .{});
-            const common = serialized_ptr.common.deserialize(base_ptr, module_source).*;
+            const common = serialized_ptr.common.deserializeInto(base_ptr, module_source);
 
             logDebug("loadCompiledModule: Deserializing ModuleEnv fields\n", .{});
             module_env_ptr.* = ModuleEnv{
                 .gpa = gpa,
                 .common = common,
-                .types = serialized_ptr.types.deserialize(base_ptr, gpa).*,
+                .types = serialized_ptr.types.deserializeInto(base_ptr, gpa),
                 .module_kind = serialized_ptr.module_kind.decode(),
                 .all_defs = serialized_ptr.all_defs,
                 .all_statements = serialized_ptr.all_statements,
                 .exports = serialized_ptr.exports,
-                .requires_types = serialized_ptr.requires_types.deserialize(base_ptr).*,
-                .for_clause_aliases = serialized_ptr.for_clause_aliases.deserialize(base_ptr).*,
+                .requires_types = serialized_ptr.requires_types.deserializeInto(base_ptr),
+                .for_clause_aliases = serialized_ptr.for_clause_aliases.deserializeInto(base_ptr),
                 .builtin_statements = serialized_ptr.builtin_statements,
-                .external_decls = serialized_ptr.external_decls.deserialize(base_ptr).*,
-                .imports = (try serialized_ptr.imports.deserialize(base_ptr, gpa)).*,
+                .external_decls = serialized_ptr.external_decls.deserializeInto(base_ptr),
+                .imports = try serialized_ptr.imports.deserializeInto(base_ptr, gpa),
                 .module_name = module_name_param,
                 .module_name_idx = undefined, // Not used for deserialized modules
                 .diagnostics = serialized_ptr.diagnostics,
-                .store = serialized_ptr.store.deserialize(base_ptr, gpa).*,
+                .store = serialized_ptr.store.deserializeInto(base_ptr, gpa),
                 .evaluation_order = null,
                 .idents = ModuleEnv.CommonIdents.find(&common),
                 .deferred_numeric_literals = try ModuleEnv.DeferredNumericLiteral.SafeList.initCapacity(gpa, 0),
                 .import_mapping = types.import_mapping.ImportMapping.init(gpa),
-                .method_idents = serialized_ptr.method_idents.deserialize(base_ptr).*,
+                .method_idents = serialized_ptr.method_idents.deserializeInto(base_ptr),
                 .rigid_vars = std.AutoHashMapUnmanaged(base.Ident.Idx, types.Var){},
             };
             logDebug("loadCompiledModule: ModuleEnv deserialized successfully\n", .{});
@@ -1055,7 +1094,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
     try Can.populateModuleEnvs(&module_envs_map, module_env, builtin_module.env, builtin_indices);
 
     logDebug("compileSource: Starting canonicalization\n", .{});
-    var czer = try Can.init(env, &result.parse_ast.?, &module_envs_map);
+    var czer = try Can.init(&allocators, env, result.parse_ast.?, &module_envs_map);
     defer czer.deinit();
 
     czer.canonicalizeFile() catch |err| {
@@ -1112,15 +1151,21 @@ fn compileSource(source: []const u8) !CompilerStageData {
         logDebug("compileSource: Type checking complete\n", .{});
 
         // Collect type checking problems and convert them to reports using ReportBuilder
-        var report_builder = problem.ReportBuilder.init(
+        var report_builder = check.report.ReportBuilder.init(
             allocator,
             result.module_env,
             type_can_ir,
             &solver.snapshots,
+            &solver.problems,
             "main.roc",
             &.{}, // other_modules - empty for playground
             &solver.import_mapping,
-        );
+            &solver.regions,
+        ) catch |err| {
+            // On allocation failure, return result with current reports
+            logDebug("compileSource: ReportBuilder.init failed: {}\n", .{err});
+            return result;
+        };
         defer report_builder.deinit();
 
         for (solver.problems.problems.items) |type_problem| {
@@ -1871,6 +1916,10 @@ fn writeJsonString(writer: *std.io.Writer, str: []const u8) !void {
 /// length prefix, so the host must use the custom `freeWasmString` function.
 /// Returns null on failure.
 export fn processAndRespond(message_ptr: [*]const u8, message_len: usize) ?[*:0]u8 {
+    // Perform deferred FBA reset if one was scheduled and not already handled
+    // by buffer allocation.
+    performPendingAllocatorReset();
+
     // Allocate a temporary buffer on the heap to avoid a stack overflow.
     var temp_response_buffer = allocator.alloc(u8, 131072) catch {
         return createSimpleErrorJson("Failed to allocate temporary response buffer");

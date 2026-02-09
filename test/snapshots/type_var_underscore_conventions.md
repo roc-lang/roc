@@ -108,7 +108,7 @@ It has the type:
 
     Str
 
-But the type annotation says it should have the type:
+But the annotation say it should be:
 
     $elem
 
@@ -305,7 +305,7 @@ NO CHANGE
 		(patt (type "_arg -> Str")))
 	(expressions
 		(expr (type "List(elem) -> Str"))
-		(expr (type "List($elem) -> Error"))
+		(expr (type "List($elem) -> $elem"))
 		(expr (type "List($bad) -> Str"))
 		(expr (type "List(_elem) -> Str"))
 		(expr (type "elem -> List(elem)"))

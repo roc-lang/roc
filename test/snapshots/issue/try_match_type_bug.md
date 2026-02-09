@@ -114,20 +114,24 @@ get_greeting = |{}| {
 															(branch
 																(patterns
 																	(pattern (degenerate false)
-																		(p-applied-tag)))
+																		(p-nominal-external (builtin)
+																			(p-applied-tag))))
 																(value
 																	(e-lookup-local
 																		(p-assign (ident "#ok")))))
 															(branch
 																(patterns
 																	(pattern (degenerate false)
-																		(p-applied-tag)))
+																		(p-nominal-external (builtin)
+																			(p-applied-tag))))
 																(value
 																	(e-return
-																		(e-tag (name "Err")
-																			(args
-																				(e-lookup-local
-																					(p-assign (ident "#err"))))))))))))))))
+																		(e-nominal-external
+																			(builtin)
+																			(e-tag (name "Err")
+																				(args
+																					(e-lookup-local
+																						(p-assign (ident "#err")))))))))))))))))
 							(branch
 								(patterns
 									(pattern (degenerate false)
@@ -147,7 +151,7 @@ get_greeting = |{}| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "{  } -> Try(Str, [ListWasEmpty, Impossible, .._others2])")))
+		(patt (type "{  } -> Try(Str, [Impossible, ListWasEmpty, ..])")))
 	(expressions
-		(expr (type "{  } -> Try(Str, [ListWasEmpty, Impossible, .._others2])"))))
+		(expr (type "{  } -> Try(Str, [Impossible, ListWasEmpty, ..])"))))
 ~~~

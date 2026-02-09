@@ -41,5 +41,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a]"))
+(expr (type "a -> a where [a.plus : a, Dec -> a]"))
 ~~~

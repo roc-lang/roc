@@ -92,5 +92,5 @@ match (1, 2) {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "(a, b) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
+(expr (type "(Dec, Dec)"))
 ~~~

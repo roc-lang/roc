@@ -27,9 +27,9 @@ result = multi_arg_fn(
 UNUSED VARIABLE - lambda_multi_arg_mismatch.md:3:25:3:27
 UNUSED VARIABLE - lambda_multi_arg_mismatch.md:3:33:3:35
 UNUSED VARIABLE - lambda_multi_arg_mismatch.md:3:41:3:43
-TYPE MISMATCH - lambda_multi_arg_mismatch.md:9:5:9:5
-MISSING METHOD - lambda_multi_arg_mismatch.md:9:5:9:7
-MISSING METHOD - lambda_multi_arg_mismatch.md:13:5:13:9
+TYPE MISMATCH - lambda_multi_arg_mismatch.md:15:5:15:9
+TYPE MISMATCH - lambda_multi_arg_mismatch.md:9:5:9:7
+TYPE MISMATCH - lambda_multi_arg_mismatch.md:13:5:13:9
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable `x3` is not used anywhere in your code.
@@ -69,17 +69,10 @@ multi_arg_fn = |x1, x2, x3, x4, x5, x6, x7, x8|
 
 **TYPE MISMATCH**
 The first and seventh arguments to `multi_arg_fn` must have compatible types, but they are incompatible in this call:
-**lambda_multi_arg_mismatch.md:9:5:**
+**lambda_multi_arg_mismatch.md:15:5:15:9:**
 ```roc
-    42,        # x1: U64 (type 'a')
-    "hello",   # x2: Str (type 'b') - correct
-    "world",   # x3: Str (should be 'a' = U64) - MISMATCH  
-    1.5,       # x4: F64 (type 'c') - correct
-    3.14,      # x5: F64 (should be 'a' = U64) - MISMATCH
-    [1, 2],    # x6: List I64 (type 'd') - correct
     True,      # x7: Bool (should be 'a' = U64) - MISMATCH
 ```
-    ^^
     ^^^^
 
 The first argument has the type:
@@ -88,37 +81,40 @@ The first argument has the type:
 
 But the seventh argument has the type:
 
-    [True, .._others]
+    [True, ..]
 
 `multi_arg_fn` needs these arguments to have compatible types.
 
-**MISSING METHOD**
-This **from_numeral** method is being called on a value whose type doesn't have that method:
+**TYPE MISMATCH**
+This number is being used where a non-number type is needed:
 **lambda_multi_arg_mismatch.md:9:5:9:7:**
 ```roc
     42,        # x1: U64 (type 'a')
 ```
     ^^
 
-The value's type, which does not have a method named **from_numeral**, is:
+The type was determined to be non-numeric here:
+**lambda_multi_arg_mismatch.md:11:5:11:12:**
+```roc
+    "world",   # x3: Str (should be 'a' = U64) - MISMATCH  
+```
+    ^^^^^^^
+
+Other code expects this to have the type:
 
     Str
 
-**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
-
-**MISSING METHOD**
-This **from_numeral** method is being called on a value whose type doesn't have that method:
+**TYPE MISMATCH**
+This number is being used where a non-number type is needed:
 **lambda_multi_arg_mismatch.md:13:5:13:9:**
 ```roc
     3.14,      # x5: F64 (should be 'a' = U64) - MISMATCH
 ```
     ^^^^
 
-The value's type, which does not have a method named **from_numeral**, is:
+Other code expects this to have the type:
 
     Str
-
-**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig
