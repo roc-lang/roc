@@ -113,6 +113,76 @@ const DevEvalError = error{
     PipeCreationFailed,
 };
 
+/// Resolve a ZST type variable to its display string.
+/// Unwraps aliases and nominal types, then returns the tag name for single-tag unions
+/// or "{}" for empty records.
+fn resolveZstName(module_env: *ModuleEnv, expr_type_var: types.Var) []const u8 {
+    var resolved = module_env.types.resolveVar(expr_type_var);
+
+    // Unwrap aliases and nominal types to get the backing type
+    for (0..100) |_| {
+        switch (resolved.desc.content) {
+            .alias => |al| {
+                const backing = module_env.types.getAliasBackingVar(al);
+                resolved = module_env.types.resolveVar(backing);
+            },
+            .structure => |st| switch (st) {
+                .nominal_type => |nt| {
+                    const backing = module_env.types.getNominalBackingVar(nt);
+                    resolved = module_env.types.resolveVar(backing);
+                },
+                else => break,
+            },
+            else => break,
+        }
+    }
+
+    switch (resolved.desc.content) {
+        .structure => |st| switch (st) {
+            .tag_union => |tu| {
+                const tags = module_env.types.getTagsSlice(tu.tags);
+                if (tags.len == 1) {
+                    const tag_name_idx = tags.items(.name)[0];
+                    return module_env.getIdent(tag_name_idx);
+                }
+                return "{}";
+            },
+            .empty_record => return "{}",
+            else => return "{}",
+        },
+        else => return "{}",
+    }
+}
+
+/// Resolve the element type of a List type variable to its ZST display string.
+/// The type is expected to be `List elem` where `elem` is a ZST type.
+fn resolveListElemZstName(module_env: *ModuleEnv, expr_type_var: types.Var) []const u8 {
+    var resolved = module_env.types.resolveVar(expr_type_var);
+
+    // Unwrap aliases to find the nominal List type
+    for (0..100) |_| {
+        switch (resolved.desc.content) {
+            .alias => |al| {
+                const backing = module_env.types.getAliasBackingVar(al);
+                resolved = module_env.types.resolveVar(backing);
+            },
+            .structure => |st| switch (st) {
+                .nominal_type => |nt| {
+                    // This should be the List nominal - get the element type arg
+                    const args = module_env.types.sliceNominalArgs(nt);
+                    if (args.len >= 1) {
+                        return resolveZstName(module_env, args[0]);
+                    }
+                    return "{}";
+                },
+                else => break,
+            },
+            else => break,
+        }
+    }
+    return "{}";
+}
+
 /// Evaluate an expression using the DevEvaluator and return the result as a string.
 fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) DevEvalError![]const u8 {
     // Initialize DevEvaluator
@@ -149,9 +219,9 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
     defer executable.deinit();
 
     if (has_fork) {
-        return forkAndExecute(allocator, &dev_eval, &executable, &code_result);
+        return forkAndExecute(allocator, &dev_eval, &executable, &code_result, module_env, expr_idx);
     } else {
-        return executeAndFormat(allocator, &dev_eval, &executable, &code_result);
+        return executeAndFormat(allocator, &dev_eval, &executable, &code_result, module_env, expr_idx);
     }
 }
 
@@ -164,6 +234,8 @@ noinline fn executeAndFormat(
     dev_eval: *DevEvaluator,
     executable: *backend.ExecutableMemory,
     code_result: *DevEvaluator.CodeResult,
+    module_env: *ModuleEnv,
+    expr_idx: CIR.Expr.Idx,
 ) DevEvalError![]const u8 {
     // Compiler barrier: std.debug.print with empty string acts as a full
     // memory barrier, ensuring all struct fields are properly materialized
@@ -308,7 +380,11 @@ noinline fn executeAndFormat(
                     };
                     try dev_eval.callWithCrashProtection(executable, @ptrCast(&result));
 
-                    // Format as [(), (), ...] based on the length
+                    // Resolve the element type for proper ZST rendering
+                    const type_var = can.ModuleEnv.varFrom(expr_idx);
+                    const elem_name = resolveListElemZstName(module_env, type_var);
+
+                    // Format as [ElemName, ElemName, ...] based on the length
                     var output = std.array_list.Managed(u8).initCapacity(alloc, 64) catch
                         return error.OutOfMemory;
                     errdefer output.deinit();
@@ -318,7 +394,7 @@ noinline fn executeAndFormat(
                         if (i > 0) {
                             try output.appendSlice(", ");
                         }
-                        try output.appendSlice("()");
+                        try output.appendSlice(elem_name);
                     }
 
                     try output.append(']');
@@ -365,16 +441,20 @@ noinline fn executeAndFormat(
                 .record => {
                     const record_idx = stored_layout.data.record.idx.int_idx;
                     const record_data = ls.record_data.items.items[record_idx];
-                    // Empty record (size 0) is the unit type - format as "{}"
+                    // Empty record (size 0) - resolve via type info
                     if (record_data.size == 0) {
-                        break :blk try alloc.dupe(u8, "{}");
+                        const type_var = can.ModuleEnv.varFrom(expr_idx);
+                        const zst_name = resolveZstName(module_env, type_var);
+                        break :blk try alloc.dupe(u8, zst_name);
                     }
                     const field_count = record_data.fields.count;
                     break :blk std.fmt.allocPrint(alloc, "{{record with {d} fields}}", .{field_count});
                 },
                 .zst => {
-                    // Zero-sized type - format as "()"
-                    break :blk try alloc.dupe(u8, "()");
+                    // Resolve the type to render the correct ZST representation
+                    const type_var = can.ModuleEnv.varFrom(expr_idx);
+                    const zst_name = resolveZstName(module_env, type_var);
+                    break :blk try alloc.dupe(u8, zst_name);
                 },
                 else => @panic("TODO: devEvaluatorStr for unsupported layout tag"),
             }
@@ -390,6 +470,8 @@ fn forkAndExecute(
     dev_eval: *DevEvaluator,
     executable: *backend.ExecutableMemory,
     code_result: *DevEvaluator.CodeResult,
+    module_env: *ModuleEnv,
+    expr_idx: CIR.Expr.Idx,
 ) DevEvalError![]const u8 {
     const pipe_fds = posix.pipe() catch {
         return error.PipeCreationFailed;
@@ -411,7 +493,7 @@ fn forkAndExecute(
         // meaningless since we exit via _exit and no defers run.
         const child_alloc = std.heap.page_allocator;
 
-        const result_str = executeAndFormat(child_alloc, dev_eval, executable, code_result) catch {
+        const result_str = executeAndFormat(child_alloc, dev_eval, executable, code_result, module_env, expr_idx) catch {
             posix.close(pipe_write);
             posix.exit(1);
         };
@@ -1132,13 +1214,16 @@ pub fn runExpectListZst(src: []const u8, expected_element_count: usize, should_t
     try std.testing.expectEqual(expected_element_count, list_accessor.len());
 
     // Build string representation for comparison with DevEvaluator
-    // ZST lists are formatted as [(), (), ...] or [] for empty
+    // Resolve element type for proper ZST rendering
+    const type_var = can.ModuleEnv.varFrom(resources.expr_idx);
+    const elem_name = resolveListElemZstName(resources.module_env, type_var);
+
     var list_str: std.ArrayList(u8) = .empty;
     defer list_str.deinit(test_allocator);
     try list_str.appendSlice(test_allocator, "[");
     for (0..expected_element_count) |i| {
         if (i > 0) try list_str.appendSlice(test_allocator, ", ");
-        try list_str.appendSlice(test_allocator, "()");
+        try list_str.appendSlice(test_allocator, elem_name);
     }
     try list_str.appendSlice(test_allocator, "]");
 
@@ -1299,20 +1384,8 @@ pub fn runExpectUnit(src: []const u8, should_trace: enum { trace, no_trace }) !v
         return error.TestExpectedEqual;
     }
 
-    // Compare with DevEvaluator - for unit/empty record, DevEvaluator may return "()" or "{}"
-    // We use a custom comparison since both are valid representations of unit
-    const dev_result = devEvaluatorStr(test_allocator, resources.module_env, resources.expr_idx, resources.builtin_module.env) catch |err| {
-        std.debug.print("\nDevEvaluator failed with error: {}\n", .{err});
-        return error.DevEvaluatorFailed;
-    };
-    defer test_allocator.free(dev_result);
-
-    // Accept both "()" and "{}" as valid unit representations
-    const valid_unit = std.mem.eql(u8, dev_result, "()") or std.mem.eql(u8, dev_result, "{}");
-    if (!valid_unit) {
-        std.debug.print("\nDevEvaluator returned unexpected result for unit: {s}\n", .{dev_result});
-        return error.TestExpectedEqual;
-    }
+    // Compare with DevEvaluator using exact match
+    try compareWithDevEvaluator(test_allocator, "{}", resources.module_env, resources.expr_idx, resources.builtin_module.env);
 }
 
 /// Parse and canonicalize an expression.
