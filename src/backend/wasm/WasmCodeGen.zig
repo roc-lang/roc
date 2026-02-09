@@ -1212,7 +1212,19 @@ fn generateExpr(self: *Self, expr_id: MonoExprId) Allocator.Error!void {
         .str_escape_and_quote => |quote_expr| {
             try self.generateStrEscapeAndQuote(quote_expr);
         },
-        .tag_payload_access => unreachable,
+        .tag_payload_access => |tpa| {
+            // Payload is always at offset 0 in the tag union memory.
+            // Generate the tag union value (pushes i32 pointer to union).
+            try self.generateExpr(tpa.value);
+
+            if (self.isCompositeLayout(tpa.payload_layout)) {
+                // Composite payload: the union pointer IS the payload pointer (offset 0)
+            } else {
+                // Scalar payload: load from offset 0
+                const payload_vt = self.resolveValType(tpa.payload_layout);
+                try self.emitLoadOp(payload_vt, 0);
+            }
+        },
         .hosted_call => unreachable,
     }
 }
@@ -1257,6 +1269,7 @@ fn generateWhen(self: *Self, w: anytype) Allocator.Error!void {
 
     // Generate the value being matched once, store in a temp local
     const value_vt = self.resolveValType(w.value_layout);
+
     try self.generateExpr(w.value);
     const temp_local = self.storage.allocAnonymousLocal(value_vt) catch return error.OutOfMemory;
     self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
@@ -1335,7 +1348,6 @@ fn generateWhenBranches(self: *Self, branches: []const mono.MonoIR.MonoWhenBranc
             // value_local holds a pointer to the tag union in memory.
             const is_pointer = blk: {
                 if (self.layout_store) |ls| {
-                    // Check if the when's value layout is a tag_union in memory
                     const wl = WasmLayout.wasmReprWithStore(tag_pat.union_layout, ls);
                     break :blk switch (wl) {
                         .stack_memory => true,
@@ -1382,12 +1394,32 @@ fn generateWhenBranches(self: *Self, branches: []const mono.MonoIR.MonoWhenBranc
                             const bind_byte_size = self.layoutByteSize(bind.layout_idx);
                             const local_idx = self.storage.allocLocal(bind.symbol, bind_vt) catch return error.OutOfMemory;
 
-                            // Load payload value from memory. For composite types
-                            // (Str, Dec, List, etc.), the tag union stores a 4-byte
-                            // pointer to the actual data, so i32.load loads that pointer.
-                            self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-                            WasmModule.leb128WriteU32(self.allocator, &self.body, value_local) catch return error.OutOfMemory;
-                            try self.emitLoadOpForLayout(bind.layout_idx, payload_offset);
+                            const wasm_repr = if (self.layout_store) |ls|
+                                WasmLayout.wasmReprWithStore(bind.layout_idx, ls)
+                            else
+                                WasmLayout.wasmRepr(bind.layout_idx);
+
+                            switch (wasm_repr) {
+                                .stack_memory => {
+                                    // Composite types (Str, Dec, List, records, etc.) are
+                                    // stored inline in the tag union memory. The "value" is
+                                    // a pointer to the start of the data within the tag union.
+                                    // Compute: value_local + payload_offset
+                                    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                                    WasmModule.leb128WriteU32(self.allocator, &self.body, value_local) catch return error.OutOfMemory;
+                                    if (payload_offset > 0) {
+                                        self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                                        WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(payload_offset)) catch return error.OutOfMemory;
+                                        self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+                                    }
+                                },
+                                .primitive => {
+                                    // Primitive types: load the value from memory
+                                    self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                                    WasmModule.leb128WriteU32(self.allocator, &self.body, value_local) catch return error.OutOfMemory;
+                                    try self.emitLoadOpForLayout(bind.layout_idx, payload_offset);
+                                },
+                            }
 
                             self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
                             WasmModule.leb128WriteU32(self.allocator, &self.body, local_idx) catch return error.OutOfMemory;
@@ -1812,6 +1844,7 @@ fn exprLayoutIdx(self: *Self, expr_id: MonoExprId) ?layout.Idx {
         .float_to_str => layout.Idx.str,
         .dec_to_str => layout.Idx.str,
         .str_escape_and_quote => layout.Idx.str,
+        .tag_payload_access => |tpa| tpa.payload_layout,
         else => null,
     };
 }
@@ -1863,6 +1896,7 @@ fn exprValType(self: *Self, expr_id: MonoExprId) ValType {
         .float_to_str => .i32, // pointer to 12-byte RocStr
         .dec_to_str => .i32, // pointer to 12-byte RocStr
         .str_escape_and_quote => .i32, // pointer to 12-byte RocStr
+        .tag_payload_access => |tpa| self.resolveValType(tpa.payload_layout),
         else => .i64, // conservative default
     };
 }
@@ -1917,6 +1951,7 @@ fn isCompositeExpr(self: *const Self, expr_id: MonoExprId) bool {
         .binop => |b| self.isCompositeLayout(b.result_layout),
         .unary_minus => |u| self.isCompositeLayout(u.result_layout),
         .unary_not => false, // always bool (i32)
+        .tag_payload_access => |tpa| self.isCompositeLayout(tpa.payload_layout),
         .incref => |inc| self.isCompositeExpr(inc.value),
         .decref => |dec| self.isCompositeExpr(dec.value),
         .free => |f| self.isCompositeExpr(f.value),
@@ -3915,6 +3950,7 @@ fn compileLambda(self: *Self, expr_id: MonoExprId, lambda: anytype) Allocator.Er
         self.resolveValType(cap_layout)
     else
         self.resolveValType(lambda.ret_layout);
+
     // Add function type and function to the module
     const type_idx = self.module.addFuncType(param_types.items, &.{ret_vt}) catch return error.OutOfMemory;
     const func_idx = self.module.addFunction(type_idx) catch return error.OutOfMemory;
@@ -6561,10 +6597,19 @@ fn generateTag(self: *Self, t: anytype) Allocator.Error!void {
     const args = self.store.getExprSpan(t.args);
     var payload_offset: u32 = 0;
     for (args) |arg_expr_id| {
-        const arg_vt = self.exprValType(arg_expr_id);
         const arg_byte_size = self.exprByteSize(arg_expr_id);
         try self.generateExpr(arg_expr_id);
-        try self.emitStoreToMemSized(base_local, payload_offset, arg_vt, arg_byte_size);
+        if (self.isCompositeExpr(arg_expr_id)) {
+            // Composite types (Str, List, records, etc.) produce a pointer on
+            // the stack. Copy the full data from the source to the tag union.
+            const src_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.local_set) catch return error.OutOfMemory;
+            WasmModule.leb128WriteU32(self.allocator, &self.body, src_local) catch return error.OutOfMemory;
+            try self.emitMemCopy(base_local, payload_offset, src_local, arg_byte_size);
+        } else {
+            const arg_vt = self.exprValType(arg_expr_id);
+            try self.emitStoreToMemSized(base_local, payload_offset, arg_vt, arg_byte_size);
+        }
         payload_offset += arg_byte_size;
     }
 

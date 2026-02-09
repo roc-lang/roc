@@ -944,15 +944,6 @@ fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_i
     var params = [1]bytebox.Val{.{ .I32 = 0 }}; // env_ptr = 0
     var returns: [1]bytebox.Val = undefined;
     _ = module_instance.invoke(handle, &params, &returns, .{}) catch {
-        // Dump failing wasm for debugging
-        var counter_buf: [80]u8 = undefined;
-        const dump_path = std.fmt.bufPrint(&counter_buf, "/tmp/wasm_debug_runtime_{}.wasm", .{@intFromPtr(wasm_result.wasm_bytes.ptr) % 10000}) catch "/tmp/wasm_debug_runtime.wasm";
-        const dump_file = std.fs.createFileAbsolute(dump_path, .{}) catch null;
-        if (dump_file) |df| {
-            _ = df.write(wasm_result.wasm_bytes) catch {};
-            df.close();
-        }
-        std.debug.print("WASM RUNTIME FAILED: {} bytes dumped to {s}\n", .{ wasm_result.wasm_bytes.len, dump_path });
         return error.WasmExecFailed;
     };
 
@@ -2194,8 +2185,8 @@ fn compareWithWasmEvaluator(allocator: std.mem.Allocator, interpreter_str: []con
 
     if (!numericStringsEqual(interpreter_str, wasm_str)) {
         std.debug.print(
-            "\nWasm evaluator mismatch! Interpreter: {s}, WasmEvaluator: {s}\n",
-            .{ interpreter_str, wasm_str },
+            "\nWasm evaluator mismatch! Interpreter: '{s}' (len={}), WasmEvaluator: '{s}' (len={})\n",
+            .{ interpreter_str, interpreter_str.len, wasm_str, wasm_str.len },
         );
         return error.EvaluatorMismatch;
     }

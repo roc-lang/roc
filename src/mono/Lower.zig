@@ -471,6 +471,17 @@ fn getExprLayoutFromIdx(self: *Self, module_env: *ModuleEnv, expr_idx: CIR.Expr.
         }
     }
 
+    // When a type var resolves to Content.err (e.g., from a `crash` branch
+    // polluting a match expression's type), fall back to the caller's return
+    // type var which has concrete type information from the call site.
+    const resolved = module_env.types.resolveVar(type_var);
+    if (resolved.desc.content == .err) {
+        if (self.caller_return_type_var) |caller_ret_var| {
+            const ls = self.layout_store orelse unreachable;
+            return ls.fromTypeVar(self.current_module_idx, caller_ret_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
+        }
+    }
+
     const ls = self.layout_store orelse unreachable;
     return ls.fromTypeVar(self.current_module_idx, type_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
 }
@@ -752,13 +763,30 @@ fn getForLoopElementLayout(self: *Self, list_expr_idx: CIR.Expr.Idx) LayoutIdx {
 fn getPatternLayout(self: *Self, pattern_idx: CIR.Pattern.Idx) LayoutIdx {
     var type_var = ModuleEnv.varFrom(pattern_idx);
 
-    // Check if we have a pre-computed layout hint for this type variable.
+    // Check for a direct hint on the unresolved type var first.
+    // This handles polymorphic tag union params where type unification caused the
+    // pattern's type var to resolve to a payload type instead of the tag union.
+    if (self.expr_layout_hints.get(type_var)) |hint_layout| {
+        return hint_layout;
+    }
+
+    // Check if we have a pre-computed layout hint for the resolved type variable.
     // This handles cases where the type var maps to a flex but we know from
     // expression analysis that it should be a list (e.g., [[10], [20], [30]] elements).
     const module_env = self.getModuleEnv(self.current_module_idx) orelse unreachable;
     const resolved = module_env.types.resolveVar(type_var);
     if (self.expr_layout_hints.get(resolved.var_)) |hint_layout| {
         return hint_layout;
+    }
+
+    // When a type var resolves to Content.err (e.g., from type inference
+    // pollution in polymorphic functions), fall back to the caller's return
+    // type var which has concrete type information from the call site.
+    if (resolved.desc.content == .err) {
+        if (self.caller_return_type_var) |caller_ret_var| {
+            const ls = self.layout_store orelse unreachable;
+            return ls.fromTypeVar(self.current_module_idx, caller_ret_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
+        }
     }
 
     // Apply type var override for re-specialized lambda bodies.
@@ -1265,11 +1293,27 @@ fn setupLocalCallLayoutHints(
         const param_type_var = ModuleEnv.varFrom(param_pattern_idx);
         const resolved = module_env.types.resolveVar(param_type_var);
 
-        // Only add hints for type vars that are flex or rigid (generic)
-        if (resolved.desc.content != .flex and resolved.desc.content != .rigid) continue;
+        // Add layout hints for parameters that have unresolved type variables.
+        // This includes:
+        // - flex/rigid vars (generic parameters like `a`)
+        // - structures containing rigid/flex vars (like `[Left(a), Right(b)]`)
+        // For such parameters, fromTypeVar may not correctly resolve nested
+        // type vars through the type scope, so we pre-compute the layout from
+        // the argument expression which has fully concrete types.
+        const needs_hint = switch (resolved.desc.content) {
+            .flex, .rigid => true,
+            .structure => |st| switch (st) {
+                .tag_union => true, // Tag unions may have rigid/flex payload types
+                else => false,
+            },
+            else => false,
+        };
+        if (!needs_hint) continue;
 
         // Check if already in the type scope (no need to add a hint)
-        if (self.type_scope.lookup(resolved.var_) != null) continue;
+        if (resolved.desc.content == .flex or resolved.desc.content == .rigid) {
+            if (self.type_scope.lookup(resolved.var_) != null) continue;
+        }
 
         // Compute the layout from the arg's type
         const arg_layout = self.getExprLayoutFromIdx(module_env, arg_idx);
@@ -2395,6 +2439,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
 
         .e_lambda => |lambda| blk: {
             const params = try self.lowerPatternSpan(module_env, lambda.args);
+
             const body = try self.lowerExprFromIdx(module_env, lambda.body);
             const ret_layout = self.getExprLayoutFromIdx(module_env, lambda.body);
             const fn_layout = self.getExprLayoutFromIdx(module_env, expr_idx);
