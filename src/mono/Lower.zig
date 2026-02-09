@@ -276,9 +276,9 @@ fn patternToSymbol(self: *Self, pattern_idx: CIR.Pattern.Idx) MonoSymbol {
 }
 
 /// Create a MonoSymbol from an external reference
-fn externalToSymbol(self: *Self, import_idx: CIR.Import.Idx, ident_idx: Ident.Idx) MonoSymbol {
+fn externalToSymbol(self: *Self, module_env: *ModuleEnv, import_idx: CIR.Import.Idx, ident_idx: Ident.Idx) MonoSymbol {
+    _ = self;
     // Resolve the import to a module index
-    const module_env = self.all_module_envs[self.current_module_idx];
     const resolved_module = module_env.imports.getResolvedModule(import_idx);
 
     if (resolved_module) |mod_idx| {
@@ -333,6 +333,16 @@ fn lowerExternalDefByIdx(self: *Self, symbol: MonoSymbol, target_def_idx: u16) A
     const old_module = self.current_module_idx;
     self.current_module_idx = symbol.module_idx;
     defer self.current_module_idx = old_module;
+
+    // Update type_scope_caller_module to the calling module so that type scope
+    // lookups inside the external def resolve mapped vars in the correct module.
+    const old_caller_module = self.type_scope_caller_module;
+    if (old_caller_module) |caller_mod| {
+        if (caller_mod != old_module) {
+            self.type_scope_caller_module = old_module;
+        }
+    }
+    defer self.type_scope_caller_module = old_caller_module;
 
     // Set up binding context for recursive closure detection
     // This is necessary for external functions like List.repeat that have recursive helpers
@@ -475,7 +485,8 @@ fn getExprLayoutFromIdx(self: *Self, module_env: *ModuleEnv, expr_idx: CIR.Expr.
     }
 
     const ls = self.layout_store orelse unreachable;
-    return ls.fromTypeVar(self.current_module_idx, type_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
+    const result = ls.fromTypeVar(self.current_module_idx, type_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
+    return result;
 }
 
 /// Look up the discriminant for a tag name within a tag union type.
@@ -613,6 +624,17 @@ fn getForLoopElementLayout(self: *Self, list_expr_idx: CIR.Expr.Idx) LayoutIdx {
     const module_env = self.getModuleEnv(self.current_module_idx) orelse unreachable;
     const ls = self.layout_store orelse unreachable;
 
+    // Strategy 1: Derive element layout from the list expression's computed layout.
+    // This is more robust than type-variable resolution because the list layout
+    // was computed during the list expression lowering, which correctly handles
+    // boxing of recursive nominal types.
+    const list_layout_idx = self.getExprLayoutFromIdx(module_env, list_expr_idx);
+    const list_layout = ls.getLayout(list_layout_idx);
+    if (list_layout.tag == .list) {
+        return list_layout.data.list;
+    }
+
+    // Strategy 2: Fall back to type variable resolution.
     // Get the list's type variable
     const list_type_var = ModuleEnv.varFrom(list_expr_idx);
     const resolved = module_env.types.resolveVar(list_type_var);
@@ -626,12 +648,6 @@ fn getForLoopElementLayout(self: *Self, list_expr_idx: CIR.Expr.Idx) LayoutIdx {
                     const args = module_env.types.sliceNominalArgs(nominal);
                     std.debug.assert(args.len > 0); // List must have element type arg
                     const elem_type_var = args[0];
-                    // For local calls, setupLocalCallLayoutHints populates the type_scope
-                    // with intra-module mappings (e.g., flex_var -> concrete_type), but
-                    // type_scope_caller_module remains null. fromTypeVar only checks the
-                    // type_scope when caller_module_idx is non-null. So when the element
-                    // type is a flex/rigid var and the type_scope has a mapping for it,
-                    // pass the current module as caller so the mapping is used.
                     const effective_caller = self.type_scope_caller_module orelse blk: {
                         const elem_resolved = module_env.types.resolveVar(elem_type_var);
                         if (elem_resolved.desc.content == .flex or elem_resolved.desc.content == .rigid) {
@@ -1513,9 +1529,7 @@ fn setupExternalCallTypeScope(
     std.debug.assert(lookup.target_node_idx < ext_module_env.store.nodes.len());
 
     // Check if this is actually a def node (type modules with hosted functions may have different node types)
-    if (!ext_module_env.store.isDefNode(lookup.target_node_idx)) {
-        return;
-    }
+    if (!ext_module_env.store.isDefNode(lookup.target_node_idx)) return;
 
     // Get the external definition
     const def_idx: CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
@@ -1538,12 +1552,11 @@ fn setupExternalCallTypeScope(
     const scope = &self.type_scope.scopes.items[0];
 
     // Track the caller module - mapped vars in type_scope belong to this module.
-    // IMPORTANT: Only set this for the OUTERMOST external call!
-    // For nested calls (e.g., List.map calling List.with_capacity), we should preserve
-    // the original caller's module context, not overwrite it with the builtins module.
-    if (self.type_scope_caller_module == null) {
-        self.type_scope_caller_module = self.current_module_idx;
-    }
+    // Always update to current_module_idx. The e_call handler saves/restores this
+    // via old_caller_module, so inner calls (e.g., Elem.walk! calling List.for_each!)
+    // correctly use the intermediate module's types for scope resolution, and the
+    // outer caller's module is restored after the inner call returns.
+    self.type_scope_caller_module = self.current_module_idx;
 
     // Get the function's parameter type variables
     const param_vars = ext_module_env.types.sliceVars(func.args);
@@ -2052,7 +2065,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
         },
 
         .e_lookup_external => |lookup| blk: {
-            const symbol = self.externalToSymbol(lookup.module_idx, lookup.ident_idx);
+            const symbol = self.externalToSymbol(module_env, lookup.module_idx, lookup.ident_idx);
 
             // Ensure the external definition is lowered using target_node_idx
             const symbol_key: u48 = @bitCast(symbol);
@@ -3049,7 +3062,6 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             // alphabetically-sorted variant list of the tag union type.
             const type_var = ModuleEnv.varFrom(expr_idx);
             const discriminant = self.resolveTagDiscriminant(module_env, type_var, tag.name);
-
             // For zero-argument tags, use zero_arg_tag
             if (args_slice.len == 0) {
                 const tag_layout = self.getExprLayoutFromIdx(module_env, expr_idx);
@@ -3060,7 +3072,6 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             }
 
             const tag_layout = self.getExprLayoutFromIdx(module_env, expr_idx);
-
             break :blk .{
                 .tag = .{
                     .discriminant = discriminant,
@@ -3110,10 +3121,11 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
         .e_match => |match_expr| blk: {
             const cond = try self.lowerExprFromIdx(module_env, match_expr.cond);
             const branches = try self.lowerWhenBranches(module_env, match_expr.branches);
+            const value_layout = self.getExprLayoutFromIdx(module_env, match_expr.cond);
             break :blk .{
                 .when = .{
                     .value = cond,
-                    .value_layout = self.getExprLayoutFromIdx(module_env, match_expr.cond),
+                    .value_layout = value_layout,
                     .branches = branches,
                     .result_layout = self.getExprLayoutFromIdx(module_env, expr_idx),
                 },
@@ -3473,6 +3485,13 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             // Lower the list expression
             const list_expr = try self.lowerExprFromIdx(module_env, for_expr.expr);
 
+            // Get element layout BEFORE lowering the body. The body may contain
+            // nested calls that modify type variables (via type scope setup for
+            // recursive or cross-module calls), corrupting the type var resolution
+            // for the element type. Computing the layout here, while the type scope
+            // still has correct mappings, gives the right answer.
+            const elem_layout = self.getForLoopElementLayout(for_expr.expr);
+
             // Lower the element pattern
             const elem_pattern = try self.lowerPattern(module_env, for_expr.patt);
 
@@ -3486,9 +3505,6 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
 
             // Pop the type scope if we pushed one
             if (pushed_scope) self.popForLoopElementTypeScope();
-
-            // Get element layout from the list expression's type (not the pattern)
-            const elem_layout = self.getForLoopElementLayout(for_expr.expr);
 
             break :blk .{
                 .for_loop = .{
@@ -4629,6 +4645,10 @@ fn lowerStmts(self: *Self, module_env: *ModuleEnv, stmts: CIR.Statement.Span) Al
             .s_for => |for_stmt| {
                 // For loop statement - lower to a for_loop expression
                 const list_expr = try self.lowerExprFromIdx(module_env, for_stmt.expr);
+
+                // Get element layout BEFORE lowering the body (see e_for comment)
+                const elem_layout = self.getForLoopElementLayout(for_stmt.expr);
+
                 const elem_pattern = try self.lowerPattern(module_env, for_stmt.patt);
 
                 // Push a type scope mapping for the element type (see e_for comment)
@@ -4637,9 +4657,6 @@ fn lowerStmts(self: *Self, module_env: *ModuleEnv, stmts: CIR.Statement.Span) Al
                 const body = try self.lowerExprFromIdx(module_env, for_stmt.body);
 
                 if (pushed_scope) self.popForLoopElementTypeScope();
-
-                // Get element layout from the list expression's type (not the pattern)
-                const elem_layout = self.getForLoopElementLayout(for_stmt.expr);
 
                 const for_loop_expr = try self.store.addExpr(.{
                     .for_loop = .{

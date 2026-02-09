@@ -813,6 +813,7 @@ pub const Store = struct {
 
         // Update a to point to b
         self.slots.set(Self.varToSlotIdx(a_var), .{ .redirect = b_var });
+
     }
 
     // test helpers //

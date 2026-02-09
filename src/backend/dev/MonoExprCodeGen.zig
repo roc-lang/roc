@@ -1304,8 +1304,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 // Hosted function calls (platform-provided effects)
                 .hosted_call => |hc| try self.generateHostedCall(hc),
 
-                // Nominal types (box recursive, transparent otherwise)
-                .nominal => |nom| try self.generateNominal(nom),
+                // Nominal types: transparent wrapper — boxing is handled by
+                // generateTag when the tag's union_layout is a box.
+                .nominal => |nom| try self.generateExpr(nom.backing_expr),
 
                 // String literals
                 .str_literal => |str_idx| try self.generateStrLiteral(str_idx),
@@ -7292,7 +7293,18 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
                         // Load discriminant based on value location
                         const disc_reg = try self.allocTempGeneral();
-                        switch (value_loc) {
+                        if (is_boxed_tag_union) {
+                            // Boxed tag union: the value is a heap pointer (in a register or on the stack).
+                            // We need to dereference it to read the discriminant from heap memory.
+                            const box_ptr_reg = try self.ensureInGeneralReg(value_loc);
+                            if (comptime target.toCpuArch() == .aarch64) {
+                                const w = if (disc_use_w32) aarch64.RegisterWidth.w32 else aarch64.RegisterWidth.w64;
+                                try self.codegen.emit.ldrRegMemSoff(w, disc_reg, box_ptr_reg, tu_disc_offset);
+                            } else {
+                                const w = if (disc_use_w32) x86_64.RegisterWidth.w32 else x86_64.RegisterWidth.w64;
+                                try self.codegen.emit.movRegMem(w, disc_reg, box_ptr_reg, tu_disc_offset);
+                            }
+                        } else switch (value_loc) {
                             .stack_str, .stack_i128 => |base_offset| {
                                 // Load discriminant from correct offset in tag union
                                 if (comptime target.toCpuArch() == .aarch64) {
@@ -7325,20 +7337,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                 }
                             },
                             .general_reg => |reg| {
-                                if (is_boxed_tag_union) {
-                                    // Boxed tag union: register holds a heap pointer.
-                                    // Dereference to read discriminant from heap memory.
-                                    if (comptime target.toCpuArch() == .aarch64) {
-                                        const w = if (disc_use_w32) aarch64.RegisterWidth.w32 else aarch64.RegisterWidth.w64;
-                                        try self.codegen.emit.ldrRegMemSoff(w, disc_reg, reg, tu_disc_offset);
-                                    } else {
-                                        const w = if (disc_use_w32) x86_64.RegisterWidth.w32 else x86_64.RegisterWidth.w64;
-                                        try self.codegen.emit.movRegMem(w, disc_reg, reg, tu_disc_offset);
-                                    }
-                                } else {
-                                    // Value is directly in register (zero-arg tag case)
-                                    try self.emitMovRegReg(disc_reg, reg);
-                                }
+                                // Value is directly in register (zero-arg tag case)
+                                try self.emitMovRegReg(disc_reg, reg);
                             },
                             .immediate_i64 => |val| {
                                 // Immediate discriminant value
@@ -7977,7 +7977,6 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
             const num_elems: u32 = @intCast(elems.len);
             const total_data_bytes: usize = @as(usize, elem_size) * @as(usize, num_elems);
-
             // Determine if elements contain refcounted data
             const elements_refcounted: bool = ls.layoutContainsRefcounted(elem_layout_data);
 
@@ -9228,19 +9227,18 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
             // Get element layout and size.
             // Cross-module layout resolution can produce incorrect elem_layout indices
-            // (e.g., for builtin functions like List.fold where the for loop's elem_layout
-            // refers to a layout index in the wrong module context). When this happens,
-            // derive the correct element layout from the list expression's layout.
+            // (e.g., for builtin functions like List.for_each! where the for loop's
+            // elem_layout is computed from a rigid type variable that may have stale
+            // type scope mappings). When this happens, derive the correct element
+            // layout from the list expression's layout, which was computed in the
+            // correct module context during list lowering.
             const ls = self.layout_store orelse unreachable;
             const effective_elem_layout: layout.Idx = blk: {
-                const stored_layout = ls.getLayout(for_loop.elem_layout);
-                const stored_size = ls.layoutSizeAlign(stored_layout).size;
-                if (stored_size > 0 or for_loop.elem_layout == .bool) {
-                    // Stored layout has non-zero size, trust it
-                    break :blk for_loop.elem_layout;
-                }
-                // Stored layout is ZST — try to derive the correct element layout
-                if (self.getExprLayout(for_loop.list_expr)) |list_layout_idx| {
+                // Priority 1: Derive from the list expression's computed layout.
+                // This is the most reliable source because the list's element layout
+                // was determined when the list itself was created/lowered.
+                const list_expr_layout = self.getExprLayout(for_loop.list_expr);
+                if (list_expr_layout) |list_layout_idx| {
                     const list_layout = ls.getLayout(list_layout_idx);
                     if (list_layout.tag == .list) {
                         const derived = list_layout.data.list;
@@ -9251,7 +9249,10 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         }
                     }
                 }
-                // Also check the element pattern's layout_idx
+                // Priority 2: Check the element pattern's layout_idx — it was computed
+                // from the pattern's type variable during lowering and may be more
+                // accurate than the for loop's elem_layout (which can be wrong due
+                // to stale type scope mappings for cross-module specializations).
                 const elem_pattern = self.store.getPattern(for_loop.elem_pattern);
                 switch (elem_pattern) {
                     .bind => |bind| {
@@ -9261,9 +9262,14 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             break :blk bind.layout_idx;
                         }
                     },
-                    .wildcard => {}, // Fall through to use for_loop.elem_layout
-                    // Other patterns not valid for for loop element
+                    .wildcard => {},
                     else => unreachable,
+                }
+                // Priority 3: Use the stored elem_layout
+                const stored_layout = ls.getLayout(for_loop.elem_layout);
+                const stored_size = ls.layoutSizeAlign(stored_layout).size;
+                if (stored_size > 0 or for_loop.elem_layout == .bool) {
+                    break :blk for_loop.elem_layout;
                 }
                 break :blk for_loop.elem_layout;
             };

@@ -602,6 +602,12 @@ fn hostedAppendChild(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, args_p
     const Args = extern struct { parent_id: u64, child_id: u64 };
     const args: *Args = @ptrCast(@alignCast(args_ptr));
     const host: *HostEnv = @ptrCast(@alignCast(ops.env));
+    {
+        const stderr_dbg: std.fs.File = .stderr();
+        var buf: [128]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "[HOST] append_child! parent={d} child={d}\n", .{ args.parent_id, args.child_id }) catch "[HOST] append_child!\n";
+        stderr_dbg.writeAll(msg) catch {};
+    }
 
     if (args.parent_id < host.dom_elements.items.len and args.child_id < host.dom_elements.items.len) {
         host.dom_elements.items[args.parent_id].children.append(host.gpa.allocator(), args.child_id) catch {};
@@ -643,6 +649,12 @@ fn hostedCreateElement(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, args
     const result: *u64 = @ptrCast(@alignCast(ret_ptr));
 
     const tag_slice = args.tag.asSlice();
+    {
+        const stderr_dbg: std.fs.File = .stderr();
+        stderr_dbg.writeAll("[HOST] create_element! tag=\"") catch {};
+        stderr_dbg.writeAll(tag_slice) catch {};
+        stderr_dbg.writeAll("\"\n") catch {};
+    }
     const allocator = host.gpa.allocator();
 
     // Duplicate tag string for storage
@@ -757,6 +769,8 @@ fn hostedCreateRoot(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, args_pt
     _ = args_ptr;
     const host: *HostEnv = @ptrCast(@alignCast(ops.env));
     const result: *u64 = @ptrCast(@alignCast(ret_ptr));
+    const stderr_dbg: std.fs.File = .stderr();
+    stderr_dbg.writeAll("[HOST] create_root!\n") catch {};
 
     const elem_id = host.next_elem_id;
     host.next_elem_id += 1;
@@ -913,6 +927,12 @@ fn hostedSetText(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, args_ptr: 
     const Args = extern struct { elem_id: u64, text: RocStr };
     const args: *Args = @ptrCast(@alignCast(args_ptr));
     const host: *HostEnv = @ptrCast(@alignCast(ops.env));
+    {
+        const stderr_dbg: std.fs.File = .stderr();
+        var buf: [256]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "[HOST] set_text! elem={d} text=\"{s}\"\n", .{ args.elem_id, args.text.asSlice() }) catch "[HOST] set_text!\n";
+        stderr_dbg.writeAll(msg) catch {};
+    }
 
     if (args.elem_id < host.dom_elements.items.len) {
         const allocator = host.gpa.allocator();
@@ -1216,15 +1236,31 @@ fn platform_main(spec_file: []const u8, verbose: bool) !c_int {
     host_env.roc_ops = &roc_ops;
 
     // Call Roc main to build the UI
+    const stderr_dbg: std.fs.File = .stderr();
+    stderr_dbg.writeAll("[HOST] calling roc__main\n") catch {};
     var ret: [0]u8 = undefined;
     var args: [0]u8 = undefined;
     roc__main(&roc_ops, @as(*anyopaque, @ptrCast(&ret)), @as(*anyopaque, @ptrCast(&args)));
+    stderr_dbg.writeAll("[HOST] roc__main returned\n") catch {};
 
     if (verbose) {
         const stderr_file: std.fs.File = .stderr();
         var buf: [256]u8 = undefined;
         const msg = std.fmt.bufPrint(&buf, "[INFO] UI built: {d} DOM elements, {d} graph nodes\n", .{ host_env.dom_elements.items.len, host_env.graph_nodes.items.len }) catch "";
         stderr_file.writeAll(msg) catch {};
+
+        // Debug: dump all DOM elements
+        for (host_env.dom_elements.items, 0..) |elem, idx| {
+            var dbg_buf: [512]u8 = undefined;
+            const dbg_msg = std.fmt.bufPrint(&dbg_buf, "[DEBUG] elem[{d}] tag=\"{s}\" text=\"{s}\" parent={?d} children={d}\n", .{
+                idx,
+                elem.tag,
+                elem.text orelse "(null)",
+                elem.parent_id,
+                elem.children.items.len,
+            }) catch "";
+            stderr_file.writeAll(dbg_msg) catch {};
+        }
     }
 
     // Execute test commands
