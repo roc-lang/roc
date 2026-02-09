@@ -878,6 +878,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             InvalidLocalLocation,
             LocalNotFound,
             Crash,
+            NotImplemented,
         };
 
         /// Initialize the code generator
@@ -7955,7 +7956,10 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             // Get the union layout
             const union_layout = ls.getLayout(tag.union_layout);
             if (union_layout.tag != .tag_union) {
-                unreachable;
+                // TODO: support tag construction for boxed tag unions (e.g., Result
+                // represented as Box(opaque_ptr)). Requires heap allocation for the
+                // boxed payload. For now, fall back to interpreter.
+                return Error.NotImplemented;
             }
 
             const tu_data = ls.getTagUnionData(union_layout.data.tag_union.idx);
