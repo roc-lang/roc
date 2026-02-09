@@ -11906,71 +11906,53 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
         /// Copy bytes from stack location to memory pointed to by ptr_reg
         fn copyStackToPtr(self: *Self, loc: ValueLocation, ptr_reg: GeneralReg, size: u32) Error!void {
-            switch (loc) {
-                .stack => |s| {
-                    const stack_offset = s.offset;
-                    // Copy size bytes from stack to destination
-                    const temp_reg = try self.allocTempGeneral();
-                    var remaining = size;
-                    var src_offset: i32 = stack_offset;
-                    var dst_offset: i32 = 0;
-
-                    // Copy 8 bytes at a time
-                    while (remaining >= 8) {
-                        try self.codegen.emitLoadStack(.w64, temp_reg, src_offset);
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emit.strRegMemUoff(.w64, temp_reg, ptr_reg, @intCast(@as(u32, @intCast(dst_offset)) >> 3));
-                        } else {
-                            try self.codegen.emit.movMemReg(.w64, ptr_reg, dst_offset, temp_reg);
-                        }
-                        src_offset += 8;
-                        dst_offset += 8;
-                        remaining -= 8;
-                    }
-
-                    // Handle remaining bytes (4, 2, 1)
-                    if (remaining >= 4) {
-                        try self.codegen.emitLoadStack(.w32, temp_reg, src_offset);
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emit.strRegMemUoff(.w32, temp_reg, ptr_reg, @intCast(@as(u32, @intCast(dst_offset)) >> 2));
-                        } else {
-                            try self.codegen.emit.movMemReg(.w32, ptr_reg, dst_offset, temp_reg);
-                        }
-                        src_offset += 4;
-                        dst_offset += 4;
-                        remaining -= 4;
-                    }
-
-                    self.codegen.freeGeneral(temp_reg);
-                },
-                .list_stack => |list_info| {
-                    // Copy 24 bytes from list struct on stack to destination
-                    const temp_reg = try self.allocTempGeneral();
-                    var remaining = size;
-                    var src_offset: i32 = list_info.struct_offset;
-                    var dst_offset: i32 = 0;
-
-                    // Copy 8 bytes at a time
-                    while (remaining >= 8) {
-                        try self.codegen.emitLoadStack(.w64, temp_reg, src_offset);
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emit.strRegMemUoff(.w64, temp_reg, ptr_reg, @intCast(@as(u32, @intCast(dst_offset)) >> 3));
-                        } else {
-                            try self.codegen.emit.movMemReg(.w64, ptr_reg, dst_offset, temp_reg);
-                        }
-                        src_offset += 8;
-                        dst_offset += 8;
-                        remaining -= 8;
-                    }
-
-                    self.codegen.freeGeneral(temp_reg);
-                },
+            // Extract stack offset from any stack-based location variant
+            const stack_offset: i32 = switch (loc) {
+                .stack => |s| s.offset,
+                .stack_i128 => |off| off,
+                .stack_str => |off| off,
+                .list_stack => |list_info| list_info.struct_offset,
                 else => {
                     // Not a stack location - try to store as single value
                     const reg = try self.ensureInGeneralReg(loc);
                     try self.emitStoreToMem(ptr_reg, reg);
+                    return;
                 },
+            };
+
+            // Copy size bytes from stack to destination
+            const temp_reg = try self.allocTempGeneral();
+            var remaining = size;
+            var src_offset: i32 = stack_offset;
+            var dst_offset: i32 = 0;
+
+            // Copy 8 bytes at a time
+            while (remaining >= 8) {
+                try self.codegen.emitLoadStack(.w64, temp_reg, src_offset);
+                if (comptime target.toCpuArch() == .aarch64) {
+                    try self.codegen.emit.strRegMemUoff(.w64, temp_reg, ptr_reg, @intCast(@as(u32, @intCast(dst_offset)) >> 3));
+                } else {
+                    try self.codegen.emit.movMemReg(.w64, ptr_reg, dst_offset, temp_reg);
+                }
+                src_offset += 8;
+                dst_offset += 8;
+                remaining -= 8;
             }
+
+            // Handle remaining bytes (4, 2, 1)
+            if (remaining >= 4) {
+                try self.codegen.emitLoadStack(.w32, temp_reg, src_offset);
+                if (comptime target.toCpuArch() == .aarch64) {
+                    try self.codegen.emit.strRegMemUoff(.w32, temp_reg, ptr_reg, @intCast(@as(u32, @intCast(dst_offset)) >> 2));
+                } else {
+                    try self.codegen.emit.movMemReg(.w32, ptr_reg, dst_offset, temp_reg);
+                }
+                src_offset += 4;
+                dst_offset += 4;
+                remaining -= 4;
+            }
+
+            self.codegen.freeGeneral(temp_reg);
         }
 
         /// Store 128-bit value to memory at [ptr_reg]
