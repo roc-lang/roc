@@ -3737,7 +3737,7 @@ fn selectClosureRepresentation(self: *Self, captures: MonoCaptureSpan) Allocator
                 .struct_layout = .i64,
             },
         };
-        const struct_layout = try ls.putCaptureStruct(self.captureLayoutIdxs(capture_list));
+        const struct_layout = try ls.putCaptureStruct(captureLayoutIdxs(capture_list));
         return .{
             .struct_captures = .{
                 .captures = captures,
@@ -3748,11 +3748,7 @@ fn selectClosureRepresentation(self: *Self, captures: MonoCaptureSpan) Allocator
 }
 
 /// Extract layout indices from a capture list into a temporary buffer.
-fn captureLayoutIdxs(self: *Self, capture_list: []const MonoCapture) []const LayoutIdx {
-    _ = self;
-    // MonoCapture has layout_idx as one of its fields; we need a slice of just the layout indices.
-    // Since MonoCapture is stored contiguously, we can build a pointer to the layout_idx fields.
-    // But for simplicity and safety, we use a static buffer.
+fn captureLayoutIdxs(capture_list: []const MonoCapture) []const LayoutIdx {
     const S = struct {
         var buf: [64]LayoutIdx = undefined;
     };
@@ -4126,19 +4122,21 @@ fn lowerExprWithLambdaSet(
             // Check if bound to variable (same logic as regular closure lowering)
             const is_bound = self.current_binding_pattern != null;
             const num_members = self.store.getLambdaSetMembers(lambda_set_members).len;
-            const closure_expr: MonoExpr = .{ .closure = .{
-                .closure_layout = .i64, // TODO: remove this field when we remove the interpreter, as it is only used by the interpreter
-                .lambda = lambda_id,
-                .captures = ir.MonoCaptureSpan.empty(),
-                .representation = .{ .enum_dispatch = .{
-                    .num_functions = @intCast(num_members),
-                    .tag = @intCast(tag),
-                    .lambda_set = lambda_set_members,
-                } },
-                .recursion = .not_recursive,
-                .self_recursive = .not_self_recursive,
-                .is_bound_to_variable = is_bound,
-            } };
+            const closure_expr: MonoExpr = .{
+                .closure = .{
+                    .closure_layout = .i64, // TODO: remove this field when we remove the interpreter, as it is only used by the interpreter
+                    .lambda = lambda_id,
+                    .captures = ir.MonoCaptureSpan.empty(),
+                    .representation = .{ .enum_dispatch = .{
+                        .num_functions = @intCast(num_members),
+                        .tag = @intCast(tag),
+                        .lambda_set = lambda_set_members,
+                    } },
+                    .recursion = .not_recursive,
+                    .self_recursive = .not_self_recursive,
+                    .is_bound_to_variable = is_bound,
+                },
+            };
 
             return self.store.addExpr(closure_expr, Region.zero());
         },
@@ -4173,7 +4171,7 @@ fn selectLambdaSetRepresentation(
                 .captures = captures,
                 .struct_layout = .i64,
             } };
-            const struct_layout = try ls.putCaptureStruct(self.captureLayoutIdxs(capture_list));
+            const struct_layout = try ls.putCaptureStruct(captureLayoutIdxs(capture_list));
             return .{ .struct_captures = .{
                 .captures = captures,
                 .struct_layout = struct_layout,
