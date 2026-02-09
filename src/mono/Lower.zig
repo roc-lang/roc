@@ -455,12 +455,20 @@ fn getBlockLayout(self: *Self, module_env: *ModuleEnv, block: anytype) LayoutIdx
 fn getExprLayoutFromIdx(self: *Self, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx) LayoutIdx {
     var type_var = ModuleEnv.varFrom(expr_idx);
 
+    // Check if we have a pre-computed layout hint for this type variable.
+    // This handles cases where the type var resolves to a flex/rigid but we know
+    // from expression analysis what the concrete layout should be (e.g., recursive
+    // tag unions that should be boxed).
+    const resolved = module_env.types.resolveVar(type_var);
+    if (self.expr_layout_hints.get(resolved.var_)) |hint_layout| {
+        return hint_layout;
+    }
+
     // Apply type var override for re-specialized lambda bodies.
     // When re-lowering a polymorphic lambda for a different call site, the
     // definition's type vars resolve to the wrong concrete types. The override
     // map redirects them to the call site's type vars with correct types.
     if (self.layout_var_overrides.count() > 0) {
-        const resolved = module_env.types.resolveVar(type_var);
         if (self.layout_var_overrides.get(resolved.var_)) |override_var| {
             type_var = override_var;
         }
@@ -3051,10 +3059,12 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                 } };
             }
 
+            const tag_layout = self.getExprLayoutFromIdx(module_env, expr_idx);
+
             break :blk .{
                 .tag = .{
                     .discriminant = discriminant,
-                    .union_layout = self.getExprLayoutFromIdx(module_env, expr_idx),
+                    .union_layout = tag_layout,
                     .args = args,
                 },
             };
@@ -3205,21 +3215,47 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
         .e_lookup_pending => .{ .runtime_error = {} },
 
         .e_nominal => |nom| blk: {
+            const nominal_layout_idx = self.getExprLayoutFromIdx(module_env, expr_idx);
+            const ls = self.layout_store orelse unreachable;
+            const nominal_layout = ls.getLayout(nominal_layout_idx);
+
+            // For recursive nominals (box layout), hint the backing expression
+            // to use the canonical inner tag_union layout.
+            if (nominal_layout.tag == .box) {
+                const inner_layout_idx = nominal_layout.data.box;
+                const backing_var = ModuleEnv.varFrom(nom.backing_expr);
+                const resolved = module_env.types.resolveVar(backing_var);
+                try self.expr_layout_hints.put(resolved.var_, inner_layout_idx);
+            }
+
             const backing = try self.lowerExprFromIdx(module_env, nom.backing_expr);
             break :blk .{
                 .nominal = .{
                     .backing_expr = backing,
-                    .nominal_layout = self.getExprLayoutFromIdx(module_env, expr_idx),
+                    .nominal_layout = nominal_layout_idx,
                 },
             };
         },
 
         .e_nominal_external => |nom| blk: {
+            const nominal_layout_idx = self.getExprLayoutFromIdx(module_env, expr_idx);
+            const ls = self.layout_store orelse unreachable;
+            const nominal_layout = ls.getLayout(nominal_layout_idx);
+
+            // For recursive nominals (box layout), hint the backing expression
+            // to use the canonical inner tag_union layout.
+            if (nominal_layout.tag == .box) {
+                const inner_layout_idx = nominal_layout.data.box;
+                const backing_var = ModuleEnv.varFrom(nom.backing_expr);
+                const resolved = module_env.types.resolveVar(backing_var);
+                try self.expr_layout_hints.put(resolved.var_, inner_layout_idx);
+            }
+
             const backing = try self.lowerExprFromIdx(module_env, nom.backing_expr);
             break :blk .{
                 .nominal = .{
                     .backing_expr = backing,
-                    .nominal_layout = self.getExprLayoutFromIdx(module_env, expr_idx),
+                    .nominal_layout = nominal_layout_idx,
                 },
             };
         },

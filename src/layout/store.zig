@@ -46,6 +46,48 @@ const TagUnionInfo = layout_mod.TagUnionInfo;
 const ScalarInfo = layout_mod.ScalarInfo;
 const Work = work.Work;
 
+/// Encapsulates the finalized layout mapping for recursive nominal types.
+///
+/// When a recursive nominal type finishes computing, we store its boxed layout here.
+/// This allows cache-hit paths (e.g., List/Box container elements) and finalization
+/// paths to find the boxed layout for recursive nominals.
+///
+/// Invariants (enforced by assertions):
+///   1. Write-once: each nominal is registered exactly once via `register()`
+///   2. After registration, `getBoxLayout()` always returns the box for the nominal_var
+///   3. The inner layout is always derivable: `store.getLayout(box_idx).data.box`
+pub const RecursiveNominalRegistry = struct {
+    /// Maps ModuleVarKey -> box layout Idx.
+    /// Contains entries for the nominal_var only (not the backing_var, which
+    /// should resolve to the raw inner layout for pattern matching etc.).
+    overrides: std.AutoHashMap(ModuleVarKey, Idx),
+
+    pub fn init(allocator: std.mem.Allocator) RecursiveNominalRegistry {
+        return .{ .overrides = std.AutoHashMap(ModuleVarKey, Idx).init(allocator) };
+    }
+
+    pub fn deinit(self: *RecursiveNominalRegistry) void {
+        self.overrides.deinit();
+    }
+
+    /// Register a finalized recursive nominal.
+    /// Called exactly once, when the backing type is fully resolved.
+    pub fn register(
+        self: *RecursiveNominalRegistry,
+        nominal_key: ModuleVarKey,
+        box_idx: Idx,
+    ) !void {
+        std.debug.assert(!self.overrides.contains(nominal_key)); // write-once
+        try self.overrides.put(nominal_key, box_idx);
+    }
+
+    /// Look up the box layout for a type variable.
+    /// Returns null if the var is not part of a recursive nominal.
+    pub fn getBoxLayout(self: *const RecursiveNominalRegistry, key: ModuleVarKey) ?Idx {
+        return self.overrides.get(key);
+    }
+};
+
 /// Errors that can occur during layout computation
 /// Stores Layout instances by Idx.
 ///
@@ -84,11 +126,10 @@ pub const Store = struct {
     // Cache to avoid duplicate work - keyed by (module_idx, var) for cross-module correctness
     layouts_by_module_var: std.AutoHashMap(ModuleVarKey, Idx),
 
-    // Cache for boxed layouts of recursive nominal types.
-    // When a recursive nominal type finishes computing, we store its boxed layout here.
-    // This allows List(RecursiveType) to use the boxed element type even after computation.
-    // Keyed by (module_idx, var) for cross-module correctness.
-    recursive_boxed_layouts: std.AutoHashMap(ModuleVarKey, Idx),
+    // Registry for finalized recursive nominal types. Provides priority lookup
+    // in fromTypeVar that supersedes the general cache, making cache-overwrite bugs
+    // structurally impossible.
+    recursive_nominal_registry: RecursiveNominalRegistry,
 
     // Cache for RAW (unboxed) layouts of recursive nominal types.
     // When a recursive nominal is encountered INSIDE a Box/List container during cycle
@@ -218,7 +259,7 @@ pub const Store = struct {
             .tag_union_variants = try TagUnionVariant.SafeMultiList.initCapacity(allocator, 64),
             .tag_union_data = try collections.SafeList(TagUnionData).initCapacity(allocator, 64),
             .layouts_by_module_var = std.AutoHashMap(ModuleVarKey, Idx).init(allocator),
-            .recursive_boxed_layouts = std.AutoHashMap(ModuleVarKey, Idx).init(allocator),
+            .recursive_nominal_registry = RecursiveNominalRegistry.init(allocator),
             .raw_layout_placeholders = std.AutoHashMap(ModuleVarKey, Idx).init(allocator),
             .work = try Work.initCapacity(allocator, 32),
             .builtin_str_ident = builtin_str_ident,
@@ -306,7 +347,7 @@ pub const Store = struct {
         self.tag_union_variants.deinit(self.allocator);
         self.tag_union_data.deinit(self.allocator);
         self.layouts_by_module_var.deinit();
-        self.recursive_boxed_layouts.deinit();
+        self.recursive_nominal_registry.deinit();
         self.raw_layout_placeholders.deinit();
         self.work.deinit(self.allocator);
     }
@@ -922,45 +963,6 @@ pub const Store = struct {
 
     pub fn ensureEmptyRecordLayout(self: *Self) !Idx {
         return self.getEmptyRecordLayout();
-    }
-
-    /// Get the boxed layout for a recursive nominal type, if it exists.
-    /// This is used for list elements where the element type is a recursive nominal.
-    /// Returns null if the type is not a recursive nominal.
-    pub fn getRecursiveBoxedLayout(self: *const Self, module_idx: u16, type_var: Var) ?Layout {
-        const key = ModuleVarKey{ .module_idx = module_idx, .var_ = type_var };
-        if (self.recursive_boxed_layouts.get(key)) |boxed_idx| {
-            return self.getLayout(boxed_idx);
-        }
-        return null;
-    }
-
-    /// Check if a nominal type (by identity) is recursive and return its boxed layout.
-    /// This is needed because different vars can represent the same nominal type,
-    /// and the boxed layout might have been stored under a different var.
-    pub fn getRecursiveBoxedLayoutByNominalKey(self: *const Self, nominal_key: work.NominalKey) ?Layout {
-        // Iterate through recursive_boxed_layouts to find an entry whose var
-        // resolves to this nominal type identity.
-        var iter = self.recursive_boxed_layouts.iterator();
-        while (iter.next()) |entry| {
-            const cache_key = entry.key_ptr.*;
-            const boxed_idx = entry.value_ptr.*;
-            if (boxed_idx == Idx.none) continue;
-            const module_env = self.all_module_envs[cache_key.module_idx];
-            const resolved = module_env.types.resolveVar(cache_key.var_);
-            if (resolved.desc.content == .structure) {
-                const flat_type = resolved.desc.content.structure;
-                if (flat_type == .nominal_type) {
-                    const nom = flat_type.nominal_type;
-                    if (nom.ident.ident_idx == nominal_key.ident_idx and
-                        nom.origin_module == nominal_key.origin_module)
-                    {
-                        return self.getLayout(boxed_idx);
-                    }
-                }
-            }
-        }
-        return null;
     }
 
     /// Get or create a zero-sized type layout
@@ -1602,6 +1604,7 @@ pub const Store = struct {
             // Check cache at every iteration - critical for recursive types
             // where the inner reference may resolve to the same var as the outer type
             const current_cache_key = ModuleVarKey{ .module_idx = self.current_module_idx, .var_ = current.var_ };
+
             if (self.layouts_by_module_var.get(current_cache_key)) |cached_idx| {
                 // Check if this cache hit is a recursive reference to an in-progress nominal.
                 // When we cache a nominal's placeholder (Box) and later hit that cache from
@@ -1632,7 +1635,7 @@ pub const Store = struct {
                 if (self.work.pending_containers.len > 0) {
                     const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
                     if (pending_item.container == .list or pending_item.container == .box) {
-                        if (self.recursive_boxed_layouts.get(current_cache_key)) |boxed_idx| {
+                        if (self.recursive_nominal_registry.getBoxLayout(current_cache_key)) |boxed_idx| {
                             layout_idx = boxed_idx;
                         } else if (is_in_progress_recursive) {
                             // This is a recursive reference to an in-progress nominal, and we're
@@ -2551,11 +2554,9 @@ pub const Store = struct {
                             // Update the placeholder to Box(layout_idx) instead of replacing it
                             // with the raw layout. This keeps recursive references boxed.
                             self.updateLayout(reserved_idx, Layout.box(layout_idx));
-                            // Only store in recursive_boxed_layouts if this type is truly recursive
-                            // (i.e., a cycle was detected during its processing). Non-recursive
-                            // nominal types don't need boxing for their values.
+                            // Register in the recursive nominal registry if truly recursive.
                             if (progress.is_recursive) {
-                                try self.recursive_boxed_layouts.put(nominal_cache_key, reserved_idx);
+                                try self.recursive_nominal_registry.register(nominal_cache_key, reserved_idx);
                             }
                         }
                         // Also update the raw layout placeholder if one was created
@@ -2568,10 +2569,9 @@ pub const Store = struct {
 
                         // CRITICAL: If there are pending containers (List, Box, etc.), update layout_idx
                         // to use the boxed layout. Container elements need boxed layouts for recursive
-                        // types to have fixed size. The boxed layout was stored in recursive_boxed_layouts.
-                        if (self.work.pending_containers.len > 0) {
-                            if (self.recursive_boxed_layouts.get(nominal_cache_key)) |boxed_layout_idx| {
-                                // Use the boxed layout for pending containers
+                        // types to have fixed size.
+                        if (self.work.pending_containers.len > 0 and progress.is_recursive) {
+                            if (self.recursive_nominal_registry.getBoxLayout(nominal_cache_key)) |boxed_layout_idx| {
                                 layout_idx = boxed_layout_idx;
                             }
                         }
@@ -2760,11 +2760,9 @@ pub const Store = struct {
                                 // Update the placeholder to Box(layout_idx) instead of replacing it
                                 // with the raw layout. This keeps recursive references boxed.
                                 self.updateLayout(reserved_idx, Layout.box(layout_idx));
-                                // Only store in recursive_boxed_layouts if this type is truly recursive
-                                // (i.e., a cycle was detected during its processing). Non-recursive
-                                // nominal types don't need boxing for their values.
+                                // Register in the recursive nominal registry if truly recursive.
                                 if (progress.is_recursive) {
-                                    try self.recursive_boxed_layouts.put(container_nominal_key, reserved_idx);
+                                    try self.recursive_nominal_registry.register(container_nominal_key, reserved_idx);
                                 }
                             }
                             // Also update the raw layout placeholder if one was created.
@@ -2780,10 +2778,6 @@ pub const Store = struct {
                                 }
                                 self.updateLayout(raw_idx, new_layout);
                             }
-                            // Note: It's valid for is_recursive to be true without a raw_placeholder
-                            // when the recursion doesn't go through a Box/List container directly.
-                            // For example: IntList := [Nil, Cons(I64, IntList)] - the recursion is
-                            // handled by implicit boxing, not an explicit Box type.
                             // Update the cache so direct lookups get the actual layout
                             try self.layouts_by_module_var.put(container_nominal_key, layout_idx);
                             try nominals_to_remove_container.append(self.allocator, entry.key_ptr.*);
@@ -2794,13 +2788,12 @@ pub const Store = struct {
                             //
                             // HOWEVER: For Box/List containers, we should NOT use the boxed layout.
                             // Box/List elements are heap-allocated, so they should use the raw layout.
-                            // Using the boxed layout would cause double-boxing (issue #8916).
-                            if (self.work.pending_containers.len > 0) {
+                            // Using the boxed layout would cause double-boxing.
+                            if (self.work.pending_containers.len > 0 and progress.is_recursive) {
                                 const next_container = self.work.pending_containers.slice().items(.container)[self.work.pending_containers.len - 1];
                                 const is_heap_container = next_container == .box or next_container == .list;
                                 if (!is_heap_container) {
-                                    if (self.recursive_boxed_layouts.get(container_nominal_key)) |boxed_layout_idx| {
-                                        // Use the boxed layout for pending containers (record/tuple fields)
+                                    if (self.recursive_nominal_registry.getBoxLayout(container_nominal_key)) |boxed_layout_idx| {
                                         layout_idx = boxed_layout_idx;
                                     }
                                 }
