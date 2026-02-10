@@ -68,6 +68,15 @@ fn crashSignalHandler(_: i32) callconv(.c) void {
     std.posix.sigaction(std.posix.SIG.ILL, &dfl, null);
 }
 
+/// SIGALRM handler for catching infinite loops in generated code.
+fn alarmSignalHandler(_: i32) callconv(.c) void {
+    if (panic_jmp) |jmp| {
+        panic_msg = "timeout: dev backend execution exceeded time limit";
+        panic_jmp = null;
+        sljmp.longjmp(jmp, 3);
+    }
+}
+
 fn installCrashSignalHandlers() void {
     const sa = std.posix.Sigaction{
         .handler = .{ .handler = &crashSignalHandler },
@@ -77,6 +86,13 @@ fn installCrashSignalHandlers() void {
     std.posix.sigaction(std.posix.SIG.SEGV, &sa, null);
     std.posix.sigaction(std.posix.SIG.BUS, &sa, null);
     std.posix.sigaction(std.posix.SIG.ILL, &sa, null);
+
+    const alarm_sa = std.posix.Sigaction{
+        .handler = .{ .handler = &alarmSignalHandler },
+        .mask = std.posix.sigemptyset(),
+        .flags = std.os.linux.SA.NODEFER,
+    };
+    std.posix.sigaction(std.posix.SIG.ALRM, &alarm_sa, null);
 }
 
 const Repl = repl.Repl;
@@ -4324,19 +4340,30 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
                 panic_jmp = null;
             }
 
+            // Set a 10-second timeout to catch infinite loops in generated code.
+            _ = std.c.alarm(10);
+            defer _ = std.c.alarm(0);
+
             const dev_output = dev_repl.step(input) catch |err| {
                 std.debug.print("Dev REPL error at input {d} in {s}: {}\n", .{ i, snapshot_path, err });
                 continue;
             };
             defer output.gpa.free(dev_output);
 
+            // Cap dev output to prevent flooding terminal with corrupted string data.
+            const max_output_len = 4096;
+            const dev_display = if (dev_output.len > max_output_len)
+                dev_output[0..max_output_len]
+            else
+                dev_output;
+
             if (i < actual_outputs.items.len) {
                 const interp_output = actual_outputs.items[i];
                 if (!std.mem.eql(u8, interp_output, dev_output)) {
                     if (!floatStringsWithinEpsilon(interp_output, dev_output)) {
                         std.debug.print(
-                            "REPL backend mismatch at input {d} in {s}:\n  interpreter: '{s}'\n  dev:         '{s}'\n",
-                            .{ i, snapshot_path, interp_output, dev_output },
+                            "REPL backend mismatch at input {d} in {s}:\n  interpreter: '{s}'\n  dev:         '{s}'{s}\n",
+                            .{ i, snapshot_path, interp_output, dev_display, if (dev_output.len > max_output_len) "... (truncated)" else "" },
                         );
                         // Note: mismatches are diagnostic only — they don't fail the
                         // snapshot check. Set success = false here once the dev backend
