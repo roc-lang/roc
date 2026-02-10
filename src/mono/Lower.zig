@@ -1163,6 +1163,25 @@ fn getExternalLowLevelLambda(self: *Self, caller_env: *ModuleEnv, lookup: anytyp
     return if (def_expr == .e_low_level_lambda) def_expr.e_low_level_lambda else null;
 }
 
+/// Look up whether an external call is a Box.box or Box.unbox intrinsic.
+/// Returns the corresponding MonoIR low-level op if so, null otherwise.
+fn getExternalBoxIntrinsic(self: *Self, caller_env: *ModuleEnv, lookup: anytype) ?ir.MonoExpr.LowLevel {
+    const ext_module_idx = caller_env.imports.getResolvedModule(lookup.module_idx) orelse return null;
+    if (ext_module_idx >= self.all_module_envs.len) return null;
+    const ext_env = self.all_module_envs[ext_module_idx];
+    if (lookup.target_node_idx >= ext_env.store.nodes.len()) return null;
+    if (!ext_env.store.isDefNode(lookup.target_node_idx)) return null;
+    const def_idx: CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
+    const def = ext_env.store.getDef(def_idx);
+    const target_pattern = ext_env.store.getPattern(def.pattern);
+    if (target_pattern == .assign) {
+        const method_ident = target_pattern.assign.ident;
+        if (method_ident == ext_env.idents.builtin_box_box) return .box_box;
+        if (method_ident == ext_env.idents.builtin_box_unbox) return .box_unbox;
+    }
+    return null;
+}
+
 /// Look up whether an external definition is a hosted lambda.
 /// Returns the hosted function index if so, null otherwise.
 fn getExternalHostedLambdaIndex(self: *Self, caller_env: *ModuleEnv, lookup: anytype) ?u32 {
@@ -2476,6 +2495,22 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                     if (toStrMonoExpr(ll.op, module_env, call.args, self)) |mono_expr| {
                         return try self.store.addExpr(mono_expr, region);
                     }
+                }
+
+                // Check for Box.box / Box.unbox intrinsics.
+                // These are not low-level lambdas in the CIR, but regular function
+                // definitions that the interpreter handles specially. For the dev
+                // backend, emit them as low-level operations so that MonoExprCodeGen
+                // can generate native code for heap allocation/deref.
+                if (self.getExternalBoxIntrinsic(module_env, lookup)) |box_op| {
+                    const args = try self.lowerExprSpan(module_env, call.args);
+                    break :blk .{
+                        .low_level = .{
+                            .op = box_op,
+                            .args = args,
+                            .ret_layout = self.getExprLayoutFromIdx(module_env, expr_idx),
+                        },
+                    };
                 }
             }
 
