@@ -379,6 +379,12 @@ pub const Store = struct {
         self.layouts_by_module_var.clearRetainingCapacity();
         self.recursive_nominal_registry.overrides.clearRetainingCapacity();
         self.raw_layout_placeholders.clearRetainingCapacity();
+        // Clear computed_nominals because nominal types like Try(a, err) are keyed
+        // only by (ident_idx, origin_module), not by type arguments. If the same
+        // nominal type is instantiated with different type arguments across REPL
+        // evaluations (e.g., Try(Dec, [OutOfBounds]) then Try(Str, [OutOfBounds])),
+        // the cached layout from the first evaluation would be incorrectly reused.
+        self.computed_nominals.clearRetainingCapacity();
         // Also clear work state that may be dirty from a previous evaluation that
         // was interrupted mid-way (e.g. by the snapshot tool's panic handler).
         self.work.in_progress_vars.clearRetainingCapacity();

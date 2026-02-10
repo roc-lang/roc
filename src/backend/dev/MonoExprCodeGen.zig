@@ -3181,16 +3181,14 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
                 },
                 .list_first => {
-                    // list_first(list) -> element  (same as list_get at index 0)
                     if (args.len != 1) unreachable;
                     const list_loc = try self.generateExpr(args[0]);
-                    return try self.listGetAtConstIndex(list_loc, 0, ll.ret_layout);
+                    return try self.listFirstOrLast(list_loc, ll, args[0], true);
                 },
                 .list_last => {
-                    // list_last(list) -> element  (same as list_get at index len-1)
                     if (args.len != 1) unreachable;
                     const list_loc = try self.generateExpr(args[0]);
-                    return try self.listGetAtLastIndex(list_loc, ll.ret_layout);
+                    return try self.listFirstOrLast(list_loc, ll, args[0], false);
                 },
                 .list_contains => {
                     // list_contains(list, element) -> bool
@@ -3951,6 +3949,167 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             } else {
                 return .{ .stack = .{ .offset = elem_slot } };
             }
+        }
+
+        /// Handle list_first / list_last with proper tag union result construction.
+        /// When ret_layout is a tag union (safe List.first / List.last), this performs
+        /// bounds checking and returns a proper Try result:
+        ///   if len > 0 then Ok(element) else Err(ListWasEmpty)
+        /// When ret_layout is NOT a tag union, delegates to the existing unsafe helpers.
+        fn listFirstOrLast(self: *Self, list_loc: ValueLocation, ll: anytype, list_arg: MonoExprId, is_first: bool) Error!ValueLocation {
+            const ls = self.layout_store orelse unreachable;
+            const ret_layout_val = ls.getLayout(ll.ret_layout);
+
+            // If ret_layout is not a tag union, delegate to existing unsafe helpers
+            if (ret_layout_val.tag != .tag_union) {
+                if (is_first) {
+                    return try self.listGetAtConstIndex(list_loc, 0, ll.ret_layout);
+                } else {
+                    return try self.listGetAtLastIndex(list_loc, ll.ret_layout);
+                }
+            }
+
+            // Safe path: construct a proper Try tag union result
+
+            // Get list base offset
+            const list_base: i32 = switch (list_loc) {
+                .stack => |s| s.offset,
+                .list_stack => |ls_info| ls_info.struct_offset,
+                else => unreachable,
+            };
+
+            // Determine element layout from the list argument (not from ret_layout)
+            const elem_layout_idx: layout.Idx = blk: {
+                if (self.getExprLayout(list_arg)) |list_layout_idx| {
+                    const list_layout_val = ls.getLayout(list_layout_idx);
+                    if (list_layout_val.tag == .list) {
+                        break :blk list_layout_val.data.list;
+                    }
+                }
+                // Fallback: extract Ok variant's payload from the tag union
+                const tu_data = ls.getTagUnionData(ret_layout_val.data.tag_union.idx);
+                const variants = ls.getTagUnionVariants(tu_data);
+                if (variants.len > 1) {
+                    break :blk variants.get(1).payload_layout;
+                }
+                break :blk ll.ret_layout;
+            };
+            const elem_layout_val = ls.getLayout(elem_layout_idx);
+            const elem_size: u32 = ls.layoutSizeAlign(elem_layout_val).size;
+
+            // Get tag union metadata
+            const tu_data = ls.getTagUnionData(ret_layout_val.data.tag_union.idx);
+            const tag_size = tu_data.size;
+            const disc_offset = tu_data.discriminant_offset;
+            const disc_size = tu_data.discriminant_size;
+
+            // Allocate and zero the result slot
+            const result_slot = self.codegen.allocStackSlot(tag_size);
+            try self.zeroStackArea(result_slot, tag_size);
+
+            // Load list length (offset 8 in list struct)
+            const len_reg = try self.allocTempGeneral();
+            try self.codegen.emitLoadStack(.w64, len_reg, list_base + 8);
+
+            // Compare: length > 0 (i.e. length != 0)
+            if (comptime target.toCpuArch() == .aarch64) {
+                try self.codegen.emit.cmpRegImm12(.w64, len_reg, 0);
+            } else {
+                try self.codegen.emit.testRegReg(.w64, len_reg, len_reg);
+            }
+            self.codegen.freeGeneral(len_reg);
+
+            // Jump to Err branch if length == 0
+            const else_patch = try self.codegen.emitCondJump(condEqual());
+
+            // === THEN branch: Ok(element) ===
+            // Load list pointer
+            const ptr_reg = try self.allocTempGeneral();
+            try self.codegen.emitLoadStack(.w64, ptr_reg, list_base);
+
+            if (elem_size == 0) {
+                // ZST element - nothing to load, just store discriminant
+                self.codegen.freeGeneral(ptr_reg);
+            } else if (is_first) {
+                // list_first: element at index 0, byte offset = 0
+                const temp_reg = try self.allocTempGeneral();
+                var copied: u32 = 0;
+                while (copied < elem_size) : (copied += 8) {
+                    if (comptime target.toCpuArch() == .aarch64) {
+                        try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, ptr_reg, @intCast(copied));
+                        try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, result_slot + @as(i32, @intCast(copied)));
+                    } else {
+                        try self.codegen.emit.movRegMem(.w64, temp_reg, ptr_reg, @intCast(copied));
+                        try self.codegen.emit.movMemReg(.w64, .RBP, result_slot + @as(i32, @intCast(copied)), temp_reg);
+                    }
+                }
+                self.codegen.freeGeneral(temp_reg);
+                self.codegen.freeGeneral(ptr_reg);
+            } else {
+                // list_last: element at index (len - 1)
+                // Reload length and compute index = len - 1
+                const idx_reg = try self.allocTempGeneral();
+                try self.codegen.emitLoadStack(.w64, idx_reg, list_base + 8);
+                if (comptime target.toCpuArch() == .aarch64) {
+                    try self.codegen.emit.subRegRegImm12(.w64, idx_reg, idx_reg, 1);
+                } else {
+                    try self.codegen.emit.addImm(idx_reg, -1);
+                }
+
+                // addr = ptr + index * elem_size
+                const addr_reg = try self.allocTempGeneral();
+                try self.codegen.emit.movRegReg(.w64, addr_reg, idx_reg);
+                self.codegen.freeGeneral(idx_reg);
+
+                if (elem_size != 1) {
+                    const size_reg = try self.allocTempGeneral();
+                    try self.codegen.emitLoadImm(size_reg, elem_size);
+                    if (comptime target.toCpuArch() == .aarch64) {
+                        try self.codegen.emit.mulRegRegReg(.w64, addr_reg, addr_reg, size_reg);
+                    } else {
+                        try self.codegen.emit.imulRegReg(.w64, addr_reg, size_reg);
+                    }
+                    self.codegen.freeGeneral(size_reg);
+                }
+
+                if (comptime target.toCpuArch() == .aarch64) {
+                    try self.codegen.emit.addRegRegReg(.w64, addr_reg, addr_reg, ptr_reg);
+                } else {
+                    try self.codegen.emit.addRegReg(.w64, addr_reg, ptr_reg);
+                }
+                self.codegen.freeGeneral(ptr_reg);
+
+                // Copy element into payload area of tag union
+                const temp_reg = try self.allocTempGeneral();
+                var copied: u32 = 0;
+                while (copied < elem_size) : (copied += 8) {
+                    if (comptime target.toCpuArch() == .aarch64) {
+                        try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, addr_reg, @intCast(copied));
+                        try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, result_slot + @as(i32, @intCast(copied)));
+                    } else {
+                        try self.codegen.emit.movRegMem(.w64, temp_reg, addr_reg, @intCast(copied));
+                        try self.codegen.emit.movMemReg(.w64, .RBP, result_slot + @as(i32, @intCast(copied)), temp_reg);
+                    }
+                }
+                self.codegen.freeGeneral(temp_reg);
+                self.codegen.freeGeneral(addr_reg);
+            }
+
+            // Store Ok discriminant (1)
+            try self.storeDiscriminant(result_slot + @as(i32, @intCast(disc_offset)), 1, disc_size);
+
+            // Jump to end
+            const end_patch = try self.codegen.emitJump();
+
+            // === ELSE branch: Err(ListWasEmpty) ===
+            self.codegen.patchJump(else_patch, self.codegen.currentOffset());
+            // Result is already zeroed. Store Err discriminant (0) explicitly.
+            try self.storeDiscriminant(result_slot + @as(i32, @intCast(disc_offset)), 0, disc_size);
+
+            // === END ===
+            self.codegen.patchJump(end_patch, self.codegen.currentOffset());
+
+            return .{ .stack = .{ .offset = result_slot } };
         }
 
         /// Generate code for hosted function calls (platform-provided effects).
