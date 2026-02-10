@@ -87,8 +87,10 @@ pub const CheckArgs = struct {
 pub const BuildArgs = struct {
     path: []const u8, // the path to the roc file to be built
     opt: OptLevel, // the optimization level
+    backend: Backend = .interpreter, // code generation backend (interpreter or dev)
     target: ?[]const u8 = null, // the target to compile for (e.g., x64musl, x64glibc)
     output: ?[]const u8 = null, // the path where the output binary should be created
+    no_link: bool = false, // output object file only, skip linking with host
     debug: bool = false, // include debug information in the output binary
     allow_errors: bool = false, // allow building even if there are type errors
     verbose: bool = false, // enable verbose output including cache statistics
@@ -305,8 +307,10 @@ fn parseCheck(args: []const []const u8) CliArgs {
 fn parseBuild(args: []const []const u8) CliArgs {
     var path: ?[]const u8 = null;
     var opt: OptLevel = .dev;
+    var backend: Backend = .interpreter;
     var target: ?[]const u8 = null;
     var output: ?[]const u8 = null;
+    var no_link: bool = false;
     var debug: bool = false;
     var allow_errors: bool = false;
     var verbose: bool = false;
@@ -330,7 +334,9 @@ fn parseBuild(args: []const []const u8) CliArgs {
             \\Options:
             \\      --output=<output>              The full path to the output binary, including filename. To specify directory only, specify a path that ends in a directory separator (e.g. a slash)
             \\      --opt=<size|speed|dev>         Optimize the build process for binary size, execution speed, or compilation speed. Defaults to compilation speed (dev)
+            \\      --backend=<interpreter|dev>    Code generation backend: interpreter (default) embeds bytecode, dev generates native machine code
             \\      --target=<target>              Target to compile for (e.g., x64musl, x64glibc, arm64musl). Defaults to native target with musl for static linking
+            \\      --no-link                      Output object file only, skip linking with host (useful for debugging or custom toolchains)
             \\      --debug                        Include debug information in the output binary
             \\      --allow-errors                 Allow building even if there are type errors (warnings are always allowed)
             \\      --verbose                      Enable verbose output including cache statistics
@@ -366,6 +372,17 @@ fn parseBuild(args: []const []const u8) CliArgs {
             } else {
                 return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--opt" } } };
             }
+        } else if (mem.startsWith(u8, arg, "--backend=")) {
+            const value = arg["--backend=".len..];
+            backend = Backend.fromString(value) orelse {
+                return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{
+                    .value = value,
+                    .flag = "--backend",
+                    .valid_options = "interpreter, dev",
+                } } };
+            };
+        } else if (mem.eql(u8, arg, "--no-link")) {
+            no_link = true;
         } else if (mem.startsWith(u8, arg, "--z-bench-tokenize")) {
             if (getFlagValue(arg)) |value| {
                 z_bench_tokenize = value;
@@ -429,7 +446,7 @@ fn parseBuild(args: []const []const u8) CliArgs {
             path = arg;
         }
     }
-    return CliArgs{ .build = BuildArgs{ .path = path orelse "main.roc", .opt = opt, .target = target, .output = output, .debug = debug, .allow_errors = allow_errors, .verbose = verbose, .no_cache = no_cache, .max_threads = max_threads, .wasm_memory = wasm_memory, .wasm_stack_size = wasm_stack_size, .z_bench_tokenize = z_bench_tokenize, .z_bench_parse = z_bench_parse, .z_dump_linker = z_dump_linker } };
+    return CliArgs{ .build = BuildArgs{ .path = path orelse "main.roc", .opt = opt, .backend = backend, .target = target, .output = output, .no_link = no_link, .debug = debug, .allow_errors = allow_errors, .verbose = verbose, .no_cache = no_cache, .max_threads = max_threads, .wasm_memory = wasm_memory, .wasm_stack_size = wasm_stack_size, .z_bench_tokenize = z_bench_tokenize, .z_bench_parse = z_bench_parse, .z_dump_linker = z_dump_linker } };
 }
 
 fn parseBundle(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Error!CliArgs {

@@ -66,6 +66,7 @@ comptime {
         std.testing.refAllDecls(platform_validation);
         std.testing.refAllDecls(cli_context);
         std.testing.refAllDecls(cli_problem);
+        std.testing.refAllDecls(@import("stack_probe.zig"));
     }
 }
 const bench = @import("bench.zig");
@@ -89,6 +90,9 @@ const CacheManager = compile.CacheManager;
 const CacheConfig = compile.CacheConfig;
 const serialize_modules = compile.serialize_modules;
 const TestRunner = eval.TestRunner;
+const backend = @import("backend");
+const mono = @import("mono");
+const layout = @import("layout");
 const Allocators = base.Allocators;
 
 /// Embedded interpreter shim libraries for different targets.
@@ -132,6 +136,65 @@ const ShimLibraries = struct {
             .x64mac, .arm64mac => native,
             // Fallback for other targets (will use native, may not work for cross-compilation)
             else => native,
+        };
+    }
+};
+
+/// Embedded pre-compiled builtins object files for each target.
+/// These contain the wrapper functions needed by the dev backend for string/list operations.
+/// Used by `roc build --backend=dev` to link the app object with builtins.
+/// Now using static libraries instead of object files to include compiler_rt
+/// (needed for 128-bit integer operations used by Dec type).
+const BuiltinsObjects = struct {
+    /// Native builtins (for host platform builds)
+    const native = if (builtin.is_test)
+        &[_]u8{}
+    else if (builtin.os.tag == .windows)
+        @embedFile("roc_builtins.lib")
+    else
+        @embedFile("libroc_builtins.a");
+
+    /// Cross-compilation target builtins (Linux musl targets)
+    const x64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64musl/libroc_builtins.a");
+    const arm64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64musl/libroc_builtins.a");
+
+    /// Cross-compilation target builtins (Linux glibc targets)
+    const x64glibc = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64glibc/libroc_builtins.a");
+    const arm64glibc = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64glibc/libroc_builtins.a");
+
+    /// WebAssembly target builtins (wasm32-freestanding) - not used by dev backend
+    const wasm32 = if (builtin.is_test) &[_]u8{} else @embedFile("targets/wasm32/libroc_builtins.a");
+
+    /// Cross-compilation target builtins (Windows targets)
+    const x64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64win/roc_builtins.lib");
+    const arm64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64win/roc_builtins.lib");
+
+    /// Cross-compilation target builtins (macOS targets)
+    const x64mac = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64mac/libroc_builtins.a");
+    const arm64mac = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64mac/libroc_builtins.a");
+
+    /// Get the appropriate builtins library bytes for the given target
+    pub fn forTarget(target: roc_target.RocTarget) []const u8 {
+        return switch (target) {
+            .x64musl => x64musl,
+            .arm64musl => arm64musl,
+            .x64glibc => x64glibc,
+            .arm64glibc => arm64glibc,
+            .wasm32 => wasm32,
+            .x64win => x64win,
+            .arm64win => arm64win,
+            .x64mac => x64mac,
+            .arm64mac => arm64mac,
+            // Fallback for other targets (will use native, may not work for cross-compilation)
+            else => native,
+        };
+    }
+
+    /// Get the filename for builtins library on given target
+    pub fn filename(target: roc_target.RocTarget) []const u8 {
+        return switch (target.toOsTag()) {
+            .windows => "roc_builtins.lib",
+            else => "libroc_builtins.a",
         };
     }
 };
@@ -3182,9 +3245,688 @@ fn rocBuild(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         return;
     }
 
-    // Use embedded interpreter build approach
-    // This compiles the Roc app, serializes the ModuleEnv, and embeds it in the binary
-    try rocBuildEmbedded(ctx, args);
+    // Select build path based on backend
+    switch (args.backend) {
+        .dev => {
+            // Use native code generation backend
+            try rocBuildNative(ctx, args);
+        },
+        .interpreter => {
+            // Use embedded interpreter build approach
+            // This compiles the Roc app, serializes the ModuleEnv, and embeds it in the binary
+            try rocBuildEmbedded(ctx, args);
+        },
+    }
+}
+
+/// Build using the dev backend to generate native machine code.
+/// This produces truly compiled executables without an interpreter.
+fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
+    const target_mod = @import("target.zig");
+
+    var timer = try std.time.Timer.start();
+
+    std.log.info("Building {s} with native dev backend", .{args.path});
+
+    // Determine output path
+    const output_path = if (args.output) |output|
+        try ctx.arena.dupe(u8, output)
+    else blk: {
+        break :blk try base.module_path.getModuleNameAlloc(ctx.arena, args.path);
+    };
+
+    // Set up cache directory for build artifacts
+    const cache_config = CacheConfig{
+        .enabled = true,
+        .verbose = false,
+    };
+    var cache_manager = CacheManager.init(ctx.gpa, cache_config, Filesystem.default());
+    const cache_dir = try cache_manager.config.getCacheEntriesDir(ctx.arena);
+    const build_cache_dir = try std.fs.path.join(ctx.arena, &.{ cache_dir, "roc_build" });
+
+    std.fs.cwd().makePath(build_cache_dir) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return err,
+    };
+
+    // Get platform directory and host library
+    const app_dir = std.fs.path.dirname(args.path) orelse ".";
+    const platform_spec = try extractPlatformSpecFromApp(ctx, args.path);
+    std.log.debug("Platform spec: {s}", .{platform_spec});
+
+    // Resolve platform path
+    const platform_paths: ?PlatformPaths = if (std.mem.startsWith(u8, platform_spec, "./") or
+        std.mem.startsWith(u8, platform_spec, "../") or
+        base.url.isSafeUrl(platform_spec))
+        try resolvePlatformSpecToPaths(ctx, platform_spec, app_dir)
+    else
+        null;
+
+    // Validate platform header
+    const platform_source = if (platform_paths) |pp| pp.platform_source_path else null;
+    const validation = if (platform_source) |ps|
+        platform_validation.validatePlatformHeader(ctx.arena, ps) catch |err| {
+            switch (err) {
+                error.MissingTargetsSection => {
+                    const result = platform_validation.ValidationResult{
+                        .missing_targets_section = .{ .platform_path = ps },
+                    };
+                    _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+                    return error.MissingTargetsSection;
+                },
+                else => {
+                    renderProblem(ctx.gpa, ctx.io.stderr(), .{
+                        .platform_validation_failed = .{
+                            .message = "Failed to validate platform header",
+                        },
+                    });
+                    return err;
+                },
+            }
+        }
+    else {
+        renderProblem(ctx.gpa, ctx.io.stderr(), .{
+            .no_platform_found = .{ .app_path = args.path },
+        });
+        return error.NoPlatformSource;
+    };
+
+    const targets_config = validation.config;
+    const platform_dir = validation.platform_dir;
+
+    // Select target and link type
+    const target: target_mod.RocTarget, const link_type: target_mod.LinkType = if (args.target) |target_str| blk: {
+        const parsed_target = target_mod.RocTarget.fromString(target_str) orelse {
+            const result = platform_validation.targets_validator.ValidationResult{
+                .invalid_target = .{ .target_str = target_str },
+            };
+            _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+            return error.InvalidTarget;
+        };
+
+        const lt: target_mod.LinkType = if (targets_config.supportsTarget(parsed_target, .exe))
+            .exe
+        else if (targets_config.supportsTarget(parsed_target, .static_lib))
+            .static_lib
+        else if (targets_config.supportsTarget(parsed_target, .shared_lib))
+            .shared_lib
+        else {
+            const result = platform_validation.createUnsupportedTargetResult(
+                platform_source.?,
+                parsed_target,
+                .exe,
+                targets_config,
+            );
+            _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+            return error.UnsupportedTarget;
+        };
+
+        break :blk .{ parsed_target, lt };
+    } else blk: {
+        const compatible = targets_config.getFirstCompatibleTarget() orelse {
+            renderProblem(ctx.gpa, ctx.io.stderr(), .{
+                .platform_validation_failed = .{
+                    .message = "No compatible target found. The platform does not support any target compatible with this system.",
+                },
+            });
+            return error.UnsupportedTarget;
+        };
+        break :blk .{ compatible.target, compatible.link_type };
+    };
+
+    std.log.debug("Target: {s}, Link type: {s}", .{ @tagName(target), @tagName(link_type) });
+
+    // Check if dev backend supports this target architecture
+    const target_arch = target.toCpuArch();
+    const target_os = target.toOsTag();
+    switch (target_arch) {
+        .x86_64, .aarch64 => {}, // Supported
+        else => {
+            const stdout = ctx.io.stdout();
+            try stdout.print("Note: Dev backend does not support {s} architecture.\n", .{@tagName(target_arch)});
+            try stdout.print("Falling back to interpreter mode.\n\n", .{});
+            return rocBuildEmbedded(ctx, args);
+        },
+    }
+
+    // Add appropriate file extension based on target and link type
+    const final_output_path = if (args.output != null)
+        output_path
+    else blk: {
+        const ext = switch (link_type) {
+            .exe => switch (target_os) {
+                .windows => ".exe",
+                .freestanding => ".wasm",
+                else => "",
+            },
+            .static_lib => switch (target_os) {
+                .windows => ".lib",
+                else => ".a",
+            },
+            .shared_lib => switch (target_os) {
+                .windows => ".dll",
+                .macos => ".dylib",
+                else => ".so",
+            },
+        };
+        break :blk try std.fmt.allocPrint(ctx.arena, "{s}{s}", .{ output_path, ext });
+    };
+
+    // Build all modules using BuildEnv
+    const thread_count: usize = if (args.max_threads) |t| t else (std.Thread.getCpuCount() catch 1);
+    const mode: compile.package.Mode = if (thread_count <= 1) .single_threaded else .multi_threaded;
+
+    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, target);
+    build_env.compiler_version = build_options.compiler_version;
+    defer build_env.deinit();
+
+    // Set up cache manager for compilation caching
+    if (!args.no_cache) {
+        const build_cache_manager = try ctx.gpa.create(CacheManager);
+        build_cache_manager.* = CacheManager.init(ctx.gpa, .{
+            .enabled = true,
+            .verbose = args.verbose,
+        }, Filesystem.default());
+        build_env.setCacheManager(build_cache_manager);
+    }
+
+    // Build all modules
+    build_env.build(args.path) catch |err| {
+        const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
+        defer build_env.gpa.free(drained);
+
+        for (drained) |mod| {
+            for (mod.reports) |*report| {
+                const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
+                const config = reporting.ReportingConfig.initColorTerminal();
+                reporting.renderReportToTerminal(report, ctx.io.stderr(), palette, config) catch {};
+            }
+        }
+        return err;
+    };
+
+    // Drain reports and count errors/warnings
+    const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
+    defer build_env.freeDrainedReports(drained);
+
+    var total_error_count: usize = 0;
+    var total_warning_count: usize = 0;
+
+    for (drained) |mod| {
+        for (mod.reports) |*report| {
+            switch (report.severity) {
+                .info => {},
+                .runtime_error, .fatal => total_error_count += 1,
+                .warning => total_warning_count += 1,
+            }
+            const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
+            const config = reporting.ReportingConfig.initColorTerminal();
+            reporting.renderReportToTerminal(report, ctx.io.stderr(), palette, config) catch {};
+        }
+    }
+
+    if (total_error_count > 0 and !args.allow_errors) {
+        return error.CompilationFailed;
+    }
+
+    // Get compiled modules - use getCompiledModules (not serialization order) to preserve
+    // the module ordering that matches the CIR's import resolution
+    const modules = build_env.getCompiledModules(ctx.arena) catch |err| {
+        std.log.err("Failed to get compiled modules: {}", .{err});
+        return err;
+    };
+
+    if (modules.len == 0) {
+        std.log.err("No modules were compiled", .{});
+        return error.NoModulesCompiled;
+    }
+
+    // Find platform module (primary module is platform main if present)
+    const platform_idx = BuildEnv.findPrimaryModuleIndex(modules) orelse {
+        std.log.err("No platform module found", .{});
+        return error.NoPlatformModule;
+    };
+    const platform_module = modules[platform_idx];
+
+    std.log.debug("Found {} modules, platform module at index {}", .{ modules.len, platform_idx });
+
+    // Get provides entries from the compiled platform module
+    const provides_entries = platform_module.provides_entries;
+    if (provides_entries.len == 0) {
+        return ctx.fail(.{ .entrypoint_extraction_failed = .{
+            .path = platform_source.?,
+            .reason = "NoEntrypointFound",
+        } });
+    }
+    std.log.debug("Found {} provides entries", .{provides_entries.len});
+
+    // Build module envs array for layout store and lowering.
+    // Include the Builtin module first, matching the layout used during type-checking
+    // (where resolveImports resolved "Builtin" to index 0). Without this, resolved
+    // import indices for builtins (List, Str, Bool, etc.) point to the wrong module.
+    const builtin_env = build_env.builtin_modules.builtin_module.env;
+    var all_module_envs = try ctx.arena.alloc(*ModuleEnv, modules.len + 1);
+    all_module_envs[0] = builtin_env;
+    for (modules, 0..) |mod, i| {
+        all_module_envs[i + 1] = mod.env;
+    }
+
+    // Re-resolve imports against all_module_envs so resolved indices match this array.
+    // During type-checking, imports were resolved against a per-module imported_envs array
+    // (with Builtin at index 0). Now we re-resolve against the unified all_module_envs.
+    for (all_module_envs) |module| {
+        module.imports.resolveImports(module, all_module_envs);
+    }
+
+    // Compiled modules (excluding Builtin at index 0) for pipelines that shouldn't process Builtin
+    const compiled_module_envs = all_module_envs[1..];
+
+    // Run closure pipeline on modules (lambda lifting, inference, transformation)
+    std.log.debug("Running closure pipeline...", .{});
+    for (compiled_module_envs) |module| {
+        if (!module.is_lambda_lifted) {
+            var top_level_patterns = std.AutoHashMap(can.CIR.Pattern.Idx, void).init(ctx.gpa);
+            defer top_level_patterns.deinit();
+
+            const stmts = module.store.sliceStatements(module.all_statements);
+            for (stmts) |stmt_idx| {
+                const stmt = module.store.getStatement(stmt_idx);
+                switch (stmt) {
+                    .s_decl => |decl| {
+                        top_level_patterns.put(decl.pattern, {}) catch {};
+                    },
+                    else => {},
+                }
+            }
+
+            var lifter = can.LambdaLifter.init(ctx.gpa, module, &top_level_patterns);
+            defer lifter.deinit();
+            module.is_lambda_lifted = true;
+        }
+    }
+
+    // Run lambda set inference
+    var lambda_inference = can.LambdaSetInference.init(ctx.gpa);
+    defer lambda_inference.deinit();
+
+    // Convert to mutable slice for inferAll (compiled modules only)
+    var mutable_envs = try ctx.arena.alloc(*ModuleEnv, compiled_module_envs.len);
+    for (compiled_module_envs, 0..) |env, i| {
+        mutable_envs[i] = env;
+    }
+    lambda_inference.inferAll(mutable_envs) catch {
+        std.log.err("Lambda set inference failed", .{});
+        return error.LambdaInferenceFailed;
+    };
+
+    // Run closure transformer (defunctionalization)
+    for (mutable_envs) |module| {
+        if (!module.is_defunctionalized) {
+            var transformer = can.ClosureTransformer.initWithInference(ctx.gpa, module, &lambda_inference);
+            defer transformer.deinit();
+            module.is_defunctionalized = true;
+        }
+    }
+
+    // Process hosted functions - assign global indices based on alphabetical order
+    // and build a map for fast lookup during lowering.
+    var hosted_functions = mono.Lower.HostedFunctionMap.init(ctx.gpa);
+    defer hosted_functions.deinit();
+
+    {
+        const HostedCompiler = can.HostedCompiler;
+        var all_hosted_fns = std.ArrayList(HostedCompiler.HostedFunctionInfo).empty;
+        defer all_hosted_fns.deinit(ctx.gpa);
+
+        // Collect from platform sibling modules
+        for (modules) |mod| {
+            if (!mod.is_platform_sibling) continue;
+
+            var module_fns = HostedCompiler.collectAndSortHostedFunctions(mod.env) catch continue;
+            defer module_fns.deinit(mod.env.gpa);
+
+            for (module_fns.items) |fn_info| {
+                const name_copy = ctx.gpa.dupe(u8, fn_info.name_text) catch continue;
+                mod.env.gpa.free(fn_info.name_text);
+                all_hosted_fns.append(ctx.gpa, .{
+                    .symbol_name = fn_info.symbol_name,
+                    .expr_idx = fn_info.expr_idx,
+                    .name_text = name_copy,
+                }) catch {
+                    ctx.gpa.free(name_copy);
+                    continue;
+                };
+            }
+        }
+
+        if (all_hosted_fns.items.len > 0) {
+            // Sort globally by qualified name
+            const SortContext = struct {
+                pub fn lessThan(_: void, a: HostedCompiler.HostedFunctionInfo, b: HostedCompiler.HostedFunctionInfo) bool {
+                    return std.mem.order(u8, a.name_text, b.name_text) == .lt;
+                }
+            };
+            std.mem.sort(HostedCompiler.HostedFunctionInfo, all_hosted_fns.items, {}, SortContext.lessThan);
+
+            // Deduplicate
+            var write_idx: usize = 0;
+            for (all_hosted_fns.items, 0..) |fn_info, read_idx| {
+                if (write_idx == 0 or !std.mem.eql(u8, all_hosted_fns.items[write_idx - 1].name_text, fn_info.name_text)) {
+                    if (write_idx != read_idx) {
+                        all_hosted_fns.items[write_idx] = fn_info;
+                    }
+                    write_idx += 1;
+                } else {
+                    ctx.gpa.free(fn_info.name_text);
+                }
+            }
+            all_hosted_fns.shrinkRetainingCapacity(write_idx);
+
+            // Assign global indices and register in the hosted function registry
+            for (modules, 0..) |mod, global_module_idx| {
+                if (!mod.is_platform_sibling) continue;
+                const platform_env = mod.env;
+
+                const mod_all_defs = platform_env.store.sliceDefs(platform_env.all_defs);
+                for (mod_all_defs) |def_idx| {
+                    const def = platform_env.store.getDef(def_idx);
+                    const expr = platform_env.store.getExpr(def.expr);
+
+                    if (expr == .e_hosted_lambda) {
+                        const hosted = expr.e_hosted_lambda;
+                        const local_name = platform_env.getIdent(hosted.symbol_name);
+                        const plat_module_name = base.module_path.getModuleName(platform_env.module_name);
+                        const qualified_name = std.fmt.allocPrint(ctx.gpa, "{s}.{s}", .{ plat_module_name, local_name }) catch continue;
+                        defer ctx.gpa.free(qualified_name);
+
+                        const stripped_name = if (std.mem.endsWith(u8, qualified_name, "!"))
+                            qualified_name[0 .. qualified_name.len - 1]
+                        else
+                            qualified_name;
+
+                        for (all_hosted_fns.items, 0..) |fn_info, idx| {
+                            if (std.mem.eql(u8, fn_info.name_text, stripped_name)) {
+                                const hosted_index: u32 = @intCast(idx);
+
+                                // Update the CIR expression with the global index
+                                const expr_node_idx = @as(@TypeOf(platform_env.store.nodes).Idx, @enumFromInt(@intFromEnum(def.expr)));
+                                var expr_node = platform_env.store.nodes.get(expr_node_idx);
+                                var payload = expr_node.getPayload().expr_hosted_lambda;
+                                payload.index = hosted_index;
+                                expr_node.setPayload(.{ .expr_hosted_lambda = payload });
+                                platform_env.store.nodes.set(expr_node_idx, expr_node);
+
+                                // Register in the hosted function map for fast lookup during lowering
+                                // Store mappings for def_idx, pattern_idx, and expr_idx so lookup
+                                // succeeds regardless of which node target_node_idx points to
+                                const mod_idx: u16 = @intCast(global_module_idx + 1);
+                                hosted_functions.put(mono.Lower.hostedFunctionKey(mod_idx, @intFromEnum(def_idx)), hosted_index) catch {};
+                                hosted_functions.put(mono.Lower.hostedFunctionKey(mod_idx, @intFromEnum(def.pattern)), hosted_index) catch {};
+                                hosted_functions.put(mono.Lower.hostedFunctionKey(mod_idx, @intFromEnum(def.expr)), hosted_index) catch {};
+
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Free name_text strings
+            for (all_hosted_fns.items) |fn_info| {
+                ctx.gpa.free(fn_info.name_text);
+            }
+        }
+    }
+
+    // Create layout store
+    std.log.debug("Creating layout store...", .{});
+    const builtin_str = if (all_module_envs.len > 0)
+        all_module_envs[0].idents.builtin_str
+    else
+        null;
+
+    var layout_store = layout.Store.init(all_module_envs, builtin_str, ctx.gpa, base.target.TargetUsize.native) catch {
+        std.log.err("Failed to create layout store", .{});
+        return error.LayoutStoreFailed;
+    };
+    defer layout_store.deinit();
+
+    // Find the app module index
+    var app_module_idx: ?u16 = null;
+    for (modules, 0..) |mod, i| {
+        if (mod.is_app) {
+            app_module_idx = @intCast(i + 1);
+            break;
+        }
+    }
+    std.log.debug("App module index: {?}", .{app_module_idx});
+
+    // Create Mono IR store
+    std.log.debug("Creating Mono IR store and lowering expressions...", .{});
+    var mono_store = mono.MonoExprStore.init(ctx.gpa);
+    defer mono_store.deinit();
+
+    // Create lowerer with hosted function map
+    var lowerer = mono.Lower.init(ctx.gpa, &mono_store, all_module_envs, &lambda_inference, &layout_store, app_module_idx, &hosted_functions);
+    defer lowerer.deinit();
+
+    // Find and lower entrypoint expressions from platform module
+    // The platform's provides clause maps Roc identifiers to FFI symbols
+    // e.g., provides { main_for_host!: "main" } means we look for main_for_host! in platform
+    var entrypoints = try std.ArrayList(backend.Entrypoint).initCapacity(ctx.gpa, provides_entries.len);
+    defer entrypoints.deinit(ctx.gpa);
+
+    const platform_defs = platform_module.env.store.sliceDefs(platform_module.env.all_defs);
+
+    for (provides_entries) |entry| {
+        // Find declaration matching the Roc identifier in the platform module's defs
+        var found_expr: ?can.CIR.Expr.Idx = null;
+        for (platform_defs) |def_idx| {
+            const def = platform_module.env.store.getDef(def_idx);
+            const pattern = platform_module.env.store.getPattern(def.pattern);
+            switch (pattern) {
+                .assign => |assign| {
+                    const ident_name = platform_module.env.getIdent(assign.ident);
+                    if (std.mem.eql(u8, ident_name, entry.roc_ident)) {
+                        found_expr = def.expr;
+                        break;
+                    }
+                },
+                else => {},
+            }
+        }
+
+        if (found_expr) |expr_idx| {
+            // Lower the expression from the platform module
+            const mono_expr_id = lowerer.lowerExpr(@intCast(platform_idx + 1), expr_idx) catch |err| {
+                std.log.err("Failed to lower expression for entrypoint {s} ({s}): {}", .{ entry.roc_ident, entry.ffi_symbol, err });
+                continue;
+            };
+
+            // Get layout for the expression
+            const type_var = can.ModuleEnv.varFrom(expr_idx);
+            var type_scope = @import("types").TypeScope.init(ctx.gpa);
+            defer type_scope.deinit();
+            const ret_layout = layout_store.fromTypeVar(@intCast(platform_idx + 1), type_var, &type_scope, null) catch {
+                std.log.err("Failed to get layout for entrypoint {s}", .{entry.roc_ident});
+                continue;
+            };
+
+            try entrypoints.append(ctx.gpa, .{
+                .symbol_name = try std.fmt.allocPrint(ctx.arena, "roc__{s}", .{entry.ffi_symbol}),
+                .body_expr = mono_expr_id,
+                .arg_layouts = &[_]layout.Idx{}, // Top-level constants have no args
+                .ret_layout = ret_layout,
+            });
+
+            std.log.debug("Found entrypoint: {s} -> roc__{s}", .{ entry.roc_ident, entry.ffi_symbol });
+        } else {
+            std.log.warn("Entrypoint '{s}' not found in platform module", .{entry.roc_ident});
+        }
+    }
+
+    if (entrypoints.items.len == 0) {
+        std.log.err("No entrypoints could be lowered", .{});
+        return error.NoEntrypointsLowered;
+    }
+
+    // Run RC insertion pass
+    var rc_pass = mono.RcInsert.RcInsertPass.init(ctx.gpa, &mono_store, &layout_store);
+    defer rc_pass.deinit();
+
+    for (entrypoints.items) |*ep| {
+        ep.body_expr = rc_pass.insertRcOps(ep.body_expr) catch ep.body_expr;
+    }
+
+    // Get procedures from the mono store
+    const procs = mono_store.getProcs();
+
+    // Compile to object file
+    std.log.debug("Generating native code...", .{});
+    var object_compiler = backend.ObjectFileCompiler.init(ctx.gpa);
+
+    const obj_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_{s}.o", .{@tagName(target)});
+    const obj_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, obj_filename });
+
+    object_compiler.compileToObjectFileAndWrite(
+        &mono_store,
+        &layout_store,
+        entrypoints.items,
+        procs,
+        target,
+        obj_path,
+    ) catch |err| {
+        std.log.err("Native compilation failed: {}", .{err});
+        return error.NativeCompilationFailed;
+    };
+
+    std.log.debug("Object file generated: {s}", .{obj_path});
+
+    // If --no-link, we're done
+    if (args.no_link) {
+        const stdout = ctx.io.stdout();
+        try stdout.print("Object file generated: {s}\n", .{obj_path});
+        return;
+    }
+
+    // Get link spec and build file lists
+    const target_name = @tagName(target);
+    const link_spec = targets_config.getLinkSpec(target, link_type) orelse {
+        return ctx.fail(.{ .linker_failed = .{
+            .err = error.UnsupportedTarget,
+            .target = target_name,
+        } });
+    };
+
+    const files_dir = targets_config.files_dir orelse "targets";
+    var platform_files_pre = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 8);
+    var platform_files_post = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 8);
+    var hit_app = false;
+
+    for (link_spec.items) |item| {
+        switch (item) {
+            .file_path => |path| {
+                const full_path = try std.fs.path.join(ctx.arena, &.{ platform_dir, files_dir, target_name, path });
+
+                std.fs.cwd().access(full_path, .{}) catch {
+                    const result = platform_validation.targets_validator.ValidationResult{
+                        .missing_target_file = .{
+                            .target = target,
+                            .link_type = link_type,
+                            .file_path = path,
+                            .expected_full_path = full_path,
+                        },
+                    };
+                    _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+                    return error.MissingTargetFile;
+                };
+
+                if (!hit_app) {
+                    try platform_files_pre.append(full_path);
+                } else {
+                    try platform_files_post.append(full_path);
+                }
+            },
+            .app => {
+                hit_app = true;
+            },
+            .win_gui => {},
+        }
+    }
+
+    // Extract builtins object file for the target and add to link inputs
+    const builtins_bytes = BuiltinsObjects.forTarget(target);
+    const builtins_filename = BuiltinsObjects.filename(target);
+    const builtins_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, builtins_filename });
+
+    // Write builtins object to cache if not already there
+    std.fs.cwd().writeFile(.{
+        .sub_path = builtins_path,
+        .data = builtins_bytes,
+    }) catch |err| {
+        std.log.err("Failed to write builtins object file: {}", .{err});
+        return error.BuiltinsExtractionFailed;
+    };
+    std.log.debug("Builtins object file: {s}", .{builtins_path});
+
+    // Link the object file with platform files
+    var object_files = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 4);
+    try object_files.append(obj_path);
+    try object_files.append(builtins_path);
+
+    std.log.debug("Linking: {} pre-files, {} object files, {} post-files", .{
+        platform_files_pre.items.len,
+        object_files.items.len,
+        platform_files_post.items.len,
+    });
+
+    linker.link(ctx, .{
+        .target_format = linker.TargetFormat.detectFromOs(target_os),
+        .target_abi = linker.TargetAbi.fromRocTarget(target),
+        .target_os = target_os,
+        .target_arch = target_arch,
+        .output_path = final_output_path,
+        .object_files = object_files.items,
+        .platform_files_pre = platform_files_pre.items,
+        .platform_files_post = platform_files_post.items,
+        .extra_args = &.{},
+    }) catch |err| {
+        return ctx.fail(.{ .linker_failed = .{
+            .err = err,
+            .target = target_name,
+        } });
+    };
+
+    const elapsed_ns = timer.read();
+    const elapsed_ms = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000.0;
+
+    // Get cache statistics for verbose output
+    const cache_stats = build_env.getCacheStats();
+    const cache_percent = if (cache_stats.modules_total > 0)
+        @as(u32, @intCast((cache_stats.cache_hits * 100) / cache_stats.modules_total))
+    else
+        0;
+
+    const stdout = ctx.io.stdout();
+    try stdout.print("Built {s} in {d:.1}ms", .{ final_output_path, elapsed_ms });
+    if (cache_stats.modules_total > 0 and cache_stats.cache_hits > 0) {
+        try stdout.print(" with {}% cache hit", .{cache_percent});
+    }
+    try stdout.writeAll(" (dev backend)\n");
+
+    // Print verbose stats if requested
+    if (args.verbose) {
+        try stdout.print("\n    Modules: {} total, {} cached, {} built\n", .{
+            cache_stats.modules_total,
+            cache_stats.cache_hits,
+            cache_stats.modules_compiled,
+        });
+        try stdout.print("    Cache Hit: {}%\n", .{cache_percent});
+    }
+
+    if (total_warning_count > 0) {
+        try stdout.print("  {} warning(s)\n", .{total_warning_count});
+    }
 }
 
 /// Build a standalone binary with the interpreter and embedded module data.

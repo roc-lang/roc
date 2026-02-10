@@ -7,9 +7,6 @@ name: CI New Compiler
 # Do not add permissions here! Configure them at the job level!
 permissions: {}
 
-env:
-  VALGRIND_VERSION: "3.26.0"
-
 jobs:
   # Checks that don't need to run on every OS
   check-once:
@@ -127,8 +124,7 @@ jobs:
       - name: build roc + repro executables
         uses: ./.github/actions/flaky-retry
         with:
-          # -Dstrip=false preserves debug info for valgrind suppressions to match function names
-          command: "zig build -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast -Dstrip=false ${{ matrix.cpu_flag }} ${{ matrix.target_flag }}"
+          command: "zig build -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast ${{ matrix.cpu_flag }} ${{ matrix.target_flag }}"
           error_string_contains: "build.zig.zon"
           retry_count: 3
 
@@ -181,7 +177,7 @@ jobs:
         uses: ./.github/actions/flaky-retry
         with:
           command: "zig build test -Dfuzz -Dsystem-afl=false ${{ matrix.target_flag }}"
-          error_string_contains: "double roundtrip bundle|connectTcp|downloadToFile|build.zig.zon|Run terminated abnormally|terminated by signal"
+          error_string_contains: "double roundtrip bundle|connectTcp|downloadToFile|build.zig.zon|Run terminated abnormally|terminated by signal|stuck"
           retry_count: 3
 
       # 2) in release mode
@@ -189,7 +185,7 @@ jobs:
         uses: ./.github/actions/flaky-retry
         with:
           command: "zig build test -Doptimize=ReleaseFast -Dfuzz -Dsystem-afl=false ${{ matrix.cpu_flag }} ${{ matrix.target_flag }}"
-          error_string_contains: "double roundtrip bundle|connectTcp|downloadToFile|build.zig.zon|Run terminated abnormally|terminated by signal"
+          error_string_contains: "double roundtrip bundle|connectTcp|downloadToFile|build.zig.zon|Run terminated abnormally|terminated by signal|stuck"
           retry_count: 3
 
       - name: Check for snapshot changes
@@ -209,37 +205,6 @@ jobs:
             git diff test/snapshots;
             exit 1;
           }
-
-      - name: Cache valgrind
-        if: ${{ matrix.os == 'ubuntu-22.04' }}
-        id: cache-valgrind
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # ratchet:actions/cache@v4
-        with:
-          path: ~/valgrind
-          key: valgrind-${{ env.VALGRIND_VERSION }}-${{ runner.os }}-${{ runner.arch }}
-
-      - name: Build valgrind from source
-        if: ${{ matrix.os == 'ubuntu-22.04' && steps.cache-valgrind.outputs.cache-hit != 'true' }}
-        run: |
-          curl -sSL "https://sourceware.org/pub/valgrind/valgrind-${VALGRIND_VERSION}.tar.bz2" -o valgrind.tar.bz2
-          tar -xjf valgrind.tar.bz2
-          cd "valgrind-${VALGRIND_VERSION}"
-          ./configure --prefix="$HOME/valgrind"
-          make -j"$(nproc)"
-          make install
-
-      - name: Add valgrind to PATH
-        if: ${{ matrix.os == 'ubuntu-22.04' }}
-        run: echo "$HOME/valgrind/bin" >> $GITHUB_PATH
-
-      - name: test with valgrind (ubuntu)
-        if: ${{ matrix.os == 'ubuntu-22.04' }}
-        run: |
-          sudo apt-get update && sudo apt-get install -y libc6-dbg
-          valgrind --version
-          ./ci/custom_valgrind.sh ./zig-out/bin/snapshot --debug --verbose
-          ./ci/custom_valgrind.sh ./zig-out/bin/roc --no-cache test/str/app.roc
-          ./ci/custom_valgrind.sh ./zig-out/bin/roc --no-cache test/int/app.roc
 
       - name: check if statically linked (ubuntu)
         if: startsWith(matrix.os, 'ubuntu')
@@ -290,6 +255,24 @@ jobs:
           echo "=== Files found ==="
           cat kcov-output/parser/parse_unit_coverage/coverage.json | jq -r '.files[].file' | head -10
 
+      - name: test with valgrind (ubuntu)
+        # Sadly, with zig 0.14.1, this had to be disabled on arm.
+        # Valgrind as of 3.25.1 does not support some arm instructions zig generates.
+        # So valgrind only works happily on x86_64 linux.
+        # We can re-evaluate as new version of zig/valgrind come out.
+        if: ${{ matrix.os == 'ubuntu-22.04' }}
+        run: |
+          # clean build
+          git clean -fdx
+          zig build -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast ${{ matrix.cpu_flag }} ${{ matrix.target_flag }} -Dstrip=false
+          # Install libc6-dbg which is required for Valgrind's function redirections
+          sudo apt-get update && sudo apt-get install -y libc6-dbg
+          sudo snap install valgrind --classic
+          valgrind --version
+          ./ci/custom_valgrind.sh ./zig-out/bin/snapshot --debug --verbose
+          ./ci/custom_valgrind.sh ./zig-out/bin/roc --no-cache test/str/app.roc
+          ./ci/custom_valgrind.sh ./zig-out/bin/roc --no-cache test/int/app.roc
+
   zig-cross-compile:
     needs: check-once
     runs-on: ubuntu-24.04
@@ -318,7 +301,7 @@ jobs:
         uses: ./.github/actions/flaky-retry
         with:
           command: zig build -Dtarget=${{ matrix.target }}
-          error_string_contains: "error: bad HTTP response code: '500 Internal Server Error'|TemporaryNameServerFailure|503|Timeout"
+          error_string_contains: "error: bad HTTP response code: '500 Internal Server Error'|TemporaryNameServerFailure|503|Timeout|stuck"
 
   # Test cross-compilation with Roc's cross-compilation system (musl + glibc)
   roc-cross-compile:

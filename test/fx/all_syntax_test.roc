@@ -123,6 +123,20 @@ for_loop = |num_list| {
 	$sum
 }
 
+# break exits a for or while loop early
+break_in_for_loop = |bool_list| {
+	var $allTrue = True
+	for b in bool_list {
+		if b == False {
+			$allTrue = False
+			break
+		} else {
+			{}
+		}
+	}
+	$allTrue
+}
+
 while_loop = |limit| {
 	var $count = 0
 	var $sum = 0
@@ -207,45 +221,42 @@ record_update_2 = |person| {
 	{ ..person, age: 31 }
 }
 
-number_literals : {
-	usage_based: _,
-	explicit_u8: U8,
-	explicit_i8: I8,
-	explicit_u16: U16,
-	explicit_i16: I16,
-	explicit_u32: U32,
-	explicit_i32: I32,
-	explicit_u64: U64,
-	explicit_i64: I64,
-	explicit_u128: U128,
-	explicit_i128: I128,
-	# Note: F32, F64, and Dec literals use type inference which doesn't work with Str.inspect
-	# So we use simple Dec literals here
-	explicit_dec: Dec,
-	hex: I64,
-	octal: I64,
-	binary: I64,
-}
+
 number_literals = {
 	usage_based: 5, # defaults to Dec
-	explicit_u8: 5,
-	explicit_i8: 5,
-	explicit_u16: 5,
-	explicit_i16: 5,
-	explicit_u32: 5,
-	explicit_i32: 5,
-	explicit_u64: 5,
-	explicit_i64: 5,
-	explicit_u128: 5,
-	explicit_i128: 5,
-	explicit_dec: 5.0,
+	explicit_u8: 5.U8, # Note that most of the time you will want to specify the type in the type signature instead.
+	explicit_i8: 5.I8,
+	explicit_u16: 5.U16,
+	explicit_i16: 5.I16,
+	explicit_u32: 5.U32,
+	explicit_i32: 5.I32,
+	explicit_u64: 5.U64,
+	explicit_i64: 5.I64,
+	explicit_u128: 5.U128,
+	explicit_i128: 5.I128,
+	# Note: F32, F64, and Dec literals use type inference which doesn't work with Str.inspect so they are omitted here.
 	hex: 0x5,
 	octal: 0o5,
 	binary: 0b0101,
 }
 
 # Opaque type
-Username :: Str
+# Useful if you want to hide fields e.g. so users of the type can not access some implementation detail you did not want to expose. 
+Secret :: {
+	key : Str
+}.{
+	new : Str -> Secret
+	new = |k| { key: k }
+
+	unlock : Secret, Str -> Str
+	unlock = |secret, password| {
+		if password == "open sesame" {
+			"The secret key is: ${secret.key}"
+		} else {
+			"Wrong password!"
+		}
+	}
+}
 
 # Define a nominal type with a custom is_eq method
 Animal := [Dog(Str), Cat(Str)].{
@@ -334,6 +345,9 @@ main! = || {
 
 	expect sum == 15
 
+	all_true = break_in_for_loop([True, True, False, True, True])
+	print!(all_true)
+
 	while_sum = while_loop(5)
 	print!(while_sum)
 
@@ -355,9 +369,10 @@ main! = || {
 
 	print!(number_literals)
 
-	# TODO: not implemented yet.
-	# bob = @Username("Bob")
-	# Stdout.line!("Username: ${bob}")
+	secret = Secret.new("my_secret_key")
+	# This print will not expose internal data.
+	print!(secret)
+	print!(secret.unlock("open sesame"))
 
 	dog : Animal
 	dog = Dog("Fido")
