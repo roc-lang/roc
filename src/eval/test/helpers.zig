@@ -2044,198 +2044,26 @@ fn llvmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_i
     };
     defer executable.deinit();
 
-    const layout_mod = @import("layout");
     // Use real roc_ops from the LlvmEvaluator (needed for heap allocation in lists, etc.)
     var roc_ops = llvm_eval.roc_ops;
 
-    return switch (code_result.result_layout) {
-        layout_mod.Idx.i64, layout_mod.Idx.i8, layout_mod.Idx.i16, layout_mod.Idx.i32 => blk: {
-            var result: i64 = 0;
-            executable.callWithResultPtrAndRocOps(@ptrCast(&result), @ptrCast(&roc_ops));
-            break :blk std.fmt.allocPrint(allocator, "{}", .{result});
-        },
-        layout_mod.Idx.u64, layout_mod.Idx.u8, layout_mod.Idx.u16, layout_mod.Idx.u32, layout_mod.Idx.bool => blk: {
-            var result: u64 = 0;
-            executable.callWithResultPtrAndRocOps(@ptrCast(&result), @ptrCast(&roc_ops));
-            break :blk std.fmt.allocPrint(allocator, "{}", .{result});
-        },
-        layout_mod.Idx.f64 => blk: {
-            var result: f64 = 0;
-            executable.callWithResultPtrAndRocOps(@ptrCast(&result), @ptrCast(&roc_ops));
-            break :blk std.fmt.allocPrint(allocator, "{d}", .{result});
-        },
-        layout_mod.Idx.f32 => blk: {
-            var result: f32 = 0;
-            executable.callWithResultPtrAndRocOps(@ptrCast(&result), @ptrCast(&roc_ops));
-            break :blk std.fmt.allocPrint(allocator, "{d}", .{result});
-        },
-        layout_mod.Idx.i128, layout_mod.Idx.u128 => blk: {
-            var result: i128 align(16) = 0;
-            executable.callWithResultPtrAndRocOps(@ptrCast(&result), @ptrCast(&roc_ops));
-            break :blk std.fmt.allocPrint(allocator, "{}", .{result});
-        },
-        layout_mod.Idx.dec => blk: {
-            var result: i128 align(16) = 0;
-            executable.callWithResultPtrAndRocOps(@ptrCast(&result), @ptrCast(&roc_ops));
-            const dec = builtins.dec.RocDec{ .num = result };
-            var buf: [builtins.dec.RocDec.max_str_length]u8 = undefined;
-            const slice = dec.format_to_buf(&buf);
-            break :blk allocator.dupe(u8, slice);
-        },
-        layout_mod.Idx.str => blk: {
-            // RocStr is 24 bytes
-            var result_bytes: [24]u8 align(8) = .{0} ** 24;
-            executable.callWithResultPtrAndRocOps(@ptrCast(&result_bytes), @ptrCast(&roc_ops));
+    // Execute into a result buffer (512 bytes to accommodate large tuples/records)
+    var result_buf: [512]u8 align(16) = undefined;
+    executable.callWithResultPtrAndRocOps(@ptrCast(&result_buf), @ptrCast(&roc_ops));
 
-            // Check if small string (last byte has high bit set)
-            if (result_bytes[23] & 0x80 != 0) {
-                const len = result_bytes[23] ^ 0x80;
-                break :blk allocator.dupe(u8, result_bytes[0..len]);
-            } else {
-                // Large string — read pointer and length from the RocStr struct
-                const str_ptr: *const ?[*]const u8 = @ptrCast(@alignCast(&result_bytes));
-                const str_len: *const usize = @ptrCast(@alignCast(result_bytes[8..16]));
-                if (str_ptr.* != null and str_len.* > 0) {
-                    break :blk allocator.dupe(u8, str_ptr.*.?[0..str_len.*]);
-                }
-                break :blk allocator.dupe(u8, "");
-            }
-        },
-        else => blk: {
-            // Handle composite types (records, tuples)
-            const ls = code_result.layout_store orelse return error.UnsupportedLayout;
-            const stored_layout = ls.getLayout(code_result.result_layout);
-            switch (stored_layout.tag) {
-                .list_of_zst => {
-                    var result_bytes: [24]u8 align(8) = .{0} ** 24;
-                    executable.callWithResultPtrAndRocOps(@ptrCast(&result_bytes), @ptrCast(&roc_ops));
-
-                    const list_len: *const usize = @ptrCast(@alignCast(result_bytes[8..16]));
-
-                    var output = std.array_list.Managed(u8).initCapacity(allocator, 64) catch return error.OutOfMemory;
-                    errdefer output.deinit();
-                    output.append('[') catch return error.OutOfMemory;
-
-                    for (0..list_len.*) |i| {
-                        if (i > 0) {
-                            output.appendSlice(", ") catch return error.OutOfMemory;
-                        }
-                        output.appendSlice("()") catch return error.OutOfMemory;
-                    }
-
-                    output.append(']') catch return error.OutOfMemory;
-                    break :blk output.toOwnedSlice();
-                },
-                .list => {
-                    var result_bytes: [24]u8 align(8) = .{0} ** 24;
-                    executable.callWithResultPtrAndRocOps(@ptrCast(&result_bytes), @ptrCast(&roc_ops));
-
-                    const data_ptr: *const ?[*]const i64 = @ptrCast(@alignCast(&result_bytes));
-                    const list_len: *const usize = @ptrCast(@alignCast(result_bytes[8..16]));
-
-                    var output = std.array_list.Managed(u8).initCapacity(allocator, 64) catch return error.OutOfMemory;
-                    errdefer output.deinit();
-                    output.append('[') catch return error.OutOfMemory;
-
-                    if (list_len.* > 0 and data_ptr.* != null) {
-                        const elements = data_ptr.*.?[0..list_len.*];
-                        for (elements, 0..) |elem, i| {
-                            if (i > 0) {
-                                output.appendSlice(", ") catch return error.OutOfMemory;
-                            }
-                            const elem_str = std.fmt.allocPrint(allocator, "{}", .{elem}) catch return error.OutOfMemory;
-                            defer allocator.free(elem_str);
-                            output.appendSlice(elem_str) catch return error.OutOfMemory;
-                        }
-                    }
-
-                    output.append(']') catch return error.OutOfMemory;
-                    break :blk output.toOwnedSlice();
-                },
-                .record => {
-                    const record_idx = stored_layout.data.record.idx.int_idx;
-                    const record_data = ls.record_data.items.items[record_idx];
-                    const field_count = record_data.fields.count;
-                    break :blk std.fmt.allocPrint(allocator, "{{record with {d} fields}}", .{field_count});
-                },
-                .tuple => {
-                    const tuple_data_val = ls.getTupleData(stored_layout.data.tuple.idx);
-                    const sorted_elements = ls.tuple_fields.sliceRange(tuple_data_val.getFields());
-                    const elem_count = sorted_elements.len;
-                    const struct_size = tuple_data_val.size;
-
-                    // Allocate buffer and execute
-                    var result_buf: [256]u8 align(16) = @splat(0);
-                    if (struct_size > result_buf.len) return error.UnsupportedLayout;
-                    executable.callWithResultPtrAndRocOps(@ptrCast(&result_buf), @ptrCast(&roc_ops));
-
-                    // Format as "(elem1, elem2, ...)"
-                    // Elements are in sorted order in memory; build original-order mapping
-                    var original_order_values: [32]i128 = undefined;
-                    for (0..elem_count) |sorted_i| {
-                        const element = sorted_elements.get(@intCast(sorted_i));
-                        const offset = ls.getTupleElementOffset(stored_layout.data.tuple.idx, @intCast(sorted_i));
-                        const field_ptr = result_buf[offset..];
-
-                        // Read value based on element layout
-                        const val: i128 = switch (element.layout) {
-                            layout_mod.Idx.i64, layout_mod.Idx.u64 => @as(i128, @as(*align(1) const i64, @ptrCast(field_ptr)).*),
-                            layout_mod.Idx.i32, layout_mod.Idx.u32 => @as(i128, @as(*align(1) const i32, @ptrCast(field_ptr)).*),
-                            layout_mod.Idx.i16, layout_mod.Idx.u16 => @as(i128, @as(*align(1) const i16, @ptrCast(field_ptr)).*),
-                            layout_mod.Idx.i8, layout_mod.Idx.u8, layout_mod.Idx.bool => @as(i128, @as(*align(1) const i8, @ptrCast(field_ptr)).*),
-                            layout_mod.Idx.i128, layout_mod.Idx.u128, layout_mod.Idx.dec => @as(*align(1) const i128, @ptrCast(field_ptr)).*,
-                            else => 0,
-                        };
-                        original_order_values[element.index] = val;
-                    }
-
-                    // Format tuple string in original order
-                    var output = std.array_list.Managed(u8).initCapacity(allocator, 64) catch return error.OutOfMemory;
-                    errdefer output.deinit();
-                    output.append('(') catch return error.OutOfMemory;
-
-                    for (0..elem_count) |i| {
-                        if (i > 0) {
-                            output.appendSlice(", ") catch return error.OutOfMemory;
-                        }
-                        // Find the layout for this original index
-                        var elem_layout: layout_mod.Idx = .i64;
-                        for (0..elem_count) |si| {
-                            const element = sorted_elements.get(@intCast(si));
-                            if (element.index == i) {
-                                elem_layout = element.layout;
-                                break;
-                            }
-                        }
-                        const raw_val = original_order_values[i];
-                        if (elem_layout == layout_mod.Idx.dec) {
-                            const dec_val = builtins.dec.RocDec{ .num = raw_val };
-                            var dec_buf: [builtins.dec.RocDec.max_str_length]u8 = undefined;
-                            const elem_str = dec_val.format_to_buf(&dec_buf);
-                            output.appendSlice(elem_str) catch return error.OutOfMemory;
-                        } else {
-                            const abs_val: u128 = if (raw_val < 0) @intCast(-raw_val) else @intCast(raw_val);
-                            const one_point_zero: u128 = 1_000_000_000_000_000_000;
-                            if (abs_val < one_point_zero / 10) {
-                                const elem_str = std.fmt.allocPrint(allocator, "{d}.0", .{raw_val}) catch return error.OutOfMemory;
-                                defer allocator.free(elem_str);
-                                output.appendSlice(elem_str) catch return error.OutOfMemory;
-                            } else {
-                                const dec_val = builtins.dec.RocDec{ .num = raw_val };
-                                var dec_buf: [builtins.dec.RocDec.max_str_length]u8 = undefined;
-                                const elem_str = dec_val.format_to_buf(&dec_buf);
-                                output.appendSlice(elem_str) catch return error.OutOfMemory;
-                            }
-                        }
-                    }
-
-                    output.append(')') catch return error.OutOfMemory;
-                    break :blk output.toOwnedSlice();
-                },
-                else => return error.UnsupportedLayout,
-            }
-        },
+    // Format using RocValue.format() -- same as the dev backend
+    const ls = code_result.layout_store orelse return error.UnsupportedLayout;
+    const result_layout = ls.getLayout(code_result.result_layout);
+    const roc_val = values.RocValue{
+        .ptr = &result_buf,
+        .lay = result_layout,
+        .layout_idx = code_result.result_layout,
     };
+    const fmt_ctx = values.RocValue.FormatContext{
+        .layout_store = ls,
+        .strip_whole_number_decimal = true,
+    };
+    return roc_val.format(allocator, fmt_ctx) catch error.UnsupportedLayout;
 }
 
 /// Compare Interpreter result string with LlvmEvaluator result string.
