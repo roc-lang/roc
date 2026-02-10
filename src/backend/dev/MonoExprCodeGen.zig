@@ -649,7 +649,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
         mutable_var_slots: std.AutoHashMap(u48, MutableVarInfo),
 
         /// Map from JoinPointId to code offset (for recursive closure jumps)
-        join_points: std.AutoHashMap(u32, usize),
+        join_points: std.AutoHashMap(u64, usize),
 
         /// Current recursive context (for detecting recursive calls)
         /// When set, lookups of this symbol should jump to the join point instead of re-entering
@@ -666,7 +666,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
         /// Registry of compiled lambdas by expression ID.
         /// Used when a lambda is called - we compile it once and reuse.
         /// Key is @intFromEnum(MonoExprId), value is code start offset.
-        compiled_lambdas: std.AutoHashMap(u32, usize),
+        compiled_lambdas: std.AutoHashMap(u64, usize),
 
         /// Pending calls that need to be patched after all procedures are compiled
         pending_calls: std.ArrayList(PendingCall),
@@ -679,18 +679,6 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
         /// Map from JoinPointId to parameter patterns (for rebinding to correct stack slots)
         join_point_param_patterns: std.AutoHashMap(u32, mono.MonoPatternSpan),
-
-        /// Tracks positions of BL/CALL instructions to compiled lambda procs.
-        /// When compileLambdaAsProc shifts its body (extract, prepend prologue,
-        /// re-append), BL instructions targeting code outside the body become
-        /// incorrect. This list lets us re-patch those instructions after shifts.
-        internal_call_patches: std.ArrayList(InternalCallPatch),
-
-        /// Tracks positions of ADR/LEA instructions computing lambda addresses.
-        /// Same shifting problem as internal_call_patches: when compileLambdaAsProc
-        /// shifts its body, ADR/LEA instructions targeting code outside the body
-        /// get incorrect PC-relative offsets.
-        internal_addr_patches: std.ArrayList(InternalAddrPatch),
 
         /// Stack of early return jump patches.
         /// When generateEarlyReturn is called inside compileLambdaAsProc,
@@ -750,24 +738,6 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             call_site: usize,
             /// The function being called
             target_symbol: MonoSymbol,
-        };
-
-        /// Tracks position of a BL/CALL to a compiled lambda proc.
-        /// Used to re-patch relative offsets after body shifts in compileLambdaAsProc.
-        pub const InternalCallPatch = struct {
-            /// Buffer offset where the BL/CALL instruction starts
-            call_offset: usize,
-            /// Absolute buffer offset of the target (prologue start of the called lambda)
-            target_offset: usize,
-        };
-
-        /// Tracks position of an ADR/LEA instruction computing a lambda address.
-        /// Used to re-patch PC-relative offsets after body shifts.
-        pub const InternalAddrPatch = struct {
-            /// Buffer offset where the ADR/LEA instruction starts
-            instr_offset: usize,
-            /// Absolute buffer offset of the target lambda
-            target_offset: usize,
         };
 
         /// Record of a jump instruction that needs patching to a join point.
@@ -920,18 +890,16 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 .static_interner = static_interner,
                 .symbol_locations = std.AutoHashMap(u48, ValueLocation).init(allocator),
                 .mutable_var_slots = std.AutoHashMap(u48, MutableVarInfo).init(allocator),
-                .join_points = std.AutoHashMap(u32, usize).init(allocator),
+                .join_points = std.AutoHashMap(u64, usize).init(allocator),
                 .current_recursive_symbol = null,
                 .current_recursive_join_point = null,
                 .current_binding_symbol = null,
                 .proc_registry = std.AutoHashMap(u48, CompiledProc).init(allocator),
-                .compiled_lambdas = std.AutoHashMap(u32, usize).init(allocator),
+                .compiled_lambdas = std.AutoHashMap(u64, usize).init(allocator),
                 .pending_calls = std.ArrayList(PendingCall).empty,
                 .join_point_jumps = std.AutoHashMap(u32, std.ArrayList(JumpRecord)).init(allocator),
                 .join_point_param_layouts = std.AutoHashMap(u32, LayoutIdxSpan).init(allocator),
                 .join_point_param_patterns = std.AutoHashMap(u32, mono.MonoPatternSpan).init(allocator),
-                .internal_call_patches = std.ArrayList(InternalCallPatch).empty,
-                .internal_addr_patches = std.ArrayList(InternalAddrPatch).empty,
                 .early_return_patches = std.ArrayList(usize).empty,
             };
         }
@@ -953,8 +921,6 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             self.join_point_jumps.deinit();
             self.join_point_param_layouts.deinit();
             self.join_point_param_patterns.deinit();
-            self.internal_call_patches.deinit(self.allocator);
-            self.internal_addr_patches.deinit(self.allocator);
             self.early_return_patches.deinit(self.allocator);
         }
 
@@ -978,8 +944,6 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             self.join_point_jumps.clearRetainingCapacity();
             self.join_point_param_layouts.clearRetainingCapacity();
             self.join_point_param_patterns.clearRetainingCapacity();
-            self.internal_call_patches.clearRetainingCapacity();
-            self.internal_addr_patches.clearRetainingCapacity();
         }
 
         /// Generate code for a Mono IR expression
@@ -1273,7 +1237,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 .call => |call| try self.generateCall(call),
                 // Lambdas and closures as first-class values (stored to variables)
                 .lambda => |lambda| {
-                    const code_offset = try self.compileLambdaAsProc(expr_id, lambda);
+                    const code_offset = try self.compileLambdaAsProc(expr_id, lambda, null);
                     return .{ .lambda_code = .{
                         .code_offset = code_offset,
                         .ret_layout = lambda.ret_layout,
@@ -4879,7 +4843,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     const closure = def_expr.closure;
                     const inner = self.store.getExpr(closure.lambda);
                     if (inner == .lambda) {
-                        const code_offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda);
+                        const code_offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda, null);
                         const lambda_loc: ValueLocation = .{ .lambda_code = .{
                             .code_offset = code_offset,
                             .ret_layout = inner.lambda.ret_layout,
@@ -10839,14 +10803,6 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
         /// code is shifted by compileLambdaAsProc's deferred prologue pattern.
         fn emitCallToOffset(self: *Self, target_offset: usize) !void {
             const current = self.codegen.currentOffset();
-
-            // Record this call so we can re-patch it after body shifts
-            try self.internal_call_patches.append(self.allocator, .{
-                .call_offset = current,
-                .target_offset = target_offset,
-            });
-
-            // Calculate relative byte offset (can be negative for backward call)
             const rel_offset: i32 = @intCast(@as(i64, @intCast(target_offset)) - @as(i64, @intCast(current)));
 
             if (comptime target.toCpuArch() == .aarch64) {
@@ -10860,90 +10816,6 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        /// After compileLambdaAsProc shifts its body by prepending a prologue,
-        /// re-patch any internal BL/CALL instructions within the shifted range
-        /// that target code outside the shifted range.
-        ///
-        /// When body bytes [body_start..body_end] are shifted forward by prologue_size:
-        /// - BL instructions within the body are now at (old_pos + prologue_size)
-        /// - Their targets outside the body are NOT shifted
-        /// - So the relative offset in the BL instruction is now wrong by prologue_size
-        fn repatchInternalCalls(self: *Self, body_start: usize, body_end: usize, prologue_size: usize) void {
-            const buf = self.codegen.emit.buf.items;
-            for (self.internal_call_patches.items) |*patch| {
-                // Only adjust patches that were within the shifted body range
-                if (patch.call_offset >= body_start and patch.call_offset < body_end) {
-                    // Update the patch's recorded position (it shifted)
-                    patch.call_offset += prologue_size;
-
-                    // If the target is outside the shifted range (at or before body_start),
-                    // we need to re-patch the instruction because the relative offset changed.
-                    // Targets within the body shifted by the same amount, so they're fine.
-                    // Note: target_offset == body_start covers self-recursive calls within
-                    // compileLambdaAsProc, where the call targets the function's own entry point.
-                    if (patch.target_offset <= body_start) {
-                        const new_rel: i32 = @intCast(@as(i64, @intCast(patch.target_offset)) - @as(i64, @intCast(patch.call_offset)));
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            // Patch BL instruction (4 bytes at call_offset)
-                            // BL encoding: imm26 = offset / 4
-                            const imm26: u26 = @bitCast(@as(i26, @intCast(@divExact(new_rel, 4))));
-                            const bl_opcode: u32 = (0b100101 << 26) | @as(u32, imm26);
-                            const bytes: [4]u8 = @bitCast(bl_opcode);
-                            @memcpy(buf[patch.call_offset..][0..4], &bytes);
-                        } else {
-                            // Patch CALL rel32 instruction (5 bytes: 0xE8 + 4-byte offset)
-                            // The offset is relative to the instruction AFTER the call (call_offset + 5)
-                            const call_rel: i32 = new_rel - 5;
-                            const bytes: [4]u8 = @bitCast(call_rel);
-                            @memcpy(buf[patch.call_offset + 1 ..][0..4], &bytes);
-                        }
-                    }
-                }
-            }
-        }
-
-        /// After compileLambdaAsProc shifts its body by prepending a prologue,
-        /// re-patch any ADR/LEA instructions within the shifted range that
-        /// compute lambda addresses targeting code outside the shifted range.
-        fn repatchInternalAddrPatches(self: *Self, body_start: usize, body_end: usize, prologue_size: usize) void {
-            const buf = self.codegen.emit.buf.items;
-            for (self.internal_addr_patches.items) |*patch| {
-                if (patch.instr_offset >= body_start and patch.instr_offset < body_end) {
-                    // Update the patch's recorded position (it shifted)
-                    patch.instr_offset += prologue_size;
-
-                    // If the target is outside the shifted range (at or before body_start), re-patch.
-                    // target_offset == body_start covers self-recursive calls.
-                    if (patch.target_offset <= body_start) {
-                        const new_rel: i64 = @as(i64, @intCast(patch.target_offset)) - @as(i64, @intCast(patch.instr_offset));
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            // ADR instruction: rd | immhi(19) << 5 | 10000 << 24 | immlo(2) << 29 | 0 << 31
-                            // We need to preserve rd and just update the immediate
-                            const existing: u32 = @bitCast(buf[patch.instr_offset..][0..4].*);
-                            const rd_bits: u32 = existing & 0x1F; // bottom 5 bits = Rd
-                            const imm: u21 = @bitCast(@as(i21, @intCast(new_rel)));
-                            const immlo: u2 = @truncate(imm);
-                            const immhi: u19 = @truncate(imm >> 2);
-                            const inst: u32 = (0 << 31) |
-                                (@as(u32, immlo) << 29) |
-                                (0b10000 << 24) |
-                                (@as(u32, immhi) << 5) |
-                                rd_bits;
-                            const bytes: [4]u8 = @bitCast(inst);
-                            @memcpy(buf[patch.instr_offset..][0..4], &bytes);
-                        } else {
-                            // LEA reg, [RIP + disp32] — 7 bytes: REX + 0x8D + ModRM + disp32
-                            // disp32 is at bytes [3..7], relative to end of instruction (instr_offset + 7)
-                            const lea_size: i64 = 7;
-                            const disp: i32 = @intCast(new_rel - lea_size);
-                            const bytes: [4]u8 = @bitCast(disp);
-                            @memcpy(buf[patch.instr_offset + 3 ..][0..4], &bytes);
-                        }
-                    }
-                }
-            }
-        }
-
         /// Generate code for a function call
         fn generateCall(self: *Self, call: anytype) Error!ValueLocation {
             // Get the function expression
@@ -10952,7 +10824,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             return switch (fn_expr) {
                 // Direct lambda call: compile as proc and call
                 .lambda => |lambda| {
-                    const offset = try self.compileLambdaAsProc(call.fn_expr, lambda);
+                    const offset = try self.compileLambdaAsProc(call.fn_expr, lambda, call.ret_layout);
                     return try self.generateCallToLambda(offset, call.args, call.ret_layout);
                 },
 
@@ -10960,7 +10832,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 .closure => |closure| {
                     const inner = self.store.getExpr(closure.lambda);
                     if (inner == .lambda) {
-                        const offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda);
+                        const offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda, call.ret_layout);
                         return try self.generateCallToLambda(offset, call.args, call.ret_layout);
                     }
                     unreachable; // closure inner must always be a lambda in the IR
@@ -11099,7 +10971,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     // Direct call - compile as procedure for direct calling
                     const inner = self.store.getExpr(closure.lambda);
                     if (inner != .lambda) unreachable;
-                    const code_offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda);
+                    const code_offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda, null);
                     return .{ .lambda_code = .{
                         .code_offset = code_offset,
                         .ret_layout = inner.lambda.ret_layout,
@@ -11212,10 +11084,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             const temp = try self.allocTempGeneral();
                             const current = self.codegen.currentOffset();
                             const rel: i64 = @as(i64, @intCast(lc.code_offset)) - @as(i64, @intCast(current));
-                            try self.internal_addr_patches.append(self.allocator, .{
-                                .instr_offset = current,
-                                .target_offset = lc.code_offset,
-                            });
+
                             if (comptime target.toCpuArch() == .aarch64) {
                                 try self.codegen.emit.adr(temp, @intCast(rel));
                             } else {
@@ -11270,10 +11139,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                 const temp = try self.allocTempGeneral();
                                 const current = self.codegen.currentOffset();
                                 const rel: i64 = @as(i64, @intCast(lc.code_offset)) - @as(i64, @intCast(current));
-                                try self.internal_addr_patches.append(self.allocator, .{
-                                    .instr_offset = current,
-                                    .target_offset = lc.code_offset,
-                                });
+
                                 if (comptime target.toCpuArch() == .aarch64) {
                                     try self.codegen.emit.adr(temp, @intCast(rel));
                                 } else {
@@ -11540,13 +11406,13 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             const lambda_expr = self.store.getExpr(lambda_body);
             switch (lambda_expr) {
                 .lambda => |lambda| {
-                    const code_offset = try self.compileLambdaAsProc(lambda_body, lambda);
+                    const code_offset = try self.compileLambdaAsProc(lambda_body, lambda, ret_layout);
                     return try self.generateCallToLambda(code_offset, args_span, ret_layout);
                 },
                 .closure => |closure| {
                     const inner = self.store.getExpr(closure.lambda);
                     if (inner == .lambda) {
-                        const code_offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda);
+                        const code_offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda, ret_layout);
                         return try self.generateCallToLambda(code_offset, args_span, ret_layout);
                     }
                     unreachable; // closure inner must always be a lambda in the IR
@@ -11580,13 +11446,13 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             const lambda_expr = self.store.getExpr(member.lambda_body);
             switch (lambda_expr) {
                 .lambda => |l| {
-                    const code_offset = try self.compileLambdaAsProc(member.lambda_body, l);
+                    const code_offset = try self.compileLambdaAsProc(member.lambda_body, l, null);
                     return try self.generateCallToLambda(code_offset, args_span, l.ret_layout);
                 },
                 .closure => |c| {
                     const inner = self.store.getExpr(c.lambda);
                     if (inner == .lambda) {
-                        const code_offset = try self.compileLambdaAsProc(c.lambda, inner.lambda);
+                        const code_offset = try self.compileLambdaAsProc(c.lambda, inner.lambda, null);
                         return try self.generateCallToLambda(code_offset, args_span, inner.lambda.ret_layout);
                     }
                     unreachable; // closure inner must always be a lambda in the IR
@@ -11689,13 +11555,13 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
                 return switch (def_expr) {
                     .lambda => |lambda| {
-                        const offset = try self.compileLambdaAsProc(def_expr_id, lambda);
+                        const offset = try self.compileLambdaAsProc(def_expr_id, lambda, ret_layout);
                         return try self.generateCallToLambda(offset, args_span, ret_layout);
                     },
                     .closure => |closure| {
                         const inner = self.store.getExpr(closure.lambda);
                         if (inner == .lambda) {
-                            const offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda);
+                            const offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda, ret_layout);
                             return try self.generateCallToLambda(offset, args_span, ret_layout);
                         }
                         unreachable;
@@ -11719,13 +11585,13 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         // Unwrap nominal and retry with the inner expression
                         const inner = self.store.getExpr(nom.backing_expr);
                         if (inner == .lambda) {
-                            const offset = try self.compileLambdaAsProc(nom.backing_expr, inner.lambda);
+                            const offset = try self.compileLambdaAsProc(nom.backing_expr, inner.lambda, ret_layout);
                             return try self.generateCallToLambda(offset, args_span, ret_layout);
                         }
                         if (inner == .closure) {
                             const closure_inner = self.store.getExpr(inner.closure.lambda);
                             if (closure_inner == .lambda) {
-                                const offset = try self.compileLambdaAsProc(inner.closure.lambda, closure_inner.lambda);
+                                const offset = try self.compileLambdaAsProc(inner.closure.lambda, closure_inner.lambda, ret_layout);
                                 return try self.generateCallToLambda(offset, args_span, ret_layout);
                             }
                         }
@@ -12071,8 +11937,16 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     try self.codegen.emitLoadStack(.w64, target_reg, list_info.struct_offset);
                 },
                 .lambda_code => |lc| {
-                    // Load the code offset into the register - used when passing lambdas as arguments
-                    try self.codegen.emitLoadImm(target_reg, @bitCast(@as(i64, @intCast(lc.code_offset))));
+                    // Load the code address via ADR/LEA - must use PC-relative addressing
+                    const current = self.codegen.currentOffset();
+                    const rel: i64 = @as(i64, @intCast(lc.code_offset)) - @as(i64, @intCast(current));
+
+                    if (comptime target.toCpuArch() == .aarch64) {
+                        try self.codegen.emit.adr(target_reg, @intCast(rel));
+                    } else {
+                        const lea_size: i64 = 7;
+                        try self.codegen.emit.leaRegRipRel(target_reg, @intCast(rel - lea_size));
+                    }
                 },
                 .closure_value => |cv| {
                     // Load the closure value from stack
@@ -12293,10 +12167,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     const temp = try self.allocTempGeneral();
                     const current = self.codegen.currentOffset();
                     const rel: i64 = @as(i64, @intCast(lc.code_offset)) - @as(i64, @intCast(current));
-                    try self.internal_addr_patches.append(self.allocator, .{
-                        .instr_offset = current,
-                        .target_offset = lc.code_offset,
-                    });
+
                     if (comptime target.toCpuArch() == .aarch64) {
                         try self.codegen.emit.adr(temp, @intCast(rel));
                         try self.codegen.emit.strRegMemSoff(.w64, temp, .FP, slot);
@@ -12994,14 +12865,17 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 self.codegen.stack_offset = 16 + CodeGen.CALLEE_SAVED_AREA_SIZE;
             }
 
+            // Trampoline pattern: emit entry_jump before body, prologue after body.
+            // entry_point is the jump instruction itself — this is what callers target.
+            const entry_point = self.codegen.currentOffset();
+            const entry_jump = try self.codegen.emitJump();
             const body_start = self.codegen.currentOffset();
-            const relocs_before = self.codegen.relocations.items.len;
 
             // CRITICAL: Register the procedure BEFORE generating the body
             // so that recursive calls within the body can find this procedure.
-            // We use body_start as a temporary code_start; will be updated after prologue prepend.
+            // entry_point is stable — never changes, even after prologue emission.
             try self.proc_registry.put(key, .{
-                .code_start = body_start,
+                .code_start = entry_point,
                 .code_end = 0, // Placeholder, updated below
                 .name = proc.name,
             });
@@ -13045,154 +12919,32 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 try builder.emitEpilogue(&self.codegen.emit);
             }
 
-            const body_end = self.codegen.currentOffset();
-
-            // PHASE 2: Extract body and prepend prologue (x86_64 only - uses deferred pattern)
+            // PHASE 2: Emit prologue after body (trampoline pattern)
+            // The prologue is emitted after the body+epilogue, with a backward jump
+            // into the body. The entry_jump (emitted before the body) is patched to
+            // jump to the prologue. Nothing shifts, so no fixups are needed.
+            const prologue_start = self.codegen.currentOffset();
             if (comptime target.toCpuArch() == .x86_64) {
-                // Save body bytes
-                var body_bytes = self.allocator.dupe(u8, self.codegen.emit.buf.items[body_start..body_end]) catch return Error.OutOfMemory;
-                defer self.allocator.free(body_bytes);
-
-                // Truncate buffer back to body_start
-                self.codegen.emit.buf.shrinkRetainingCapacity(body_start);
-
-                // Emit prologue using DeferredFrameBuilder (now knows callee_saved_used).
-                // Pass only the actual locals size — the builder adds callee-saved space internally.
-                const prologue_start = self.codegen.currentOffset();
                 const actual_locals_x86: u32 = @intCast(-self.codegen.stack_offset - CodeGen.CALLEE_SAVED_AREA_SIZE);
                 try self.codegen.emitPrologueWithAlloc(actual_locals_x86);
-                const prologue_size = self.codegen.currentOffset() - prologue_start;
-
-                // PHASE 2.5: Patch self-calls in body_bytes
-                // Self-calls target body_start (0) but after prepending prologue,
-                // they need to target prologue_start (0) which means adjusting
-                // the relative offset by -prologue_size.
-                // x86_64 CALL rel32: E8 [4-byte signed offset]
-                var i: usize = 0;
-                while (i + 5 <= body_bytes.len) : (i += 1) {
-                    if (body_bytes[i] == 0xE8) { // CALL opcode
-                        // Read the 4-byte relative offset (little-endian)
-                        const rel_bytes = body_bytes[i + 1 ..][0..4];
-                        const rel_offset: i32 = @bitCast(rel_bytes.*);
-                        // The call lands at: (body_offset + 5) + rel_offset
-                        // where body_offset = i (offset within body)
-                        // For self-calls, this should equal body_start (0)
-                        const call_end_offset: i64 = @intCast(i + 5);
-                        const call_target: i64 = call_end_offset + rel_offset;
-                        if (call_target == @as(i64, @intCast(body_start))) {
-                            // This is a self-call targeting body_start
-                            // After prepending prologue, the call is at (prologue_size + i)
-                            // and should still target prologue_start (0)
-                            // New relative offset = 0 - (prologue_size + i + 5)
-                            //                     = -(prologue_size + i + 5)
-                            // Old relative offset = -(i + 5)
-                            // Adjustment = new - old = -prologue_size
-                            const new_rel: i32 = rel_offset - @as(i32, @intCast(prologue_size));
-                            const new_bytes: [4]u8 = @bitCast(new_rel);
-                            @memcpy(body_bytes[i + 1 ..][0..4], &new_bytes);
-                        }
-                    }
-                }
-
-                // Re-append body
-                self.codegen.emit.buf.appendSlice(self.allocator, body_bytes) catch return Error.OutOfMemory;
-
-                // PHASE 3: Adjust relocation offsets
-                for (self.codegen.relocations.items[relocs_before..]) |*reloc| {
-                    reloc.adjustOffset(prologue_size);
-                }
-
-                // Patch return-stmt jumps to the shared epilogue
-                for (self.early_return_patches.items[saved_early_return_patches_len..]) |*patch| {
-                    patch.* += prologue_size;
-                }
-                const final_epilogue = body_epilogue_offset - body_start + prologue_size + prologue_start;
-                for (self.early_return_patches.items[saved_early_return_patches_len..]) |patch| {
-                    self.codegen.patchJump(patch, final_epilogue);
-                }
-                self.early_return_patches.shrinkRetainingCapacity(saved_early_return_patches_len);
-
-                // Update procedure registry with correct code_start (prologue_start)
-                if (self.proc_registry.getPtr(key)) |entry| {
-                    entry.code_start = prologue_start;
-                    entry.code_end = self.codegen.currentOffset();
-                }
             } else {
-                // aarch64: Prepend prologue to generated body
-                // Since body was generated without prologue, we need to prepend it.
-                const body_bytes = self.allocator.dupe(u8, self.codegen.emit.buf.items[body_start..body_end]) catch return Error.OutOfMemory;
-                defer self.allocator.free(body_bytes);
-
-                // Truncate buffer back to body_start
-                self.codegen.emit.buf.shrinkRetainingCapacity(body_start);
-
-                // Emit aarch64 prologue using DeferredFrameBuilder with actual stack usage
-                const prologue_start = self.codegen.currentOffset();
                 const actual_locals: u32 = @intCast(self.codegen.stack_offset - 16 - CodeGen.CALLEE_SAVED_AREA_SIZE);
                 var frame_builder = CodeGen.DeferredFrameBuilder.init();
                 frame_builder.setCalleeSavedMask(self.codegen.callee_saved_used);
                 frame_builder.setStackSize(actual_locals);
                 _ = try frame_builder.emitPrologue(&self.codegen.emit);
-                const prologue_size = self.codegen.currentOffset() - prologue_start;
+            }
+            try self.emitJumpBackward(body_start);
+            self.codegen.patchJump(entry_jump, prologue_start);
 
-                // PHASE 2.5: Patch self-calls in body_bytes
-                // Self-calls target body_start but after prepending prologue,
-                // they need to target prologue_start which means adjusting
-                // the relative offset by -prologue_size.
-                // aarch64 BL: 1 00101 imm26 (4-byte instruction, imm26 is signed offset in words)
-                var i: usize = 0;
-                while (i + 4 <= body_bytes.len) : (i += 4) {
-                    const inst: u32 = @bitCast(body_bytes[i..][0..4].*);
-                    // Check for BL opcode (bits 31-26 = 100101 = 37)
-                    if ((inst >> 26) == 0b100101) {
-                        // Extract 26-bit signed offset (in words)
-                        const imm26: u26 = @truncate(inst);
-                        const offset_words: i26 = @bitCast(imm26);
-                        const offset_bytes: i32 = @as(i32, offset_words) * 4;
-                        // For aarch64, offset is relative to instruction address (not end like x86_64)
-                        const inst_offset: i64 = @intCast(i);
-                        const call_target: i64 = inst_offset + offset_bytes;
-                        if (call_target == @as(i64, @intCast(body_start))) {
-                            // This is a self-call targeting body_start
-                            // After prepending prologue, the instruction is at (prologue_size + i)
-                            // and should still target prologue_start (body_start)
-                            // New relative offset = body_start - (body_start + prologue_size + i)
-                            //                     = -(prologue_size + i)
-                            // Old relative offset = -(i)
-                            // Adjustment = new - old = -prologue_size
-                            const new_offset_bytes: i32 = offset_bytes - @as(i32, @intCast(prologue_size));
-                            const new_offset_words: i26 = @intCast(@divExact(new_offset_bytes, 4));
-                            const new_imm26: u26 = @bitCast(new_offset_words);
-                            const new_inst: u32 = (@as(u32, 0b100101) << 26) | new_imm26;
-                            const new_bytes: [4]u8 = @bitCast(new_inst);
-                            @memcpy(body_bytes[i..][0..4], &new_bytes);
-                        }
-                    }
-                }
+            // Patch early return jumps directly to epilogue (no offset adjustment needed)
+            for (self.early_return_patches.items[saved_early_return_patches_len..]) |patch| {
+                self.codegen.patchJump(patch, body_epilogue_offset);
+            }
+            self.early_return_patches.shrinkRetainingCapacity(saved_early_return_patches_len);
 
-                // Re-append body
-                self.codegen.emit.buf.appendSlice(self.allocator, body_bytes) catch return Error.OutOfMemory;
-
-                // Adjust relocation offsets
-                for (self.codegen.relocations.items[relocs_before..]) |*reloc| {
-                    reloc.adjustOffset(prologue_size);
-                }
-
-                // Patch return-stmt jumps to the shared epilogue
-                for (self.early_return_patches.items[saved_early_return_patches_len..]) |*patch| {
-                    patch.* += prologue_size;
-                }
-                const final_epilogue = body_epilogue_offset - body_start + prologue_size + prologue_start;
-                for (self.early_return_patches.items[saved_early_return_patches_len..]) |patch| {
-                    self.codegen.patchJump(patch, final_epilogue);
-                }
-                self.early_return_patches.shrinkRetainingCapacity(saved_early_return_patches_len);
-
-                // Update procedure registry
-                if (self.proc_registry.getPtr(key)) |entry| {
-                    entry.code_start = prologue_start;
-                    entry.code_end = self.codegen.currentOffset();
-                }
+            if (self.proc_registry.getPtr(key)) |entry| {
+                entry.code_end = self.codegen.currentOffset();
             }
 
             // Restore state
@@ -13212,8 +12964,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
         /// Returns the code offset where the procedure starts.
         /// If the lambda was already compiled, returns the cached offset.
         /// Uses deferred prologue pattern for x86_64 to properly save callee-saved registers.
-        fn compileLambdaAsProc(self: *Self, lambda_expr_id: MonoExprId, lambda: anytype) Error!usize {
-            const key = @intFromEnum(lambda_expr_id);
+        fn compileLambdaAsProc(self: *Self, lambda_expr_id: MonoExprId, lambda: anytype, caller_ret_layout: ?layout.Idx) Error!usize {
+            const effective_ret_layout = caller_ret_layout orelse lambda.ret_layout;
+            const key = (@as(u64, @intFromEnum(lambda_expr_id)) << 32) | @as(u64, @intFromEnum(effective_ret_layout));
 
             // Check if already compiled
             if (self.compiled_lambdas.get(key)) |code_offset| {
@@ -13293,12 +13046,15 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 self.codegen.stack_offset = 16 + CodeGen.CALLEE_SAVED_AREA_SIZE;
             }
 
+            // Trampoline pattern: emit entry_jump before body, prologue after body.
+            // entry_point is the jump instruction — this is what callers target.
+            const entry_point = self.codegen.currentOffset();
+            const entry_jump = try self.codegen.emitJump();
             const body_start = self.codegen.currentOffset();
-            const relocs_before = self.codegen.relocations.items.len;
 
             // Register before generating (for potential recursive calls)
-            // Use body_start as temporary; will be updated after prologue prepend
-            try self.compiled_lambdas.put(key, body_start);
+            // entry_point is stable — never changes, even after prologue emission.
+            try self.compiled_lambdas.put(key, entry_point);
 
             // Restore state on error
             errdefer {
@@ -13320,7 +13076,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             }
 
             // Check if return type needs return-by-pointer (exceeds register limit)
-            const needs_ret_ptr = self.needsInternalReturnByPointer(lambda.ret_layout);
+            const needs_ret_ptr = self.needsInternalReturnByPointer(effective_ret_layout);
             if (needs_ret_ptr) {
                 // The first argument register contains a hidden return pointer.
                 // Save it to a local stack slot for use after body generation.
@@ -13336,16 +13092,16 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             try self.bindLambdaParams(lambda.params, if (needs_ret_ptr) 1 else 0);
 
             // Set early return state so generateEarlyReturn can emit jumps
-            self.early_return_ret_layout = lambda.ret_layout;
+            self.early_return_ret_layout = effective_ret_layout;
 
             // Generate the body
             const result_loc = try self.generateExpr(lambda.body);
 
             // Move result to return register or copy to return pointer
             if (self.ret_ptr_slot) |ret_slot| {
-                try self.copyResultToReturnPointer(result_loc, lambda.ret_layout, ret_slot);
+                try self.copyResultToReturnPointer(result_loc, effective_ret_layout, ret_slot);
             } else {
-                try self.moveToReturnRegisterWithLayout(result_loc, lambda.ret_layout);
+                try self.moveToReturnRegisterWithLayout(result_loc, effective_ret_layout);
             }
 
             // Record epilogue location (relative to body, will adjust after prepending prologue)
@@ -13363,138 +13119,48 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 try builder.emitEpilogue(&self.codegen.emit);
             }
 
-            const body_end = self.codegen.currentOffset();
-
-            // PHASE 2: Extract body and prepend prologue
+            // PHASE 2: Emit prologue after body (trampoline pattern)
+            // The prologue is emitted after the body+epilogue, with a backward jump
+            // into the body. The entry_jump (emitted before the body) is patched to
+            // jump to the prologue. Nothing shifts, so no fixups are needed.
+            const prologue_start = self.codegen.currentOffset();
             if (comptime target.toCpuArch() == .x86_64) {
-                // Save body bytes
-                const body_bytes = self.allocator.dupe(u8, self.codegen.emit.buf.items[body_start..body_end]) catch return Error.OutOfMemory;
-                defer self.allocator.free(body_bytes);
-
-                // Truncate buffer back to body_start
-                self.codegen.emit.buf.shrinkRetainingCapacity(body_start);
-
-                // Emit prologue using DeferredFrameBuilder (now knows callee_saved_used).
-                // Pass only the actual locals size — the builder adds callee-saved space internally.
-                const prologue_start = self.codegen.currentOffset();
                 const actual_locals_x86: u32 = @intCast(-self.codegen.stack_offset - CodeGen.CALLEE_SAVED_AREA_SIZE);
                 try self.codegen.emitPrologueWithAlloc(actual_locals_x86);
-                const prologue_size = self.codegen.currentOffset() - prologue_start;
-
-                // Re-append body
-                self.codegen.emit.buf.appendSlice(self.allocator, body_bytes) catch return Error.OutOfMemory;
-
-                // PHASE 3: Adjust relocation offsets
-                for (self.codegen.relocations.items[relocs_before..]) |*reloc| {
-                    reloc.adjustOffset(prologue_size);
-                }
-
-                // Re-patch internal calls/addr whose targets are outside the shifted body
-                self.repatchInternalCalls(body_start, body_end, prologue_size);
-                self.repatchInternalAddrPatches(body_start, body_end, prologue_size);
-
-                // Adjust early return patches (they point to locations within the body)
-                for (self.early_return_patches.items[saved_early_return_patches_len..]) |*patch| {
-                    patch.* += prologue_size;
-                }
-
-                // Update compiled lambda entry with correct code_start
-                try self.compiled_lambdas.put(key, prologue_start);
-
-                // Patch early return jumps to point to the epilogue (now at adjusted offset)
-                const final_epilogue_offset = body_epilogue_offset - body_start + prologue_size + prologue_start;
-                for (self.early_return_patches.items[saved_early_return_patches_len..]) |patch| {
-                    self.codegen.patchJump(patch, final_epilogue_offset);
-                }
-
-                // Restore early return state (trim patches back)
-                self.early_return_patches.shrinkRetainingCapacity(saved_early_return_patches_len);
-                self.early_return_ret_layout = saved_early_return_ret_layout;
-
-                // Restore state
-                self.codegen.stack_offset = saved_stack_offset;
-                self.codegen.callee_saved_used = saved_callee_saved_used;
-                self.codegen.callee_saved_available = saved_callee_saved_available;
-                self.roc_ops_reg = saved_roc_ops_reg;
-                self.codegen.free_general = saved_free_general;
-                self.codegen.free_float = saved_free_float;
-                self.ret_ptr_slot = saved_ret_ptr_slot;
-                self.symbol_locations.deinit();
-                self.symbol_locations = saved_symbol_locations.clone() catch return Error.OutOfMemory;
-                self.mutable_var_slots.deinit();
-                self.mutable_var_slots = saved_mutable_var_slots.clone() catch return Error.OutOfMemory;
-
-                // Patch the skip jump to point here (after the lambda code)
-                const after_lambda = self.codegen.currentOffset();
-                self.codegen.patchJump(skip_jump, after_lambda);
-
-                return prologue_start;
             } else {
-                // aarch64: Use deferred prologue pattern too for consistency
-                const body_bytes = self.allocator.dupe(u8, self.codegen.emit.buf.items[body_start..body_end]) catch return Error.OutOfMemory;
-                defer self.allocator.free(body_bytes);
-
-                // Truncate buffer back to body_start
-                self.codegen.emit.buf.shrinkRetainingCapacity(body_start);
-
-                // Emit aarch64 prologue using DeferredFrameBuilder with actual stack usage
-                const prologue_start = self.codegen.currentOffset();
                 const actual_locals: u32 = @intCast(self.codegen.stack_offset - 16 - CodeGen.CALLEE_SAVED_AREA_SIZE);
                 var frame_builder = CodeGen.DeferredFrameBuilder.init();
                 frame_builder.setCalleeSavedMask(self.codegen.callee_saved_used);
                 frame_builder.setStackSize(actual_locals);
                 _ = try frame_builder.emitPrologue(&self.codegen.emit);
-                const prologue_size = self.codegen.currentOffset() - prologue_start;
-
-                // Re-append body
-                self.codegen.emit.buf.appendSlice(self.allocator, body_bytes) catch return Error.OutOfMemory;
-
-                // Adjust relocation offsets
-                for (self.codegen.relocations.items[relocs_before..]) |*reloc| {
-                    reloc.adjustOffset(prologue_size);
-                }
-
-                // Re-patch internal calls/addr whose targets are outside the shifted body
-                self.repatchInternalCalls(body_start, body_end, prologue_size);
-                self.repatchInternalAddrPatches(body_start, body_end, prologue_size);
-
-                // Adjust early return patches
-                for (self.early_return_patches.items[saved_early_return_patches_len..]) |*patch| {
-                    patch.* += prologue_size;
-                }
-
-                // Update compiled lambda entry
-                try self.compiled_lambdas.put(key, prologue_start);
-
-                // Patch early return jumps
-                const final_epilogue_offset = body_epilogue_offset - body_start + prologue_size + prologue_start;
-                for (self.early_return_patches.items[saved_early_return_patches_len..]) |patch| {
-                    self.codegen.patchJump(patch, final_epilogue_offset);
-                }
-
-                // Restore early return state
-                self.early_return_patches.shrinkRetainingCapacity(saved_early_return_patches_len);
-                self.early_return_ret_layout = saved_early_return_ret_layout;
-
-                // Restore state
-                self.codegen.stack_offset = saved_stack_offset;
-                self.codegen.callee_saved_used = saved_callee_saved_used;
-                self.codegen.callee_saved_available = saved_callee_saved_available;
-                self.roc_ops_reg = saved_roc_ops_reg;
-                self.codegen.free_general = saved_free_general;
-                self.codegen.free_float = saved_free_float;
-                self.ret_ptr_slot = saved_ret_ptr_slot;
-                self.symbol_locations.deinit();
-                self.symbol_locations = saved_symbol_locations.clone() catch return Error.OutOfMemory;
-                self.mutable_var_slots.deinit();
-                self.mutable_var_slots = saved_mutable_var_slots.clone() catch return Error.OutOfMemory;
-
-                // Patch the skip jump to point here (after the lambda code)
-                const after_lambda = self.codegen.currentOffset();
-                self.codegen.patchJump(skip_jump, after_lambda);
-
-                return prologue_start;
             }
+            try self.emitJumpBackward(body_start);
+            self.codegen.patchJump(entry_jump, prologue_start);
+
+            // Patch early return jumps directly to epilogue (no offset adjustment needed)
+            for (self.early_return_patches.items[saved_early_return_patches_len..]) |patch| {
+                self.codegen.patchJump(patch, body_epilogue_offset);
+            }
+            self.early_return_patches.shrinkRetainingCapacity(saved_early_return_patches_len);
+            self.early_return_ret_layout = saved_early_return_ret_layout;
+
+            // Restore state
+            self.codegen.stack_offset = saved_stack_offset;
+            self.codegen.callee_saved_used = saved_callee_saved_used;
+            self.codegen.callee_saved_available = saved_callee_saved_available;
+            self.roc_ops_reg = saved_roc_ops_reg;
+            self.codegen.free_general = saved_free_general;
+            self.codegen.free_float = saved_free_float;
+            self.ret_ptr_slot = saved_ret_ptr_slot;
+            self.symbol_locations.deinit();
+            self.symbol_locations = saved_symbol_locations.clone() catch return Error.OutOfMemory;
+            self.mutable_var_slots.deinit();
+            self.mutable_var_slots = saved_mutable_var_slots.clone() catch return Error.OutOfMemory;
+
+            // Patch the skip jump to point here (after the lambda code + prologue)
+            self.codegen.patchJump(skip_jump, self.codegen.currentOffset());
+
+            return entry_point;
         }
 
         /// Maximum number of registers used for multi-register returns in internal Roc calls.
@@ -14297,7 +13963,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         },
                         else => unreachable,
                     };
-                    const cv_code_offset = try self.compileLambdaAsProc(cv.lambda, lambda);
+                    const cv_code_offset = try self.compileLambdaAsProc(cv.lambda, lambda, null);
                     arg_loc = .{ .lambda_code = .{
                         .code_offset = cv_code_offset,
                         .ret_layout = lambda.ret_layout,
@@ -14519,11 +14185,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                 // BLR/CALL to invoke it as a function pointer.
                                 const current = self.codegen.currentOffset();
                                 const rel: i64 = @as(i64, @intCast(lc.code_offset)) - @as(i64, @intCast(current));
-                                // Record for re-patching after body shifts
-                                try self.internal_addr_patches.append(self.allocator, .{
-                                    .instr_offset = current,
-                                    .target_offset = lc.code_offset,
-                                });
+
+
                                 if (comptime target.toCpuArch() == .aarch64) {
                                     try self.codegen.emit.adr(arg_reg, @intCast(rel));
                                 } else {
@@ -14723,7 +14386,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         },
                         else => unreachable,
                     };
-                    const cv_code_offset = try self.compileLambdaAsProc(cv.lambda, lambda);
+                    const cv_code_offset = try self.compileLambdaAsProc(cv.lambda, lambda, null);
                     arg_loc = .{ .lambda_code = .{
                         .code_offset = cv_code_offset,
                         .ret_layout = lambda.ret_layout,
@@ -14891,11 +14554,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                 // Pass lambda address using PC-relative addressing
                                 const current = self.codegen.currentOffset();
                                 const rel: i64 = @as(i64, @intCast(lc.code_offset)) - @as(i64, @intCast(current));
-                                // Record for re-patching after body shifts
-                                try self.internal_addr_patches.append(self.allocator, .{
-                                    .instr_offset = current,
-                                    .target_offset = lc.code_offset,
-                                });
+
+
                                 if (comptime target.toCpuArch() == .aarch64) {
                                     try self.codegen.emit.adr(arg_reg, @intCast(rel));
                                 } else {
@@ -16395,8 +16055,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 // Layout: [FP/LR (16)] [callee-saved area (80)] [locals...]
                 self.codegen.stack_offset = 16 + CodeGen.CALLEE_SAVED_AREA_SIZE;
 
+                // Trampoline pattern: emit entry_jump before body, prologue after body.
+                const entry_jump = try self.codegen.emitJump();
                 const body_start = self.codegen.currentOffset();
-                const relocs_before = self.codegen.relocations.items.len;
 
                 // Save args to callee-saved registers (safe because prologue will save them)
                 // X20 = roc_ops (must match compileProc's convention: roc_ops_reg = X20)
@@ -16485,16 +16146,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     try builder.emitEpilogue(&self.codegen.emit);
                 }
 
-                const body_end = self.codegen.currentOffset();
-
-                // PHASE 2: Extract body and prepend prologue
-                const body_bytes = self.allocator.dupe(u8, self.codegen.emit.buf.items[body_start..body_end]) catch return Error.OutOfMemory;
-                defer self.allocator.free(body_bytes);
-
-                // Truncate buffer back to body_start
-                self.codegen.emit.buf.shrinkRetainingCapacity(body_start);
-
-                // Emit prologue with actual stack usage
+                // PHASE 2: Emit prologue after body (trampoline pattern)
                 const prologue_start = self.codegen.currentOffset();
                 {
                     var frame_builder = CodeGen.DeferredFrameBuilder.init();
@@ -16502,27 +16154,12 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     frame_builder.setStackSize(actual_locals);
                     _ = try frame_builder.emitPrologue(&self.codegen.emit);
                 }
-                const prologue_size_val = self.codegen.currentOffset() - prologue_start;
+                try self.emitJumpBackward(body_start);
+                self.codegen.patchJump(entry_jump, prologue_start);
 
-                // Re-append body
-                self.codegen.emit.buf.appendSlice(self.allocator, body_bytes) catch return Error.OutOfMemory;
-
-                // Adjust relocation offsets
-                for (self.codegen.relocations.items[relocs_before..]) |*reloc| {
-                    reloc.adjustOffset(prologue_size_val);
-                }
-
-                // Re-patch internal calls/addr whose targets are outside the shifted body
-                self.repatchInternalCalls(body_start, body_end, prologue_size_val);
-                self.repatchInternalAddrPatches(body_start, body_end, prologue_size_val);
-
-                // Patch early return jumps to the epilogue (shifted by prologue_size)
-                for (self.early_return_patches.items[saved_early_return_patches_len..]) |*patch| {
-                    patch.* += prologue_size_val;
-                }
-                const final_epilogue = body_epilogue_offset - body_start + prologue_size_val + prologue_start;
+                // Patch early return jumps directly to epilogue (no offset adjustment needed)
                 for (self.early_return_patches.items[saved_early_return_patches_len..]) |patch| {
-                    self.codegen.patchJump(patch, final_epilogue);
+                    self.codegen.patchJump(patch, body_epilogue_offset);
                 }
                 self.early_return_patches.shrinkRetainingCapacity(saved_early_return_patches_len);
 
