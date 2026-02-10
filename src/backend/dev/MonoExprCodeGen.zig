@@ -1615,15 +1615,32 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     const list_loc = try self.generateExpr(args[0]);
                     const index_loc = try self.generateExpr(args[1]);
 
+                    const ls = self.layout_store orelse unreachable;
+                    const ret_layout_val = ls.getLayout(ll.ret_layout);
+
+                    // Handle empty/null list (immediate_i64(0)) from failed inner
+                    // expressions (e.g. list_sort_with lowered to runtime_error).
+                    // Spill a zeroed RocList struct to the stack so subsequent code
+                    // (bounds check for safe get, or element load for unsafe get)
+                    // operates on a valid zero-length list instead of panicking.
+                    if (list_loc == .immediate_i64 and list_loc.immediate_i64 == 0) {
+                        if (ret_layout_val.tag == .tag_union) {
+                            const tu_data = ls.getTagUnionData(ret_layout_val.data.tag_union.idx);
+                            const err_slot = self.codegen.allocStackSlot(tu_data.size);
+                            try self.zeroStackArea(err_slot, tu_data.size);
+                            // Err discriminant = 0, already zeroed
+                            return self.fieldLocationFromLayout(err_slot, tu_data.size, ll.ret_layout);
+                        }
+                        // Unsafe list_get on a null list — return zero
+                        return .{ .immediate_i64 = 0 };
+                    }
+
                     // Get base offset of list struct
                     const list_base: i32 = switch (list_loc) {
                         .stack => |s| s.offset,
                         .list_stack => |ls_info| ls_info.struct_offset,
-                        else => unreachable,
+                        else => unreachable, // list must be on the stack
                     };
-
-                    const ls = self.layout_store orelse unreachable;
-                    const ret_layout_val = ls.getLayout(ll.ret_layout);
 
                     // Determine element layout: extract from the list arg's layout
                     // (not from ret_layout, which may be a Try tag union)
@@ -1638,8 +1655,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         // Fallback: if ret_layout is a tag_union (Try), extract
                         // the Ok variant's payload layout as element layout
                         if (ret_layout_val.tag == .tag_union) {
-                            const tu_data = ls.getTagUnionData(ret_layout_val.data.tag_union.idx);
-                            const variants = ls.getTagUnionVariants(tu_data);
+                            const tu_data2 = ls.getTagUnionData(ret_layout_val.data.tag_union.idx);
+                            const variants = ls.getTagUnionVariants(tu_data2);
                             // Ok is discriminant 1 (tags sorted alphabetically: Err=0, Ok=1)
                             if (variants.len > 1) {
                                 break :blk variants.get(1).payload_layout;
@@ -3958,11 +3975,26 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
             // Safe path: construct a proper Try tag union result
 
+            // Get tag union metadata (needed early for the empty-list fast path)
+            const tu_data = ls.getTagUnionData(ret_layout_val.data.tag_union.idx);
+            const tag_size = tu_data.size;
+            const disc_offset = tu_data.discriminant_offset;
+
             // Get list base offset
             const list_base: i32 = switch (list_loc) {
                 .stack => |s| s.offset,
                 .list_stack => |ls_info| ls_info.struct_offset,
-                else => unreachable,
+                .immediate_i64 => |val| {
+                    if (val == 0) {
+                        // Empty list (or failed inner expression) — return Err variant.
+                        // Allocate result, zero it; Err discriminant = 0, already zeroed.
+                        const err_slot = self.codegen.allocStackSlot(tag_size);
+                        try self.zeroStackArea(err_slot, tag_size);
+                        return self.fieldLocationFromLayout(err_slot, tag_size, ll.ret_layout);
+                    }
+                    unreachable; // non-zero immediate_i64 is not a valid list location
+                },
+                else => unreachable, // list_first/list_last requires a stack-backed list
             };
 
             // Determine element layout from the list argument (not from ret_layout)
@@ -3974,7 +4006,6 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     }
                 }
                 // Fallback: extract Ok variant's payload from the tag union
-                const tu_data = ls.getTagUnionData(ret_layout_val.data.tag_union.idx);
                 const variants = ls.getTagUnionVariants(tu_data);
                 if (variants.len > 1) {
                     break :blk variants.get(1).payload_layout;
@@ -3983,11 +4014,6 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             };
             const elem_layout_val = ls.getLayout(elem_layout_idx);
             const elem_size: u32 = ls.layoutSizeAlign(elem_layout_val).size;
-
-            // Get tag union metadata
-            const tu_data = ls.getTagUnionData(ret_layout_val.data.tag_union.idx);
-            const tag_size = tu_data.size;
-            const disc_offset = tu_data.discriminant_offset;
             const disc_size = tu_data.discriminant_size;
 
             // Allocate and zero the result slot
@@ -11061,7 +11087,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     if (inner == .lambda) {
                         return try self.callLambdaBodyDirect(inner.lambda, call.args);
                     }
-                    unreachable;
+                    unreachable; // closure inner must always be a lambda in the IR
                 },
 
                 // Chained calls: evaluate inner call, then call result with outer args
@@ -11077,7 +11103,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     if (inner_result == .closure_value) {
                         return try self.generateClosureDispatch(inner_result.closure_value, call.args, call.ret_layout);
                     }
-                    unreachable;
+                    unreachable; // chained call must produce a lambda_code or closure_value
                 },
 
                 // Block calls: evaluate block, if it returns lambda_code or closure_value, call it
@@ -11093,7 +11119,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     if (block_result == .closure_value) {
                         return try self.generateClosureDispatch(block_result.closure_value, call.args, call.ret_layout);
                     }
-                    unreachable;
+                    unreachable; // block call must produce a lambda_code or closure_value
                 },
 
                 // Lookup a function and call it
@@ -11648,9 +11674,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     if (inner == .lambda) {
                         return try self.callLambdaBodyDirect(inner.lambda, args_span);
                     }
-                    unreachable;
+                    unreachable; // closure inner must always be a lambda in the IR
                 },
-                else => unreachable,
+                else => unreachable, // closure dispatch target must be a lambda or closure
             }
         }
 
@@ -11675,9 +11701,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         const code_offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda);
                         return try self.generateCallToLambda(code_offset, args_span, ret_layout);
                     }
-                    unreachable;
+                    unreachable; // closure inner must always be a lambda in the IR
                 },
-                else => unreachable,
+                else => unreachable, // compile target must be a lambda or closure
             }
         }
 
@@ -11716,9 +11742,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         const code_offset = try self.compileLambdaAsProc(c.lambda, inner.lambda);
                         return try self.generateCallToLambda(code_offset, args_span, inner.lambda.ret_layout);
                     }
-                    unreachable;
+                    unreachable; // closure inner must always be a lambda in the IR
                 },
-                else => unreachable,
+                else => unreachable, // compile target must be a lambda or closure
             }
         }
 
