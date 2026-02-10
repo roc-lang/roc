@@ -746,6 +746,35 @@ test "roc test --verbose caches failure reports" {
     try testing.expect(std.mem.indexOf(u8, result2.stderr, "FAIL") != null);
 }
 
+test "roc test non-verbose run caches verbose failure reports for later verbose run" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    // First run: non-verbose on failing tests — populates cache with verbose failure reports
+    const result1 = try util.runRoc(gpa, &.{"test"}, "test/cli/expect_some_fail.roc");
+    defer gpa.free(result1.stdout);
+    defer gpa.free(result1.stderr);
+
+    try testing.expect(result1.term == .Exited and result1.term.Exited == 1);
+
+    // First run should NOT contain detailed failure report (non-verbose)
+    try testing.expect(std.mem.indexOf(u8, result1.stderr, "expect failed") == null);
+
+    // Second run: verbose — should hit cache and show detailed failure reports
+    const result2 = try util.runRoc(gpa, &.{ "test", "--verbose" }, "test/cli/expect_some_fail.roc");
+    defer gpa.free(result2.stdout);
+    defer gpa.free(result2.stderr);
+
+    try testing.expect(result2.term == .Exited and result2.term.Exited == 1);
+
+    // Should be a cache hit
+    try testing.expect(std.mem.indexOf(u8, result2.stderr, "(cached)") != null);
+
+    // Should contain detailed failure report text even though first run was non-verbose
+    try testing.expect(std.mem.indexOf(u8, result2.stderr, "expect") != null);
+    try testing.expect(std.mem.indexOf(u8, result2.stderr, "TEST FAILURE") != null);
+}
+
 test "roc test with nested list chunks does not panic on layout upgrade" {
     const testing = std.testing;
     const gpa = testing.allocator;
