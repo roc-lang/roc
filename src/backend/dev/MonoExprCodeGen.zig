@@ -10815,6 +10815,22 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             return false;
         }
 
+        /// Check if any argument requires multiple registers (tag unions > 8 bytes,
+        /// records > 8 bytes, strings, lists, i128, etc.).
+        /// When true, we force inlining to avoid procedure calling convention issues
+        /// with multi-register argument passing.
+        fn hasMultiRegArguments(self: *Self, args_span: anytype) bool {
+            const args = self.store.getExprSpan(args_span);
+            for (args) |arg_id| {
+                const arg_layout = self.getExprLayout(arg_id);
+                if (arg_layout) |al| {
+                    const num_regs = self.calcArgRegCount(.{ .stack = .{ .offset = 0 } }, al);
+                    if (num_regs > 1) return true;
+                }
+            }
+            return false;
+        }
+
         /// Inline a lambda body at the call site, binding parameters directly.
         /// Used for direct lambda calls (e.g., `(|x| x + 1)(5)`) where the
         /// lambda may return closures whose capture data must remain on the
@@ -11658,7 +11674,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         // 1. Args contain callables (higher-order calls)
                         // 2. Body returns callable (closure-returning functions)
                         // 3. Polymorphic lambda with different ret_layout
-                        if (self.hasCallableArguments(args_span) or self.bodyReturnsCallable(lambda.body) or lambda.ret_layout != ret_layout) {
+                        // 4. Args require multiple registers (avoids proc calling convention issues)
+                        if (self.hasCallableArguments(args_span) or self.bodyReturnsCallable(lambda.body) or lambda.ret_layout != ret_layout or self.hasMultiRegArguments(args_span)) {
                             return try self.callLambdaBodyDirect(lambda, args_span);
                         }
                         const offset = try self.compileLambdaAsProc(def_expr_id, lambda);
@@ -11667,7 +11684,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     .closure => |closure| {
                         const inner = self.store.getExpr(closure.lambda);
                         if (inner == .lambda) {
-                            if (self.hasCallableArguments(args_span) or self.bodyReturnsCallable(inner.lambda.body) or inner.lambda.ret_layout != ret_layout) {
+                            if (self.hasCallableArguments(args_span) or self.bodyReturnsCallable(inner.lambda.body) or inner.lambda.ret_layout != ret_layout or self.hasMultiRegArguments(args_span)) {
                                 return try self.callLambdaBodyDirect(inner.lambda, args_span);
                             }
                             const offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda);
@@ -11694,7 +11711,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         // Unwrap nominal and retry with the inner expression
                         const inner = self.store.getExpr(nom.backing_expr);
                         if (inner == .lambda) {
-                            if (self.hasCallableArguments(args_span) or self.bodyReturnsCallable(inner.lambda.body) or inner.lambda.ret_layout != ret_layout) {
+                            if (self.hasCallableArguments(args_span) or self.bodyReturnsCallable(inner.lambda.body) or inner.lambda.ret_layout != ret_layout or self.hasMultiRegArguments(args_span)) {
                                 return try self.callLambdaBodyDirect(inner.lambda, args_span);
                             }
                             const offset = try self.compileLambdaAsProc(nom.backing_expr, inner.lambda);
@@ -11703,7 +11720,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         if (inner == .closure) {
                             const closure_inner = self.store.getExpr(inner.closure.lambda);
                             if (closure_inner == .lambda) {
-                                if (self.hasCallableArguments(args_span) or self.bodyReturnsCallable(closure_inner.lambda.body) or closure_inner.lambda.ret_layout != ret_layout) {
+                                if (self.hasCallableArguments(args_span) or self.bodyReturnsCallable(closure_inner.lambda.body) or closure_inner.lambda.ret_layout != ret_layout or self.hasMultiRegArguments(args_span)) {
                                     return try self.callLambdaBodyDirect(closure_inner.lambda, args_span);
                                 }
                                 const offset = try self.compileLambdaAsProc(inner.closure.lambda, closure_inner.lambda);
@@ -12927,6 +12944,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             const saved_callee_saved_used = self.codegen.callee_saved_used;
             const saved_callee_saved_available = self.codegen.callee_saved_available;
             const saved_roc_ops_reg = self.roc_ops_reg;
+            const saved_free_general = self.codegen.free_general;
+            const saved_free_float = self.codegen.free_float;
             var saved_symbol_locations = self.symbol_locations.clone() catch return Error.OutOfMemory;
             defer saved_symbol_locations.deinit();
             var saved_mutable_var_slots = self.mutable_var_slots.clone() catch return Error.OutOfMemory;
@@ -12936,6 +12955,15 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             self.symbol_locations.clearRetainingCapacity();
             self.mutable_var_slots.clearRetainingCapacity();
             self.codegen.callee_saved_used = 0;
+            // Reset caller-saved register pools for the procedure's independent scope
+            if (comptime target.toCpuArch() == .x86_64) {
+                const CC = if (comptime target.isWindows()) x86_64.WindowsFastcall else x86_64.SystemV;
+                self.codegen.free_general = CC.CALLER_SAVED_GENERAL_MASK;
+                self.codegen.free_float = CC.CALLER_SAVED_FLOAT_MASK;
+            } else {
+                self.codegen.free_general = aarch64.Call.CALLER_SAVED_GENERAL_MASK;
+                self.codegen.free_float = aarch64.Call.CALLER_SAVED_FLOAT_MASK;
+            }
 
             // Reserve R12/X20 for roc_ops (inherited from the caller via callee-saved convention).
             // Same pattern as compileLambdaAsProc: mark as used so prologue saves/restores it,
@@ -13170,6 +13198,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             self.codegen.callee_saved_used = saved_callee_saved_used;
             self.codegen.callee_saved_available = saved_callee_saved_available;
             self.roc_ops_reg = saved_roc_ops_reg;
+            self.codegen.free_general = saved_free_general;
+            self.codegen.free_float = saved_free_float;
             self.symbol_locations.deinit();
             self.symbol_locations = saved_symbol_locations.clone() catch return Error.OutOfMemory;
             self.mutable_var_slots.deinit();
@@ -13199,6 +13229,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             const saved_callee_saved_used = self.codegen.callee_saved_used;
             const saved_callee_saved_available = self.codegen.callee_saved_available;
             const saved_roc_ops_reg = self.roc_ops_reg;
+            const saved_free_general = self.codegen.free_general;
+            const saved_free_float = self.codegen.free_float;
             var saved_symbol_locations = self.symbol_locations.clone() catch return Error.OutOfMemory;
             defer saved_symbol_locations.deinit();
             var saved_mutable_var_slots = self.mutable_var_slots.clone() catch return Error.OutOfMemory;
@@ -13208,6 +13240,15 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             self.symbol_locations.clearRetainingCapacity();
             self.mutable_var_slots.clearRetainingCapacity();
             self.codegen.callee_saved_used = 0;
+            // Reset caller-saved register pools for the procedure's independent scope
+            if (comptime target.toCpuArch() == .x86_64) {
+                const CC = if (comptime target.isWindows()) x86_64.WindowsFastcall else x86_64.SystemV;
+                self.codegen.free_general = CC.CALLER_SAVED_GENERAL_MASK;
+                self.codegen.free_float = CC.CALLER_SAVED_FLOAT_MASK;
+            } else {
+                self.codegen.free_general = aarch64.Call.CALLER_SAVED_GENERAL_MASK;
+                self.codegen.free_float = aarch64.Call.CALLER_SAVED_FLOAT_MASK;
+            }
             // NOTE: Do NOT reset callee_saved_available to the full mask here!
             // The main procedure has reserved R12 (roc_ops) and RBX (result_ptr) which
             // must remain protected. The lambda shares the same roc_ops register, so if
@@ -13263,6 +13304,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 self.codegen.callee_saved_used = saved_callee_saved_used;
                 self.codegen.callee_saved_available = saved_callee_saved_available;
                 self.roc_ops_reg = saved_roc_ops_reg;
+                self.codegen.free_general = saved_free_general;
+                self.codegen.free_float = saved_free_float;
                 self.ret_ptr_slot = saved_ret_ptr_slot;
                 self.symbol_locations.deinit();
                 self.symbol_locations = saved_symbol_locations.clone() catch unreachable;
@@ -13371,6 +13414,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 self.codegen.callee_saved_used = saved_callee_saved_used;
                 self.codegen.callee_saved_available = saved_callee_saved_available;
                 self.roc_ops_reg = saved_roc_ops_reg;
+                self.codegen.free_general = saved_free_general;
+                self.codegen.free_float = saved_free_float;
                 self.ret_ptr_slot = saved_ret_ptr_slot;
                 self.symbol_locations.deinit();
                 self.symbol_locations = saved_symbol_locations.clone() catch return Error.OutOfMemory;
@@ -13434,6 +13479,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 self.codegen.callee_saved_used = saved_callee_saved_used;
                 self.codegen.callee_saved_available = saved_callee_saved_available;
                 self.roc_ops_reg = saved_roc_ops_reg;
+                self.codegen.free_general = saved_free_general;
+                self.codegen.free_float = saved_free_float;
                 self.ret_ptr_slot = saved_ret_ptr_slot;
                 self.symbol_locations.deinit();
                 self.symbol_locations = saved_symbol_locations.clone() catch return Error.OutOfMemory;
