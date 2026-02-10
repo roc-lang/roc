@@ -25,6 +25,7 @@ const backend = @import("backend");
 const bytebox = @import("bytebox");
 const WasmEvaluator = eval_mod.WasmEvaluator;
 const values = @import("values");
+const i128h = builtins.compiler_rt_128;
 
 const posix = std.posix;
 

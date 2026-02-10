@@ -492,8 +492,8 @@ fn getExprLayoutFromIdx(self: *Self, module_env: *ModuleEnv, expr_idx: CIR.Expr.
     // When a type var resolves to Content.err (e.g., from a `crash` branch
     // polluting a match expression's type), fall back to the caller's return
     // type var which has concrete type information from the call site.
-    const resolved = module_env.types.resolveVar(type_var);
-    if (resolved.desc.content == .err) {
+    const resolved_updated = module_env.types.resolveVar(type_var);
+    if (resolved_updated.desc.content == .err) {
         if (self.caller_return_type_var) |caller_ret_var| {
             const ls = self.layout_store orelse unreachable;
             return ls.fromTypeVar(self.current_module_idx, caller_ret_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
@@ -1327,7 +1327,10 @@ fn setupLocalCallLayoutHints(
         self.caller_return_type_var = caller_ret_var;
 
         // Also map the function's return type to the call expression's result type.
-        try self.collectTypeMappingsWithExpr(scope, module_env, func.ret, module_env, caller_ret_var, null);
+        if (self.type_scope.scopes.items.len > 0) {
+            const scope = &self.type_scope.scopes.items[0];
+            try self.collectTypeMappingsWithExpr(scope, module_env, func.ret, module_env, caller_ret_var, null);
+        }
 
         // Pre-cache the correct return type layout for the lambda body's type variable.
         // The lambda body's type may have unresolved flex extensions that produce a
