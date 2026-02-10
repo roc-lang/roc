@@ -8013,7 +8013,10 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 16
             else
                 elem_size_align.size;
-            const elem_alignment: u32 = if (elem_size >= 16) 16 else @intCast(elem_size_align.alignment.toByteUnits());
+            const elem_alignment: u32 = if (list.elem_layout == .dec or list.elem_layout == .i128 or list.elem_layout == .u128 or self.isScalar16Layout(list.elem_layout))
+                16
+            else
+                @intCast(elem_size_align.alignment.toByteUnits());
 
             const num_elems: u32 = @intCast(elems.len);
             const total_data_bytes: usize = @as(usize, elem_size) * @as(usize, num_elems);

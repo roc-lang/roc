@@ -2724,7 +2724,8 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                                 if (args.len > 0) {
                                     const elem_type_var = args[0];
                                     // Compute layout for the element type
-                                    break :elem_blk ls.fromTypeVar(self.current_module_idx, elem_type_var, &self.type_scope, self.type_scope_caller_module) catch LayoutIdx.default_num;
+                                    const el = ls.fromTypeVar(self.current_module_idx, elem_type_var, &self.type_scope, self.type_scope_caller_module) catch LayoutIdx.default_num;
+                                    break :elem_blk el;
                                 }
                             },
                             else => {},
