@@ -1299,22 +1299,31 @@ fn setupLocalCallLayoutHints(
 
             // Compose override chain into the type scope for fromTypeVar's
             // recursive processing. layout_var_overrides maps inner_rigid →
-            // outer_rigid (both in this module), and the type scope maps
+            // outer_concrete (both in this module), and the type scope may map
             // outer_rigid → caller's concrete var. fromTypeVar only sees the
             // type scope during recursive traversal (e.g., resolving the element
-            // type inside `List a`), so we need to compose the chain:
-            //   inner_rigid → caller's concrete var
-            // This lets fromTypeVar find inner function rigid vars directly.
-            if (self.type_scope.scopes.items.len > 0) {
+            // type inside `List a`).
+            {
+                if (self.type_scope.scopes.items.len == 0) {
+                    try self.type_scope.scopes.append(types.VarMap.init(self.allocator));
+                }
                 const scope = &self.type_scope.scopes.items[0];
                 var override_iter = self.layout_var_overrides.iterator();
                 while (override_iter.next()) |entry| {
                     const inner_var = entry.key_ptr.*;
                     const outer_var = entry.value_ptr.*;
-                    // Look up the outer var in the type scope to get the
-                    // caller module's concrete var
+                    // Try composing: inner → outer → caller's var
                     if (scope.get(outer_var)) |caller_var| {
                         scope.put(inner_var, caller_var) catch {};
+                    } else {
+                        // No outer mapping in the type scope. This happens when the
+                        // outer function has concrete types (not rigids), e.g., I64.to
+                        // calling range_to. In this case, map inner_var → outer_var
+                        // directly. The outer_var is in the current module's type store
+                        // and resolves to a concrete type. fromTypeVar will detect that
+                        // the mapped var is out of bounds for the caller module and
+                        // resolve it in the current module instead.
+                        scope.put(inner_var, outer_var) catch {};
                     }
                 }
             }
@@ -2370,9 +2379,36 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             // For local function calls, set up layout hints so generic parameters
             // get the correct concrete layouts from the call arguments.
             const is_local_call_with_hints = fn_expr == .e_lookup_local;
+            // Track scope entries added by inner local calls so we can remove them after.
+            // When inside an external def body (old_caller_module != null), inner local calls
+            // compose override chains into scope[0]. These entries must be removed after the
+            // inner call to prevent inner-function vars from polluting later expressions.
+            var inner_scope_keys: [32]types.Var = undefined;
+            var inner_scope_key_count: u8 = 0;
             if (is_local_call_with_hints) {
                 const lookup = fn_expr.e_lookup_local;
+                // Snapshot scope[0] count before the call to track new entries
+                const scope_count_before: u32 = if (old_caller_module != null and
+                    self.type_scope.scopes.items.len > 0)
+                    self.type_scope.scopes.items[0].count()
+                else
+                    0;
                 try self.setupLocalCallLayoutHints(module_env, lookup.pattern_idx, call.args, expr_idx);
+                // Record which keys were added by the composition
+                if (old_caller_module != null and self.type_scope.scopes.items.len > 0) {
+                    const scope_count_after = self.type_scope.scopes.items[0].count();
+                    if (scope_count_after > scope_count_before) {
+                        // New entries were added — record the keys from layout_var_overrides
+                        // since those are the ones composed into scope[0]
+                        var override_iter = self.layout_var_overrides.iterator();
+                        while (override_iter.next()) |entry| {
+                            if (inner_scope_key_count < inner_scope_keys.len) {
+                                inner_scope_keys[inner_scope_key_count] = entry.key_ptr.*;
+                                inner_scope_key_count += 1;
+                            }
+                        }
+                    }
+                }
                 // Set type_scope_caller_module so that fromTypeVar checks the type
                 // scope for flex/rigid vars inside the lambda body. Without this,
                 // layout computations for parameters with unresolved types (like list
@@ -2391,6 +2427,13 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                 if (old_caller_module == null) {
                     if (self.type_scope.scopes.items.len > 0) {
                         self.type_scope.scopes.items[0].clearRetainingCapacity();
+                    }
+                } else {
+                    // Inner call: remove only the entries that were added by the composition
+                    if (inner_scope_key_count > 0 and self.type_scope.scopes.items.len > 0) {
+                        for (inner_scope_keys[0..inner_scope_key_count]) |key| {
+                            _ = self.type_scope.scopes.items[0].remove(key);
+                        }
                     }
                 }
             };

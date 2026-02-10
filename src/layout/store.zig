@@ -1626,6 +1626,20 @@ pub const Store = struct {
         const cache_key = ModuleVarKey{ .module_idx = module_idx, .var_ = current.var_ };
 
         if (self.layouts_by_module_var.get(cache_key)) |cached_idx| {
+            // For recursive nominals, the cache stores Box(tag_union). When not inside
+            // a container (top-level caller), unwrap to return the raw tag_union.
+            // The Box is only needed for recursive references WITHIN the type's definition
+            // (to break infinite size) and for fields in records/tuples.
+            if (self.work.pending_containers.len == 0) {
+                const cached_layout = self.getLayout(cached_idx);
+                if (cached_layout.tag == .box and cached_layout.data.box != .opaque_ptr) {
+                    if (current.desc.content == .structure and
+                        current.desc.content.structure == .nominal_type)
+                    {
+                        return cached_layout.data.box;
+                    }
+                }
+            }
             return cached_idx;
         }
 
@@ -1689,7 +1703,7 @@ pub const Store = struct {
                 // we need to use the boxed layout, not the raw cached layout.
                 // But for tag union and record fields, we use the raw layout - the type
                 // system says it's Node, not Box(Node).
-                if (self.work.pending_containers.len > 0) {
+                if (self.work.pending_containers.len > container_base_depth) {
                     const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
                     if (pending_item.container == .list or pending_item.container == .box) {
                         if (self.recursive_nominal_registry.getBoxLayout(current_cache_key)) |boxed_idx| {
@@ -1714,6 +1728,18 @@ pub const Store = struct {
                         } else {
                             layout_idx = cached_idx;
                         }
+                    } else {
+                        layout_idx = cached_idx;
+                    }
+                } else if (self.work.pending_containers.len == container_base_depth) {
+                    // Not inside a container from this invocation — unwrap Box
+                    // for top-level callers who expect the raw tag_union layout.
+                    const cached_layout = self.getLayout(cached_idx);
+                    if (cached_layout.tag == .box and cached_layout.data.box != .opaque_ptr and
+                        current.desc.content == .structure and
+                        current.desc.content.structure == .nominal_type)
+                    {
+                        layout_idx = cached_layout.data.box;
                     } else {
                         layout_idx = cached_idx;
                     }
@@ -1927,13 +1953,19 @@ pub const Store = struct {
                             // double-boxing. This mirrors the logic in the layouts_by_module_var
                             // cache hit path above.
                             const existing_layout = self.getLayout(existing_idx);
-                            if (existing_layout.tag == .box and self.work.pending_containers.len > 0) {
+                            if (existing_layout.tag == .box and self.work.pending_containers.len > container_base_depth) {
                                 const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
                                 if (pending_item.container == .list or pending_item.container == .box) {
                                     layout_idx = existing_layout.data.box;
                                 } else {
                                     layout_idx = existing_idx;
                                 }
+                            } else if (existing_layout.tag == .box and existing_layout.data.box != .opaque_ptr and
+                                self.work.pending_containers.len == container_base_depth)
+                            {
+                                // Not inside a container from this invocation - unwrap Box
+                                // for top-level callers who expect the raw tag_union layout.
+                                layout_idx = existing_layout.data.box;
                             } else {
                                 layout_idx = existing_idx;
                             }
@@ -2070,6 +2102,13 @@ pub const Store = struct {
                                             if (type_scope.lookup(elem_resolved.var_)) |mapped_var| {
                                                 // Resolve the mapped type in the caller module
                                                 const caller_env = self.all_module_envs[caller_mod];
+                                                // Guard: the mapped var must be valid for the caller module's type store.
+                                                // If not, the type scope entry is from a different module context
+                                                // (e.g., an inner call within an external def body) and should be ignored.
+                                                const mapped_var_int = @intFromEnum(mapped_var);
+                                                if (mapped_var_int >= caller_env.types.len()) {
+                                                    break :blk flex.constraints.count == 0;
+                                                }
                                                 const mapped_resolved = caller_env.types.resolveVar(mapped_var);
                                                 // If there's a mapping, the element type is NOT ZST.
                                                 // We'll compute the actual layout recursively.
@@ -2097,6 +2136,11 @@ pub const Store = struct {
                                             if (type_scope.lookup(elem_resolved.var_)) |mapped_var| {
                                                 // Resolve the mapped type in the caller module
                                                 const caller_env = self.all_module_envs[caller_mod];
+                                                // Guard: the mapped var must be valid for the caller module's type store.
+                                                const mapped_var_int = @intFromEnum(mapped_var);
+                                                if (mapped_var_int >= caller_env.types.len()) {
+                                                    break :blk rigid.constraints.count == 0;
+                                                }
                                                 const mapped_resolved = caller_env.types.resolveVar(mapped_var);
                                                 // If there's a mapping, the element type is NOT ZST.
                                                 // We'll compute the actual layout recursively.
@@ -2117,14 +2161,20 @@ pub const Store = struct {
                                         // function, all unmapped rigids should map to the same concrete type.
                                         if (caller_module_idx) |caller_mod| {
                                             if (type_scope.scopes.items.len > 0) {
+                                                const caller_env = self.all_module_envs[caller_mod];
                                                 var iter = type_scope.scopes.items[0].iterator();
                                                 while (iter.next()) |entry| {
                                                     // Check if this mapping is from a rigid (not a specific structure)
                                                     const ext_env = self.all_module_envs[self.current_module_idx];
+                                                    // Guard: ensure key is valid for the ext module's type store
+                                                    const key_int = @intFromEnum(entry.key_ptr.*);
+                                                    if (key_int >= ext_env.types.len()) continue;
                                                     const key_resolved = ext_env.types.resolveVar(entry.key_ptr.*);
                                                     if (key_resolved.desc.content == .rigid) {
+                                                        // Guard: ensure value is valid for the caller module's type store
+                                                        const val_int = @intFromEnum(entry.value_ptr.*);
+                                                        if (val_int >= caller_env.types.len()) continue;
                                                         // Found a rigid mapping - use it
-                                                        const caller_env = self.all_module_envs[caller_mod];
                                                         const mapped_resolved = caller_env.types.resolveVar(entry.value_ptr.*);
                                                         break :blk switch (mapped_resolved.desc.content) {
                                                             .structure => |ft| switch (ft) {
@@ -2534,19 +2584,26 @@ pub const Store = struct {
                                         scope_lookup_count += 1;
                                     }
                                 }
+                                const target_module = caller_module_idx.?;
+                                const target_types = &self.all_module_envs[target_module].types;
+                                const resolve_module = if (@intFromEnum(mapped_var) >= target_types.len())
+                                    // mapped_var is out of bounds for the caller module — it likely
+                                    // belongs to the current module (e.g., an inner function's override
+                                    // composed into the type scope within an external def body).
+                                    // Resolve in the current module instead.
+                                    self.current_module_idx
+                                else
+                                    target_module;
                                 // IMPORTANT: Remove the flex from in_progress_vars before making
                                 // the recursive call. Otherwise, if the recursive call resolves to
                                 // the same flex, it will see it in in_progress_vars and incorrectly
                                 // detect a cycle.
                                 _ = self.work.in_progress_vars.swapRemove(.{ .module_idx = self.current_module_idx, .var_ = current.var_ });
-                                // Make a recursive call to compute the layout in the caller's module.
-                                // This avoids switching current_module_idx which would mess up pending
-                                // work items from the current module.
-                                const target_module = caller_module_idx.?;
-                                // Pass target_module as caller so chained type scope lookups
+                                // Make a recursive call to compute the layout in the resolve module.
+                                // Pass resolve_module as caller so chained type scope lookups
                                 // work (e.g., rigid → flex → concrete via two scope entries).
                                 // Cycle detection prevents infinite loops.
-                                layout_idx = try self.fromTypeVar(target_module, mapped_var, type_scope, target_module);
+                                layout_idx = try self.fromTypeVar(resolve_module, mapped_var, type_scope, resolve_module);
                                 skip_layout_computation = true;
                                 break :blk self.getLayout(layout_idx);
                             }
@@ -2587,6 +2644,12 @@ pub const Store = struct {
                         // we're already in the target module and shouldn't apply mappings.
                         if (caller_module_idx != null) {
                             if (type_scope.lookup(current.var_)) |mapped_var| {
+                                const target_module = caller_module_idx.?;
+                                const target_types = &self.all_module_envs[target_module].types;
+                                const resolve_module = if (@intFromEnum(mapped_var) >= target_types.len())
+                                    self.current_module_idx
+                                else
+                                    target_module;
                                 // Debug-only cycle detection: if we've visited this var before,
                                 // there's a cycle which indicates a bug in type checking.
                                 if (@import("builtin").mode == .Debug) {
@@ -2601,18 +2664,9 @@ pub const Store = struct {
                                     }
                                 }
                                 // IMPORTANT: Remove the rigid from in_progress_vars before making
-                                // the recursive call. Otherwise, if the recursive call resolves to
-                                // the same rigid, it will see it in in_progress_vars and incorrectly
-                                // detect a cycle.
+                                // the recursive call.
                                 _ = self.work.in_progress_vars.swapRemove(.{ .module_idx = self.current_module_idx, .var_ = current.var_ });
-                                // Make a recursive call to compute the layout in the caller's module.
-                                // This avoids switching current_module_idx which would mess up pending
-                                // work items from the current module.
-                                const target_module = caller_module_idx.?;
-                                // Pass target_module as caller so chained type scope lookups
-                                // work (e.g., rigid → flex → concrete via two scope entries).
-                                // Cycle detection prevents infinite loops.
-                                layout_idx = try self.fromTypeVar(target_module, mapped_var, type_scope, target_module);
+                                layout_idx = try self.fromTypeVar(resolve_module, mapped_var, type_scope, resolve_module);
                                 skip_layout_computation = true;
                                 break :blk self.getLayout(layout_idx);
                             }
@@ -3024,7 +3078,12 @@ pub const Store = struct {
                         // Unfinalized box reservation - update it with the real layout
                         self.updateLayout(reserved, Layout.box(layout_idx));
                     }
-                    // Return the box layout (the nominal's canonical representation)
+                    // If reserved is Box(layout_idx), return the raw layout for
+                    // top-level callers (not inside a container from this invocation).
+                    const final_reserved = self.getLayout(reserved);
+                    if (final_reserved.tag == .box and final_reserved.data.box == layout_idx) {
+                        return layout_idx;
+                    }
                     return reserved;
                 }
             }
