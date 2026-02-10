@@ -2,7 +2,7 @@
 //!
 //! This module provides background cleanup functionality that:
 //! - Removes temporary runtime directories older than 5 minutes
-//! - Removes persistent cache files (mod/ and exe/) older than 30 days
+//! - Removes persistent cache files (mod/, exe/, and test/) older than 30 days
 //! - Removes empty directories after cleanup
 //!
 //! The cleanup runs on a single background thread that is fire-and-forget:
@@ -189,6 +189,11 @@ fn cleanupPersistentCache(allocator: Allocator, maybe_stats: ?*CleanupStats) voi
         const exe_path = std.fs.path.join(allocator, &.{ version_path, "exe" }) catch continue;
         cleanupCacheSubdir(allocator, exe_path, now, maybe_stats);
         allocator.free(exe_path);
+
+        // Clean up test/ directory
+        const test_path = std.fs.path.join(allocator, &.{ version_path, "test" }) catch continue;
+        cleanupCacheSubdir(allocator, test_path, now, maybe_stats);
+        allocator.free(test_path);
 
         // NOTE: We intentionally do NOT delete empty version directories.
         // Empty directories are harmless and deleting them can cause race conditions.

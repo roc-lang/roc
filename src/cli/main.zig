@@ -4670,6 +4670,215 @@ const CopiedFile = struct {
     category: []const u8,
 };
 
+// ---- Test cache blob format ----
+// Binary format for caching test results. See plan for full specification.
+
+const TestCacheHeader = extern struct {
+    magic: u32 = 0x524F4354, // "ROCT"
+    version: u32 = 1,
+    outcome: u32, // 0=all_passed, 1=some_failed, 2=compilation_error
+    passed_count: u32,
+    failed_count: u32,
+    num_results: u32,
+    comptime_report_len: u32,
+    _reserved: u32 = 0,
+
+    comptime {
+        std.debug.assert(@sizeOf(TestCacheHeader) == 32);
+    }
+};
+
+const TestCacheResultEntry = extern struct {
+    passed: u8,
+    _pad: [3]u8 = .{ 0, 0, 0 },
+    region_start: u32,
+    region_end: u32,
+    report_len: u32,
+
+    comptime {
+        std.debug.assert(@sizeOf(TestCacheResultEntry) == 16);
+    }
+};
+
+const TestCacheOutcome = enum(u32) {
+    all_passed = 0,
+    some_failed = 1,
+    compilation_error = 2,
+};
+
+fn parseTestCacheHeader(data: []const u8) ?*const TestCacheHeader {
+    if (data.len < @sizeOf(TestCacheHeader)) return null;
+    const header: *const TestCacheHeader = @ptrCast(@alignCast(data.ptr));
+    if (header.magic != 0x524F4354) return null;
+    if (header.version != 1) return null;
+    return header;
+}
+
+fn buildTestCacheBlob(
+    allocator: std.mem.Allocator,
+    outcome: TestCacheOutcome,
+    passed_count: u32,
+    failed_count: u32,
+    results: []const TestCacheResultEntry,
+    failure_reports: []const []const u8,
+    comptime_report: []const u8,
+) ![]u8 {
+    // Calculate total size
+    var total_size: usize = @sizeOf(TestCacheHeader);
+
+    if (outcome == .compilation_error) {
+        total_size += comptime_report.len;
+    } else {
+        total_size += results.len * @sizeOf(TestCacheResultEntry);
+        for (failure_reports) |report| {
+            total_size += report.len;
+        }
+        total_size += comptime_report.len;
+    }
+
+    var buf = try allocator.alloc(u8, total_size);
+    var offset: usize = 0;
+
+    // Write header
+    const header = TestCacheHeader{
+        .outcome = @intFromEnum(outcome),
+        .passed_count = passed_count,
+        .failed_count = failed_count,
+        .num_results = @intCast(results.len),
+        .comptime_report_len = @intCast(comptime_report.len),
+    };
+    const header_bytes = std.mem.asBytes(&header);
+    @memcpy(buf[offset..][0..header_bytes.len], header_bytes);
+    offset += header_bytes.len;
+
+    if (outcome == .compilation_error) {
+        @memcpy(buf[offset..][0..comptime_report.len], comptime_report);
+        offset += comptime_report.len;
+    } else {
+        // Write result entries
+        for (results) |entry| {
+            const entry_bytes = std.mem.asBytes(&entry);
+            @memcpy(buf[offset..][0..entry_bytes.len], entry_bytes);
+            offset += entry_bytes.len;
+        }
+        // Write failure report data
+        for (failure_reports) |report| {
+            @memcpy(buf[offset..][0..report.len], report);
+            offset += report.len;
+        }
+        // Write comptime report
+        @memcpy(buf[offset..][0..comptime_report.len], comptime_report);
+        offset += comptime_report.len;
+    }
+
+    std.debug.assert(offset == total_size);
+    return buf;
+}
+
+fn replayTestCache(
+    gpa: std.mem.Allocator,
+    data: []const u8,
+    args: cli_args.TestArgs,
+    stdout: *std.Io.Writer,
+    stderr: *std.Io.Writer,
+    source: []const u8,
+    start_time: i128,
+) !void {
+    const header = parseTestCacheHeader(data) orelse return error.InvalidCacheData;
+    const outcome: TestCacheOutcome = @enumFromInt(header.outcome);
+
+    // Calculate elapsed time
+    const end_time = std.time.nanoTimestamp();
+    const elapsed_ns = @as(u64, @intCast(end_time - start_time));
+    const elapsed_ms = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000.0;
+
+    if (outcome == .compilation_error) {
+        // Print cached error message
+        const error_start = @sizeOf(TestCacheHeader);
+        if (data.len < error_start + header.comptime_report_len) return error.InvalidCacheData;
+        const error_msg = data[error_start..][0..header.comptime_report_len];
+        try stderr.writeAll(error_msg);
+        return error.TestsFailed;
+    }
+
+    // Parse result entries
+    const entries_start = @sizeOf(TestCacheHeader);
+    const entries_size = @as(usize, header.num_results) * @sizeOf(TestCacheResultEntry);
+    if (data.len < entries_start + entries_size + header.comptime_report_len) return error.InvalidCacheData;
+
+    const entries_bytes = data[entries_start..][0..entries_size];
+    const entries: []const TestCacheResultEntry = @as([*]const TestCacheResultEntry, @ptrCast(@alignCast(entries_bytes.ptr)))[0..header.num_results];
+
+    // Calculate where failure reports start
+    const failure_data_start = entries_start + entries_size;
+
+    // Print compile-time crash reports from cache
+    const comptime_report_start = data.len - header.comptime_report_len;
+    if (header.comptime_report_len > 0) {
+        const comptime_report = data[comptime_report_start..][0..header.comptime_report_len];
+        try stderr.writeAll(comptime_report);
+    }
+
+    const has_comptime_crashes = header.comptime_report_len > 0;
+    const passed = header.passed_count;
+    const failed = header.failed_count;
+
+    // Create minimal ModuleEnv just for line number computation
+    var env = can.ModuleEnv.init(gpa, source) catch return error.InvalidCacheData;
+    defer env.deinit();
+    env.common.source = source;
+    env.common.calcLineStarts(gpa) catch return error.InvalidCacheData;
+
+    if (failed == 0 and !has_comptime_crashes) {
+        try stdout.print("All ({}) tests passed in {d:.1} ms. (cached)\n", .{ passed, elapsed_ms });
+        if (args.verbose) {
+            for (entries) |entry| {
+                const region = base.Region.from_raw_offsets(entry.region_start, entry.region_end);
+                const region_info = env.calcRegionInfo(region);
+                try stdout.print("\x1b[32mPASS\x1b[0m: {s}:{}\n", .{ args.path, region_info.start_line_idx + 1 });
+            }
+        }
+        return; // Exit with 0
+    } else {
+        const total_tests = passed + failed;
+        if (total_tests > 0) {
+            try stderr.print("Ran {} test(s): {} passed, {} failed in {d:.1}ms (cached)\n", .{ total_tests, passed, failed, elapsed_ms });
+        }
+
+        if (args.verbose) {
+            var report_offset = failure_data_start;
+            for (entries) |entry| {
+                const region = base.Region.from_raw_offsets(entry.region_start, entry.region_end);
+                const region_info = env.calcRegionInfo(region);
+                if (entry.passed != 0) {
+                    try stdout.print("\x1b[32mPASS\x1b[0m: {s}:{}\n", .{ args.path, region_info.start_line_idx + 1 });
+                } else {
+                    // Print cached failure report
+                    if (entry.report_len > 0 and report_offset + entry.report_len <= comptime_report_start) {
+                        const report_text = data[report_offset..][0..entry.report_len];
+                        try stderr.writeAll(report_text);
+                    } else {
+                        try stderr.print("\x1b[31mFAIL\x1b[0m: {s}:{}\n", .{ args.path, region_info.start_line_idx + 1 });
+                    }
+                }
+                if (entry.passed == 0) {
+                    report_offset += entry.report_len;
+                }
+            }
+        } else {
+            for (entries) |entry| {
+                if (entry.passed == 0) {
+                    const region = base.Region.from_raw_offsets(entry.region_start, entry.region_end);
+                    const region_info = env.calcRegionInfo(region);
+                    try stderr.print("\x1b[31mFAIL\x1b[0m: {s}:{}\n", .{ args.path, region_info.start_line_idx + 1 });
+                }
+            }
+        }
+
+        return error.TestsFailed;
+    }
+}
+
 fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -4690,6 +4899,28 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
         return err;
     };
     defer ctx.gpa.free(source);
+
+    // --- Cache check (before any compilation) ---
+    const cache_config = CacheConfig{ .enabled = !args.no_cache };
+    var cache_manager = CacheManager.init(ctx.gpa, cache_config, Filesystem.default());
+    const cache_key = CacheManager.generateCacheKey(source, build_options.compiler_version);
+
+    if (!args.no_cache) {
+        const test_cache_dir = cache_config.getTestCacheDir(ctx.gpa) catch null;
+        if (test_cache_dir) |dir| {
+            defer ctx.gpa.free(dir);
+            if (cache_manager.loadRawBytes(cache_key, dir)) |cached_data| {
+                defer ctx.gpa.free(cached_data);
+                replayTestCache(ctx.gpa, cached_data, args, stdout, stderr, source, start_time) catch |err| {
+                    if (err == error.TestsFailed) return err;
+                    // On invalid cache data, fall through to normal path
+                };
+                return;
+            }
+        }
+    }
+
+    // --- Normal compilation path (cache miss) ---
 
     // Extract module name from the file path
     const basename = std.fs.path.basename(args.path);
@@ -4822,7 +5053,10 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
     const elapsed_ns = @as(u64, @intCast(end_time - start_time));
     const elapsed_ms = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000.0;
 
-    // Report any compile-time crashes
+    // Render compile-time crash reports to a buffer for caching
+    var comptime_report_writer = std.Io.Writer.Allocating.init(ctx.gpa);
+    defer comptime_report_writer.deinit();
+
     const has_comptime_crashes = checker.problems.len() > 0;
     if (has_comptime_crashes) {
         const problem = @import("check").problem;
@@ -4848,14 +5082,73 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
 
             const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
             const config = reporting.ReportingConfig.initColorTerminal();
+            // Render to both stderr and the cache buffer
             try reporting.renderReportToTerminal(&report, stderr, palette, config);
+            try reporting.renderReportToTerminal(&report, &comptime_report_writer.writer, palette, config);
         }
     }
 
     // Clean up comptime evaluator AFTER building reports (crash messages must stay alive until reports are built)
     comptime_evaluator.deinit();
 
-    // Report results
+    // --- Build cache blob ---
+    // Always render verbose failure reports for caching (even in non-verbose mode)
+    var cache_entries = std.ArrayList(TestCacheResultEntry).empty;
+    defer cache_entries.deinit(ctx.gpa);
+    var cache_failure_reports = std.ArrayList([]const u8).empty;
+    defer {
+        for (cache_failure_reports.items) |r| ctx.gpa.free(r);
+        cache_failure_reports.deinit(ctx.gpa);
+    }
+
+    for (test_runner.test_results.items) |test_result| {
+        var report_text: []const u8 = "";
+        if (!test_result.passed) {
+            // Render failure report to buffer for cache
+            var report_writer = std.Io.Writer.Allocating.init(ctx.gpa);
+            errdefer report_writer.deinit();
+
+            var report = test_runner.createReport(test_result, args.path) catch null;
+            if (report != null) {
+                defer report.?.deinit();
+                const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
+                const config = reporting.ReportingConfig.initColorTerminal();
+                reporting.renderReportToTerminal(&report.?, &report_writer.writer, palette, config) catch {};
+            }
+
+            report_text = report_writer.toOwnedSlice() catch "";
+        }
+        try cache_failure_reports.append(ctx.gpa, report_text);
+
+        try cache_entries.append(ctx.gpa, .{
+            .passed = if (test_result.passed) 1 else 0,
+            .region_start = test_result.region.start.offset,
+            .region_end = test_result.region.end.offset,
+            .report_len = @intCast(report_text.len),
+        });
+    }
+
+    const cache_outcome: TestCacheOutcome = if (failed == 0 and !has_comptime_crashes) .all_passed else .some_failed;
+
+    if (!args.no_cache) {
+        if (buildTestCacheBlob(
+            ctx.gpa,
+            cache_outcome,
+            passed,
+            failed,
+            cache_entries.items,
+            cache_failure_reports.items,
+            comptime_report_writer.toOwnedSlice() catch "",
+        )) |blob| {
+            defer ctx.gpa.free(blob);
+            if (cache_config.getTestCacheDir(ctx.gpa)) |dir| {
+                defer ctx.gpa.free(dir);
+                cache_manager.storeRawBytes(cache_key, blob, dir);
+            } else |_| {}
+        } else |_| {}
+    }
+
+    // --- Report results to user ---
     if (failed == 0 and !has_comptime_crashes) {
         // Success case: print summary
         try stdout.print("All ({}) tests passed in {d:.1} ms.\n", .{ passed, elapsed_ms });
@@ -4875,27 +5168,18 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
         }
 
         if (args.verbose) {
-            for (test_runner.test_results.items) |test_result| {
+            for (test_runner.test_results.items, 0..) |test_result, idx| {
                 const region_info = env.calcRegionInfo(test_result.region);
                 if (test_result.passed) {
                     try stdout.print("\x1b[32mPASS\x1b[0m: {s}:{}\n", .{ args.path, region_info.start_line_idx + 1 });
                 } else {
-                    // Generate and render a detailed report for this failure
-                    var report = test_runner.createReport(test_result, args.path) catch |err| {
-                        // Fallback to simple message if report generation fails
-                        try stderr.print("\x1b[31mFAIL\x1b[0m: {s}:{}", .{ args.path, region_info.start_line_idx + 1 });
-                        if (test_result.error_msg) |msg| {
-                            try stderr.print(" - {s}", .{msg});
-                        }
-                        try stderr.print(" (report generation failed: {})\n", .{err});
-                        continue;
-                    };
-                    defer report.deinit();
-
-                    // Render the report to terminal
-                    const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
-                    const config = reporting.ReportingConfig.initColorTerminal();
-                    try reporting.renderReportToTerminal(&report, stderr, palette, config);
+                    // Use the pre-rendered report from cache building
+                    const cached_report = cache_failure_reports.items[idx];
+                    if (cached_report.len > 0) {
+                        try stderr.writeAll(cached_report);
+                    } else {
+                        try stderr.print("\x1b[31mFAIL\x1b[0m: {s}:{}\n", .{ args.path, region_info.start_line_idx + 1 });
+                    }
                 }
             }
         } else {

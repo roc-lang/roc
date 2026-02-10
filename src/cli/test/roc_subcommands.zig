@@ -588,6 +588,164 @@ test "roc build glibc target gives helpful error on non-Linux" {
     try testing.expect(suggests_musl);
 }
 
+test "roc test caches passing results" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    // First run - should compile and cache
+    const result1 = try util.runRoc(gpa, &.{"test"}, "test/cli/expect_all_pass.roc");
+    defer gpa.free(result1.stdout);
+    defer gpa.free(result1.stderr);
+
+    // First run should succeed
+    try testing.expect(result1.term == .Exited and result1.term.Exited == 0);
+
+    // Second run - should hit cache
+    const result2 = try util.runRoc(gpa, &.{"test"}, "test/cli/expect_all_pass.roc");
+    defer gpa.free(result2.stdout);
+    defer gpa.free(result2.stderr);
+
+    // Second run should also succeed
+    try testing.expect(result2.term == .Exited and result2.term.Exited == 0);
+
+    // Second run's stdout should contain "(cached)"
+    try testing.expect(std.mem.indexOf(u8, result2.stdout, "(cached)") != null);
+}
+
+test "roc test caches failing results" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    // First run - should compile and cache
+    const result1 = try util.runRoc(gpa, &.{"test"}, "test/cli/expect_some_fail.roc");
+    defer gpa.free(result1.stdout);
+    defer gpa.free(result1.stderr);
+
+    // First run should fail (exit code 1)
+    try testing.expect(result1.term == .Exited and result1.term.Exited == 1);
+
+    // Second run - should hit cache
+    const result2 = try util.runRoc(gpa, &.{"test"}, "test/cli/expect_some_fail.roc");
+    defer gpa.free(result2.stdout);
+    defer gpa.free(result2.stderr);
+
+    // Second run should also fail
+    try testing.expect(result2.term == .Exited and result2.term.Exited == 1);
+
+    // Second run's stderr should contain "(cached)"
+    try testing.expect(std.mem.indexOf(u8, result2.stderr, "(cached)") != null);
+}
+
+test "roc test cache invalidated by source change" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    // Create a temporary copy of the test file
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const cwd = std.fs.cwd();
+    const source_content = try cwd.readFileAlloc(gpa, "test/cli/expect_all_pass.roc", 10 * 1024);
+    defer gpa.free(source_content);
+
+    try tmp_dir.dir.writeFile(.{ .sub_path = "test_cache_invalidation.roc", .data = source_content });
+
+    const tmp_path = try tmp_dir.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(tmp_path);
+    const temp_file_path = try std.fs.path.join(gpa, &.{ tmp_path, "test_cache_invalidation.roc" });
+    defer gpa.free(temp_file_path);
+
+    // Get absolute path to roc binary
+    const cwd_path = try cwd.realpathAlloc(gpa, ".");
+    defer gpa.free(cwd_path);
+    const roc_binary_name = if (@import("builtin").os.tag == .windows) "roc.exe" else "roc";
+    const roc_path = try std.fs.path.join(gpa, &.{ cwd_path, "zig-out", "bin", roc_binary_name });
+    defer gpa.free(roc_path);
+
+    // First run - populates cache
+    const result1 = try std.process.Child.run(.{
+        .allocator = gpa,
+        .argv = &.{ roc_path, "test", temp_file_path },
+        .cwd = cwd_path,
+        .max_output_bytes = 10 * 1024 * 1024,
+    });
+    defer gpa.free(result1.stdout);
+    defer gpa.free(result1.stderr);
+
+    try testing.expect(result1.term == .Exited and result1.term.Exited == 0);
+
+    // Modify the source (append a comment)
+    const modified_content = try std.mem.concat(gpa, u8, &.{ source_content, "\n# modified\n" });
+    defer gpa.free(modified_content);
+    try tmp_dir.dir.writeFile(.{ .sub_path = "test_cache_invalidation.roc", .data = modified_content });
+
+    // Second run - should NOT be cached (source changed)
+    const result2 = try std.process.Child.run(.{
+        .allocator = gpa,
+        .argv = &.{ roc_path, "test", temp_file_path },
+        .cwd = cwd_path,
+        .max_output_bytes = 10 * 1024 * 1024,
+    });
+    defer gpa.free(result2.stdout);
+    defer gpa.free(result2.stderr);
+
+    try testing.expect(result2.term == .Exited and result2.term.Exited == 0);
+
+    // Second run should NOT contain "(cached)" since source changed
+    try testing.expect(std.mem.indexOf(u8, result2.stdout, "(cached)") == null);
+}
+
+test "roc test --verbose works from cache" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    // First run (non-verbose) - populates cache
+    const result1 = try util.runRoc(gpa, &.{"test"}, "test/cli/expect_all_pass.roc");
+    defer gpa.free(result1.stdout);
+    defer gpa.free(result1.stderr);
+
+    try testing.expect(result1.term == .Exited and result1.term.Exited == 0);
+
+    // Second run (verbose) - should use cache
+    const result2 = try util.runRoc(gpa, &.{ "test", "--verbose" }, "test/cli/expect_all_pass.roc");
+    defer gpa.free(result2.stdout);
+    defer gpa.free(result2.stderr);
+
+    try testing.expect(result2.term == .Exited and result2.term.Exited == 0);
+
+    // Should contain "(cached)" and PASS lines
+    try testing.expect(std.mem.indexOf(u8, result2.stdout, "(cached)") != null);
+    try testing.expect(std.mem.indexOf(u8, result2.stdout, "PASS") != null);
+}
+
+test "roc test --verbose caches failure reports" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    // First run (verbose) - compiles and caches
+    const result1 = try util.runRoc(gpa, &.{ "test", "--verbose" }, "test/cli/expect_some_fail.roc");
+    defer gpa.free(result1.stdout);
+    defer gpa.free(result1.stderr);
+
+    // Should fail
+    try testing.expect(result1.term == .Exited and result1.term.Exited == 1);
+
+    // Second run (verbose) - should use cache
+    const result2 = try util.runRoc(gpa, &.{ "test", "--verbose" }, "test/cli/expect_some_fail.roc");
+    defer gpa.free(result2.stdout);
+    defer gpa.free(result2.stderr);
+
+    // Should also fail
+    try testing.expect(result2.term == .Exited and result2.term.Exited == 1);
+
+    // Second run should have "(cached)" in stderr
+    try testing.expect(std.mem.indexOf(u8, result2.stderr, "(cached)") != null);
+
+    // Both runs should report FAIL in stderr
+    try testing.expect(std.mem.indexOf(u8, result1.stderr, "FAIL") != null);
+    try testing.expect(std.mem.indexOf(u8, result2.stderr, "FAIL") != null);
+}
+
 test "roc test with nested list chunks does not panic on layout upgrade" {
     const testing = std.testing;
     const gpa = testing.allocator;

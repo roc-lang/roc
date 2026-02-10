@@ -100,6 +100,7 @@ pub const TestArgs = struct {
     opt: OptLevel, // the optimization level to be used for test execution
     main: ?[]const u8, // the path to a roc file with an app header to be used to resolve dependencies
     verbose: bool = false, // enable verbose output showing individual test results
+    no_cache: bool = false, // disable test result caching
 };
 
 /// Arguments for `roc format`
@@ -535,9 +536,10 @@ fn parseTest(args: []const []const u8) CliArgs {
     var opt: OptLevel = .dev;
     var main: ?[]const u8 = null;
     var verbose: bool = false;
+    var no_cache: bool = false;
     for (args) |arg| {
         if (isHelpFlag(arg)) {
-            return CliArgs{ .help = 
+            return CliArgs{ .help =
             \\Run all top-level `expect`s in a main module and any modules it imports
             \\
             \\Usage: roc test [OPTIONS] [ROC_FILE]
@@ -549,6 +551,7 @@ fn parseTest(args: []const []const u8) CliArgs {
             \\      --opt=<size|speed|dev>  Optimize the build process for binary size, execution speed, or compilation speed. Defaults to compilation speed dev
             \\      --main <main>           The .roc file of the main app/package module to resolve dependencies from
             \\      --verbose               Enable verbose output showing individual test results
+            \\      --no-cache              Disable test result caching
             \\  -h, --help                  Print help
             \\
         };
@@ -570,6 +573,8 @@ fn parseTest(args: []const []const u8) CliArgs {
             }
         } else if (mem.eql(u8, arg, "--verbose")) {
             verbose = true;
+        } else if (mem.eql(u8, arg, "--no-cache")) {
+            no_cache = true;
         } else {
             if (path != null) {
                 return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "test", .arg = arg } } };
@@ -577,7 +582,7 @@ fn parseTest(args: []const []const u8) CliArgs {
             path = arg;
         }
     }
-    return CliArgs{ .test_cmd = TestArgs{ .path = path orelse "main.roc", .opt = opt, .main = main, .verbose = verbose } };
+    return CliArgs{ .test_cmd = TestArgs{ .path = path orelse "main.roc", .opt = opt, .main = main, .verbose = verbose, .no_cache = no_cache } };
 }
 
 fn parseRepl(args: []const []const u8) CliArgs {
