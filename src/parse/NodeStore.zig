@@ -175,10 +175,6 @@ pub fn debugTo(store: *NodeStore, writer: std.io.AnyWriter) !void {
     try writer.print("==> IR.NodeStore DEBUG <==\n\n", .{});
 }
 
-// ------------------------------------------------------------------------
-// Creation API - All nodes should be added using these functions
-// ------------------------------------------------------------------------
-
 /// Any node type can be malformed, but must come with a diagnostic reason
 pub fn addMalformed(store: *NodeStore, comptime T: type, reason: Diagnostic.Tag, region: Region) std.mem.Allocator.Error!T {
     const nid = try store.nodes.append(store.gpa, .{
@@ -1090,10 +1086,6 @@ pub fn addTypeAnno(store: *NodeStore, anno: AST.TypeAnno) std.mem.Allocator.Erro
     const nid = try store.nodes.append(store.gpa, node);
     return @enumFromInt(@intFromEnum(nid));
 }
-
-// ------------------------------------------------------------------------
-// Read API - All nodes should be accessed using these functions
-// ------------------------------------------------------------------------
 
 /// TODO
 pub fn getFile(store: *const NodeStore) AST.File {
@@ -2091,10 +2083,6 @@ pub fn getTypeAnno(store: *const NodeStore, ty_anno_idx: AST.TypeAnno.Idx) AST.T
     return @enumFromInt(@intFromEnum(nid));
 }
 
-// ------------------------------------------------------------------------
-// Node types - these are the constituent types used in the Node Store API
-// ------------------------------------------------------------------------
-
 /// Returns the start position for a new Span of AST.Expr.Idxs in scratch
 pub fn scratchExprTop(store: *NodeStore) u32 {
     return store.scratch_exprs.top();
@@ -2507,10 +2495,6 @@ pub fn clearScratchWhereClausesFrom(store: *NodeStore, start: u32) void {
 pub fn whereClauseSlice(store: *const NodeStore, span: AST.WhereClause.Span) []AST.WhereClause.Idx {
     return store.sliceFromSpan(AST.WhereClause.Idx, span.span);
 }
-
-// -----------------------------------------------------------------
-// Target section functions
-// -----------------------------------------------------------------
 
 /// Adds a TargetsSection node and returns its index.
 pub fn addTargetsSection(store: *NodeStore, section: AST.TargetsSection) std.mem.Allocator.Error!AST.TargetsSection.Idx {

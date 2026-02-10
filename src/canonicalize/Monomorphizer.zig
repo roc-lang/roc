@@ -1548,9 +1548,14 @@ fn duplicateExpr(
                         return expr_idx;
                     }
 
+                    // Body changed due to type substitutions, so create independent
+                    // copies of args and captures for this specialization.
+                    const new_args = try self.duplicatePatternSpan(lambda.args);
+                    const new_captures = try self.duplicateCaptureSpan(closure.captures);
+
                     const new_lambda = try self.module_env.store.addExpr(Expr{
                         .e_lambda = .{
-                            .args = lambda.args,
+                            .args = new_args,
                             .body = new_body,
                         },
                     }, base.Region.zero());
@@ -1558,7 +1563,7 @@ fn duplicateExpr(
                     return try self.module_env.store.addExpr(Expr{
                         .e_closure = .{
                             .lambda_idx = new_lambda,
-                            .captures = closure.captures,
+                            .captures = new_captures,
                             .tag_name = closure.tag_name,
                         },
                     }, base.Region.zero());
@@ -2005,6 +2010,28 @@ fn duplicatePatternSpan(
     }
 
     return try self.module_env.store.patternSpanFrom(patterns_start);
+}
+
+/// Duplicate a span of captures so each specialization gets independent capture data.
+/// Used when duplicating closures during monomorphization.
+fn duplicateCaptureSpan(
+    self: *Self,
+    span: CIR.Expr.Capture.Span,
+) std.mem.Allocator.Error!CIR.Expr.Capture.Span {
+    const captures = self.module_env.store.sliceCaptures(span);
+    if (captures.len == 0) {
+        return span; // Empty span - return as-is
+    }
+
+    const captures_start = self.module_env.store.scratchTop("captures");
+
+    for (captures) |capture_idx| {
+        const capture = self.module_env.store.getCapture(capture_idx);
+        const new_idx = try self.module_env.store.addCapture(capture, base.Region.zero());
+        try self.module_env.store.addScratchCapture(new_idx);
+    }
+
+    return try self.module_env.store.capturesSpanFrom(captures_start);
 }
 
 /// Duplicate a single pattern.
@@ -3074,6 +3101,103 @@ test "monomorphizer: allExternalSpecializationsResolved detects unresolved" {
 
     // Now all resolved
     try testing.expect(try mono.allExternalSpecializationsResolved());
+}
+
+test "monomorphizer: closure capture duplication" {
+    const allocator = testing.allocator;
+
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, "test");
+    defer {
+        module_env.deinit();
+        allocator.destroy(module_env);
+    }
+
+    var mono = Self.init(allocator, module_env, &module_env.types);
+    defer mono.deinit();
+
+    // Create a capture (simulating a captured variable)
+    const ident = try module_env.insertIdent(base.Ident.for_text("captured_var"));
+    const pattern_idx = try module_env.store.addPattern(
+        Pattern{ .assign = .{ .ident = ident } },
+        base.Region.zero(),
+    );
+
+    const capture = CIR.Expr.Capture{
+        .name = ident,
+        .pattern_idx = pattern_idx,
+        .scope_depth = 1,
+    };
+
+    // Build a capture span with one capture
+    const captures_start = module_env.store.scratchTop("captures");
+    const capture_idx = try module_env.store.addCapture(capture, base.Region.zero());
+    try module_env.store.addScratchCapture(capture_idx);
+    const captures_span = try module_env.store.capturesSpanFrom(captures_start);
+
+    // Create a body expression that will change during duplication.
+    // Use a nested lambda (since duplicatePatternSpan always creates new patterns,
+    // a lambda with args always gets a new expression index).
+    const inner_body = try module_env.store.addExpr(Expr{ .e_lookup_local = .{ .pattern_idx = pattern_idx } }, base.Region.zero());
+    const inner_arg = try module_env.store.addPattern(Pattern.underscore, base.Region.zero());
+    const inner_args_start = module_env.store.scratchPatternTop();
+    try module_env.store.addScratchPattern(inner_arg);
+    const inner_args_span = try module_env.store.patternSpanFrom(inner_args_start);
+    const body_expr = try module_env.store.addExpr(Expr{
+        .e_lambda = .{
+            .args = inner_args_span,
+            .body = inner_body,
+        },
+    }, base.Region.zero());
+
+    // Create a lambda arg pattern
+    const arg_pattern = try module_env.store.addPattern(Pattern.underscore, base.Region.zero());
+    const args_start = module_env.store.scratchPatternTop();
+    try module_env.store.addScratchPattern(arg_pattern);
+    const args_span = try module_env.store.patternSpanFrom(args_start);
+
+    // Create the inner e_lambda expression
+    const lambda_idx = try module_env.store.addExpr(Expr{
+        .e_lambda = .{
+            .args = args_span,
+            .body = body_expr,
+        },
+    }, base.Region.zero());
+
+    // Create the e_closure expression
+    const tag_name = try module_env.insertIdent(base.Ident.for_text("#1_wrap"));
+    const closure_idx = try module_env.store.addExpr(Expr{
+        .e_closure = .{
+            .lambda_idx = lambda_idx,
+            .captures = captures_span,
+            .tag_name = tag_name,
+        },
+    }, base.Region.zero());
+
+    // Duplicate the closure expression
+    const type_subs = types.VarMap.init(allocator);
+    const duplicated = try mono.duplicateExpr(closure_idx, &type_subs);
+
+    // Should have created a new expression (different index)
+    try testing.expect(duplicated != closure_idx);
+
+    // The duplicated closure should have a different captures span start
+    const dup_expr = module_env.store.getExpr(duplicated);
+    const orig_expr = module_env.store.getExpr(closure_idx);
+
+    const dup_closure = dup_expr.e_closure;
+    const orig_closure = orig_expr.e_closure;
+
+    // Captures should be duplicated (different span start)
+    try testing.expect(dup_closure.captures.span.start != orig_closure.captures.span.start);
+
+    // But should have the same length
+    try testing.expectEqual(orig_closure.captures.span.len, dup_closure.captures.span.len);
+
+    // The duplicated lambda args should also be different
+    const dup_lambda = module_env.store.getExpr(dup_closure.lambda_idx).e_lambda;
+    const orig_lambda = module_env.store.getExpr(orig_closure.lambda_idx).e_lambda;
+    try testing.expect(dup_lambda.args.span.start != orig_lambda.args.span.start);
 }
 
 test "monomorphizer: alias types with different type args produce different hashes" {
