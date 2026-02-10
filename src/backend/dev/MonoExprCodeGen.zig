@@ -77,6 +77,7 @@ const strDropSuffix = builtins.str.strDropSuffix;
 const strWithAsciiLowercased = builtins.str.strWithAsciiLowercased;
 const strWithAsciiUppercased = builtins.str.strWithAsciiUppercased;
 const strFromUtf8Lossy = builtins.str.fromUtf8Lossy;
+const strFromUtf8 = builtins.str.fromUtf8;
 
 const Relocation = @import("Relocation.zig").Relocation;
 const StaticDataInterner = @import("StaticDataInterner.zig");
@@ -144,6 +145,7 @@ pub const BuiltinFn = enum {
     str_with_ascii_uppercased,
     str_with_prefix,
     str_from_utf8_lossy,
+    str_from_utf8,
     str_escape_and_quote,
 
     // List operations
@@ -222,6 +224,7 @@ pub const BuiltinFn = enum {
             .str_with_ascii_uppercased => "roc_builtins_str_with_ascii_uppercased",
             .str_with_prefix => "roc_builtins_str_with_prefix",
             .str_from_utf8_lossy => "roc_builtins_str_from_utf8_lossy",
+            .str_from_utf8 => "roc_builtins_str_from_utf8",
             .str_escape_and_quote => "roc_builtins_str_escape_and_quote",
 
             // List operations
@@ -443,6 +446,25 @@ fn wrapStrWithAsciiUppercased(out: *RocStr, str_bytes: ?[*]u8, str_len: usize, s
 fn wrapStrFromUtf8Lossy(out: *RocStr, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, roc_ops: *RocOps) callconv(.c) void {
     const list = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
     out.* = strFromUtf8Lossy(list, roc_ops);
+}
+
+/// Wrapper: fromUtf8 with validation — writes Result tag union directly.
+/// Ok variant (disc=1): RocStr at offset 0.
+/// Err variant (disc=0): BadUtf8 { index: U64 at 0, problem: U8 at 8 }.
+fn wrapStrFromUtf8(out: [*]u8, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, disc_offset: usize, roc_ops: *RocOps) callconv(.c) void {
+    const list = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+    const result = strFromUtf8(list, .Immutable, roc_ops);
+
+    if (result.is_ok) {
+        const str_out: *RocStr = @ptrCast(@alignCast(out));
+        str_out.* = result.string;
+        out[disc_offset] = 1;
+    } else {
+        const idx_out: *u64 = @ptrCast(@alignCast(out));
+        idx_out.* = result.byte_index;
+        out[8] = @intFromEnum(result.problem_code);
+        out[disc_offset] = 0;
+    }
 }
 
 /// Wrapper: escape special characters and wrap in double quotes for Str.inspect
@@ -1257,9 +1279,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         .ret_layout = lambda.ret_layout,
                     } };
                 },
-                .closure => |closure| {
-                    return try self.generateClosure(closure);
-                },
+                .closure => |closure| return try self.generateClosure(closure),
 
                 // Records
                 .empty_record => .{ .immediate_i64 = 0 },
@@ -1490,38 +1510,10 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     const elem_loc = try self.generateExpr(args[1]);
                     // Determine element size from layout.
                     const elem_size_align: layout.SizeAlign = blk: {
-                        // Check the element's value location for the ground truth size.
-                        const actual_elem_size: ?u29 = switch (elem_loc) {
-                            .stack => |s| s.size.byteCount(),
-                            .stack_i128 => 16,
-                            .immediate_i64 => 8,
-                            .immediate_i128 => 16,
-                            .immediate_f64 => 8,
-                            .general_reg => 8,
-                            .float_reg => 8,
-                            else => null,
-                        };
-
                         const ret_layout_val = ls.getLayout(ll.ret_layout);
                         if (ret_layout_val.tag == .list) {
                             const sa = ls.layoutSizeAlign(ls.getLayout(ret_layout_val.data.list));
-                            if (sa.size > 0) {
-                                // If the layout disagrees with the actual element size
-                                // (due to polymorphic inlining or cross-module layout resolution),
-                                // use the actual size from the value location.
-                                if (actual_elem_size) |aes| {
-                                    if (aes != sa.size) {
-                                        break :blk .{
-                                            .size = aes,
-                                            .alignment = if (std.math.isPowerOfTwo(aes))
-                                                layout.RocAlignment.fromByteUnits(@intCast(aes))
-                                            else
-                                                sa.alignment,
-                                        };
-                                    }
-                                }
-                                break :blk sa;
-                            }
+                            if (sa.size > 0) break :blk sa;
                         }
                         // ret_layout has ZST element — try deriving from the list argument's layout
                         if (self.getExprLayout(args[0])) |list_layout_idx| {
@@ -2079,8 +2071,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     try self.codegen.emit.cmpRegReg(.w64, ctr_reg2, cnt_reg2);
                     self.codegen.freeGeneral(cnt_reg2);
 
-                    // Branch to end if counter >= count
-                    const skip_patch = try self.codegen.emitCondJump(condGreaterOrEqual());
+                    // Branch to end if counter >= count (unsigned comparison)
+                    const skip_patch = try self.emitJumpIfGreaterOrEqual();
 
                     // Increment counter before the call (so it survives the call)
                     if (comptime target.toCpuArch() == .aarch64) {
@@ -3094,13 +3086,45 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     return try self.callStr1RocOpsToResult(list_off, @intFromPtr(&wrapStrFromUtf8Lossy), .str_from_utf8_lossy, .str);
                 },
                 .str_from_utf8 => {
-                    // str_from_utf8(list) -> {Str, Bool, U64} result struct
-                    // For now, use the lossy version (which always succeeds)
-                    // TODO: proper from_utf8 with validation
+                    // str_from_utf8(list) -> Result Str BadUtf8 (tag union)
+                    // Validates UTF-8 and returns Ok(Str) or Err(BadUtf8).
                     if (args.len != 1) unreachable;
                     const list_loc = try self.generateExpr(args[0]);
                     const list_off = try self.ensureOnStack(list_loc, roc_list_size);
-                    return try self.callStr1RocOpsToResult(list_off, @intFromPtr(&wrapStrFromUtf8Lossy), .str_from_utf8_lossy, .str);
+
+                    const ls = self.layout_store orelse unreachable;
+                    const ret_layout = ls.getLayout(ll.ret_layout);
+
+                    if (ret_layout.tag == .tag_union) {
+                        const tu_data = ls.getTagUnionData(ret_layout.data.tag_union.idx);
+                        const stack_size = tu_data.size;
+
+                        // Allocate and zero the full tag union
+                        const base_offset = self.codegen.allocStackSlot(stack_size);
+                        try self.zeroStackArea(base_offset, stack_size);
+
+                        // Call fromUtf8 wrapper — writes tag union (payload + discriminant) directly
+                        const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+                        const bp: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .FP else .RBP;
+                        var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                        try builder.addLeaArg(bp, base_offset);
+                        try builder.addMemArg(bp, list_off);
+                        try builder.addMemArg(bp, list_off + 8);
+                        try builder.addMemArg(bp, list_off + 16);
+                        try builder.addImmArg(@intCast(tu_data.discriminant_offset));
+                        try builder.addRegArg(roc_ops_reg);
+                        try self.callBuiltin(&builder, @intFromPtr(&wrapStrFromUtf8), .str_from_utf8);
+
+                        return .{ .stack = .{ .offset = base_offset } };
+                    } else {
+                        // Non-tag-union layout — return Str directly (lossy)
+                        return try self.callStr1RocOpsToResult(
+                            list_off,
+                            @intFromPtr(&wrapStrFromUtf8Lossy),
+                            .str_from_utf8_lossy,
+                            .str,
+                        );
+                    }
                 },
 
                 // ── Remaining list low-level operations ──
@@ -3359,10 +3383,102 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     if (std.debug.runtime_safety) unreachable;
                     unreachable;
                 },
-                .box_box,
-                .box_unbox,
-                => {
-                    unreachable;
+                .box_box => {
+                    // Box.box(value) -> Box a
+                    // Heap-allocate and copy the value into the allocation.
+                    std.debug.assert(args.len == 1);
+                    const elem_loc = try self.generateExpr(args[0]);
+                    const ls = self.layout_store orelse unreachable;
+                    const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+
+                    // Get element size from the return layout (box layout -> inner element)
+                    const ret_layout = ls.getLayout(ll.ret_layout);
+                    const elem_layout_idx: layout.Idx = switch (ret_layout.tag) {
+                        .box => ret_layout.data.box,
+                        .box_of_zst => {
+                            // ZST box: nothing to allocate, return a null-like pointer
+                            return .{ .immediate_i64 = 0 };
+                        },
+                        else => unreachable,
+                    };
+                    const elem_sa = ls.layoutSizeAlign(ls.getLayout(elem_layout_idx));
+                    const elem_alignment = elem_sa.alignment.toByteUnits();
+
+                    // Ensure the element is on the stack for copying
+                    const elem_off = try self.ensureOnStack(elem_loc, elem_sa.size);
+
+                    // Allocate heap memory: allocateWithRefcountC(data_bytes, alignment, elements_refcounted, roc_ops)
+                    {
+                        var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                        try builder.addImmArg(@intCast(elem_sa.size));
+                        try builder.addImmArg(@intCast(elem_alignment));
+                        try builder.addImmArg(0); // elements_refcounted = false
+                        try builder.addRegArg(roc_ops_reg);
+                        try self.callBuiltin(&builder, @intFromPtr(&allocateWithRefcountC), .allocate_with_refcount);
+                    }
+
+                    // The heap pointer is returned in RAX/X0
+                    const heap_ptr_reg = try self.allocTempGeneral();
+                    if (comptime target.toCpuArch() == .aarch64) {
+                        try self.codegen.emit.movRegReg(.w64, heap_ptr_reg, .X0);
+                    } else {
+                        try self.codegen.emit.movRegReg(.w64, heap_ptr_reg, .RAX);
+                    }
+
+                    // Copy element data from stack to heap
+                    try self.copyStackToPtr(.{ .stack = .{ .offset = elem_off, .size = ValueSize.fromByteCount(@min(elem_sa.size, 8)) } }, heap_ptr_reg, elem_sa.size);
+
+                    // The box value IS the heap pointer
+                    return .{ .general_reg = heap_ptr_reg };
+                },
+                .box_unbox => {
+                    // Box.unbox(box) -> a
+                    // Dereference the box pointer and copy the element to the stack.
+                    std.debug.assert(args.len == 1);
+                    const box_loc = try self.generateExpr(args[0]);
+                    const ls = self.layout_store orelse unreachable;
+                    const base_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .FP else .RBP;
+
+                    // ret_layout is the element layout
+                    const elem_sa = ls.layoutSizeAlign(ls.getLayout(ll.ret_layout));
+
+                    if (elem_sa.size == 0) {
+                        // ZST: nothing to copy
+                        return .{ .immediate_i64 = 0 };
+                    }
+
+                    // Get the box pointer into a register
+                    const box_ptr_reg = try self.ensureInGeneralReg(box_loc);
+
+                    if (elem_sa.size <= 8) {
+                        // Small value: load directly from heap into register
+                        const result_reg = box_ptr_reg; // reuse the register
+                        if (comptime target.toCpuArch() == .aarch64) {
+                            try self.codegen.emit.ldrRegMemSoff(.w64, result_reg, box_ptr_reg, 0);
+                        } else {
+                            try self.codegen.emit.movRegMem(.w64, result_reg, box_ptr_reg, 0);
+                        }
+                        return .{ .general_reg = result_reg };
+                    }
+
+                    // Larger value: copy from heap to stack
+                    const dest_offset = self.codegen.allocStackSlot(elem_sa.size);
+                    var copied: u32 = 0;
+                    while (copied < elem_sa.size) {
+                        const temp_reg = try self.allocTempGeneral();
+                        if (comptime target.toCpuArch() == .aarch64) {
+                            try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, box_ptr_reg, @intCast(copied));
+                            try self.codegen.emit.strRegMemSoff(.w64, temp_reg, base_reg, dest_offset + @as(i32, @intCast(copied)));
+                        } else {
+                            try self.codegen.emit.movRegMem(.w64, temp_reg, box_ptr_reg, @intCast(copied));
+                            try self.codegen.emit.movMemReg(.w64, base_reg, dest_offset + @as(i32, @intCast(copied)), temp_reg);
+                        }
+                        self.codegen.freeGeneral(temp_reg);
+                        copied += 8;
+                    }
+                    self.codegen.freeGeneral(box_ptr_reg);
+
+                    return self.fieldLocationFromLayout(dest_offset, elem_sa.size, ll.ret_layout);
                 },
                 .crash => {
                     // Runtime crash: call roc_crashed via RocOps.
@@ -4119,9 +4235,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             // Loop start
             const loop_start = self.codegen.currentOffset();
 
-            // if ctr >= len, jump to end
+            // if ctr >= len, jump to end (unsigned comparison)
             try self.codegen.emit.cmpRegReg(.w64, ctr_reg, len_reg);
-            const exit_patch = try self.codegen.emitCondJump(condGreaterOrEqual());
+            const exit_patch = try self.emitJumpIfGreaterOrEqual();
 
             // Compute element address: ptr + ctr * elem_size
             const offset_reg = try self.allocTempGeneral();
@@ -4383,7 +4499,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 }
                 try self.codegen.emit.cmpRegReg(.w64, ci, li);
                 self.codegen.freeGeneral(li);
-                const exit_patch2 = try self.codegen.emitCondJump(condGreaterOrEqual());
+                const exit_patch2 = try self.emitJumpIfGreaterOrEqual();
 
                 // src_index = len - 1 - i
                 const si = try self.allocTempGeneral();
@@ -10430,6 +10546,17 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             for (0..num_args) |i| {
                 arg_locs[i] = try self.generateExpr(args[i]);
             }
+
+            // Save symbol and mutable var state before binding parameters and
+            // generating body. Recursive inlining (e.g., iter_help calling itself
+            // with a callable `f`) would otherwise overwrite the caller's symbol
+            // and mutable var bindings, corrupting subsequent when-branch matching
+            // (e.g., Break/Continue tag unions).
+            var saved_symbol_locations = self.symbol_locations.clone() catch return Error.OutOfMemory;
+            defer saved_symbol_locations.deinit();
+            var saved_mutable_var_slots = self.mutable_var_slots.clone() catch return Error.OutOfMemory;
+            defer saved_mutable_var_slots.deinit();
+
             for (params[0..num_args], 0..) |pattern_id, i| {
                 try self.bindPattern(pattern_id, arg_locs[i]);
             }
@@ -10454,6 +10581,12 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
             // Restore early return state
             self.early_return_ret_layout = saved_early_return_ret_layout;
+
+            // Restore symbol and mutable var state
+            self.symbol_locations.deinit();
+            self.symbol_locations = saved_symbol_locations.clone() catch return Error.OutOfMemory;
+            self.mutable_var_slots.deinit();
+            self.mutable_var_slots = saved_mutable_var_slots.clone() catch return Error.OutOfMemory;
 
             return result_loc;
         }
