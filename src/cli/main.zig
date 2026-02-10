@@ -4659,10 +4659,12 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
     // Track test results across all modules
     var total_passed: u32 = 0;
     var total_failed: u32 = 0;
+    var total_compiler_errors: u32 = 0;
 
     // Structure to track test results per module for reporting
+    const TestResult = enum { passed, failed, compiler_error };
     const TestResultItem = struct {
-        passed: bool,
+        result: TestResult,
         region: base.Region,
         error_msg: ?[]const u8,
     };
@@ -4680,112 +4682,289 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
         module_results.deinit();
     }
 
-    // Run tests in the root module
-    {
-        var test_runner = TestRunner.init(
-            ctx.gpa,
-            @constCast(root_env),
-            builtin_types,
-            other_modules,
-            builtin_module_env,
-            &import_mapping,
-        ) catch |err| {
-            try stderr.print("Failed to create test runner for root module: {}\n", .{err});
+    if (args.backend == .dev) {
+        // Dev backend: use native code generation via DevEvaluator
+        var dev_eval = eval.DevEvaluator.init(ctx.gpa) catch |err| {
+            try stderr.print("Failed to create dev evaluator: {}\n", .{err});
             comptime_evaluator.deinit();
             return err;
         };
-        defer test_runner.deinit();
+        defer dev_eval.deinit();
 
-        const summary = test_runner.eval_all() catch |err| {
-            try stderr.print("Failed to evaluate tests in root module: {}\n", .{err});
-            comptime_evaluator.deinit();
-            return err;
-        };
+        // Build all_dev_envs: other_modules (with builtin at index 0) + root_env
+        // generateCode expects []const *ModuleEnv (mutable pointers), so we cast
+        var all_dev_envs_list = std.array_list.Managed(*ModuleEnv).init(ctx.gpa);
+        defer all_dev_envs_list.deinit();
+        for (other_modules) |mod| try all_dev_envs_list.append(@constCast(mod));
+        try all_dev_envs_list.append(@constCast(root_env));
+        const all_dev_envs: []const *ModuleEnv = all_dev_envs_list.items;
 
-        total_passed += summary.passed;
-        total_failed += summary.failed;
+        // Helper to run dev tests for a single module
+        const runDevTests = struct {
+            fn run(
+                allocator: std.mem.Allocator,
+                dev: *eval.DevEvaluator,
+                module_env: *const ModuleEnv,
+                envs: []const *ModuleEnv,
+                passed: *u32,
+                failed: *u32,
+                compiler_errors: *u32,
+                results_list: *std.array_list.Managed(TestResultItem),
+            ) void {
+                const statements = module_env.store.sliceStatements(module_env.all_statements);
+                for (statements) |stmt_idx| {
+                    const stmt = module_env.store.getStatement(stmt_idx);
+                    if (stmt == .s_expect) {
+                        const region = module_env.store.getStatementRegion(stmt_idx);
+                        const body_expr = stmt.s_expect.body;
 
-        // Copy test results for reporting
-        var results = try ctx.gpa.alloc(TestResultItem, test_runner.test_results.items.len);
-        for (test_runner.test_results.items, 0..) |tr, i| {
-            results[i] = .{
-                .passed = tr.passed,
-                .region = tr.region,
-                .error_msg = if (tr.error_msg) |msg| try ctx.gpa.dupe(u8, msg) else null,
-            };
-        }
+                        // Generate code for the expect body
+                        var code_result = dev.generateCode(@constCast(module_env), body_expr, envs) catch {
+                            // Code generation failed — compiler error or not implemented
+                            compiler_errors.* += 1;
+                            results_list.append(.{
+                                .result = .compiler_error,
+                                .region = region,
+                                .error_msg = null,
+                            }) catch {};
+                            continue;
+                        };
+                        defer code_result.deinit();
 
-        try module_results.append(.{
-            .env = root_env,
-            .path = args.path,
-            .results = results,
-        });
-    }
+                        if (code_result.code.len == 0) {
+                            failed.* += 1;
+                            results_list.append(.{
+                                .result = .failed,
+                                .region = region,
+                                .error_msg = allocator.dupe(u8, "Dev backend generated no code") catch null,
+                            }) catch {};
+                            continue;
+                        }
 
-    // Run tests in all imported modules (recursive test execution)
-    for (other_modules) |mod_env| {
-        // Skip builtin module - no user tests there
-        if (mod_env == builtin_module_env) continue;
+                        // Create executable memory
+                        var executable = eval.ExecutableMemory.initWithEntryOffset(code_result.code, code_result.entry_offset) catch {
+                            compiler_errors.* += 1;
+                            results_list.append(.{
+                                .result = .compiler_error,
+                                .region = region,
+                                .error_msg = null,
+                            }) catch {};
+                            continue;
+                        };
+                        defer executable.deinit();
 
-        // Create import mapping for this module
-        var mod_import_mapping = Check.createImportMapping(
-            ctx.gpa,
-            @constCast(mod_env).getIdentStore(),
-            mod_env,
-            builtin_module_env,
-            builtin_indices,
-            null,
-        ) catch continue;
-        defer mod_import_mapping.deinit();
+                        // Execute with crash protection
+                        var result_buf: [512]u8 align(16) = undefined;
+                        dev.callWithCrashProtection(&executable, @ptrCast(&result_buf)) catch |err| {
+                            failed.* += 1;
+                            const error_msg = switch (err) {
+                                error.RocCrashed => if (dev.roc_env.crash_message) |msg|
+                                    std.fmt.allocPrint(allocator, "Roc crashed: {s}", .{msg}) catch null
+                                else
+                                    allocator.dupe(u8, "Roc crashed") catch null,
+                                error.Segfault => allocator.dupe(u8, "Segfault during test execution") catch null,
+                            };
+                            results_list.append(.{
+                                .result = .failed,
+                                .region = region,
+                                .error_msg = error_msg,
+                            }) catch {};
+                            continue;
+                        };
 
-        var test_runner = TestRunner.init(
-            ctx.gpa,
-            @constCast(mod_env),
-            builtin_types,
-            other_modules,
-            builtin_module_env,
-            &mod_import_mapping,
-        ) catch continue;
-        defer test_runner.deinit();
-
-        const summary = test_runner.eval_all() catch continue;
-
-        total_passed += summary.passed;
-        total_failed += summary.failed;
-
-        // Copy test results for reporting
-        if (test_runner.test_results.items.len > 0) {
-            var results = ctx.gpa.alloc(TestResultItem, test_runner.test_results.items.len) catch continue;
-            for (test_runner.test_results.items, 0..) |tr, i| {
-                results[i] = .{
-                    .passed = tr.passed,
-                    .region = tr.region,
-                    .error_msg = if (tr.error_msg) |msg| ctx.gpa.dupe(u8, msg) catch null else null,
-                };
-            }
-
-            // Find the module path from schedulers
-            var mod_path: []const u8 = "<unknown>";
-            var sched_iter2 = build_env.schedulers.iterator();
-            outer: while (sched_iter2.next()) |sched_entry| {
-                const scheduler2 = sched_entry.value_ptr.*;
-                for (scheduler2.modules.items) |*m| {
-                    if (m.env) |*env| {
-                        if (env == mod_env) {
-                            mod_path = m.path;
-                            break :outer;
+                        // Check result: expect body should evaluate to Bool (layout .bool or .u8)
+                        const is_bool_result = code_result.result_layout == .bool or code_result.result_layout == .u8;
+                        if (is_bool_result) {
+                            const result_byte = result_buf[0];
+                            if (result_byte != 0) {
+                                passed.* += 1;
+                                results_list.append(.{
+                                    .result = .passed,
+                                    .region = region,
+                                    .error_msg = null,
+                                }) catch {};
+                            } else {
+                                failed.* += 1;
+                                results_list.append(.{
+                                    .result = .failed,
+                                    .region = region,
+                                    .error_msg = null,
+                                }) catch {};
+                            }
+                        } else {
+                            failed.* += 1;
+                            results_list.append(.{
+                                .result = .failed,
+                                .region = region,
+                                .error_msg = std.fmt.allocPrint(allocator, "Test did not evaluate to a boolean", .{}) catch null,
+                            }) catch {};
                         }
                     }
                 }
             }
+        }.run;
 
-            module_results.append(.{
-                .env = mod_env,
-                .path = mod_path,
+        // Collect results for root module
+        {
+            var results_list = std.array_list.Managed(TestResultItem).init(ctx.gpa);
+            defer results_list.deinit();
+
+            runDevTests(ctx.gpa, &dev_eval, root_env, all_dev_envs, &total_passed, &total_failed, &total_compiler_errors, &results_list);
+
+            const results = try ctx.gpa.dupe(TestResultItem, results_list.items);
+            try module_results.append(.{
+                .env = root_env,
+                .path = args.path,
                 .results = results,
-            }) catch {
-                ctx.gpa.free(results);
+            });
+        }
+
+        // Run tests in all imported modules
+        for (other_modules) |mod_env| {
+            if (mod_env == builtin_module_env) continue;
+
+            var results_list = std.array_list.Managed(TestResultItem).init(ctx.gpa);
+            defer results_list.deinit();
+
+            runDevTests(ctx.gpa, &dev_eval, mod_env, all_dev_envs, &total_passed, &total_failed, &total_compiler_errors, &results_list);
+
+            if (results_list.items.len > 0) {
+                const results = ctx.gpa.dupe(TestResultItem, results_list.items) catch continue;
+
+                // Find the module path from schedulers
+                var mod_path: []const u8 = "<unknown>";
+                var sched_iter2 = build_env.schedulers.iterator();
+                outer_dev: while (sched_iter2.next()) |sched_entry| {
+                    const scheduler2 = sched_entry.value_ptr.*;
+                    for (scheduler2.modules.items) |*m| {
+                        if (m.env) |*env| {
+                            if (env == mod_env) {
+                                mod_path = m.path;
+                                break :outer_dev;
+                            }
+                        }
+                    }
+                }
+
+                module_results.append(.{
+                    .env = mod_env,
+                    .path = mod_path,
+                    .results = results,
+                }) catch {
+                    ctx.gpa.free(results);
+                };
+            }
+        }
+    } else {
+        // Interpreter backend: use TestRunner (default)
+
+        // Run tests in the root module
+        {
+            var test_runner = TestRunner.init(
+                ctx.gpa,
+                @constCast(root_env),
+                builtin_types,
+                other_modules,
+                builtin_module_env,
+                &import_mapping,
+            ) catch |err| {
+                try stderr.print("Failed to create test runner for root module: {}\n", .{err});
+                comptime_evaluator.deinit();
+                return err;
             };
+            defer test_runner.deinit();
+
+            const summary = test_runner.eval_all() catch |err| {
+                try stderr.print("Failed to evaluate tests in root module: {}\n", .{err});
+                comptime_evaluator.deinit();
+                return err;
+            };
+
+            total_passed += summary.passed;
+            total_failed += summary.failed;
+
+            // Copy test results for reporting
+            var results = try ctx.gpa.alloc(TestResultItem, test_runner.test_results.items.len);
+            for (test_runner.test_results.items, 0..) |tr, i| {
+                results[i] = .{
+                    .result = if (tr.passed) .passed else .failed,
+                    .region = tr.region,
+                    .error_msg = if (tr.error_msg) |msg| try ctx.gpa.dupe(u8, msg) else null,
+                };
+            }
+
+            try module_results.append(.{
+                .env = root_env,
+                .path = args.path,
+                .results = results,
+            });
+        }
+
+        // Run tests in all imported modules (recursive test execution)
+        for (other_modules) |mod_env| {
+            // Skip builtin module - no user tests there
+            if (mod_env == builtin_module_env) continue;
+
+            // Create import mapping for this module
+            var mod_import_mapping = Check.createImportMapping(
+                ctx.gpa,
+                @constCast(mod_env).getIdentStore(),
+                mod_env,
+                builtin_module_env,
+                builtin_indices,
+                null,
+            ) catch continue;
+            defer mod_import_mapping.deinit();
+
+            var test_runner = TestRunner.init(
+                ctx.gpa,
+                @constCast(mod_env),
+                builtin_types,
+                other_modules,
+                builtin_module_env,
+                &mod_import_mapping,
+            ) catch continue;
+            defer test_runner.deinit();
+
+            const summary = test_runner.eval_all() catch continue;
+
+            total_passed += summary.passed;
+            total_failed += summary.failed;
+
+            // Copy test results for reporting
+            if (test_runner.test_results.items.len > 0) {
+                var results = ctx.gpa.alloc(TestResultItem, test_runner.test_results.items.len) catch continue;
+                for (test_runner.test_results.items, 0..) |tr, i| {
+                    results[i] = .{
+                        .result = if (tr.passed) .passed else .failed,
+                        .region = tr.region,
+                        .error_msg = if (tr.error_msg) |msg| ctx.gpa.dupe(u8, msg) catch null else null,
+                    };
+                }
+
+                // Find the module path from schedulers
+                var mod_path: []const u8 = "<unknown>";
+                var sched_iter2 = build_env.schedulers.iterator();
+                outer: while (sched_iter2.next()) |sched_entry| {
+                    const scheduler2 = sched_entry.value_ptr.*;
+                    for (scheduler2.modules.items) |*m| {
+                        if (m.env) |*env| {
+                            if (env == mod_env) {
+                                mod_path = m.path;
+                                break :outer;
+                            }
+                        }
+                    }
+                }
+
+                module_results.append(.{
+                    .env = mod_env,
+                    .path = mod_path,
+                    .results = results,
+                }) catch {
+                    ctx.gpa.free(results);
+                };
+            }
         }
     }
 
@@ -4800,14 +4979,20 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
     // Report results
     if (total_failed == 0 and !has_compilation_errors) {
         // Success case: print summary
-        try stdout.print("All ({}) tests passed in {d:.1} ms.\n", .{ total_passed, elapsed_ms });
+        if (total_compiler_errors > 0) {
+            try stdout.print("All ({}) tests passed, {} compiler errors in {d:.1} ms.\n", .{ total_passed, total_compiler_errors, elapsed_ms });
+        } else {
+            try stdout.print("All ({}) tests passed in {d:.1} ms.\n", .{ total_passed, elapsed_ms });
+        }
         if (args.verbose) {
             // Generate and render a detailed report if verbose is true
             for (module_results.items) |mr| {
                 for (mr.results) |result| {
-                    if (result.passed) {
-                        const region_info = mr.env.calcRegionInfo(result.region);
-                        try stdout.print("\x1b[32mPASS\x1b[0m: {s}:{}\n", .{ mr.path, region_info.start_line_idx + 1 });
+                    const region_info = mr.env.calcRegionInfo(result.region);
+                    switch (result.result) {
+                        .passed => try stdout.print("\x1b[32mPASS\x1b[0m: {s}:{}\n", .{ mr.path, region_info.start_line_idx + 1 }),
+                        .compiler_error => try stdout.print("\x1b[33mCOMPILER_ERROR\x1b[0m: {s}:{}\n", .{ mr.path, region_info.start_line_idx + 1 }),
+                        .failed => {},
                     }
                 }
             }
@@ -4815,23 +5000,29 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
         return; // Exit with 0
     } else {
         // Failure case: always print summary with timing
-        const total_tests = total_passed + total_failed;
+        const total_tests = total_passed + total_failed + total_compiler_errors;
         if (total_tests > 0) {
-            try stderr.print("Ran {} test(s): {} passed, {} failed in {d:.1}ms\n", .{ total_tests, total_passed, total_failed, elapsed_ms });
+            if (total_compiler_errors > 0) {
+                try stderr.print("Ran {} test(s): {} passed, {} failed, {} compiler errors in {d:.1}ms\n", .{ total_tests, total_passed, total_failed, total_compiler_errors, elapsed_ms });
+            } else {
+                try stderr.print("Ran {} test(s): {} passed, {} failed in {d:.1}ms\n", .{ total_tests, total_passed, total_failed, elapsed_ms });
+            }
         }
 
         if (args.verbose) {
             for (module_results.items) |mr| {
                 for (mr.results) |result| {
                     const region_info = mr.env.calcRegionInfo(result.region);
-                    if (result.passed) {
-                        try stdout.print("\x1b[32mPASS\x1b[0m: {s}:{}\n", .{ mr.path, region_info.start_line_idx + 1 });
-                    } else {
-                        try stderr.print("\x1b[31mFAIL\x1b[0m: {s}:{}", .{ mr.path, region_info.start_line_idx + 1 });
-                        if (result.error_msg) |msg| {
-                            try stderr.print(" - {s}", .{msg});
-                        }
-                        try stderr.print("\n", .{});
+                    switch (result.result) {
+                        .passed => try stdout.print("\x1b[32mPASS\x1b[0m: {s}:{}\n", .{ mr.path, region_info.start_line_idx + 1 }),
+                        .compiler_error => try stdout.print("\x1b[33mCOMPILER_ERROR\x1b[0m: {s}:{}\n", .{ mr.path, region_info.start_line_idx + 1 }),
+                        .failed => {
+                            try stderr.print("\x1b[31mFAIL\x1b[0m: {s}:{}", .{ mr.path, region_info.start_line_idx + 1 });
+                            if (result.error_msg) |msg| {
+                                try stderr.print(" - {s}", .{msg});
+                            }
+                            try stderr.print("\n", .{});
+                        },
                     }
                 }
             }
@@ -4839,7 +5030,7 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
             // Non-verbose mode: just show simple FAIL messages with line numbers
             for (module_results.items) |mr| {
                 for (mr.results) |result| {
-                    if (!result.passed) {
+                    if (result.result == .failed) {
                         const region_info = mr.env.calcRegionInfo(result.region);
                         try stderr.print("\x1b[31mFAIL\x1b[0m: {s}:{}\n", .{ mr.path, region_info.start_line_idx + 1 });
                     }

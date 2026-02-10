@@ -205,11 +205,12 @@ fn monoExprResultLayout(store: *const MonoExprStore, expr_id: mono.MonoIR.MonoEx
         .nominal => |n| n.nominal_layout,
         // Note: .list and .empty_list store element layout, not the overall list layout.
         // They are handled by the fromTypeVar fallback.
-        .i64_literal => .i64,
+        // Integer literals don't carry signedness — an i64_literal could be
+        // U8, I32, U128, etc. and an i128_literal could be I128 or U128.
+        // Fall through to fromTypeVar which has the actual type.
         .f64_literal => .f64,
         .f32_literal => .f32,
         .bool_literal => .bool,
-        .i128_literal => .i128,
         .dec_literal => .dec,
         .str_literal => .str,
         .unary_not => .bool,
@@ -300,19 +301,26 @@ const DevRocEnv = struct {
             }
             return 0;
         }
+
+        fn reset() void {
+            offset = 0;
+            alloc_count = 0;
+        }
     };
 
     /// Allocation function for RocOps.
     fn rocAllocFn(roc_alloc: *RocAlloc, env: *anyopaque) callconv(.c) void {
-        _ = env; // unused with static buffer workaround
-
         // Align the offset to the requested alignment
         const alignment = roc_alloc.alignment;
         const mask = alignment - 1;
         const aligned_offset = (StaticAlloc.offset + mask) & ~mask;
 
         if (aligned_offset + roc_alloc.length > StaticAlloc.buffer.len) {
-            @panic("DevRocEnv: static buffer overflow");
+            const self: *DevRocEnv = @ptrCast(@alignCast(env));
+            self.crashed = true;
+            if (self.crash_message) |old| self.allocator.free(old);
+            self.crash_message = self.allocator.dupe(u8, "static buffer overflow in alloc") catch null;
+            longjmp(&self.jmp_buf, 1);
         }
 
         const ptr: [*]u8 = @ptrCast(&StaticAlloc.buffer[aligned_offset]);
@@ -332,14 +340,18 @@ const DevRocEnv = struct {
 
     /// Reallocation function for RocOps.
     /// With static buffer, we allocate new space and copy data (old space is not reclaimed).
-    fn rocReallocFn(roc_realloc: *RocRealloc, _: *anyopaque) callconv(.c) void {
+    fn rocReallocFn(roc_realloc: *RocRealloc, env: *anyopaque) callconv(.c) void {
         // Align the offset to the requested alignment
         const alignment = roc_realloc.alignment;
         const mask = alignment - 1;
         const aligned_offset = (StaticAlloc.offset + mask) & ~mask;
 
         if (aligned_offset + roc_realloc.new_length > StaticAlloc.buffer.len) {
-            @panic("DevRocEnv: static buffer overflow in realloc");
+            const self: *DevRocEnv = @ptrCast(@alignCast(env));
+            self.crashed = true;
+            if (self.crash_message) |old| self.allocator.free(old);
+            self.crash_message = self.allocator.dupe(u8, "static buffer overflow in realloc") catch null;
+            longjmp(&self.jmp_buf, 1);
         }
 
         const new_ptr: [*]u8 = @ptrCast(&StaticAlloc.buffer[aligned_offset]);
@@ -661,6 +673,9 @@ pub const DevEvaluator = struct {
         expr_idx: CIR.Expr.Idx,
         all_module_envs: []const *ModuleEnv,
     ) Error!CodeResult {
+        // Reset the static bump allocator so each evaluation starts fresh
+        DevRocEnv.StaticAlloc.reset();
+
         // Create a Mono IR store for lowered expressions
         var mono_store = MonoExprStore.init(self.allocator);
         defer mono_store.deinit();
@@ -677,6 +692,11 @@ pub const DevEvaluator = struct {
         // Get or create the global layout store for resolving layouts of composite types
         // This is a single store shared across all modules for cross-module correctness
         const layout_store_ptr = try self.ensureGlobalLayoutStore(all_module_envs);
+
+        // In REPL sessions, module type stores get fresh type variables on each evaluation,
+        // but the global layout store persists. Clear all type variable cache entries
+        // so that recycled type_var indices don't map to wrong layouts from previous evals.
+        layout_store_ptr.resetModuleCache(all_module_envs);
 
         // Create the lowerer with the layout store
         // Note: app_module_idx is null for JIT evaluation (no platform/app distinction)

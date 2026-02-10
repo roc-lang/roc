@@ -53,6 +53,10 @@ pub const Work = struct {
     pub const NominalProgress = struct {
         nominal_var: types.Var,
         backing_var: types.Var,
+        /// The module index under which the placeholder layout was cached.
+        /// Needed because the early cycle detection may encounter the same nominal
+        /// from a different module context than where it was first processed.
+        cache_module_idx: u16,
         /// The type arguments of this nominal stored as a range into the types store.
         /// Using a range (start index + count) instead of a slice avoids dangling
         /// pointers if the underlying vars storage is reallocated while processing
@@ -63,6 +67,11 @@ pub const Work = struct {
         /// True if a recursive cycle was detected while processing this nominal type.
         /// This is set when we encounter the same nominal type during its own processing.
         is_recursive: bool = false,
+        /// True if the recursive self-reference goes through a heap container (List/Box).
+        /// When true, the Box is only needed during layout computation (to break the cycle)
+        /// but NOT at runtime — the heap container provides sufficient indirection.
+        /// When false (direct recursion), the Box IS the runtime representation.
+        recursion_through_heap: bool = false,
     };
 
     /// A container being processed. The var_ is optional because synthetic tuples

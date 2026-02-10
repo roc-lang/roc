@@ -1389,7 +1389,7 @@ fn processAssociatedItemsSecondPass(
                 std.debug.assert(type_var_scope.idx == 0);
 
                 // Now canonicalize the annotation with type variables in scope
-                const type_anno_idx = try self.canonicalizeTypeAnno(ta.anno, .inline_anno);
+                const type_anno_idx = try self.canonicalizeTypeAnno(ta.anno, .local_anno);
 
                 // Canonicalize where clauses if present
                 const where_clauses = if (ta.where) |where_coll| blk: {
@@ -1397,7 +1397,7 @@ fn processAssociatedItemsSecondPass(
                     const where_start = self.env.store.scratchWhereClauseTop();
 
                     for (where_slice) |where_idx| {
-                        const canonicalized_where = try self.canonicalizeWhereClause(where_idx, .inline_anno);
+                        const canonicalized_where = try self.canonicalizeWhereClause(where_idx, .local_anno);
                         try self.env.store.addScratchWhereClause(canonicalized_where);
                     }
 
@@ -2043,14 +2043,14 @@ pub fn canonicalizeFile(
                     try self.extractTypeVarIdentsFromASTAnno(ta.anno, type_vars_top);
                     const type_var_scope = self.scopeEnterTypeVar();
                     defer self.scopeExitTypeVar(type_var_scope);
-                    const type_anno_idx = try self.canonicalizeTypeAnno(ta.anno, .inline_anno);
+                    const type_anno_idx = try self.canonicalizeTypeAnno(ta.anno, .local_anno);
 
                     // Canonicalize where clauses if present
                     const where_clauses = if (ta.where) |where_coll| blk: {
                         const where_slice = self.parse_ir.store.whereClauseSlice(.{ .span = self.parse_ir.store.getCollection(where_coll).span });
                         const where_start = self.env.store.scratchWhereClauseTop();
                         for (where_slice) |where_idx| {
-                            const canonicalized_where = try self.canonicalizeWhereClause(where_idx, .inline_anno);
+                            const canonicalized_where = try self.canonicalizeWhereClause(where_idx, .local_anno);
                             try self.env.store.addScratchWhereClause(canonicalized_where);
                         }
                         break :blk try self.env.store.whereClauseSpanFrom(where_start);
@@ -2543,7 +2543,7 @@ pub fn canonicalizeFile(
                 std.debug.assert(type_var_scope.idx == 0);
 
                 // Now canonicalize the annotation with type variables in scope
-                const type_anno_idx = try self.canonicalizeTypeAnno(ta.anno, .inline_anno);
+                const type_anno_idx = try self.canonicalizeTypeAnno(ta.anno, .local_anno);
 
                 // Canonicalize where clauses if present
                 const where_clauses = if (ta.where) |where_coll| blk: {
@@ -2551,7 +2551,7 @@ pub fn canonicalizeFile(
                     const where_start = self.env.store.scratchWhereClauseTop();
 
                     for (where_slice) |where_idx| {
-                        const canonicalized_where = try self.canonicalizeWhereClause(where_idx, .inline_anno);
+                        const canonicalized_where = try self.canonicalizeWhereClause(where_idx, .local_anno);
                         try self.env.store.addScratchWhereClause(canonicalized_where);
                     }
 
@@ -9179,8 +9179,8 @@ const TypeAnnoCtx = struct {
         type_decl_anno,
         /// Platform requires for-clause - allows `_`-prefixed type vars (like `_others` in open unions)
         for_clause_anno,
-        /// Inline annotations - any type var can be introduced
-        inline_anno,
+        /// Local annotations - any type var can be introduced
+        local_anno,
     };
 
     pub fn init(typ: TypeAnnoCtxType) TypeAnnoCtx {
@@ -9196,7 +9196,7 @@ const TypeAnnoCtx = struct {
         return switch (self.type) {
             .type_decl_anno => false,
             .for_clause_anno => is_ignored,
-            .inline_anno => true,
+            .local_anno => true,
         };
     }
 };
@@ -9236,7 +9236,7 @@ fn canonicalizeTypeAnnoHelp(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_c
                     // Whether new type variables can be introduced depends on context:
                     // - type_decl_anno: no new vars allowed
                     // - for_clause_anno: only _-prefixed vars allowed (for open unions in platform requires)
-                    // - inline_anno: any new var allowed
+                    // - local_anno: any new var allowed
                     const can_introduce = type_anno_ctx.canIntroduceTypeVar(name_ident.attributes.ignored);
 
                     if (can_introduce) {
@@ -9294,7 +9294,7 @@ fn canonicalizeTypeAnnoHelp(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_c
                     // Whether new type variables can be introduced depends on context:
                     // - type_decl_anno: no new vars allowed
                     // - for_clause_anno: only _-prefixed vars allowed (for open unions in platform requires)
-                    // - inline_anno: any new var allowed
+                    // - local_anno: any new var allowed
                     const can_introduce = type_anno_ctx.canIntroduceTypeVar(name_ident.attributes.ignored);
 
                     if (can_introduce) {
@@ -10738,7 +10738,7 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
             defer self.scopeExitTypeVar(type_var_scope);
 
             // Now canonicalize the annotation with type variables in scope
-            const type_anno_idx = try self.canonicalizeTypeAnno(ta.anno, .inline_anno);
+            const type_anno_idx = try self.canonicalizeTypeAnno(ta.anno, .local_anno);
 
             // Extract type variables from the AST annotation
             try self.extractTypeVarIdentsFromASTAnno(ta.anno, type_vars_top);
@@ -10753,7 +10753,7 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                 defer self.scopeExit(self.env.gpa) catch {}; // See above comment for why this is necessary
 
                 for (where_slice) |where_idx| {
-                    const canonicalized_where = try self.canonicalizeWhereClause(where_idx, .inline_anno);
+                    const canonicalized_where = try self.canonicalizeWhereClause(where_idx, .local_anno);
                     try self.env.store.addScratchWhereClause(canonicalized_where);
                 }
                 break :inner_blk try self.env.store.whereClauseSpanFrom(where_start);
@@ -12415,7 +12415,7 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx, type
                         switch (type_anno_ctx) {
                             // If this is an inline anno, then we can introduce the variable
                             // into the scope
-                            .inline_anno => {
+                            .local_anno => {
                                 // Track this type variable for underscore validation
                                 try self.scratch_type_var_validation.append(var_ident);
 
@@ -12498,7 +12498,7 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx, type
                         switch (type_anno_ctx) {
                             // If this is an inline anno, then we can introduce the variable
                             // into the scope
-                            .inline_anno => {
+                            .local_anno => {
                                 // Track this type variable for underscore validation
                                 try self.scratch_type_var_validation.append(var_ident);
 

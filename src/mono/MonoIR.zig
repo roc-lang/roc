@@ -725,6 +725,7 @@ pub const MonoExpr = union(enum) {
         list_drop_last,
         list_take_first,
         list_take_last,
+        list_sublist,
         list_contains,
         list_reverse,
         list_reserve,
