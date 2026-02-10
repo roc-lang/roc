@@ -271,6 +271,8 @@ test "fx platform all_syntax_test.roc prints expected output" {
         "10.0\n" ++
         "{ age: 31, name: \"Alice\" }\n" ++
         "{ binary: 5.0, explicit_i128: 5, explicit_i16: 5, explicit_i32: 5, explicit_i64: 5, explicit_i8: 5, explicit_u128: 5, explicit_u16: 5, explicit_u32: 5, explicit_u64: 5, explicit_u8: 5, hex: 5.0, octal: 5.0, usage_based: 5.0 }\n" ++
+        "<opaque>\n" ++
+        "\"The secret key is: my_secret_key\"\n" ++
         "False\n" ++
         "99\n" ++
         "\"12345.0\"\n" ++

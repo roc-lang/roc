@@ -2678,7 +2678,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             self.current_binding_symbol = saved_binding_symbol;
 
             // Select the closure representation based on captures
-            const representation = self.selectClosureRepresentation(captures);
+            const representation = try self.selectClosureRepresentation(captures);
 
             // If this is a recursive closure bound to a variable, create a MonoProc
             // so it can be compiled as a separate procedure with proper stack frame.
@@ -2695,7 +2695,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
 
             break :blk .{
                 .closure = .{
-                    .closure_layout = .i64, // TODO: compute from representation
+                    .closure_layout = .i64, // TODO: remove this field when we remove the interpreter, as it is only used by the interpreter
                     .lambda = lambda_id,
                     .captures = captures,
                     .representation = representation,
@@ -4315,7 +4315,7 @@ fn lowerCaptures(self: *Self, module_env: *ModuleEnv, captures: CIR.Expr.Capture
 ///
 /// For lambda sets with multiple functions, we'd use enum_dispatch or union_repr,
 /// but that requires lambda set inference results which we'll add later.
-fn selectClosureRepresentation(self: *Self, captures: MonoCaptureSpan) ClosureRepresentation {
+fn selectClosureRepresentation(self: *Self, captures: MonoCaptureSpan) Allocator.Error!ClosureRepresentation {
     const capture_list = self.store.getCaptures(captures);
 
     if (capture_list.len == 0) {
@@ -4327,16 +4327,33 @@ fn selectClosureRepresentation(self: *Self, captures: MonoCaptureSpan) ClosureRe
             .capture_layout = capture_list[0].layout_idx,
         } };
     } else {
-        // Multiple captures - store in a struct
-        // TODO: Sort captures by alignment (largest first) for memory efficiency
-        // For now, just use the captures as-is
+        // Multiple captures - compute struct layout from capture layouts
+        const ls = self.layout_store orelse return .{
+            .struct_captures = .{
+                .captures = captures,
+                .struct_layout = .i64,
+            },
+        };
+        const struct_layout = try ls.putCaptureStruct(captureLayoutIdxs(capture_list));
         return .{
             .struct_captures = .{
                 .captures = captures,
-                .struct_layout = .i64, // TODO: compute actual struct layout
+                .struct_layout = struct_layout,
             },
         };
     }
+}
+
+/// Extract layout indices from a capture list into a temporary buffer.
+fn captureLayoutIdxs(capture_list: []const MonoCapture) []const LayoutIdx {
+    const S = struct {
+        var buf: [64]LayoutIdx = undefined;
+    };
+    const len = @min(capture_list.len, S.buf.len);
+    for (capture_list[0..len], 0..len) |cap, i| {
+        S.buf[i] = cap.layout_idx;
+    }
+    return S.buf[0..len];
 }
 
 /// Result of recursion detection for a closure
@@ -4661,7 +4678,7 @@ fn lowerExprWithLambdaSet(
             const captures = try self.lowerCaptures(module_env, closure.captures);
 
             // Determine representation based on lambda set
-            const representation = self.selectLambdaSetRepresentation(lambda_set_members, captures, tag);
+            const representation = try self.selectLambdaSetRepresentation(lambda_set_members, captures, tag);
 
             // Detect recursion
             const recursion_info = self.detectClosureRecursion(module_env, closure.lambda_idx);
@@ -4671,7 +4688,7 @@ fn lowerExprWithLambdaSet(
 
             const mono_expr: MonoExpr = .{
                 .closure = .{
-                    .closure_layout = .i64, // TODO
+                    .closure_layout = .i64, // TODO: remove this field when we remove the interpreter, as it is only used by the interpreter
                     .lambda = lambda_id,
                     .captures = captures,
                     .representation = representation,
@@ -4702,19 +4719,21 @@ fn lowerExprWithLambdaSet(
             // Check if bound to variable (same logic as regular closure lowering)
             const is_bound = self.current_binding_pattern != null;
             const num_members = self.store.getLambdaSetMembers(lambda_set_members).len;
-            const closure_expr: MonoExpr = .{ .closure = .{
-                .closure_layout = .i64,
-                .lambda = lambda_id,
-                .captures = ir.MonoCaptureSpan.empty(),
-                .representation = .{ .enum_dispatch = .{
-                    .num_functions = @intCast(num_members),
-                    .tag = @intCast(tag),
-                    .lambda_set = lambda_set_members,
-                } },
-                .recursion = .not_recursive,
-                .self_recursive = .not_self_recursive,
-                .is_bound_to_variable = is_bound,
-            } };
+            const closure_expr: MonoExpr = .{
+                .closure = .{
+                    .closure_layout = .i64, // TODO: remove this field when we remove the interpreter, as it is only used by the interpreter
+                    .lambda = lambda_id,
+                    .captures = ir.MonoCaptureSpan.empty(),
+                    .representation = .{ .enum_dispatch = .{
+                        .num_functions = @intCast(num_members),
+                        .tag = @intCast(tag),
+                        .lambda_set = lambda_set_members,
+                    } },
+                    .recursion = .not_recursive,
+                    .self_recursive = .not_self_recursive,
+                    .is_bound_to_variable = is_bound,
+                },
+            };
 
             return self.store.addExpr(closure_expr, Region.zero());
         },
@@ -4731,7 +4750,7 @@ fn selectLambdaSetRepresentation(
     lambda_set_members: ir.LambdaSetMemberSpan,
     captures: ir.MonoCaptureSpan,
     tag: u16,
-) ClosureRepresentation {
+) Allocator.Error!ClosureRepresentation {
     const members = self.store.getLambdaSetMembers(lambda_set_members);
     const capture_list = self.store.getCaptures(captures);
 
@@ -4744,9 +4763,15 @@ fn selectLambdaSetRepresentation(
                 .capture_layout = capture_list[0].layout_idx,
             } };
         } else {
-            return .{ .struct_captures = .{
+            // Multiple captures - compute struct layout
+            const ls = self.layout_store orelse return .{ .struct_captures = .{
                 .captures = captures,
                 .struct_layout = .i64,
+            } };
+            const struct_layout = try ls.putCaptureStruct(captureLayoutIdxs(capture_list));
+            return .{ .struct_captures = .{
+                .captures = captures,
+                .struct_layout = struct_layout,
             } };
         }
     }
@@ -4771,15 +4796,48 @@ fn selectLambdaSetRepresentation(
         } };
     } else {
         // Some functions have captures - use union_repr
+        // Compute the union layout from all variants' capture layouts
+        const ls = self.layout_store orelse return .{
+            .union_repr = .{
+                .tag = tag,
+                .captures = captures,
+                .union_layout = .i64,
+                .lambda_set = lambda_set_members,
+            },
+        };
+        const union_layout = try self.computeUnionLayout(ls, members);
         return .{
             .union_repr = .{
                 .tag = tag,
                 .captures = captures,
-                .union_layout = .i64, // TODO: compute actual union layout
+                .union_layout = union_layout,
                 .lambda_set = lambda_set_members,
             },
         };
     }
+}
+
+/// Compute the union layout for a lambda set with captures.
+/// The union has an 8-byte tag followed by the max payload across all variants.
+fn computeUnionLayout(self: *Self, ls: *LayoutStore, members: []const ir.LambdaSetMember) Allocator.Error!LayoutIdx {
+    const S = struct {
+        var variants_buf: [32][]const LayoutIdx = undefined;
+        var idxs_buf: [256]LayoutIdx = undefined;
+    };
+    var idxs_offset: usize = 0;
+    const variant_count = @min(members.len, S.variants_buf.len);
+    for (members[0..variant_count], 0..variant_count) |member, i| {
+        const member_captures = self.store.getCaptures(member.captures);
+        const start = idxs_offset;
+        for (member_captures) |cap| {
+            if (idxs_offset < S.idxs_buf.len) {
+                S.idxs_buf[idxs_offset] = cap.layout_idx;
+                idxs_offset += 1;
+            }
+        }
+        S.variants_buf[i] = S.idxs_buf[start..idxs_offset];
+    }
+    return try ls.putCaptureUnion(S.variants_buf[0..variant_count]);
 }
 
 /// Lower when/match branches
@@ -5831,7 +5889,7 @@ fn lowerClosureToProc(
         .arg_layouts = param_layouts,
         .body = body_stmt,
         .ret_layout = ret_layout,
-        .closure_data_layout = null, // TODO: compute from captures
+        .closure_data_layout = null, // TODO: remove this field when we remove the interpreter, as it is only used by the interpreter
         .is_self_recursive = if (is_recursive)
             .{ .self_recursive = join_point_id }
         else
