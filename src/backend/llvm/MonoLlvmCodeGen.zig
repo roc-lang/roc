@@ -25,6 +25,7 @@ const MonoExprId = mono.MonoExprId;
 const MonoPatternId = mono.MonoPatternId;
 const MonoSymbol = mono.MonoSymbol;
 const MonoProc = mono.MonoProc;
+const MonoExprSpan = mono.MonoExprSpan;
 const CFStmtId = mono.CFStmtId;
 
 const Allocator = std.mem.Allocator;
@@ -102,6 +103,9 @@ pub const MonoLlvmCodeGen = struct {
     /// Maps join point id to an array of alloca pointers, one per parameter.
     /// Jump handlers store values here; join body loads before executing.
     join_param_allocas: std.AutoHashMap(u32, []LlvmBuilder.Value),
+
+    /// Join point parameter LLVM types (recorded at first jump, used for correct loads).
+    join_param_types: std.AutoHashMap(u32, []LlvmBuilder.Type),
 
     /// Current LLVM builder (set during code generation)
     builder: ?*LlvmBuilder = null,
@@ -205,6 +209,11 @@ pub const MonoLlvmCodeGen = struct {
     /// The block contains retVoid since the value is already stored to out_ptr.
     early_return_block: ?LlvmBuilder.Function.Block.Index = null,
 
+    /// Function-level output pointer for early returns. Unlike `out_ptr` which
+    /// gets nulled by intermediate expression handlers (if-then-else, when, block),
+    /// this always points to the function's output destination.
+    fn_out_ptr: ?LlvmBuilder.Value = null,
+
     /// Result layout for the top-level expression (needed by early_return).
     result_layout: ?layout.Idx = null,
 
@@ -252,6 +261,7 @@ pub const MonoLlvmCodeGen = struct {
             .join_points = std.AutoHashMap(u32, LlvmBuilder.Function.Block.Index).init(allocator),
             .join_point_params = std.AutoHashMap(u32, []MonoPatternId).init(allocator),
             .join_param_allocas = std.AutoHashMap(u32, []LlvmBuilder.Value).init(allocator),
+            .join_param_types = std.AutoHashMap(u32, []LlvmBuilder.Type).init(allocator),
             .loop_var_allocas = std.AutoHashMap(u48, LoopVarAlloca).init(allocator),
         };
     }
@@ -274,6 +284,12 @@ pub const MonoLlvmCodeGen = struct {
             self.allocator.free(allocas.*);
         }
         self.join_param_allocas.deinit();
+        // Free allocated type slices
+        var it3 = self.join_param_types.valueIterator();
+        while (it3.next()) |types| {
+            self.allocator.free(types.*);
+        }
+        self.join_param_types.deinit();
         self.loop_var_allocas.deinit();
     }
 
@@ -294,6 +310,11 @@ pub const MonoLlvmCodeGen = struct {
             self.allocator.free(allocas.*);
         }
         self.join_param_allocas.clearRetainingCapacity();
+        var it3 = self.join_param_types.valueIterator();
+        while (it3.next()) |types| {
+            self.allocator.free(types.*);
+        }
+        self.join_param_types.clearRetainingCapacity();
     }
 
     /// Generate LLVM bitcode for a Mono IR expression
@@ -352,6 +373,7 @@ pub const MonoLlvmCodeGen = struct {
         // Get the output pointer and roc_ops pointer
         const out_ptr = wip.arg(0);
         self.out_ptr = out_ptr;
+        self.fn_out_ptr = out_ptr;
         defer self.out_ptr = null;
         self.roc_ops_arg = wip.arg(1);
         defer self.roc_ops_arg = null;
@@ -360,10 +382,8 @@ pub const MonoLlvmCodeGen = struct {
         self.result_layout = result_layout;
         defer self.result_layout = null;
 
-        // Create the early return block (used by early_return expressions)
-        const early_ret_block = wip.block(0, "early_ret") catch return error.OutOfMemory;
-        self.early_return_block = early_ret_block;
-        defer self.early_return_block = null;
+        // Early returns emit retVoid directly at each site (no shared block needed).
+        self.early_return_block = null;
 
         // Compile all procedures now that the builder is available.
         // Must happen before generateExpr so that call sites can find procs.
@@ -373,7 +393,9 @@ pub const MonoLlvmCodeGen = struct {
         }
 
         // Generate LLVM IR for the expression
-        const value = self.generateExpr(expr_id) catch return error.UnsupportedExpression;
+        const value = self.generateExpr(expr_id) catch {
+            return error.UnsupportedExpression;
+        };
 
         // Store the result to the output pointer.
         // Some generators (e.g., string literals) write directly to out_ptr and
@@ -421,44 +443,15 @@ pub const MonoLlvmCodeGen = struct {
             });
             _ = wip.store(.normal, store_value, out_ptr, alignment) catch return error.CompilationFailed;
         } else {
-            // Composite type (record, tuple, tag_union, str, etc.)
-            if (result_layout == .str) {
-                // String — alloca pointer, memcpy 24 bytes to out_ptr
-                const copy_size = builder.intValue(.i32, roc_str_size) catch return error.OutOfMemory;
+            // Composite type (record, tuple, tag_union, str, list, etc.)
+            // Store the struct value directly to out_ptr.
+            {
                 const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
-                _ = wip.callMemCpy(out_ptr, alignment, value, alignment, copy_size, .normal, false) catch return error.OutOfMemory;
-            } else {
-                const ls = self.layout_store orelse return error.UnsupportedExpression;
-                const stored_layout = ls.getLayout(result_layout);
-                switch (stored_layout.tag) {
-                    .tag_union => {
-                        // Tag union — alloca pointer, memcpy to out_ptr
-                        const tu_data = ls.getTagUnionData(stored_layout.data.tag_union.idx);
-                        const copy_size = builder.intValue(.i32, tu_data.size) catch return error.OutOfMemory;
-                        const tu_align: u64 = @intCast(stored_layout.data.tag_union.alignment.toByteUnits());
-                        const alignment = LlvmBuilder.Alignment.fromByteUnits(tu_align);
-                        _ = wip.callMemCpy(out_ptr, alignment, value, alignment, copy_size, .normal, false) catch return error.OutOfMemory;
-                    },
-                    else => {
-                        // Record, tuple, etc. — store the LLVM struct value directly.
-                        const align_bytes: u32 = switch (stored_layout.tag) {
-                            .record => @intCast(stored_layout.data.record.alignment.toByteUnits()),
-                            .tuple => @intCast(stored_layout.data.tuple.alignment.toByteUnits()),
-                            .zst => 1,
-                            else => return error.UnsupportedExpression,
-                        };
-                        const alignment = LlvmBuilder.Alignment.fromByteUnits(align_bytes);
-                        _ = wip.store(.normal, value, out_ptr, alignment) catch return error.CompilationFailed;
-                    },
-                }
+                _ = wip.store(.normal, value, out_ptr, alignment) catch return error.CompilationFailed;
             }
         }
         } // end of value != .none else
 
-        _ = wip.retVoid() catch return error.CompilationFailed;
-
-        // Fill in the early return block (just ret void — value already stored to out_ptr)
-        wip.cursor = .{ .block = early_ret_block };
         _ = wip.retVoid() catch return error.CompilationFailed;
 
         wip.finish() catch return error.CompilationFailed;
@@ -484,7 +477,12 @@ pub const MonoLlvmCodeGen = struct {
     /// so recursive calls within the body can find the function.
     pub fn compileAllProcs(self: *MonoLlvmCodeGen, procs: []const MonoProc) Error!void {
         for (procs) |proc| {
-            try self.compileProc(proc);
+            self.compileProc(proc) catch {
+                // Skip procs that can't be compiled (unsupported features).
+                // The proc won't be in proc_registry, so call sites will
+                // fall back to inlining or return UnsupportedExpression.
+                continue;
+            };
         }
     }
 
@@ -499,12 +497,12 @@ pub const MonoLlvmCodeGen = struct {
         var param_types: std.ArrayList(LlvmBuilder.Type) = .{};
         defer param_types.deinit(self.allocator);
         for (arg_layouts) |arg_layout| {
-            param_types.append(self.allocator, layoutToLlvmType(arg_layout)) catch return error.OutOfMemory;
+            param_types.append(self.allocator, try self.layoutToLlvmTypeFull(arg_layout)) catch return error.OutOfMemory;
         }
         // Hidden roc_ops parameter at the end
         param_types.append(self.allocator, ptr_type) catch return error.OutOfMemory;
 
-        const ret_type = layoutToLlvmType(proc.ret_layout);
+        const ret_type = try self.layoutToLlvmTypeFull(proc.ret_layout);
         const fn_type = builder.fnType(ret_type, param_types.items, .normal) catch return error.OutOfMemory;
 
         // Create a unique function name from the symbol
@@ -525,7 +523,10 @@ pub const MonoLlvmCodeGen = struct {
         defer self.roc_ops_arg = outer_roc_ops;
         const outer_out_ptr = self.out_ptr;
         defer self.out_ptr = outer_out_ptr;
+        const outer_fn_out_ptr = self.fn_out_ptr;
+        defer self.fn_out_ptr = outer_fn_out_ptr;
         self.out_ptr = null; // Procs don't have a top-level out_ptr
+        self.fn_out_ptr = null;
 
         // Create a new WipFunction for this procedure
         var proc_wip = LlvmBuilder.WipFunction.init(builder, .{
@@ -555,7 +556,7 @@ pub const MonoLlvmCodeGen = struct {
         proc_wip.finish() catch return error.CompilationFailed;
     }
 
-    /// Convert layout to LLVM type
+    /// Convert layout to LLVM type (scalar types only — str/list fall through to i64)
     fn layoutToLlvmType(result_layout: layout.Idx) LlvmBuilder.Type {
         return switch (result_layout) {
             .bool => .i1,
@@ -567,6 +568,36 @@ pub const MonoLlvmCodeGen = struct {
             .f32 => .float,
             .f64 => .double,
             else => .i64,
+        };
+    }
+
+    /// Convert layout to LLVM type, handling str/list as struct {ptr, i64, i64}.
+    /// Use this for proc signatures where composite types must be correctly typed.
+    fn layoutToLlvmTypeFull(self: *MonoLlvmCodeGen, result_layout: layout.Idx) Error!LlvmBuilder.Type {
+        const builder = self.builder orelse return error.CompilationFailed;
+        return switch (result_layout) {
+            .bool => .i1,
+            .u8, .i8 => .i8,
+            .u16, .i16 => .i16,
+            .u32, .i32 => .i32,
+            .u64, .i64 => .i64,
+            .u128, .i128, .dec => .i128,
+            .f32 => .float,
+            .f64 => .double,
+            .str => blk: {
+                const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
+                break :blk builder.structType(.normal, &.{ ptr_type, .i64, .i64 }) catch return error.CompilationFailed;
+            },
+            else => blk: {
+                // Check if it's a list layout
+                const ls = self.layout_store orelse break :blk .i64;
+                const stored_layout = ls.getLayout(result_layout);
+                if (stored_layout.tag == .list) {
+                    const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
+                    break :blk builder.structType(.normal, &.{ ptr_type, .i64, .i64 }) catch return error.CompilationFailed;
+                }
+                break :blk .i64;
+            },
         };
     }
 
@@ -612,11 +643,17 @@ pub const MonoLlvmCodeGen = struct {
                 if (params.len > 0) {
                     const allocas = self.allocator.alloc(LlvmBuilder.Value, params.len) catch return error.OutOfMemory;
                     const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
+                    const alloca_count = builder.intValue(.i32, 3) catch return error.OutOfMemory;
                     for (allocas) |*a| {
-                        // Each param gets an i64 stack slot (we'll extend/truncate as needed)
-                        a.* = wip.alloca(.normal, .i64, .none, alignment, .default, "jp") catch return error.CompilationFailed;
+                        // Each param gets 24 bytes (3×i64), enough for str/list/record structs
+                        a.* = wip.alloca(.normal, .i64, alloca_count, alignment, .default, "jp") catch return error.CompilationFailed;
                     }
                     self.join_param_allocas.put(jp_key, allocas) catch return error.OutOfMemory;
+
+                    // Create type tracking array (default i64, updated at first jump)
+                    const types = self.allocator.alloc(LlvmBuilder.Type, params.len) catch return error.OutOfMemory;
+                    @memset(types, .i64);
+                    self.join_param_types.put(jp_key, types) catch return error.OutOfMemory;
 
                     // Initialize allocas to 0 to avoid undef
                     const zero = builder.intValue(.i64, 0) catch return error.OutOfMemory;
@@ -636,8 +673,10 @@ pub const MonoLlvmCodeGen = struct {
                 wip.cursor = .{ .block = join_block };
                 if (self.join_param_allocas.get(jp_key)) |allocas| {
                     const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
-                    for (params, allocas) |param_id, alloca_ptr| {
-                        const loaded = wip.load(.normal, .i64, alloca_ptr, alignment, "") catch return error.CompilationFailed;
+                    const types = self.join_param_types.get(jp_key);
+                    for (params, allocas, 0..) |param_id, alloca_ptr, i| {
+                        const load_type: LlvmBuilder.Type = if (types) |ts| ts[i] else .i64;
+                        const loaded = wip.load(.normal, load_type, alloca_ptr, alignment, "") catch return error.CompilationFailed;
                         try self.bindPattern(param_id, loaded);
                     }
                 }
@@ -647,15 +686,27 @@ pub const MonoLlvmCodeGen = struct {
                 const wip = self.wip orelse return error.CompilationFailed;
                 const jp_key = @intFromEnum(jmp.target);
 
+                // Null out_ptr so sub-expressions produce SSA values (not write to out_ptr)
+                const saved_out_ptr = self.out_ptr;
+                self.out_ptr = null;
+                defer self.out_ptr = saved_out_ptr;
+
                 // Evaluate all arguments and store to join point allocas
                 const args = self.store.getExprSpan(jmp.args);
                 const allocas = self.join_param_allocas.get(jp_key);
+                const types = self.join_param_types.get(jp_key);
                 const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
                 for (args, 0..) |arg_id, i| {
                     const val = try self.generateExpr(arg_id);
                     if (allocas) |a| {
                         if (i < a.len) {
                             _ = wip.store(.normal, val, a[i], alignment) catch return error.CompilationFailed;
+                            // Record the actual LLVM type for correct loading later
+                            if (types) |ts| {
+                                if (i < ts.len) {
+                                    ts[i] = val.typeOfWip(wip);
+                                }
+                            }
                         }
                     }
                 }
@@ -818,7 +869,7 @@ pub const MonoLlvmCodeGen = struct {
             .while_loop => |wl| self.generateWhileLoop(wl),
             .for_loop => |fl| self.generateForLoop(fl),
 
-            else => error.UnsupportedExpression,
+            else => return error.UnsupportedExpression,
         };
     }
 
@@ -1096,6 +1147,7 @@ pub const MonoLlvmCodeGen = struct {
     /// Convert a value to match the expected struct field type.
     /// Handles i1→i8 (bool), integer widening/narrowing, etc.
     fn convertToFieldType(self: *MonoLlvmCodeGen, val: LlvmBuilder.Value, field_layout: layout.Idx) Error!LlvmBuilder.Value {
+        if (val == .none) return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
         const target_type = layoutToStructFieldType(field_layout);
         const actual_type = val.typeOfWip(wip);
@@ -1210,9 +1262,15 @@ pub const MonoLlvmCodeGen = struct {
 
     fn generateFieldAccess(self: *MonoLlvmCodeGen, access: anytype) Error!LlvmBuilder.Value {
         const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
 
         // Generate the record value
         const record_val = try self.generateExpr(access.record_expr);
+
+        // Guard: if value is .none or not a struct, we can't extract fields
+        if (record_val == .none) return error.CompilationFailed;
+        const val_type = record_val.typeOfWip(wip);
+        if (!val_type.isStruct(builder)) return error.UnsupportedExpression;
 
         // Extract the field at the sorted index
         var val = wip.extractValue(record_val, &.{@intCast(access.field_idx)}, "") catch return error.CompilationFailed;
@@ -1288,9 +1346,15 @@ pub const MonoLlvmCodeGen = struct {
 
     fn generateTupleAccess(self: *MonoLlvmCodeGen, access: anytype) Error!LlvmBuilder.Value {
         const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
 
         // Generate the tuple value
         const tuple_val = try self.generateExpr(access.tuple_expr);
+
+        // Guard: if value is .none or not a struct, we can't extract elements
+        if (tuple_val == .none) return error.CompilationFailed;
+        const val_type = tuple_val.typeOfWip(wip);
+        if (!val_type.isStruct(builder)) return error.UnsupportedExpression;
 
         // Extract the element at the sorted index
         var val = wip.extractValue(tuple_val, &.{@intCast(access.elem_idx)}, "") catch return error.CompilationFailed;
@@ -1699,11 +1763,10 @@ pub const MonoLlvmCodeGen = struct {
         }
 
         // Load element from data_ptr + idx * elem_size
-        const elem_llvm_type = layoutToLlvmType(fl.elem_layout);
         const size_const = builder.intValue(.i64, elem_size) catch return error.OutOfMemory;
         const byte_offset = wip.bin(.mul, idx_val, size_const, "") catch return error.CompilationFailed;
         const elem_ptr = wip.gep(.inbounds, .i8, data_ptr, &.{byte_offset}, "") catch return error.CompilationFailed;
-        const elem_val = wip.load(.normal, elem_llvm_type, elem_ptr, LlvmBuilder.Alignment.fromByteUnits(1), "") catch return error.CompilationFailed;
+        const elem_val = try self.loadValueFromPtr(elem_ptr, fl.elem_layout);
 
         // Bind the element to the pattern
         try self.bindPattern(fl.elem_pattern, elem_val);
@@ -1762,13 +1825,13 @@ pub const MonoLlvmCodeGen = struct {
 
         // Compute the incoming count for the merge block by scanning patterns.
         // Each branch contributes one incoming edge. Unconditional patterns
-        // (wildcard/bind) stop further branches, so count up to and including
-        // the first unconditional one.
+        // (wildcard/bind/record/tuple) stop further branches, so count up to
+        // and including the first unconditional one.
         var merge_incoming: u32 = 0;
         for (branches) |branch| {
             merge_incoming += 1;
             const pat = self.store.getPattern(branch.pattern);
-            if (pat == .wildcard or pat == .bind) break;
+            if (pat == .wildcard or pat == .bind or pat == .record or pat == .tuple) break;
         }
 
         const merge_block = wip.block(merge_incoming, "when_merge") catch return error.OutOfMemory;
@@ -1846,13 +1909,27 @@ pub const MonoLlvmCodeGen = struct {
                     const ls = self.layout_store orelse return error.UnsupportedExpression;
                     const stored_layout = ls.getLayout(tag_pat.union_layout);
 
+                    // For tag unions, GEP requires a pointer. If the scrutinee is a
+                    // struct value (not a pointer), materialize it to an alloca.
+                    const tag_scrutinee = if (stored_layout.tag == .tag_union) ts: {
+                        const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
+                        if (scrutinee.typeOfWip(wip) == ptr_type) {
+                            break :ts scrutinee;
+                        }
+                        const scrutinee_type = scrutinee.typeOfWip(wip);
+                        const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
+                        const alloca_ptr = wip.alloca(.normal, scrutinee_type, .none, alignment, .default, "tag_val") catch return error.CompilationFailed;
+                        _ = wip.store(.normal, scrutinee, alloca_ptr, alignment) catch return error.CompilationFailed;
+                        break :ts alloca_ptr;
+                    } else scrutinee;
+
                     const discriminant = switch (stored_layout.tag) {
                         .scalar => scrutinee, // Scalar tag — value IS the discriminant
                         .tag_union => blk: {
                             const tu_data = ls.getTagUnionData(stored_layout.data.tag_union.idx);
                             const disc_type = discriminantIntType(tu_data.discriminant_size);
                             const disc_offset_val = builder.intValue(.i32, tu_data.discriminant_offset) catch return error.OutOfMemory;
-                            const disc_ptr = wip.gep(.inbounds, .i8, scrutinee, &.{disc_offset_val}, "") catch return error.CompilationFailed;
+                            const disc_ptr = wip.gep(.inbounds, .i8, tag_scrutinee, &.{disc_offset_val}, "") catch return error.CompilationFailed;
                             break :blk wip.load(.normal, disc_type, disc_ptr, LlvmBuilder.Alignment.fromByteUnits(@as(u64, tu_data.discriminant_size)), "") catch return error.CompilationFailed;
                         },
                         else => return error.UnsupportedExpression,
@@ -1864,7 +1941,7 @@ pub const MonoLlvmCodeGen = struct {
 
                     if (is_last) {
                         // Last branch — bind payload args if needed, generate body
-                        try self.bindTagPayloadArgs(tag_pat, scrutinee);
+                        try self.bindTagPayloadArgs(tag_pat, tag_scrutinee);
                         const body_val = try self.generateExpr(branch.body);
                         _ = wip.br(merge_block) catch return error.OutOfMemory;
                         result_vals[branch_count] = body_val;
@@ -1876,7 +1953,7 @@ pub const MonoLlvmCodeGen = struct {
                         _ = wip.brCond(cmp, then_block, else_block, .none) catch return error.OutOfMemory;
 
                         wip.cursor = .{ .block = then_block };
-                        try self.bindTagPayloadArgs(tag_pat, scrutinee);
+                        try self.bindTagPayloadArgs(tag_pat, tag_scrutinee);
                         const body_val = try self.generateExpr(branch.body);
                         _ = wip.br(merge_block) catch return error.OutOfMemory;
                         result_vals[branch_count] = body_val;
@@ -1887,15 +1964,81 @@ pub const MonoLlvmCodeGen = struct {
                     }
                 },
 
+                .list => |list_pat| {
+                    // List pattern in when: check length matches, then bind elements
+                    // Guard: scrutinee must be a {ptr, i64, i64} struct
+                    if (scrutinee == .none or !scrutinee.typeOfWip(wip).isStruct(builder)) return error.UnsupportedExpression;
+                    const prefix_patterns = self.store.getPatternSpan(list_pat.prefix);
+                    const expected_len_val = builder.intValue(.i64, @as(u64, @intCast(prefix_patterns.len))) catch return error.OutOfMemory;
+                    const actual_len = wip.extractValue(scrutinee, &.{1}, "") catch return error.CompilationFailed;
+                    // Use >= for list rest patterns (.. as rest), == for exact-length patterns
+                    const has_rest = !list_pat.rest.isNone();
+                    const cmp_pred: LlvmBuilder.IntegerCondition = if (has_rest) .uge else .eq;
+                    const cmp = wip.icmp(cmp_pred, actual_len, expected_len_val, "") catch return error.OutOfMemory;
+
+                    if (is_last) {
+                        // Last branch — bind elements, generate body
+                        try self.bindPattern(branch.pattern, scrutinee);
+                        const body_val = try self.generateExpr(branch.body);
+                        _ = wip.br(merge_block) catch return error.OutOfMemory;
+                        result_vals[branch_count] = body_val;
+                        result_blocks[branch_count] = wip.cursor.block;
+                        branch_count += 1;
+                    } else {
+                        const then_block = wip.block(1, "list_match") catch return error.OutOfMemory;
+                        const else_block = wip.block(1, "list_next") catch return error.OutOfMemory;
+                        _ = wip.brCond(cmp, then_block, else_block, .none) catch return error.OutOfMemory;
+
+                        wip.cursor = .{ .block = then_block };
+                        try self.bindPattern(branch.pattern, scrutinee);
+                        const body_val = try self.generateExpr(branch.body);
+                        _ = wip.br(merge_block) catch return error.OutOfMemory;
+                        result_vals[branch_count] = body_val;
+                        result_blocks[branch_count] = wip.cursor.block;
+                        branch_count += 1;
+
+                        wip.cursor = .{ .block = else_block };
+                    }
+                },
+
+                .record => {
+                    // Record pattern: always matches (structural), bind fields
+                    try self.bindPattern(branch.pattern, scrutinee);
+                    const body_val = try self.generateExpr(branch.body);
+                    _ = wip.br(merge_block) catch return error.OutOfMemory;
+                    result_vals[branch_count] = body_val;
+                    result_blocks[branch_count] = wip.cursor.block;
+                    branch_count += 1;
+                    break; // Record patterns always match
+                },
+
+                .tuple => {
+                    // Tuple pattern: always matches (structural), bind elements
+                    try self.bindPattern(branch.pattern, scrutinee);
+                    const body_val = try self.generateExpr(branch.body);
+                    _ = wip.br(merge_block) catch return error.OutOfMemory;
+                    result_vals[branch_count] = body_val;
+                    result_blocks[branch_count] = wip.cursor.block;
+                    branch_count += 1;
+                    break; // Tuple patterns always match
+                },
+
                 else => return error.UnsupportedExpression,
             }
         }
 
         if (branch_count == 0) return error.UnsupportedExpression;
 
-        // Merge block with phi
+        // Check if all branch values have the same type for the phi node
         wip.cursor = .{ .block = merge_block };
         const result_type = result_vals[0].typeOfWip(wip);
+        for (result_vals[1..branch_count]) |val| {
+            if (val.typeOfWip(wip) != result_type) {
+                return error.UnsupportedExpression;
+            }
+        }
+
+        // Merge block with phi
         const phi_inst = wip.phi(result_type, "") catch return error.OutOfMemory;
         phi_inst.finish(
             result_vals[0..branch_count],
@@ -1966,8 +2109,10 @@ pub const MonoLlvmCodeGen = struct {
     fn generateEarlyReturn(self: *MonoLlvmCodeGen, er: anytype) Error!LlvmBuilder.Value {
         const wip = self.wip orelse return error.CompilationFailed;
         const builder = self.builder orelse return error.CompilationFailed;
-        const out_ptr = self.out_ptr orelse return error.UnsupportedExpression;
-        const ret_block = self.early_return_block orelse return error.UnsupportedExpression;
+        // Use fn_out_ptr (function-level) rather than out_ptr (expression-level),
+        // because out_ptr is nulled by intermediate handlers (if-then-else, when, block).
+        const out_ptr = self.fn_out_ptr orelse return error.UnsupportedExpression;
+        _ = self.early_return_block; // kept for API compatibility
         const ret_layout = self.result_layout orelse return error.UnsupportedExpression;
 
         // Generate the return value
@@ -2009,21 +2154,14 @@ pub const MonoLlvmCodeGen = struct {
                 });
                 _ = wip.store(.normal, store_value, out_ptr, alignment) catch return error.CompilationFailed;
             } else {
-                // Composite — memcpy
-                const ls = self.layout_store orelse return error.UnsupportedExpression;
-                const stored_layout = ls.getLayout(ret_layout);
-                const copy_size = switch (stored_layout.tag) {
-                    .tag_union => ls.getTagUnionData(stored_layout.data.tag_union.idx).size,
-                    else => return error.UnsupportedExpression,
-                };
-                const size_val = builder.intValue(.i32, copy_size) catch return error.OutOfMemory;
+                // Composite — store struct value directly to out_ptr
                 const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
-                _ = wip.callMemCpy(out_ptr, alignment, value, alignment, size_val, .normal, false) catch return error.OutOfMemory;
+                _ = wip.store(.normal, value, out_ptr, alignment) catch return error.CompilationFailed;
             }
         }
 
-        // Branch to early return block
-        _ = wip.br(ret_block) catch return error.OutOfMemory;
+        // Return directly — early return stores to fn_out_ptr then returns
+        _ = wip.retVoid() catch return error.OutOfMemory;
 
         // Create a dead block for subsequent code
         const dead_block = wip.block(0, "after_early_ret") catch return error.OutOfMemory;
@@ -2043,8 +2181,21 @@ pub const MonoLlvmCodeGen = struct {
     fn generateEmptyList(self: *MonoLlvmCodeGen) Error!LlvmBuilder.Value {
         const wip = self.wip orelse return error.CompilationFailed;
         const builder = self.builder orelse return error.CompilationFailed;
-        const dest_ptr = self.out_ptr orelse return error.UnsupportedExpression;
+        const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
 
+        // If no out_ptr, build a zero struct directly in SSA registers
+        if (self.out_ptr == null) {
+            const roc_list_type = builder.structType(.normal, &.{ ptr_type, .i64, .i64 }) catch return error.CompilationFailed;
+            const zero = builder.intValue(.i64, 0) catch return error.OutOfMemory;
+            const null_ptr = wip.cast(.inttoptr, zero, ptr_type, "") catch return error.CompilationFailed;
+            var result = builder.poisonValue(roc_list_type) catch return error.OutOfMemory;
+            result = wip.insertValue(result, null_ptr, &.{0}, "") catch return error.CompilationFailed;
+            result = wip.insertValue(result, zero, &.{1}, "") catch return error.CompilationFailed;
+            result = wip.insertValue(result, zero, &.{2}, "") catch return error.CompilationFailed;
+            return result;
+        }
+
+        const dest_ptr = self.out_ptr.?;
         const zero = builder.intValue(.i64, 0) catch return error.OutOfMemory;
         const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
 
@@ -2068,8 +2219,14 @@ pub const MonoLlvmCodeGen = struct {
     fn generateList(self: *MonoLlvmCodeGen, list: anytype) Error!LlvmBuilder.Value {
         const wip = self.wip orelse return error.CompilationFailed;
         const builder = self.builder orelse return error.CompilationFailed;
-        const dest_ptr = self.out_ptr orelse return error.UnsupportedExpression;
         const ls = self.layout_store orelse return error.UnsupportedExpression;
+
+        // If no out_ptr is set, create a temporary alloca for the 24-byte RocList struct
+        const needs_temp = self.out_ptr == null;
+        const dest_ptr = self.out_ptr orelse blk: {
+            const alloca = wip.alloca(.normal, .i64, builder.intValue(.i32, 3) catch return error.OutOfMemory, LlvmBuilder.Alignment.fromByteUnits(8), .default, "list_tmp") catch return error.CompilationFailed;
+            break :blk alloca;
+        };
 
         const elems = self.store.getExprSpan(list.elems);
         if (elems.len == 0) return self.generateEmptyList();
@@ -2103,9 +2260,10 @@ pub const MonoLlvmCodeGen = struct {
         self.out_ptr = null;
         defer self.out_ptr = saved_out_ptr;
 
-        for (elems, 0..) |elem_id, i| {
-            const elem_val = try self.generateExpr(elem_id);
+        // Check if elements are composite (str/list) — need out_ptr for inner generation
+        const is_composite_elem = (list.elem_layout == .str or elem_layout_data.tag == .list or elem_layout_data.tag == .list_of_zst);
 
+        for (elems, 0..) |elem_id, i| {
             const offset: u64 = @as(u64, @intCast(i)) * elem_size;
             const elem_ptr = if (offset == 0)
                 heap_ptr
@@ -2114,11 +2272,25 @@ pub const MonoLlvmCodeGen = struct {
                 break :blk wip.gep(.inbounds, .i8, heap_ptr, &.{off_val}, "") catch return error.CompilationFailed;
             };
 
-            // Convert value to match element layout
-            const store_val = try self.convertToFieldType(elem_val, list.elem_layout);
-            const store_align = LlvmBuilder.Alignment.fromByteUnits(@intCast(elem_align));
-            // Use volatile stores to prevent LLVM from optimizing away element writes
-            _ = wip.store(.@"volatile", store_val, elem_ptr, store_align) catch return error.CompilationFailed;
+            if (is_composite_elem) {
+                // Composite elements (str/list): set out_ptr to the heap slot so the
+                // inner generateExpr writes the 24-byte struct directly to heap memory.
+                self.out_ptr = elem_ptr;
+                const elem_val = try self.generateExpr(elem_id);
+                if (elem_val != .none) {
+                    // If it returned a value (e.g. from a lookup), store it
+                    const store_align = LlvmBuilder.Alignment.fromByteUnits(@intCast(@max(elem_align, 1)));
+                    _ = wip.store(.@"volatile", elem_val, elem_ptr, store_align) catch return error.CompilationFailed;
+                }
+                self.out_ptr = null;
+            } else {
+                const elem_val = try self.generateExpr(elem_id);
+                // Convert value to match element layout
+                const store_val = try self.convertToFieldType(elem_val, list.elem_layout);
+                const store_align = LlvmBuilder.Alignment.fromByteUnits(@intCast(@max(elem_align, 1)));
+                // Use volatile stores to prevent LLVM from optimizing away element writes
+                _ = wip.store(.@"volatile", store_val, elem_ptr, store_align) catch return error.CompilationFailed;
+            }
         }
 
         // Write RocList struct to out_ptr: {ptr, len, capacity}
@@ -2138,6 +2310,11 @@ pub const MonoLlvmCodeGen = struct {
         const ptr16 = wip.gep(.inbounds, .i8, dest_ptr, &.{off16}, "") catch return error.CompilationFailed;
         _ = wip.store(.normal, len_val, ptr16, alignment) catch return error.CompilationFailed;
 
+        if (needs_temp) {
+            // Load the 24-byte struct from the temp alloca and return it as a value
+            const list_type = builder.structType(.normal, &.{ ptr_type, .i64, .i64 }) catch return error.CompilationFailed;
+            return wip.load(.normal, list_type, dest_ptr, alignment, "list_val") catch return error.CompilationFailed;
+        }
         return .none;
     }
 
@@ -2162,6 +2339,39 @@ pub const MonoLlvmCodeGen = struct {
     /// instructions. Complex operations (list, string) fall through to
     /// UnsupportedExpression.
     fn generateLowLevel(self: *MonoLlvmCodeGen, ll: anytype) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
+
+        // Str/list operations write their 24-byte result to out_ptr and return .none.
+        // When out_ptr is null, provide a temp alloca so these ops can write their result,
+        // then load the struct value from the alloca.
+        const saved_out_ptr = self.out_ptr;
+        const needs_temp = self.out_ptr == null;
+        var temp_alloca: LlvmBuilder.Value = .none;
+        if (needs_temp) {
+            const alloca_count = builder.intValue(.i32, 3) catch return error.OutOfMemory;
+            temp_alloca = wip.alloca(.normal, .i64, alloca_count, LlvmBuilder.Alignment.fromByteUnits(8), .default, "ll_tmp") catch return error.CompilationFailed;
+            self.out_ptr = temp_alloca;
+        }
+
+        const result = self.generateLowLevelInner(ll) catch |err| {
+            if (needs_temp) self.out_ptr = saved_out_ptr;
+            return err;
+        };
+
+        if (needs_temp) {
+            self.out_ptr = saved_out_ptr;
+            if (result == .none) {
+                const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
+                const struct_type = builder.structType(.normal, &.{ ptr_type, .i64, .i64 }) catch return error.CompilationFailed;
+                return wip.load(.normal, struct_type, temp_alloca, LlvmBuilder.Alignment.fromByteUnits(8), "ll_val") catch return error.CompilationFailed;
+            }
+        }
+
+        return result;
+    }
+
+    fn generateLowLevelInner(self: *MonoLlvmCodeGen, ll: anytype) Error!LlvmBuilder.Value {
         const wip = self.wip orelse return error.CompilationFailed;
         const builder = self.builder orelse return error.CompilationFailed;
         const args = self.store.getExprSpan(ll.args);
@@ -4136,13 +4346,35 @@ pub const MonoLlvmCodeGen = struct {
     fn generateStrLiteral(self: *MonoLlvmCodeGen, str_idx: anytype) Error!LlvmBuilder.Value {
         const wip = self.wip orelse return error.CompilationFailed;
         const builder = self.builder orelse return error.CompilationFailed;
-        const dest_ptr = self.out_ptr orelse return error.UnsupportedExpression;
+
+        // If no out_ptr, create a temporary alloca for the 24-byte RocStr struct
+        const needs_temp = self.out_ptr == null;
+        const dest_ptr = self.out_ptr orelse blk: {
+            const alloca = wip.alloca(.normal, .i64, builder.intValue(.i32, 3) catch return error.OutOfMemory, LlvmBuilder.Alignment.fromByteUnits(8), .default, "str_tmp") catch return error.CompilationFailed;
+            // Zero initialize to avoid garbage in unused small string bytes
+            const zero_i64 = builder.intValue(.i64, 0) catch return error.OutOfMemory;
+            const align8 = LlvmBuilder.Alignment.fromByteUnits(8);
+            _ = wip.store(.normal, zero_i64, alloca, align8) catch return error.CompilationFailed;
+            const off8 = builder.intValue(.i32, 8) catch return error.OutOfMemory;
+            const p8 = wip.gep(.inbounds, .i8, alloca, &.{off8}, "") catch return error.CompilationFailed;
+            _ = wip.store(.normal, zero_i64, p8, align8) catch return error.CompilationFailed;
+            const off16 = builder.intValue(.i32, 16) catch return error.OutOfMemory;
+            const p16 = wip.gep(.inbounds, .i8, alloca, &.{off16}, "") catch return error.CompilationFailed;
+            _ = wip.store(.normal, zero_i64, p16, align8) catch return error.CompilationFailed;
+            break :blk alloca;
+        };
 
         const str_bytes = self.store.getString(str_idx);
 
         if (str_bytes.len >= roc_str_size) {
             // Large string: allocate heap memory, copy bytes, write RocStr to dest_ptr
-            return self.generateLargeStrLiteral(str_bytes, dest_ptr);
+            _ = try self.generateLargeStrLiteral(str_bytes, dest_ptr);
+            if (needs_temp) {
+                const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
+                const str_struct_type = builder.structType(.normal, &.{ ptr_type, .i64, .i64 }) catch return error.CompilationFailed;
+                return wip.load(.normal, str_struct_type, dest_ptr, LlvmBuilder.Alignment.fromByteUnits(8), "str_val") catch return error.CompilationFailed;
+            }
+            return .none;
         }
 
         const byte_alignment = LlvmBuilder.Alignment.fromByteUnits(1);
@@ -4170,6 +4402,11 @@ pub const MonoLlvmCodeGen = struct {
         const len_ptr = wip.gep(.inbounds, .i8, dest_ptr, &.{len_offset}, "") catch return error.CompilationFailed;
         _ = wip.store(.@"volatile", len_val, len_ptr, byte_alignment) catch return error.CompilationFailed;
 
+        if (needs_temp) {
+            const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
+            const str_struct_type = builder.structType(.normal, &.{ ptr_type, .i64, .i64 }) catch return error.CompilationFailed;
+            return wip.load(.normal, str_struct_type, dest_ptr, LlvmBuilder.Alignment.fromByteUnits(8), "str_val") catch return error.CompilationFailed;
+        }
         // Return .none as sentinel — data already written to out_ptr
         return .none;
     }
@@ -4236,13 +4473,19 @@ pub const MonoLlvmCodeGen = struct {
         const wip = self.wip orelse return error.CompilationFailed;
         const builder = self.builder orelse return error.CompilationFailed;
         const roc_ops = self.roc_ops_arg orelse return error.CompilationFailed;
-        const dest_ptr = self.out_ptr orelse return error.UnsupportedExpression;
         const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
+
+        const needs_temp = self.out_ptr == null;
+        if (needs_temp) {
+            const alloca_count = builder.intValue(.i32, 3) catch return error.OutOfMemory;
+            self.out_ptr = wip.alloca(.normal, .i64, alloca_count, LlvmBuilder.Alignment.fromByteUnits(8), .default, "its_tmp") catch return error.CompilationFailed;
+        }
+        const dest_ptr = self.out_ptr.?;
 
         const saved_out_ptr = self.out_ptr;
         self.out_ptr = null;
-        defer self.out_ptr = saved_out_ptr;
         const value = try self.generateExpr(its.value);
+        self.out_ptr = saved_out_ptr;
 
         const fn_type = builder.fnType(.void, &.{ ptr_type, .i64, ptr_type }, .normal) catch return error.CompilationFailed;
         const addr = builder.intValue(.i64, self.i64_to_str_addr) catch return error.CompilationFailed;
@@ -4255,6 +4498,11 @@ pub const MonoLlvmCodeGen = struct {
             wip.cast(.sext, value, .i64, "") catch return error.CompilationFailed;
 
         _ = wip.call(.normal, .ccc, .none, fn_type, fn_ptr, &.{ dest_ptr, val_i64, roc_ops }, "") catch return error.CompilationFailed;
+
+        if (needs_temp) {
+            const struct_type = builder.structType(.normal, &.{ ptr_type, .i64, .i64 }) catch return error.CompilationFailed;
+            return wip.load(.normal, struct_type, dest_ptr, LlvmBuilder.Alignment.fromByteUnits(8), "its_val") catch return error.CompilationFailed;
+        }
         return .none;
     }
 
@@ -4263,7 +4511,6 @@ pub const MonoLlvmCodeGen = struct {
         const wip = self.wip orelse return error.CompilationFailed;
         const builder = self.builder orelse return error.CompilationFailed;
         const roc_ops = self.roc_ops_arg orelse return error.CompilationFailed;
-        const dest_ptr = self.out_ptr orelse return error.UnsupportedExpression;
         const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
 
         // Check for Dec precision
@@ -4278,10 +4525,17 @@ pub const MonoLlvmCodeGen = struct {
         };
         if (fn_addr_val == 0) return error.UnsupportedExpression;
 
+        const needs_temp = self.out_ptr == null;
+        if (needs_temp) {
+            const alloca_count = builder.intValue(.i32, 3) catch return error.OutOfMemory;
+            self.out_ptr = wip.alloca(.normal, .i64, alloca_count, LlvmBuilder.Alignment.fromByteUnits(8), .default, "fts_tmp") catch return error.CompilationFailed;
+        }
+        const dest_ptr = self.out_ptr.?;
+
         const saved_out_ptr = self.out_ptr;
         self.out_ptr = null;
-        defer self.out_ptr = saved_out_ptr;
         const value = try self.generateExpr(fts.value);
+        self.out_ptr = saved_out_ptr;
 
         const float_type: LlvmBuilder.Type = switch (fts.float_precision) {
             .f64 => .double,
@@ -4294,6 +4548,11 @@ pub const MonoLlvmCodeGen = struct {
         const fn_ptr = wip.cast(.inttoptr, addr, ptr_type, "") catch return error.CompilationFailed;
 
         _ = wip.call(.normal, .ccc, .none, fn_type, fn_ptr, &.{ dest_ptr, value, roc_ops }, "") catch return error.CompilationFailed;
+
+        if (needs_temp) {
+            const struct_type = builder.structType(.normal, &.{ ptr_type, .i64, .i64 }) catch return error.CompilationFailed;
+            return wip.load(.normal, struct_type, dest_ptr, LlvmBuilder.Alignment.fromByteUnits(8), "fts_val") catch return error.CompilationFailed;
+        }
         return .none;
     }
 
@@ -4303,13 +4562,19 @@ pub const MonoLlvmCodeGen = struct {
         const wip = self.wip orelse return error.CompilationFailed;
         const builder = self.builder orelse return error.CompilationFailed;
         const roc_ops = self.roc_ops_arg orelse return error.CompilationFailed;
-        const dest_ptr = self.out_ptr orelse return error.UnsupportedExpression;
         const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
+
+        const needs_temp = self.out_ptr == null;
+        if (needs_temp) {
+            const alloca_count = builder.intValue(.i32, 3) catch return error.OutOfMemory;
+            self.out_ptr = wip.alloca(.normal, .i64, alloca_count, LlvmBuilder.Alignment.fromByteUnits(8), .default, "dts_tmp") catch return error.CompilationFailed;
+        }
+        const dest_ptr = self.out_ptr.?;
 
         const saved_out_ptr = self.out_ptr;
         self.out_ptr = null;
-        defer self.out_ptr = saved_out_ptr;
         const value = try self.generateExpr(expr_id);
+        self.out_ptr = saved_out_ptr;
 
         // Decompose i128 into lo (lower 64 bits) and hi (upper 64 bits)
         const lo = wip.cast(.trunc, value, .i64, "") catch return error.CompilationFailed;
@@ -4323,6 +4588,11 @@ pub const MonoLlvmCodeGen = struct {
         const fn_ptr = wip.cast(.inttoptr, addr, ptr_type, "") catch return error.CompilationFailed;
 
         _ = wip.call(.normal, .ccc, .none, fn_type, fn_ptr, &.{ dest_ptr, lo, hi, roc_ops }, "") catch return error.CompilationFailed;
+
+        if (needs_temp) {
+            const struct_type = builder.structType(.normal, &.{ ptr_type, .i64, .i64 }) catch return error.CompilationFailed;
+            return wip.load(.normal, struct_type, dest_ptr, LlvmBuilder.Alignment.fromByteUnits(8), "dts_val") catch return error.CompilationFailed;
+        }
         return .none;
     }
 
@@ -4332,9 +4602,15 @@ pub const MonoLlvmCodeGen = struct {
         const wip = self.wip orelse return error.CompilationFailed;
         const builder = self.builder orelse return error.CompilationFailed;
         const roc_ops = self.roc_ops_arg orelse return error.CompilationFailed;
-        const dest_ptr = self.out_ptr orelse return error.UnsupportedExpression;
         const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
         const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
+
+        const needs_temp = self.out_ptr == null;
+        if (needs_temp) {
+            const alloca_count = builder.intValue(.i32, 3) catch return error.OutOfMemory;
+            self.out_ptr = wip.alloca(.normal, .i64, alloca_count, LlvmBuilder.Alignment.fromByteUnits(8), .default, "seq_tmp") catch return error.CompilationFailed;
+        }
+        const dest_ptr = self.out_ptr.?;
 
         // Materialize the string arg
         const str_ptr = try self.materializeAsPtr(expr_id, 24);
@@ -4354,6 +4630,11 @@ pub const MonoLlvmCodeGen = struct {
         const fn_ptr = wip.cast(.inttoptr, addr, ptr_type, "") catch return error.CompilationFailed;
 
         _ = wip.call(.normal, .ccc, .none, fn_type, fn_ptr, &.{ dest_ptr, str_bytes, str_len, str_cap, roc_ops }, "") catch return error.CompilationFailed;
+
+        if (needs_temp) {
+            const struct_type = builder.structType(.normal, &.{ ptr_type, .i64, .i64 }) catch return error.CompilationFailed;
+            return wip.load(.normal, struct_type, dest_ptr, alignment, "seq_val") catch return error.CompilationFailed;
+        }
         return .none;
     }
 
@@ -4535,10 +4816,17 @@ pub const MonoLlvmCodeGen = struct {
         _ = wip.br(merge_block) catch return error.CompilationFailed;
         const else_exit_block = wip.cursor.block;
 
-        // Merge block with phi — use actual value type, not layout (which may be wrong for structs)
+        // Merge block with phi
         wip.cursor = .{ .block = merge_block };
-        const result_type = then_val.typeOfWip(wip);
-        const phi_inst = wip.phi(result_type, "") catch return error.CompilationFailed;
+
+        // Check that both branch values have the same type for the phi node
+        const then_type = then_val.typeOfWip(wip);
+        const else_type = else_val.typeOfWip(wip);
+        if (then_type != else_type) {
+            return error.UnsupportedExpression;
+        }
+
+        const phi_inst = wip.phi(then_type, "") catch return error.CompilationFailed;
         phi_inst.finish(
             &.{ then_val, else_val },
             &.{ then_exit_block, else_exit_block },
@@ -4562,6 +4850,17 @@ pub const MonoLlvmCodeGen = struct {
             switch (stmt_expr) {
                 .lambda, .closure => {
                     try self.bindLambdaPattern(stmt.pattern, stmt.expr);
+                },
+                .call => {
+                    if (self.resolveCallToLambda(stmt.expr)) |resolved_id| {
+                        try self.bindLambdaPattern(stmt.pattern, resolved_id);
+                    }
+                },
+                .lookup => |lookup| {
+                    const sym_key: u48 = @bitCast(lookup.symbol);
+                    if (self.lambda_bindings.get(sym_key)) |lambda_expr_id| {
+                        try self.bindLambdaPattern(stmt.pattern, lambda_expr_id);
+                    }
                 },
                 else => {},
             }
@@ -4588,15 +4887,47 @@ pub const MonoLlvmCodeGen = struct {
         self.out_ptr = null;
         defer self.out_ptr = saved_out_ptr;
 
-        const fn_expr = self.store.getExpr(call.fn_expr);
+        return self.callExprWithArgs(call.fn_expr, call.args, call.ret_layout);
+    }
 
+    /// Resolve a function expression and call it with the given arguments.
+    /// Handles lambda, closure, lookup, call-of-call, block-as-function, etc.
+    fn callExprWithArgs(self: *MonoLlvmCodeGen, fn_expr_id: MonoExprId, args_span: anytype, ret_layout: layout.Idx) Error!LlvmBuilder.Value {
+        const fn_expr = self.store.getExpr(fn_expr_id);
         return switch (fn_expr) {
-            .lambda => |lambda| self.generateLambdaCall(lambda, call.args, call.ret_layout),
-            .closure => |closure| self.generateClosureCall(closure, call.args, call.ret_layout),
-            .lookup => |lookup| self.generateLookupCall(lookup, call.args, call.ret_layout),
-            .call => error.UnsupportedExpression,
-            .block => error.UnsupportedExpression,
-            else => error.UnsupportedExpression,
+            .lambda => |lambda| self.generateLambdaCall(lambda, args_span, ret_layout),
+            .closure => |closure| self.generateClosureCall(closure, args_span, ret_layout),
+            .lookup => |lookup| self.generateLookupCall(lookup, args_span, ret_layout),
+            .call => |inner_call| {
+                // Call-of-call: e.g., (make_adder(5))(10) or (((|a| |b| |c| a+b+c)(100))(20))(3)
+                // Resolve the inner call chain: bind args at each level, get the body.
+                const body_id = try self.resolveCallToBody(inner_call.fn_expr, inner_call.args);
+                return self.callExprWithArgs(body_id, args_span, ret_layout);
+            },
+            .block => |block_data| {
+                // Block-as-function: evaluate the block, then call its result.
+                // Handle let stmts, then the final expression is the callable.
+                const stmts = self.store.getStmts(block_data.stmts);
+                for (stmts) |stmt| {
+                    const val = try self.generateExpr(stmt.expr);
+                    try self.bindPattern(stmt.pattern, val);
+
+                    // Also track lambda bindings
+                    const stmt_expr = self.store.getExpr(stmt.expr);
+                    switch (stmt_expr) {
+                        .lambda, .closure => try self.bindLambdaPattern(stmt.pattern, stmt.expr),
+                        .call => {
+                            if (self.resolveCallToLambda(stmt.expr)) |resolved_id| {
+                                try self.bindLambdaPattern(stmt.pattern, resolved_id);
+                            }
+                        },
+                        else => {},
+                    }
+                }
+                return self.callExprWithArgs(block_data.final_expr, args_span, ret_layout);
+            },
+            .if_then_else => return error.UnsupportedExpression,
+            else => return error.UnsupportedExpression,
         };
     }
 
@@ -4606,11 +4937,28 @@ pub const MonoLlvmCodeGen = struct {
         const args = self.store.getExprSpan(args_span);
 
         for (params, args) |param_id, arg_id| {
-            // Check if the argument is a lambda/closure
+            // Propagate lambda bindings from argument to parameter
             const arg_expr = self.store.getExpr(arg_id);
             switch (arg_expr) {
                 .lambda, .closure => {
                     try self.bindLambdaPattern(param_id, arg_id);
+                },
+                .lookup => |lookup| {
+                    const sym_key: u48 = @bitCast(lookup.symbol);
+                    if (self.lambda_bindings.get(sym_key)) |lambda_expr_id| {
+                        try self.bindLambdaPattern(param_id, lambda_expr_id);
+                    } else if (self.store.getSymbolDef(lookup.symbol)) |def_id| {
+                        const def_expr = self.store.getExpr(def_id);
+                        switch (def_expr) {
+                            .lambda, .closure => try self.bindLambdaPattern(param_id, def_id),
+                            else => {},
+                        }
+                    }
+                },
+                .call => {
+                    if (self.resolveCallToLambda(arg_id)) |resolved_id| {
+                        try self.bindLambdaPattern(param_id, resolved_id);
+                    }
                 },
                 else => {},
             }
@@ -4700,7 +5048,7 @@ pub const MonoLlvmCodeGen = struct {
             return switch (def_expr) {
                 .lambda => |lambda| self.generateLambdaCall(lambda, args_span, ret_layout),
                 .closure => |closure| self.generateClosureCall(closure, args_span, ret_layout),
-                else => error.UnsupportedExpression,
+                else => return error.UnsupportedExpression,
             };
         }
 
@@ -4799,8 +5147,319 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     // ---------------------------------------------------------------
+    // Call resolution helpers
+    // ---------------------------------------------------------------
+
+    /// Structurally resolve a call expression to the lambda/closure it returns,
+    /// without generating any LLVM code. Used for binding lambda patterns and
+    /// for call-of-call dispatch.
+    fn resolveCallToLambda(self: *MonoLlvmCodeGen, expr_id: MonoExprId) ?MonoExprId {
+        const expr = self.store.getExpr(expr_id);
+        return switch (expr) {
+            .lambda, .closure => expr_id,
+            .call => |call| self.resolveCallToLambda2(call.fn_expr),
+            .block => |block_data| self.resolveCallToLambda(block_data.final_expr),
+            .lookup => |lookup| {
+                const sym_key: u48 = @bitCast(lookup.symbol);
+                if (self.lambda_bindings.get(sym_key)) |lambda_expr_id| {
+                    return lambda_expr_id;
+                }
+                if (self.store.getSymbolDef(lookup.symbol)) |def_id| {
+                    return self.resolveCallToLambda(def_id);
+                }
+                return null;
+            },
+            else => null,
+        };
+    }
+
+    /// Given a call's fn_expr, find the lambda body that the call returns.
+    fn resolveCallToLambda2(self: *MonoLlvmCodeGen, fn_expr_id: MonoExprId) ?MonoExprId {
+        const fn_expr = self.store.getExpr(fn_expr_id);
+        return switch (fn_expr) {
+            .lambda => |lambda| self.resolveCallToLambda(lambda.body),
+            .closure => |closure| self.resolveCallToLambda2(closure.lambda),
+            .lookup => |lookup| {
+                const sym_key: u48 = @bitCast(lookup.symbol);
+                if (self.lambda_bindings.get(sym_key)) |lambda_expr_id| {
+                    return self.resolveCallToLambda2(lambda_expr_id);
+                }
+                if (self.store.getSymbolDef(lookup.symbol)) |def_id| {
+                    return self.resolveCallToLambda2(def_id);
+                }
+                return null;
+            },
+            .call => |call| {
+                if (self.resolveCallToLambda2(call.fn_expr)) |resolved| {
+                    return self.resolveCallToLambda2(resolved);
+                }
+                return null;
+            },
+            .block => |block_data| self.resolveCallToLambda2(block_data.final_expr),
+            else => null,
+        };
+    }
+
+    /// Resolve an expression to a lambda expression ID.
+    /// Handles lambda, closure, lookup, call (recursive), and block expressions.
+    fn resolveToLambdaExprId(self: *MonoLlvmCodeGen, expr_id: MonoExprId) Error!MonoExprId {
+        const expr = self.store.getExpr(expr_id);
+        return switch (expr) {
+            .lambda => expr_id,
+            .closure => |closure| {
+                try self.bindClosureCaptures(closure);
+                return closure.lambda;
+            },
+            .lookup => |lookup| {
+                const sym_key: u48 = @bitCast(lookup.symbol);
+                if (self.lambda_bindings.get(sym_key)) |lid| return self.resolveToLambdaExprId(lid);
+                if (self.store.getSymbolDef(lookup.symbol)) |def_id| return self.resolveToLambdaExprId(def_id);
+                return error.UnsupportedExpression;
+            },
+            .call => |call| {
+                const body_id = try self.resolveCallToBody(call.fn_expr, call.args);
+                return self.resolveToLambdaExprId(body_id);
+            },
+            .block => |block_data| {
+                const stmts = self.store.getStmts(block_data.stmts);
+                for (stmts) |stmt| {
+                    const val = try self.generateExpr(stmt.expr);
+                    try self.bindPattern(stmt.pattern, val);
+                    const stmt_expr = self.store.getExpr(stmt.expr);
+                    switch (stmt_expr) {
+                        .lambda, .closure => try self.bindLambdaPattern(stmt.pattern, stmt.expr),
+                        .call => {
+                            if (self.resolveCallToLambda(stmt.expr)) |resolved_id| {
+                                try self.bindLambdaPattern(stmt.pattern, resolved_id);
+                            }
+                        },
+                        else => {},
+                    }
+                }
+                return self.resolveToLambdaExprId(block_data.final_expr);
+            },
+            else => error.UnsupportedExpression,
+        };
+    }
+
+    /// Resolve a call expression: find the lambda, bind args to params, return the body expr ID.
+    fn resolveCallToBody(self: *MonoLlvmCodeGen, fn_expr_id: MonoExprId, args: MonoExprSpan) Error!MonoExprId {
+        const lambda_expr_id = try self.resolveToLambdaExprId(fn_expr_id);
+        const lambda_expr = self.store.getExpr(lambda_expr_id);
+        const lambda = switch (lambda_expr) {
+            .lambda => |l| l,
+            else => return error.UnsupportedExpression,
+        };
+
+        // Bind call args to lambda params
+        const params = self.store.getPatternSpan(lambda.params);
+        const arg_exprs = self.store.getExprSpan(args);
+        for (params, arg_exprs) |param_id, arg_id| {
+            const arg_expr = self.store.getExpr(arg_id);
+            switch (arg_expr) {
+                .lambda, .closure => try self.bindLambdaPattern(param_id, arg_id),
+                .lookup => |arg_lookup| {
+                    const arg_sym_key: u48 = @bitCast(arg_lookup.symbol);
+                    if (self.lambda_bindings.get(arg_sym_key)) |lambda_id| {
+                        try self.bindLambdaPattern(param_id, lambda_id);
+                    } else if (self.store.getSymbolDef(arg_lookup.symbol)) |def_id| {
+                        const de = self.store.getExpr(def_id);
+                        switch (de) {
+                            .lambda, .closure => try self.bindLambdaPattern(param_id, def_id),
+                            else => {},
+                        }
+                    }
+                },
+                .call => {
+                    if (self.resolveCallToLambda(arg_id)) |resolved_id| {
+                        try self.bindLambdaPattern(param_id, resolved_id);
+                    }
+                },
+                else => {},
+            }
+            const arg_val = try self.generateExpr(arg_id);
+            try self.bindPattern(param_id, arg_val);
+        }
+        return lambda.body;
+    }
+
+    /// Bind closure captures to symbol_values.
+    fn bindClosureCaptures(self: *MonoLlvmCodeGen, closure: anytype) Error!void {
+        switch (closure.representation) {
+            .direct_call => {},
+            .unwrapped_capture => {
+                const captures = self.store.getCaptures(closure.captures);
+                if (captures.len > 0) {
+                    const cap = captures[0];
+                    const symbol_key: u48 = @bitCast(cap.symbol);
+                    if (self.symbol_values.get(symbol_key) == null) {
+                        if (self.store.getSymbolDef(cap.symbol)) |def_expr_id| {
+                            const val = try self.generateExpr(def_expr_id);
+                            self.symbol_values.put(symbol_key, val) catch return error.OutOfMemory;
+                        }
+                    }
+                }
+            },
+            .struct_captures => |repr| {
+                const captures = self.store.getCaptures(repr.captures);
+                for (captures) |cap| {
+                    const symbol_key: u48 = @bitCast(cap.symbol);
+                    if (self.symbol_values.get(symbol_key) == null) {
+                        if (self.store.getSymbolDef(cap.symbol)) |def_expr_id| {
+                            const val = try self.generateExpr(def_expr_id);
+                            self.symbol_values.put(symbol_key, val) catch return error.OutOfMemory;
+                        }
+                    }
+                }
+            },
+            .enum_dispatch, .union_repr => {
+                const captures = self.store.getCaptures(closure.captures);
+                for (captures) |cap| {
+                    const symbol_key: u48 = @bitCast(cap.symbol);
+                    if (self.symbol_values.get(symbol_key) == null) {
+                        if (self.store.getSymbolDef(cap.symbol)) |def_expr_id| {
+                            const val = try self.generateExpr(def_expr_id);
+                            self.symbol_values.put(symbol_key, val) catch return error.OutOfMemory;
+                        }
+                    }
+                }
+            },
+        }
+    }
+
+    // ---------------------------------------------------------------
     // Pattern binding helpers
     // ---------------------------------------------------------------
+
+    /// Load a value from a pointer based on layout type.
+    /// Handles scalars, composite types (str/list as 24-byte {ptr,i64,i64}), and aggregates.
+    fn loadValueFromPtr(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, layout_idx: layout.Idx) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
+
+        // Composite types (str/list) are 24-byte structs: {ptr, i64, i64}
+        if (layout_idx == .str) {
+            const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
+            const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
+            const roc_struct_type = builder.structType(.normal, &.{ ptr_type, .i64, .i64 }) catch return error.OutOfMemory;
+            return wip.load(.normal, roc_struct_type, ptr, alignment, "") catch return error.CompilationFailed;
+        }
+        if (self.layout_store) |ls| {
+            const l = ls.getLayout(layout_idx);
+            switch (l.tag) {
+                .list, .list_of_zst => {
+                    const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
+                    const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
+                    const roc_struct_type = builder.structType(.normal, &.{ ptr_type, .i64, .i64 }) catch return error.OutOfMemory;
+                    return wip.load(.normal, roc_struct_type, ptr, alignment, "") catch return error.CompilationFailed;
+                },
+                .record => {
+                    const llvm_type = try self.buildLlvmTypeForRecordLayout(ls, l.data.record.idx);
+                    const sa = ls.layoutSizeAlign(l);
+                    const alignment = LlvmBuilder.Alignment.fromByteUnits(@intCast(@max(sa.alignment.toByteUnits(), 1)));
+                    return wip.load(.normal, llvm_type, ptr, alignment, "") catch return error.CompilationFailed;
+                },
+                .tuple => {
+                    const llvm_type = try self.buildLlvmTypeForTupleLayout(ls, l.data.tuple.idx);
+                    const sa = ls.layoutSizeAlign(l);
+                    const alignment = LlvmBuilder.Alignment.fromByteUnits(@intCast(@max(sa.alignment.toByteUnits(), 1)));
+                    return wip.load(.normal, llvm_type, ptr, alignment, "") catch return error.CompilationFailed;
+                },
+                else => {},
+            }
+        }
+
+        // Scalar types
+        const elem_type = layoutToLlvmType(layout_idx);
+        return wip.load(.normal, elem_type, ptr, .default, "") catch return error.CompilationFailed;
+    }
+
+    /// Build an LLVM struct type for a record layout by looking up each field's layout.
+    fn buildLlvmTypeForRecordLayout(self: *MonoLlvmCodeGen, ls: *const layout.Store, record_idx: anytype) Error!LlvmBuilder.Type {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const record_data = ls.getRecordData(record_idx);
+        const field_count = record_data.getFields().count;
+        var field_types: [32]LlvmBuilder.Type = undefined;
+        for (0..field_count) |i| {
+            const field_layout = ls.getRecordFieldLayout(record_idx, @intCast(i));
+            field_types[i] = try self.layoutToLlvmTypeForLoad(field_layout);
+        }
+        return builder.structType(.normal, field_types[0..field_count]) catch return error.OutOfMemory;
+    }
+
+    /// Build an LLVM struct type for a tuple layout by looking up each element's layout.
+    fn buildLlvmTypeForTupleLayout(self: *MonoLlvmCodeGen, ls: *const layout.Store, tuple_idx: anytype) Error!LlvmBuilder.Type {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const tuple_data = ls.getTupleData(tuple_idx);
+        const sorted_elements = ls.tuple_fields.sliceRange(tuple_data.getFields());
+        const elem_count = sorted_elements.len;
+        var field_types: [32]LlvmBuilder.Type = undefined;
+        for (0..elem_count) |i| {
+            const elem = sorted_elements.get(@intCast(i));
+            field_types[i] = try self.layoutToLlvmTypeForLoad(elem.layout);
+        }
+        return builder.structType(.normal, field_types[0..elem_count]) catch return error.OutOfMemory;
+    }
+
+    /// Convert a layout index to an LLVM type suitable for memory loads.
+    /// Uses struct field types (bool→i8) for correct memory layout matching.
+    fn layoutToLlvmTypeForLoad(self: *MonoLlvmCodeGen, layout_idx: layout.Idx) Error!LlvmBuilder.Type {
+        const builder = self.builder orelse return error.CompilationFailed;
+        return switch (layout_idx) {
+            .bool => .i8, // bools stored as i8 in structs
+            .u8, .i8 => .i8,
+            .u16, .i16 => .i16,
+            .u32, .i32 => .i32,
+            .u64, .i64 => .i64,
+            .u128, .i128, .dec => .i128,
+            .f32 => .float,
+            .f64 => .double,
+            .str => blk: {
+                const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
+                break :blk builder.structType(.normal, &.{ ptr_type, .i64, .i64 }) catch return error.OutOfMemory;
+            },
+            else => blk: {
+                if (self.layout_store) |ls| {
+                    const l = ls.getLayout(layout_idx);
+                    switch (l.tag) {
+                        .list, .list_of_zst => {
+                            const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
+                            break :blk builder.structType(.normal, &.{ ptr_type, .i64, .i64 }) catch return error.OutOfMemory;
+                        },
+                        .record => break :blk try self.buildLlvmTypeForRecordLayout(ls, l.data.record.idx),
+                        .tuple => break :blk try self.buildLlvmTypeForTupleLayout(ls, l.data.tuple.idx),
+                        else => {},
+                    }
+                }
+                break :blk layoutToStructFieldType(layout_idx);
+            },
+        };
+    }
+
+    /// Build a rest-sublist value: creates a list struct {ptr + prefix_len*elem_size, len - prefix_len, 0}
+    /// representing the remainder of a list after prefix elements have been matched.
+    fn buildRestSublist(self: *MonoLlvmCodeGen, data_ptr: LlvmBuilder.Value, list_len: LlvmBuilder.Value, prefix_len: LlvmBuilder.Value, elem_size: u64) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
+
+        // rest_ptr = data_ptr + prefix_len * elem_size (via GEP on i8)
+        const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
+        const elem_size_val = builder.intValue(.i64, elem_size) catch return error.OutOfMemory;
+        const byte_offset = wip.bin(.mul, prefix_len, elem_size_val, "") catch return error.CompilationFailed;
+        const rest_ptr = wip.gep(.inbounds, .i8, data_ptr, &.{byte_offset}, "") catch return error.CompilationFailed;
+
+        // rest_len = list_len - prefix_len
+        const rest_len = wip.bin(.sub, list_len, prefix_len, "") catch return error.CompilationFailed;
+
+        // Build {ptr, len, cap=0} struct
+        const roc_list_type = builder.structType(.normal, &.{ ptr_type, .i64, .i64 }) catch return error.OutOfMemory;
+        const zero_cap = builder.intValue(.i64, 0) catch return error.OutOfMemory;
+        var result = builder.poisonValue(roc_list_type) catch return error.OutOfMemory;
+        result = wip.insertValue(result, rest_ptr, &.{0}, "") catch return error.CompilationFailed;
+        result = wip.insertValue(result, rest_len, &.{1}, "") catch return error.CompilationFailed;
+        result = wip.insertValue(result, zero_cap, &.{2}, "") catch return error.CompilationFailed;
+        return result;
+    }
 
     /// Bind a pattern to an LLVM value.
     /// If the symbol has a loop variable alloca, also stores the value there
@@ -4820,6 +5479,63 @@ pub const MonoLlvmCodeGen = struct {
                 }
             },
             .wildcard => {},
+            .record => |rec_pat| {
+                // Record destructuring: extract each field from the struct value
+                const wip = self.wip orelse return error.CompilationFailed;
+                const builder = self.builder orelse return error.CompilationFailed;
+                if (value == .none or !value.typeOfWip(wip).isStruct(builder)) return error.CompilationFailed;
+                const fields = self.store.getPatternSpan(rec_pat.fields);
+                for (fields, 0..) |field_pat_id, idx| {
+                    const field_val = wip.extractValue(value, &.{@as(u32, @intCast(idx))}, "") catch return error.CompilationFailed;
+                    try self.bindPattern(field_pat_id, field_val);
+                }
+            },
+            .tuple => |tup_pat| {
+                // Tuple destructuring: extract each element from the struct value
+                const wip = self.wip orelse return error.CompilationFailed;
+                const builder = self.builder orelse return error.CompilationFailed;
+                if (value == .none or !value.typeOfWip(wip).isStruct(builder)) return error.CompilationFailed;
+                const elems = self.store.getPatternSpan(tup_pat.elems);
+                for (elems, 0..) |elem_pat_id, idx| {
+                    const elem_val = wip.extractValue(value, &.{@as(u32, @intCast(idx))}, "") catch return error.CompilationFailed;
+                    try self.bindPattern(elem_pat_id, elem_val);
+                }
+            },
+            .list => |list_pat| {
+                // List destructuring pattern: extract prefix elements from the list value
+                const wip = self.wip orelse return error.CompilationFailed;
+                const builder = self.builder orelse return error.CompilationFailed;
+                const ls = self.layout_store orelse return error.UnsupportedExpression;
+
+                // Guard: value must be a {ptr, i64, i64} struct
+                if (value == .none or !value.typeOfWip(wip).isStruct(builder)) return error.CompilationFailed;
+
+                const prefix_patterns = self.store.getPatternSpan(list_pat.prefix);
+
+                // The value is a {ptr, i64, i64} struct. Extract data pointer and length.
+                const data_ptr = wip.extractValue(value, &.{0}, "") catch return error.CompilationFailed;
+                const list_len = wip.extractValue(value, &.{1}, "") catch return error.CompilationFailed;
+
+                // Get element size info
+                const elem_layout_data = ls.getLayout(list_pat.elem_layout);
+                const elem_sa = ls.layoutSizeAlign(elem_layout_data);
+                const elem_size: u64 = elem_sa.size;
+
+                // Bind each prefix element
+                for (prefix_patterns, 0..) |sub_pat_id, idx| {
+                    const byte_off = builder.intValue(.i64, @as(u64, @intCast(idx)) * elem_size) catch return error.OutOfMemory;
+                    const elem_ptr = wip.gep(.inbounds, .i8, data_ptr, &.{byte_off}, "") catch return error.CompilationFailed;
+                    const elem_val = try self.loadValueFromPtr(elem_ptr, list_pat.elem_layout);
+                    try self.bindPattern(sub_pat_id, elem_val);
+                }
+
+                // Handle rest pattern if present (.. as rest)
+                if (!list_pat.rest.isNone()) {
+                    const expected_len = builder.intValue(.i64, @as(u64, @intCast(prefix_patterns.len))) catch return error.OutOfMemory;
+                    const rest_val = try self.buildRestSublist(data_ptr, list_len, expected_len, elem_size);
+                    try self.bindPattern(list_pat.rest, rest_val);
+                }
+            },
             else => {},
         }
     }

@@ -525,7 +525,8 @@ fn llvmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_i
 
     const all_module_envs = [_]*ModuleEnv{ module_env, @constCast(builtin_module_env) };
 
-    var code_result = llvm_eval.generateCode(module_env, expr_idx, &all_module_envs, builtin_module_env) catch {
+    var code_result = llvm_eval.generateCode(module_env, expr_idx, &all_module_envs, builtin_module_env) catch |err| {
+        std.debug.print("generateCode error: {s}\n", .{@errorName(err)});
         return error.GenerateCodeFailed;
     };
     defer code_result.deinit();
@@ -749,7 +750,8 @@ pub fn compareWithLlvmEvaluator(allocator: std.mem.Allocator, interpreter_str: [
         posix.close(pipe_read);
         const child_alloc = std.heap.page_allocator;
 
-        const llvm_str = llvmEvaluatorStr(child_alloc, module_env, expr_idx, builtin_module_env) catch {
+        const llvm_str = llvmEvaluatorStr(child_alloc, module_env, expr_idx, builtin_module_env) catch |err| {
+            std.debug.print("LLVM child error: {s}\n", .{@errorName(err)});
             posix.close(pipe_write);
             posix.exit(1);
         };
