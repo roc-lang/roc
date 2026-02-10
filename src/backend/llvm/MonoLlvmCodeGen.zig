@@ -25,7 +25,6 @@ const MonoExprId = mono.MonoExprId;
 const MonoPatternId = mono.MonoPatternId;
 const MonoSymbol = mono.MonoSymbol;
 const MonoProc = mono.MonoProc;
-const MonoExprSpan = mono.MonoExprSpan;
 const CFStmtId = mono.CFStmtId;
 
 const Allocator = std.mem.Allocator;
@@ -86,9 +85,6 @@ pub const MonoLlvmCodeGen = struct {
 
     /// Map from MonoSymbol to LLVM value
     symbol_values: std.AutoHashMap(u48, LlvmBuilder.Value),
-
-    /// Map from MonoSymbol to lambda expression ID (for callable bindings)
-    lambda_bindings: std.AutoHashMap(u48, MonoExprId),
 
     /// Registry of compiled procedures (symbol -> function index)
     proc_registry: std.AutoHashMap(u48, LlvmBuilder.Function.Index),
@@ -205,10 +201,6 @@ pub const MonoLlvmCodeGen = struct {
     /// pool references to .rodata (which we don't extract from the object file).
     out_ptr: ?LlvmBuilder.Value = null,
 
-    /// Block for early returns — branches here skip the rest of the function.
-    /// The block contains retVoid since the value is already stored to out_ptr.
-    early_return_block: ?LlvmBuilder.Function.Block.Index = null,
-
     /// Function-level output pointer for early returns. Unlike `out_ptr` which
     /// gets nulled by intermediate expression handlers (if-then-else, when, block),
     /// this always points to the function's output destination.
@@ -216,6 +208,7 @@ pub const MonoLlvmCodeGen = struct {
 
     /// Result layout for the top-level expression (needed by early_return).
     result_layout: ?layout.Idx = null,
+
 
     /// Allocas for mutable variables inside loop bodies.
     /// When a symbol is reassigned inside a for_loop or while_loop body,
@@ -256,7 +249,6 @@ pub const MonoLlvmCodeGen = struct {
             .allocator = allocator,
             .store = store,
             .symbol_values = std.AutoHashMap(u48, LlvmBuilder.Value).init(allocator),
-            .lambda_bindings = std.AutoHashMap(u48, MonoExprId).init(allocator),
             .proc_registry = std.AutoHashMap(u48, LlvmBuilder.Function.Index).init(allocator),
             .join_points = std.AutoHashMap(u32, LlvmBuilder.Function.Block.Index).init(allocator),
             .join_point_params = std.AutoHashMap(u32, []MonoPatternId).init(allocator),
@@ -269,7 +261,6 @@ pub const MonoLlvmCodeGen = struct {
     /// Clean up resources
     pub fn deinit(self: *MonoLlvmCodeGen) void {
         self.symbol_values.deinit();
-        self.lambda_bindings.deinit();
         self.proc_registry.deinit();
         self.join_points.deinit();
         // Free allocated param slices
@@ -296,7 +287,6 @@ pub const MonoLlvmCodeGen = struct {
     /// Reset the code generator for a new expression
     pub fn reset(self: *MonoLlvmCodeGen) void {
         self.symbol_values.clearRetainingCapacity();
-        self.lambda_bindings.clearRetainingCapacity();
         self.proc_registry.clearRetainingCapacity();
         self.join_points.clearRetainingCapacity();
         // Free allocated param slices before clearing
@@ -335,9 +325,6 @@ pub const MonoLlvmCodeGen = struct {
         self.builder = &builder;
         defer self.builder = null;
 
-        // Determine the LLVM type for the result
-        const value_type = layoutToLlvmType(result_layout);
-
         // Create the eval function: void roc_eval(<type>* out_ptr, roc_ops* ops_ptr)
         const ptr_type = builder.ptrType(.default) catch return error.OutOfMemory;
         const eval_fn_type = builder.fnType(.void, &.{ ptr_type, ptr_type }, .normal) catch return error.OutOfMemory;
@@ -360,7 +347,7 @@ pub const MonoLlvmCodeGen = struct {
         // Build function body
         var wip = LlvmBuilder.WipFunction.init(&builder, .{
             .function = eval_fn,
-            .strip = false,
+            .strip = true,
         }) catch return error.OutOfMemory;
         defer wip.deinit();
 
@@ -381,9 +368,6 @@ pub const MonoLlvmCodeGen = struct {
         // Store result layout for early_return
         self.result_layout = result_layout;
         defer self.result_layout = null;
-
-        // Early returns emit retVoid directly at each site (no shared block needed).
-        self.early_return_block = null;
 
         // Compile all procedures now that the builder is available.
         // Must happen before generateExpr so that call sites can find procs.
@@ -429,10 +413,20 @@ pub const MonoLlvmCodeGen = struct {
                 else => .unneeded,
             };
 
-            const store_value = if (value_type == final_type)
+            // Check actual generated value type vs expected store type.
+            // value_type (from layoutToLlvmType) may not match the actual value if
+            // the expression generates a narrower type (e.g., i64 when result is Dec/i128).
+            const actual_value_type = value.typeOfWip(&wip);
+            const store_value = if (actual_value_type == final_type)
                 value
-            else
-                wip.conv(signedness, value, final_type, "") catch return error.CompilationFailed;
+            else conv: {
+                // For Dec result_layout, integer values need sign extension
+                const conv_sign: LlvmBuilder.Constant.Cast.Signedness = if (signedness == .unneeded and isIntType(actual_value_type))
+                    .signed
+                else
+                    signedness;
+                break :conv wip.conv(conv_sign, value, final_type, "") catch return error.CompilationFailed;
+            };
 
             const alignment = LlvmBuilder.Alignment.fromByteUnits(switch (final_type) {
                 .i64 => 8,
@@ -444,8 +438,29 @@ pub const MonoLlvmCodeGen = struct {
             _ = wip.store(.normal, store_value, out_ptr, alignment) catch return error.CompilationFailed;
         } else {
             // Composite type (record, tuple, tag_union, str, list, etc.)
-            // Store the struct value directly to out_ptr.
-            {
+            // For 24-byte types (str, list), decompose to individual field stores
+            // to avoid aggregate store issues where only the first field is written.
+            const is_24byte_struct = switch (result_layout) {
+                .str => true,
+                else => blk: {
+                    if (self.layout_store) |ls2| {
+                        const l = ls2.getLayout(result_layout);
+                        break :blk (l.tag == .list or l.tag == .list_of_zst);
+                    }
+                    break :blk false;
+                },
+            };
+            if (is_24byte_struct) {
+                const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
+                for (0..3) |fi| {
+                    const field_val = wip.extractValue(value, &.{@as(u32, @intCast(fi))}, "") catch return error.CompilationFailed;
+                    const field_ptr = if (fi == 0) out_ptr else blk: {
+                        const off = builder.intValue(.i32, @as(u32, @intCast(fi * 8))) catch return error.OutOfMemory;
+                        break :blk wip.gep(.inbounds, .i8, out_ptr, &.{off}, "") catch return error.CompilationFailed;
+                    };
+                    _ = wip.store(.@"volatile", field_val, field_ptr, alignment) catch return error.CompilationFailed;
+                }
+            } else {
                 const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
                 _ = wip.store(.normal, value, out_ptr, alignment) catch return error.CompilationFailed;
             }
@@ -480,7 +495,7 @@ pub const MonoLlvmCodeGen = struct {
             self.compileProc(proc) catch {
                 // Skip procs that can't be compiled (unsupported features).
                 // The proc won't be in proc_registry, so call sites will
-                // fall back to inlining or return UnsupportedExpression.
+                // return UnsupportedExpression.
                 continue;
             };
         }
@@ -515,6 +530,7 @@ pub const MonoLlvmCodeGen = struct {
 
         // Register in proc_registry BEFORE compiling body (for recursive calls)
         self.proc_registry.put(key, func) catch return error.OutOfMemory;
+        errdefer _ = self.proc_registry.remove(key);
 
         // Save and restore outer wip state and roc_ops_arg
         const outer_wip = self.wip;
@@ -531,7 +547,7 @@ pub const MonoLlvmCodeGen = struct {
         // Create a new WipFunction for this procedure
         var proc_wip = LlvmBuilder.WipFunction.init(builder, .{
             .function = func,
-            .strip = false,
+            .strip = true,
         }) catch return error.OutOfMemory;
         defer proc_wip.deinit();
 
@@ -610,14 +626,6 @@ pub const MonoLlvmCodeGen = struct {
 
         switch (stmt) {
             .let_stmt => |let_s| {
-                // Check if the value is a lambda/closure - if so, bind it for later call resolution
-                const value_expr = self.store.getExpr(let_s.value);
-                switch (value_expr) {
-                    .lambda, .closure => {
-                        try self.bindLambdaPattern(let_s.pattern, let_s.value);
-                    },
-                    else => {},
-                }
                 const val = try self.generateExpr(let_s.value);
                 try self.bindPattern(let_s.pattern, val);
                 try self.generateStmt(let_s.next);
@@ -805,8 +813,8 @@ pub const MonoLlvmCodeGen = struct {
 
             // Function calls and lambdas
             .call => |call| self.generateCall(call),
-            .lambda => |lambda| self.generateLambda(lambda),
-            .closure => |closure| self.generateClosure(closure),
+            .lambda => return error.UnsupportedExpression,
+            .closure => return error.UnsupportedExpression,
 
             // Records and tuples
             .record => |rec| self.generateRecord(rec),
@@ -906,13 +914,6 @@ pub const MonoLlvmCodeGen = struct {
             return val;
         }
 
-        // Check if it's a lambda binding that needs to be evaluated
-        if (self.lambda_bindings.get(symbol_key)) |lambda_expr_id| {
-            const val = try self.generateExpr(lambda_expr_id);
-            self.symbol_values.put(symbol_key, val) catch return error.OutOfMemory;
-            return val;
-        }
-
         // Check if it's a top-level definition
         if (self.store.getSymbolDef(symbol)) |def_expr_id| {
             const val = try self.generateExpr(def_expr_id);
@@ -925,6 +926,55 @@ pub const MonoLlvmCodeGen = struct {
 
     fn generateBinop(self: *MonoLlvmCodeGen, binop: anytype) Error!LlvmBuilder.Value {
         const wip = self.wip orelse return error.CompilationFailed;
+
+        // For string/list equality, operands write to out_ptr and return .none.
+        // Handle these before generating sub-expressions by materializing to allocas.
+        if (binop.op == .eq or binop.op == .neq) {
+            const operand_layout = self.getExprResultLayout(binop.lhs) orelse binop.result_layout;
+            if (operand_layout == .str) {
+                if (self.str_equal_addr == 0) return error.UnsupportedExpression;
+                const result = try self.callStrStr2Bool(binop.lhs, binop.rhs, self.str_equal_addr);
+                if (binop.op == .neq) {
+                    const builder = self.builder orelse return error.CompilationFailed;
+                    const one = builder.intValue(.i1, 1) catch return error.OutOfMemory;
+                    return wip.bin(.xor, result, one, "") catch return error.CompilationFailed;
+                }
+                return result;
+            }
+            // Check if operands are lists — detect from expression or layout store
+            const elem_layout_for_list: ?layout.Idx = blk: {
+                // Check via layout store if operand_layout is a list
+                if (self.layout_store) |ls| {
+                    const stored = ls.getLayout(operand_layout);
+                    if (stored.tag == .list) break :blk stored.data.list;
+                    if (stored.tag == .list_of_zst) break :blk .zst;
+                }
+                // Check the LHS expression directly
+                const lhs_expr = self.store.getExpr(binop.lhs);
+                switch (lhs_expr) {
+                    .list => |l| break :blk l.elem_layout,
+                    .empty_list => |e| break :blk e.elem_layout,
+                    .low_level => |ll| {
+                        if (self.layout_store) |ls| {
+                            const stored = ls.getLayout(ll.ret_layout);
+                            if (stored.tag == .list) break :blk stored.data.list;
+                            if (stored.tag == .list_of_zst) break :blk .zst;
+                        }
+                    },
+                    else => {},
+                }
+                break :blk null;
+            };
+            if (elem_layout_for_list) |elem_layout_idx| {
+                const result = try self.generateListEqualityByElem(binop.lhs, binop.rhs, elem_layout_idx);
+                if (binop.op == .neq) {
+                    const builder = self.builder orelse return error.CompilationFailed;
+                    const one = builder.intValue(.i1, 1) catch return error.OutOfMemory;
+                    return wip.bin(.xor, result, one, "") catch return error.CompilationFailed;
+                }
+                return result;
+            }
+        }
 
         var lhs = try self.generateExpr(binop.lhs);
         var rhs = try self.generateExpr(binop.rhs);
@@ -1083,6 +1133,19 @@ pub const MonoLlvmCodeGen = struct {
             return builder.intValue(.i1, eq_val) catch return error.OutOfMemory;
         }
 
+        // Check if this struct looks like a RocStr/RocList: {ptr, i64, i64}
+        // If so, use the str_equal builtin instead of field-by-field comparison.
+        if (fields.len == 3 and self.isStrLikeStruct(fields)) {
+            if (self.str_equal_addr != 0) {
+                const result = try self.callStrStr2BoolFromValues(lhs, rhs, self.str_equal_addr);
+                if (is_neq) {
+                    const one = builder.intValue(.i1, 1) catch return error.OutOfMemory;
+                    return wip.bin(.xor, result, one, "") catch return error.CompilationFailed;
+                }
+                return result;
+            }
+        }
+
         // Compare each field and AND results together
         var result = builder.intValue(.i1, 1) catch return error.OutOfMemory;
         for (0..fields.len) |i| {
@@ -1112,6 +1175,257 @@ pub const MonoLlvmCodeGen = struct {
         }
 
         return result;
+    }
+
+    /// Check if a struct's fields match the RocStr/RocList pattern: {ptr, i64, i64}
+    fn isStrLikeStruct(self: *MonoLlvmCodeGen, fields: []const LlvmBuilder.Type) bool {
+        if (fields.len != 3) return false;
+        const builder_ptr = self.builder orelse return false;
+        const ptr_type = builder_ptr.ptrType(.default) catch return false;
+        return fields[0] == ptr_type and fields[1] == .i64 and fields[2] == .i64;
+    }
+
+    /// Call str_is_eq from already-generated struct values (not from expr IDs).
+    /// Decomposes both structs into (ptr, len, cap) and calls the builtin.
+    fn callStrStr2BoolFromValues(self: *MonoLlvmCodeGen, lhs: LlvmBuilder.Value, rhs: LlvmBuilder.Value, fn_addr_val: usize) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
+        const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
+
+        // Extract fields from both structs
+        const a_bytes = wip.extractValue(lhs, &.{0}, "") catch return error.CompilationFailed;
+        const a_len = wip.extractValue(lhs, &.{1}, "") catch return error.CompilationFailed;
+        const a_cap = wip.extractValue(lhs, &.{2}, "") catch return error.CompilationFailed;
+
+        const b_bytes = wip.extractValue(rhs, &.{0}, "") catch return error.CompilationFailed;
+        const b_len = wip.extractValue(rhs, &.{1}, "") catch return error.CompilationFailed;
+        const b_cap = wip.extractValue(rhs, &.{2}, "") catch return error.CompilationFailed;
+
+        // fn(a_bytes, a_len, a_cap, b_bytes, b_len, b_cap) -> i1
+        const fn_type = builder.fnType(.i1, &.{
+            ptr_type, .i64, .i64, ptr_type, .i64, .i64,
+        }, .normal) catch return error.CompilationFailed;
+        const addr = builder.intValue(.i64, fn_addr_val) catch return error.CompilationFailed;
+        const fn_ptr = wip.cast(.inttoptr, addr, ptr_type, "") catch return error.CompilationFailed;
+
+        return wip.call(.normal, .ccc, .none, fn_type, fn_ptr, &.{
+            a_bytes, a_len, a_cap, b_bytes, b_len, b_cap,
+        }, "") catch return error.CompilationFailed;
+    }
+
+    /// Generate inline list equality comparison.
+    /// Materializes both lists, compares lengths, then loops through elements.
+    /// Takes the element layout index directly.
+    fn generateListEqualityByElem(self: *MonoLlvmCodeGen, lhs_expr: MonoExprId, rhs_expr: MonoExprId, elem_layout_idx: layout.Idx) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
+        const ls = self.layout_store orelse return error.UnsupportedExpression;
+        const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
+        const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
+
+        // ZST elements: just compare lengths
+        if (elem_layout_idx == .zst) {
+            const a_ptr = try self.materializeAsPtr(lhs_expr, 24);
+            const b_ptr = try self.materializeAsPtr(rhs_expr, 24);
+            const off8 = builder.intValue(.i32, 8) catch return error.OutOfMemory;
+            const a_len_ptr = wip.gep(.inbounds, .i8, a_ptr, &.{off8}, "") catch return error.CompilationFailed;
+            const a_len = wip.load(.normal, .i64, a_len_ptr, alignment, "") catch return error.CompilationFailed;
+            const b_len_ptr = wip.gep(.inbounds, .i8, b_ptr, &.{off8}, "") catch return error.CompilationFailed;
+            const b_len = wip.load(.normal, .i64, b_len_ptr, alignment, "") catch return error.CompilationFailed;
+            return wip.icmp(.eq, a_len, b_len, "") catch return error.CompilationFailed;
+        }
+
+        const elem_layout = ls.getLayout(elem_layout_idx);
+        const elem_sa = ls.layoutSizeAlign(elem_layout);
+        const elem_size: u64 = elem_sa.size;
+        if (elem_size == 0) return error.UnsupportedExpression;
+
+        // Determine element LLVM type for loading
+        const elem_llvm_type = layoutToLlvmType(elem_layout_idx);
+
+        // Determine if elements need special comparison (strings, nested lists)
+        const is_str_elem = (elem_layout_idx == .str);
+        const is_list_elem = (elem_layout.tag == .list or elem_layout.tag == .list_of_zst);
+
+        // Materialize both lists
+        const a_ptr = try self.materializeAsPtr(lhs_expr, 24);
+        const b_ptr = try self.materializeAsPtr(rhs_expr, 24);
+
+        // Load data pointers and lengths
+        const off8 = builder.intValue(.i32, 8) catch return error.OutOfMemory;
+        const a_data = wip.load(.normal, ptr_type, a_ptr, alignment, "") catch return error.CompilationFailed;
+        const a_len_ptr = wip.gep(.inbounds, .i8, a_ptr, &.{off8}, "") catch return error.CompilationFailed;
+        const a_len = wip.load(.normal, .i64, a_len_ptr, alignment, "") catch return error.CompilationFailed;
+
+        const b_data = wip.load(.normal, ptr_type, b_ptr, alignment, "") catch return error.CompilationFailed;
+        const b_len_ptr = wip.gep(.inbounds, .i8, b_ptr, &.{off8}, "") catch return error.CompilationFailed;
+        const b_len = wip.load(.normal, .i64, b_len_ptr, alignment, "") catch return error.CompilationFailed;
+
+        // Compare lengths
+        const len_eq = wip.icmp(.eq, a_len, b_len, "") catch return error.CompilationFailed;
+
+        // Blocks: entry -> loop_header(2: entry+loop_body) -> loop_body(1: loop_header)
+        //         -> equal(1: loop_header) / not_equal(2: entry+loop_body) -> merge(2: equal+not_equal)
+        const entry_block = wip.cursor.block;
+        const loop_header = wip.block(2, "") catch return error.OutOfMemory;
+        const loop_body = wip.block(1, "") catch return error.OutOfMemory;
+        const equal_block = wip.block(1, "") catch return error.OutOfMemory;
+        const not_equal_block = wip.block(2, "") catch return error.OutOfMemory;
+        const merge_block = wip.block(2, "") catch return error.OutOfMemory;
+
+        // If lengths differ, go to not_equal
+        _ = wip.brCond(len_eq, loop_header, not_equal_block, .none) catch return error.CompilationFailed;
+
+        // Loop header: phi for index
+        wip.cursor = .{ .block = loop_header };
+        const zero_i64 = builder.intValue(.i64, 0) catch return error.OutOfMemory;
+        const phi_idx = wip.phi(.i64, "") catch return error.CompilationFailed;
+
+        // Check if index < length
+        const in_bounds = wip.icmp(.ult, phi_idx.toValue(), a_len, "") catch return error.CompilationFailed;
+        _ = wip.brCond(in_bounds, loop_body, equal_block, .none) catch return error.CompilationFailed;
+
+        // Loop body: compare elements at index
+        wip.cursor = .{ .block = loop_body };
+        const elem_size_val = builder.intValue(.i64, elem_size) catch return error.OutOfMemory;
+        const byte_offset = wip.bin(.mul, phi_idx.toValue(), elem_size_val, "") catch return error.CompilationFailed;
+        const a_elem_ptr = wip.gep(.inbounds, .i8, a_data, &.{byte_offset}, "") catch return error.CompilationFailed;
+        const b_elem_ptr = wip.gep(.inbounds, .i8, b_data, &.{byte_offset}, "") catch return error.CompilationFailed;
+
+        const elem_eq = if (is_str_elem) blk: {
+            // String elements: load as {ptr, i64, i64} structs, call str_equal
+            if (self.str_equal_addr == 0) return error.UnsupportedExpression;
+            const roc_str_type = builder.structType(.normal, &.{ ptr_type, .i64, .i64 }) catch return error.CompilationFailed;
+            const a_str = wip.load(.normal, roc_str_type, a_elem_ptr, alignment, "") catch return error.CompilationFailed;
+            const b_str = wip.load(.normal, roc_str_type, b_elem_ptr, alignment, "") catch return error.CompilationFailed;
+            break :blk try self.callStrStr2BoolFromValues(a_str, b_str, self.str_equal_addr);
+        } else if (is_list_elem) blk: {
+            // Nested list elements: recursively compare via pointers
+            break :blk try self.generateListEqualityFromPtrs(a_elem_ptr, b_elem_ptr, elem_layout_idx);
+        } else blk: {
+            // Scalar elements: load and compare directly
+            const elem_align = LlvmBuilder.Alignment.fromByteUnits(@intCast(@max(elem_sa.alignment.toByteUnits(), 1)));
+            const a_elem = wip.load(.normal, elem_llvm_type, a_elem_ptr, elem_align, "") catch return error.CompilationFailed;
+            const b_elem = wip.load(.normal, elem_llvm_type, b_elem_ptr, elem_align, "") catch return error.CompilationFailed;
+            if (elem_llvm_type == .float or elem_llvm_type == .double) {
+                break :blk wip.fcmp(.normal, .oeq, a_elem, b_elem, "") catch return error.CompilationFailed;
+            }
+            break :blk wip.icmp(.eq, a_elem, b_elem, "") catch return error.CompilationFailed;
+        };
+
+        // If not equal, jump to not_equal; otherwise increment and loop
+        const next_idx = wip.bin(.add, phi_idx.toValue(), builder.intValue(.i64, 1) catch return error.OutOfMemory, "") catch return error.CompilationFailed;
+        _ = wip.brCond(elem_eq, loop_header, not_equal_block, .none) catch return error.CompilationFailed;
+
+        // Finish loop index phi: [0 from entry, next_idx from loop_body]
+        phi_idx.finish(&.{ zero_i64, next_idx }, &.{ entry_block, loop_body }, wip);
+
+        // Equal block
+        wip.cursor = .{ .block = equal_block };
+        _ = wip.br(merge_block) catch return error.CompilationFailed;
+
+        // Not-equal block
+        wip.cursor = .{ .block = not_equal_block };
+        _ = wip.br(merge_block) catch return error.CompilationFailed;
+
+        // Merge block with phi for result
+        wip.cursor = .{ .block = merge_block };
+        const true_val = builder.intValue(.i1, 1) catch return error.OutOfMemory;
+        const false_val = builder.intValue(.i1, 0) catch return error.OutOfMemory;
+        const result_phi = wip.phi(.i1, "") catch return error.CompilationFailed;
+        result_phi.finish(&.{ true_val, false_val }, &.{ equal_block, not_equal_block }, wip);
+
+        return result_phi.toValue();
+    }
+
+    /// Generate list equality comparison from already-loaded list pointers.
+    /// Used for nested list elements (list of lists).
+    fn generateListEqualityFromPtrs(self: *MonoLlvmCodeGen, a_list_ptr: LlvmBuilder.Value, b_list_ptr: LlvmBuilder.Value, list_layout_idx: layout.Idx) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
+        const ls = self.layout_store orelse return error.UnsupportedExpression;
+        const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
+        const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
+
+        const stored = ls.getLayout(list_layout_idx);
+        const elem_layout_idx = if (stored.tag == .list) stored.data.list else return error.UnsupportedExpression;
+        const elem_layout = ls.getLayout(elem_layout_idx);
+        const elem_sa = ls.layoutSizeAlign(elem_layout);
+        const elem_size: u64 = elem_sa.size;
+        if (elem_size == 0) return error.UnsupportedExpression;
+
+        const elem_llvm_type = layoutToLlvmType(elem_layout_idx);
+        const is_str_elem = (elem_layout_idx == .str);
+
+        // Load data pointers and lengths from the 24-byte list structs
+        const off8 = builder.intValue(.i32, 8) catch return error.OutOfMemory;
+        const a_data = wip.load(.normal, ptr_type, a_list_ptr, alignment, "") catch return error.CompilationFailed;
+        const a_len_ptr = wip.gep(.inbounds, .i8, a_list_ptr, &.{off8}, "") catch return error.CompilationFailed;
+        const a_len = wip.load(.normal, .i64, a_len_ptr, alignment, "") catch return error.CompilationFailed;
+
+        const b_data = wip.load(.normal, ptr_type, b_list_ptr, alignment, "") catch return error.CompilationFailed;
+        const b_len_ptr = wip.gep(.inbounds, .i8, b_list_ptr, &.{off8}, "") catch return error.CompilationFailed;
+        const b_len = wip.load(.normal, .i64, b_len_ptr, alignment, "") catch return error.CompilationFailed;
+
+        const len_eq = wip.icmp(.eq, a_len, b_len, "") catch return error.CompilationFailed;
+
+        const entry_blk = wip.cursor.block;
+        const loop_header = wip.block(2, "") catch return error.OutOfMemory;
+        const loop_body = wip.block(1, "") catch return error.OutOfMemory;
+        const equal_block = wip.block(1, "") catch return error.OutOfMemory;
+        const not_equal_block = wip.block(2, "") catch return error.OutOfMemory;
+        const merge_block = wip.block(2, "") catch return error.OutOfMemory;
+
+        _ = wip.brCond(len_eq, loop_header, not_equal_block, .none) catch return error.CompilationFailed;
+
+        wip.cursor = .{ .block = loop_header };
+        const zero_i64 = builder.intValue(.i64, 0) catch return error.OutOfMemory;
+        const phi_idx = wip.phi(.i64, "") catch return error.CompilationFailed;
+
+        const in_bounds = wip.icmp(.ult, phi_idx.toValue(), a_len, "") catch return error.CompilationFailed;
+        _ = wip.brCond(in_bounds, loop_body, equal_block, .none) catch return error.CompilationFailed;
+
+        wip.cursor = .{ .block = loop_body };
+        const elem_size_val = builder.intValue(.i64, elem_size) catch return error.OutOfMemory;
+        const byte_offset = wip.bin(.mul, phi_idx.toValue(), elem_size_val, "") catch return error.CompilationFailed;
+        const a_elem_ptr = wip.gep(.inbounds, .i8, a_data, &.{byte_offset}, "") catch return error.CompilationFailed;
+        const b_elem_ptr = wip.gep(.inbounds, .i8, b_data, &.{byte_offset}, "") catch return error.CompilationFailed;
+
+        const elem_eq = if (is_str_elem) blk: {
+            if (self.str_equal_addr == 0) return error.UnsupportedExpression;
+            const roc_str_type = builder.structType(.normal, &.{ ptr_type, .i64, .i64 }) catch return error.CompilationFailed;
+            const a_str = wip.load(.normal, roc_str_type, a_elem_ptr, alignment, "") catch return error.CompilationFailed;
+            const b_str = wip.load(.normal, roc_str_type, b_elem_ptr, alignment, "") catch return error.CompilationFailed;
+            break :blk try self.callStrStr2BoolFromValues(a_str, b_str, self.str_equal_addr);
+        } else blk: {
+            // Scalar elements
+            const elem_align = LlvmBuilder.Alignment.fromByteUnits(@intCast(@max(elem_sa.alignment.toByteUnits(), 1)));
+            const a_elem = wip.load(.normal, elem_llvm_type, a_elem_ptr, elem_align, "") catch return error.CompilationFailed;
+            const b_elem = wip.load(.normal, elem_llvm_type, b_elem_ptr, elem_align, "") catch return error.CompilationFailed;
+            if (elem_llvm_type == .float or elem_llvm_type == .double) {
+                break :blk wip.fcmp(.normal, .oeq, a_elem, b_elem, "") catch return error.CompilationFailed;
+            }
+            break :blk wip.icmp(.eq, a_elem, b_elem, "") catch return error.CompilationFailed;
+        };
+
+        const next_idx = wip.bin(.add, phi_idx.toValue(), builder.intValue(.i64, 1) catch return error.OutOfMemory, "") catch return error.CompilationFailed;
+        _ = wip.brCond(elem_eq, loop_header, not_equal_block, .none) catch return error.CompilationFailed;
+
+        phi_idx.finish(&.{ zero_i64, next_idx }, &.{ entry_blk, loop_body }, wip);
+
+        wip.cursor = .{ .block = equal_block };
+        _ = wip.br(merge_block) catch return error.CompilationFailed;
+
+        wip.cursor = .{ .block = not_equal_block };
+        _ = wip.br(merge_block) catch return error.CompilationFailed;
+
+        wip.cursor = .{ .block = merge_block };
+        const true_val = builder.intValue(.i1, 1) catch return error.OutOfMemory;
+        const false_val = builder.intValue(.i1, 0) catch return error.OutOfMemory;
+        const result_phi = wip.phi(.i1, "") catch return error.CompilationFailed;
+        result_phi.finish(&.{ true_val, false_val }, &.{ equal_block, not_equal_block }, wip);
+
+        return result_phi.toValue();
     }
 
     fn isSigned(result_layout: layout.Idx) bool {
@@ -1446,13 +1760,17 @@ pub const MonoLlvmCodeGen = struct {
         const tu_align_bytes: u64 = @intCast(stored_layout.data.tag_union.alignment.toByteUnits());
         const alignment = LlvmBuilder.Alignment.fromByteUnits(tu_align_bytes);
 
-        // Alloca the tag union
-        const alloca_ptr = wip.alloca(.normal, .i8, builder.intValue(.i32, tu_size) catch return error.OutOfMemory, alignment, .default, "") catch return error.OutOfMemory;
+        // Alloca the tag union — use at least 8-byte alignment and pad size to alignment
+        // boundary to avoid issues with small allocas being overlapped by other stores.
+        const min_align: u64 = @max(tu_align_bytes, 8);
+        const padded_size: u32 = @intCast((@as(u64, tu_size) + min_align - 1) / min_align * min_align);
+        const forced_alignment = LlvmBuilder.Alignment.fromByteUnits(min_align);
+        const alloca_ptr = wip.alloca(.normal, .i8, builder.intValue(.i32, padded_size) catch return error.OutOfMemory, forced_alignment, .default, "") catch return error.OutOfMemory;
 
         // Zero the memory
         const zero_val = builder.intValue(.i8, 0) catch return error.OutOfMemory;
-        const size_val = builder.intValue(.i32, tu_size) catch return error.OutOfMemory;
-        _ = wip.callMemSet(alloca_ptr, alignment, zero_val, size_val, .normal, false) catch return error.OutOfMemory;
+        const size_val = builder.intValue(.i32, padded_size) catch return error.OutOfMemory;
+        _ = wip.callMemSet(alloca_ptr, forced_alignment, zero_val, size_val, .normal, false) catch return error.OutOfMemory;
 
         // Store payload arguments
         const arg_exprs = self.store.getExprSpan(tag_expr.args);
@@ -1499,9 +1817,6 @@ pub const MonoLlvmCodeGen = struct {
 
     /// Generate a discriminant switch — dispatch on a tag union's discriminant.
     fn generateDiscriminantSwitch(self: *MonoLlvmCodeGen, ds: anytype) Error!LlvmBuilder.Value {
-        const saved_out_ptr = self.out_ptr;
-        self.out_ptr = null;
-        defer self.out_ptr = saved_out_ptr;
 
         const wip = self.wip orelse return error.CompilationFailed;
         const builder = self.builder orelse return error.CompilationFailed;
@@ -1544,6 +1859,7 @@ pub const MonoLlvmCodeGen = struct {
         var result_vals: [64]LlvmBuilder.Value = undefined;
         var result_blocks: [64]LlvmBuilder.Function.Block.Index = undefined;
         var branch_count: usize = 0;
+        var any_none = false;
 
         for (branch_exprs, 0..) |branch_expr_id, i| {
             const is_last = (i == branch_exprs.len - 1);
@@ -1561,6 +1877,7 @@ pub const MonoLlvmCodeGen = struct {
                 // Then block — generate branch body
                 wip.cursor = .{ .block = then_block };
                 const branch_val = try self.generateExpr(branch_expr_id);
+                if (branch_val == .none) any_none = true;
                 _ = wip.br(merge_block) catch return error.OutOfMemory;
                 result_vals[branch_count] = branch_val;
                 result_blocks[branch_count] = wip.cursor.block;
@@ -1571,6 +1888,7 @@ pub const MonoLlvmCodeGen = struct {
             } else {
                 // Last branch — no comparison needed (default case)
                 const branch_val = try self.generateExpr(branch_expr_id);
+                if (branch_val == .none) any_none = true;
                 _ = wip.br(merge_block) catch return error.OutOfMemory;
                 result_vals[branch_count] = branch_val;
                 result_blocks[branch_count] = wip.cursor.block;
@@ -1578,8 +1896,12 @@ pub const MonoLlvmCodeGen = struct {
             }
         }
 
-        // Merge block with phi
+        // Merge block
         wip.cursor = .{ .block = merge_block };
+
+        // If any branch wrote to out_ptr (returned .none), all did — result is in out_ptr
+        if (any_none) return .none;
+
         const result_type = result_vals[0].typeOfWip(wip);
         const phi_inst = wip.phi(result_type, "") catch return error.OutOfMemory;
         phi_inst.finish(
@@ -2076,18 +2398,22 @@ pub const MonoLlvmCodeGen = struct {
                     // Load the field value from the tag struct
                     const field_val = if (args.len == 1) blk: {
                         // Single arg — payload is at offset 0
-                        const field_type = layoutToLlvmType(bind.layout_idx);
-                        break :blk wip.load(.normal, field_type, scrutinee, .default, "") catch return error.CompilationFailed;
+                        const field_type = try self.layoutToLlvmTypeForLoad(bind.layout_idx);
+                        const sa = ls.layoutSizeAlign(ls.getLayout(bind.layout_idx));
+                        const alignment = LlvmBuilder.Alignment.fromByteUnits(@intCast(@max(sa.alignment.toByteUnits(), 1)));
+                        break :blk wip.load(.normal, field_type, scrutinee, alignment, "") catch return error.CompilationFailed;
                     } else blk: {
                         // Multiple args — payload is a tuple, load from offset
-                        const field_type = layoutToLlvmType(bind.layout_idx);
+                        const field_type = try self.layoutToLlvmTypeForLoad(bind.layout_idx);
                         const offset: u32 = if (payload_layout.tag == .tuple)
                             ls.getTupleElementOffset(payload_layout.data.tuple.idx, @intCast(arg_i))
                         else
                             0;
                         const offset_val = builder.intValue(.i32, offset) catch return error.OutOfMemory;
                         const field_ptr = wip.gep(.inbounds, .i8, scrutinee, &.{offset_val}, "") catch return error.CompilationFailed;
-                        break :blk wip.load(.normal, field_type, field_ptr, .default, "") catch return error.CompilationFailed;
+                        const sa = ls.layoutSizeAlign(ls.getLayout(bind.layout_idx));
+                        const alignment = LlvmBuilder.Alignment.fromByteUnits(@intCast(@max(sa.alignment.toByteUnits(), 1)));
+                        break :blk wip.load(.normal, field_type, field_ptr, alignment, "") catch return error.CompilationFailed;
                     };
                     const symbol_key: u48 = @bitCast(bind.symbol);
                     self.symbol_values.put(symbol_key, field_val) catch return error.OutOfMemory;
@@ -2109,62 +2435,67 @@ pub const MonoLlvmCodeGen = struct {
     fn generateEarlyReturn(self: *MonoLlvmCodeGen, er: anytype) Error!LlvmBuilder.Value {
         const wip = self.wip orelse return error.CompilationFailed;
         const builder = self.builder orelse return error.CompilationFailed;
-        // Use fn_out_ptr (function-level) rather than out_ptr (expression-level),
-        // because out_ptr is nulled by intermediate handlers (if-then-else, when, block).
-        const out_ptr = self.fn_out_ptr orelse return error.UnsupportedExpression;
-        _ = self.early_return_block; // kept for API compatibility
-        const ret_layout = self.result_layout orelse return error.UnsupportedExpression;
 
         // Generate the return value
         const value = try self.generateExpr(er.expr);
 
-        // Store to output pointer (same logic as in generateCode)
-        if (value != .none) {
-            const is_scalar = switch (ret_layout) {
-                .bool, .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64,
-                .i128, .u128, .dec, .f32, .f64,
-                => true,
-                else => false,
-            };
+        if (self.fn_out_ptr) |out_ptr| {
+            // Top-level function (void return) — store to output pointer, then retVoid
+            const ret_layout = self.result_layout orelse return error.UnsupportedExpression;
 
-            if (is_scalar) {
-                const final_type: LlvmBuilder.Type = switch (ret_layout) {
-                    .bool, .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64 => .i64,
-                    .i128, .u128, .dec => .i128,
-                    .f32 => .float,
-                    .f64 => .double,
-                    else => unreachable,
+            if (value != .none) {
+                const is_scalar = switch (ret_layout) {
+                    .bool, .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64,
+                    .i128, .u128, .dec, .f32, .f64,
+                    => true,
+                    else => false,
                 };
-                const signedness: LlvmBuilder.Constant.Cast.Signedness = switch (ret_layout) {
-                    .i8, .i16, .i32, .i64, .i128 => .signed,
-                    .bool, .u8, .u16, .u32, .u64, .u128 => .unsigned,
-                    .f32, .f64, .dec => .unneeded,
-                    else => .unneeded,
-                };
-                const store_value = if (value.typeOfWip(wip) == final_type)
-                    value
-                else
-                    wip.conv(signedness, value, final_type, "") catch return error.CompilationFailed;
-                const alignment = LlvmBuilder.Alignment.fromByteUnits(switch (final_type) {
-                    .i64 => 8,
-                    .i128 => 16,
-                    .float => 4,
-                    .double => 8,
-                    else => 0,
-                });
-                _ = wip.store(.normal, store_value, out_ptr, alignment) catch return error.CompilationFailed;
+
+                if (is_scalar) {
+                    const final_type: LlvmBuilder.Type = switch (ret_layout) {
+                        .bool, .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64 => .i64,
+                        .i128, .u128, .dec => .i128,
+                        .f32 => .float,
+                        .f64 => .double,
+                        else => unreachable,
+                    };
+                    const signedness: LlvmBuilder.Constant.Cast.Signedness = switch (ret_layout) {
+                        .i8, .i16, .i32, .i64, .i128 => .signed,
+                        .bool, .u8, .u16, .u32, .u64, .u128 => .unsigned,
+                        .f32, .f64, .dec => .unneeded,
+                        else => .unneeded,
+                    };
+                    const store_value = if (value.typeOfWip(wip) == final_type)
+                        value
+                    else
+                        wip.conv(signedness, value, final_type, "") catch return error.CompilationFailed;
+                    const alignment = LlvmBuilder.Alignment.fromByteUnits(switch (final_type) {
+                        .i64 => 8,
+                        .i128 => 16,
+                        .float => 4,
+                        .double => 8,
+                        else => 0,
+                    });
+                    _ = wip.store(.normal, store_value, out_ptr, alignment) catch return error.CompilationFailed;
+                } else {
+                    // Composite — store struct value directly to out_ptr
+                    const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
+                    _ = wip.store(.normal, value, out_ptr, alignment) catch return error.CompilationFailed;
+                }
+            }
+
+            _ = wip.retVoid() catch return error.OutOfMemory;
+        } else {
+            // Inside a proc (typed return) — return the value directly
+            if (value != .none) {
+                _ = wip.ret(value) catch return error.CompilationFailed;
             } else {
-                // Composite — store struct value directly to out_ptr
-                const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
-                _ = wip.store(.normal, value, out_ptr, alignment) catch return error.CompilationFailed;
+                return error.UnsupportedExpression;
             }
         }
 
-        // Return directly — early return stores to fn_out_ptr then returns
-        _ = wip.retVoid() catch return error.OutOfMemory;
-
-        // Create a dead block for subsequent code
-        const dead_block = wip.block(0, "after_early_ret") catch return error.OutOfMemory;
+        // Create a dead block for subsequent code after the return
+        const dead_block = wip.block(0, "") catch return error.OutOfMemory;
         wip.cursor = .{ .block = dead_block };
         return builder.intValue(.i64, 0) catch return error.OutOfMemory;
     }
@@ -2239,6 +2570,21 @@ pub const MonoLlvmCodeGen = struct {
         const num_elems: u64 = @intCast(elems.len);
         const total_bytes: u64 = elem_size * num_elems;
 
+        // ZST elements: no allocation needed, just set length
+        if (elem_size == 0) {
+            const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
+            const zero = builder.intValue(.i64, 0) catch return error.OutOfMemory;
+            const len_val = builder.intValue(.i64, num_elems) catch return error.OutOfMemory;
+            const off8 = builder.intValue(.i32, 8) catch return error.OutOfMemory;
+            const off16 = builder.intValue(.i32, 16) catch return error.OutOfMemory;
+            _ = wip.store(.@"volatile", zero, dest_ptr, alignment) catch return error.CompilationFailed;
+            const len_ptr = wip.gep(.inbounds, .i8, dest_ptr, &.{off8}, "") catch return error.CompilationFailed;
+            _ = wip.store(.@"volatile", len_val, len_ptr, alignment) catch return error.CompilationFailed;
+            const cap_ptr = wip.gep(.inbounds, .i8, dest_ptr, &.{off16}, "") catch return error.CompilationFailed;
+            _ = wip.store(.@"volatile", len_val, cap_ptr, alignment) catch return error.CompilationFailed;
+            return .none;
+        }
+
         // Call allocateWithRefcountC(data_bytes, elem_align, elements_refcounted, roc_ops)
         if (self.alloc_with_refcount_addr == 0) return error.CompilationFailed;
         const roc_ops = self.roc_ops_arg orelse return error.CompilationFailed;
@@ -2262,6 +2608,7 @@ pub const MonoLlvmCodeGen = struct {
 
         // Check if elements are composite (str/list) — need out_ptr for inner generation
         const is_composite_elem = (list.elem_layout == .str or elem_layout_data.tag == .list or elem_layout_data.tag == .list_of_zst);
+        const is_tag_union_elem = (elem_layout_data.tag == .tag_union);
 
         for (elems, 0..) |elem_id, i| {
             const offset: u64 = @as(u64, @intCast(i)) * elem_size;
@@ -2283,6 +2630,13 @@ pub const MonoLlvmCodeGen = struct {
                     _ = wip.store(.@"volatile", elem_val, elem_ptr, store_align) catch return error.CompilationFailed;
                 }
                 self.out_ptr = null;
+            } else if (is_tag_union_elem) {
+                // Tag union elements are pointer-based (alloca ptrs). Copy the full
+                // tag union data (payload + discriminant) from the alloca to the heap slot.
+                const elem_val = try self.generateExpr(elem_id);
+                const store_align = LlvmBuilder.Alignment.fromByteUnits(@intCast(@max(elem_align, 1)));
+                const size_val_copy = builder.intValue(.i32, @as(u32, @intCast(elem_size))) catch return error.OutOfMemory;
+                _ = wip.callMemCpy(elem_ptr, store_align, elem_val, store_align, size_val_copy, .normal, false) catch return error.CompilationFailed;
             } else {
                 const elem_val = try self.generateExpr(elem_id);
                 // Convert value to match element layout
@@ -2748,7 +3102,13 @@ pub const MonoLlvmCodeGen = struct {
                 if (args.len < 2) return error.UnsupportedExpression;
                 const ls = self.layout_store orelse return error.UnsupportedExpression;
                 const list_ptr = try self.materializeAsPtr(args[0], 24);
-                const index = try self.generateExpr(args[1]);
+                const raw_index = try self.generateExpr(args[1]);
+
+                // Ensure index is i64 (it may be a different int type from the literal)
+                const index = if (raw_index.typeOfWip(wip) == .i64)
+                    raw_index
+                else
+                    wip.conv(.unsigned, raw_index, .i64, "") catch return error.CompilationFailed;
 
                 // Load data pointer from list (offset 0)
                 const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
@@ -2766,8 +3126,8 @@ pub const MonoLlvmCodeGen = struct {
                 const elem_ptr = wip.gep(.inbounds, .i8, data_ptr, &.{byte_offset}, "") catch return error.CompilationFailed;
 
                 // Load the element
-                const elem_type = layoutToLlvmType(ll.ret_layout);
-                const elem_align = LlvmBuilder.Alignment.fromByteUnits(@intCast(elem_sa.alignment.toByteUnits()));
+                const elem_type = try self.layoutToLlvmTypeForLoad(ll.ret_layout);
+                const elem_align = LlvmBuilder.Alignment.fromByteUnits(@intCast(@max(elem_sa.alignment.toByteUnits(), 1)));
                 return wip.load(.normal, elem_type, elem_ptr, elem_align, "") catch return error.CompilationFailed;
             },
 
@@ -3080,6 +3440,16 @@ pub const MonoLlvmCodeGen = struct {
 
                 // Get element size/alignment from the list's element layout
                 const ret_layout = ls.getLayout(ll.ret_layout);
+                if (ret_layout.tag == .list_of_zst) {
+                    // ZST list: just increment the length, no data allocation needed.
+                    const new_len = wip.bin(.add, list_len, builder.intValue(.i64, 1) catch return error.OutOfMemory, "") catch return error.CompilationFailed;
+                    _ = wip.store(.@"volatile", data_ptr, dest_ptr, alignment) catch return error.CompilationFailed;
+                    const dest_len_ptr = wip.gep(.inbounds, .i8, dest_ptr, &.{off8}, "") catch return error.CompilationFailed;
+                    _ = wip.store(.@"volatile", new_len, dest_len_ptr, alignment) catch return error.CompilationFailed;
+                    const dest_cap_ptr = wip.gep(.inbounds, .i8, dest_ptr, &.{off16}, "") catch return error.CompilationFailed;
+                    _ = wip.store(.@"volatile", new_len, dest_cap_ptr, alignment) catch return error.CompilationFailed;
+                    return .none;
+                }
                 const elem_layout_idx = if (ret_layout.tag == .list)
                     ret_layout.data.list
                 else
@@ -3532,8 +3902,8 @@ pub const MonoLlvmCodeGen = struct {
 
                 const elem_layout = ls.getLayout(ll.ret_layout);
                 const elem_sa = ls.layoutSizeAlign(elem_layout);
-                const elem_type = layoutToLlvmType(ll.ret_layout);
-                const elem_align = LlvmBuilder.Alignment.fromByteUnits(@intCast(elem_sa.alignment.toByteUnits()));
+                const elem_type = try self.layoutToLlvmTypeForLoad(ll.ret_layout);
+                const elem_align = LlvmBuilder.Alignment.fromByteUnits(@intCast(@max(elem_sa.alignment.toByteUnits(), 1)));
                 return wip.load(.normal, elem_type, data_ptr, elem_align, "") catch return error.CompilationFailed;
             },
 
@@ -3561,8 +3931,8 @@ pub const MonoLlvmCodeGen = struct {
                 const byte_offset = wip.bin(.mul, last_idx, size_const, "") catch return error.CompilationFailed;
                 const elem_ptr = wip.gep(.inbounds, .i8, data_ptr, &.{byte_offset}, "") catch return error.CompilationFailed;
 
-                const elem_type = layoutToLlvmType(ll.ret_layout);
-                const elem_align = LlvmBuilder.Alignment.fromByteUnits(@intCast(elem_sa.alignment.toByteUnits()));
+                const elem_type = try self.layoutToLlvmTypeForLoad(ll.ret_layout);
+                const elem_align = LlvmBuilder.Alignment.fromByteUnits(@intCast(@max(elem_sa.alignment.toByteUnits(), 1)));
                 return wip.load(.normal, elem_type, elem_ptr, elem_align, "") catch return error.CompilationFailed;
             },
 
@@ -4845,27 +5215,6 @@ pub const MonoLlvmCodeGen = struct {
         // Process all statements (let bindings)
         const stmts = self.store.getStmts(block_data.stmts);
         for (stmts) |stmt| {
-            // Check if the expression is a lambda/closure for binding
-            const stmt_expr = self.store.getExpr(stmt.expr);
-            switch (stmt_expr) {
-                .lambda, .closure => {
-                    try self.bindLambdaPattern(stmt.pattern, stmt.expr);
-                },
-                .call => {
-                    if (self.resolveCallToLambda(stmt.expr)) |resolved_id| {
-                        try self.bindLambdaPattern(stmt.pattern, resolved_id);
-                    }
-                },
-                .lookup => |lookup| {
-                    const sym_key: u48 = @bitCast(lookup.symbol);
-                    if (self.lambda_bindings.get(sym_key)) |lambda_expr_id| {
-                        try self.bindLambdaPattern(stmt.pattern, lambda_expr_id);
-                    }
-                },
-                else => {},
-            }
-
-            // Generate the expression
             const val = try self.generateExpr(stmt.expr);
 
             // Bind the pattern
@@ -4891,165 +5240,20 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     /// Resolve a function expression and call it with the given arguments.
-    /// Handles lambda, closure, lookup, call-of-call, block-as-function, etc.
     fn callExprWithArgs(self: *MonoLlvmCodeGen, fn_expr_id: MonoExprId, args_span: anytype, ret_layout: layout.Idx) Error!LlvmBuilder.Value {
         const fn_expr = self.store.getExpr(fn_expr_id);
         return switch (fn_expr) {
-            .lambda => |lambda| self.generateLambdaCall(lambda, args_span, ret_layout),
-            .closure => |closure| self.generateClosureCall(closure, args_span, ret_layout),
             .lookup => |lookup| self.generateLookupCall(lookup, args_span, ret_layout),
-            .call => |inner_call| {
-                // Call-of-call: e.g., (make_adder(5))(10) or (((|a| |b| |c| a+b+c)(100))(20))(3)
-                // Resolve the inner call chain: bind args at each level, get the body.
-                const body_id = try self.resolveCallToBody(inner_call.fn_expr, inner_call.args);
-                return self.callExprWithArgs(body_id, args_span, ret_layout);
-            },
-            .block => |block_data| {
-                // Block-as-function: evaluate the block, then call its result.
-                // Handle let stmts, then the final expression is the callable.
-                const stmts = self.store.getStmts(block_data.stmts);
-                for (stmts) |stmt| {
-                    const val = try self.generateExpr(stmt.expr);
-                    try self.bindPattern(stmt.pattern, val);
-
-                    // Also track lambda bindings
-                    const stmt_expr = self.store.getExpr(stmt.expr);
-                    switch (stmt_expr) {
-                        .lambda, .closure => try self.bindLambdaPattern(stmt.pattern, stmt.expr),
-                        .call => {
-                            if (self.resolveCallToLambda(stmt.expr)) |resolved_id| {
-                                try self.bindLambdaPattern(stmt.pattern, resolved_id);
-                            }
-                        },
-                        else => {},
-                    }
-                }
-                return self.callExprWithArgs(block_data.final_expr, args_span, ret_layout);
-            },
-            .if_then_else => return error.UnsupportedExpression,
             else => return error.UnsupportedExpression,
         };
     }
 
-    /// Generate a lambda call by inlining: bind args to params, generate body.
-    fn generateLambdaCall(self: *MonoLlvmCodeGen, lambda: anytype, args_span: anytype, _: layout.Idx) Error!LlvmBuilder.Value {
-        const params = self.store.getPatternSpan(lambda.params);
-        const args = self.store.getExprSpan(args_span);
-
-        for (params, args) |param_id, arg_id| {
-            // Propagate lambda bindings from argument to parameter
-            const arg_expr = self.store.getExpr(arg_id);
-            switch (arg_expr) {
-                .lambda, .closure => {
-                    try self.bindLambdaPattern(param_id, arg_id);
-                },
-                .lookup => |lookup| {
-                    const sym_key: u48 = @bitCast(lookup.symbol);
-                    if (self.lambda_bindings.get(sym_key)) |lambda_expr_id| {
-                        try self.bindLambdaPattern(param_id, lambda_expr_id);
-                    } else if (self.store.getSymbolDef(lookup.symbol)) |def_id| {
-                        const def_expr = self.store.getExpr(def_id);
-                        switch (def_expr) {
-                            .lambda, .closure => try self.bindLambdaPattern(param_id, def_id),
-                            else => {},
-                        }
-                    }
-                },
-                .call => {
-                    if (self.resolveCallToLambda(arg_id)) |resolved_id| {
-                        try self.bindLambdaPattern(param_id, resolved_id);
-                    }
-                },
-                else => {},
-            }
-            const arg_val = try self.generateExpr(arg_id);
-            try self.bindPattern(param_id, arg_val);
-        }
-
-        return self.generateExpr(lambda.body);
-    }
-
-    /// Generate a closure call: bind captures based on representation, then call lambda.
-    fn generateClosureCall(self: *MonoLlvmCodeGen, closure: anytype, args_span: anytype, ret_layout: layout.Idx) Error!LlvmBuilder.Value {
-        // Bind captured values based on representation
-        switch (closure.representation) {
-            .direct_call => {
-                // No captures to bind
-            },
-            .unwrapped_capture => {
-                const captures = self.store.getCaptures(closure.captures);
-                if (captures.len > 0) {
-                    const cap = captures[0];
-                    const symbol_key: u48 = @bitCast(cap.symbol);
-                    if (self.symbol_values.get(symbol_key) == null) {
-                        if (self.store.getSymbolDef(cap.symbol)) |def_expr_id| {
-                            const val = try self.generateExpr(def_expr_id);
-                            self.symbol_values.put(symbol_key, val) catch return error.OutOfMemory;
-                        }
-                    }
-                }
-            },
-            .struct_captures => |repr| {
-                const captures = self.store.getCaptures(repr.captures);
-                for (captures) |cap| {
-                    const symbol_key: u48 = @bitCast(cap.symbol);
-                    if (self.symbol_values.get(symbol_key) == null) {
-                        if (self.store.getSymbolDef(cap.symbol)) |def_expr_id| {
-                            const val = try self.generateExpr(def_expr_id);
-                            self.symbol_values.put(symbol_key, val) catch return error.OutOfMemory;
-                        }
-                    }
-                }
-            },
-            .enum_dispatch, .union_repr => {
-                const captures = self.store.getCaptures(closure.captures);
-                for (captures) |cap| {
-                    const symbol_key: u48 = @bitCast(cap.symbol);
-                    if (self.symbol_values.get(symbol_key) == null) {
-                        if (self.store.getSymbolDef(cap.symbol)) |def_expr_id| {
-                            const val = try self.generateExpr(def_expr_id);
-                            self.symbol_values.put(symbol_key, val) catch return error.OutOfMemory;
-                        }
-                    }
-                }
-            },
-        }
-
-        // Get the lambda and call it (inlined)
-        const lambda_expr = self.store.getExpr(closure.lambda);
-        return switch (lambda_expr) {
-            .lambda => |lambda| self.generateLambdaCall(lambda, args_span, ret_layout),
-            else => error.UnsupportedExpression,
-        };
-    }
-
-    /// Generate a call through a lookup: check proc_registry, lambda_bindings, symbol defs.
+    /// Generate a call through a lookup: check proc_registry for compiled procedures.
     fn generateLookupCall(self: *MonoLlvmCodeGen, lookup: anytype, args_span: anytype, ret_layout: layout.Idx) Error!LlvmBuilder.Value {
         const symbol_key: u48 = @bitCast(lookup.symbol);
 
-        // First: check if the function was compiled as a procedure
         if (self.proc_registry.get(symbol_key)) |func_index| {
             return self.generateCallToCompiledProc(func_index, args_span, ret_layout);
-        }
-
-        // Check if the symbol is bound to a lambda/closure in local scope
-        if (self.lambda_bindings.get(symbol_key)) |lambda_expr_id| {
-            const lambda_expr = self.store.getExpr(lambda_expr_id);
-            return switch (lambda_expr) {
-                .lambda => |lambda| self.generateLambdaCall(lambda, args_span, ret_layout),
-                .closure => |closure| self.generateClosureCall(closure, args_span, ret_layout),
-                else => error.UnsupportedExpression,
-            };
-        }
-
-        // Look up in top-level definitions
-        if (self.store.getSymbolDef(lookup.symbol)) |def_expr_id| {
-            const def_expr = self.store.getExpr(def_expr_id);
-            return switch (def_expr) {
-                .lambda => |lambda| self.generateLambdaCall(lambda, args_span, ret_layout),
-                .closure => |closure| self.generateClosureCall(closure, args_span, ret_layout),
-                else => return error.UnsupportedExpression,
-            };
         }
 
         return error.UnsupportedExpression;
@@ -5077,254 +5281,6 @@ pub const MonoLlvmCodeGen = struct {
         const callee = func_index.toValue(builder);
 
         return wip.call(.normal, .ccc, .none, fn_type, callee, arg_values.items, "") catch return error.CompilationFailed;
-    }
-
-    // ---------------------------------------------------------------
-    // Standalone lambda/closure (not at call sites)
-    // ---------------------------------------------------------------
-
-    fn generateLambda(self: *MonoLlvmCodeGen, _: anytype) Error!LlvmBuilder.Value {
-        // Standalone lambda - return 0 placeholder.
-        // Actual evaluation happens at call site via inlining.
-        return self.emitI64(0);
-    }
-
-    fn generateClosure(self: *MonoLlvmCodeGen, closure: anytype) Error!LlvmBuilder.Value {
-        switch (closure.representation) {
-            .direct_call => {
-                return self.emitI64(0);
-            },
-            .unwrapped_capture => {
-                // Single capture - the closure value IS the captured value
-                const captures = self.store.getCaptures(closure.captures);
-                if (captures.len > 0) {
-                    const cap = captures[0];
-                    const symbol_key: u48 = @bitCast(cap.symbol);
-                    if (self.symbol_values.get(symbol_key)) |loc| {
-                        return loc;
-                    }
-                    if (self.store.getSymbolDef(cap.symbol)) |def_expr_id| {
-                        return self.generateExpr(def_expr_id);
-                    }
-                }
-                return self.emitI64(0);
-            },
-            .struct_captures => |repr| {
-                // Multiple captures - bind all for inline evaluation
-                const captures = self.store.getCaptures(repr.captures);
-                var first_val: ?LlvmBuilder.Value = null;
-                for (captures) |cap| {
-                    const symbol_key: u48 = @bitCast(cap.symbol);
-                    if (self.symbol_values.get(symbol_key)) |val| {
-                        if (first_val == null) first_val = val;
-                    } else if (self.store.getSymbolDef(cap.symbol)) |def_expr_id| {
-                        const val = try self.generateExpr(def_expr_id);
-                        self.symbol_values.put(symbol_key, val) catch return error.OutOfMemory;
-                        if (first_val == null) first_val = val;
-                    }
-                }
-                return first_val orelse self.emitI64(0);
-            },
-            .enum_dispatch => |repr| {
-                // Multiple functions, no captures - return the tag
-                return self.emitI64(@intCast(repr.tag));
-            },
-            .union_repr => |repr| {
-                // Multiple functions with captures - bind captures, return tag
-                const captures = self.store.getCaptures(repr.captures);
-                for (captures) |cap| {
-                    const symbol_key: u48 = @bitCast(cap.symbol);
-                    if (self.symbol_values.get(symbol_key) == null) {
-                        if (self.store.getSymbolDef(cap.symbol)) |def_expr_id| {
-                            const val = try self.generateExpr(def_expr_id);
-                            self.symbol_values.put(symbol_key, val) catch return error.OutOfMemory;
-                        }
-                    }
-                }
-                return self.emitI64(@intCast(repr.tag));
-            },
-        }
-    }
-
-    // ---------------------------------------------------------------
-    // Call resolution helpers
-    // ---------------------------------------------------------------
-
-    /// Structurally resolve a call expression to the lambda/closure it returns,
-    /// without generating any LLVM code. Used for binding lambda patterns and
-    /// for call-of-call dispatch.
-    fn resolveCallToLambda(self: *MonoLlvmCodeGen, expr_id: MonoExprId) ?MonoExprId {
-        const expr = self.store.getExpr(expr_id);
-        return switch (expr) {
-            .lambda, .closure => expr_id,
-            .call => |call| self.resolveCallToLambda2(call.fn_expr),
-            .block => |block_data| self.resolveCallToLambda(block_data.final_expr),
-            .lookup => |lookup| {
-                const sym_key: u48 = @bitCast(lookup.symbol);
-                if (self.lambda_bindings.get(sym_key)) |lambda_expr_id| {
-                    return lambda_expr_id;
-                }
-                if (self.store.getSymbolDef(lookup.symbol)) |def_id| {
-                    return self.resolveCallToLambda(def_id);
-                }
-                return null;
-            },
-            else => null,
-        };
-    }
-
-    /// Given a call's fn_expr, find the lambda body that the call returns.
-    fn resolveCallToLambda2(self: *MonoLlvmCodeGen, fn_expr_id: MonoExprId) ?MonoExprId {
-        const fn_expr = self.store.getExpr(fn_expr_id);
-        return switch (fn_expr) {
-            .lambda => |lambda| self.resolveCallToLambda(lambda.body),
-            .closure => |closure| self.resolveCallToLambda2(closure.lambda),
-            .lookup => |lookup| {
-                const sym_key: u48 = @bitCast(lookup.symbol);
-                if (self.lambda_bindings.get(sym_key)) |lambda_expr_id| {
-                    return self.resolveCallToLambda2(lambda_expr_id);
-                }
-                if (self.store.getSymbolDef(lookup.symbol)) |def_id| {
-                    return self.resolveCallToLambda2(def_id);
-                }
-                return null;
-            },
-            .call => |call| {
-                if (self.resolveCallToLambda2(call.fn_expr)) |resolved| {
-                    return self.resolveCallToLambda2(resolved);
-                }
-                return null;
-            },
-            .block => |block_data| self.resolveCallToLambda2(block_data.final_expr),
-            else => null,
-        };
-    }
-
-    /// Resolve an expression to a lambda expression ID.
-    /// Handles lambda, closure, lookup, call (recursive), and block expressions.
-    fn resolveToLambdaExprId(self: *MonoLlvmCodeGen, expr_id: MonoExprId) Error!MonoExprId {
-        const expr = self.store.getExpr(expr_id);
-        return switch (expr) {
-            .lambda => expr_id,
-            .closure => |closure| {
-                try self.bindClosureCaptures(closure);
-                return closure.lambda;
-            },
-            .lookup => |lookup| {
-                const sym_key: u48 = @bitCast(lookup.symbol);
-                if (self.lambda_bindings.get(sym_key)) |lid| return self.resolveToLambdaExprId(lid);
-                if (self.store.getSymbolDef(lookup.symbol)) |def_id| return self.resolveToLambdaExprId(def_id);
-                return error.UnsupportedExpression;
-            },
-            .call => |call| {
-                const body_id = try self.resolveCallToBody(call.fn_expr, call.args);
-                return self.resolveToLambdaExprId(body_id);
-            },
-            .block => |block_data| {
-                const stmts = self.store.getStmts(block_data.stmts);
-                for (stmts) |stmt| {
-                    const val = try self.generateExpr(stmt.expr);
-                    try self.bindPattern(stmt.pattern, val);
-                    const stmt_expr = self.store.getExpr(stmt.expr);
-                    switch (stmt_expr) {
-                        .lambda, .closure => try self.bindLambdaPattern(stmt.pattern, stmt.expr),
-                        .call => {
-                            if (self.resolveCallToLambda(stmt.expr)) |resolved_id| {
-                                try self.bindLambdaPattern(stmt.pattern, resolved_id);
-                            }
-                        },
-                        else => {},
-                    }
-                }
-                return self.resolveToLambdaExprId(block_data.final_expr);
-            },
-            else => error.UnsupportedExpression,
-        };
-    }
-
-    /// Resolve a call expression: find the lambda, bind args to params, return the body expr ID.
-    fn resolveCallToBody(self: *MonoLlvmCodeGen, fn_expr_id: MonoExprId, args: MonoExprSpan) Error!MonoExprId {
-        const lambda_expr_id = try self.resolveToLambdaExprId(fn_expr_id);
-        const lambda_expr = self.store.getExpr(lambda_expr_id);
-        const lambda = switch (lambda_expr) {
-            .lambda => |l| l,
-            else => return error.UnsupportedExpression,
-        };
-
-        // Bind call args to lambda params
-        const params = self.store.getPatternSpan(lambda.params);
-        const arg_exprs = self.store.getExprSpan(args);
-        for (params, arg_exprs) |param_id, arg_id| {
-            const arg_expr = self.store.getExpr(arg_id);
-            switch (arg_expr) {
-                .lambda, .closure => try self.bindLambdaPattern(param_id, arg_id),
-                .lookup => |arg_lookup| {
-                    const arg_sym_key: u48 = @bitCast(arg_lookup.symbol);
-                    if (self.lambda_bindings.get(arg_sym_key)) |lambda_id| {
-                        try self.bindLambdaPattern(param_id, lambda_id);
-                    } else if (self.store.getSymbolDef(arg_lookup.symbol)) |def_id| {
-                        const de = self.store.getExpr(def_id);
-                        switch (de) {
-                            .lambda, .closure => try self.bindLambdaPattern(param_id, def_id),
-                            else => {},
-                        }
-                    }
-                },
-                .call => {
-                    if (self.resolveCallToLambda(arg_id)) |resolved_id| {
-                        try self.bindLambdaPattern(param_id, resolved_id);
-                    }
-                },
-                else => {},
-            }
-            const arg_val = try self.generateExpr(arg_id);
-            try self.bindPattern(param_id, arg_val);
-        }
-        return lambda.body;
-    }
-
-    /// Bind closure captures to symbol_values.
-    fn bindClosureCaptures(self: *MonoLlvmCodeGen, closure: anytype) Error!void {
-        switch (closure.representation) {
-            .direct_call => {},
-            .unwrapped_capture => {
-                const captures = self.store.getCaptures(closure.captures);
-                if (captures.len > 0) {
-                    const cap = captures[0];
-                    const symbol_key: u48 = @bitCast(cap.symbol);
-                    if (self.symbol_values.get(symbol_key) == null) {
-                        if (self.store.getSymbolDef(cap.symbol)) |def_expr_id| {
-                            const val = try self.generateExpr(def_expr_id);
-                            self.symbol_values.put(symbol_key, val) catch return error.OutOfMemory;
-                        }
-                    }
-                }
-            },
-            .struct_captures => |repr| {
-                const captures = self.store.getCaptures(repr.captures);
-                for (captures) |cap| {
-                    const symbol_key: u48 = @bitCast(cap.symbol);
-                    if (self.symbol_values.get(symbol_key) == null) {
-                        if (self.store.getSymbolDef(cap.symbol)) |def_expr_id| {
-                            const val = try self.generateExpr(def_expr_id);
-                            self.symbol_values.put(symbol_key, val) catch return error.OutOfMemory;
-                        }
-                    }
-                }
-            },
-            .enum_dispatch, .union_repr => {
-                const captures = self.store.getCaptures(closure.captures);
-                for (captures) |cap| {
-                    const symbol_key: u48 = @bitCast(cap.symbol);
-                    if (self.symbol_values.get(symbol_key) == null) {
-                        if (self.store.getSymbolDef(cap.symbol)) |def_expr_id| {
-                            const val = try self.generateExpr(def_expr_id);
-                            self.symbol_values.put(symbol_key, val) catch return error.OutOfMemory;
-                        }
-                    }
-                }
-            },
-        }
     }
 
     // ---------------------------------------------------------------
@@ -5364,6 +5320,11 @@ pub const MonoLlvmCodeGen = struct {
                     const sa = ls.layoutSizeAlign(l);
                     const alignment = LlvmBuilder.Alignment.fromByteUnits(@intCast(@max(sa.alignment.toByteUnits(), 1)));
                     return wip.load(.normal, llvm_type, ptr, alignment, "") catch return error.CompilationFailed;
+                },
+                .tag_union => {
+                    // Tag unions are pointer-based in this backend — return
+                    // the raw pointer so the discriminant + payload are accessible.
+                    return ptr;
                 },
                 else => {},
             }
@@ -5491,13 +5452,29 @@ pub const MonoLlvmCodeGen = struct {
                 }
             },
             .tuple => |tup_pat| {
-                // Tuple destructuring: extract each element from the struct value
+                // Tuple destructuring: extract each element from the struct value.
+                // The LLVM struct is in sorted (alignment) order, but patterns are
+                // in source order. Map source index → sorted position via layout.
                 const wip = self.wip orelse return error.CompilationFailed;
                 const builder = self.builder orelse return error.CompilationFailed;
                 if (value == .none or !value.typeOfWip(wip).isStruct(builder)) return error.CompilationFailed;
                 const elems = self.store.getPatternSpan(tup_pat.elems);
-                for (elems, 0..) |elem_pat_id, idx| {
-                    const elem_val = wip.extractValue(value, &.{@as(u32, @intCast(idx))}, "") catch return error.CompilationFailed;
+                const ls = self.layout_store;
+                for (elems, 0..) |elem_pat_id, source_idx| {
+                    // Find the sorted position for this source index
+                    const sorted_idx: u32 = if (ls) |store| blk: {
+                        const tup_layout = store.getLayout(tup_pat.tuple_layout);
+                        if (tup_layout.tag == .tuple) {
+                            const tuple_data = store.getTupleData(tup_layout.data.tuple.idx);
+                            const sorted_elements = store.tuple_fields.sliceRange(tuple_data.getFields());
+                            for (0..sorted_elements.len) |si| {
+                                const elem = sorted_elements.get(@intCast(si));
+                                if (elem.index == source_idx) break :blk @intCast(si);
+                            }
+                        }
+                        break :blk @intCast(source_idx);
+                    } else @intCast(source_idx);
+                    const elem_val = wip.extractValue(value, &.{sorted_idx}, "") catch return error.CompilationFailed;
                     try self.bindPattern(elem_pat_id, elem_val);
                 }
             },
@@ -5540,15 +5517,4 @@ pub const MonoLlvmCodeGen = struct {
         }
     }
 
-    /// Record that a pattern is bound to a lambda/closure expression for later call resolution.
-    fn bindLambdaPattern(self: *MonoLlvmCodeGen, pattern_id: MonoPatternId, expr_id: MonoExprId) Error!void {
-        const pattern = self.store.getPattern(pattern_id);
-        switch (pattern) {
-            .bind => |bind| {
-                const key: u48 = @bitCast(bind.symbol);
-                self.lambda_bindings.put(key, expr_id) catch return error.OutOfMemory;
-            },
-            else => {},
-        }
-    }
 };
