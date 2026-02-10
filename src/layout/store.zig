@@ -1754,6 +1754,15 @@ pub const Store = struct {
                             progress.is_recursive = true;
                             is_in_progress_recursive = true;
                             maybe_progress = progress;
+                            // Check if the recursion path goes through a heap container.
+                            // If so, the Box is only a computation artifact, not needed at runtime.
+                            const containers = self.work.pending_containers.slice().items(.container);
+                            for (containers[container_base_depth..]) |container| {
+                                if (container == .list or container == .box) {
+                                    progress.recursion_through_heap = true;
+                                    break;
+                                }
+                            }
                         }
                     }
                 }
@@ -1837,15 +1846,20 @@ pub const Store = struct {
                     for (nominals_to_remove_cache.items) |key| {
                         // Register the computed nominal so other type vars for the same
                         // nominal type reuse this layout instead of recomputing.
+                        // Only cache non-polymorphic nominals (no type args). Polymorphic
+                        // nominals like Try have different layouts per instantiation, so
+                        // caching would cause cross-instantiation pollution.
                         if (self.work.in_progress_nominals.get(key)) |progress| {
-                            const nck = ModuleVarKey{ .module_idx = progress.cache_module_idx, .var_ = progress.nominal_var };
-                            if (self.layouts_by_module_var.get(nck)) |final_idx| {
-                                if (comptime std.debug.runtime_safety) {
-                                    if (self.computed_nominals.get(key)) |existing| {
-                                        std.debug.assert(existing.layout_idx == final_idx);
+                            if (progress.type_args_range.count == 0) {
+                                const nck = ModuleVarKey{ .module_idx = progress.cache_module_idx, .var_ = progress.nominal_var };
+                                if (self.layouts_by_module_var.get(nck)) |final_idx| {
+                                    if (comptime std.debug.runtime_safety) {
+                                        if (self.computed_nominals.get(key)) |existing| {
+                                            std.debug.assert(existing.layout_idx == final_idx);
+                                        }
                                     }
+                                    try self.computed_nominals.put(key, .{ .layout_idx = final_idx, .module_idx = progress.cache_module_idx });
                                 }
-                                try self.computed_nominals.put(key, .{ .layout_idx = final_idx, .module_idx = progress.cache_module_idx });
                             }
                         }
                         _ = self.work.in_progress_nominals.swapRemove(key);
@@ -1911,6 +1925,14 @@ pub const Store = struct {
                             const progress = entry.value_ptr.*;
                             if (self.work.in_progress_vars.contains(.{ .module_idx = progress.cache_module_idx, .var_ = progress.backing_var })) {
                                 entry.value_ptr.is_recursive = true;
+                                // Check if the recursion path goes through a heap container.
+                                const containers = self.work.pending_containers.slice().items(.container);
+                                for (containers[container_base_depth..]) |container| {
+                                    if (container == .list or container == .box) {
+                                        entry.value_ptr.recursion_through_heap = true;
+                                        break;
+                                    }
+                                }
                             }
                         }
                     } else {
@@ -1954,6 +1976,15 @@ pub const Store = struct {
                         // This IS a true recursive reference - the type refers to itself.
                         // Mark it as truly recursive so we know to box its values.
                         progress.is_recursive = true;
+                        // Check if the recursion path goes through a heap container.
+                        // If so, the Box is only a computation artifact, not needed at runtime.
+                        const containers3 = self.work.pending_containers.slice().items(.container);
+                        for (containers3[container_base_depth..]) |container| {
+                            if (container == .list or container == .box) {
+                                progress.recursion_through_heap = true;
+                                break;
+                            }
+                        }
                         // Use the cached placeholder index for the nominal.
                         // The placeholder will be updated with the real layout once
                         // the nominal's backing type is fully computed.
@@ -2004,7 +2035,12 @@ pub const Store = struct {
                     if (current.desc.content.structure == .nominal_type) {
                         const nt = current.desc.content.structure.nominal_type;
                         const nk = work.NominalKey{ .ident_idx = nt.ident.ident_idx, .origin_module = nt.origin_module };
-                        if (self.findComputedNominal(nk)) |existing_idx| {
+                        // Only use computed_nominals for non-polymorphic nominals (no type args).
+                        // Polymorphic nominals like Try have different layouts per instantiation,
+                        // so we must compute each instantiation independently.
+                        const nt_type_args = types.Store.getNominalArgsRange(nt);
+                        const found_computed = if (nt_type_args.count == 0) self.findComputedNominal(nk) else null;
+                        if (found_computed) |existing_idx| {
                             // For recursive nominals (Box layout) inside List/Box containers,
                             // use the inner (raw) layout instead of the Box. The container
                             // itself provides heap allocation, so using the Box would cause
@@ -2014,6 +2050,8 @@ pub const Store = struct {
                             if (existing_layout.tag == .box and self.work.pending_containers.len > container_base_depth) {
                                 const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
                                 if (pending_item.container == .list or pending_item.container == .box) {
+                                    // Heap containers provide their own allocation, so use
+                                    // the raw inner layout to avoid double-boxing.
                                     layout_idx = existing_layout.data.box;
                                 } else {
                                     layout_idx = existing_idx;
@@ -2347,7 +2385,6 @@ pub const Store = struct {
                                 .cache_module_idx = self.current_module_idx,
                                 .type_args_range = type_args_range,
                             });
-
                             // From a layout perspective, nominal types are identical to type aliases:
                             // all we care about is what's inside, so just unroll it.
                             current = resolved_backing;
@@ -2857,15 +2894,18 @@ pub const Store = struct {
 
                 // Remove the nominals we updated
                 for (nominals_to_remove.items) |key| {
+                    // Only cache non-polymorphic nominals (no type args) in computed_nominals.
                     if (self.work.in_progress_nominals.get(key)) |progress| {
-                        const nck = ModuleVarKey{ .module_idx = progress.cache_module_idx, .var_ = progress.nominal_var };
-                        if (self.layouts_by_module_var.get(nck)) |final_idx| {
-                            if (comptime std.debug.runtime_safety) {
-                                if (self.computed_nominals.get(key)) |existing| {
-                                    std.debug.assert(existing.layout_idx == final_idx);
+                        if (progress.type_args_range.count == 0) {
+                            const nck = ModuleVarKey{ .module_idx = progress.cache_module_idx, .var_ = progress.nominal_var };
+                            if (self.layouts_by_module_var.get(nck)) |final_idx| {
+                                if (comptime std.debug.runtime_safety) {
+                                    if (self.computed_nominals.get(key)) |existing| {
+                                        std.debug.assert(existing.layout_idx == final_idx);
+                                    }
                                 }
+                                try self.computed_nominals.put(key, .{ .layout_idx = final_idx, .module_idx = progress.cache_module_idx });
                             }
-                            try self.computed_nominals.put(key, .{ .layout_idx = final_idx, .module_idx = progress.cache_module_idx });
                         }
                     }
                     _ = self.work.in_progress_nominals.swapRemove(key);
@@ -3048,8 +3088,11 @@ pub const Store = struct {
                                 // Update the placeholder to Box(layout_idx) instead of replacing it
                                 // with the raw layout. This keeps recursive references boxed.
                                 self.updateLayout(reserved_idx, Layout.box(layout_idx));
-                                // Register in the recursive nominal registry if truly recursive.
-                                if (progress.is_recursive) {
+                                // Register in the recursive nominal registry if truly recursive
+                                // AND the recursion is direct (not through a heap container).
+                                // Heap-recursive nominals don't need Box at runtime — the
+                                // heap container (List/Box) provides sufficient indirection.
+                                if (progress.is_recursive and !progress.recursion_through_heap) {
                                     try self.recursive_nominal_registry.register(container_nominal_key, reserved_idx);
                                 }
                             }
@@ -3066,11 +3109,13 @@ pub const Store = struct {
                                 }
                                 self.updateLayout(raw_idx, new_layout);
                             }
-                            // Update the cache. For recursive nominals, keep the box layout
-                            // (reserved_idx) in the cache — overwriting with the raw layout
-                            // would cause fromTypeVar to return unboxed layouts for recursive types.
-                            // Non-recursive nominals are transparent, so use the raw layout.
-                            if (!progress.is_recursive) {
+                            // Update the cache. For directly-recursive nominals, keep the box
+                            // layout (reserved_idx) in the cache — Box IS the runtime repr.
+                            // For non-recursive or heap-recursive nominals, use the raw layout.
+                            // Heap-recursive nominals don't need Box at runtime (the heap
+                            // container provides indirection), so they're transparent like
+                            // non-recursive nominals.
+                            if (!progress.is_recursive or progress.recursion_through_heap) {
                                 try self.layouts_by_module_var.put(container_nominal_key, layout_idx);
                             }
                             try nominals_to_remove_container.append(self.allocator, entry.key_ptr.*);
@@ -3096,15 +3141,18 @@ pub const Store = struct {
 
                     // Remove the nominals we updated
                     for (nominals_to_remove_container.items) |key| {
+                        // Only cache non-polymorphic nominals (no type args) in computed_nominals.
                         if (self.work.in_progress_nominals.get(key)) |progress| {
-                            const nck = ModuleVarKey{ .module_idx = progress.cache_module_idx, .var_ = progress.nominal_var };
-                            if (self.layouts_by_module_var.get(nck)) |final_idx| {
-                                if (comptime std.debug.runtime_safety) {
-                                    if (self.computed_nominals.get(key)) |existing| {
-                                        std.debug.assert(existing.layout_idx == final_idx);
+                            if (progress.type_args_range.count == 0) {
+                                const nck = ModuleVarKey{ .module_idx = progress.cache_module_idx, .var_ = progress.nominal_var };
+                                if (self.layouts_by_module_var.get(nck)) |final_idx| {
+                                    if (comptime std.debug.runtime_safety) {
+                                        if (self.computed_nominals.get(key)) |existing| {
+                                            std.debug.assert(existing.layout_idx == final_idx);
+                                        }
                                     }
+                                    try self.computed_nominals.put(key, .{ .layout_idx = final_idx, .module_idx = progress.cache_module_idx });
                                 }
-                                try self.computed_nominals.put(key, .{ .layout_idx = final_idx, .module_idx = progress.cache_module_idx });
                             }
                         }
                         _ = self.work.in_progress_nominals.swapRemove(key);
