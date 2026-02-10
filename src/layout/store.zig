@@ -485,8 +485,7 @@ pub const Store = struct {
     }
 
     /// Create a tuple layout representing the sequential layout of closure captures.
-    /// Matches the layout used by `materializeCaptures` in the dev backend: captures
-    /// are stored sequentially with no alignment padding between them.
+    /// Captures are stored sequentially with no alignment padding between them.
     pub fn putCaptureStruct(self: *Self, capture_layout_idxs: []const Idx) std.mem.Allocator.Error!Idx {
         var temp_fields = std.ArrayList(TupleField).empty;
         defer temp_fields.deinit(self.allocator);
@@ -515,7 +514,6 @@ pub const Store = struct {
 
     /// Create a tuple layout representing the sequential layout of a lambda set union.
     /// The layout is: 8-byte tag + max(capture struct size per variant).
-    /// This matches how `generateClosure` in the dev backend stores union_repr closures.
     pub fn putCaptureUnion(self: *Self, variants: []const []const Idx) std.mem.Allocator.Error!Idx {
         // Find the maximum payload size across all variants
         var max_payload_size: u32 = 0;
