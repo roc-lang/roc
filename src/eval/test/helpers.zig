@@ -766,7 +766,7 @@ fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_i
         },
         layout_mod.Idx.bool => blk: {
             const val = returns[0].I32;
-            break :blk std.fmt.allocPrint(allocator, "{}", .{val});
+            break :blk allocator.dupe(u8, if (val != 0) "True" else "False");
         },
         layout_mod.Idx.f64 => blk: {
             const val: f64 = @bitCast(returns[0].I64);
@@ -819,20 +819,32 @@ fn wasmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_i
 
             // Check SSO: high bit of byte 11
             const byte11 = mem_slice[str_ptr + 11];
-            if (byte11 & 0x80 != 0) {
+            const str_data: []const u8 = if (byte11 & 0x80 != 0) sd: {
                 // Small string: bytes stored inline, length in byte 11 (masked)
                 const sso_len: u32 = byte11 & 0x7F;
                 if (sso_len > 11) return error.WasmExecFailed;
-                const str_data = mem_slice[str_ptr..][0..sso_len];
-                break :blk allocator.dupe(u8, str_data);
-            } else {
+                break :sd mem_slice[str_ptr..][0..sso_len];
+            } else sd: {
                 // Large string: ptr at offset 0, len at offset 4
                 const data_ptr: u32 = @bitCast(mem_slice[str_ptr..][0..4].*);
                 const data_len: u32 = @bitCast(mem_slice[str_ptr + 4 ..][0..4].*);
                 if (data_ptr + data_len > mem_slice.len) return error.WasmExecFailed;
-                const str_data = mem_slice[data_ptr..][0..data_len];
-                break :blk allocator.dupe(u8, str_data);
+                break :sd mem_slice[data_ptr..][0..data_len];
+            };
+
+            // Wrap in quotes with escape handling, matching interpreter (RocValue.zig)
+            var buf = std.array_list.AlignedManaged(u8, null).init(allocator);
+            errdefer buf.deinit();
+            try buf.append('"');
+            for (str_data) |ch| {
+                switch (ch) {
+                    '\\' => try buf.appendSlice("\\\\"),
+                    '"' => try buf.appendSlice("\\\""),
+                    else => try buf.append(ch),
+                }
             }
+            try buf.append('"');
+            break :blk buf.toOwnedSlice();
         },
         else => blk: {
             // Non-sentinel layout — use layout store to determine type

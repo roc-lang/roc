@@ -1367,19 +1367,12 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     std.debug.assert(args.len >= 1);
                     const list_loc = try self.generateExpr(args[0]);
 
-                    // Get base offset from either stack or list_stack location
-                    const base_offset: i32 = switch (list_loc) {
-                        .stack => |s| s.offset,
-                        .list_stack => |ls_info| ls_info.struct_offset,
-                        .immediate_i64 => |val| {
-                            // Empty list - length is 0
-                            if (val == 0) {
-                                return .{ .immediate_i64 = 0 };
-                            }
-                            unreachable;
-                        },
-                        else => unreachable,
-                    };
+                    // Fast-path: empty list immediate
+                    if (list_loc == .immediate_i64 and list_loc.immediate_i64 == 0) {
+                        return .{ .immediate_i64 = 0 };
+                    }
+
+                    const base_offset: i32 = try self.ensureOnStack(list_loc, roc_list_size);
 
                     // Length is at offset 8 in the list struct
                     const result_reg = try self.allocTempGeneral();
@@ -1395,18 +1388,12 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     std.debug.assert(args.len >= 1);
                     const list_loc = try self.generateExpr(args[0]);
 
-                    const base_offset: i32 = switch (list_loc) {
-                        .stack => |s| s.offset,
-                        .list_stack => |ls_info| ls_info.struct_offset,
-                        .immediate_i64 => |val| {
-                            // Empty list - is_empty returns true (1)
-                            if (val == 0) {
-                                return .{ .immediate_i64 = 1 };
-                            }
-                            unreachable;
-                        },
-                        else => unreachable,
-                    };
+                    // Fast-path: empty list immediate
+                    if (list_loc == .immediate_i64 and list_loc.immediate_i64 == 0) {
+                        return .{ .immediate_i64 = 1 };
+                    }
+
+                    const base_offset: i32 = try self.ensureOnStack(list_loc, roc_list_size);
 
                     {
                         // Length is at offset 8 - check if zero
