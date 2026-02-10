@@ -801,13 +801,6 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             immediate_f64: f64,
             /// Immediate 128-bit value
             immediate_i128: i128,
-            /// Compiled lambda code location (for first-class functions)
-            lambda_code: struct {
-                /// Offset into code buffer where the procedure starts
-                code_offset: usize,
-                /// Layout of the function's return type
-                ret_layout: layout.Idx,
-            },
             /// Closure value on stack - for lambda set dispatch at call sites.
             /// Used when a closure is passed as an argument to a higher-order function,
             /// or when a single-function closure captures variables.
@@ -1023,25 +1016,6 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             var actual_ret_layout = result_layout;
 
             const final_result = switch (result_loc) {
-                .lambda_code => |lc| blk: {
-                    // The lambda's return layout is the actual return type
-                    actual_ret_layout = lc.ret_layout;
-                    // Call the lambda
-                    const current_offset = self.codegen.currentOffset();
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        const rel_offset: i28 = @intCast(@as(i32, @intCast(lc.code_offset)) - @as(i32, @intCast(current_offset)));
-                        try self.codegen.emit.bl(rel_offset);
-                    } else {
-                        // x86_64: emit relative call
-                        const rel_offset: i32 = @intCast(@as(i32, @intCast(lc.code_offset)) - @as(i32, @intCast(current_offset)) - 5);
-                        try self.codegen.emit.callRel32(rel_offset);
-                    }
-                    // Result is in X0/RAX
-                    break :blk if (comptime target.toCpuArch() == .aarch64)
-                        ValueLocation{ .general_reg = .X0 }
-                    else
-                        ValueLocation{ .general_reg = .RAX };
-                },
                 .closure_value => |cv| blk: {
                     // Dispatch the closure call with no arguments
                     // The closure's return layout is the actual return type, not the closure layout
@@ -1178,7 +1152,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
         }
 
         /// Generate code for an expression. The result is ALWAYS in a stable location
-        /// (stack, immediate, lambda_code, closure_value) — never a bare register.
+        /// (stack, immediate, closure_value) — never a bare register.
         fn generateExpr(self: *Self, expr_id: MonoExprId) Error!ValueLocation {
             const loc = try self.generateExprRaw(expr_id);
             return self.stabilize(loc);
@@ -1236,11 +1210,12 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 // Function calls and lambdas
                 .call => |call| try self.generateCall(call),
                 // Lambdas and closures as first-class values (stored to variables)
-                .lambda => |lambda| {
-                    const code_offset = try self.compileLambdaAsProc(expr_id, lambda, null);
-                    return .{ .lambda_code = .{
-                        .code_offset = code_offset,
-                        .ret_layout = lambda.ret_layout,
+                .lambda => {
+                    return .{ .closure_value = .{
+                        .stack_offset = 0,
+                        .representation = .direct_call,
+                        .lambda = expr_id,
+                        .captures = mono.MonoIR.MonoCaptureSpan.empty(),
                     } };
                 },
                 .closure => |closure| return try self.generateClosure(closure),
@@ -4835,7 +4810,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             if (self.store.getSymbolDef(symbol)) |def_expr_id| {
                 const def_expr = self.store.getExpr(def_expr_id);
 
-                // For closures, compile the lambda as a proc and pre-register as lambda_code.
+                // For closures, pre-compile the lambda and register as closure_value.
                 // This breaks recursive capture cycles: if a closure captures itself (recursive
                 // function), the self-reference is found in symbol_locations on the second lookup
                 // instead of triggering infinite recursion through materializeCaptures.
@@ -4843,13 +4818,16 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     const closure = def_expr.closure;
                     const inner = self.store.getExpr(closure.lambda);
                     if (inner == .lambda) {
-                        const code_offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda, null);
-                        const lambda_loc: ValueLocation = .{ .lambda_code = .{
-                            .code_offset = code_offset,
-                            .ret_layout = inner.lambda.ret_layout,
+                        // Pre-compile to register in compiled_lambdas cache (breaks recursion)
+                        _ = try self.compileLambdaAsProc(closure.lambda, inner.lambda, null);
+                        const cv_loc: ValueLocation = .{ .closure_value = .{
+                            .stack_offset = 0,
+                            .representation = closure.representation,
+                            .lambda = def_expr_id,
+                            .captures = closure.captures,
                         } };
-                        try self.symbol_locations.put(symbol_key, lambda_loc);
-                        return lambda_loc;
+                        try self.symbol_locations.put(symbol_key, cv_loc);
+                        return cv_loc;
                     }
                 }
 
@@ -8959,10 +8937,6 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     try self.codegen.emitStoreStack(.w64, offset + 16, reg);
                     self.codegen.freeGeneral(reg);
                 },
-                .lambda_code => {
-                    // lambda_code should not be copied to stack - it's only used for calling
-                    unreachable;
-                },
                 .closure_value => |cv| {
                     // Copy the closure value from stack
                     const reg = try self.allocTempGeneral();
@@ -9093,14 +9067,6 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 },
                 .stack, .stack_str, .stack_i128, .list_stack => {
                     // Handle stack locations below
-                },
-                .lambda_code => |lc| {
-                    // Store the code offset as an 8-byte pointer value
-                    const reg = try self.allocTempGeneral();
-                    try self.codegen.emitLoadImm(reg, @bitCast(@as(i64, @intCast(lc.code_offset))));
-                    try self.codegen.emitStoreStack(.w64, dest_offset, reg);
-                    self.codegen.freeGeneral(reg);
-                    return;
                 },
                 .closure_value => |cv| {
                     // Copy the closure value from its stack location
@@ -9902,7 +9868,6 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 .float_reg => unreachable, // Dec is not a float register type
                 .stack_str => unreachable, // Dec is not a string
                 .list_stack => unreachable, // Dec is not a list
-                .lambda_code => unreachable, // Dec is not a lambda
                 .closure_value => unreachable, // Dec is not a closure
                 .immediate_f64 => unreachable, // Dec is not a float
             };
@@ -10233,8 +10198,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 },
                 // Lambda and closure values should be called/dispatched first, not stored directly.
                 // The caller must handle these by extracting the actual return layout and calling.
-                .lambda_code, .closure_value => {
-                    std.debug.panic("storeResultToSlot: cannot store lambda_code or closure_value directly - caller must call/dispatch and store the result", .{});
+                .closure_value => {
+                    std.debug.panic("storeResultToSlot: cannot store closure_value directly - caller must call/dispatch and store the result", .{});
                 },
                 else => {
                     // For other types, try a generic copy using slot_size
@@ -10844,53 +10809,30 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 // Chained calls: evaluate inner call, then call result with outer args
                 .call => |inner_call| {
                     const inner_result = try self.generateCall(inner_call);
-                    if (inner_result == .lambda_code) {
-                        return try self.generateCallToLambda(
-                            inner_result.lambda_code.code_offset,
-                            call.args,
-                            call.ret_layout,
-                        );
-                    }
                     if (inner_result == .closure_value) {
                         return try self.generateClosureDispatch(inner_result.closure_value, call.args, call.ret_layout);
                     }
-                    unreachable; // chained call must produce a lambda_code or closure_value
+                    unreachable; // chained call must produce a closure_value
                 },
 
-                // Block calls: evaluate block, if it returns lambda_code or closure_value, call it
+                // Block calls: evaluate block, call the resulting closure
                 .block => |block| {
                     const block_result = try self.generateBlock(block);
-                    if (block_result == .lambda_code) {
-                        return try self.generateCallToLambda(
-                            block_result.lambda_code.code_offset,
-                            call.args,
-                            call.ret_layout,
-                        );
-                    }
                     if (block_result == .closure_value) {
                         return try self.generateClosureDispatch(block_result.closure_value, call.args, call.ret_layout);
                     }
-                    unreachable; // block call must produce a lambda_code or closure_value
+                    unreachable; // block call must produce a closure_value
                 },
 
                 // Lookup a function and call it
                 .lookup => |lookup| {
                     const symbol_key: u48 = @bitCast(lookup.symbol);
-                    // Check if the symbol is bound to a lambda_code or closure_value location
+                    // Check if the symbol is bound to a closure_value location
                     if (self.symbol_locations.get(symbol_key)) |loc| {
                         switch (loc) {
-                            .lambda_code => |lc| {
-                                return try self.generateCallToLambda(
-                                    lc.code_offset,
-                                    call.args,
-                                    call.ret_layout,
-                                );
-                            },
                             .closure_value => |cv| {
                                 return try self.generateClosureDispatch(cv, call.args, call.ret_layout);
                             },
-                            // Other locations (registers, stack, immediates) fall through
-                            // to generateLookupCall for function pointer handling
                             else => {},
                         }
                     }
@@ -10971,13 +10913,12 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     } };
                 },
                 .direct_call => {
-                    // Direct call - compile as procedure for direct calling
-                    const inner = self.store.getExpr(closure.lambda);
-                    if (inner != .lambda) unreachable;
-                    const code_offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda, null);
-                    return .{ .lambda_code = .{
-                        .code_offset = code_offset,
-                        .ret_layout = inner.lambda.ret_layout,
+                    // Direct call - no captures, just track the lambda for dispatch
+                    return .{ .closure_value = .{
+                        .stack_offset = 0,
+                        .representation = .direct_call,
+                        .lambda = closure.lambda,
+                        .captures = mono.MonoIR.MonoCaptureSpan.empty(),
                     } };
                 },
             }
@@ -11082,22 +11023,6 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             }
                             self.codegen.freeGeneral(temp);
                         },
-                        .lambda_code => |lc| {
-                            // Capturing a lambda (function pointer) - store the code address
-                            const temp = try self.allocTempGeneral();
-                            const current = self.codegen.currentOffset();
-                            const rel: i64 = @as(i64, @intCast(lc.code_offset)) - @as(i64, @intCast(current));
-
-                            if (comptime target.toCpuArch() == .aarch64) {
-                                try self.codegen.emit.adr(temp, @intCast(rel));
-                            } else {
-                                // Displacement is relative to end of LEA instruction (7 bytes)
-                                const lea_size: i64 = 7;
-                                try self.codegen.emit.leaRegRipRel(temp, @intCast(rel - lea_size));
-                            }
-                            try self.codegen.emitStoreStack(.w64, base_offset + offset, temp);
-                            self.codegen.freeGeneral(temp);
-                        },
                         else => {
                             const slot = try self.ensureOnStack(capture_loc, capture_size);
                             const temp = try self.allocTempGeneral();
@@ -11133,25 +11058,6 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                     }
                                     self.codegen.freeGeneral(temp);
                                 }
-                            },
-                            .lambda_code => |lc| {
-                                // Capturing a lambda (function pointer) - store the absolute
-                                // code address using RIP-relative LEA, same as the main path.
-                                // Using emitLoadImm would store the raw code buffer offset
-                                // (not an absolute address), causing a segfault when called.
-                                const temp = try self.allocTempGeneral();
-                                const current = self.codegen.currentOffset();
-                                const rel: i64 = @as(i64, @intCast(lc.code_offset)) - @as(i64, @intCast(current));
-
-                                if (comptime target.toCpuArch() == .aarch64) {
-                                    try self.codegen.emit.adr(temp, @intCast(rel));
-                                } else {
-                                    // Displacement is relative to end of LEA instruction (7 bytes)
-                                    const lea_size: i64 = 7;
-                                    try self.codegen.emit.leaRegRipRel(temp, @intCast(rel - lea_size));
-                                }
-                                try self.codegen.emitStoreStack(.w64, base_offset + offset, temp);
-                                self.codegen.freeGeneral(temp);
                             },
                             else => {
                                 const slot = try self.ensureOnStack(resolved_loc, capture_size);
@@ -11373,22 +11279,17 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 const capture_size = ls.layoutSizeAlign(capture_layout).size;
                 const capture_offset = cv.stack_offset + offset;
 
-                // Check if the capture is itself a closure or lambda. The old
+                // Check if the capture is itself a closure. The old
                 // symbol_locations entry (from the outer scope) carries the
                 // representation metadata needed to dispatch closure calls. If
                 // we just store .stack here, that metadata is lost and the body
-                // will try to call the raw stack bytes as a function pointer,
-                // causing a segfault. Preserve .closure_value / .lambda_code.
+                // will try to call the raw stack bytes as a function,
+                // causing a segfault. Preserve .closure_value.
                 const old_loc = self.symbol_locations.get(symbol_key);
                 if (old_loc != null and old_loc.? == .closure_value) {
                     var new_cv = old_loc.?.closure_value;
                     new_cv.stack_offset = capture_offset;
                     try self.symbol_locations.put(symbol_key, .{ .closure_value = new_cv });
-                } else if (old_loc != null and old_loc.? == .lambda_code) {
-                    // Lambda code was materialized as a function pointer on the
-                    // stack by materializeCaptures. Keep it as .stack so
-                    // generateIndirectCall can load and call it.
-                    try self.symbol_locations.put(symbol_key, .{ .stack = .{ .offset = capture_offset } });
                 } else {
                     try self.symbol_locations.put(symbol_key, self.stackLocationForLayout(capture.layout_idx, capture_offset));
                 }
@@ -11570,15 +11471,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         unreachable;
                     },
                     .block => {
-                        // Definition is a block — evaluate the block which may produce a lambda/closure
+                        // Definition is a block — evaluate the block which may produce a closure
                         const block_result = try self.generateExpr(def_expr_id);
-                        if (block_result == .lambda_code) {
-                            return try self.generateCallToLambda(
-                                block_result.lambda_code.code_offset,
-                                args_span,
-                                ret_layout,
-                            );
-                        }
                         if (block_result == .closure_value) {
                             return try self.generateClosureDispatch(block_result.closure_value, args_span, ret_layout);
                         }
@@ -11600,13 +11494,6 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         }
                         if (inner == .block) {
                             const block_result = try self.generateExpr(nom.backing_expr);
-                            if (block_result == .lambda_code) {
-                                return try self.generateCallToLambda(
-                                    block_result.lambda_code.code_offset,
-                                    args_span,
-                                    ret_layout,
-                                );
-                            }
                             if (block_result == .closure_value) {
                                 return try self.generateClosureDispatch(block_result.closure_value, args_span, ret_layout);
                             }
@@ -11633,18 +11520,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             // in a higher-order function like `apply = |f, x| f(x)`)
             if (self.symbol_locations.get(symbol_key)) |loc| {
                 switch (loc) {
-                    .lambda_code => |lc| {
-                        return try self.generateCallToLambda(lc.code_offset, args_span, ret_layout);
-                    },
                     .closure_value => |cv| {
                         return try self.generateClosureDispatch(cv, args_span, ret_layout);
-                    },
-                    // Function pointer: the value is an absolute address that we can call
-                    // indirectly via BLR (aarch64) or CALL reg (x86_64).
-                    // This happens when a lambda is passed as an argument to a higher-order
-                    // function — the caller computes the address via ADR/LEA and passes it.
-                    .general_reg, .stack, .immediate_i64 => {
-                        return try self.generateIndirectCall(loc, args_span, ret_layout);
                     },
                     else => {},
                 }
@@ -11939,18 +11816,6 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     // Load ptr (first 8 bytes of list struct)
                     try self.codegen.emitLoadStack(.w64, target_reg, list_info.struct_offset);
                 },
-                .lambda_code => |lc| {
-                    // Load the code address via ADR/LEA - must use PC-relative addressing
-                    const current = self.codegen.currentOffset();
-                    const rel: i64 = @as(i64, @intCast(lc.code_offset)) - @as(i64, @intCast(current));
-
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.adr(target_reg, @intCast(rel));
-                    } else {
-                        const lea_size: i64 = 7;
-                        try self.codegen.emit.leaRegRipRel(target_reg, @intCast(rel - lea_size));
-                    }
-                },
                 .closure_value => |cv| {
                     // Load the closure value from stack
                     try self.codegen.emitLoadStack(.w64, target_reg, cv.stack_offset);
@@ -12164,25 +12029,6 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     self.codegen.freeGeneral(temp);
                     break :blk slot;
                 },
-                .lambda_code => |lc| blk: {
-                    // Store the code address to a stack slot via ADR/LEA
-                    const slot = self.codegen.allocStackSlot(8);
-                    const temp = try self.allocTempGeneral();
-                    const current = self.codegen.currentOffset();
-                    const rel: i64 = @as(i64, @intCast(lc.code_offset)) - @as(i64, @intCast(current));
-
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.adr(temp, @intCast(rel));
-                        try self.codegen.emit.strRegMemSoff(.w64, temp, .FP, slot);
-                    } else {
-                        // Displacement is relative to end of LEA instruction (7 bytes)
-                        const lea_size: i64 = 7;
-                        try self.codegen.emit.leaRegRipRel(temp, @intCast(rel - lea_size));
-                        try self.codegen.emit.movMemReg(.w64, .RBP, slot, temp);
-                    }
-                    self.codegen.freeGeneral(temp);
-                    break :blk slot;
-                },
                 else => {
                     unreachable;
                 },
@@ -12234,8 +12080,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     try self.codegen.emitLoadStack(.w64, reg, cv.stack_offset);
                     return reg;
                 },
-                .float_reg, .immediate_f64, .lambda_code => {
-                    // Convert float to int or lambda_code to register - this shouldn't happen in normal code
+                .float_reg, .immediate_f64 => {
                     return Error.InvalidLocalLocation;
                 },
             }
@@ -12283,7 +12128,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     const f_val: f64 = @floatFromInt(val);
                     return self.ensureInFloatReg(.{ .immediate_f64 = f_val });
                 },
-                .general_reg, .immediate_i128, .stack_i128, .stack_str, .list_stack, .lambda_code, .closure_value => {
+                .general_reg, .immediate_i128, .stack_i128, .stack_str, .list_stack, .closure_value => {
                     return Error.InvalidLocalLocation;
                 },
             }
@@ -13905,15 +13750,6 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         try self.codegen.emitLoadImm(.RDX, high);
                     }
                 },
-                .lambda_code => |lc| {
-                    // Return lambda code location: code_offset in X0/RAX, ret_layout in X1/RDX
-                    try self.codegen.emitLoadImm(ret_reg, @bitCast(@as(i64, @intCast(lc.code_offset))));
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emitLoadImm(.X1, @intFromEnum(lc.ret_layout));
-                    } else {
-                        try self.codegen.emitLoadImm(.RDX, @intFromEnum(lc.ret_layout));
-                    }
-                },
                 .closure_value => {
                     // Can't return a closure_value from a compiled procedure - the
                     // closure's capture data lives on this procedure's stack frame
@@ -13950,28 +13786,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             var arg_infos: [16]ArgInfo = undefined;
             for (args, 0..) |arg_id, i| {
                 if (i >= 16) break;
-                var arg_loc = try self.generateExpr(arg_id);
-                // When a closure_value is passed as an argument to a higher-order function,
-                // the callee will call it through a function pointer (BLR/CALL reg).
-                // We need to compile the lambda as a proc and pass the code address,
-                // not the raw closure data (tag bytes, captures, etc).
-                if (arg_loc == .closure_value) {
-                    const cv = arg_loc.closure_value;
-                    const lambda_expr = self.store.getExpr(cv.lambda);
-                    const lambda = switch (lambda_expr) {
-                        .lambda => |l| l,
-                        .closure => |c| blk: {
-                            const inner = self.store.getExpr(c.lambda);
-                            break :blk inner.lambda;
-                        },
-                        else => unreachable,
-                    };
-                    const cv_code_offset = try self.compileLambdaAsProc(cv.lambda, lambda, null);
-                    arg_loc = .{ .lambda_code = .{
-                        .code_offset = cv_code_offset,
-                        .ret_layout = lambda.ret_layout,
-                    } };
-                }
+                const arg_loc = try self.generateExpr(arg_id);
                 const arg_layout = self.getExprLayout(arg_id);
                 const num_regs = self.calcArgRegCount(arg_loc, arg_layout);
                 arg_infos[i] = .{ .loc = arg_loc, .layout_idx = arg_layout, .num_regs = num_regs };
@@ -14182,23 +13997,6 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             .immediate_i64 => |val| {
                                 try self.codegen.emitLoadImm(arg_reg, @bitCast(val));
                             },
-                            .lambda_code => |lc| {
-                                // Compute the absolute runtime address of the lambda proc
-                                // using PC-relative addressing, so the callee can use
-                                // BLR/CALL to invoke it as a function pointer.
-                                const current = self.codegen.currentOffset();
-                                const rel: i64 = @as(i64, @intCast(lc.code_offset)) - @as(i64, @intCast(current));
-
-
-                                if (comptime target.toCpuArch() == .aarch64) {
-                                    try self.codegen.emit.adr(arg_reg, @intCast(rel));
-                                } else {
-                                    // x86_64: LEA reg, [RIP + disp32]
-                                    // The displacement is relative to the END of the LEA instruction (7 bytes)
-                                    const lea_size: i64 = 7;
-                                    try self.codegen.emit.leaRegRipRel(arg_reg, @intCast(rel - lea_size));
-                                }
-                            },
                             .closure_value => |cv| {
                                 try self.codegen.emitLoadStack(.w64, arg_reg, cv.stack_offset);
                             },
@@ -14333,361 +14131,6 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             // Spill scalar return value from the return register (X0/RAX) to the stack.
             // The return register is caller-saved and will be clobbered by any subsequent
             // code generation (e.g., setting up arguments for the next function call).
-            const ret_reg = self.getReturnRegister();
-            const stack_offset = self.codegen.allocStackSlot(8);
-            try self.codegen.emitStoreStack(.w64, stack_offset, ret_reg);
-            return .{ .stack = .{ .offset = stack_offset } };
-        }
-
-        /// Generate an indirect call through a function pointer value.
-        /// The fn_ptr_loc contains the absolute runtime address of the target function.
-        /// This is used when a lambda is passed as a parameter to a higher-order function.
-        fn generateIndirectCall(self: *Self, fn_ptr_loc: ValueLocation, args_span: anytype, ret_layout: layout.Idx) Error!ValueLocation {
-            const args = self.store.getExprSpan(args_span);
-
-            // Save the function pointer to a callee-saved temp before arg setup,
-            // since arg register loading might clobber it.
-            const fn_ptr_stack = self.codegen.allocStackSlot(8);
-            switch (fn_ptr_loc) {
-                .general_reg => |reg| {
-                    try self.codegen.emitStoreStack(.w64, fn_ptr_stack, reg);
-                },
-                .stack => |s| {
-                    const temp = try self.allocTempGeneral();
-                    try self.codegen.emitLoadStack(.w64, temp, s.offset);
-                    try self.codegen.emitStoreStack(.w64, fn_ptr_stack, temp);
-                    self.codegen.freeGeneral(temp);
-                },
-                .immediate_i64 => |val| {
-                    const temp = try self.allocTempGeneral();
-                    try self.codegen.emitLoadImm(temp, @bitCast(val));
-                    try self.codegen.emitStoreStack(.w64, fn_ptr_stack, temp);
-                    self.codegen.freeGeneral(temp);
-                },
-                else => unreachable,
-            }
-
-            // Generate all argument expressions
-            const ArgInfo = struct {
-                loc: ValueLocation,
-                layout_idx: ?layout.Idx,
-                num_regs: u8,
-            };
-            var arg_infos: [16]ArgInfo = undefined;
-            for (args, 0..) |arg_id, i| {
-                if (i >= 16) break;
-                var arg_loc = try self.generateExpr(arg_id);
-                // Convert closure_value to lambda_code for higher-order function args
-                if (arg_loc == .closure_value) {
-                    const cv = arg_loc.closure_value;
-                    const lambda_expr = self.store.getExpr(cv.lambda);
-                    const lambda = switch (lambda_expr) {
-                        .lambda => |l| l,
-                        .closure => |c| blk: {
-                            const inner = self.store.getExpr(c.lambda);
-                            break :blk inner.lambda;
-                        },
-                        else => unreachable,
-                    };
-                    const cv_code_offset = try self.compileLambdaAsProc(cv.lambda, lambda, null);
-                    arg_loc = .{ .lambda_code = .{
-                        .code_offset = cv_code_offset,
-                        .ret_layout = lambda.ret_layout,
-                    } };
-                }
-                const arg_layout = self.getExprLayout(arg_id);
-                const num_regs = self.calcArgRegCount(arg_loc, arg_layout);
-                arg_infos[i] = .{ .loc = arg_loc, .layout_idx = arg_layout, .num_regs = num_regs };
-            }
-
-            // Check if return type needs return-by-pointer (same as generateCallToLambda)
-            const needs_ret_ptr = self.needsInternalReturnByPointer(ret_layout);
-            var ret_buffer_offset: i32 = 0;
-            if (needs_ret_ptr) {
-                const ls = self.layout_store orelse unreachable;
-                const ret_layout_val = ls.getLayout(ret_layout);
-                const ret_size = ls.layoutSizeAlign(ret_layout_val).size;
-                ret_buffer_offset = self.codegen.allocStackSlot(ret_size);
-            }
-
-            // Pre-compute pass_by_ptr (same algorithm as generateCallToLambda)
-            // to ensure caller and callee agree on the calling convention.
-            var pass_by_ptr: [16]bool = .{false} ** 16;
-            var stack_spill_size: i32 = 0;
-            {
-                var reg_count: u8 = if (needs_ret_ptr) 1 else 0;
-                for (0..args.len) |i| {
-                    if (i >= 16) break;
-                    const nr = arg_infos[i].num_regs;
-                    if (reg_count + nr <= max_arg_regs) {
-                        reg_count += nr;
-                    } else if (nr > 1) {
-                        pass_by_ptr[i] = true;
-                        if (reg_count + 1 <= max_arg_regs) {
-                            reg_count += 1;
-                        } else {
-                            stack_spill_size += 8;
-                            reg_count = max_arg_regs;
-                        }
-                    } else {
-                        stack_spill_size += 8;
-                        reg_count = max_arg_regs;
-                    }
-                }
-                while (reg_count + 1 > max_arg_regs) {
-                    var found = false;
-                    var best_idx: usize = 0;
-                    var best_regs: u8 = 0;
-                    for (0..args.len) |i| {
-                        if (i >= 16) break;
-                        if (!pass_by_ptr[i] and arg_infos[i].num_regs > 1 and arg_infos[i].num_regs > best_regs) {
-                            best_idx = i;
-                            best_regs = arg_infos[i].num_regs;
-                            found = true;
-                        }
-                    }
-                    if (!found) break;
-                    pass_by_ptr[best_idx] = true;
-                    reg_count -= (best_regs - 1);
-                }
-                if (reg_count + 1 > max_arg_regs) {
-                    stack_spill_size += 8;
-                }
-            }
-
-            if (stack_spill_size > 0) {
-                if (comptime target.toCpuArch() == .x86_64) {
-                    try self.codegen.emit.subRegImm32(.w64, .RSP, stack_spill_size);
-                } else {
-                    try self.codegen.emit.subRegRegImm12(.w64, .ZRSP, .ZRSP, @intCast(stack_spill_size));
-                }
-            }
-
-            // Load arguments into registers (same logic as generateCallToLambda)
-            var reg_idx: u8 = 0;
-            var stack_arg_offset: i32 = 0;
-
-            // If return-by-pointer, load the hidden return buffer pointer as arg 0
-            if (needs_ret_ptr) {
-                const arg_reg = self.getArgumentRegister(0);
-                if (comptime target.toCpuArch() == .aarch64) {
-                    if (ret_buffer_offset >= 0 and ret_buffer_offset <= 4095) {
-                        try self.codegen.emit.addRegRegImm12(.w64, arg_reg, .FP, @intCast(ret_buffer_offset));
-                    } else {
-                        try self.codegen.emitLoadImm(arg_reg, @intCast(ret_buffer_offset));
-                        try self.codegen.emit.addRegRegReg(.w64, arg_reg, .FP, arg_reg);
-                    }
-                } else {
-                    try self.codegen.emit.leaRegMem(arg_reg, .RBP, ret_buffer_offset);
-                }
-                reg_idx = 1;
-            }
-
-            for (0..args.len) |i| {
-                if (i >= 16) break;
-                const info = arg_infos[i];
-                const arg_loc = info.loc;
-
-                // Check if this argument is passed by pointer (pre-computed above)
-                if (pass_by_ptr[i]) {
-                    const arg_size: u32 = @as(u32, info.num_regs) * 8;
-                    const arg_offset = try self.ensureOnStack(arg_loc, arg_size);
-                    const arg_reg = self.getArgumentRegister(reg_idx);
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        if (arg_offset >= 0 and arg_offset <= 4095) {
-                            try self.codegen.emit.addRegRegImm12(.w64, arg_reg, .FP, @intCast(arg_offset));
-                        } else {
-                            try self.codegen.emitLoadImm(arg_reg, @intCast(arg_offset));
-                            try self.codegen.emit.addRegRegReg(.w64, arg_reg, .FP, arg_reg);
-                        }
-                    } else {
-                        try self.codegen.emit.leaRegMem(arg_reg, .RBP, arg_offset);
-                    }
-                    reg_idx += 1;
-                    continue;
-                }
-
-                if (reg_idx + info.num_regs <= max_arg_regs) {
-                    if (info.num_regs == 3) {
-                        const offset: i32 = switch (arg_loc) {
-                            .stack => |s| s.offset,
-                            .list_stack => |li| li.struct_offset,
-                            .stack_str => |off| off,
-                            else => unreachable,
-                        };
-                        const reg0 = self.getArgumentRegister(reg_idx);
-                        const reg1 = self.getArgumentRegister(reg_idx + 1);
-                        const reg2 = self.getArgumentRegister(reg_idx + 2);
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emit.ldrRegMemSoff(.w64, reg0, .FP, offset);
-                            try self.codegen.emit.ldrRegMemSoff(.w64, reg1, .FP, offset + 8);
-                            try self.codegen.emit.ldrRegMemSoff(.w64, reg2, .FP, offset + 16);
-                        } else {
-                            try self.codegen.emit.movRegMem(.w64, reg0, .RBP, offset);
-                            try self.codegen.emit.movRegMem(.w64, reg1, .RBP, offset + 8);
-                            try self.codegen.emit.movRegMem(.w64, reg2, .RBP, offset + 16);
-                        }
-                        reg_idx += 3;
-                    } else if (info.num_regs > 1) {
-                        const offset: i32 = switch (arg_loc) {
-                            .stack => |s| s.offset,
-                            .stack_i128 => |off| off,
-                            else => {
-                                const arg_reg = self.getArgumentRegister(reg_idx);
-                                try self.moveToReg(arg_loc, arg_reg);
-                                reg_idx += 1;
-                                continue;
-                            },
-                        };
-                        var ri: u8 = 0;
-                        while (ri < info.num_regs) : (ri += 1) {
-                            const r = self.getArgumentRegister(reg_idx + ri);
-                            try self.codegen.emitLoadStack(.w64, r, offset + @as(i32, ri) * 8);
-                        }
-                        reg_idx += info.num_regs;
-                    } else {
-                        const arg_reg = self.getArgumentRegister(reg_idx);
-                        switch (arg_loc) {
-                            .general_reg => |reg| {
-                                if (reg != arg_reg) try self.codegen.emit.movRegReg(.w64, arg_reg, reg);
-                            },
-                            .stack => |s| try self.codegen.emitLoadStack(.w64, arg_reg, s.offset),
-                            .immediate_i64 => |val| try self.codegen.emitLoadImm(arg_reg, @bitCast(val)),
-                            .lambda_code => |lc| {
-                                // Pass lambda address using PC-relative addressing
-                                const current = self.codegen.currentOffset();
-                                const rel: i64 = @as(i64, @intCast(lc.code_offset)) - @as(i64, @intCast(current));
-
-
-                                if (comptime target.toCpuArch() == .aarch64) {
-                                    try self.codegen.emit.adr(arg_reg, @intCast(rel));
-                                } else {
-                                    const lea_size: i64 = 7;
-                                    try self.codegen.emit.leaRegRipRel(arg_reg, @intCast(rel - lea_size));
-                                }
-                            },
-                            else => try self.moveToReg(arg_loc, arg_reg),
-                        }
-                        reg_idx += 1;
-                    }
-                } else {
-                    try self.spillArgToStack(arg_loc, stack_arg_offset, info.num_regs);
-                    stack_arg_offset += @as(i32, info.num_regs) * 8;
-                    reg_idx = max_arg_regs;
-                }
-            }
-
-            // Add roc_ops as final argument
-            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
-            if (reg_idx < max_arg_regs) {
-                const arg_reg = self.getArgumentRegister(reg_idx);
-                try self.codegen.emit.movRegReg(.w64, arg_reg, roc_ops_reg);
-            } else {
-                try self.spillArgToStack(.{ .general_reg = roc_ops_reg }, stack_arg_offset, 1);
-            }
-
-            // Load function pointer from saved stack slot and call indirectly.
-            // Use a dedicated scratch register that can never be an argument register,
-            // since the argument registers (X0-X7 / RDI,RSI,RDX,RCX,R8,R9) are
-            // already loaded with call arguments at this point.
-            if (comptime target.toCpuArch() == .aarch64) {
-                try self.codegen.emitLoadStack(.w64, .IP0, fn_ptr_stack);
-                try self.codegen.emit.blrReg(.IP0);
-            } else {
-                try self.codegen.emitLoadStack(.w64, .R10, fn_ptr_stack);
-                try self.codegen.emit.callReg(.R10);
-            }
-
-            // Clean up stack spill
-            if (stack_spill_size > 0) {
-                if (comptime target.toCpuArch() == .x86_64) {
-                    try self.codegen.emit.addRegImm32(.w64, .RSP, stack_spill_size);
-                } else {
-                    try self.codegen.emit.addRegRegImm12(.w64, .ZRSP, .ZRSP, @intCast(stack_spill_size));
-                }
-            }
-
-            // If we used return-by-pointer, the callee has written the result
-            // to our pre-allocated buffer. No register saving needed.
-            if (needs_ret_ptr) {
-                return .{ .stack = .{ .offset = ret_buffer_offset } };
-            }
-
-            // Handle return values (same logic as generateCallToLambda)
-            // Check both builtin sentinels and layout store for 16-byte scalars.
-            if (ret_layout == .i128 or ret_layout == .u128 or ret_layout == .dec or self.isScalar16Layout(ret_layout)) {
-                const stack_offset = self.codegen.allocStackSlot(16);
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emitStoreStack(.w64, stack_offset, .X0);
-                    try self.codegen.emitStoreStack(.w64, stack_offset + 8, .X1);
-                } else {
-                    try self.codegen.emitStoreStack(.w64, stack_offset, .RAX);
-                    try self.codegen.emitStoreStack(.w64, stack_offset + 8, .RDX);
-                }
-                return .{ .stack_i128 = stack_offset };
-            }
-
-            if (ret_layout == .str) {
-                const stack_offset = self.codegen.allocStackSlot(roc_str_size);
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emit.strRegMemSoff(.w64, .X0, .FP, stack_offset);
-                    try self.codegen.emit.strRegMemSoff(.w64, .X1, .FP, stack_offset + 8);
-                    try self.codegen.emit.strRegMemSoff(.w64, .X2, .FP, stack_offset + 16);
-                } else {
-                    try self.codegen.emit.movMemReg(.w64, .RBP, stack_offset, .RAX);
-                    try self.codegen.emit.movMemReg(.w64, .RBP, stack_offset + 8, .RDX);
-                    try self.codegen.emit.movMemReg(.w64, .RBP, stack_offset + 16, .RCX);
-                }
-                return .{ .stack_str = stack_offset };
-            }
-
-            const is_list_return = if (self.layout_store) |ls| blk: {
-                const layout_val = ls.getLayout(ret_layout);
-                break :blk layout_val.tag == .list or layout_val.tag == .list_of_zst;
-            } else false;
-
-            if (is_list_return) {
-                const stack_offset = self.codegen.allocStackSlot(roc_str_size);
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emit.strRegMemSoff(.w64, .X0, .FP, stack_offset);
-                    try self.codegen.emit.strRegMemSoff(.w64, .X1, .FP, stack_offset + 8);
-                    try self.codegen.emit.strRegMemSoff(.w64, .X2, .FP, stack_offset + 16);
-                } else {
-                    try self.codegen.emit.movMemReg(.w64, .RBP, stack_offset, .RAX);
-                    try self.codegen.emit.movMemReg(.w64, .RBP, stack_offset + 8, .RDX);
-                    try self.codegen.emit.movMemReg(.w64, .RBP, stack_offset + 16, .RCX);
-                }
-                return .{ .list_stack = .{
-                    .struct_offset = stack_offset,
-                    .data_offset = 0,
-                    .num_elements = 0,
-                } };
-            }
-
-            if (self.layout_store) |ls| {
-                const layout_val = ls.getLayout(ret_layout);
-                if (layout_val.tag == .record or layout_val.tag == .tag_union or layout_val.tag == .tuple) {
-                    const size_align = ls.layoutSizeAlign(layout_val);
-                    if (size_align.size > 8) {
-                        // Large struct return - uses X0-X7 + X9-X12 for overflow (aarch64)
-                        const stack_offset = self.codegen.allocStackSlot(size_align.size);
-                        const num_regs = (size_align.size + 7) / 8;
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            const regs = [_]@TypeOf(GeneralReg.X0){ .X0, .X1, .X2, .X3, .X4, .X5, .X6, .X7, .XR, .X9, .X10, .X11, .X12, .X13, .X14, .X15 };
-                            for (0..@min(num_regs, regs.len)) |ri| {
-                                try self.codegen.emit.strRegMemSoff(.w64, regs[ri], .FP, stack_offset + @as(i32, @intCast(ri * 8)));
-                            }
-                        } else {
-                            const regs = [_]@TypeOf(GeneralReg.RAX){ .RAX, .RDX, .RCX, .R8, .R9, .R10, .R11, .RDI, .RSI };
-                            for (0..@min(num_regs, regs.len)) |ri| {
-                                try self.codegen.emit.movMemReg(.w64, .RBP, stack_offset + @as(i32, @intCast(ri * 8)), regs[ri]);
-                            }
-                        }
-                        return .{ .stack = .{ .offset = stack_offset } };
-                    }
-                }
-            }
-
             const ret_reg = self.getReturnRegister();
             const stack_offset = self.codegen.allocStackSlot(8);
             try self.codegen.emitStoreStack(.w64, stack_offset, ret_reg);
@@ -16093,24 +15536,6 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 var actual_ret_layout = ret_layout;
 
                 const final_result = switch (result_loc) {
-                    .lambda_code => |lc| blk: {
-                        actual_ret_layout = lc.ret_layout;
-                        // Pass roc_ops to the lambda in the register it expects.
-                        // The lambda (compileLambdaAsProc) receives roc_ops after all
-                        // regular params — use precomputeParamLayout to find that index.
-                        const lambda_params = self.getLambdaParams(body_expr);
-                        if (lambda_params) |params| {
-                            const param_layout = self.precomputeParamLayout(params);
-                            const roc_ops_arg_reg = self.getArgumentRegister(param_layout.roc_ops_reg_idx);
-                            try self.codegen.emit.movRegReg(.w64, roc_ops_arg_reg, .X20);
-                        }
-
-                        const current_offset = self.codegen.currentOffset();
-                        const rel_offset: i28 = @intCast(@as(i32, @intCast(lc.code_offset)) - @as(i32, @intCast(current_offset)));
-                        try self.codegen.emit.bl(rel_offset);
-
-                        break :blk ValueLocation{ .general_reg = .X0 };
-                    },
                     .closure_value => |cv| blk: {
                         // Dispatch the closure call with no arguments
                         // The closure's return layout is the actual return type, not the closure layout
@@ -16231,21 +15656,6 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 var actual_ret_layout = ret_layout;
 
                 const final_result = switch (result_loc) {
-                    .lambda_code => |lc| blk: {
-                        actual_ret_layout = lc.ret_layout;
-                        // Pass roc_ops to the lambda in the register it expects.
-                        const lambda_params = self.getLambdaParams(body_expr);
-                        if (lambda_params) |params| {
-                            const param_layout = self.precomputeParamLayout(params);
-                            const roc_ops_arg_reg = self.getArgumentRegister(param_layout.roc_ops_reg_idx);
-                            try self.codegen.emit.movRegReg(.w64, roc_ops_arg_reg, .R12);
-                        }
-
-                        const rel_offset = @as(i32, @intCast(lc.code_offset)) - @as(i32, @intCast(self.codegen.currentOffset() + 5));
-                        try self.codegen.emit.callRel32(rel_offset);
-
-                        break :blk ValueLocation{ .general_reg = .RAX };
-                    },
                     .closure_value => |cv| blk: {
                         // Dispatch the closure call with no arguments
                         // The closure's return layout is the actual return type, not the closure layout
