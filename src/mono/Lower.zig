@@ -5460,6 +5460,14 @@ fn lowerInspectNominal(
         return try self.lowerInspectBool(value_expr, region);
     }
 
+    // Check for custom to_inspect method on this nominal type.
+    // This must come before the scalar shortcut below, because opaque types
+    // whose backing type is a scalar (e.g., Color := [Red, Green, Blue])
+    // would otherwise be rendered as their raw discriminant integer.
+    if (try self.lowerInspectWithMethod(value_expr, nom, module_env, region)) |result| {
+        return result;
+    }
+
     // Check for numeric nominal types that should be rendered as their value.
     // These are opaque but have well-known numeric representations.
     const layout_store = self.layout_store orelse unreachable;
@@ -5482,12 +5490,6 @@ fn lowerInspectNominal(
             .str => return try self.store.addExpr(.{ .str_escape_and_quote = value_expr }, region),
             .opaque_ptr => {},
         }
-    }
-
-    // Check for custom to_inspect method on this nominal type.
-    // This uses the same method resolution as dot-call dispatch.
-    if (try self.lowerInspectWithMethod(value_expr, nom, module_env, region)) |result| {
-        return result;
     }
 
     if (nom.is_opaque) {
