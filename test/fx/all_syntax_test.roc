@@ -99,7 +99,7 @@ effect_demo! : Str => {}
 effect_demo! = |msg|
 	Stdout.line!(msg)
 
-# TODO issue #8646
+# TODO issue #9170
 # question_postfix : List(Str) -> Try(I64, _)
 # question_postfix = |strings| {
 #     # `?` to immediately return the error if there is one
