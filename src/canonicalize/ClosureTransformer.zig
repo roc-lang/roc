@@ -166,11 +166,6 @@ pub const UnspecializedClosure = struct {
     /// The expression that references the static dispatch method.
     /// Used to locate this in the IR for resolution.
     member_expr: Expr.Idx,
-
-    /// Region number for ordering during resolution.
-    /// When resolving nested static-dispatch-dependent closures, we process
-    /// innermost first (higher region numbers first).
-    region: u8,
 };
 
 /// Internal validation error for lambda set resolution failures.
@@ -715,11 +710,6 @@ pattern_lambda_return_sets: std.AutoHashMap(CIR.Pattern.Idx, LambdaSet),
 /// Set of top-level pattern indices (these don't need to be captured since they're always in scope)
 top_level_patterns: std.AutoHashMap(CIR.Pattern.Idx, void),
 
-/// Current region number for ordering unspecialized closures.
-/// Incremented when entering nested lambda scopes.
-/// Higher region = more deeply nested = should be resolved first.
-current_region: u8,
-
 /// Tracks unspecialized entries by the type variable they depend on.
 /// This enables efficient lookup during monomorphization when a type variable
 /// becomes concrete - we can quickly find all entries that need resolution.
@@ -745,25 +735,9 @@ pub fn initWithInference(allocator: std.mem.Allocator, module_env: *ModuleEnv, i
         .lambda_return_sets = std.AutoHashMap(Expr.Idx, LambdaSet).init(allocator),
         .pattern_lambda_return_sets = std.AutoHashMap(CIR.Pattern.Idx, LambdaSet).init(allocator),
         .top_level_patterns = std.AutoHashMap(CIR.Pattern.Idx, void).init(allocator),
-        .current_region = 0,
         .unspec_by_type_var = UnspecializedByTypeVar.init(allocator),
         .inference = inference,
     };
-}
-
-/// Enter a new nested scope (e.g., lambda body), incrementing the region counter.
-/// Returns the previous region value for restoration.
-pub fn enterRegion(self: *Self) u8 {
-    const prev = self.current_region;
-    if (self.current_region < 255) {
-        self.current_region += 1;
-    }
-    return prev;
-}
-
-/// Exit a nested scope, restoring the previous region value.
-pub fn exitRegion(self: *Self, prev_region: u8) void {
-    self.current_region = prev_region;
 }
 
 /// Info extracted from a static dispatch reference expression.
@@ -808,7 +782,6 @@ pub fn createUnspecializedClosure(
         .type_var = type_var,
         .member = member_info.method_name,
         .member_expr = expr_idx,
-        .region = self.current_region,
     };
 }
 
@@ -1374,7 +1347,7 @@ pub fn createLiftedFunctionPatterns(
 
 /// Generate a dispatch match expression for a closure call.
 ///
-/// Phase 5: Generates calls to lifted functions instead of inlining bodies.
+/// Phase 5: Generates calls to lifted functions instead of expanding bodies at call sites.
 /// Transforms a call like `f(10)` where `f` is a closure into:
 /// ```roc
 /// match f {
@@ -1494,7 +1467,7 @@ fn generateDispatchMatch(
 
 /// Generate a dispatch match expression for a call to a variable with multiple possible closures.
 ///
-/// Phase 5: Generates calls to lifted functions instead of inlining bodies.
+/// Phase 5: Generates calls to lifted functions instead of expanding bodies at call sites.
 /// Transforms a call like `f(10)` where `f` could be one of several closures into:
 /// ```roc
 /// match f {
@@ -2647,39 +2620,6 @@ test "ClosureTransformer: generateClosureTagName without hint" {
     try testing.expectEqualStrings("#1", tag_str);
 }
 
-test "ClosureTransformer: region tracking" {
-    const allocator = testing.allocator;
-
-    const module_env = try allocator.create(ModuleEnv);
-    module_env.* = try ModuleEnv.init(allocator, "test");
-    defer {
-        module_env.deinit();
-        allocator.destroy(module_env);
-    }
-
-    var transformer = Self.init(allocator, module_env);
-    defer transformer.deinit();
-
-    // Initial region should be 0
-    try testing.expectEqual(@as(u8, 0), transformer.current_region);
-
-    // Enter nested scopes
-    const region0 = transformer.enterRegion();
-    try testing.expectEqual(@as(u8, 0), region0);
-    try testing.expectEqual(@as(u8, 1), transformer.current_region);
-
-    const region1 = transformer.enterRegion();
-    try testing.expectEqual(@as(u8, 1), region1);
-    try testing.expectEqual(@as(u8, 2), transformer.current_region);
-
-    // Exit scopes
-    transformer.exitRegion(region1);
-    try testing.expectEqual(@as(u8, 1), transformer.current_region);
-
-    transformer.exitRegion(region0);
-    try testing.expectEqual(@as(u8, 0), transformer.current_region);
-}
-
 test "LambdaSet: unspecialized closures" {
     const allocator = testing.allocator;
 
@@ -2698,7 +2638,6 @@ test "LambdaSet: unspecialized closures" {
             .idx = 42,
         },
         .member_expr = @enumFromInt(1),
-        .region = 1,
     };
     try lambda_set.addUnspecialized(allocator, unspec);
 
@@ -2725,7 +2664,6 @@ test "LambdaSet: merge with unspecialized" {
             .idx = 10,
         },
         .member_expr = @enumFromInt(1),
-        .region = 0,
     };
     try set1.addUnspecialized(allocator, unspec1);
 
@@ -2737,7 +2675,6 @@ test "LambdaSet: merge with unspecialized" {
             .idx = 20,
         },
         .member_expr = @enumFromInt(2),
-        .region = 1,
     };
     try set2.addUnspecialized(allocator, unspec2);
 
@@ -2766,7 +2703,6 @@ test "LambdaSet: isEmpty" {
             .idx = 1,
         },
         .member_expr = @enumFromInt(1),
-        .region = 0,
     };
     try lambda_set.addUnspecialized(allocator, unspec);
 
@@ -2983,7 +2919,6 @@ test "ClosureTransformer: validateAllResolved detects unresolved" {
             .idx = 42,
         },
         .member_expr = @enumFromInt(1),
-        .region = 0,
     };
     try lambda_set.addUnspecialized(allocator, unspec);
 

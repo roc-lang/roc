@@ -77,7 +77,7 @@ NO CHANGE
 		(e-dec-small (numerator "200") (denominator-power-of-ten "1") (value "20"))
 		(e-num (value "21000"))
 		(e-num (value "22000000"))
-		(e-dec-small (numerator "0") (denominator-power-of-ten "1") (value "0.0"))
+		(e-dec-small (numerator "0") (denominator-power-of-ten "1") (value "0"))
 		(e-dec-small (numerator "-1") (denominator-power-of-ten "1") (value "-0.1"))
 		(e-dec-small (numerator "20000") (denominator-power-of-ten "0") (value "20000"))
 		(e-dec-small (numerator "300") (denominator-power-of-ten "0") (value "300"))

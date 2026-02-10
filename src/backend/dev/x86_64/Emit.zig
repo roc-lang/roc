@@ -672,7 +672,63 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(imm)));
         }
 
+        /// MOVZX r32, BYTE [base + disp32] (zero-extend byte to 64 bits)
+        /// 32-bit result auto-zero-extends to 64 bits on x86_64; no REX.W needed.
+        pub fn movzxBRegMem(self: *Self, dst: GeneralReg, base: GeneralReg, disp: i32) !void {
+            // REX prefix only for extended registers (R8-R15), never REX.W
+            const r: u1 = dst.rexR();
+            const b: u1 = base.rexB();
+            if (r == 1 or b == 1) {
+                try self.buf.append(self.allocator, rex(0, r, 0, b));
+            }
+            try self.buf.append(self.allocator, 0x0F);
+            try self.buf.append(self.allocator, 0xB6); // MOVZX r32, r/m8
+
+            const base_enc = base.enc();
+            if (base_enc == 4) {
+                // RSP/R12 - needs SIB byte
+                try self.buf.append(self.allocator, modRM(0b10, dst.enc(), 0b100));
+                try self.buf.append(self.allocator, 0x24);
+            } else {
+                try self.buf.append(self.allocator, modRM(0b10, dst.enc(), base_enc));
+            }
+            try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(disp)));
+        }
+
+        /// MOVZX r32, WORD [base + disp32] (zero-extend word to 64 bits)
+        /// 32-bit result auto-zero-extends to 64 bits on x86_64; no REX.W needed.
+        pub fn movzxWRegMem(self: *Self, dst: GeneralReg, base: GeneralReg, disp: i32) !void {
+            // REX prefix only for extended registers (R8-R15), never REX.W
+            const r: u1 = dst.rexR();
+            const b: u1 = base.rexB();
+            if (r == 1 or b == 1) {
+                try self.buf.append(self.allocator, rex(0, r, 0, b));
+            }
+            try self.buf.append(self.allocator, 0x0F);
+            try self.buf.append(self.allocator, 0xB7); // MOVZX r32, r/m16
+
+            const base_enc = base.enc();
+            if (base_enc == 4) {
+                // RSP/R12 - needs SIB byte
+                try self.buf.append(self.allocator, modRM(0b10, dst.enc(), 0b100));
+                try self.buf.append(self.allocator, 0x24);
+            } else {
+                try self.buf.append(self.allocator, modRM(0b10, dst.enc(), base_enc));
+            }
+            try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(disp)));
+        }
+
         /// LEA reg, [base + disp32] (load effective address)
+        /// LEA reg, [RIP + disp32] — compute PC-relative address
+        /// disp is relative to the end of this instruction (7 bytes total).
+        pub fn leaRegRipRel(self: *Self, dst: GeneralReg, disp: i32) !void {
+            try self.emitRex(.w64, dst, .RBP); // REX.W prefix (RBP enc = 5, doesn't matter for mod=00 rm=101)
+            try self.buf.append(self.allocator, 0x8D); // LEA
+            // ModRM: mod=00, reg=dst, rm=101 (RIP-relative)
+            try self.buf.append(self.allocator, modRM(0b00, dst.enc(), 0b101));
+            try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(disp)));
+        }
+
         pub fn leaRegMem(self: *Self, dst: GeneralReg, base: GeneralReg, disp: i32) !void {
             try self.emitRex(.w64, dst, base);
             try self.buf.append(self.allocator, 0x8D); // LEA
@@ -1717,4 +1773,46 @@ test "CC.returnI128ByPointer differs between Windows and System V" {
     // System V returns i128 in RAX+RDX
     try std.testing.expect(!LinuxEmit.CC.returnI128ByPointer());
     try std.testing.expect(!MacEmit.CC.returnI128ByPointer());
+}
+
+test "movzxBRegMem - zero-extend byte from [rbp-8]" {
+    var emit = LinuxEmit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    // movzx eax, BYTE [rbp-8]
+    // No REX prefix (no extended regs, no .W)
+    // 0F B6 85 F8FFFFFF
+    try emit.movzxBRegMem(.RAX, .RBP, -8);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x0F, 0xB6, 0x85, 0xF8, 0xFF, 0xFF, 0xFF }, emit.buf.items);
+}
+
+test "movzxWRegMem - zero-extend word from [rbp-16]" {
+    var emit = LinuxEmit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    // movzx eax, WORD [rbp-16]
+    // 0F B7 85 F0FFFFFF
+    try emit.movzxWRegMem(.RAX, .RBP, -16);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x0F, 0xB7, 0x85, 0xF0, 0xFF, 0xFF, 0xFF }, emit.buf.items);
+}
+
+test "movzxBRegMem - [rsp+offset] requires SIB" {
+    var emit = LinuxEmit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    // movzx ecx, BYTE [rsp+32]
+    // No REX (RCX and RSP are not extended)
+    // 0F B6 8C 24 20000000
+    try emit.movzxBRegMem(.RCX, .RSP, 32);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x0F, 0xB6, 0x8C, 0x24, 0x20, 0x00, 0x00, 0x00 }, emit.buf.items);
+}
+
+test "movzxBRegMem - extended register R8 from [rbp-4]" {
+    var emit = LinuxEmit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    // movzx r8d, BYTE [rbp-4]
+    // REX.R (44) + 0F B6 85 FCFFFFFF
+    try emit.movzxBRegMem(.R8, .RBP, -4);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x44, 0x0F, 0xB6, 0x85, 0xFC, 0xFF, 0xFF, 0xFF }, emit.buf.items);
 }

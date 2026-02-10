@@ -12,6 +12,7 @@ const std = @import("std");
 const base = @import("base");
 const can = @import("can");
 const builtins = @import("builtins");
+const i128h = builtins.compiler_rt_128;
 
 const helpers = @import("helpers.zig");
 const eval_mod = @import("../mod.zig");
@@ -214,7 +215,7 @@ fn evalToInt(allocator: std.mem.Allocator, source: []const u8) !i128 {
         // Unsuffixed numeric literals default to Dec
         const dec_value = result.asDec(ops);
         const RocDec = builtins.dec.RocDec;
-        break :blk @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
+        break :blk i128h.divTrunc_i128(dec_value.num, RocDec.one_point_zero_i128);
     } else return error.NotAnInteger;
 
     // Backend comparison
@@ -770,7 +771,7 @@ fn evalTupleFirst(allocator: std.mem.Allocator, source: []const u8) !i128 {
             const tmp_sv = eval_mod.StackValue{ .layout = first_elem.layout, .ptr = first_elem.ptr, .is_initialized = true, .rt_var = fresh_var };
             const dec_value = tmp_sv.asDec(ops);
             const RocDec = builtins.dec.RocDec;
-            return @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
+            return i128h.divTrunc_i128(dec_value.num, RocDec.one_point_zero_i128);
         }
     }
     return error.NotATuple;

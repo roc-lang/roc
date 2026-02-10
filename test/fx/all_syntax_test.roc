@@ -241,7 +241,22 @@ number_literals = {
 }
 
 # Opaque type
-Username :: Str
+# Useful if you want to hide fields e.g. so users of the type can not access some implementation detail you did not want to expose. 
+Secret :: {
+	key : Str
+}.{
+	new : Str -> Secret
+	new = |k| { key: k }
+
+	unlock : Secret, Str -> Str
+	unlock = |secret, password| {
+		if password == "open sesame" {
+			"The secret key is: ${secret.key}"
+		} else {
+			"Wrong password!"
+		}
+	}
+}
 
 # Define a nominal type with a custom is_eq method
 Animal := [Dog(Str), Cat(Str)].{
@@ -354,9 +369,10 @@ main! = || {
 
 	print!(number_literals)
 
-	# TODO: not implemented yet.
-	# bob = @Username("Bob")
-	# Stdout.line!("Username: ${bob}")
+	secret = Secret.new("my_secret_key")
+	# This print will not expose internal data.
+	print!(secret)
+	print!(secret.unlock("open sesame"))
 
 	dog : Animal
 	dog = Dog("Fido")

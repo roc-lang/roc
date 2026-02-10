@@ -400,9 +400,6 @@ pub const MonoExpr = union(enum) {
         /// Whether this closure captures itself (for recursive closures)
         self_recursive: SelfRecursive,
         /// Whether this closure is bound to a variable (vs. used directly as an argument).
-        /// Used by the inlining heuristic:
-        /// - true: Closure may have multiple call sites, emit as separate function
-        /// - false: Closure is used directly (e.g., passed to map), safe to inline
         is_bound_to_variable: bool,
     },
 
@@ -583,6 +580,18 @@ pub const MonoExpr = union(enum) {
         branches: MonoExprSpan,
     },
 
+    /// Extract the payload from a tag union value.
+    /// Used inside discriminant_switch branches to access the payload of the active variant.
+    /// The payload is always at offset 0 in the tag union memory.
+    tag_payload_access: struct {
+        /// Expression that produces the tag union value
+        value: MonoExprId,
+        /// Layout of the tag union
+        union_layout: layout.Idx,
+        /// Layout of the payload to extract
+        payload_layout: layout.Idx,
+    },
+
     /// For loop over a list
     /// Iterates over each element in the list, binding it to the pattern and executing the body
     /// Returns empty record (unit) after all iterations
@@ -635,6 +644,18 @@ pub const MonoExpr = union(enum) {
         value: MonoExprId,
         /// Layout of the value (to determine deallocation strategy)
         layout_idx: layout.Idx,
+    },
+
+    /// Call a hosted function by index into RocOps.hosted_fns
+    /// Used for platform-provided effects (I/O, etc.)
+    /// The host provides these functions at runtime via the RocOps struct.
+    hosted_call: struct {
+        /// Index into the RocOps.hosted_fns.fns array
+        index: u32,
+        /// Arguments to pass (marshaled to args buffer)
+        args: MonoExprSpan,
+        /// Layout of the return type
+        ret_layout: layout.Idx,
     },
 
     /// Binary operation types
@@ -704,6 +725,7 @@ pub const MonoExpr = union(enum) {
         list_drop_last,
         list_take_first,
         list_take_last,
+        list_sublist,
         list_contains,
         list_reverse,
         list_reserve,

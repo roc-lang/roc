@@ -10,9 +10,14 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const builtins = @import("builtins");
 const bindings = @import("bindings.zig");
 
+const i128h = builtins.compiler_rt_128;
+
 const Allocator = std.mem.Allocator;
+
+
 
 // Platform-specific i128 ABI Handling
 //

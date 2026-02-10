@@ -75,15 +75,39 @@ const Instantiator = types.instantiate.Instantiator;
 
 const Self = @This();
 
-/// Key for looking up specializations
+/// Key for looking up specializations.
+/// Contains the original ident, the concrete type var (for structural equality),
+/// and a precomputed structural type hash (for fast HashMap bucketing).
 pub const SpecializationKey = struct {
     original_ident: base.Ident.Idx,
+    concrete_type: types.Var,
     type_hash: u64,
+};
 
-    pub fn eql(a: SpecializationKey, b: SpecializationKey) bool {
-        return a.original_ident == b.original_ident and a.type_hash == b.type_hash;
+/// Custom HashMap context for SpecializationKey.
+/// Uses precomputed type_hash for hashing and structuralTypeEqual for equality.
+pub const SpecKeyContext = struct {
+    types_store: *types.Store,
+    allocator: std.mem.Allocator,
+
+    pub fn hash(_: @This(), key: SpecializationKey) u64 {
+        var h = std.hash.Wyhash.init(0);
+        h.update(std.mem.asBytes(&key.original_ident));
+        h.update(std.mem.asBytes(&key.type_hash));
+        return h.final();
+    }
+
+    pub fn eql(ctx: @This(), a: SpecializationKey, b: SpecializationKey) bool {
+        if (a.original_ident != b.original_ident) return false;
+        if (a.type_hash != b.type_hash) return false;
+        return structuralTypeEqual(ctx.types_store, ctx.allocator, a.concrete_type, b.concrete_type);
     }
 };
+
+/// HashMap types using custom context
+const SpecNameMap = std.HashMap(SpecializationKey, base.Ident.Idx, SpecKeyContext, 80);
+const SpecProcMap = std.HashMap(SpecializationKey, SpecializedProc, SpecKeyContext, 80);
+const SpecInProgressMap = std.HashMap(SpecializationKey, void, SpecKeyContext, 80);
 
 /// A function that hasn't been specialized yet (partial proc).
 /// Stores the original function definition that can be specialized to
@@ -148,12 +172,6 @@ pub const ExternalSpecializationRequest = struct {
     concrete_type: types.Var,
     /// The call site in this module (for error reporting)
     call_site: ?Expr.Idx,
-
-    pub fn eql(a: ExternalSpecializationRequest, b: ExternalSpecializationRequest) bool {
-        return a.source_module == b.source_module and
-            a.original_ident == b.original_ident;
-        // Note: concrete_type comparison would require type equality check
-    }
 };
 
 /// Result of requesting an external specialization.
@@ -169,8 +187,32 @@ pub const ExternalSpecializationResult = struct {
 pub const ExternalSpecKey = struct {
     source_module: CIR.Import.Idx,
     original_ident: base.Ident.Idx,
+    concrete_type: types.Var,
     type_hash: u64,
 };
+
+/// Custom HashMap context for ExternalSpecKey.
+pub const ExtSpecKeyContext = struct {
+    types_store: *types.Store,
+    allocator: std.mem.Allocator,
+
+    pub fn hash(_: @This(), key: ExternalSpecKey) u64 {
+        var h = std.hash.Wyhash.init(0);
+        h.update(std.mem.asBytes(&key.source_module));
+        h.update(std.mem.asBytes(&key.original_ident));
+        h.update(std.mem.asBytes(&key.type_hash));
+        return h.final();
+    }
+
+    pub fn eql(ctx: @This(), a: ExternalSpecKey, b: ExternalSpecKey) bool {
+        if (a.source_module != b.source_module) return false;
+        if (a.original_ident != b.original_ident) return false;
+        if (a.type_hash != b.type_hash) return false;
+        return structuralTypeEqual(ctx.types_store, ctx.allocator, a.concrete_type, b.concrete_type);
+    }
+};
+
+const ExtSpecMap = std.HashMap(ExternalSpecKey, base.Ident.Idx, ExtSpecKeyContext, 80);
 
 /// The allocator for intermediate allocations
 allocator: std.mem.Allocator,
@@ -187,14 +229,14 @@ partial_procs: std.AutoHashMap(base.Ident.Idx, PartialProc),
 /// Specializations that need to be made (queue processed in making phase)
 pending_specializations: std.ArrayList(PendingSpecialization),
 
-/// Completed specializations: (original, type_hash) -> specialized proc
-specialized: std.AutoHashMap(SpecializationKey, SpecializedProc),
+/// Completed specializations: (original, concrete_type) -> specialized proc
+specialized: SpecProcMap,
 
-/// Map from (original_name, concrete_type_hash) -> specialized_name (for lookup)
-specialization_names: std.AutoHashMap(SpecializationKey, base.Ident.Idx),
+/// Map from (original_name, concrete_type) -> specialized_name (for lookup)
+specialization_names: SpecNameMap,
 
 /// Specializations currently being made (to detect recursion)
-in_progress: std.AutoHashMap(SpecializationKey, void),
+in_progress: SpecInProgressMap,
 
 /// Counter for generating unique specialization names
 specialization_counter: u32,
@@ -218,9 +260,13 @@ specialization_stack: std.ArrayList(SpecializationKey),
 /// External specializations requested from other modules
 external_requests: std.ArrayList(ExternalSpecializationRequest),
 
-/// Resolved external specializations: maps (source_module, original_ident, type_hash) to specialized_ident.
+/// Fast lookup indexes for pending specialization deduplication (O(1) vs O(n) linear scan)
+pending_specialization_keys: SpecInProgressMap,
+pending_external_keys: std.HashMap(ExternalSpecKey, void, ExtSpecKeyContext, 80),
+
+/// Resolved external specializations: maps (source_module, original_ident, concrete_type) to specialized_ident.
 /// Populated by resolveExternalSpecialization, used by requestExternalSpecialization.
-resolved_external_specs: std.AutoHashMap(ExternalSpecKey, base.Ident.Idx),
+resolved_external_specs: ExtSpecMap,
 
 /// Optional closure transformer for resolving unspecialized lambda set entries.
 /// When set, the monomorphizer will resolve unspecialized closures during specialization.
@@ -239,15 +285,17 @@ pub fn init(
     module_env: *ModuleEnv,
     types_store: *types.Store,
 ) Self {
+    const spec_ctx = SpecKeyContext{ .types_store = types_store, .allocator = allocator };
+    const ext_ctx = ExtSpecKeyContext{ .types_store = types_store, .allocator = allocator };
     return .{
         .allocator = allocator,
         .module_env = module_env,
         .types_store = types_store,
         .partial_procs = std.AutoHashMap(base.Ident.Idx, PartialProc).init(allocator),
         .pending_specializations = std.ArrayList(PendingSpecialization).empty,
-        .specialized = std.AutoHashMap(SpecializationKey, SpecializedProc).init(allocator),
-        .specialization_names = std.AutoHashMap(SpecializationKey, base.Ident.Idx).init(allocator),
-        .in_progress = std.AutoHashMap(SpecializationKey, void).init(allocator),
+        .specialized = SpecProcMap.initContext(allocator, spec_ctx),
+        .specialization_names = SpecNameMap.initContext(allocator, spec_ctx),
+        .in_progress = SpecInProgressMap.initContext(allocator, spec_ctx),
         .specialization_counter = 0,
         .synthetic_arg_counter = 0,
         .phase = .finding,
@@ -255,7 +303,9 @@ pub fn init(
         .max_recursion_depth = DEFAULT_MAX_RECURSION_DEPTH,
         .specialization_stack = std.ArrayList(SpecializationKey).empty,
         .external_requests = std.ArrayList(ExternalSpecializationRequest).empty,
-        .resolved_external_specs = std.AutoHashMap(ExternalSpecKey, base.Ident.Idx).init(allocator),
+        .resolved_external_specs = ExtSpecMap.initContext(allocator, ext_ctx),
+        .pending_specialization_keys = SpecInProgressMap.initContext(allocator, spec_ctx),
+        .pending_external_keys = (std.HashMap(ExternalSpecKey, void, ExtSpecKeyContext, 80)).initContext(allocator, ext_ctx),
         .closure_transformer = null,
         .impl_lambda_sets = null,
     };
@@ -358,22 +408,6 @@ pub fn lookupStaticDispatch(
         .method_ident = qualified_method,
         .type_ident = resolved_type_ident,
         .node_idx = node_idx,
-    };
-}
-
-/// Get the concrete type name from a type variable for error messages
-pub fn getConcreteTypeName(self: *Self, type_var: types.Var) ?[]const u8 {
-    const resolved = self.types_store.resolveVar(type_var);
-    return switch (resolved.desc.content) {
-        .structure => |flat| switch (flat) {
-            .nominal_type => |nom| self.module_env.getIdent(nom.ident.ident_idx),
-            .record, .record_unbound, .empty_record => "Record",
-            .tag_union, .empty_tag_union => "Tag",
-            .tuple => "Tuple",
-            .fn_pure, .fn_effectful, .fn_unbound => "Function",
-        },
-        .alias => |alias| self.module_env.getIdent(alias.ident.ident_idx),
-        else => null,
     };
 }
 
@@ -650,7 +684,7 @@ pub fn resolveEntriesForTypeVar(
 
     // Add entries from flattened lambda sets
     for (flattened_lambda_sets.items) |lambda_set| {
-        for (lambda_set.unspecialized.items, 0..) |_, i| {
+        for (0..lambda_set.unspecialized.items.len) |i| {
             try all_entries.append(self.allocator, .{
                 .lambda_set = lambda_set,
                 .index = i,
@@ -658,19 +692,13 @@ pub fn resolveEntriesForTypeVar(
         }
     }
 
-    // Sort by region DESCENDING (innermost first - higher region numbers first)
-    std.mem.sort(ClosureTransformer.UnspecializedEntryRef, all_entries.items, {}, compareByRegionDesc);
-
     var resolved_count: usize = 0;
 
-    // Step 3: Process each entry in region order
-    for (all_entries.items) |entry_ref| {
-        // Validate the entry is still valid (index might be stale after swapRemove)
-        if (entry_ref.index >= entry_ref.lambda_set.unspecialized.items.len) {
-            continue;
-        }
+    // Step 3: Process each entry
+    for (all_entries.items, 0..) |entry, entry_i| {
+        std.debug.assert(entry.index < entry.lambda_set.unspecialized.items.len);
 
-        const unspec = entry_ref.lambda_set.unspecialized.items[entry_ref.index];
+        const unspec = entry.lambda_set.unspecialized.items[entry.index];
 
         // Look up the static dispatch implementation for the concrete type
         if (self.lookupStaticDispatch(concrete_type, unspec.member)) |impl| {
@@ -681,12 +709,18 @@ pub fn resolveEntriesForTypeVar(
             };
 
             // Add to the lambda set as a closure
-            try self.addResolvedToLambdaSet(entry_ref.lambda_set, resolved);
+            try self.addResolvedToLambdaSet(entry.lambda_set, resolved);
 
-            // Remove from unspecialized list
-            // Note: Using swapRemove changes indices, which is why we process all entries
-            // in one pass and then remove the tracking entirely
-            _ = entry_ref.lambda_set.unspecialized.swapRemove(entry_ref.index);
+            // Remove from unspecialized list. swapRemove moves the last element
+            // to entry.index, so fix up any later entry that pointed to that last element.
+            _ = entry.lambda_set.unspecialized.swapRemove(entry.index);
+            const swapped_from = entry.lambda_set.unspecialized.items.len;
+            for (all_entries.items[entry_i + 1 ..]) |*later| {
+                if (later.lambda_set == entry.lambda_set and later.index == swapped_from) {
+                    later.index = entry.index;
+                    break;
+                }
+            }
 
             resolved_count += 1;
         }
@@ -697,24 +731,6 @@ pub fn resolveEntriesForTypeVar(
     tracker.removeVar(type_var);
 
     return resolved_count;
-}
-
-/// Comparison function for sorting UnspecializedEntryRef by region descending.
-fn compareByRegionDesc(
-    _: void,
-    a: ClosureTransformer.UnspecializedEntryRef,
-    b: ClosureTransformer.UnspecializedEntryRef,
-) bool {
-    // Handle potential out-of-bounds indices gracefully
-    const a_region = if (a.index < a.lambda_set.unspecialized.items.len)
-        a.lambda_set.unspecialized.items[a.index].region
-    else
-        0;
-    const b_region = if (b.index < b.lambda_set.unspecialized.items.len)
-        b.lambda_set.unspecialized.items[b.index].region
-    else
-        0;
-    return a_region > b_region; // Descending order
 }
 
 /// Unify ambient function types when resolving an unspecialized entry.
@@ -785,28 +801,23 @@ pub fn resolveEntriesForTypeVarWithUnification(
 
     if (entry_refs.len == 0) return 0;
 
-    // Copy to slice for sorting
+    // Copy to mutable slice so swapRemove index fixups can update later entries
     const entries = try self.allocator.alloc(ClosureTransformer.UnspecializedEntryRef, entry_refs.len);
     defer self.allocator.free(entries);
     @memcpy(entries, entry_refs);
 
-    // Sort by region DESCENDING (innermost first)
-    std.mem.sort(ClosureTransformer.UnspecializedEntryRef, entries, {}, compareByRegionDesc);
-
     var resolved_count: usize = 0;
 
-    for (entries) |entry_ref| {
-        if (entry_ref.index >= entry_ref.lambda_set.unspecialized.items.len) {
-            continue;
-        }
+    for (entries, 0..) |entry, entry_i| {
+        std.debug.assert(entry.index < entry.lambda_set.unspecialized.items.len);
 
-        const unspec = entry_ref.lambda_set.unspecialized.items[entry_ref.index];
+        const unspec = entry.lambda_set.unspecialized.items[entry.index];
 
         if (self.lookupStaticDispatch(concrete_type, unspec.member)) |impl| {
             // Perform ambient function unification if we have the implementation's lambda set
             if (impl_lambda_sets) |ls_map| {
                 if (ls_map.get(impl.method_ident)) |impl_ls| {
-                    self.unifyAmbientFunctions(entry_ref.lambda_set, impl_ls);
+                    self.unifyAmbientFunctions(entry.lambda_set, impl_ls);
                 }
             }
 
@@ -816,8 +827,19 @@ pub fn resolveEntriesForTypeVarWithUnification(
                 .impl_lookup = impl,
             };
 
-            try self.addResolvedToLambdaSet(entry_ref.lambda_set, resolved);
-            _ = entry_ref.lambda_set.unspecialized.swapRemove(entry_ref.index);
+            try self.addResolvedToLambdaSet(entry.lambda_set, resolved);
+
+            // Remove from unspecialized list. swapRemove moves the last element
+            // to entry.index, so fix up any later entry that pointed to that last element.
+            _ = entry.lambda_set.unspecialized.swapRemove(entry.index);
+            const swapped_from = entry.lambda_set.unspecialized.items.len;
+            for (entries[entry_i + 1 ..]) |*later| {
+                if (later.lambda_set == entry.lambda_set and later.index == swapped_from) {
+                    later.index = entry.index;
+                    break;
+                }
+            }
+
             resolved_count += 1;
         }
     }
@@ -864,9 +886,10 @@ pub fn requestSpecialization(
     concrete_type: types.Var,
     call_site: ?Expr.Idx,
 ) !?base.Ident.Idx {
-    const type_hash = self.structuralTypeHash(concrete_type);
+    const type_hash = try self.structuralTypeHash(concrete_type);
     const key = SpecializationKey{
         .original_ident = original_ident,
+        .concrete_type = concrete_type,
         .type_hash = type_hash,
     };
 
@@ -875,17 +898,10 @@ pub fn requestSpecialization(
         return specialized_name;
     }
 
-    // Check if it's already pending - if so, look up or create the specialized name
-    for (self.pending_specializations.items) |pending| {
-        if (pending.original_ident == original_ident) {
-            const pending_hash = self.structuralTypeHash(pending.concrete_type);
-            if (pending_hash == type_hash) {
-                // Already pending - create and return the specialized name so call sites
-                // can reference it. The name will be reused when the spec is processed.
-                const specialized_name = try self.createSpecializedName(original_ident, concrete_type);
-                return specialized_name;
-            }
-        }
+    // Check if it's already pending
+    if (self.pending_specialization_keys.contains(key)) {
+        const specialized_name = try self.createSpecializedName(original_ident, concrete_type);
+        return specialized_name;
     }
 
     // Check if this function is registered as a partial proc
@@ -927,12 +943,13 @@ pub fn requestExternalSpecialization(
     call_site: ?Expr.Idx,
 ) !ExternalSpecializationResult {
     // Check if we already have this request (same module, ident, and concrete type)
-    const new_type_hash = self.structuralTypeHash(concrete_type);
+    const new_type_hash = try self.structuralTypeHash(concrete_type);
 
     // First, check if this has already been resolved
     const ext_key = ExternalSpecKey{
         .source_module = source_module,
         .original_ident = original_ident,
+        .concrete_type = concrete_type,
         .type_hash = new_type_hash,
     };
     if (self.resolved_external_specs.get(ext_key)) |resolved_ident| {
@@ -947,9 +964,8 @@ pub fn requestExternalSpecialization(
         if (existing.source_module == source_module and
             existing.original_ident == original_ident)
         {
-            // Compare concrete types using structural type hashing
-            const existing_type_hash = self.structuralTypeHash(existing.concrete_type);
-            if (existing_type_hash == new_type_hash) {
+            // Compare concrete types using structural type equality
+            if (structuralTypeEqual(self.types_store, self.allocator, existing.concrete_type, concrete_type)) {
                 // Pending but not yet resolved - create/lookup the specialized name
                 // so all call sites use a consistent reference
                 const specialized_name = try self.createSpecializedName(original_ident, concrete_type);
@@ -995,10 +1011,11 @@ pub fn getUnresolvedExternalRequests(self: *Self) !std.ArrayList(ExternalSpecial
     var unresolved = std.ArrayList(ExternalSpecializationRequest).empty;
 
     for (self.external_requests.items) |request| {
-        const type_hash = self.structuralTypeHash(request.concrete_type);
+        const type_hash = try self.structuralTypeHash(request.concrete_type);
         const ext_key = ExternalSpecKey{
             .source_module = request.source_module,
             .original_ident = request.original_ident,
+            .concrete_type = request.concrete_type,
             .type_hash = type_hash,
         };
 
@@ -1012,12 +1029,13 @@ pub fn getUnresolvedExternalRequests(self: *Self) !std.ArrayList(ExternalSpecial
 
 /// Check if all external specialization requests have been resolved.
 /// Returns true if all are resolved, false otherwise.
-pub fn allExternalSpecializationsResolved(self: *Self) bool {
+pub fn allExternalSpecializationsResolved(self: *Self) !bool {
     for (self.external_requests.items) |request| {
-        const type_hash = self.structuralTypeHash(request.concrete_type);
+        const type_hash = try self.structuralTypeHash(request.concrete_type);
         const ext_key = ExternalSpecKey{
             .source_module = request.source_module,
             .original_ident = request.original_ident,
+            .concrete_type = request.concrete_type,
             .type_hash = type_hash,
         };
 
@@ -1037,11 +1055,12 @@ pub fn resolveExternalSpecialization(
     specialized_ident: base.Ident.Idx,
     concrete_type: types.Var,
 ) !void {
-    const type_hash = self.structuralTypeHash(concrete_type);
+    const type_hash = try self.structuralTypeHash(concrete_type);
 
     // Store in the local specialization names for consistency
     const key = SpecializationKey{
         .original_ident = original_ident,
+        .concrete_type = concrete_type,
         .type_hash = type_hash,
     };
     try self.specialization_names.put(key, specialized_ident);
@@ -1050,6 +1069,7 @@ pub fn resolveExternalSpecialization(
     const ext_key = ExternalSpecKey{
         .source_module = source_module,
         .original_ident = original_ident,
+        .concrete_type = concrete_type,
         .type_hash = type_hash,
     };
     try self.resolved_external_specs.put(ext_key, specialized_ident);
@@ -1076,9 +1096,10 @@ pub fn processPendingSpecializations(self: *Self) !void {
 
 /// Create a single specialization from a pending request.
 fn makeSpecialization(self: *Self, pending: *PendingSpecialization) !void {
-    const type_hash = self.structuralTypeHash(pending.concrete_type);
+    const type_hash = try self.structuralTypeHash(pending.concrete_type);
     const key = SpecializationKey{
         .original_ident = pending.original_ident,
+        .concrete_type = pending.concrete_type,
         .type_hash = type_hash,
     };
 
@@ -1099,7 +1120,7 @@ fn makeSpecialization(self: *Self, pending: *PendingSpecialization) !void {
     std.debug.assert(self.recursion_depth < self.max_recursion_depth);
 
     // Get the partial proc
-    const partial = self.partial_procs.get(pending.original_ident) orelse return;
+    const partial = self.partial_procs.get(pending.original_ident) orelse unreachable;
 
     // Mark as in progress and track depth
     try self.in_progress.put(key, {});
@@ -1290,6 +1311,24 @@ fn buildFlatTypeSubstitutions(
                 else => return,
             };
 
+            // Compare tag payload types (tags are sorted by name, so positional match is correct)
+            const poly_tags = self.types_store.getTagsSlice(poly_union.tags);
+            const concrete_tags = self.types_store.getTagsSlice(concrete_union.tags);
+
+            const poly_args_slice = poly_tags.items(.args);
+            const concrete_args_slice = concrete_tags.items(.args);
+
+            const min_tags = @min(poly_args_slice.len, concrete_args_slice.len);
+            for (0..min_tags) |i| {
+                const poly_tag_args = self.types_store.sliceVars(poly_args_slice[i]);
+                const concrete_tag_args = self.types_store.sliceVars(concrete_args_slice[i]);
+
+                const min_args = @min(poly_tag_args.len, concrete_tag_args.len);
+                for (0..min_args) |j| {
+                    try self.buildTypeSubstitutions(poly_tag_args[j], concrete_tag_args[j], var_map);
+                }
+            }
+
             // Compare extension types
             try self.buildTypeSubstitutions(poly_union.ext, concrete_union.ext, var_map);
         },
@@ -1414,8 +1453,8 @@ fn duplicateExpr(
                 } else {
                     // Create a synthetic let-binding for this complex argument
                     // Use # prefix which is invalid in Roc syntax (starts a comment)
-                    var name_buf: [32]u8 = undefined;
-                    const name = std.fmt.bufPrint(&name_buf, "#arg{d}", .{self.synthetic_arg_counter}) catch "#arg";
+                    const name = try std.fmt.allocPrint(self.allocator, "#arg{d}", .{self.synthetic_arg_counter});
+                    defer self.allocator.free(name);
                     self.synthetic_arg_counter += 1;
 
                     // Create the synthetic identifier and pattern
@@ -1513,9 +1552,14 @@ fn duplicateExpr(
                         return expr_idx;
                     }
 
+                    // Body changed due to type substitutions, so create independent
+                    // copies of args and captures for this specialization.
+                    const new_args = try self.duplicatePatternSpan(lambda.args);
+                    const new_captures = try self.duplicateCaptureSpan(closure.captures);
+
                     const new_lambda = try self.module_env.store.addExpr(Expr{
                         .e_lambda = .{
-                            .args = lambda.args,
+                            .args = new_args,
                             .body = new_body,
                         },
                     }, base.Region.zero());
@@ -1523,7 +1567,7 @@ fn duplicateExpr(
                     return try self.module_env.store.addExpr(Expr{
                         .e_closure = .{
                             .lambda_idx = new_lambda,
-                            .captures = closure.captures,
+                            .captures = new_captures,
                             .tag_name = closure.tag_name,
                         },
                     }, base.Region.zero());
@@ -1947,17 +1991,7 @@ fn resolveTypeVarDispatch(
             base.Region.zero(),
         );
     } else {
-        // Method not found - create a diagnostic for this error
-        // TODO: Create a more specific diagnostic for method resolution failures
-        const diagnostic_idx = try self.module_env.addDiagnostic(.{
-            .expr_not_canonicalized = .{ .region = base.Region.zero() },
-        });
-        return try self.module_env.store.addExpr(
-            Expr{ .e_runtime_error = .{
-                .diagnostic = diagnostic_idx,
-            } },
-            base.Region.zero(),
-        );
+        unreachable;
     }
 }
 
@@ -1980,6 +2014,28 @@ fn duplicatePatternSpan(
     }
 
     return try self.module_env.store.patternSpanFrom(patterns_start);
+}
+
+/// Duplicate a span of captures so each specialization gets independent capture data.
+/// Used when duplicating closures during monomorphization.
+fn duplicateCaptureSpan(
+    self: *Self,
+    span: CIR.Expr.Capture.Span,
+) std.mem.Allocator.Error!CIR.Expr.Capture.Span {
+    const captures = self.module_env.store.sliceCaptures(span);
+    if (captures.len == 0) {
+        return span; // Empty span - return as-is
+    }
+
+    const captures_start = self.module_env.store.scratchTop("captures");
+
+    for (captures) |capture_idx| {
+        const capture = self.module_env.store.getCapture(capture_idx);
+        const new_idx = try self.module_env.store.addCapture(capture, base.Region.zero());
+        try self.module_env.store.addScratchCapture(new_idx);
+    }
+
+    return try self.module_env.store.capturesSpanFrom(captures_start);
 }
 
 /// Duplicate a single pattern.
@@ -2201,11 +2257,11 @@ pub fn isPolymorphic(self: *Self, type_var: types.Var) bool {
 
 /// Compute a structural hash for a type.
 /// Two structurally equivalent types will have the same hash.
-pub fn structuralTypeHash(self: *Self, type_var: types.Var) u64 {
+pub fn structuralTypeHash(self: *Self, type_var: types.Var) std.mem.Allocator.Error!u64 {
     var hasher = std.hash.Wyhash.init(0);
     var seen = std.AutoHashMap(types.Var, void).init(self.allocator);
     defer seen.deinit();
-    self.hashTypeRecursive(&hasher, type_var, &seen);
+    try self.hashTypeRecursive(&hasher, type_var, &seen);
     return hasher.final();
 }
 
@@ -2214,15 +2270,15 @@ fn hashTypeRecursive(
     hasher: *std.hash.Wyhash,
     type_var: types.Var,
     seen: *std.AutoHashMap(types.Var, void),
-) void {
-    // Check for cycles
-    if (seen.contains(type_var)) {
+) std.mem.Allocator.Error!void {
+    const resolved = self.types_store.resolveVar(type_var);
+
+    // Check for cycles using the resolved var (not the input var)
+    if (seen.contains(resolved.var_)) {
         hasher.update("CYCLE");
         return;
     }
-    seen.put(type_var, {}) catch return;
-
-    const resolved = self.types_store.resolveVar(type_var);
+    try seen.put(resolved.var_, {});
 
     // Hash based on content
     switch (resolved.desc.content) {
@@ -2235,24 +2291,26 @@ fn hashTypeRecursive(
                     // Hash type parameters
                     const vars = self.types_store.sliceVars(nom.vars.nonempty);
                     for (vars) |v| {
-                        self.hashTypeRecursive(hasher, v, seen);
+                        try self.hashTypeRecursive(hasher, v, seen);
                     }
                 },
                 .fn_pure, .fn_effectful, .fn_unbound => |func| {
                     // Hash function arguments and return type
                     const args = self.types_store.sliceVars(func.args);
                     for (args) |arg| {
-                        self.hashTypeRecursive(hasher, arg, seen);
+                        try self.hashTypeRecursive(hasher, arg, seen);
                     }
-                    self.hashTypeRecursive(hasher, func.ret, seen);
+                    try self.hashTypeRecursive(hasher, func.ret, seen);
                 },
                 .record => |record| {
                     // Hash record fields
                     const fields_slice = self.types_store.getRecordFieldsSlice(record.fields);
                     for (fields_slice.items(.name), fields_slice.items(.var_)) |name, var_| {
                         hasher.update(std.mem.asBytes(&name));
-                        self.hashTypeRecursive(hasher, var_, seen);
+                        try self.hashTypeRecursive(hasher, var_, seen);
                     }
+                    // Hash the extension variable
+                    try self.hashTypeRecursive(hasher, record.ext, seen);
                 },
                 .tag_union => |tag_union| {
                     // Hash tags
@@ -2261,42 +2319,234 @@ fn hashTypeRecursive(
                         hasher.update(std.mem.asBytes(&name));
                         const tag_args = self.types_store.sliceVars(args);
                         for (tag_args) |arg| {
-                            self.hashTypeRecursive(hasher, arg, seen);
+                            try self.hashTypeRecursive(hasher, arg, seen);
                         }
                     }
+                    // Hash the extension variable
+                    try self.hashTypeRecursive(hasher, tag_union.ext, seen);
                 },
                 .tuple => |tuple| {
                     const elems = self.types_store.sliceVars(tuple.elems);
                     for (elems) |elem| {
-                        self.hashTypeRecursive(hasher, elem, seen);
+                        try self.hashTypeRecursive(hasher, elem, seen);
                     }
                 },
                 .record_unbound => |fields_range| {
                     const fields_slice = self.types_store.getRecordFieldsSlice(fields_range);
                     for (fields_slice.items(.name), fields_slice.items(.var_)) |name, var_| {
                         hasher.update(std.mem.asBytes(&name));
-                        self.hashTypeRecursive(hasher, var_, seen);
+                        try self.hashTypeRecursive(hasher, var_, seen);
                     }
                 },
                 .empty_record => hasher.update("empty_record"),
                 .empty_tag_union => hasher.update("empty_tag_union"),
             }
         },
-        .flex => |flex| {
-            hasher.update("flex");
-            if (flex.name) |name| {
-                hasher.update(std.mem.asBytes(&name));
-            }
-        },
-        .rigid => |rigid| {
-            hasher.update("rigid");
-            hasher.update(std.mem.asBytes(&rigid.name));
+        .flex, .rigid => {
+            // Hash by resolved Var identity — two flex/rigid vars that
+            // resolved to the same variable must hash the same, and
+            // different variables must (likely) hash differently.
+            hasher.update("var");
+            hasher.update(std.mem.asBytes(&resolved.var_));
         },
         .alias => |alias| {
             hasher.update("alias");
             hasher.update(std.mem.asBytes(&alias.ident.ident_idx));
+            // Recurse into alias args
+            const alias_args = self.types_store.sliceAliasArgs(alias);
+            for (alias_args) |arg| {
+                try self.hashTypeRecursive(hasher, arg, seen);
+            }
+            // Recurse into backing var
+            const backing = self.types_store.getAliasBackingVar(alias);
+            try self.hashTypeRecursive(hasher, backing, seen);
         },
         .err => hasher.update("err"),
+    }
+}
+
+/// Pair of type variables used as key for cycle detection in structural equality.
+const VarPair = struct {
+    a: types.Var,
+    b: types.Var,
+};
+
+/// Check structural equality of two types.
+/// Two types are structurally equal if they have the same shape when fully resolved.
+/// Uses an explicit work stack (not recursion) to avoid stack overflow.
+/// On allocation failure, returns false (conservative — may create a duplicate
+/// specialization but never wrong code).
+pub fn structuralTypeEqual(
+    types_store: *types.Store,
+    allocator: std.mem.Allocator,
+    var_a: types.Var,
+    var_b: types.Var,
+) bool {
+    var seen = std.AutoHashMap(VarPair, void).init(allocator);
+    defer seen.deinit();
+
+    // Explicit work stack of pairs to compare
+    var work = std.ArrayList(VarPair).empty;
+    defer work.deinit(allocator);
+    work.append(allocator, .{ .a = var_a, .b = var_b }) catch return false;
+
+    while (work.items.len > 0) {
+        const item = work.pop().?;
+        if (!enqueueTypeEqual(types_store, item.a, item.b, &seen, &work, allocator)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/// Compare one pair of vars. Returns false if definitely not equal.
+/// Pushes child pairs onto `work` for further comparison.
+fn enqueueTypeEqual(
+    store: *types.Store,
+    va: types.Var,
+    vb: types.Var,
+    seen: *std.AutoHashMap(VarPair, void),
+    work: *std.ArrayList(VarPair),
+    allocator: std.mem.Allocator,
+) bool {
+    const ra = store.resolveVar(va);
+    const rb = store.resolveVar(vb);
+
+    if (ra.var_ == rb.var_) return true;
+
+    const pair = VarPair{ .a = ra.var_, .b = rb.var_ };
+    if (seen.contains(pair)) return true;
+    seen.put(pair, {}) catch return false;
+
+    switch (ra.desc.content) {
+        .structure => |flat_a| {
+            const flat_b = switch (rb.desc.content) {
+                .structure => |fb| fb,
+                else => return false,
+            };
+            return enqueueFlatTypeEqual(store, flat_a, flat_b, work, allocator);
+        },
+        .flex, .rigid => return false,
+        .alias => |alias_a| {
+            const alias_b = switch (rb.desc.content) {
+                .alias => |ab| ab,
+                else => return false,
+            };
+            if (alias_a.ident.ident_idx != alias_b.ident.ident_idx) return false;
+            const args_a = store.sliceAliasArgs(alias_a);
+            const args_b = store.sliceAliasArgs(alias_b);
+            if (args_a.len != args_b.len) return false;
+            for (args_a, args_b) |aa, ab| {
+                work.append(allocator, .{ .a = aa, .b = ab }) catch return false;
+            }
+            const backing_a = store.getAliasBackingVar(alias_a);
+            const backing_b = store.getAliasBackingVar(alias_b);
+            work.append(allocator, .{ .a = backing_a, .b = backing_b }) catch return false;
+            return true;
+        },
+        .err => return rb.desc.content == .err,
+    }
+}
+
+fn enqueueFlatTypeEqual(
+    store: *types.Store,
+    flat_a: types.FlatType,
+    flat_b: types.FlatType,
+    work: *std.ArrayList(VarPair),
+    allocator: std.mem.Allocator,
+) bool {
+    if (@intFromEnum(flat_a) != @intFromEnum(flat_b)) return false;
+
+    switch (flat_a) {
+        .nominal_type => |nom_a| {
+            const nom_b = flat_b.nominal_type;
+            if (nom_a.ident.ident_idx != nom_b.ident.ident_idx) return false;
+            const vars_a = store.sliceVars(nom_a.vars.nonempty);
+            const vars_b = store.sliceVars(nom_b.vars.nonempty);
+            if (vars_a.len != vars_b.len) return false;
+            for (vars_a, vars_b) |v_a, v_b| {
+                work.append(allocator, .{ .a = v_a, .b = v_b }) catch return false;
+            }
+            return true;
+        },
+        .fn_pure, .fn_effectful, .fn_unbound => |func_a| {
+            const func_b = switch (flat_b) {
+                .fn_pure, .fn_effectful, .fn_unbound => |f| f,
+                else => unreachable,
+            };
+            const args_a = store.sliceVars(func_a.args);
+            const args_b = store.sliceVars(func_b.args);
+            if (args_a.len != args_b.len) return false;
+            for (args_a, args_b) |v_a, v_b| {
+                work.append(allocator, .{ .a = v_a, .b = v_b }) catch return false;
+            }
+            work.append(allocator, .{ .a = func_a.ret, .b = func_b.ret }) catch return false;
+            return true;
+        },
+        .record => |rec_a| {
+            const rec_b = flat_b.record;
+            const fields_a = store.getRecordFieldsSlice(rec_a.fields);
+            const fields_b = store.getRecordFieldsSlice(rec_b.fields);
+            if (fields_a.len != fields_b.len) return false;
+            const names_a = fields_a.items(.name);
+            const names_b = fields_b.items(.name);
+            const vars_a = fields_a.items(.var_);
+            const vars_b = fields_b.items(.var_);
+            for (names_a, names_b, vars_a, vars_b) |na, nb, v_a, v_b| {
+                if (na != nb) return false;
+                work.append(allocator, .{ .a = v_a, .b = v_b }) catch return false;
+            }
+            work.append(allocator, .{ .a = rec_a.ext, .b = rec_b.ext }) catch return false;
+            return true;
+        },
+        .tag_union => |tu_a| {
+            const tu_b = flat_b.tag_union;
+            const tags_a = store.getTagsSlice(tu_a.tags);
+            const tags_b = store.getTagsSlice(tu_b.tags);
+            if (tags_a.len != tags_b.len) return false;
+            const tnames_a = tags_a.items(.name);
+            const tnames_b = tags_b.items(.name);
+            const targs_a = tags_a.items(.args);
+            const targs_b = tags_b.items(.args);
+            for (tnames_a, tnames_b, targs_a, targs_b) |na, nb, aa, ab| {
+                if (na != nb) return false;
+                const payload_a = store.sliceVars(aa);
+                const payload_b = store.sliceVars(ab);
+                if (payload_a.len != payload_b.len) return false;
+                for (payload_a, payload_b) |pa, pb| {
+                    work.append(allocator, .{ .a = pa, .b = pb }) catch return false;
+                }
+            }
+            work.append(allocator, .{ .a = tu_a.ext, .b = tu_b.ext }) catch return false;
+            return true;
+        },
+        .tuple => |tup_a| {
+            const tup_b = flat_b.tuple;
+            const elems_a = store.sliceVars(tup_a.elems);
+            const elems_b = store.sliceVars(tup_b.elems);
+            if (elems_a.len != elems_b.len) return false;
+            for (elems_a, elems_b) |ea, eb| {
+                work.append(allocator, .{ .a = ea, .b = eb }) catch return false;
+            }
+            return true;
+        },
+        .record_unbound => |fields_range_a| {
+            const fields_range_b = flat_b.record_unbound;
+            const fields_a = store.getRecordFieldsSlice(fields_range_a);
+            const fields_b = store.getRecordFieldsSlice(fields_range_b);
+            if (fields_a.len != fields_b.len) return false;
+            const names_a = fields_a.items(.name);
+            const names_b = fields_b.items(.name);
+            const vars_a = fields_a.items(.var_);
+            const vars_b = fields_b.items(.var_);
+            for (names_a, names_b, vars_a, vars_b) |na, nb, v_a, v_b| {
+                if (na != nb) return false;
+                work.append(allocator, .{ .a = v_a, .b = v_b }) catch return false;
+            }
+            return true;
+        },
+        .empty_record => return flat_b == .empty_record,
+        .empty_tag_union => return flat_b == .empty_tag_union,
     }
 }
 
@@ -2380,9 +2630,10 @@ pub fn createSpecializedName(
     original_name: base.Ident.Idx,
     type_var: types.Var,
 ) !base.Ident.Idx {
-    const type_hash = self.structuralTypeHash(type_var);
+    const type_hash = try self.structuralTypeHash(type_var);
     const key = SpecializationKey{
         .original_ident = original_name,
+        .concrete_type = type_var,
         .type_hash = type_hash,
     };
 
@@ -2416,22 +2667,21 @@ pub fn getSpecializationCount(self: *const Self) usize {
 
 /// Get the specialized name for a function at a concrete type, if it exists
 pub fn getSpecializedName(
-    self: *const Self,
+    self: *Self,
     original_ident: base.Ident.Idx,
     type_var: types.Var,
-) ?base.Ident.Idx {
-    // Need mutable self for structuralTypeHash but we only read
-    const mutable_self: *Self = @constCast(self);
-    const type_hash = mutable_self.structuralTypeHash(type_var);
+) !?base.Ident.Idx {
+    const type_hash = try self.structuralTypeHash(type_var);
     const key = SpecializationKey{
         .original_ident = original_ident,
+        .concrete_type = type_var,
         .type_hash = type_hash,
     };
     return self.specialization_names.get(key);
 }
 
 /// Iterator for specialized procs
-pub fn specializedIterator(self: *const Self) std.AutoHashMap(SpecializationKey, SpecializedProc).ValueIterator {
+pub fn specializedIterator(self: *const Self) SpecProcMap.ValueIterator {
     return self.specialized.valueIterator();
 }
 
@@ -2504,26 +2754,49 @@ test "monomorphizer: isPolymorphic" {
     try testing.expect(mono.isPolymorphic(flex_var));
 }
 
-test "monomorphizer: specialization key equality" {
+test "monomorphizer: specialization key equality via context" {
+    const allocator = testing.allocator;
+
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, "test");
+    defer {
+        module_env.deinit();
+        allocator.destroy(module_env);
+    }
+
+    const ctx = SpecKeyContext{ .types_store = &module_env.types, .allocator = allocator };
+
     const test_ident = base.Ident.Idx{
         .attributes = .{ .effectful = false, .ignored = false, .reassignable = false },
         .idx = 1,
     };
+
+    // Same type var should be equal
+    const type_var = try module_env.types.fresh();
+    var mono = Self.init(allocator, module_env, &module_env.types);
+    defer mono.deinit();
+    const hash1 = try mono.structuralTypeHash(type_var);
+
     const key1 = SpecializationKey{
         .original_ident = test_ident,
-        .type_hash = 12345,
+        .concrete_type = type_var,
+        .type_hash = hash1,
     };
     const key2 = SpecializationKey{
         .original_ident = test_ident,
-        .type_hash = 12345,
-    };
-    const key3 = SpecializationKey{
-        .original_ident = test_ident,
-        .type_hash = 67890,
+        .concrete_type = type_var,
+        .type_hash = hash1,
     };
 
-    try testing.expect(key1.eql(key2));
-    try testing.expect(!key1.eql(key3));
+    try testing.expect(ctx.eql(key1, key2));
+
+    // Different type hash should not be equal
+    const key3 = SpecializationKey{
+        .original_ident = test_ident,
+        .concrete_type = type_var,
+        .type_hash = 67890,
+    };
+    try testing.expect(!ctx.eql(key1, key3));
 }
 
 test "monomorphizer: type hashing consistency" {
@@ -2541,8 +2814,8 @@ test "monomorphizer: type hashing consistency" {
 
     // Same type should produce same hash
     const type_var = try module_env.types.fresh();
-    const hash1 = mono.structuralTypeHash(type_var);
-    const hash2 = mono.structuralTypeHash(type_var);
+    const hash1 = try mono.structuralTypeHash(type_var);
+    const hash2 = try mono.structuralTypeHash(type_var);
     try testing.expectEqual(hash1, hash2);
 
     // Note: Fresh flex vars may hash the same since they have the same structure.
@@ -2612,25 +2885,6 @@ test "monomorphizer: static dispatch lookup returns null for flex vars" {
     // (can't dispatch until we know the concrete type)
     const result = mono.lookupStaticDispatch(flex_var, method_name);
     try testing.expect(result == null);
-}
-
-test "monomorphizer: getConcreteTypeName" {
-    const allocator = testing.allocator;
-
-    const module_env = try allocator.create(ModuleEnv);
-    module_env.* = try ModuleEnv.init(allocator, "test");
-    defer {
-        module_env.deinit();
-        allocator.destroy(module_env);
-    }
-
-    var mono = Self.init(allocator, module_env, &module_env.types);
-    defer mono.deinit();
-
-    // For flex vars, should return null
-    const flex_var = try module_env.types.fresh();
-    const name = mono.getConcreteTypeName(flex_var);
-    try testing.expect(name == null);
 }
 
 test "monomorphizer: set closure transformer integration" {
@@ -2777,12 +3031,25 @@ test "monomorphizer: external specialization resolution stores and retrieves" {
 }
 
 test "monomorphizer: ExternalSpecKey stores module info" {
+    const allocator = testing.allocator;
+
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, "test");
+    defer {
+        module_env.deinit();
+        allocator.destroy(module_env);
+    }
+
+    const type_var = try module_env.types.fresh();
+    const ctx = ExtSpecKeyContext{ .types_store = &module_env.types, .allocator = allocator };
+
     const key1 = ExternalSpecKey{
         .source_module = @enumFromInt(1),
         .original_ident = base.Ident.Idx{
             .attributes = .{ .effectful = false, .ignored = false, .reassignable = false },
             .idx = 42,
         },
+        .concrete_type = type_var,
         .type_hash = 12345,
     };
 
@@ -2792,12 +3059,13 @@ test "monomorphizer: ExternalSpecKey stores module info" {
             .attributes = .{ .effectful = false, .ignored = false, .reassignable = false },
             .idx = 42,
         },
+        .concrete_type = type_var,
         .type_hash = 12345,
     };
 
-    // Different modules should produce different keys
-    const hash1 = std.hash.Wyhash.hash(0, std.mem.asBytes(&key1));
-    const hash2 = std.hash.Wyhash.hash(0, std.mem.asBytes(&key2));
+    // Different modules should produce different context hashes
+    const hash1 = ctx.hash(key1);
+    const hash2 = ctx.hash(key2);
     try testing.expect(hash1 != hash2);
 }
 
@@ -2815,7 +3083,7 @@ test "monomorphizer: allExternalSpecializationsResolved detects unresolved" {
     defer mono.deinit();
 
     // Initially all resolved (no requests)
-    try testing.expect(mono.allExternalSpecializationsResolved());
+    try testing.expect(try mono.allExternalSpecializationsResolved());
 
     // Create test identifiers
     const original_ident = try module_env.insertIdent(base.Ident.for_text("external_fn"));
@@ -2826,7 +3094,7 @@ test "monomorphizer: allExternalSpecializationsResolved detects unresolved" {
     _ = try mono.requestExternalSpecialization(source_module, original_ident, concrete_type, null);
 
     // Now should report unresolved
-    try testing.expect(!mono.allExternalSpecializationsResolved());
+    try testing.expect(!try mono.allExternalSpecializationsResolved());
 
     // Get unresolved requests
     var unresolved = try mono.getUnresolvedExternalRequests();
@@ -2838,5 +3106,230 @@ test "monomorphizer: allExternalSpecializationsResolved detects unresolved" {
     try mono.resolveExternalSpecialization(source_module, original_ident, specialized_ident, concrete_type);
 
     // Now all resolved
-    try testing.expect(mono.allExternalSpecializationsResolved());
+    try testing.expect(try mono.allExternalSpecializationsResolved());
+}
+
+test "monomorphizer: closure capture duplication" {
+    const allocator = testing.allocator;
+
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, "test");
+    defer {
+        module_env.deinit();
+        allocator.destroy(module_env);
+    }
+
+    var mono = Self.init(allocator, module_env, &module_env.types);
+    defer mono.deinit();
+
+    // Create a capture (simulating a captured variable)
+    const ident = try module_env.insertIdent(base.Ident.for_text("captured_var"));
+    const pattern_idx = try module_env.store.addPattern(
+        Pattern{ .assign = .{ .ident = ident } },
+        base.Region.zero(),
+    );
+
+    const capture = CIR.Expr.Capture{
+        .name = ident,
+        .pattern_idx = pattern_idx,
+        .scope_depth = 1,
+    };
+
+    // Build a capture span with one capture
+    const captures_start = module_env.store.scratchTop("captures");
+    const capture_idx = try module_env.store.addCapture(capture, base.Region.zero());
+    try module_env.store.addScratchCapture(capture_idx);
+    const captures_span = try module_env.store.capturesSpanFrom(captures_start);
+
+    // Create a body expression that will change during duplication.
+    // Use a nested lambda (since duplicatePatternSpan always creates new patterns,
+    // a lambda with args always gets a new expression index).
+    const inner_body = try module_env.store.addExpr(Expr{ .e_lookup_local = .{ .pattern_idx = pattern_idx } }, base.Region.zero());
+    const inner_arg = try module_env.store.addPattern(Pattern.underscore, base.Region.zero());
+    const inner_args_start = module_env.store.scratchPatternTop();
+    try module_env.store.addScratchPattern(inner_arg);
+    const inner_args_span = try module_env.store.patternSpanFrom(inner_args_start);
+    const body_expr = try module_env.store.addExpr(Expr{
+        .e_lambda = .{
+            .args = inner_args_span,
+            .body = inner_body,
+        },
+    }, base.Region.zero());
+
+    // Create a lambda arg pattern
+    const arg_pattern = try module_env.store.addPattern(Pattern.underscore, base.Region.zero());
+    const args_start = module_env.store.scratchPatternTop();
+    try module_env.store.addScratchPattern(arg_pattern);
+    const args_span = try module_env.store.patternSpanFrom(args_start);
+
+    // Create the inner e_lambda expression
+    const lambda_idx = try module_env.store.addExpr(Expr{
+        .e_lambda = .{
+            .args = args_span,
+            .body = body_expr,
+        },
+    }, base.Region.zero());
+
+    // Create the e_closure expression
+    const tag_name = try module_env.insertIdent(base.Ident.for_text("#1_wrap"));
+    const closure_idx = try module_env.store.addExpr(Expr{
+        .e_closure = .{
+            .lambda_idx = lambda_idx,
+            .captures = captures_span,
+            .tag_name = tag_name,
+        },
+    }, base.Region.zero());
+
+    // Duplicate the closure expression
+    const type_subs = types.VarMap.init(allocator);
+    const duplicated = try mono.duplicateExpr(closure_idx, &type_subs);
+
+    // Should have created a new expression (different index)
+    try testing.expect(duplicated != closure_idx);
+
+    // The duplicated closure should have a different captures span start
+    const dup_expr = module_env.store.getExpr(duplicated);
+    const orig_expr = module_env.store.getExpr(closure_idx);
+
+    const dup_closure = dup_expr.e_closure;
+    const orig_closure = orig_expr.e_closure;
+
+    // Captures should be duplicated (different span start)
+    try testing.expect(dup_closure.captures.span.start != orig_closure.captures.span.start);
+
+    // But should have the same length
+    try testing.expectEqual(orig_closure.captures.span.len, dup_closure.captures.span.len);
+
+    // The duplicated lambda args should also be different
+    const dup_lambda = module_env.store.getExpr(dup_closure.lambda_idx).e_lambda;
+    const orig_lambda = module_env.store.getExpr(orig_closure.lambda_idx).e_lambda;
+    try testing.expect(dup_lambda.args.span.start != orig_lambda.args.span.start);
+}
+
+test "monomorphizer: alias types with different type args produce different hashes" {
+    const allocator = testing.allocator;
+
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, "test");
+    defer {
+        module_env.deinit();
+        allocator.destroy(module_env);
+    }
+
+    var mono = Self.init(allocator, module_env, &module_env.types);
+    defer mono.deinit();
+
+    // Create the alias name (e.g. "MyAlias")
+    const alias_ident = try module_env.insertIdent(base.Ident.for_text("MyAlias"));
+    const type_ident = types.types.TypeIdent{ .ident_idx = alias_ident };
+
+    // Create two different concrete types for the type argument
+    const arg1 = try module_env.types.fresh();
+    try module_env.types.setVarContent(arg1, .{ .structure = .empty_record });
+
+    const arg2 = try module_env.types.fresh();
+    try module_env.types.setVarContent(arg2, .{ .structure = .empty_tag_union });
+
+    // Create backing vars
+    const backing1 = try module_env.types.fresh();
+    const backing2 = try module_env.types.fresh();
+
+    // Create two alias types: MyAlias EmptyRecord vs MyAlias EmptyTagUnion
+    const alias_content1 = try module_env.types.mkAlias(type_ident, backing1, &.{arg1}, alias_ident);
+    const alias_content2 = try module_env.types.mkAlias(type_ident, backing2, &.{arg2}, alias_ident);
+
+    const var1 = try module_env.types.fresh();
+    try module_env.types.setVarContent(var1, alias_content1);
+
+    const var2 = try module_env.types.fresh();
+    try module_env.types.setVarContent(var2, alias_content2);
+
+    // These should produce DIFFERENT hashes because the type args differ
+    const hash1 = try mono.structuralTypeHash(var1);
+    const hash2 = try mono.structuralTypeHash(var2);
+    try testing.expect(hash1 != hash2);
+}
+
+test "monomorphizer: alias types with same type args produce same hash" {
+    const allocator = testing.allocator;
+
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, "test");
+    defer {
+        module_env.deinit();
+        allocator.destroy(module_env);
+    }
+
+    var mono = Self.init(allocator, module_env, &module_env.types);
+    defer mono.deinit();
+
+    const alias_ident = try module_env.insertIdent(base.Ident.for_text("MyAlias"));
+    const type_ident = types.types.TypeIdent{ .ident_idx = alias_ident };
+
+    // Create two identical concrete type args
+    const arg1 = try module_env.types.fresh();
+    try module_env.types.setVarContent(arg1, .{ .structure = .empty_record });
+
+    const arg2 = try module_env.types.fresh();
+    try module_env.types.setVarContent(arg2, .{ .structure = .empty_record });
+
+    const backing1 = try module_env.types.fresh();
+    try module_env.types.setVarContent(backing1, .{ .structure = .empty_record });
+
+    const backing2 = try module_env.types.fresh();
+    try module_env.types.setVarContent(backing2, .{ .structure = .empty_record });
+
+    // Create two alias types with the same structure
+    const alias_content1 = try module_env.types.mkAlias(type_ident, backing1, &.{arg1}, alias_ident);
+    const alias_content2 = try module_env.types.mkAlias(type_ident, backing2, &.{arg2}, alias_ident);
+
+    const var1 = try module_env.types.fresh();
+    try module_env.types.setVarContent(var1, alias_content1);
+
+    const var2 = try module_env.types.fresh();
+    try module_env.types.setVarContent(var2, alias_content2);
+
+    // These should produce the SAME hash because the structure is identical
+    const hash1 = try mono.structuralTypeHash(var1);
+    const hash2 = try mono.structuralTypeHash(var2);
+    try testing.expectEqual(hash1, hash2);
+}
+
+test "monomorphizer: alias types with different backing vars produce different hashes" {
+    const allocator = testing.allocator;
+
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, "test");
+    defer {
+        module_env.deinit();
+        allocator.destroy(module_env);
+    }
+
+    var mono = Self.init(allocator, module_env, &module_env.types);
+    defer mono.deinit();
+
+    const alias_ident = try module_env.insertIdent(base.Ident.for_text("MyAlias"));
+    const type_ident = types.types.TypeIdent{ .ident_idx = alias_ident };
+
+    // Create two different backing types (no type args)
+    const backing1 = try module_env.types.fresh();
+    try module_env.types.setVarContent(backing1, .{ .structure = .empty_record });
+
+    const backing2 = try module_env.types.fresh();
+    try module_env.types.setVarContent(backing2, .{ .structure = .empty_tag_union });
+
+    // Create alias types with no args but different backing vars
+    const alias_content1 = try module_env.types.mkAlias(type_ident, backing1, &.{}, alias_ident);
+    const alias_content2 = try module_env.types.mkAlias(type_ident, backing2, &.{}, alias_ident);
+
+    const var1 = try module_env.types.fresh();
+    try module_env.types.setVarContent(var1, alias_content1);
+
+    const var2 = try module_env.types.fresh();
+    try module_env.types.setVarContent(var2, alias_content2);
+
+    // These should produce DIFFERENT hashes because the backing types differ
+    const hash1 = try mono.structuralTypeHash(var1);
+    const hash2 = try mono.structuralTypeHash(var2);
+    try testing.expect(hash1 != hash2);
 }

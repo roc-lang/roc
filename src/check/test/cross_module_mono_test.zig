@@ -408,7 +408,7 @@ test "cross-module mono: closure transformer tracks unspecialized closures" {
     defer transformer.deinit();
 
     // The transformer should be initialized and ready
-    try testing.expectEqual(@as(u8, 0), transformer.current_region);
+    _ = &transformer;
 }
 
 test "cross-module mono: monomorphizer tracks external requests" {
@@ -518,7 +518,7 @@ test "cross-module mono: allExternalSpecializationsResolved tracks resolution st
     defer mono.deinit();
 
     // Initially all resolved (no requests)
-    try testing.expect(mono.allExternalSpecializationsResolved());
+    try testing.expect(try mono.allExternalSpecializationsResolved());
 
     // Add a request
     const concrete_type = try env_b.module_env.types.fresh();
@@ -526,14 +526,14 @@ test "cross-module mono: allExternalSpecializationsResolved tracks resolution st
     _ = try mono.requestExternalSpecialization(.first, identity_ident, concrete_type, null);
 
     // Now not all resolved
-    try testing.expect(!mono.allExternalSpecializationsResolved());
+    try testing.expect(!try mono.allExternalSpecializationsResolved());
 
     // Resolve it
     const specialized_ident = try env_b.module_env.insertIdent(base.Ident.for_text("identity_U64_0"));
     try mono.resolveExternalSpecialization(.first, identity_ident, specialized_ident, concrete_type);
 
     // Now all resolved again
-    try testing.expect(mono.allExternalSpecializationsResolved());
+    try testing.expect(try mono.allExternalSpecializationsResolved());
 }
 
 test "cross-module mono: static dispatch method registration in type module" {

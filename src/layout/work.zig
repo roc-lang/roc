@@ -53,6 +53,10 @@ pub const Work = struct {
     pub const NominalProgress = struct {
         nominal_var: types.Var,
         backing_var: types.Var,
+        /// The module index under which the placeholder layout was cached.
+        /// Needed because the early cycle detection may encounter the same nominal
+        /// from a different module context than where it was first processed.
+        cache_module_idx: u16,
         /// The type arguments of this nominal stored as a range into the types store.
         /// Using a range (start index + count) instead of a slice avoids dangling
         /// pointers if the underlying vars storage is reallocated while processing

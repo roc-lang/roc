@@ -8,6 +8,7 @@
 //! - aarch64: Linux and macOS (AAPCS64)
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const layout = @import("layout");
 const builtins = @import("builtins");
@@ -33,9 +34,14 @@ const relocation_mod = @import("Relocation.zig");
 pub const Relocation = relocation_mod.Relocation;
 pub const applyRelocations = relocation_mod.applyRelocations;
 pub const SymbolResolver = relocation_mod.SymbolResolver;
-pub const CodeGen = @import("CodeGen.zig");
-pub const Backend = @import("Backend.zig");
-pub const ExecutableMemory = @import("ExecutableMemory.zig").ExecutableMemory;
+pub const ValueStorage = @import("ValueStorage.zig");
+pub const ObjectWriter = @import("ObjectWriter.zig");
+
+/// Executable memory for running generated code. Uses OS-specific APIs not available on freestanding.
+pub const ExecutableMemory = if (builtin.os.tag == .freestanding)
+    void
+else
+    @import("ExecutableMemory.zig").ExecutableMemory;
 
 // Static data interner for string literals and other static data
 pub const StaticDataInterner = @import("StaticDataInterner.zig");
@@ -46,8 +52,8 @@ const MonoExprCodeGenMod = @import("MonoExprCodeGen.zig");
 /// Mono IR code generator parameterized by target (use MonoExprCodeGen(target) to instantiate)
 pub const MonoExprCodeGen = MonoExprCodeGenMod.MonoExprCodeGen;
 
-/// Pre-instantiated MonoExprCodeGen for native host target
-pub const NativeMonoExprCodeGen = MonoExprCodeGenMod.NativeMonoExprCodeGen;
+/// Pre-instantiated MonoExprCodeGen for the host platform (the machine running the compiler)
+pub const HostMonoExprCodeGen = MonoExprCodeGenMod.HostMonoExprCodeGen;
 
 /// x86_64 Linux with glibc
 pub const X64GlibcMonoExprCodeGen = MonoExprCodeGenMod.X64GlibcMonoExprCodeGen;
@@ -65,6 +71,25 @@ pub const Arm64MuslMonoExprCodeGen = MonoExprCodeGenMod.Arm64MuslMonoExprCodeGen
 pub const Arm64WinMonoExprCodeGen = MonoExprCodeGenMod.Arm64WinMonoExprCodeGen;
 /// ARM64 macOS
 pub const Arm64MacMonoExprCodeGen = MonoExprCodeGenMod.Arm64MacMonoExprCodeGen;
+/// ARM64 Linux (generic)
+pub const Arm64LinuxMonoExprCodeGen = MonoExprCodeGenMod.Arm64LinuxMonoExprCodeGen;
+/// x86_64 FreeBSD
+pub const X64FreebsdMonoExprCodeGen = MonoExprCodeGenMod.X64FreebsdMonoExprCodeGen;
+/// x86_64 OpenBSD
+pub const X64OpenbsdMonoExprCodeGen = MonoExprCodeGenMod.X64OpenbsdMonoExprCodeGen;
+/// x86_64 NetBSD
+pub const X64NetbsdMonoExprCodeGen = MonoExprCodeGenMod.X64NetbsdMonoExprCodeGen;
+/// x86_64 Linux (generic)
+pub const X64LinuxMonoExprCodeGen = MonoExprCodeGenMod.X64LinuxMonoExprCodeGen;
+/// x86_64 ELF (generic)
+pub const X64ElfMonoExprCodeGen = MonoExprCodeGenMod.X64ElfMonoExprCodeGen;
+
+/// Object file compiler for generating object files from Mono IR.
+/// Supports cross-compilation to any RocTarget.
+/// Only available on non-freestanding targets (uses std.fs)
+pub const ObjectFileCompiler = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").ObjectFileCompiler;
+pub const Entrypoint = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").Entrypoint;
+pub const CompilationResult = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").CompilationResult;
 
 /// Object file reader for extracting code sections from ELF/Mach-O/COFF
 pub const object_reader = @import("object_reader.zig");
@@ -292,7 +317,8 @@ pub fn resolveBuiltinFunction(name: []const u8) ?usize {
 
 test "backend module imports" {
     std.testing.refAllDecls(@This());
-    std.testing.refAllDecls(@import("CallBuilder.zig"));
+    std.testing.refAllDecls(@import("CallingConvention.zig"));
+    std.testing.refAllDecls(@import("FrameBuilder.zig"));
 }
 
 test "resolve builtin functions" {

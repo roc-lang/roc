@@ -23,6 +23,8 @@ const backend = @import("backend");
 const builtin_loading = @import("builtin_loading.zig");
 const compiled_builtins = @import("compiled_builtins");
 const builtins = @import("builtins");
+const i128h = builtins.compiler_rt_128;
+const eval_mod = @import("mod.zig");
 
 const RocEnv = @import("roc_env.zig").RocEnv;
 const createRocOps = @import("roc_env.zig").createRocOps;

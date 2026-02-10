@@ -3018,7 +3018,7 @@ test "check type - comprehensive: polymorphism + lambdas + dispatch + annotation
         \\# Fifth layer: combine everything
         \\main = {
         \\  # Let-polymorphism layer 1
-        \\  # TODO INLINE ANNOS
+        \\  # TODO LOCAL ANNOS
         \\  # id : a -> a
         \\  id = |x| x
         \\
@@ -4093,4 +4093,42 @@ test "check type - mutually recursive functions - is_even and is_odd" {
         \\}
     ;
     try checkTypesModule(source, .{ .pass = .{ .def = "is_odd" } }, "U64 -> Bool");
+}
+
+// repros //
+
+test "check type - zulip repro" {
+    const source =
+        \\main! = |_args| {
+        \\    rec = create_record()
+        \\    use_record(rec)
+        \\}
+        \\create_record = || {
+        \\    {foo: "bar"}
+        \\}
+        \\use_record = |rec| {
+        \\    Str.is_empty(rec.blah)
+        \\}
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**TYPE MISMATCH**
+        \\The first argument being passed to this function has the wrong type:
+        \\**test:3:5:**
+        \\```roc
+        \\    use_record(rec)
+        \\```
+        \\               ^^^
+        \\
+        \\This argument has the type:
+        \\
+        \\    { foo: Str }
+        \\
+        \\But `use_record` needs the first argument to be:
+        \\
+        \\    { .., blah: Str }
+        \\
+        \\**Hint:** This record is missing the field: `blah`
+        \\
+        \\
+    );
 }

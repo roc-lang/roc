@@ -312,6 +312,11 @@ pub const io_spec_tests = [_]TestSpec{
         .io_spec = "1>Hello, World!",
         .description = "Regression test: Hosted effects on opaque types with data (not just [])",
     },
+    .{
+        .roc_file = "test/fx/cross_module_recursive_nominal.roc",
+        .io_spec = "1>Div (correct)",
+        .description = "Regression test: cross-module recursive nominal type gets correct layout for pattern matching",
+    },
 };
 
 /// Get the total number of IO spec tests

@@ -409,6 +409,20 @@ test "lambdas with capture" {
     , 60, .no_trace);
 }
 
+test "closure with many captures (struct_captures)" {
+    // 4 captures -> struct_captures representation
+    try runExpectI64(
+        \\{
+        \\    a = 100.I64
+        \\    b = 200.I64
+        \\    c = 300.I64
+        \\    d = 400.I64
+        \\    f = |n| a + b + c + d + n
+        \\    f(5.I64)
+        \\}
+    , 1005, .no_trace);
+}
+
 test "lambdas nested closures" {
     // Nested closures with block locals
     try runExpectI64(
@@ -2201,10 +2215,10 @@ test "debug 8783a: lambda with tag match called directly" {
         \\{
         \\    f = |child|
         \\        match child {
-        \\            Text(_) => 1.I64
-        \\            Element(_, _) => 10.I64
+        \\            Aaa(_, _) => 10.I64
+        \\            Bbb(_) => 1.I64
         \\        }
-        \\    f(Text("hello"))
+        \\    f(Bbb(42.I64))
         \\}
     , 1, .no_trace);
 }
@@ -3070,6 +3084,55 @@ test "Bool in record field - bug confirmation" {
     try runExpectBool("{ flag: Bool.False }.flag", false, .no_trace);
 }
 
+test "polymorphic tag union payload substitution: extract payload" {
+    // Tests that `a -> I64` is discovered from the Ok tag's payload
+    try runExpectI64(
+        \\{
+        \\    second : [Left(a), Right(b)] -> b
+        \\    second = |either| match either {
+        \\        Left(_) => 0i64
+        \\        Right(val) => val
+        \\    }
+        \\
+        \\    input : [Left(I64), Right(I64)]
+        \\    input = Right(42i64)
+        \\    second(input)
+        \\}
+    , 42, .no_trace);
+}
+
+test "polymorphic tag union payload substitution: multiple type vars" {
+    // Tests that `e -> Str` is discovered from the Err tag's payload
+    try runExpectStr(
+        \\{
+        \\    get_err : [Ok(a), Err(e)] -> e
+        \\    get_err = |result| match result {
+        \\        Ok(_) => ""
+        \\        Err(e) => e
+        \\    }
+        \\
+        \\    val : [Ok(I64), Err(Str)]
+        \\    val = Err("hello")
+        \\    get_err(val)
+        \\}
+    , "hello", .no_trace);
+}
+
+test "polymorphic tag union payload substitution: wrap and unwrap" {
+    // Tests that `a -> I64` is discovered from the return type's tag payload
+    try runExpectI64(
+        \\{
+        \\    wrap : a -> [Val(a)]
+        \\    wrap = |x| Val(x)
+        \\
+        \\    result = wrap(42)
+        \\    match result {
+        \\        Val(n) => n
+        \\    }
+        \\}
+    , 42, .no_trace);
+}
+
 test "Bool in record with mixed alignment fields - bug confirmation" {
     // Test Bool in a record with fields of different alignments
     // Similar to the bug report: { key: U64, childCount: U32, isElement: Bool }
@@ -3115,3 +3178,125 @@ test "tag union with True/False mixed among other tags uses correct discriminant
         \\}
     , 2, .no_trace);
 }
+
+test "Str.trim" {
+    try runExpectStr("Str.trim(\"  hello  \")", "hello", .no_trace);
+    try runExpectStr("Str.trim(\"hello\")", "hello", .no_trace);
+    try runExpectStr("Str.trim(\"  \")", "", .no_trace);
+}
+
+test "Str.trim_start" {
+    try runExpectStr("Str.trim_start(\"  hello  \")", "hello  ", .no_trace);
+    try runExpectStr("Str.trim_start(\"hello\")", "hello", .no_trace);
+}
+
+test "Str.trim_end" {
+    try runExpectStr("Str.trim_end(\"  hello  \")", "  hello", .no_trace);
+    try runExpectStr("Str.trim_end(\"hello\")", "hello", .no_trace);
+}
+
+test "Str.with_ascii_lowercased" {
+    try runExpectStr("Str.with_ascii_lowercased(\"HELLO\")", "hello", .no_trace);
+    try runExpectStr("Str.with_ascii_lowercased(\"Hello World\")", "hello world", .no_trace);
+    try runExpectStr("Str.with_ascii_lowercased(\"abc\")", "abc", .no_trace);
+}
+
+test "Str.with_ascii_uppercased" {
+    try runExpectStr("Str.with_ascii_uppercased(\"hello\")", "HELLO", .no_trace);
+    try runExpectStr("Str.with_ascii_uppercased(\"Hello World\")", "HELLO WORLD", .no_trace);
+    try runExpectStr("Str.with_ascii_uppercased(\"ABC\")", "ABC", .no_trace);
+}
+
+test "Str.caseless_ascii_equals" {
+    try runExpectBool("Str.caseless_ascii_equals(\"hello\", \"HELLO\")", true, .no_trace);
+    try runExpectBool("Str.caseless_ascii_equals(\"abc\", \"abc\")", true, .no_trace);
+    try runExpectBool("Str.caseless_ascii_equals(\"abc\", \"def\")", false, .no_trace);
+}
+
+test "Str.repeat" {
+    try runExpectStr("Str.repeat(\"ab\", 3)", "ababab", .no_trace);
+    try runExpectStr("Str.repeat(\"x\", 1)", "x", .no_trace);
+    try runExpectStr("Str.repeat(\"x\", 0)", "", .no_trace);
+}
+
+test "Str.with_prefix" {
+    try runExpectStr("Str.with_prefix(\"world\", \"hello \")", "hello world", .no_trace);
+    try runExpectStr("Str.with_prefix(\"bar\", \"\")", "bar", .no_trace);
+}
+
+test "polymorphic closure capture duplication during monomorphization" {
+    // Regression test: when a polymorphic function creates a closure that captures
+    // its argument, each specialization must get independent copies of the captures.
+    // Without proper duplication, specializations share capture data, causing corruption.
+
+    // Polymorphic function that returns a closure capturing its argument,
+    // called with both integer and string types.
+    try runExpectI64(
+        \\{
+        \\    make_getter = |n| |_x| n
+        \\    get_num = make_getter(42)
+        \\    get_num(0)
+        \\}
+    , 42, .no_trace);
+
+    try runExpectStr(
+        \\{
+        \\    make_getter = |n| |_x| n
+        \\    get_str = make_getter("hello")
+        \\    get_str(0)
+        \\}
+    , "hello", .no_trace);
+}
+
+test "large record - chained higher-order calls with growing intermediates" {
+    // Simulates the record builder pattern: nested apply calls build up larger types
+    try runExpectStr(
+        \\{
+        \\    apply2 = |a, b, f| f(a, b)
+        \\    step1 = apply2("x_val", "y_val", |x, y| { x, y })
+        \\    result = apply2("w_val", step1.y, |w, y| { w, y })
+        \\    result.w
+        \\}
+    , "w_val", .no_trace);
+    try runExpectStr(
+        \\{
+        \\    apply2 = |a, b, f| f(a, b)
+        \\    step1 = apply2("x_val", "y_val", |x, y| { x, y })
+        \\    result = apply2("w_val", step1.y, |w, y| { w, y })
+        \\    result.y
+        \\}
+    , "y_val", .no_trace);
+}
+
+test "Str.drop_prefix" {
+    try runExpectStr("Str.drop_prefix(\"foobar\", \"foo\")", "bar", .no_trace);
+    try runExpectStr("Str.drop_prefix(\"foobar\", \"baz\")", "foobar", .no_trace);
+}
+
+test "Str.drop_suffix" {
+    try runExpectStr("Str.drop_suffix(\"foobar\", \"bar\")", "foo", .no_trace);
+    try runExpectStr("Str.drop_suffix(\"foobar\", \"baz\")", "foobar", .no_trace);
+}
+
+test "Str.release_excess_capacity" {
+    try runExpectStr("Str.release_excess_capacity(\"hello\")", "hello", .no_trace);
+}
+
+test "Str.split_on and Str.join_with" {
+    try runExpectStr(
+        \\{
+        \\    parts = Str.split_on("a,b,c", ",")
+        \\    Str.join_with(parts, "-")
+        \\}
+    , "a-b-c", .no_trace);
+}
+
+test "Str.join_with" {
+    try runExpectStr(
+        \\Str.join_with(["hello", "world"], " ")
+    , "hello world", .no_trace);
+}
+
+// Note: Str.from_utf8 returns a Result which requires match support in all evaluators.
+// It is tested indirectly via the encode/decode tests. The wasm codegen for it is implemented
+// but we don't add a standalone test here to avoid DevEvaluator limitations with Result matching.
