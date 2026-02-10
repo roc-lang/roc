@@ -57,7 +57,7 @@ const lo = switch (native_endian) {
 const hi = 1 - lo;
 const is_wasm = builtin.cpu.arch == .wasm32;
 
-// ─── Shift / widening-multiply helpers ──────────────────────────────
+// Shift / widening-multiply helpers
 // On 64-bit targets the native <<, >>, and widening * compile to a few
 // inline instructions.  On wasm32 they would call __ashlti3 etc., so we
 // decompose into u64 (or u32) operations instead.
@@ -559,7 +559,7 @@ pub fn f64_to_u128(x: f64) u128 {
     }
 }
 
-// ─── Integer formatting (avoids std.fmt which calls @rem on u128) ────
+// Integer formatting (avoids std.fmt which calls @rem on u128)
 
 /// Format a u128 as a decimal string into the provided buffer.
 /// Returns the slice of `buf` that contains the formatted number.

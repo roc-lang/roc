@@ -3523,7 +3523,7 @@ pub fn extractSections(gpa: Allocator, content: []const u8) !Content {
     return try Content.from_ranges(ranges, content);
 }
 
-// ── Dev Object Snapshot Processing ──────────────────────────────────────────
+// Dev Object Snapshot Processing
 
 /// Represents a single source file extracted from a multi-file SOURCE section
 const SourceFile = struct {
@@ -4133,7 +4133,7 @@ fn processDevObjectSnapshot(
     return success;
 }
 
-// ── REPL Snapshot Processing ───────────────────────────────────────────────
+// REPL Snapshot Processing
 
 fn processReplSnapshot(allocator: Allocator, content: Content, output_path: []const u8, config: *const Config) !bool {
     var success = true;

@@ -6722,6 +6722,10 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 const tu_data = ls.getTagUnionData(value_layout_val.data.tag_union.idx);
                 break :blk tu_data.size;
             } else 0;
+            const tu_disc_size: u8 = if (value_layout_val.tag == .tag_union) blk: {
+                const tu_data = ls.getTagUnionData(value_layout_val.data.tag_union.idx);
+                break :blk tu_data.discriminant_size;
+            } else 4;
             // Use .w32 for discriminant loads when .w64 would read past the tag union.
             // Discriminants are at most 4 bytes, so .w32 is always sufficient.
             const disc_use_w32 = (tu_disc_offset + 8 > @as(i32, @intCast(tu_total_size)));
@@ -6885,6 +6889,19 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                 self.codegen.freeGeneral(disc_reg);
                                 unreachable;
                             },
+                        }
+
+                        // Mask to actual discriminant size — memory loads may include padding bytes
+                        if (tu_disc_size < 4) {
+                            const mask: i32 = (@as(i32, 1) << @as(u5, @intCast(tu_disc_size * 8))) - 1;
+                            if (comptime target.toCpuArch() == .aarch64) {
+                                const mask_reg = try self.allocTempGeneral();
+                                try self.codegen.emitLoadImm(mask_reg, mask);
+                                try self.codegen.emit.andRegRegReg(.w32, disc_reg, disc_reg, mask_reg);
+                                self.codegen.freeGeneral(mask_reg);
+                            } else {
+                                try self.codegen.emit.andRegImm32(disc_reg, mask);
+                            }
                         }
 
                         // Compare discriminant with pattern's expected value

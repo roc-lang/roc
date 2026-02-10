@@ -954,10 +954,6 @@ pub const BuildEnv = struct {
         }
     }
 
-    // ------------------------
-    // Resolver implementation
-    // ------------------------
-
     const ResolverCtx = struct { ws: *BuildEnv };
 
     const ScheduleCtx = struct {
@@ -1054,10 +1050,6 @@ pub const BuildEnv = struct {
             .resolveLocalPath = resolverResolveLocalPath,
         };
     }
-
-    // ------------------------
-    // Package graph construction
-    // ------------------------
 
     const PackageKind = enum { app, package, platform, module, hosted, type_module, default_app };
 
