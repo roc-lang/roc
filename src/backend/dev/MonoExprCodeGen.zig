@@ -4903,7 +4903,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
         fn generateBinop(self: *Self, binop: anytype) Error!ValueLocation {
             // Polymorphic numeric literal coercion:
             // In polymorphic functions like `range_until`, numeric literals are lowered
-            // as `dec_literal` (the default numeric type). When the function is inlined
+            // as `dec_literal` (the default numeric type). When the function is called
             // at an integer call site, the binop's result_layout is the correct integer
             // type, but operand literals are still Dec-encoded. Coerce them here.
             const result_is_int = switch (binop.result_layout) {
@@ -10944,148 +10944,24 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        /// Check if a lambda body returns a callable value (closure/lambda).
-        /// Used to decide whether to inline or compile as a separate procedure.
-        fn bodyReturnsCallable(self: *Self, body_expr_id: mono.MonoExprId) bool {
-            const body = self.store.getExpr(body_expr_id);
-            return switch (body) {
-                .lambda, .closure => true,
-                .block => |block| self.bodyReturnsCallable(block.final_expr),
-                .if_then_else => |ite| self.bodyReturnsCallable(ite.final_else),
-                else => false,
-            };
-        }
-
-        /// Check if any argument is a callable value (lambda, closure, or lookup
-        /// that resolves to one). Higher-order function calls with callable args
-        /// must be inlined because compiled procs can't dispatch opaque stack values.
-        fn hasCallableArguments(self: *Self, args_span: anytype) bool {
-            const args = self.store.getExprSpan(args_span);
-            for (args) |arg_id| {
-                const arg_expr = self.store.getExpr(arg_id);
-                switch (arg_expr) {
-                    .lambda, .closure => return true,
-                    .lookup => |lk| {
-                        const sk: u48 = @bitCast(lk.symbol);
-                        if (self.symbol_locations.get(sk)) |loc| {
-                            switch (loc) {
-                                .lambda_code, .closure_value => return true,
-                                else => {},
-                            }
-                        }
-                        if (self.store.getSymbolDef(lk.symbol)) |def_id| {
-                            const def = self.store.getExpr(def_id);
-                            switch (def) {
-                                .lambda, .closure => return true,
-                                else => {},
-                            }
-                        }
-                    },
-                    else => {},
-                }
-            }
-            return false;
-        }
-
-        /// Check if any argument requires multiple registers (tag unions > 8 bytes,
-        /// records > 8 bytes, strings, lists, i128, etc.).
-        /// When true, we force inlining to avoid procedure calling convention issues
-        /// with multi-register argument passing.
-        fn hasMultiRegArguments(self: *Self, args_span: anytype) bool {
-            const args = self.store.getExprSpan(args_span);
-            for (args) |arg_id| {
-                const arg_layout = self.getExprLayout(arg_id);
-                if (arg_layout) |al| {
-                    const num_regs = self.calcArgRegCount(.{ .stack = .{ .offset = 0 } }, al);
-                    if (num_regs > 1) return true;
-                }
-            }
-            return false;
-        }
-
-        /// Inline a lambda body at the call site, binding parameters directly.
-        /// Used for direct lambda calls (e.g., `(|x| x + 1)(5)`) where the
-        /// lambda may return closures whose capture data must remain on the
-        /// current stack frame. Unlike compileLambdaAsProc, this does NOT
-        /// create a separate procedure — the body runs in the caller's scope.
-        fn callLambdaBodyDirect(self: *Self, lambda: anytype, args_span: anytype) Error!ValueLocation {
-            const args = self.store.getExprSpan(args_span);
-            const params = self.store.getPatternSpan(lambda.params);
-            const num_args = @min(params.len, args.len);
-
-            // Evaluate ALL arguments before binding ANY patterns.
-            // This prevents nested inlining (e.g., recursive map2 calls in
-            // record builders) from clobbering parameter bindings that were
-            // already set by earlier iterations. Without this, the inner call
-            // overwrites shared symbol IDs (same lambda inlined multiple times).
-            var arg_locs: [32]ValueLocation = undefined;
-            for (0..num_args) |i| {
-                arg_locs[i] = try self.generateExpr(args[i]);
-            }
-
-            // Save symbol and mutable var state before binding parameters and
-            // generating body. Recursive inlining (e.g., iter_help calling itself
-            // with a callable `f`) would otherwise overwrite the caller's symbol
-            // and mutable var bindings, corrupting subsequent when-branch matching
-            // (e.g., Break/Continue tag unions).
-            var saved_symbol_locations = self.symbol_locations.clone() catch return Error.OutOfMemory;
-            defer saved_symbol_locations.deinit();
-            var saved_mutable_var_slots = self.mutable_var_slots.clone() catch return Error.OutOfMemory;
-            defer saved_mutable_var_slots.deinit();
-
-            for (params[0..num_args], 0..) |pattern_id, i| {
-                try self.bindPattern(pattern_id, arg_locs[i]);
-            }
-
-            // Set up early return context for inlined lambda.
-            const saved_early_return_ret_layout = self.early_return_ret_layout;
-            const saved_early_return_patches_len = self.early_return_patches.items.len;
-            self.early_return_ret_layout = lambda.ret_layout;
-
-            // Generate the lambda body inline
-            const result_loc = try self.generateExpr(lambda.body);
-
-            // Check if any early returns were generated
-            if (self.early_return_patches.items.len > saved_early_return_patches_len) {
-                // Patch early return jumps to the current position (merge point)
-                const merge_point = self.codegen.currentOffset();
-                for (self.early_return_patches.items[saved_early_return_patches_len..]) |patch| {
-                    self.codegen.patchJump(patch, merge_point);
-                }
-                self.early_return_patches.shrinkRetainingCapacity(saved_early_return_patches_len);
-            }
-
-            // Restore early return state
-            self.early_return_ret_layout = saved_early_return_ret_layout;
-
-            // Restore symbol and mutable var state
-            self.symbol_locations.deinit();
-            self.symbol_locations = saved_symbol_locations.clone() catch return Error.OutOfMemory;
-            self.mutable_var_slots.deinit();
-            self.mutable_var_slots = saved_mutable_var_slots.clone() catch return Error.OutOfMemory;
-
-            return result_loc;
-        }
-
         /// Generate code for a function call
         fn generateCall(self: *Self, call: anytype) Error!ValueLocation {
             // Get the function expression
             const fn_expr = self.store.getExpr(call.fn_expr);
 
             return switch (fn_expr) {
-                // Direct lambda call: inline the body in the current scope.
-                // Inline lambdas are defined at a single call site, cannot be
-                // recursive, and may return closures whose capture data must
-                // remain on the current stack frame.
+                // Direct lambda call: compile as proc and call
                 .lambda => |lambda| {
-                    return try self.callLambdaBodyDirect(lambda, call.args);
+                    const offset = try self.compileLambdaAsProc(call.fn_expr, lambda);
+                    return try self.generateCallToLambda(offset, call.args, call.ret_layout);
                 },
 
-                // Direct closure call: inline the inner lambda's body.
+                // Direct closure call: compile as proc and call
                 .closure => |closure| {
                     const inner = self.store.getExpr(closure.lambda);
                     if (inner == .lambda) {
-                        return try self.callLambdaBodyDirect(inner.lambda, call.args);
+                        const offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda);
+                        return try self.generateCallToLambda(offset, call.args, call.ret_layout);
                     }
                     unreachable; // closure inner must always be a lambda in the IR
                 },
@@ -11452,21 +11328,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     return try self.callSingleClosureWithCaptures(cv, args_span, ret_layout);
                 },
                 .direct_call => {
-                    // Inline the lambda body (no captures, no separate proc needed)
-                    const lambda_expr = self.store.getExpr(cv.lambda);
-                    switch (lambda_expr) {
-                        .lambda => |l| {
-                            return try self.callLambdaBodyDirect(l, args_span);
-                        },
-                        .closure => |c| {
-                            const inner = self.store.getExpr(c.lambda);
-                            if (inner == .lambda) {
-                                return try self.callLambdaBodyDirect(inner.lambda, args_span);
-                            }
-                            unreachable;
-                        },
-                        else => unreachable,
-                    }
+                    // Compile and call the lambda (no captures)
+                    return try self.compileLambdaAndCall(cv.lambda, args_span, ret_layout);
                 },
             }
         }
@@ -11624,12 +11487,12 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
         }
 
         /// Call a single closure (unwrapped_capture or struct_captures) by binding
-        /// its captures to symbol_locations and inlining the lambda body.
+        /// its captures to symbol_locations and calling the lambda as a proc.
         fn callSingleClosureWithCaptures(
             self: *Self,
             cv: anytype,
             args_span: anytype,
-            _: layout.Idx,
+            ret_layout: layout.Idx,
         ) Error!ValueLocation {
             // Bind captures from the closure's stack data to their symbols
             const captures = self.store.getCaptures(cv.captures);
@@ -11663,24 +11526,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 offset += @intCast(capture_size);
             }
 
-            // Inline the lambda body (captures must stay in scope)
-            const lambda_expr = self.store.getExpr(cv.lambda);
-            switch (lambda_expr) {
-                .lambda => |l| {
-                    return try self.callLambdaBodyDirect(l, args_span);
-                },
-                .closure => |c| {
-                    const inner = self.store.getExpr(c.lambda);
-                    if (inner == .lambda) {
-                        return try self.callLambdaBodyDirect(inner.lambda, args_span);
-                    }
-                    unreachable; // closure inner must always be a lambda in the IR
-                },
-                else => unreachable, // closure dispatch target must be a lambda or closure
-            }
+            // Call the lambda as a proc (captures bound above)
+            return try self.compileLambdaAndCall(cv.lambda, args_span, ret_layout);
         }
-
-        // All lambdas are compiled as procs - no inlining.
 
         /// Compile a lambda body expression as a procedure and call it.
         fn compileLambdaAndCall(
@@ -11708,8 +11556,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
         }
 
         /// Compile a lambda and call it, binding captures from a stack location.
-        /// Binds captures to symbol_locations, then evaluates the lambda body directly
-        /// (captures need to stay in scope, so we don't compile as a separate procedure).
+        /// Binds captures to symbol_locations, then compiles and calls the lambda as a proc.
         fn compileLambdaAndCallWithCaptures(
             self: *Self,
             member: mono.LambdaSetMember,
@@ -11842,23 +11689,12 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
                 return switch (def_expr) {
                     .lambda => |lambda| {
-                        // Inline when:
-                        // 1. Args contain callables (higher-order calls)
-                        // 2. Body returns callable (closure-returning functions)
-                        // 3. Polymorphic lambda with different ret_layout
-                        // 4. Args require multiple registers (avoids proc calling convention issues)
-                        if (self.hasCallableArguments(args_span) or self.bodyReturnsCallable(lambda.body) or lambda.ret_layout != ret_layout or self.hasMultiRegArguments(args_span)) {
-                            return try self.callLambdaBodyDirect(lambda, args_span);
-                        }
                         const offset = try self.compileLambdaAsProc(def_expr_id, lambda);
                         return try self.generateCallToLambda(offset, args_span, ret_layout);
                     },
                     .closure => |closure| {
                         const inner = self.store.getExpr(closure.lambda);
                         if (inner == .lambda) {
-                            if (self.hasCallableArguments(args_span) or self.bodyReturnsCallable(inner.lambda.body) or inner.lambda.ret_layout != ret_layout or self.hasMultiRegArguments(args_span)) {
-                                return try self.callLambdaBodyDirect(inner.lambda, args_span);
-                            }
                             const offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda);
                             return try self.generateCallToLambda(offset, args_span, ret_layout);
                         }
@@ -11883,18 +11719,12 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         // Unwrap nominal and retry with the inner expression
                         const inner = self.store.getExpr(nom.backing_expr);
                         if (inner == .lambda) {
-                            if (self.hasCallableArguments(args_span) or self.bodyReturnsCallable(inner.lambda.body) or inner.lambda.ret_layout != ret_layout or self.hasMultiRegArguments(args_span)) {
-                                return try self.callLambdaBodyDirect(inner.lambda, args_span);
-                            }
                             const offset = try self.compileLambdaAsProc(nom.backing_expr, inner.lambda);
                             return try self.generateCallToLambda(offset, args_span, ret_layout);
                         }
                         if (inner == .closure) {
                             const closure_inner = self.store.getExpr(inner.closure.lambda);
                             if (closure_inner == .lambda) {
-                                if (self.hasCallableArguments(args_span) or self.bodyReturnsCallable(closure_inner.lambda.body) or closure_inner.lambda.ret_layout != ret_layout or self.hasMultiRegArguments(args_span)) {
-                                    return try self.callLambdaBodyDirect(closure_inner.lambda, args_span);
-                                }
                                 const offset = try self.compileLambdaAsProc(inner.closure.lambda, closure_inner.lambda);
                                 return try self.generateCallToLambda(offset, args_span, ret_layout);
                             }

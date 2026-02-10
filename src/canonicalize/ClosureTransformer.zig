@@ -1347,7 +1347,7 @@ pub fn createLiftedFunctionPatterns(
 
 /// Generate a dispatch match expression for a closure call.
 ///
-/// Phase 5: Generates calls to lifted functions instead of inlining bodies.
+/// Phase 5: Generates calls to lifted functions instead of expanding bodies at call sites.
 /// Transforms a call like `f(10)` where `f` is a closure into:
 /// ```roc
 /// match f {
@@ -1467,7 +1467,7 @@ fn generateDispatchMatch(
 
 /// Generate a dispatch match expression for a call to a variable with multiple possible closures.
 ///
-/// Phase 5: Generates calls to lifted functions instead of inlining bodies.
+/// Phase 5: Generates calls to lifted functions instead of expanding bodies at call sites.
 /// Transforms a call like `f(10)` where `f` could be one of several closures into:
 /// ```roc
 /// match f {

@@ -121,7 +121,7 @@ test "list refcount containers - record with mixed types" {
 // Tags with Lists
 
 test "list refcount containers - tag with list payload" {
-    // Simplified: Inline list in tag construction
+    // Simplified: Direct list in tag construction
     try runExpectI64(
         \\match Some([1, 2]) { Some(lst) => match lst { [a, b] => a + b, _ => 0 }, None => 0 }
     , 3, .no_trace);
@@ -139,14 +139,14 @@ test "list refcount containers - tag with multiple list payloads" {
 }
 
 test "list refcount containers - tag with string list payload" {
-    // Simplified: Inline string list in tag
+    // Simplified: Direct string list in tag
     try runExpectStr(
         \\match Some(["tag", "value"]) { Some(lst) => match lst { [first, ..] => first, _ => "" }, None => "" }
     , "tag", .no_trace);
 }
 
 test "list refcount containers - Ok/Err with lists" {
-    // Simplified: Inline list in Ok
+    // Simplified: Direct list in Ok
     try runExpectI64(
         \\match Ok([1, 2, 3]) { Ok(lst) => match lst { [a, b, c] => a + b + c, _ => 0 }, Err(_) => 0 }
     , 6, .no_trace);
