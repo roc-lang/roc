@@ -1,20 +1,18 @@
 # Valgrind suppression file for Roc
 #
-# These suppressions address false positives from musl's mallocng allocator.
-# The enframe function uses conditional jumps on values that appear
-# uninitialised to valgrind but are safe — fresh mmap'd memory is zeroed,
-# and reused slots contain valid metadata. Every Memcheck:Cond error whose
-# top frame is enframe → __libc_malloc_impl is this same false positive,
-# regardless of the caller (LLVM, LLD, Zig allocator, operator new, etc.).
-#
-# A single catch-all rule is used because the pre-built LLVM/LLD libraries
-# lack debug info and frame pointers, making function-name-based caller
-# matching unreliable in CI.
+# musl's mallocng enframe function (meta.h) reads slot header bytes to
+# detect whether a slot was previously used. For fresh mmap'd pages these
+# bytes are zero; for reused slots they carry valid values from the prior
+# allocation. Valgrind flags the read as "uninitialized" because it does
+# not model musl's internal bookkeeping. This is safe by design —
+# enframe handles both the zero and nonzero cases correctly.
 
+# Suppress all uninitialised-value errors inside musl's enframe.
+# enframe is a static inline only called from __libc_malloc_impl,
+# so matching these two frames covers every caller.
 {
    musl-mallocng-enframe
    Memcheck:Cond
    fun:enframe
    fun:__libc_malloc_impl
-   ...
 }
