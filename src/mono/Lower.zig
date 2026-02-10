@@ -5468,32 +5468,34 @@ fn lowerInspectNominal(
         return result;
     }
 
-    // Check for numeric nominal types that should be rendered as their value.
-    // These are opaque but have well-known numeric representations.
-    const layout_store = self.layout_store orelse unreachable;
-    const lv = layout_store.getLayout(value_layout);
-    if (lv.tag == .scalar) {
-        switch (lv.data.scalar.tag) {
-            .int => return try self.store.addExpr(.{ .int_to_str = .{
-                .value = value_expr,
-                .int_precision = lv.data.scalar.data.int,
-            } }, region),
-            .frac => {
-                if (lv.data.scalar.data.frac == .dec) {
-                    return try self.store.addExpr(.{ .dec_to_str = value_expr }, region);
-                }
-                return try self.store.addExpr(.{ .float_to_str = .{
-                    .value = value_expr,
-                    .float_precision = lv.data.scalar.data.frac,
-                } }, region);
-            },
-            .str => return try self.store.addExpr(.{ .str_escape_and_quote = value_expr }, region),
-            .opaque_ptr => {},
-        }
-    }
-
     if (nom.is_opaque) {
-        // Opaque types without to_inspect render as <opaque>
+        // Opaque numeric types (I32, F64, Dec, Str, etc.) render as their value.
+        // This must be gated on is_opaque because transparent nominals wrapping
+        // tag unions (e.g., Color := [Red, Green, Blue]) also have scalar layouts
+        // (the discriminant), but should render as "TypeName.TagName" instead.
+        const layout_store = self.layout_store orelse unreachable;
+        const lv = layout_store.getLayout(value_layout);
+        if (lv.tag == .scalar) {
+            switch (lv.data.scalar.tag) {
+                .int => return try self.store.addExpr(.{ .int_to_str = .{
+                    .value = value_expr,
+                    .int_precision = lv.data.scalar.data.int,
+                } }, region),
+                .frac => {
+                    if (lv.data.scalar.data.frac == .dec) {
+                        return try self.store.addExpr(.{ .dec_to_str = value_expr }, region);
+                    }
+                    return try self.store.addExpr(.{ .float_to_str = .{
+                        .value = value_expr,
+                        .float_precision = lv.data.scalar.data.frac,
+                    } }, region);
+                },
+                .str => return try self.store.addExpr(.{ .str_escape_and_quote = value_expr }, region),
+                .opaque_ptr => {},
+            }
+        }
+
+        // Opaque types without to_inspect and without a scalar layout render as <opaque>
         return try self.addStrLiteral("<opaque>", region);
     }
 
@@ -5517,6 +5519,7 @@ fn lowerInspectNominal(
     try parts.append(self.allocator, try self.addStrLiteral(type_name, region));
     try parts.append(self.allocator, try self.addStrLiteral(".", region));
     // For backing value, inspect by layout
+    const layout_store = self.layout_store orelse unreachable;
     const layout_val = layout_store.getLayout(value_layout);
     try parts.append(self.allocator, try self.lowerInspectByLayout(value_expr, layout_val, value_layout, region));
 
