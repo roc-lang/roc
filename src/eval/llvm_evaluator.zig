@@ -256,7 +256,7 @@ pub const LlvmEvaluator = struct {
         const layout_store_ptr = try self.ensureGlobalLayoutStore(all_module_envs, builtin_module_env);
 
         // Create the lowerer with the layout store
-        var lowerer = MonoLower.init(self.allocator, &mono_store, all_module_envs, null, layout_store_ptr);
+        var lowerer = MonoLower.init(self.allocator, &mono_store, all_module_envs, null, layout_store_ptr, null, null);
         defer lowerer.deinit();
 
         // Lower the CIR expression to Mono IR
@@ -353,7 +353,7 @@ pub const LlvmEvaluator = struct {
         defer self.allocator.free(object_bytes);
 
         // 6. Extract .text section and find entry point
-        const object_reader = backend.object_reader;
+        const object_reader = backend.dev.object_reader;
         const code_info = object_reader.extractCodeSectionWithEntry(object_bytes) catch return error.CompilationFailed;
 
         // 7. Copy code (it's a slice into object_bytes which we're about to free)

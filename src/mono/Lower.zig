@@ -1137,8 +1137,6 @@ fn convertToMonoLowLevel(op: CIR.Expr.LowLevel) ?ir.MonoExpr.LowLevel {
         .dec_to_f32_try_unsafe => .dec_to_f32_try_unsafe,
         .dec_to_f64 => .dec_to_f64,
 
-        .num_from_str => .num_from_str,
-
         else => null,
     };
 }
@@ -1200,8 +1198,7 @@ fn getExternalBoxIntrinsic(self: *Self, caller_env: *ModuleEnv, lookup: anytype)
     const target_pattern = ext_env.store.getPattern(def.pattern);
     if (target_pattern == .assign) {
         const method_ident = target_pattern.assign.ident;
-        if (method_ident == ext_env.idents.builtin_box_box) return .box_box;
-        if (method_ident == ext_env.idents.builtin_box_unbox) return .box_unbox;
+        _ = method_ident;
     }
     return null;
 }

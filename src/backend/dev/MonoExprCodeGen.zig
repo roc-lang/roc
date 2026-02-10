@@ -3316,9 +3316,6 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 // ── Generic numeric operations (not emitted by Mono IR lowering) ──
                 // The Mono IR lowering phase resolves these to type-specific operations
                 // (int_add_wrap, dec_add, float_add, etc.) before code generation.
-                .num_from_str => {
-                    return try self.generateNumFromStr(ll, args);
-                },
                 .num_add,
                 .num_sub,
                 .num_mul,
@@ -3332,109 +3329,10 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 .num_round,
                 .num_floor,
                 .num_ceiling,
-                .num_to_str,
-                .num_from_numeral,
                 .compare,
                 => {
                     if (std.debug.runtime_safety) unreachable;
                     unreachable;
-                },
-                .box_box => {
-                    // Box.box(value) -> Box a
-                    // Heap-allocate and copy the value into the allocation.
-                    std.debug.assert(args.len == 1);
-                    const elem_loc = try self.generateExpr(args[0]);
-                    const ls = self.layout_store orelse unreachable;
-                    const roc_ops_reg = self.roc_ops_reg orelse unreachable;
-
-                    // Get element size from the return layout (box layout -> inner element)
-                    const ret_layout = ls.getLayout(ll.ret_layout);
-                    const elem_layout_idx: layout.Idx = switch (ret_layout.tag) {
-                        .box => ret_layout.data.box,
-                        .box_of_zst => {
-                            // ZST box: nothing to allocate, return a null-like pointer
-                            return .{ .immediate_i64 = 0 };
-                        },
-                        else => unreachable,
-                    };
-                    const elem_sa = ls.layoutSizeAlign(ls.getLayout(elem_layout_idx));
-                    const elem_alignment = elem_sa.alignment.toByteUnits();
-
-                    // Ensure the element is on the stack for copying
-                    const elem_off = try self.ensureOnStack(elem_loc, elem_sa.size);
-
-                    // Allocate heap memory: allocateWithRefcountC(data_bytes, alignment, elements_refcounted, roc_ops)
-                    {
-                        var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                        try builder.addImmArg(@intCast(elem_sa.size));
-                        try builder.addImmArg(@intCast(elem_alignment));
-                        try builder.addImmArg(0); // elements_refcounted = false
-                        try builder.addRegArg(roc_ops_reg);
-                        try self.callBuiltin(&builder, @intFromPtr(&allocateWithRefcountC), .allocate_with_refcount);
-                    }
-
-                    // The heap pointer is returned in RAX/X0
-                    const heap_ptr_reg = try self.allocTempGeneral();
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.movRegReg(.w64, heap_ptr_reg, .X0);
-                    } else {
-                        try self.codegen.emit.movRegReg(.w64, heap_ptr_reg, .RAX);
-                    }
-
-                    // Copy element data from stack to heap
-                    try self.copyStackToPtr(.{ .stack = .{ .offset = elem_off, .size = ValueSize.fromByteCount(@min(elem_sa.size, 8)) } }, heap_ptr_reg, elem_sa.size);
-
-                    // The box value IS the heap pointer
-                    return .{ .general_reg = heap_ptr_reg };
-                },
-                .box_unbox => {
-                    // Box.unbox(box) -> a
-                    // Dereference the box pointer and copy the element to the stack.
-                    std.debug.assert(args.len == 1);
-                    const box_loc = try self.generateExpr(args[0]);
-                    const ls = self.layout_store orelse unreachable;
-                    const base_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .FP else .RBP;
-
-                    // ret_layout is the element layout
-                    const elem_sa = ls.layoutSizeAlign(ls.getLayout(ll.ret_layout));
-
-                    if (elem_sa.size == 0) {
-                        // ZST: nothing to copy
-                        return .{ .immediate_i64 = 0 };
-                    }
-
-                    // Get the box pointer into a register
-                    const box_ptr_reg = try self.ensureInGeneralReg(box_loc);
-
-                    if (elem_sa.size <= 8) {
-                        // Small value: load directly from heap into register
-                        const result_reg = box_ptr_reg; // reuse the register
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emit.ldrRegMemSoff(.w64, result_reg, box_ptr_reg, 0);
-                        } else {
-                            try self.codegen.emit.movRegMem(.w64, result_reg, box_ptr_reg, 0);
-                        }
-                        return .{ .general_reg = result_reg };
-                    }
-
-                    // Larger value: copy from heap to stack
-                    const dest_offset = self.codegen.allocStackSlot(elem_sa.size);
-                    var copied: u32 = 0;
-                    while (copied < elem_sa.size) {
-                        const temp_reg = try self.allocTempGeneral();
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, box_ptr_reg, @intCast(copied));
-                            try self.codegen.emit.strRegMemSoff(.w64, temp_reg, base_reg, dest_offset + @as(i32, @intCast(copied)));
-                        } else {
-                            try self.codegen.emit.movRegMem(.w64, temp_reg, box_ptr_reg, @intCast(copied));
-                            try self.codegen.emit.movMemReg(.w64, base_reg, dest_offset + @as(i32, @intCast(copied)), temp_reg);
-                        }
-                        self.codegen.freeGeneral(temp_reg);
-                        copied += 8;
-                    }
-                    self.codegen.freeGeneral(box_ptr_reg);
-
-                    return self.fieldLocationFromLayout(dest_offset, elem_sa.size, ll.ret_layout);
                 },
                 .crash => {
                     // Runtime crash: call roc_crashed via RocOps.
