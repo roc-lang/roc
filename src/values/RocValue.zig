@@ -26,10 +26,6 @@ lay: Layout,
 /// sentinel types such as `Idx.bool`.
 layout_idx: ?Idx = null,
 
-// ---------------------------------------------------------------------------
-// Constructors
-// ---------------------------------------------------------------------------
-
 /// Wrap an opaque pointer and its layout into a `RocValue`.
 pub fn fromPtr(raw_ptr: *const anyopaque, lay_val: Layout) RocValue {
     return .{ .ptr = @ptrCast(raw_ptr), .lay = lay_val };
@@ -49,10 +45,6 @@ pub fn fromRawBytes(raw_ptr: [*]const u8, lay_val: Layout) RocValue {
 pub fn zst(lay_val: Layout) RocValue {
     return .{ .ptr = null, .lay = lay_val };
 }
-
-// ---------------------------------------------------------------------------
-// Scalar accessors (safe, misalignment-tolerant reads via @memcpy)
-// ---------------------------------------------------------------------------
 
 inline fn readAligned(comptime T: type, raw_ptr: [*]const u8) T {
     var result: T = undefined;
@@ -128,10 +120,6 @@ pub fn readList(self: RocValue) *const RocList {
     return @ptrCast(@alignCast(self.ptr.?));
 }
 
-// ---------------------------------------------------------------------------
-// Format context — lightweight, no type-system dependencies
-// ---------------------------------------------------------------------------
-
 /// Lightweight context for formatting values — carries only layout and ident stores.
 pub const FormatContext = struct {
     layout_store: *const layout.Store,
@@ -141,10 +129,6 @@ pub const FormatContext = struct {
     /// Strip trailing .0 from whole-number Dec values (REPL mode).
     strip_whole_number_decimal: bool = false,
 };
-
-// ---------------------------------------------------------------------------
-// Canonical formatting
-// ---------------------------------------------------------------------------
 
 /// Errors that can occur during value formatting.
 pub const FormatError = error{OutOfMemory};
@@ -368,10 +352,6 @@ pub fn format(self: RocValue, allocator: std.mem.Allocator, ctx: FormatContext) 
     return try allocator.dupe(u8, "<unsupported>");
 }
 
-// ---------------------------------------------------------------------------
-// Structural equality
-// ---------------------------------------------------------------------------
-
 /// Compare two RocValues for structural equality.
 /// The `FormatContext` is needed because composite types require the
 /// `layout_store` to determine field offsets and element sizes.
@@ -505,10 +485,6 @@ pub fn equals(self: RocValue, other: RocValue, ctx: FormatContext) bool {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 /// Dereference the box pointer. Returns the inner data pointer or null.
 fn getBoxedData(self: RocValue) ?[*]const u8 {
     if (self.ptr) |ptr| {
@@ -518,10 +494,6 @@ fn getBoxedData(self: RocValue) ?[*]const u8 {
     }
     return null;
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 test "format bool true" {
     const allocator = std.testing.allocator;
@@ -641,10 +613,6 @@ test "format box_of_zst" {
     defer allocator.free(result);
     try std.testing.expectEqualStrings("Box({})", result);
 }
-
-// ---------------------------------------------------------------------------
-// equals() tests
-// ---------------------------------------------------------------------------
 
 test "equals bool" {
     const bool_layout = Layout{

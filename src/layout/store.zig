@@ -102,6 +102,7 @@ const ComputedNominalEntry = struct {
     module_idx: u16,
 };
 
+/// Layout store that computes and caches memory layouts from type variables.
 pub const Store = struct {
     const Self = @This();
 

@@ -748,10 +748,6 @@ pub const Repl = struct {
     }
 };
 
-// ---------------------------------------------------------------------------
-// Type-driven value formatting — walks type vars + layout for proper rendering
-// ---------------------------------------------------------------------------
-
 const layout_mod = @import("layout");
 const Layout = layout_mod.Layout;
 const RocValue = @import("values").RocValue;
