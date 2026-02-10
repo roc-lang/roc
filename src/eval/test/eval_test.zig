@@ -420,6 +420,20 @@ test "lambdas with capture" {
     , 60, .no_trace);
 }
 
+test "closure with many captures (struct_captures)" {
+    // 4 captures -> struct_captures representation
+    try runExpectI64(
+        \\{
+        \\    a = 100.I64
+        \\    b = 200.I64
+        \\    c = 300.I64
+        \\    d = 400.I64
+        \\    f = |n| a + b + c + d + n
+        \\    f(5.I64)
+        \\}
+    , 1005, .no_trace);
+}
+
 test "lambdas nested closures" {
     // Nested closures with block locals
     try runExpectI64(
