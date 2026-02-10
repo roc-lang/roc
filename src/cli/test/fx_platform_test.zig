@@ -260,6 +260,7 @@ test "fx platform all_syntax_test.roc prints expected output" {
         "Line 3\n" ++
         "Unicode escape sequence: \u{00A0}\n" ++
         "This is an effectful function!\n" ++
+        "Try.Ok(1)\n" ++
         "15.0\n" ++
         "False\n" ++
         "10.0\n" ++
