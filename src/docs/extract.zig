@@ -176,11 +176,20 @@ pub fn extractModuleDocs(gpa: Allocator, module_env: *const ModuleEnv, package_n
         entries_list.deinit(gpa);
     }
 
-    const exports_slice = module_env.store.sliceDefs(module_env.exports);
-    const defs_slice = if (exports_slice.len > 0)
-        exports_slice
-    else
-        module_env.store.sliceDefs(module_env.all_defs);
+    // For documentation purposes, show all accessible definitions, not just
+    // what's explicitly exported. Exports control compilation/linking (what
+    // other modules can import), but docs should be comprehensive.
+    const defs_slice = switch (module_env.module_kind) {
+        .platform, .hosted => blk: {
+            // Platforms and hosted modules: only document explicitly provided items
+            const exports_slice = module_env.store.sliceDefs(module_env.exports);
+            break :blk if (exports_slice.len > 0)
+                exports_slice
+            else
+                module_env.store.sliceDefs(module_env.all_defs);
+        },
+        else => module_env.store.sliceDefs(module_env.all_defs),
+    };
 
     for (defs_slice) |def_idx| {
         if (try extractDefEntry(gpa, module_env, def_idx, source)) |entry| {
@@ -687,6 +696,10 @@ const ExtractContext = struct {
     fn deinit(self: *ExtractContext) void {
         self.seen.deinit(self.gpa);
         self.constraints_list.deinit(self.gpa);
+        var it = self.flex_names.valueIterator();
+        while (it.next()) |value| {
+            self.gpa.free(value.*);
+        }
         self.flex_names.deinit();
     }
 
