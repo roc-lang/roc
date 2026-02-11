@@ -5641,6 +5641,8 @@ fn getContentType(file_path: []const u8) []const u8 {
         return "image/jpeg";
     } else if (std.mem.endsWith(u8, file_path, ".svg")) {
         return "image/svg+xml";
+    } else if (std.mem.endsWith(u8, file_path, ".woff2")) {
+        return "font/woff2";
     } else {
         return "text/plain";
     }
@@ -5768,7 +5770,7 @@ fn rocDocs(ctx: *CliContext, args: cli_args.DocsArgs) !void {
 /// Generate documentation for the root and all its dependencies and imported modules.
 ///
 /// Builds a PackageDocs by extracting documentation from all compiled modules,
-/// then writes it as an S-expression file to the output directory.
+/// then generates an HTML documentation site in the output directory.
 fn generateDocs(
     ctx: *CliContext,
     build_env: *compile.BuildEnv,
@@ -5823,19 +5825,13 @@ fn generateDocs(
         else => return err,
     };
 
-    // Write S-expression output
-    const sexpr_path = try std.fs.path.join(ctx.arena, &[_][]const u8{ base_output_dir, "docs.sexpr" });
-    const sexpr_file = try std.fs.cwd().createFile(sexpr_path, .{});
-    defer sexpr_file.close();
-
-    var file_buffer: [4096]u8 = undefined;
-    var file_writer = sexpr_file.writer(&file_buffer);
-    const writer = &file_writer.interface;
-
-    package_docs.writeToSExpr(writer) catch |err| {
-        std.debug.print("Warning: failed to write S-expression docs: {}\n", .{err});
+    // Generate HTML documentation site
+    // TODO: support --format md and --format json output formats
+    const render_html = docs.render_html;
+    render_html.renderPackageDocs(ctx.gpa, &package_docs, base_output_dir) catch |err| {
+        std.debug.print("Error: failed to generate HTML docs: {}\n", .{err});
+        return err;
     };
-    writer.flush() catch {};
 
     _ = module_path;
 }
