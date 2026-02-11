@@ -3184,10 +3184,13 @@ pub const Store = struct {
                         // Unfinalized box reservation - update it with the real layout
                         self.updateLayout(reserved, Layout.box(layout_idx));
                     }
-                    // If reserved is Box(layout_idx), return the raw layout for
-                    // top-level callers (not inside a container from this invocation).
+                    // If reserved is Box(layout_idx), the nominal is non-recursive
+                    // (recursive nominals are finalized through the container path).
+                    // Update the cache to store the raw layout so subsequent lookups
+                    // (e.g., record field layout resolution) get the correct layout.
                     const final_reserved = self.getLayout(reserved);
                     if (final_reserved.tag == .box and final_reserved.data.box == layout_idx) {
+                        try self.layouts_by_module_var.put(cache_key, layout_idx);
                         return layout_idx;
                     }
                     return reserved;

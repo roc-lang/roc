@@ -2775,7 +2775,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                     },
                 };
             } else {
-                const result = try self.lowerRecordFields(module_env, rec.fields);
+                const result = try self.lowerRecordFields(module_env, rec.fields, record_layout);
                 break :blk .{
                     .record = .{
                         .record_layout = record_layout,
@@ -3950,8 +3950,10 @@ const LowerRecordFieldsResult = struct {
     field_names: MonoFieldNameSpan,
 };
 
-/// Lower record fields - sorted alphabetically by field name to match layout order
-fn lowerRecordFields(self: *Self, module_env: *ModuleEnv, fields: CIR.RecordField.Span) Allocator.Error!LowerRecordFieldsResult {
+/// Lower record fields - sorted by alignment descending, then alphabetically
+/// by field name to match the layout store's field ordering.
+fn lowerRecordFields(self: *Self, module_env: *ModuleEnv, fields: CIR.RecordField.Span, record_layout: LayoutIdx) Allocator.Error!LowerRecordFieldsResult {
+    _ = record_layout;
     const field_indices = module_env.store.sliceRecordFields(fields);
     if (field_indices.len == 0) return .{
         .fields = MonoExprSpan.empty(),
@@ -4028,12 +4030,12 @@ fn lowerRecordUpdate(
 ) Allocator.Error!LowerRecordFieldsResult {
     const ls = self.layout_store orelse {
         // No layout store — fall back to just lowering explicit fields
-        return self.lowerRecordFields(module_env, explicit_fields);
+        return self.lowerRecordFields(module_env, explicit_fields, record_layout_idx);
     };
 
     const layout_val = ls.getLayout(record_layout_idx);
     if (layout_val.tag != .record) {
-        return self.lowerRecordFields(module_env, explicit_fields);
+        return self.lowerRecordFields(module_env, explicit_fields, record_layout_idx);
     }
 
     // Lower the ext expression once (the record being spread)

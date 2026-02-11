@@ -813,7 +813,7 @@ fn formatWithTypes(
         else => {},
     };
 
-    // Fall back to layout-only formatting for scalars and other types
+    // Use layout-only formatting for scalars and other types
     const roc_val = RocValue{ .ptr = ptr, .lay = lay };
     const fmt_ctx = RocValue.FormatContext{
         .layout_store = layout_store,
