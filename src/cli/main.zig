@@ -93,6 +93,7 @@ const TestRunner = eval.TestRunner;
 const backend = @import("backend");
 const mono = @import("mono");
 const layout = @import("layout");
+const docs = @import("docs");
 const Allocators = base.Allocators;
 
 /// Embedded interpreter shim libraries for different targets.
@@ -5761,518 +5762,81 @@ fn rocDocs(ctx: *CliContext, args: cli_args.DocsArgs) !void {
     }
 }
 
-/// Associated item (type or value) within a module or type
-pub const AssociatedItem = struct {
-    name: []const u8,
-    children: []AssociatedItem, // Nested associated items (for types with associated items)
+// Documentation generation uses the docs module's extraction pipeline.
+// See src/docs/ for DocModel, extract, and render_type modules.
 
-    fn deinit(self: AssociatedItem, gpa: Allocator) void {
-        gpa.free(self.name);
-        for (self.children) |child| {
-            child.deinit(gpa);
-        }
-        gpa.free(self.children);
-    }
-};
-
-/// Information about an imported module
-pub const ModuleInfo = struct {
-    name: []const u8, // e.g., "Foo" or "foo.Bar"
-    link_path: []const u8, // e.g., "Foo" or "foo/Bar"
-    associated_items: []AssociatedItem, // Types and values defined in this module
-
-    fn deinit(self: ModuleInfo, gpa: Allocator) void {
-        gpa.free(self.name);
-        gpa.free(self.link_path);
-        for (self.associated_items) |item| {
-            item.deinit(gpa);
-        }
-        gpa.free(self.associated_items);
-    }
-};
-
-/// Recursively write associated items as nested <ul> elements
-fn writeAssociatedItems(writer: anytype, items: []const AssociatedItem, indent_level: usize) !void {
-    // Write opening <ul>
-    try writer.splatByteAll(' ', indent_level * 2);
-    try writer.writeAll("<ul>\n");
-
-    for (items) |item| {
-        // Write <li> with item name
-        try writer.splatByteAll(' ', (indent_level + 1) * 2);
-        try writer.print("<li>{s}\n", .{item.name});
-
-        // Recursively write children if any
-        if (item.children.len > 0) {
-            try writeAssociatedItems(writer, item.children, indent_level + 2);
-        }
-
-        // Close <li>
-        try writer.splatByteAll(' ', (indent_level + 1) * 2);
-        try writer.writeAll("</li>\n");
-    }
-
-    // Write closing </ul>
-    try writer.splatByteAll(' ', indent_level * 2);
-    try writer.writeAll("</ul>\n");
-}
-
-/// Generate HTML index file for a package or app
-pub fn generatePackageIndex(
-    ctx: *CliContext,
-    output_path: []const u8,
-    module_path: []const u8,
-    package_shorthands: []const []const u8,
-    imported_modules: []const ModuleInfo,
-) !void {
-    // Create output directory if it doesn't exist
-    std.fs.cwd().makePath(output_path) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        else => return err,
-    };
-
-    // Create index.html file
-    const index_path = try std.fs.path.join(ctx.arena, &[_][]const u8{ output_path, "index.html" });
-
-    const file = try std.fs.cwd().createFile(index_path, .{});
-    defer file.close();
-
-    var file_buffer: [4096]u8 = undefined;
-    var file_writer = file.writer(&file_buffer);
-    const writer = &file_writer.interface;
-
-    // Write HTML header
-    try writer.writeAll("<!DOCTYPE html>\n<html>\n<head>\n");
-    try writer.writeAll("  <meta charset=\"UTF-8\">\n");
-    try writer.writeAll("  <title>Documentation</title>\n");
-    try writer.writeAll("</head>\n<body>\n");
-
-    // Write module path as h1
-    try writer.print("  <h1>{s}</h1>\n", .{module_path});
-
-    // Write sidebar with imported modules if any
-    if (imported_modules.len > 0) {
-        try writer.writeAll("  <ul class='sidebar'>\n");
-        for (imported_modules) |mod_info| {
-            try writer.print("    <li>\n      <a href=\"{s}\">{s}</a>\n", .{ mod_info.link_path, mod_info.name });
-
-            // Write nested associated items if any
-            if (mod_info.associated_items.len > 0) {
-                try writeAssociatedItems(writer, mod_info.associated_items, 3);
-            }
-
-            try writer.writeAll("    </li>\n");
-        }
-        try writer.writeAll("  </ul>\n");
-    }
-
-    // Write links to package dependencies if any exist
-    if (package_shorthands.len > 0) {
-        try writer.writeAll("  <ul>\n");
-        for (package_shorthands) |shorthand| {
-            try writer.print("    <li><a href=\"{s}\">{s}</a></li>\n", .{ shorthand, shorthand });
-        }
-        try writer.writeAll("  </ul>\n");
-    }
-
-    try writer.writeAll("</body>\n</html>\n");
-    try writer.flush();
-}
-
-/// Generate HTML index file for a module
-pub fn generateModuleIndex(
-    ctx: *CliContext,
-    output_path: []const u8,
-    module_name: []const u8,
-) !void {
-    // Create output directory if it doesn't exist
-    std.fs.cwd().makePath(output_path) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        else => return err,
-    };
-
-    // Create index.html file
-    const index_path = try std.fs.path.join(ctx.arena, &[_][]const u8{ output_path, "index.html" });
-
-    const file = try std.fs.cwd().createFile(index_path, .{});
-    defer file.close();
-
-    var file_buffer: [4096]u8 = undefined;
-    var file_writer = file.writer(&file_buffer);
-    const writer = &file_writer.interface;
-
-    // Write HTML header
-    try writer.writeAll("<!DOCTYPE html>\n<html>\n<head>\n");
-    try writer.writeAll("  <meta charset=\"UTF-8\">\n");
-    try writer.print("  <title>{s}</title>\n", .{module_name});
-    try writer.writeAll("</head>\n<body>\n");
-
-    // Write module name as h1
-    try writer.print("  <h1>{s}</h1>\n", .{module_name});
-
-    try writer.writeAll("</body>\n</html>\n");
-    try writer.flush();
-}
-
-/// Extract associated items from a record expression (recursively)
-fn extractRecordAssociatedItems(
-    ctx: *CliContext,
-    module_env: *const ModuleEnv,
-    record_fields: can.CIR.RecordField.Span,
-) ![]AssociatedItem {
-    var items = std.array_list.Managed(AssociatedItem).init(ctx.gpa);
-    errdefer {
-        for (items.items) |item| {
-            item.deinit(ctx.gpa);
-        }
-        items.deinit();
-    }
-
-    const fields_slice = module_env.store.sliceRecordFields(record_fields);
-    for (fields_slice) |field_idx| {
-        const field = module_env.store.getRecordField(field_idx);
-        const field_name = try ctx.gpa.dupe(u8, module_env.getIdentText(field.name));
-        errdefer ctx.gpa.free(field_name);
-
-        // Check if the field value is a nominal type (has nested associated items)
-        const field_expr = module_env.store.getExpr(field.value);
-        const children = switch (field_expr) {
-            .e_nominal => |nom| blk: {
-                // Get the nominal type's backing expression
-                const backing_expr = module_env.store.getExpr(nom.backing_expr);
-                break :blk switch (backing_expr) {
-                    .e_record => |rec| try extractRecordAssociatedItems(ctx, module_env, rec.fields),
-                    else => try ctx.gpa.alloc(AssociatedItem, 0),
-                };
-            },
-            else => try ctx.gpa.alloc(AssociatedItem, 0),
-        };
-
-        try items.append(.{
-            .name = field_name,
-            .children = children,
-        });
-    }
-
-    return try items.toOwnedSlice();
-}
-
-/// Extract associated items from a module's exports
-fn extractAssociatedItems(
-    ctx: *CliContext,
-    module_env: *const ModuleEnv,
-) ![]AssociatedItem {
-    var items = std.array_list.Managed(AssociatedItem).init(ctx.gpa);
-    errdefer {
-        for (items.items) |item| {
-            item.deinit(ctx.gpa);
-        }
-        items.deinit();
-    }
-
-    // Get all exported definitions
-    const exports_slice = module_env.store.sliceDefs(module_env.exports);
-
-    // If no exports, try all_defs (for modules that are still being processed)
-    const defs_slice = if (exports_slice.len == 0)
-        module_env.store.sliceDefs(module_env.all_defs)
-    else
-        exports_slice;
-
-    for (defs_slice) |def_idx| {
-        const def = module_env.store.getDef(def_idx);
-
-        // Get the pattern to find the name
-        const pattern = module_env.store.getPattern(def.pattern);
-
-        // Extract name from pattern (could be assign, nominal, etc.)
-        const name_ident_opt = switch (pattern) {
-            .assign => |a| a.ident,
-            .nominal => |n| blk: {
-                // For nominal types, we need to get the statement and extract the header
-                const stmt = module_env.store.getStatement(n.nominal_type_decl);
-                break :blk switch (stmt) {
-                    .s_nominal_decl => |decl| module_env.store.getTypeHeader(decl.header).name,
-                    else => continue,
-                };
-            },
-            else => continue,
-        };
-
-        const name = try ctx.gpa.dupe(u8, module_env.getIdentText(name_ident_opt));
-        errdefer ctx.gpa.free(name);
-
-        // Extract nested associated items if this is a nominal type with a record
-        const children = switch (pattern) {
-            .nominal => blk: {
-                // For nominal types, look at the expression to find associated items
-                const expr = module_env.store.getExpr(def.expr);
-                break :blk switch (expr) {
-                    .e_nominal => |nom_expr| blk2: {
-                        const backing = module_env.store.getExpr(nom_expr.backing_expr);
-                        break :blk2 switch (backing) {
-                            .e_record => |record| try extractRecordAssociatedItems(ctx, module_env, record.fields),
-                            else => try ctx.gpa.alloc(AssociatedItem, 0),
-                        };
-                    },
-                    else => try ctx.gpa.alloc(AssociatedItem, 0),
-                };
-            },
-            else => try ctx.gpa.alloc(AssociatedItem, 0),
-        };
-
-        try items.append(.{
-            .name = name,
-            .children = children,
-        });
-    }
-
-    return try items.toOwnedSlice();
-}
-
-/// Generate documentation for the root and all its dependencies and imported modules
+/// Generate documentation for the root and all its dependencies and imported modules.
+///
+/// Builds a PackageDocs by extracting documentation from all compiled modules,
+/// then writes it as an S-expression file to the output directory.
 fn generateDocs(
     ctx: *CliContext,
     build_env: *compile.BuildEnv,
     module_path: []const u8,
     base_output_dir: []const u8,
 ) !void {
-    // First, determine if this is an app or other kind
+    const DocModel = docs.DocModel;
+    const extract = docs.extract;
+
+    // Determine package name from the first package
     var pkg_iter = build_env.packages.iterator();
     const first_pkg = if (pkg_iter.next()) |entry| entry.value_ptr.* else return;
+    const pkg_name = try ctx.gpa.dupe(u8, first_pkg.name);
 
-    const is_app = first_pkg.kind == .app;
-
-    if (is_app) {
-        // For apps, collect all imported modules and generate sidebar
-        try generateAppDocs(ctx, build_env, module_path, base_output_dir);
-    } else {
-        // For packages, just generate package dependency docs
-        try generatePackageDocs(ctx, build_env, module_path, base_output_dir, "");
-    }
-}
-
-/// Generate docs for an app module
-fn generateAppDocs(
-    ctx: *CliContext,
-    build_env: *compile.BuildEnv,
-    module_path: []const u8,
-    base_output_dir: []const u8,
-) !void {
-    // Collect all imported modules (both local and from packages)
-    var modules_map = std.StringHashMap(ModuleInfo).init(ctx.gpa);
+    // Collect ModuleDocs from all compiled modules
+    var module_docs_list = std.ArrayList(DocModel.ModuleDocs).empty;
     defer {
-        var it = modules_map.iterator();
-        while (it.next()) |entry| {
-            entry.value_ptr.deinit(ctx.gpa);
-        }
-        modules_map.deinit();
+        for (module_docs_list.items) |*mod| mod.deinit(ctx.gpa);
+        module_docs_list.deinit(ctx.gpa);
     }
 
-    // Get the root package
-    var pkg_iter = build_env.packages.iterator();
-    const first_pkg = if (pkg_iter.next()) |entry| entry.value_ptr.* else return;
-
-    // Iterate through schedulers to get modules
-    var sched_iter = build_env.schedulers.iterator();
-    while (sched_iter.next()) |sched_entry| {
-        const package_name = sched_entry.key_ptr.*;
-        const package_env = sched_entry.value_ptr.*;
-
-        // Iterate through modules in this package
-        for (package_env.modules.items) |module_state| {
-            // Process external imports (e.g., "cli.Stdout")
-            for (module_state.external_imports.items) |ext_import| {
-                // Parse the import (e.g., "cli.Stdout" -> { .qualifier = "cli", .module = "Stdout" })
-                if (base.module_path.parseQualifiedImport(ext_import)) |qualified| {
-                    // Create full name and link path
-                    const full_name = try ctx.arena.dupe(u8, ext_import);
-                    const link_path = try std.fmt.allocPrint(ctx.arena, "{s}/{s}", .{ qualified.qualifier, qualified.module });
-
-                    const empty_items = [_]AssociatedItem{};
-                    const mod_info = ModuleInfo{
-                        .name = full_name,
-                        .link_path = link_path,
-                        .associated_items = &empty_items,
-                    };
-
-                    // Add to map (deduplicates automatically)
-                    const gop = try modules_map.getOrPut(full_name);
-                    if (!gop.found_existing) {
-                        gop.value_ptr.* = mod_info;
-                    }
-
-                    // Generate index.html for this module
-                    const module_output_dir = try std.fs.path.join(ctx.arena, &[_][]const u8{ base_output_dir, qualified.qualifier, qualified.module });
-                    generateModuleIndex(ctx, module_output_dir, ext_import) catch |err| {
-                        std.debug.print("Warning: failed to generate module index for {s}: {}\n", .{ ext_import, err });
-                    };
-                }
-            }
-
-            // Process local imports (non-external modules in the same package)
-            for (module_state.imports.items) |import_id| {
-                if (import_id < package_env.modules.items.len) {
-                    const imported_module = package_env.modules.items[import_id];
-                    const module_name = imported_module.name;
-
-                    // Skip if this is the root module itself
-                    if (std.mem.eql(u8, module_name, "main")) continue;
-
-                    // Only include if it's a local module (not from a package)
-                    if (std.mem.eql(u8, package_name, first_pkg.name)) {
-                        const full_name = try ctx.gpa.dupe(u8, module_name);
-                        const link_path = try ctx.gpa.dupe(u8, module_name);
-
-                        // Extract associated items from the module if it has an env
-                        const associated_items = if (imported_module.env) |*mod_env|
-                            try extractAssociatedItems(ctx, mod_env)
-                        else
-                            try ctx.gpa.alloc(AssociatedItem, 0);
-
-                        const mod_info = ModuleInfo{
-                            .name = full_name,
-                            .link_path = link_path,
-                            .associated_items = associated_items,
-                        };
-
-                        const gop = try modules_map.getOrPut(full_name);
-                        if (!gop.found_existing) {
-                            gop.value_ptr.* = mod_info;
-                        } else {
-                            // Free the duplicates
-                            ctx.gpa.free(full_name);
-                            ctx.gpa.free(link_path);
-                            for (associated_items) |item| {
-                                item.deinit(ctx.gpa);
-                            }
-                            ctx.gpa.free(associated_items);
-                        }
-
-                        // Generate index.html for this local module
-                        const module_output_dir = try std.fs.path.join(ctx.arena, &[_][]const u8{ base_output_dir, module_name });
-                        generateModuleIndex(ctx, module_output_dir, module_name) catch |err| {
-                            std.debug.print("Warning: failed to generate module index for {s}: {}\n", .{ module_name, err });
-                        };
-                    }
-                }
-            }
-        }
-    }
-
-    // Convert map to sorted list
-    var modules_list = std.ArrayList(ModuleInfo).empty;
-    defer modules_list.deinit(ctx.gpa);
-    var map_iter = modules_map.iterator();
-    while (map_iter.next()) |entry| {
-        try modules_list.append(ctx.gpa, entry.value_ptr.*);
-    }
-
-    // Collect package shorthands
-    var shorthands_list = std.array_list.Managed([]const u8).init(ctx.gpa);
-    defer {
-        for (shorthands_list.items) |item| ctx.gpa.free(item);
-        shorthands_list.deinit();
-    }
-
-    var shorthand_iter = first_pkg.shorthands.iterator();
-    while (shorthand_iter.next()) |sh_entry| {
-        const shorthand = try ctx.gpa.dupe(u8, sh_entry.key_ptr.*);
-        try shorthands_list.append(shorthand);
-    }
-
-    // Generate root index.html
-    try generatePackageIndex(ctx, base_output_dir, module_path, shorthands_list.items, modules_list.items);
-
-    // Generate package dependency docs recursively
-    shorthand_iter = first_pkg.shorthands.iterator();
-    while (shorthand_iter.next()) |sh_entry| {
-        const shorthand = sh_entry.key_ptr.*;
-        const dep_ref = sh_entry.value_ptr.*;
-
-        generatePackageDocs(ctx, build_env, dep_ref.root_file, base_output_dir, shorthand) catch |err| {
-            std.debug.print("Warning: failed to generate docs for package {s}: {}\n", .{ shorthand, err });
-        };
-    }
-}
-
-/// Recursively generate documentation for a package and its dependencies
-fn generatePackageDocs(
-    ctx: *CliContext,
-    build_env: *compile.BuildEnv,
-    module_path: []const u8,
-    base_output_dir: []const u8,
-    relative_path: []const u8,
-) error{OutOfMemory}!void {
-    const output_dir = if (relative_path.len == 0)
-        try ctx.arena.dupe(u8, base_output_dir)
-    else
-        try std.fs.path.join(ctx.arena, &[_][]const u8{ base_output_dir, relative_path });
-
-    var shorthands_list = std.array_list.Managed([]const u8).init(ctx.gpa);
-    defer {
-        for (shorthands_list.items) |item| ctx.gpa.free(item);
-        shorthands_list.deinit();
-    }
-
-    var pkg_iter = build_env.packages.iterator();
-    while (pkg_iter.next()) |entry| {
-        const pkg = entry.value_ptr;
-
-        var shorthand_iter = pkg.shorthands.iterator();
-        while (shorthand_iter.next()) |sh_entry| {
-            const shorthand = try ctx.gpa.dupe(u8, sh_entry.key_ptr.*);
-            try shorthands_list.append(shorthand);
-        }
-
-        shorthand_iter = pkg.shorthands.iterator();
-        while (shorthand_iter.next()) |sh_entry| {
-            const shorthand = sh_entry.key_ptr.*;
-
-            const dep_relative_path = if (relative_path.len == 0)
-                try ctx.arena.dupe(u8, shorthand)
-            else
-                try std.fs.path.join(ctx.arena, &[_][]const u8{ relative_path, shorthand });
-
-            const dep_ref = sh_entry.value_ptr.*;
-            generatePackageDocs(ctx, build_env, dep_ref.root_file, base_output_dir, dep_relative_path) catch |err| {
-                std.debug.print("Warning: failed to generate docs for {s}: {}\n", .{ shorthand, err });
-            };
-        }
-
-        break;
-    }
-
-    // For standalone modules, extract and display their exports
-    var module_infos = std.array_list.Managed(ModuleInfo).init(ctx.gpa);
-    defer {
-        for (module_infos.items) |mod| mod.deinit(ctx.gpa);
-        module_infos.deinit();
-    }
-
-    // Get the module's exports if it's a standalone module
     var sched_iter = build_env.schedulers.iterator();
     while (sched_iter.next()) |sched_entry| {
         const package_env = sched_entry.value_ptr.*;
 
-        // Check ALL modules in this package
         for (package_env.modules.items) |module_state| {
             if (module_state.env) |*mod_env| {
-                const associated_items = try extractAssociatedItems(ctx, mod_env);
-                const mod_name = try ctx.gpa.dupe(u8, module_state.name);
-
-                try module_infos.append(.{
-                    .name = mod_name,
-                    .link_path = try ctx.gpa.dupe(u8, ""),
-                    .associated_items = associated_items,
-                });
+                var mod_docs = extract.extractModuleDocs(ctx.gpa, mod_env) catch |err| {
+                    std.debug.print("Warning: failed to extract docs for module {s}: {}\n", .{ module_state.name, err });
+                    continue;
+                };
+                module_docs_list.append(ctx.gpa, mod_docs) catch {
+                    mod_docs.deinit(ctx.gpa);
+                    continue;
+                };
             }
         }
     }
 
-    generatePackageIndex(ctx, output_dir, module_path, shorthands_list.items, module_infos.items) catch |err| {
-        std.debug.print("Warning: failed to generate index for {s}: {}\n", .{ module_path, err });
+    const modules_slice = module_docs_list.toOwnedSlice(ctx.gpa) catch return;
+
+    var package_docs = DocModel.PackageDocs{
+        .name = pkg_name,
+        .modules = modules_slice,
     };
+    defer package_docs.deinit(ctx.gpa);
+
+    // Create output directory
+    std.fs.cwd().makePath(base_output_dir) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return err,
+    };
+
+    // Write S-expression output
+    const sexpr_path = try std.fs.path.join(ctx.arena, &[_][]const u8{ base_output_dir, "docs.sexpr" });
+    const sexpr_file = try std.fs.cwd().createFile(sexpr_path, .{});
+    defer sexpr_file.close();
+
+    var file_buffer: [4096]u8 = undefined;
+    var file_writer = sexpr_file.writer(&file_buffer);
+    const writer = &file_writer.interface;
+
+    package_docs.writeToSExpr(writer) catch |err| {
+        std.debug.print("Warning: failed to write S-expression docs: {}\n", .{err});
+    };
+    writer.flush() catch {};
+
+    _ = module_path;
 }
 
 test "appendWindowsQuotedArg" {

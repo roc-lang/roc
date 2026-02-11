@@ -269,7 +269,7 @@ pub const ModuleTest = struct {
 /// unnamed wrappers) so callers can correct the reported totals.
 pub const ModuleTestsResult = struct {
     /// Compile/run steps for each module's tests, in creation order.
-    tests: [23]ModuleTest,
+    tests: [24]ModuleTest,
     /// Number of synthetic passes the summary must subtract when filters were injected.
     /// Includes aggregator ensures and unconditional wrapper tests.
     forced_passes: usize,
@@ -304,6 +304,7 @@ pub const ModuleType = enum {
     mono,
     roc_target,
     sljmp,
+    docs,
 
     /// Returns the dependencies for this module type
     pub fn getDependencies(self: ModuleType) []const ModuleType {
@@ -335,6 +336,7 @@ pub const ModuleType = enum {
             .mono => &.{ .base, .layout, .can, .types },
             .roc_target => &.{.base},
             .sljmp => &.{},
+            .docs => &.{ .tracy, .builtins, .collections, .base, .parse, .types, .can, .check, .reporting },
         };
     }
 };
@@ -368,6 +370,7 @@ pub const RocModules = struct {
     mono: *Module,
     roc_target: *Module,
     sljmp: *Module,
+    docs: *Module,
 
     pub fn create(b: *Build, build_options_step: *Step.Options, zstd: ?*Dependency) RocModules {
         const self = RocModules{
@@ -404,6 +407,7 @@ pub const RocModules = struct {
             .mono = b.addModule("mono", .{ .root_source_file = b.path("src/mono/mod.zig") }),
             .roc_target = b.addModule("roc_target", .{ .root_source_file = b.path("src/target/mod.zig") }),
             .sljmp = b.addModule("sljmp", .{ .root_source_file = b.path("src/sljmp/mod.zig") }),
+            .docs = b.addModule("docs", .{ .root_source_file = b.path("src/docs/mod.zig") }),
         };
 
         // Link zstd to bundle module if available (it's unsupported on wasm32, so don't link it)
@@ -446,6 +450,7 @@ pub const RocModules = struct {
             .mono,
             .roc_target,
             .sljmp,
+            .docs,
         };
 
         // Setup dependencies for each module
@@ -483,6 +488,7 @@ pub const RocModules = struct {
         step.root_module.addImport("roc_target", self.roc_target);
         step.root_module.addImport("backend", self.backend);
         step.root_module.addImport("mono", self.mono);
+        step.root_module.addImport("docs", self.docs);
 
         // Don't add thread-dependent modules for WASM targets (threads not supported)
         if (!is_wasm) {
@@ -529,6 +535,7 @@ pub const RocModules = struct {
             .mono => self.mono,
             .roc_target => self.roc_target,
             .sljmp => self.sljmp,
+            .docs => self.docs,
         };
     }
 
@@ -573,6 +580,7 @@ pub const RocModules = struct {
             .backend,
             .mono,
             .sljmp,
+            .docs,
         };
 
         var tests: [test_configs.len]ModuleTest = undefined;

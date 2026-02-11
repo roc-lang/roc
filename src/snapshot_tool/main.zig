@@ -18,6 +18,7 @@ const compile = @import("compile");
 const fmt = @import("fmt");
 const repl = @import("repl");
 const eval_mod = @import("eval");
+const docs_mod = @import("docs");
 const tracy = @import("tracy");
 
 const Repl = repl.Repl;
@@ -907,6 +908,11 @@ fn processSnapshotContent(
         return processDevObjectSnapshot(allocator, content, output_path, config);
     }
 
+    // Handle docs snapshots separately (multi-file, doc extraction)
+    if (content.meta.node_type == .docs) {
+        return processDocsSnapshot(allocator, content, output_path, config);
+    }
+
     // Process the content through the compilation pipeline
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
@@ -932,7 +938,7 @@ fn processSnapshotContent(
         .expr => .expr,
         .statement => .statement,
         .header => .header,
-        .repl, .dev_object => unreachable, // Handled above
+        .repl, .dev_object, .docs => unreachable, // Handled above
     };
 
     // Create ModuleEnv (caller manages memory)
@@ -1016,7 +1022,7 @@ fn processSnapshotContent(
                 else => unreachable,
             }
         },
-        .repl, .dev_object => unreachable, // Handled above
+        .repl, .dev_object, .docs => unreachable, // Handled above
     }
 
     // Assert that everything is in-sync
@@ -1028,7 +1034,7 @@ fn processSnapshotContent(
     // don't call canonicalizeFile.
     const needs_evaluation_order = switch (content.meta.node_type) {
         .expr, .statement, .mono => true,
-        .file, .package, .platform, .app, .snippet, .repl, .header, .dev_object => false,
+        .file, .package, .platform, .app, .snippet, .repl, .header, .dev_object, .docs => false,
     };
 
     if (needs_evaluation_order and can_ir.evaluation_order == null) {
@@ -1162,7 +1168,7 @@ fn processSnapshotContent(
             module_envs_for_snippet = module_envs; // Keep alive
             break :blk checker;
         },
-        .repl, .dev_object => unreachable, // Should never reach here - handled earlier
+        .repl, .dev_object, .docs => unreachable, // Should never reach here - handled earlier
     };
     defer solver.deinit();
 
@@ -1466,6 +1472,7 @@ fn processRocFileAsSnapshotWithExpected(
         .output = null,
         .formatted = null,
         .dev_output = null,
+        .docs_output = null,
         .has_canonicalize = true,
     };
 
@@ -1632,6 +1639,7 @@ const Section = union(enum) {
     types,
     mono,
     dev_output,
+    docs,
 
     pub const META = "# META\n~~~ini\n";
     pub const SOURCE = "# SOURCE\n~~~roc\n";
@@ -1646,6 +1654,7 @@ const Section = union(enum) {
     pub const TYPES = "# TYPES\n~~~clojure\n";
     pub const MONO = "# MONO\n~~~roc\n";
     pub const DEV_OUTPUT = "# DEV OUTPUT\n~~~ini\n";
+    pub const DOCS = "# DOCS\n~~~clojure\n";
 
     pub const SECTION_END = "~~~\n";
 
@@ -1663,6 +1672,7 @@ const Section = union(enum) {
         if (std.mem.startsWith(u8, str, TOKENS)) return .tokens;
         if (std.mem.startsWith(u8, str, PROBLEMS)) return .problems;
         if (std.mem.startsWith(u8, str, DEV_OUTPUT)) return .dev_output;
+        if (std.mem.startsWith(u8, str, DOCS)) return .docs;
         if (std.mem.startsWith(u8, str, MONO)) return .mono;
         return null;
     }
@@ -1686,6 +1696,7 @@ const Section = union(enum) {
             .types => TYPES,
             .mono => MONO,
             .dev_output => DEV_OUTPUT,
+            .docs => DOCS,
         };
     }
 
@@ -1721,6 +1732,7 @@ pub const NodeType = enum {
     snippet,
     mono,
     dev_object,
+    docs,
 
     pub const HEADER = "header";
     pub const EXPR = "expr";
@@ -1733,6 +1745,7 @@ pub const NodeType = enum {
     pub const SNIPPET = "snippet";
     pub const MONO = "mono";
     pub const DEV_OBJECT = "dev_object";
+    pub const DOCS_TYPE = "docs";
 
     fn fromString(str: []const u8) !NodeType {
         if (std.mem.eql(u8, str, HEADER)) return .header;
@@ -1746,6 +1759,7 @@ pub const NodeType = enum {
         if (std.mem.eql(u8, str, SNIPPET)) return .snippet;
         if (std.mem.eql(u8, str, MONO)) return .mono;
         if (std.mem.eql(u8, str, DEV_OBJECT)) return .dev_object;
+        if (std.mem.eql(u8, str, DOCS_TYPE)) return .docs;
         return Error.InvalidNodeType;
     }
 
@@ -1762,6 +1776,7 @@ pub const NodeType = enum {
             .snippet => "snippet",
             .mono => "mono",
             .dev_object => "dev_object",
+            .docs => "docs",
         };
     }
 };
@@ -1869,6 +1884,7 @@ pub const Content = struct {
     output: ?[]const u8,
     formatted: ?[]const u8,
     dev_output: ?[]const u8,
+    docs_output: ?[]const u8,
     has_canonicalize: bool,
 
     fn from_ranges(ranges: std.AutoHashMap(Section, Section.Range), content: []const u8) Error!Content {
@@ -1877,6 +1893,7 @@ pub const Content = struct {
         var output: ?[]const u8 = undefined;
         var formatted: ?[]const u8 = undefined;
         var dev_output: ?[]const u8 = undefined;
+        var docs_output: ?[]const u8 = undefined;
         var has_canonicalize: bool = false;
 
         if (ranges.get(.source)) |value| {
@@ -1910,6 +1927,12 @@ pub const Content = struct {
             dev_output = null;
         }
 
+        if (ranges.get(.docs)) |value| {
+            docs_output = value.extract(content);
+        } else {
+            docs_output = null;
+        }
+
         if (ranges.get(.canonicalize)) |_| {
             has_canonicalize = true;
         }
@@ -1924,6 +1947,7 @@ pub const Content = struct {
                 .output = output,
                 .formatted = formatted,
                 .dev_output = dev_output,
+                .docs_output = docs_output,
                 .has_canonicalize = has_canonicalize,
             };
         } else {
@@ -2283,7 +2307,7 @@ fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast:
             const file = parse_ast.store.getFile();
             try file.pushToSExprTree(output.gpa, env, parse_ast, &tree);
         },
-        .dev_object => unreachable, // Handled separately
+        .dev_object, .docs => unreachable, // Handled separately
     }
 
     // Only generate section if we have content on the stack
@@ -2353,7 +2377,7 @@ fn generateFormattedSection(output: *DualOutput, content: *const Content, parse_
         .snippet => {
             try fmt.formatAst(parse_ast.*, &formatted.writer);
         },
-        .dev_object => unreachable, // Handled separately
+        .dev_object, .docs => unreachable, // Handled separately
     }
 
     const is_changed = !std.mem.eql(u8, formatted.written(), content.source);
@@ -3465,7 +3489,7 @@ pub fn extractSections(gpa: Allocator, content: []const u8) !Content {
         if (idx == 0 or (idx > 0 and content[idx - 1] == '\n')) {
             if (Section.fromString(content[idx..])) |section| {
                 // Only process META, SOURCE, OUTPUT, EXPECTED, and DEV_OUTPUT sections
-                if (section == .meta or section == .source or section == .expected or section == .output or section == .dev_output) {
+                if (section == .meta or section == .source or section == .expected or section == .output or section == .dev_output or section == .docs) {
                     // Determine header length - for multi-file SOURCE (no ~~~roc after # SOURCE),
                     // the header is just "# SOURCE\n"
                     const is_multi_file_source = section == .source and Section.isMultiFileSource(content[idx..]);
@@ -3476,7 +3500,7 @@ pub fn extractSections(gpa: Allocator, content: []const u8) !Content {
                     var end = content.len;
 
                     // For sections with ~~~ delimiters (META, single-file SOURCE, DEV_OUTPUT)
-                    if (section == .meta or (section == .source and !is_multi_file_source) or section == .dev_output) {
+                    if (section == .meta or (section == .source and !is_multi_file_source) or section == .dev_output or section == .docs) {
                         // Find the closing ~~~
                         var search_idx = start;
                         while (search_idx < content.len - 3) {
@@ -3521,6 +3545,204 @@ pub fn extractSections(gpa: Allocator, content: []const u8) !Content {
     }
 
     return try Content.from_ranges(ranges, content);
+}
+
+// Docs Snapshot Processing
+
+/// Process a docs snapshot: parse multi-file source, compile with BuildEnv,
+/// extract documentation from compiled modules, and serialize to S-expressions.
+fn processDocsSnapshot(
+    allocator: Allocator,
+    content: Content,
+    output_path: []const u8,
+    config: *const Config,
+) !bool {
+    log("Processing docs snapshot: {s}", .{output_path});
+
+    // 1. Parse multi-file source
+    const source_files = try parseMultiFileSource(allocator, content.source);
+    defer allocator.free(source_files);
+
+    if (source_files.len == 0) {
+        std.log.err("docs snapshot has no source files (need ## filename.roc sub-headings)", .{});
+        return false;
+    }
+
+    // 2. Write source files to a temp directory
+    var tmp_dir_name_buf: [256]u8 = undefined;
+    const tmp_dir_name = std.fmt.bufPrint(&tmp_dir_name_buf, "/tmp/roc_snapshot_docs_{d}", .{
+        @as(u64, @intCast(@intFromPtr(output_path.ptr))),
+    }) catch return false;
+
+    std.fs.cwd().makePath(tmp_dir_name) catch |err| {
+        std.log.err("Failed to create temp directory {s}: {}", .{ tmp_dir_name, err });
+        return false;
+    };
+    defer std.fs.cwd().deleteTree(tmp_dir_name) catch {};
+
+    // Find the app file (first .roc file, or explicitly "app.roc")
+    var app_filename: ?[]const u8 = null;
+    for (source_files) |sf| {
+        const sub_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ tmp_dir_name, sf.filename });
+        defer allocator.free(sub_path);
+        std.fs.cwd().writeFile(.{
+            .sub_path = sub_path,
+            .data = sf.content,
+        }) catch |err| {
+            std.log.err("Failed to write {s}: {}", .{ sf.filename, err });
+            return false;
+        };
+        if (std.mem.eql(u8, sf.filename, "app.roc") or app_filename == null) {
+            app_filename = sf.filename;
+        }
+    }
+
+    const app_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ tmp_dir_name, app_filename.? });
+    defer allocator.free(app_path);
+
+    // 3. Build with BuildEnv
+    const BuildEnv = compile.BuildEnv;
+    const native_target = roc_target.RocTarget.detectNative();
+
+    var build_env = BuildEnv.init(allocator, .single_threaded, 1, native_target) catch |err| {
+        std.log.err("Failed to init BuildEnv: {}", .{err});
+        return false;
+    };
+    defer build_env.deinit();
+
+    build_env.build(app_path) catch |err| {
+        std.log.err("BuildEnv.build failed for {s}: {}", .{ app_path, err });
+        return false;
+    };
+
+    // 4. Get compiled modules and extract docs
+    const modules = build_env.getCompiledModules(allocator) catch |err| {
+        std.log.err("Failed to get compiled modules: {}", .{err});
+        return false;
+    };
+    defer allocator.free(modules);
+
+    if (modules.len == 0) {
+        std.log.err("No modules were compiled", .{});
+        return false;
+    }
+
+    // Extract docs from each compiled module
+    var module_docs_list = std.ArrayList(docs_mod.DocModel.ModuleDocs).empty;
+    defer {
+        for (module_docs_list.items) |*md| md.deinit(allocator);
+        module_docs_list.deinit(allocator);
+    }
+
+    for (modules) |mod| {
+        var mod_docs = docs_mod.extract.extractModuleDocs(allocator, mod.env) catch |err| {
+            std.log.err("Failed to extract docs from module {s}: {}", .{ mod.name, err });
+            continue;
+        };
+        // Override the module name with the clean name from CompiledModuleInfo
+        allocator.free(mod_docs.name);
+        mod_docs.name = allocator.dupe(u8, mod.name) catch continue;
+        module_docs_list.append(allocator, mod_docs) catch continue;
+    }
+
+    // Build PackageDocs
+    const package_name = try allocator.dupe(u8, "test-app");
+    const modules_owned = try allocator.dupe(docs_mod.DocModel.ModuleDocs, module_docs_list.items);
+    // Clear the list so deinit doesn't double-free
+    module_docs_list.clearRetainingCapacity();
+
+    var package_docs = docs_mod.DocModel.PackageDocs{
+        .name = package_name,
+        .modules = modules_owned,
+    };
+    defer package_docs.deinit(allocator);
+
+    // 5. Serialize to S-expression
+    var sexpr_buffer = std.ArrayList(u8).empty;
+    defer sexpr_buffer.deinit(allocator);
+    var sexpr_writer: std.Io.Writer.Allocating = .fromArrayList(allocator, &sexpr_buffer);
+
+    try package_docs.writeToSExpr(&sexpr_writer.writer);
+
+    sexpr_buffer = sexpr_writer.toArrayList();
+    const new_docs_text = sexpr_buffer.items;
+
+    // 6. Compare against existing DOCS section and decide what to write
+    var success = true;
+    const write_new_docs = blk: {
+        if (content.docs_output == null) {
+            // First run - always write new docs
+            break :blk true;
+        }
+        switch (config.expected_section_command) {
+            .update => break :blk true,
+            .check => {
+                const existing_trimmed = std.mem.trimRight(u8, content.docs_output.?, " \t\r\n");
+                const new_trimmed = std.mem.trimRight(u8, new_docs_text, " \t\r\n");
+                if (!std.mem.eql(u8, existing_trimmed, new_trimmed)) {
+                    std.debug.print("\nDOCS mismatch in {s}\n\n", .{output_path});
+                    std.debug.print("Expected:\n{s}\n\nActual:\n{s}\n", .{ existing_trimmed, new_trimmed });
+                    std.debug.print("\nHint: use `zig build snapshot -- --update-expected` to update DOCS output.\n\n", .{});
+                    success = false;
+                }
+                break :blk false;
+            },
+            .none => {
+                const existing_trimmed = std.mem.trimRight(u8, content.docs_output.?, " \t\r\n");
+                const new_trimmed = std.mem.trimRight(u8, new_docs_text, " \t\r\n");
+                if (!std.mem.eql(u8, existing_trimmed, new_trimmed)) {
+                    std.debug.print("\nDOCS warning: output changed in {s}\n", .{output_path});
+                    std.debug.print("Hint: use `zig build snapshot -- --check-expected` to see details, or `--update-expected` to update.\n\n", .{});
+                }
+                break :blk false;
+            },
+        }
+    };
+
+    // 7. Generate output file
+    var md_buffer = std.ArrayList(u8).empty;
+    defer md_buffer.deinit(allocator);
+    var md_writer: std.Io.Writer.Allocating = .fromArrayList(allocator, &md_buffer);
+
+    // META section
+    try md_writer.writer.writeAll(Section.META);
+    try content.meta.format(&md_writer.writer);
+    try md_writer.writer.writeAll("\n" ++ Section.SECTION_END);
+
+    // SOURCE section (preserve original multi-file format)
+    try md_writer.writer.writeAll(Section.SOURCE_MULTI);
+    try md_writer.writer.writeAll(content.source);
+    // Ensure trailing newline before next section
+    if (content.source.len > 0 and content.source[content.source.len - 1] != '\n') {
+        try md_writer.writer.writeByte('\n');
+    }
+
+    // DOCS section
+    try md_writer.writer.writeAll(Section.DOCS);
+    if (write_new_docs) {
+        try md_writer.writer.writeAll(new_docs_text);
+    } else {
+        // Preserve existing DOCS content
+        try md_writer.writer.writeAll(content.docs_output.?);
+        // Ensure trailing newline
+        if (content.docs_output.?.len > 0 and content.docs_output.?[content.docs_output.?.len - 1] != '\n') {
+            try md_writer.writer.writeByte('\n');
+        }
+    }
+    try md_writer.writer.writeAll(Section.SECTION_END);
+
+    // Transfer from writer to buffer
+    md_buffer = md_writer.toArrayList();
+
+    // Write the output file
+    const md_file = std.fs.cwd().createFile(output_path, .{}) catch |err| {
+        std.log.err("Failed to create {s}: {}", .{ output_path, err });
+        return false;
+    };
+    defer md_file.close();
+
+    try md_file.writeAll(md_buffer.items);
+    return success;
 }
 
 // Dev Object Snapshot Processing
