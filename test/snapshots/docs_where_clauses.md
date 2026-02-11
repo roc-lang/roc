@@ -41,32 +41,34 @@ main_for_host = main
   (name "test-app")
   (module
     (name "app")
+    (package "app")
     (kind app)
     (entry
       (name "stringify")
       (kind value)
-      (type "a -> Str where [a.to_str : a -> Str]")
+      (type (where (fn (var "a") (type-ref (module "Builtin") (name "Str"))) (constraint "a" "to_str" (fn (var "a") (type-ref (module "Builtin") (name "Str"))))))
       (doc "Convert any value to a string.")
     )
     (entry
       (name "compare")
       (kind value)
-      (type "a, a -> Bool where [a.is_eq : a, a -> Bool]")
+      (type (where (fn (var "a") (var "a") (type-ref (module "Builtin") (name "Bool"))) (constraint "a" "is_eq" (fn (var "a") (var "a") (type-ref (module "Builtin") (name "Bool"))))))
       (doc "Check equality of two values.")
     )
     (entry
       (name "main")
       (kind value)
-      (type "Str")
+      (type (type-ref (module "Builtin") (name "Str")))
     )
   )
   (module
     (name "platform")
+    (package "pf")
     (kind platform)
     (entry
       (name "main_for_host")
       (kind value)
-      (type "Str")
+      (type (type-ref (module "Builtin") (name "Str")))
     )
   )
 )

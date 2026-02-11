@@ -5792,11 +5792,12 @@ fn generateDocs(
 
     var sched_iter = build_env.schedulers.iterator();
     while (sched_iter.next()) |sched_entry| {
+        const sched_pkg_name = sched_entry.key_ptr.*;
         const package_env = sched_entry.value_ptr.*;
 
         for (package_env.modules.items) |module_state| {
             if (module_state.env) |*mod_env| {
-                var mod_docs = extract.extractModuleDocs(ctx.gpa, mod_env) catch |err| {
+                var mod_docs = extract.extractModuleDocs(ctx.gpa, mod_env, sched_pkg_name) catch |err| {
                     std.debug.print("Warning: failed to extract docs for module {s}: {}\n", .{ module_state.name, err });
                     continue;
                 };

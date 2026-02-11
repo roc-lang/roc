@@ -35,21 +35,23 @@ greet_for_host = greet
   (name "test-app")
   (module
     (name "app")
+    (package "app")
     (kind app)
     (entry
       (name "greet")
       (kind value)
-      (type "Str -> Str")
+      (type (fn (type-ref (module "Builtin") (name "Str")) (type-ref (module "Builtin") (name "Str"))))
       (doc "Greets someone by name.")
     )
   )
   (module
     (name "platform")
+    (package "pf")
     (kind platform)
     (entry
       (name "greet_for_host")
       (kind value)
-      (type "Str -> Str")
+      (type (fn (type-ref (module "Builtin") (name "Str")) (type-ref (module "Builtin") (name "Str"))))
     )
   )
 )

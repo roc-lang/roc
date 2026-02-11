@@ -39,32 +39,34 @@ main_for_host = main
   (name "test-app")
   (module
     (name "app")
+    (package "app")
     (kind app)
     (entry
       (name "x")
       (kind value)
-      (type "Dec")
+      (type (type-ref (module "Builtin") (name "Dec")))
       (doc "A number.")
     )
     (entry
       (name "greeting")
       (kind value)
-      (type "Str")
+      (type (type-ref (module "Builtin") (name "Str")))
       (doc "A greeting.")
     )
     (entry
       (name "main")
       (kind value)
-      (type "Str")
+      (type (type-ref (module "Builtin") (name "Str")))
     )
   )
   (module
     (name "platform")
+    (package "pf")
     (kind platform)
     (entry
       (name "main_for_host")
       (kind value)
-      (type "Str")
+      (type (type-ref (module "Builtin") (name "Str")))
     )
   )
 )

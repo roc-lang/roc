@@ -39,32 +39,34 @@ main_for_host = main
   (name "test-app")
   (module
     (name "app")
+    (package "app")
     (kind app)
     (entry
       (name "main")
       (kind value)
-      (type "Str")
+      (type (type-ref (module "Builtin") (name "Str")))
     )
     (entry
       (name "Color")
       (kind nominal)
-      (type "Color := [Red, Green, Blue]")
+      (type "Color := " (tag-union (tag "Red") (tag "Green") (tag "Blue")))
       (doc "A color value.")
     )
     (entry
       (name "Id")
       (kind opaque)
-      (type "Id :: U64")
+      (type "Id :: " (type-ref (module "Builtin") (name "U64")))
       (doc "An opaque identifier.")
     )
   )
   (module
     (name "platform")
+    (package "pf")
     (kind platform)
     (entry
       (name "main_for_host")
       (kind value)
-      (type "Str")
+      (type (type-ref (module "Builtin") (name "Str")))
     )
   )
 )
