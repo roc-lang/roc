@@ -44,23 +44,21 @@ main = {
 }
 ~~~
 # EXPECTED
-MISSING METHOD - Adv.md:17:28:17:31
+TYPE MISMATCH - Adv.md:17:28:17:31
 MISSING METHOD - Adv.md:23:17:23:28
 MISSING METHOD - Adv.md:28:21:28:27
 # PROBLEMS
-**MISSING METHOD**
-This **from_numeral** method is being called on a value whose type doesn't have that method:
+**TYPE MISMATCH**
+This number is being used where a non-number type is needed:
 **Adv.md:17:28:17:31:**
 ```roc
 	next_val = val.update_str(100)
 ```
 	                          ^^^
 
-The value's type, which does not have a method named **from_numeral**, is:
+Other code expects this to have the type:
 
     Str
-
-**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 **MISSING METHOD**
 This **update_strr** method is being called on a value whose type doesn't have that method:
@@ -70,7 +68,7 @@ This **update_strr** method is being called on a value whose type doesn't have t
 ```
 	               ^^^^^^^^^^^
 
-The value's type, which does not have a method named **update_strr**, is:
+The value's type, which does not have a method named**update_strr**, is:
 
     Adv
 
@@ -84,7 +82,7 @@ This **update** method is being called on a value whose type doesn't have that m
 ```
 	                   ^^^^^^
 
-The value's type, which does not have a method named **update**, is:
+The value's type, which does not have a method named**update**, is:
 
     Str
 

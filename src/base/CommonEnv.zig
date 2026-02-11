@@ -115,34 +115,20 @@ pub const Serialized = extern struct {
         self.source = .{ 0, 0 };
     }
 
-    /// Deserialize a CommonEnv from the buffer, updating the CommonEnv in place
+    /// Deserialize into a CommonEnv value (no in-place modification of cache buffer).
     /// The base_addr parameter is the base address of the serialized buffer in memory.
-    pub fn deserialize(
-        self: *Serialized,
+    pub fn deserializeInto(
+        self: *const Serialized,
         base_addr: usize,
         source: []const u8,
-    ) *CommonEnv {
-        // Note: Serialized may be smaller than the runtime struct because:
-        // - Uses u64 offsets instead of usize pointers (same size on 64-bit, but conceptually different)
-        // - May have different alignment/padding requirements
-        // We deserialize by overwriting the Serialized memory with the runtime struct.
-        const env = @as(*CommonEnv, @ptrFromInt(@intFromPtr(self)));
-
-        // Read values BEFORE any writes to avoid corruption from in-place deserialization
-        const idents_val = self.idents.deserialize(base_addr).*;
-        const strings_val = self.strings.deserialize(base_addr).*;
-        const exposed_items_val = self.exposed_items.deserialize(base_addr).*;
-        const line_starts_val = self.line_starts.deserialize(base_addr).*;
-
-        env.* = CommonEnv{
-            .idents = idents_val,
-            .strings = strings_val,
-            .exposed_items = exposed_items_val,
-            .line_starts = line_starts_val,
+    ) CommonEnv {
+        return CommonEnv{
+            .idents = self.idents.deserializeInto(base_addr),
+            .strings = self.strings.deserializeInto(base_addr),
+            .exposed_items = self.exposed_items.deserializeInto(base_addr),
+            .line_starts = self.line_starts.deserializeInto(base_addr),
             .source = source,
         };
-
-        return env;
     }
 };
 
@@ -332,7 +318,7 @@ test "CommonEnv.Serialized roundtrip" {
 
     // The Serialized struct is at the beginning of the buffer
     const deserialized_ptr = @as(*CommonEnv.Serialized, @ptrCast(@alignCast(buffer.ptr)));
-    const env = deserialized_ptr.deserialize(@intFromPtr(buffer.ptr), source);
+    const env = deserialized_ptr.deserializeInto(@intFromPtr(buffer.ptr), source);
 
     // Verify the data was preserved
     try testing.expectEqualStrings("hello", env.getIdent(hello_idx));
@@ -382,7 +368,7 @@ test "CommonEnv.Serialized roundtrip with empty data" {
 
     // The Serialized struct is at the beginning of the buffer
     const deserialized_ptr = @as(*CommonEnv.Serialized, @ptrCast(@alignCast(buffer.ptr)));
-    const env = deserialized_ptr.deserialize(@intFromPtr(buffer.ptr), source);
+    const env = deserialized_ptr.deserializeInto(@intFromPtr(buffer.ptr), source);
 
     // Verify empty state is preserved
     try testing.expectEqual(@as(u32, 0), env.idents.interner.entry_count);
@@ -465,7 +451,7 @@ test "CommonEnv.Serialized roundtrip with large data" {
 
     // The Serialized struct is at the beginning of the buffer
     const deserialized_ptr = @as(*CommonEnv.Serialized, @ptrCast(@alignCast(buffer.ptr)));
-    const env = deserialized_ptr.deserialize(@intFromPtr(buffer.ptr), source);
+    const env = deserialized_ptr.deserializeInto(@intFromPtr(buffer.ptr), source);
 
     // Verify large data was preserved
     try testing.expectEqual(@as(u32, 50), env.idents.interner.entry_count);
@@ -542,7 +528,7 @@ test "CommonEnv.Serialized roundtrip with special characters" {
 
     // The Serialized struct is at the beginning of the buffer
     const deserialized_ptr = @as(*CommonEnv.Serialized, @ptrCast(@alignCast(buffer.ptr)));
-    const env = deserialized_ptr.deserialize(@intFromPtr(buffer.ptr), source);
+    const env = deserialized_ptr.deserializeInto(@intFromPtr(buffer.ptr), source);
 
     // Verify special characters were preserved
     try testing.expectEqualStrings("café", env.getIdent(unicode_idx));

@@ -463,8 +463,8 @@ pub const Pattern = union(enum) {
                 try tree.pushStaticAtom("p-frac-f32");
                 try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
 
-                var value_buf: [40]u8 = undefined;
-                const value_str = std.fmt.bufPrint(&value_buf, "{e}", .{p.value}) catch "fmt_error";
+                var value_buf: [400]u8 = undefined;
+                const value_str = builtins.compiler_rt_128.f32_to_str(&value_buf, p.value);
                 try tree.pushStringPair("value", value_str);
 
                 const attrs = tree.beginNode();
@@ -475,8 +475,8 @@ pub const Pattern = union(enum) {
                 try tree.pushStaticAtom("p-frac-f64");
                 try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
 
-                var value_buf: [40]u8 = undefined;
-                const value_str = std.fmt.bufPrint(&value_buf, "{e}", .{p.value}) catch "fmt_error";
+                var value_buf: [400]u8 = undefined;
+                const value_str = builtins.compiler_rt_128.f64_to_str(&value_buf, p.value);
                 try tree.pushStringPair("value", value_str);
 
                 const attrs = tree.beginNode();

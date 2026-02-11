@@ -18,6 +18,7 @@ const ModuleEnv = can.ModuleEnv;
 const Can = can.Can;
 const Check = check.Check;
 const Allocator = std.mem.Allocator;
+const Allocators = base.Allocators;
 const CIR = can.CIR;
 
 const max_builtin_bytes = 1024 * 1024;
@@ -1240,15 +1241,13 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
                     } }, base.Region.zero());
 
                     // Now replace the e_anno_only expression with the e_low_level_lambda
-                    // Def structure is stored in extra_data:
-                    // extra_data[0] = pattern, extra_data[1] = expr, ...
-                    // node.data_1 points to the start index in extra_data
+                    // Def structure is stored in def_data list
                     const def_node_idx = @as(@TypeOf(env.store.nodes).Idx, @enumFromInt(@intFromEnum(def_idx)));
                     const def_node = env.store.nodes.get(def_node_idx);
-                    const extra_start = def_node.data_1;
+                    const def_data_idx = def_node.getPayload().def.def_data_idx;
 
-                    // Update the expr field (at extra_start + 1)
-                    env.store.extra_data.items.items[extra_start + 1] = @intFromEnum(expr_idx);
+                    // Update the expr field in def_data
+                    env.store.def_data.items.items[def_data_idx].expr = @intFromEnum(expr_idx);
 
                     // Track this replaced def index
                     try new_def_indices.append(gpa, def_idx);
@@ -1577,13 +1576,12 @@ fn compileModule(
     };
 
     // 3. Parse
-    var parse_ast = try gpa.create(parse.AST);
-    defer {
-        parse_ast.deinit(gpa);
-        gpa.destroy(parse_ast);
-    }
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(gpa);
+    defer allocators.deinit();
 
-    parse_ast.* = try parse.parse(&module_env.common, gpa);
+    const parse_ast = try parse.parse(&allocators, &module_env.common);
+    defer parse_ast.deinit();
     parse_ast.store.emptyScratch();
 
     // Check for parse errors
@@ -1630,7 +1628,7 @@ fn compileModule(
     }
 
     // When compiling Builtin itself, pass null for module_envs so setupAutoImportedBuiltinTypes doesn't run
-    can_result.* = try Can.init(module_env, parse_ast, null);
+    can_result.* = try Can.init(&allocators, module_env, parse_ast, null);
 
     try can_result.canonicalizeFile();
     try can_result.validateForChecking();
@@ -1753,14 +1751,16 @@ fn compileModule(
         const config = reporting.ReportingConfig.initColorTerminal();
 
         const problem = check.problem;
-        var report_builder = problem.ReportBuilder.init(
+        var report_builder = try check.report.ReportBuilder.init(
             gpa,
             module_env,
             module_env,
             &checker.snapshots,
+            &checker.problems,
             source_path,
             imported_envs.items,
             &checker.import_mapping,
+            &checker.regions,
         );
         defer report_builder.deinit();
 
@@ -1824,16 +1824,16 @@ fn findTypeDeclaration(env: *const ModuleEnv, type_name: []const u8) !CIR.Statem
     const all_stmts = env.store.sliceStatements(env.all_statements);
     for (all_stmts) |stmt_idx| {
         const stmt = env.store.getStatement(stmt_idx);
-        switch (stmt) {
-            .s_nominal_decl => |decl| {
-                const header = env.store.getTypeHeader(decl.header);
-                const ident_idx = header.name;
-                const ident_text = env.getIdentText(ident_idx);
-                if (std.mem.eql(u8, ident_text, qualified_name)) {
-                    return stmt_idx;
-                }
-            },
+        const header_idx = switch (stmt) {
+            .s_nominal_decl => |decl| decl.header,
+            .s_alias_decl => |alias| alias.header,
             else => continue,
+        };
+        const header = env.store.getTypeHeader(header_idx);
+        const ident_idx = header.name;
+        const ident_text = env.getIdentText(ident_idx);
+        if (std.mem.eql(u8, ident_text, qualified_name)) {
+            return stmt_idx;
         }
     }
 

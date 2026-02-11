@@ -47,7 +47,7 @@ It has the type:
 
     Str
 
-But the type annotation says it should have the type:
+But the annotation say it should be:
 
     BadDerived
 
@@ -63,7 +63,7 @@ It has the type:
 
     Str
 
-But the type annotation says it should have the type:
+But the annotation say it should be:
 
     GoodDerived
 
@@ -161,6 +161,6 @@ NO CHANGE
 		(nominal (type "GoodDerived")
 			(ty-header (name "GoodDerived"))))
 	(expressions
-		(expr (type "Error"))
-		(expr (type "Error"))))
+		(expr (type "BadDerived"))
+		(expr (type "GoodDerived"))))
 ~~~

@@ -24,19 +24,25 @@ type=expr
 )
 ~~~
 # EXPECTED
-NOT IMPLEMENTED - binops.md:16:5:16:14
+TYPE MISMATCH - binops.md:16:5:16:5
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented: unsupported operator
-
-**binops.md:16:5:16:14:**
+**TYPE MISMATCH**
+The first pattern in this `match` is incompatible:
+**binops.md:16:5:**
 ```roc
     None ?? 0,
 ```
     ^^^^^^^^^
 
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+The first pattern is trying to match:
 
+    Try(ok, err)
+
+But the expression between the `match` parenthesis has the type:
+
+    [None, ..]
+
+These can never match! Either the pattern or expression has a problem.
 
 # TOKENS
 ~~~zig
@@ -182,9 +188,28 @@ EndOfFile,
 			(e-nominal-external
 				(builtin)
 				(e-tag (name "True"))))
-		(e-runtime-error (tag "not_implemented"))))
+		(e-match
+			(match
+				(cond
+					(e-tag (name "None")))
+				(branches
+					(branch
+						(patterns
+							(pattern (degenerate false)
+								(p-nominal-external (builtin)
+									(p-applied-tag))))
+						(value
+							(e-lookup-local
+								(p-assign (ident "#ok")))))
+					(branch
+						(patterns
+							(pattern (degenerate false)
+								(p-nominal-external (builtin)
+									(p-applied-tag))))
+						(value
+							(e-num (value "0")))))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "(a, b, c, d, e, Bool, Bool, Bool, Bool, Bool, Bool, f, Bool, Bool, Error) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.minus : b, b -> b, c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), c.times : c, c -> c, d.div_by : d, d -> d, d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]), e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]), e.rem_by : e, e -> e, f.div_trunc_by : f, f -> f, f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]"))
+(expr (type "(Dec, Dec, Dec, Dec, Dec, Bool, Bool, Bool, Bool, Bool, Bool, Dec, Bool, Bool, Dec)"))
 ~~~

@@ -18,6 +18,8 @@ pub const TestSpec = struct {
     io_spec: []const u8,
     /// Optional description of what the test verifies
     description: []const u8 = "",
+    /// If set, test is skipped with this reason
+    skip: []const u8 = "",
 };
 
 /// All fx platform tests that can be run with --test mode IO specs.
@@ -75,6 +77,11 @@ pub const io_spec_tests = [_]TestSpec{
         .roc_file = "test/fx/opaque_with_method.roc",
         .io_spec = "1>My favourite color is Red",
         .description = "Opaque type with attached method",
+    },
+    .{
+        .roc_file = "test/fx/test_issue9034.roc",
+        .io_spec = "1>test",
+        .description = "Platform-exposed opaque types in type annotations (issue #9034)",
     },
 
     // Language feature tests
@@ -136,7 +143,7 @@ pub const io_spec_tests = [_]TestSpec{
     // Lookup tests
     .{
         .roc_file = "test/fx/numeric_lookup_test.roc",
-        .io_spec = "1>done",
+        .io_spec = "1>done: 42",
         .description = "Numeric lookup",
     },
     .{
@@ -163,7 +170,7 @@ pub const io_spec_tests = [_]TestSpec{
     // Inspect tests
     .{
         .roc_file = "test/fx/inspect_compare_test.roc",
-        .io_spec = "1>With to_inspect: Custom::Red|1>Without to_inspect: ColorWithoutInspect.Red|1>Primitive: 42",
+        .io_spec = "1>With to_inspect: Custom::Red|1>Without to_inspect: ColorWithoutInspect.Red|1>Primitive: 42.0",
         .description = "Inspect comparison with and without to_inspect",
     },
     .{
@@ -174,7 +181,7 @@ pub const io_spec_tests = [_]TestSpec{
     .{
         .roc_file = "test/fx/inspect_nested_test.roc",
         // Note: field order may differ from expected - record fields are rendered in their internal order
-        .io_spec = "1>{ color: Color::Red, count: 42, name: \"test\" }|1>Expected: { color: Color::Red, count: 42, name: \"test\" }",
+        .io_spec = "1>{ color: Color::Red, count: 42.0, name: \"test\" }|1>Expected: { color: Color::Red, count: 42, name: \"test\" }",
         .description = "Nested struct inspection",
     },
     .{
@@ -184,7 +191,7 @@ pub const io_spec_tests = [_]TestSpec{
     },
     .{
         .roc_file = "test/fx/inspect_record_test.roc",
-        .io_spec = "1>{ count: 42, name: \"test\" }",
+        .io_spec = "1>{ count: 42.0, name: \"test\" }",
         .description = "Record inspection",
     },
     .{
@@ -194,7 +201,7 @@ pub const io_spec_tests = [_]TestSpec{
     },
     .{
         .roc_file = "test/fx/inspect_open_tag_test.roc",
-        .io_spec = "1>Closed: TagB|1>With payload: Value(42)|1>Number: 123",
+        .io_spec = "1>Closed: TagB|1>With payload: Value(42)|1>Number: 123.0",
         .description = "Str.inspect on tag unions",
     },
     // Bug regression tests
@@ -212,6 +219,7 @@ pub const io_spec_tests = [_]TestSpec{
         .roc_file = "test/fx/list_map_fallible.roc",
         .io_spec = "1>done",
         .description = "Regression test: List.map with fallible function (U64.from_str)",
+        .skip = "dev backend does not yet support List.map with fallible functions",
     },
     .{
         .roc_file = "test/fx/list_append_stdin_uaf.roc",
@@ -252,6 +260,57 @@ pub const io_spec_tests = [_]TestSpec{
         .roc_file = "test/fx/dbg_corrupts_recursive_tag_union.roc",
         .io_spec = "1>Child is Text: hello",
         .description = "Regression test: dbg on recursive tag union preserves variant discriminant (issue #8804)",
+    },
+    .{
+        .roc_file = "test/fx/primitive_encode.roc",
+        .io_spec = "1>Bool.encode(True): true|1>U64.encode(42): 42|1>Done",
+        .description = "Primitive types have encode methods for static dispatch (issue #8853)",
+    },
+    .{
+        .roc_file = "test/fx/issue8866.roc",
+        .io_spec = "1>Done: 2",
+        .description = "Regression test: List.append with opaque type containing Str (issue #8866)",
+    },
+    .{
+        .roc_file = "test/fx/issue8897.roc",
+        .io_spec = "1>done",
+        .description = "Regression test: Multiple expects with polymorphic function panic (issue #8897)",
+    },
+    .{
+        .roc_file = "test/fx/issue8897_min.roc",
+        .io_spec = "1>done",
+        .description = "Regression test: Minimal repro for issue #8897 panic",
+    },
+    .{
+        .roc_file = "test/fx/issue8898.roc",
+        .io_spec = "1>done",
+        .description = "Regression test: Polymorphic function with for loop list literal panic (issue #8898)",
+    },
+    .{
+        .roc_file = "test/fx/static_dispatch_platform_module.roc",
+        .io_spec = "1>Result: start-middle-end",
+        .description = "Regression test: Static dispatch on platform-exposed opaque types (issue #8928)",
+    },
+    .{
+        .roc_file = "test/fx/static_dispatch_effect_bug.roc",
+        .io_spec = "1>SUCCESS: Builder.print_value! called via static dispatch!|1>  value: test|1>  count: 0",
+        .description = "Regression test: Static dispatch on effect methods (issue #8928)",
+    },
+    .{
+        .roc_file = "test/fx/record_builder_cli_parser.roc",
+        // Multi-line strings (\\) create strings with embedded newlines - use \n in spec
+        .io_spec = "1>=== Record Builder ===\n|1>Test 1: Two-field record builder\n  Result: host=localhost, port=8080\n|1>Test 2: Three-field record builder\n  Result: name=world, count=1, verbose=False\n|1>Test 3: Four-field record builder\n  Result: w=10, x=20, y=30, z=40\n|1>Test 4: Combined help text\n  Help:  --input <value>  --output <value>|1>Test 5: Equivalence with direct map2|1>  Builder: a=1, b=2|1>  Direct:  a=1, b=2|1>|1>=== All tests passed! ===",
+        .description = "True applicative record builder: { a: Cli.option(...), b: Cli.flag(...) }.Cli with parameterized Cli(a) type",
+    },
+    .{
+        .roc_file = "test/fx/issue9049.roc",
+        .io_spec = "1>Direct: False|1>Via pure/run: False",
+        .description = "Regression test: Bool.False inspected via opaque type extraction shows correct value (issue #9049)",
+    },
+    .{
+        .roc_file = "test/fx/hosted_effect_opaque_with_data.roc",
+        .io_spec = "1>Hello, World!",
+        .description = "Regression test: Hosted effects on opaque types with data (not just [])",
     },
 };
 

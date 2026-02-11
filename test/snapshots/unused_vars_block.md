@@ -171,7 +171,7 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_arg -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a]")))
+		(patt (type "_arg -> Dec")))
 	(expressions
-		(expr (type "_arg -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a]"))))
+		(expr (type "_arg -> Dec"))))
 ~~~

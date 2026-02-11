@@ -108,6 +108,12 @@ const str_tests = [_]SimpleTestSpec{
         .roc_file = "test/str/app_diamond.roc",
         .description = "Diamond: app->Helper->{Core->Utils, Utils}",
     },
+
+    // Sibling module import (type module pattern)
+    .{
+        .roc_file = "test/str/app_message.roc",
+        .description = "Sibling module import: app imports Message type module",
+    },
 };
 
 /// All platform configurations

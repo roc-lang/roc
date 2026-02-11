@@ -9,7 +9,22 @@
 //! This design makes Roc's ABI very simple; the calling convention is just "Ops pointer,
 //! return pointer, args pointers".
 
-const tracy = @import("tracy");
+// Tracy is optional - when not available (e.g., standalone static library builds),
+// use a no-op stub to avoid compilation errors.
+const tracy = if (@hasDecl(@import("root"), "tracy_enabled"))
+    @import("tracy")
+else
+    struct {
+        pub const enable_allocation = false;
+        pub fn trace(_: anytype) TracyStub {
+            return .{};
+        }
+        pub fn allocName(_: ?[*]const u8, _: usize) void {}
+        pub fn freeName(_: ?[*]const u8, _: usize) void {}
+        const TracyStub = struct {
+            pub fn end(_: @This()) void {}
+        };
+    };
 
 /// todo: describe RocCall
 pub const RocCall = fn (

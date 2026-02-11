@@ -6,6 +6,7 @@ const can = @import("can");
 const layout = @import("layout");
 const builtins = @import("builtins");
 const StackValue = @import("StackValue.zig");
+const i128h = builtins.compiler_rt_128;
 const RocDec = builtins.dec.RocDec;
 const TypeScope = types.TypeScope;
 
@@ -91,6 +92,9 @@ pub const RenderCtx = struct {
     to_inspect_callback: ?ToInspectCallback = null,
     /// Opaque context pointer passed to the to_inspect callback.
     callback_ctx: ?*anyopaque = null,
+    /// When true, render whole-number Dec values without .0 if the type is an unbound numeral.
+    /// Used by the REPL for cleaner output.
+    strip_unbound_numeral_decimal: bool = false,
 };
 
 /// Render `value` using the supplied runtime type variable, following alias/nominal backing.
@@ -153,7 +157,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                         errdefer out.deinit();
                         try out.appendSlice("Box(");
 
-                        const payload_layout_idx = try ctx.layout_store.addTypeVar(payload_var, ctx.type_scope);
+                        const payload_layout_idx = try ctx.layout_store.fromTypeVar(0, payload_var, ctx.type_scope, null);
                         const payload_layout = ctx.layout_store.getLayout(payload_layout_idx);
                         const payload_size = ctx.layout_store.layoutSize(payload_layout);
 
@@ -167,7 +171,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                         switch (value.layout.tag) {
                             .box => {
                                 const elem_layout = ctx.layout_store.getLayout(value.layout.data.box);
-                                const data_ptr_opt = value.boxDataPointer() orelse return error.TypeMismatch;
+                                const data_ptr_opt = value.getBoxedData() orelse return error.TypeMismatch;
                                 if (!elem_layout.eql(payload_layout)) {
                                     return error.TypeMismatch;
                                 }
@@ -243,8 +247,8 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                                             .is_initialized = true,
                                             .rt_var = elem_type_var,
                                         };
-                                        // Use layout-based rendering since type info may be unreliable
-                                        const rendered = try renderValueRoc(ctx, elem_val);
+                                        // Use type-aware rendering to enable unbound numeral stripping
+                                        const rendered = try renderValueRocWithType(ctx, elem_val, elem_type_var);
                                         defer gpa.free(rendered);
                                         try out.appendSlice(rendered);
                                         if (i + 1 < len) try out.appendSlice(", ");
@@ -473,19 +477,12 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                 }
             } else if (value.layout.tag == .tag_union) {
                 // Tag union with new proper layout: payload at offset 0, discriminant at discriminant_offset
-                const tu_data = ctx.layout_store.getTagUnionData(value.layout.data.tag_union.idx);
+                const tu_idx = value.layout.data.tag_union.idx;
+                const tu_data = ctx.layout_store.getTagUnionData(tu_idx);
+                const disc_offset = ctx.layout_store.getTagUnionDiscriminantOffset(tu_idx);
                 if (value.ptr) |ptr| {
                     const base_ptr: [*]u8 = @ptrCast(ptr);
-                    const disc_ptr = base_ptr + tu_data.discriminant_offset;
-                    // Read discriminant based on its size
-                    const discriminant: usize = switch (tu_data.discriminant_size) {
-                        1 => @as(*const u8, @ptrCast(disc_ptr)).*,
-                        2 => @as(*const u16, @ptrCast(@alignCast(disc_ptr))).*,
-                        4 => @as(*const u32, @ptrCast(@alignCast(disc_ptr))).*,
-                        8 => @intCast(@as(*const u64, @ptrCast(@alignCast(disc_ptr))).*),
-                        else => 0,
-                    };
-                    tag_index = discriminant;
+                    tag_index = tu_data.readDiscriminantFromPtr(base_ptr + disc_offset);
                     have_tag = true;
                 }
                 // Use getSortedTag to ensure consistent tag ordering
@@ -687,6 +684,22 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
         },
         else => {},
     };
+
+    // Handle Dec values specially when stripping unbound numeral decimals in REPL mode.
+    // When enabled, whole-number Dec values (like 2.0) display without the decimal (as 2).
+    if (ctx.strip_unbound_numeral_decimal and value.layout.tag == .scalar) {
+        const scalar = value.layout.data.scalar;
+        if (scalar.tag == .frac and scalar.data.frac == .dec) {
+            const dec = @as(*const RocDec, @ptrCast(@alignCast(value.ptr.?))).*;
+            // Check if this is a whole number (no fractional part)
+            if (i128h.rem_u128(@abs(dec.num), @as(u128, @intCast(RocDec.one_point_zero_i128))) == 0) {
+                const whole = i128h.divTrunc_i128(dec.num, RocDec.one_point_zero_i128);
+                var str_buf: [40]u8 = undefined;
+                return try gpa.dupe(u8, i128h.i128_to_str(&str_buf, whole).str);
+            }
+        }
+    }
+
     return try renderValueRoc(ctx, value);
 }
 
@@ -713,23 +726,42 @@ pub fn renderValueRoc(ctx: *RenderCtx, value: StackValue) ![]u8 {
                 return buf.toOwnedSlice();
             },
             .int => {
-                const i = value.asI128();
-                return try std.fmt.allocPrint(gpa, "{d}", .{i});
+                // Check if this is an unsigned type that needs asU128
+                const precision = value.getIntPrecision();
+                var str_buf: [40]u8 = undefined;
+                return switch (precision) {
+                    .u64, .u128 => try gpa.dupe(u8, i128h.u128_to_str(&str_buf, value.asU128()).str),
+                    else => try gpa.dupe(u8, i128h.i128_to_str(&str_buf, value.asI128()).str),
+                };
             },
             .frac => {
                 std.debug.assert(value.ptr != null);
                 return switch (scalar.data.frac) {
                     .f32 => {
                         const ptr = @as(*const f32, @ptrCast(@alignCast(value.ptr.?)));
-                        return try std.fmt.allocPrint(gpa, "{d}", .{@as(f64, ptr.*)});
+                        var float_buf: [400]u8 = undefined;
+                        // Cast f32 to f64 and format at f64 precision to show the
+                        // exact binary representation (e.g. 3.140000104904175 for 3.14f32).
+                        return try gpa.dupe(u8, i128h.f64_to_str(&float_buf, @as(f64, ptr.*)));
                     },
                     .f64 => {
                         const ptr = @as(*const f64, @ptrCast(@alignCast(value.ptr.?)));
-                        return try std.fmt.allocPrint(gpa, "{d}", .{ptr.*});
+                        var float_buf: [400]u8 = undefined;
+                        return try gpa.dupe(u8, i128h.f64_to_str(&float_buf, ptr.*));
                     },
                     .dec => {
-                        const ptr = @as(*const RocDec, @ptrCast(@alignCast(value.ptr.?)));
-                        return try renderDecimal(gpa, ptr.*);
+                        const dec = @as(*const RocDec, @ptrCast(@alignCast(value.ptr.?))).*;
+                        // In REPL mode, strip .0 from whole-number Dec values
+                        if (ctx.strip_unbound_numeral_decimal and
+                            i128h.rem_u128(@abs(dec.num), @as(u128, @intCast(RocDec.one_point_zero_i128))) == 0)
+                        {
+                            const whole = i128h.divTrunc_i128(dec.num, RocDec.one_point_zero_i128);
+                            var str_buf: [40]u8 = undefined;
+                            return try gpa.dupe(u8, i128h.i128_to_str(&str_buf, whole).str);
+                        }
+                        var buf: [RocDec.max_str_length]u8 = undefined;
+                        const slice = dec.format_to_buf(&buf);
+                        return try gpa.dupe(u8, slice);
                     },
                 };
             },
@@ -830,7 +862,7 @@ pub fn renderValueRoc(ctx: *RenderCtx, value: StackValue) ![]u8 {
         const elem_size = ctx.layout_store.layoutSize(elem_layout);
 
         if (elem_size > 0) {
-            if (value.boxDataPointer()) |data_ptr| {
+            if (value.getBoxedData()) |data_ptr| {
                 const elem_val = StackValue{
                     .layout = elem_layout,
                     .ptr = @ptrCast(data_ptr),
@@ -865,19 +897,14 @@ pub fn renderValueRoc(ctx: *RenderCtx, value: StackValue) ![]u8 {
     }
     if (value.layout.tag == .tag_union) {
         // Layout-only fallback for tag_union: show discriminant and raw payload
-        const tu_data = ctx.layout_store.getTagUnionData(value.layout.data.tag_union.idx);
+        const tu_idx = value.layout.data.tag_union.idx;
+        const tu_data = ctx.layout_store.getTagUnionData(tu_idx);
+        const disc_offset = ctx.layout_store.getTagUnionDiscriminantOffset(tu_idx);
         var out = std.array_list.AlignedManaged(u8, null).init(gpa);
         errdefer out.deinit();
         if (value.ptr) |ptr| {
             const base_ptr: [*]u8 = @ptrCast(ptr);
-            const disc_ptr = base_ptr + tu_data.discriminant_offset;
-            const discriminant: usize = switch (tu_data.discriminant_size) {
-                1 => @as(*const u8, @ptrCast(disc_ptr)).*,
-                2 => @as(*const u16, @ptrCast(@alignCast(disc_ptr))).*,
-                4 => @as(*const u32, @ptrCast(@alignCast(disc_ptr))).*,
-                8 => @intCast(@as(*const u64, @ptrCast(@alignCast(disc_ptr))).*),
-                else => 0,
-            };
+            const discriminant = tu_data.readDiscriminantFromPtr(base_ptr + disc_offset);
             try std.fmt.format(out.writer(), "<tag_union variant={d}>", .{discriminant});
         } else {
             try out.appendSlice("<tag_union>");
@@ -885,50 +912,4 @@ pub fn renderValueRoc(ctx: *RenderCtx, value: StackValue) ![]u8 {
         return out.toOwnedSlice();
     }
     return try gpa.dupe(u8, "<unsupported>");
-}
-
-fn renderDecimal(gpa: std.mem.Allocator, dec: RocDec) ![]u8 {
-    if (dec.num == 0) {
-        return try gpa.dupe(u8, "0");
-    }
-
-    var out = std.array_list.AlignedManaged(u8, null).init(gpa);
-    errdefer out.deinit();
-
-    var num = dec.num;
-    if (num < 0) {
-        try out.append('-');
-        num = -num;
-    }
-
-    const one = RocDec.one_point_zero_i128;
-    const integer_part = @divTrunc(num, one);
-    const fractional_part = @rem(num, one);
-
-    try std.fmt.format(out.writer(), "{d}", .{integer_part});
-
-    if (fractional_part == 0) {
-        return out.toOwnedSlice();
-    }
-
-    try out.writer().writeByte('.');
-
-    const decimal_places: usize = @as(usize, RocDec.decimal_places);
-    var digits: [decimal_places]u8 = undefined;
-    @memset(digits[0..], '0');
-    var remaining = fractional_part;
-    var idx: usize = decimal_places;
-    while (idx > 0) : (idx -= 1) {
-        const digit: u8 = @intCast(@mod(remaining, 10));
-        digits[idx - 1] = digit + '0';
-        remaining = @divTrunc(remaining, 10);
-    }
-
-    var end: usize = decimal_places;
-    while (end > 1 and digits[end - 1] == '0') {
-        end -= 1;
-    }
-
-    try out.writer().writeAll(digits[0..end]);
-    return out.toOwnedSlice();
 }

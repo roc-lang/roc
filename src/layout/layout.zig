@@ -103,13 +103,25 @@ pub const Idx = enum(@Type(.{
     f64 = 14,
     dec = 15,
 
+    // zero-sized type
+    zst = 16,
+
     // Regular indices start from here.
-    // num_scalars in store.zig must refer to how many variants we had up to this point.
+    // num_primitives in store.zig must refer to how many variants we had up to this point.
     _,
 
     /// Sentinel value representing "not present" / "no layout".
     /// Used by ArrayListMap as the empty slot marker.
     pub const none: Idx = @enumFromInt(std.math.maxInt(@typeInfo(Idx).@"enum".tag_type));
+
+    /// Sentinel for call expressions where the function is resolved by name
+    /// (e.g., external method calls like `List.map`), not by closure dispatch.
+    /// The dev backend resolves these via symbol lookup, so no closure layout is needed.
+    pub const named_fn: Idx = @enumFromInt(std.math.maxInt(@typeInfo(Idx).@"enum".tag_type) - 1);
+
+    /// Default numeric type for unbound/polymorphic numbers.
+    /// Dec is the default in the new Roc compiler.
+    pub const default_num: Idx = .dec;
 };
 
 /// Represents a closure with its captured environment
@@ -274,14 +286,89 @@ pub const TagUnionData = struct {
     }
 
     /// Read the discriminant value from memory at the given base pointer.
-    /// Uses manual byte reading to avoid std.mem which triggers the forbidden pattern check.
+    /// Adds discriminant_offset internally to find the discriminant location.
     pub fn readDiscriminant(self: TagUnionData, base_ptr: [*]const u8) u32 {
-        const disc_ptr = base_ptr + self.discriminant_offset;
+        return self.readDiscriminantFromPtr(base_ptr + self.discriminant_offset);
+    }
+
+    /// Read the discriminant value from a pointer already at the discriminant location.
+    /// Use this when you have a pre-computed discriminant pointer (e.g., from getTagUnionDiscriminantOffset).
+    pub fn readDiscriminantFromPtr(self: TagUnionData, disc_ptr: [*]const u8) u32 {
         return switch (self.discriminant_size) {
             1 => disc_ptr[0],
             2 => @as(u32, disc_ptr[0]) | (@as(u32, disc_ptr[1]) << 8),
             4 => @as(u32, disc_ptr[0]) | (@as(u32, disc_ptr[1]) << 8) | (@as(u32, disc_ptr[2]) << 16) | (@as(u32, disc_ptr[3]) << 24),
-            else => unreachable, // discriminant_size is always 1, 2, or 4
+            8 => @as(u32, disc_ptr[0]) | (@as(u32, disc_ptr[1]) << 8) | (@as(u32, disc_ptr[2]) << 16) | (@as(u32, disc_ptr[3]) << 24), // truncate to u32
+            else => unreachable, // discriminant_size is 1, 2, 4, or 8
+        };
+    }
+
+    /// Write a discriminant value to memory at the given base pointer.
+    /// Adds discriminant_offset internally to find the discriminant location.
+    pub fn writeDiscriminant(self: TagUnionData, base_ptr: [*]u8, value: u32) void {
+        self.writeDiscriminantToPtr(base_ptr + self.discriminant_offset, value);
+    }
+
+    /// Write a discriminant value to a pointer already at the discriminant location.
+    /// Use this when you have a pre-computed discriminant pointer (e.g., from getTagUnionDiscriminantOffset).
+    pub fn writeDiscriminantToPtr(self: TagUnionData, disc_ptr: [*]u8, value: u32) void {
+        switch (self.discriminant_size) {
+            1 => disc_ptr[0] = @intCast(value),
+            2 => {
+                disc_ptr[0] = @intCast(value & 0xFF);
+                disc_ptr[1] = @intCast((value >> 8) & 0xFF);
+            },
+            4 => {
+                disc_ptr[0] = @intCast(value & 0xFF);
+                disc_ptr[1] = @intCast((value >> 8) & 0xFF);
+                disc_ptr[2] = @intCast((value >> 16) & 0xFF);
+                disc_ptr[3] = @intCast((value >> 24) & 0xFF);
+            },
+            8 => {
+                disc_ptr[0] = @intCast(value & 0xFF);
+                disc_ptr[1] = @intCast((value >> 8) & 0xFF);
+                disc_ptr[2] = @intCast((value >> 16) & 0xFF);
+                disc_ptr[3] = @intCast((value >> 24) & 0xFF);
+                disc_ptr[4] = 0;
+                disc_ptr[5] = 0;
+                disc_ptr[6] = 0;
+                disc_ptr[7] = 0;
+            },
+            else => unreachable, // discriminant_size is 1, 2, 4, or 8
+        }
+    }
+
+    /// Get the alignment requirement for this discriminant.
+    pub fn discriminantAlignment(self: TagUnionData) std.mem.Alignment {
+        return alignmentForDiscriminantSize(self.discriminant_size);
+    }
+
+    /// Get the alignment requirement for a given discriminant size.
+    /// Can be called before a TagUnionData is created.
+    pub fn alignmentForDiscriminantSize(size: u8) std.mem.Alignment {
+        return switch (size) {
+            1 => .@"1",
+            2 => .@"2",
+            4 => .@"4",
+            8 => .@"8",
+            else => unreachable, // discriminant_size is 1, 2, 4, or 8
+        };
+    }
+
+    /// Get the integer precision for this discriminant (always unsigned).
+    pub fn discriminantPrecision(self: TagUnionData) types.Int.Precision {
+        return precisionForDiscriminantSize(self.discriminant_size);
+    }
+
+    /// Get the integer precision for a given discriminant size (always unsigned).
+    /// Can be called before a TagUnionData is created.
+    pub fn precisionForDiscriminantSize(size: u8) types.Int.Precision {
+        return switch (size) {
+            1 => .u8,
+            2 => .u16,
+            4 => .u32,
+            8 => .u64,
+            else => unreachable, // discriminant_size is 1, 2, 4, or 8
         };
     }
 };
@@ -335,6 +422,116 @@ pub const SizeAlign = packed struct(u32) {
 test "Size of SizeAlign type" {
     try std.testing.expectEqual(32, @bitSizeOf(SizeAlign));
 }
+
+/// Bundled information about a list's element layout
+pub const ListInfo = struct {
+    elem_layout_idx: Idx,
+    elem_layout: Layout,
+    elem_size: u32,
+    elem_alignment: u32,
+    contains_refcounted: bool,
+
+    /// Iterator for traversing list elements with proper pointer arithmetic.
+    /// Use iterateElements() to create one.
+    pub const ElementIterator = struct {
+        base: [*]u8,
+        elem_size: usize,
+        elem_layout: Layout,
+        count: usize,
+        idx: usize = 0,
+
+        /// Get the next element pointer and advance the iterator.
+        /// Returns null when all elements have been visited.
+        pub fn next(self: *ElementIterator) ?[*]u8 {
+            if (self.idx >= self.count) return null;
+            const ptr = self.base + self.idx * self.elem_size;
+            self.idx += 1;
+            return ptr;
+        }
+
+        /// Reset the iterator to the beginning.
+        pub fn reset(self: *ElementIterator) void {
+            self.idx = 0;
+        }
+
+        /// Get remaining element count.
+        pub fn remaining(self: ElementIterator) usize {
+            return self.count - self.idx;
+        }
+    };
+
+    /// Create an iterator for traversing list elements.
+    /// The caller should obtain base_ptr and count from RocList methods:
+    ///   - base_ptr from list.getAllocationDataPtr(ops)
+    ///   - count from list.getAllocationElementCount(self.contains_refcounted, ops)
+    pub fn iterateElements(self: ListInfo, base_ptr: [*]u8, count: usize) ElementIterator {
+        return ElementIterator{
+            .base = base_ptr,
+            .elem_size = self.elem_size,
+            .elem_layout = self.elem_layout,
+            .count = count,
+        };
+    }
+};
+
+/// Bundled information about a box's element layout
+pub const BoxInfo = struct {
+    elem_layout_idx: Idx,
+    elem_layout: Layout,
+    elem_size: u32,
+    elem_alignment: u32,
+    contains_refcounted: bool,
+};
+
+/// Bundled information about a record layout
+pub const RecordInfo = struct {
+    data: *const RecordData,
+    alignment: std.mem.Alignment,
+    fields: RecordField.SafeMultiList.Slice,
+    contains_refcounted: bool,
+
+    pub fn size(self: RecordInfo) u32 {
+        return self.data.size;
+    }
+};
+
+/// Bundled information about a tuple layout
+pub const TupleInfo = struct {
+    data: *const TupleData,
+    alignment: std.mem.Alignment,
+    fields: TupleField.SafeMultiList.Slice,
+    contains_refcounted: bool,
+
+    pub fn size(self: TupleInfo) u32 {
+        return self.data.size;
+    }
+};
+
+/// Bundled information about a tag union layout
+pub const TagUnionInfo = struct {
+    idx: TagUnionIdx,
+    data: *const TagUnionData,
+    alignment: std.mem.Alignment,
+    variants: TagUnionVariant.SafeMultiList.Slice,
+    contains_refcounted: bool,
+
+    pub fn size(self: TagUnionInfo) u32 {
+        return self.data.size;
+    }
+
+    pub fn readDiscriminant(self: TagUnionInfo, ptr: [*]const u8) u32 {
+        return self.data.readDiscriminantFromPtr(ptr + self.data.discriminant_offset);
+    }
+};
+
+/// Bundled information about a scalar layout
+pub const ScalarInfo = struct {
+    tag: ScalarTag,
+    size: u32,
+    alignment: u32,
+    int_precision: ?types.Int.Precision,
+    frac_precision: ?types.Frac.Precision,
+};
 
 /// The memory layout of a value in a running Roc program.
 ///

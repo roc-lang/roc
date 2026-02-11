@@ -21,9 +21,12 @@ pub const SmallCollections = @import("PackedDataSpan.zig").SmallCollections;
 
 pub const CommonEnv = @import("CommonEnv.zig");
 pub const source_utils = @import("source_utils.zig");
+pub const module_path = @import("module_path.zig");
+pub const url = @import("url.zig");
 
 test {
     _ = @import("Ident.zig");
+    _ = @import("module_path.zig");
 }
 
 /// Whether a function calls itself.
@@ -164,4 +167,5 @@ test "base tests" {
     std.testing.refAllDecls(@import("stack_overflow.zig"));
     std.testing.refAllDecls(@import("StringLiteral.zig"));
     std.testing.refAllDecls(@import("target.zig"));
+    std.testing.refAllDecls(@import("url.zig"));
 }

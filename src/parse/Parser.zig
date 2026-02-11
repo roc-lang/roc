@@ -1070,10 +1070,6 @@ pub fn parseExposedItem(self: *Parser) Error!AST.ExposedItem.Idx {
     }
 }
 
-// -----------------------------------------------------------------
-// Target section parsing functions
-// -----------------------------------------------------------------
-
 /// Parses a single file item in a target list: "crt1.o" or app
 pub fn parseTargetFile(self: *Parser) Error!AST.TargetFile.Idx {
     const trace = tracy.trace(@src());
@@ -1334,25 +1330,27 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                 var nested_import = false;
 
                 // Parse all uppercase segments: first.Second.Third...
-                var prev_upper_tok: ?TokenIdx = null;
-                var module_name_tok = self.pos;
+                // We track the first token (module_name_tok) and last token (last_upper_tok).
+                var last_upper_tok: TokenIdx = self.pos;
+                const module_name_tok = self.pos;
                 self.advance(); // Advance past first UpperIdent
 
                 // Keep consuming additional .UpperIdent segments
                 while (self.peek() == .NoSpaceDotUpperIdent or self.peek() == .DotUpperIdent) {
-                    prev_upper_tok = module_name_tok;
-                    module_name_tok = self.pos;
+                    last_upper_tok = self.pos;
                     self.advance();
                 }
 
                 // If we have multiple uppercase segments and no explicit 'as' or 'exposing',
                 // auto-expose the final segment
                 const has_explicit_clause = self.peek() == .KwAs or self.peek() == .KwExposing;
-                if (prev_upper_tok != null and !has_explicit_clause) {
+                const has_multiple_segments = last_upper_tok != module_name_tok;
+                if (has_multiple_segments and !has_explicit_clause) {
                     // Auto-expose pattern: import json.Parser.Config
                     // Module is everything before the last segment, last segment is auto-exposed
-                    const final_segment_tok = module_name_tok;
-                    module_name_tok = prev_upper_tok.?;
+                    // module_name_tok stays as the first uppercase token; the formatter will
+                    // iterate through consecutive uppercase tokens and stop before the exposed token.
+                    const final_segment_tok = last_upper_tok;
                     nested_import = true;
 
                     // Create exposed item for the final segment
@@ -1365,7 +1363,9 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                     try self.store.addScratchExposedItem(exposed_item);
                     exposes = try self.store.exposedItemSpanFrom(scratch_top);
                 } else {
-                    // Normal import: handle 'as' and 'exposing' clauses
+                    // Normal import with explicit 'as' or 'exposing' clause
+                    // module_name_tok stays as the first uppercase token; the formatter will
+                    // iterate through consecutive uppercase tokens to output the full path.
 
                     // Handle 'as' clause if present
                     if (self.peek() == .KwAs) {
@@ -1505,6 +1505,7 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                     .anno = anno,
                     .name = name,
                     .where = try self.parseWhereConstraint(),
+                    .is_var = true,
                     .region = .{ .start = start, .end = self.pos },
                 } });
                 return statement_idx;
@@ -1557,6 +1558,7 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                     .anno = anno,
                     .name = start,
                     .where = try self.parseWhereConstraint(),
+                    .is_var = false,
                     .region = .{ .start = start, .end = self.pos },
                 } });
                 return statement_idx;
@@ -1588,6 +1590,7 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                     .anno = anno,
                     .name = start,
                     .where = try self.parseWhereConstraint(),
+                    .is_var = false,
                     .region = .{ .start = start, .end = self.pos },
                 } });
                 return statement_idx;
@@ -2303,17 +2306,39 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
                 return try self.pushMalformed(AST.Expr.Idx, .expr_dot_suffix_not_allowed, self.pos);
             }
 
-            expr = try self.store.addExpr(.{ .int = .{
-                .token = start,
-                .region = .{ .start = start, .end = self.pos },
-            } });
+            // Check for typed integer syntax: 123.U64
+            if (self.peek() == .NoSpaceDotUpperIdent) {
+                const type_token = self.pos;
+                self.advance();
+                expr = try self.store.addExpr(.{ .typed_int = .{
+                    .token = start,
+                    .type_token = type_token,
+                    .region = .{ .start = start, .end = self.pos },
+                } });
+            } else {
+                expr = try self.store.addExpr(.{ .int = .{
+                    .token = start,
+                    .region = .{ .start = start, .end = self.pos },
+                } });
+            }
         },
         .Float => {
             self.advance();
-            expr = try self.store.addExpr(.{ .frac = .{
-                .token = start,
-                .region = .{ .start = start, .end = self.pos },
-            } });
+            // Check for typed fractional syntax: 3.14.Dec
+            if (self.peek() == .NoSpaceDotUpperIdent) {
+                const type_token = self.pos;
+                self.advance();
+                expr = try self.store.addExpr(.{ .typed_frac = .{
+                    .token = start,
+                    .type_token = type_token,
+                    .region = .{ .start = start, .end = self.pos },
+                } });
+            } else {
+                expr = try self.store.addExpr(.{ .frac = .{
+                    .token = start,
+                    .region = .{ .start = start, .end = self.pos },
+                } });
+            }
         },
         .SingleQuote => {
             self.advance();
@@ -2535,6 +2560,9 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
                 }
             }
             const branches = try self.store.matchBranchSpanFrom(scratch_top);
+            if (branches.span.len == 0) {
+                return try self.pushMalformed(AST.Expr.Idx, .match_has_no_branches, start);
+            }
             if (self.peek() != .CloseCurly) {
                 return try self.pushMalformed(AST.Expr.Idx, .expected_close_curly_at_end_of_match, self.pos);
             }
@@ -2607,10 +2635,17 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
     if (expr) |e| {
         var expression = try self.parseExprSuffix(start, e);
 
-        while (self.peek() == .NoSpaceDotInt or self.peek() == .NoSpaceDotLowerIdent or self.peek() == .DotLowerIdent or self.peek() == .OpArrow) {
+        while (self.peek() == .NoSpaceDotInt or self.peek() == .DotInt or self.peek() == .NoSpaceDotLowerIdent or self.peek() == .DotLowerIdent or self.peek() == .OpArrow) {
             const tok = self.peek();
-            if (tok == .NoSpaceDotInt) {
-                return try self.pushMalformed(AST.Expr.Idx, .expr_no_space_dot_int, self.pos);
+            if (tok == .NoSpaceDotInt or tok == .DotInt) {
+                // Tuple element access: tuple.0, tuple.1, etc.
+                const elem_token = self.pos;
+                self.advance();
+                expression = try self.store.addExpr(.{ .tuple_access = .{
+                    .expr = expression,
+                    .elem_token = elem_token,
+                    .region = .{ .start = start, .end = self.pos },
+                } });
             } else if (self.peek() == .OpArrow) {
                 const s = self.pos;
                 self.advance();
@@ -3122,12 +3157,14 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAn
             self.advance(); // Advance past OpenRound
             const after_round = self.pos;
             const scratch_top = self.store.scratchTypeAnnoTop();
+            var saw_comma = false;
             while (self.peek() != .CloseRound and self.peek() != .OpArrow and self.peek() != .OpFatArrow and self.peek() != .EndOfFile) {
                 // Looking for args here so that we don't capture an un-parenthesized fn's args
                 try self.store.addScratchTypeAnno(try self.parseTypeAnno(.looking_for_args));
                 if (self.peek() != .Comma) {
                     break;
                 }
+                saw_comma = true;
                 self.advance(); // Advance past Comma
             }
             if (self.peek() == .OpArrow or self.peek() == .OpFatArrow) {
@@ -3176,10 +3213,19 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAn
                 }
                 self.advance(); // Advance past CloseRound
                 const annos = try self.store.typeAnnoSpanFrom(scratch_top);
-                anno = try self.store.addTypeAnno(.{ .tuple = .{
-                    .region = .{ .start = start, .end = self.pos },
-                    .annos = annos,
-                } });
+                // Single element without comma is parenthesized type, not tuple
+                // e.g., (Str) is parens, (Str,) is 1-element tuple
+                if (annos.span.len == 1 and !saw_comma) {
+                    anno = try self.store.addTypeAnno(.{ .parens = .{
+                        .anno = self.store.typeAnnoSlice(annos)[0],
+                        .region = .{ .start = start, .end = self.pos },
+                    } });
+                } else {
+                    anno = try self.store.addTypeAnno(.{ .tuple = .{
+                        .region = .{ .start = start, .end = self.pos },
+                        .annos = annos,
+                    } });
+                }
             }
         },
         .OpenCurly => {
@@ -3190,14 +3236,19 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAn
             // Parse record fields, with support for record extension
             while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
                 if (self.peek() == .DoubleDot) {
-                    // Handle record extension: { field: Type, ..ext }
+                    // Handle record extension: { field: Type, ..ext } or { field: Type, .. }
+                    const double_dot_start = self.pos;
                     self.advance(); // consume DoubleDot
 
                     if (self.peek() == .LowerIdent) {
                         // Parse the extension type variable
                         ext_anno = try self.parseTypeAnno(.looking_for_args);
+                    } else {
+                        // Anonymous extension (just ..) - create an underscore type annotation
+                        ext_anno = try self.store.addTypeAnno(.{ .underscore = .{
+                            .region = .{ .start = double_dot_start, .end = self.pos },
+                        } });
                     }
-                    // If no identifier follows .., it's an anonymous extension (just ..)
                     // Break out since .. must be the last element
                     self.expect(.Comma) catch {};
                     break;
@@ -3223,19 +3274,22 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAn
         .OpenSquare => {
             self.advance(); // Advance past OpenSquare
             const scratch_top = self.store.scratchTypeAnnoTop();
-            var open_anno: ?AST.TypeAnno.Idx = null;
+            var ext: AST.TypeAnno.TagUnionExt = .closed;
 
             // Parse tag union elements, with support for open union extension
             while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
                 if (self.peek() == .DoubleDot) {
-                    // Handle open tag union extension: [Tag, ..ext]
+                    // Handle open tag union extension: [Tag, ..ext] or [Tag, .._ext] or [Tag, ..]
+                    const double_dot_pos = self.pos;
                     self.advance(); // consume DoubleDot
 
-                    if (self.peek() == .LowerIdent) {
-                        // Parse the extension type variable
-                        open_anno = try self.parseTypeAnno(.looking_for_args);
+                    if (self.peek() == .LowerIdent or self.peek() == .NamedUnderscore) {
+                        // Parse the named extension type variable
+                        ext = .{ .named = try self.parseTypeAnno(.looking_for_args) };
+                    } else {
+                        // Anonymous extension (just ..) - store the DoubleDot token position
+                        ext = .{ .open = double_dot_pos };
                     }
-                    // If no identifier follows .., it's an anonymous extension (just ..)
                     // Break out since .. must be the last element
                     self.expect(.Comma) catch {};
                     break;
@@ -3254,7 +3308,7 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAn
             const tags = try self.store.typeAnnoSpanFrom(scratch_top);
             anno = try self.store.addTypeAnno(.{ .tag_union = .{
                 .region = .{ .start = start, .end = self.pos },
-                .open_anno = open_anno,
+                .ext = ext,
                 .tags = tags,
             } });
         },
@@ -3540,6 +3594,35 @@ pub fn parseRecord(self: *Parser, start: u32) Error!AST.Expr.Idx {
         }
     };
     const fields = try self.store.recordFieldSpanFrom(scratch_top);
+
+    // Check for record builder suffix: { ... }.TypeName
+    if (self.peek() == .NoSpaceDotUpperIdent) {
+        const suffix_start = self.pos;
+        var final_token = self.pos;
+        self.advance();
+
+        // Parse any additional qualifiers (e.g., .Foo.Bar.Baz)
+        const token_scratch_top = self.store.scratchTokenTop();
+        while (self.peek() == .NoSpaceDotUpperIdent) {
+            try self.store.addScratchToken(final_token);
+            final_token = self.pos;
+            self.advance();
+        }
+        const qualifiers = try self.store.tokenSpanFrom(token_scratch_top);
+
+        const mapper = try self.store.addExpr(.{ .tag = .{
+            .region = .{ .start = suffix_start, .end = self.pos },
+            .token = final_token,
+            .qualifiers = qualifiers,
+        } });
+
+        return try self.store.addExpr(.{ .record_builder = .{
+            .mapper = mapper,
+            .fields = fields,
+            .region = .{ .start = start, .end = self.pos },
+        } });
+    }
+
     return try self.store.addExpr(.{ .record = .{
         .fields = fields,
         .ext = null,

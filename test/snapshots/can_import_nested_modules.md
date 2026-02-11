@@ -163,8 +163,8 @@ EndOfFile,
 		(s-import (raw "json.Parser")
 			(exposing
 				(exposed-upper-ident (text "Config"))))
-		(s-import (raw "http.Auth") (alias "HttpAuth"))
-		(s-import (raw "utils.Format")
+		(s-import (raw "http.Client.Auth") (alias "HttpAuth"))
+		(s-import (raw "utils.String.Format")
 			(exposing
 				(exposed-lower-ident
 					(text "padLeft"))))
@@ -245,8 +245,8 @@ EndOfFile,
 # FORMATTED
 ~~~roc
 import json.Parser exposing [Config]
-import http.Auth as HttpAuth
-import utils.Format exposing [padLeft]
+import http.Client.Auth as HttpAuth
+import utils.String.Format exposing [padLeft]
 
 # Test multi-level type qualification
 parseConfig : Config.Settings -> Str
@@ -301,7 +301,7 @@ validateAuth = |creds| HttpAuth.validate(creds)
 			(ty-fn (effectful false)
 				(ty-lookup (name "Str") (builtin))
 				(ty-lookup (name "Str") (builtin))
-				(ty-lookup (name "Token") (external-module "http.Client.Auth")))))
+				(ty-lookup (name "Token") (external-module "http.Client")))))
 	(d-let
 		(p-assign (ident "processData"))
 		(e-lambda
@@ -346,16 +346,16 @@ validateAuth = |creds| HttpAuth.validate(creds)
 					(p-assign (ident "creds")))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-lookup (name "Credentials") (external-module "http.Client.Auth"))
+				(ty-lookup (name "Credentials") (external-module "http.Client"))
 				(ty-apply (name "Try") (builtin)
-					(ty-lookup (name "Token") (external-module "http.Client.Auth"))
-					(ty-lookup (name "Error") (external-module "http.Client.Auth"))))))
+					(ty-lookup (name "Token") (external-module "http.Client"))
+					(ty-lookup (name "Error") (external-module "http.Client"))))))
 	(s-import (module "json.Parser")
 		(exposes
 			(exposed (name "Config") (wildcard false))))
-	(s-import (module "http.Client.Auth")
+	(s-import (module "http.Client")
 		(exposes))
-	(s-import (module "utils.String.Format")
+	(s-import (module "utils.String")
 		(exposes
 			(exposed (name "padLeft") (wildcard false)))))
 ~~~
@@ -369,9 +369,9 @@ validateAuth = |creds| HttpAuth.validate(creds)
 		(patt (type "Str -> Str"))
 		(patt (type "Error -> Try(Error, Error)")))
 	(expressions
-		(expr (type "Error -> Error"))
+		(expr (type "Error -> Str"))
 		(expr (type "Str, Str -> Error"))
-		(expr (type "Error, Str -> Error"))
-		(expr (type "Str -> Error"))
-		(expr (type "Error -> Error"))))
+		(expr (type "Error, Str -> Try(Str, Error)"))
+		(expr (type "Str -> Str"))
+		(expr (type "Error -> Try(Error, Error)"))))
 ~~~

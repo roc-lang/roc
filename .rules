@@ -4,6 +4,10 @@ This repo contains the source code for the Roc compiler and related tools. There
 
 All discussion, unless otherwise explicitly requested, is regarding the new version in zig. Ignore everything in the crates folder at the root of the repo, always exclude it from searches.
 
+## Git Usage
+
+**All use of git is strictly forbidden for diagnostic purposes.** Do not use git stash, git diff, git log, or any other git commands to investigate whether issues are pre-existing or to compare with previous states. Focus exclusively on fixing the current problem. Whether an issue existed before is irrelevant information.
+
 ## Documentation
 
 Our approach is to review and update with each change. Quality documentation helps us understand quickly; however, this only works if we continuously improve and maintain it.

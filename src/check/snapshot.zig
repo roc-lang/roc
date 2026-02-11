@@ -3,6 +3,7 @@
 const std = @import("std");
 const base = @import("base");
 const collections = @import("collections");
+const tracy = @import("tracy");
 const types = @import("types");
 
 const Allocator = std.mem.Allocator;
@@ -12,20 +13,15 @@ const Ident = base.Ident;
 /// Index enum for SnapshotContentList
 pub const SnapshotContentIdx = SnapshotContentList.Idx;
 
-/// Index for extra strings stored in the snapshot store (e.g., formatted pattern strings)
-pub const ExtraStringIdx = enum(u32) {
-    _,
-
-    pub fn toInt(self: ExtraStringIdx) u32 {
-        return @intFromEnum(self);
-    }
-};
-
 const SnapshotContentList = collections.SafeList(SnapshotContent);
 const SnapshotContentIdxSafeList = collections.SafeList(SnapshotContentIdx);
-const SnapshotRecordFieldSafeList = collections.SafeMultiList(SnapshotRecordField);
-const SnapshotTagSafeList = collections.SafeMultiList(SnapshotTag);
 const SnapshotStaticDispatchConstraintSafeList = collections.SafeList(SnapshotStaticDispatchConstraint);
+
+/// A safe list of record fields
+pub const SnapshotRecordFieldSafeList = collections.SafeMultiList(SnapshotRecordField);
+
+/// A safe list of tags
+pub const SnapshotTagSafeList = collections.SafeMultiList(SnapshotTag);
 
 /// The content of a type snapshot, mirroring types.Content for error reporting.
 pub const SnapshotContent = union(enum) {
@@ -156,6 +152,9 @@ const Rigid = types.Rigid;
 /// Entry point is `snapshotVarForError`
 const TypeWriter = types.TypeWriter;
 
+const ByteList = std.array_list.Managed(u8);
+const ByteListRange = struct { start: usize, count: usize };
+
 /// Stores snapshots of types captured before unification errors overwrite them with `.err`.
 /// This allows error messages to display the original conflicting types rather than the
 /// error state. Also stores pre-formatted type strings for efficient error reporting.
@@ -183,10 +182,8 @@ pub const Store = struct {
     scratch_static_dispatch_constraints: base.Scratch(SnapshotStaticDispatchConstraint),
 
     /// Formatted type strings, indexed by SnapshotContentIdx
-    formatted_strings: std.AutoHashMapUnmanaged(SnapshotContentIdx, []const u8),
-
-    /// Extra strings (e.g., formatted pattern strings) that need lifecycle management
-    extra_strings: std.ArrayListUnmanaged([]const u8),
+    formatted_strings: std.AutoHashMapUnmanaged(SnapshotContentIdx, ByteListRange),
+    formatted_strings_backing: ByteList,
 
     pub fn initCapacity(gpa: Allocator, capacity: usize) std.mem.Allocator.Error!Self {
         return .{
@@ -201,24 +198,19 @@ pub const Store = struct {
             .scratch_tags = try base.Scratch(SnapshotTag).init(gpa),
             .scratch_record_fields = try base.Scratch(SnapshotRecordField).init(gpa),
             .scratch_static_dispatch_constraints = try base.Scratch(SnapshotStaticDispatchConstraint).init(gpa),
-            .formatted_strings = .{},
-            .extra_strings = .{},
+            .formatted_strings = blk: {
+                var map = std.AutoHashMapUnmanaged(SnapshotContentIdx, ByteListRange){};
+                try map.ensureTotalCapacity(gpa, 32);
+                break :blk map;
+            },
+            .formatted_strings_backing = try ByteList.initCapacity(gpa, 512),
         };
     }
 
     pub fn deinit(self: *Self) void {
         // Free all stored formatted strings
-        var iter = self.formatted_strings.valueIterator();
-        while (iter.next()) |str| {
-            self.gpa.free(str.*);
-        }
         self.formatted_strings.deinit(self.gpa);
-
-        // Free all extra strings
-        for (self.extra_strings.items) |str| {
-            self.gpa.free(str);
-        }
-        self.extra_strings.deinit(self.gpa);
+        self.formatted_strings_backing.deinit();
 
         // Free all formatted tag strings
         const tags_len = self.tags.len();
@@ -244,26 +236,21 @@ pub const Store = struct {
 
     /// Get the pre-formatted string for a snapshot.
     pub fn getFormattedString(self: *const Self, idx: SnapshotContentIdx) ?[]const u8 {
-        return self.formatted_strings.get(idx);
-    }
+        const mb_range = self.formatted_strings.get(idx);
 
-    /// Store an extra string (e.g., formatted pattern) and return its index.
-    /// The string will be freed when the store is deinitialized.
-    pub fn storeExtraString(self: *Self, str: []const u8) std.mem.Allocator.Error!ExtraStringIdx {
-        const idx: ExtraStringIdx = @enumFromInt(self.extra_strings.items.len);
-        try self.extra_strings.append(self.gpa, str);
-        return idx;
-    }
+        if (mb_range == null) return null;
+        const range = mb_range.?;
 
-    /// Get an extra string by index.
-    pub fn getExtraString(self: *const Self, idx: ExtraStringIdx) []const u8 {
-        return self.extra_strings.items[idx.toInt()];
+        return self.formatted_strings_backing.items[range.start..][0..range.count];
     }
 
     /// Deep copy a type variable for error reporting. This snapshots the type structure
     /// AND formats each nested type using TypeWriter before the types get overwritten with .err.
     /// ONLY use this in error paths - it allocates formatted strings for all nested types.
     pub fn snapshotVarForError(self: *Self, store: *const TypesStore, type_writer: *TypeWriter, var_: types.Var) std.mem.Allocator.Error!SnapshotContentIdx {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
         const snapshot_idx = try self.deepCopyVarInternal(store, type_writer, var_);
         return snapshot_idx;
     }
@@ -305,13 +292,23 @@ pub const Store = struct {
         try self.seen_vars.append(resolved.var_);
         defer _ = self.seen_vars.pop();
 
+        // Recursively copy content
         const snapshot_idx = try self.deepCopyContent(store, type_writer, resolved.var_, resolved.desc.content, var_);
 
         // Format this type and store the formatted string
-        type_writer.reset();
-        try type_writer.write(var_, .wrap);
-        const formatted = try self.gpa.dupe(u8, type_writer.get());
-        try self.formatted_strings.put(self.gpa, snapshot_idx, formatted);
+        // Here, we run the TypeWriter, writing directly into our backing
+        {
+            const formatted_strings_start = self.formatted_strings_backing.items.len;
+            try type_writer.writeInto(&self.formatted_strings_backing, var_, .wrap);
+            const formatted_strings_end = self.formatted_strings_backing.items.len;
+
+            const formatted_range = ByteListRange{
+                .start = formatted_strings_start,
+                .count = formatted_strings_end - formatted_strings_start,
+            };
+
+            try self.formatted_strings.put(self.gpa, snapshot_idx, formatted_range);
+        }
 
         return snapshot_idx;
     }
@@ -611,6 +608,118 @@ pub const Store = struct {
 
     pub fn getContent(self: *const Self, idx: SnapshotContentIdx) SnapshotContent {
         return self.contents.get(idx).*;
+    }
+
+    pub fn getContentUnwrapAlias(self: *const Self, initial_idx: SnapshotContentIdx) SnapshotContent {
+        var idx = initial_idx;
+        while (true) {
+            const content = self.contents.get(idx).*;
+            switch (content) {
+                .alias => |alias| {
+                    idx = alias.backing;
+                },
+                else => return content,
+            }
+        }
+    }
+
+    const RecordFieldSnapshot = union(enum) {
+        not_a_record,
+        empty_record,
+        record: SnapshotRecordFieldSafeList.Range,
+    };
+
+    pub fn gatherRecordFields(
+        self: *const Self,
+        idx: SnapshotContentIdx,
+        gpa: std.mem.Allocator,
+        fields_out: *SnapshotRecordFieldSafeList,
+    ) std.mem.Allocator.Error!RecordFieldSnapshot {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
+        const unwrapped = self.getContentUnwrapAlias(idx);
+        switch (unwrapped) {
+            .structure => |s| switch (s) {
+                .record => |record| {
+                    // Gather all fields into fields_out
+                    const fields_out_top: u32 = @intCast(fields_out.items.len);
+                    try self.gatherRecordFieldsHelp(record, gpa, fields_out);
+                    const fields_out_range = fields_out.rangeToEnd(fields_out_top);
+
+                    // Return empty record on base-case
+                    if (fields_out_range.count == 0) {
+                        return .empty_record;
+                    }
+
+                    return RecordFieldSnapshot{ .record = fields_out_range };
+                },
+                .record_unbound => |fields| {
+                    if (fields.count == 0) {
+                        return .empty_record;
+                    }
+
+                    const fields_out_top: u32 = @intCast(fields_out.items.len);
+                    const slice = self.sliceRecordFields(fields);
+                    for (slice.items(.name), slice.items(.content)) |name, content| {
+                        _ = try fields_out.append(gpa, .{ .name = name, .content = content });
+                    }
+                    const fields_out_range = fields_out.rangeToEnd(fields_out_top);
+                    return RecordFieldSnapshot{ .record = fields_out_range };
+                },
+                .empty_record => return .empty_record,
+                else => return .not_a_record,
+            },
+            else => return .not_a_record,
+        }
+    }
+
+    /// Gather all fields from a record, following extension chain.
+    /// Returns a Range into fields buffer.
+    pub fn gatherRecordFieldsHelp(
+        self: *const Store,
+        record: SnapshotRecord,
+        gpa: std.mem.Allocator,
+        fields_out: *SnapshotRecordFieldSafeList,
+    ) std.mem.Allocator.Error!void {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
+        // Add immediate fields
+        const record_fields = self.sliceRecordFields(record.fields);
+        for (record_fields.items(.name), record_fields.items(.content)) |name, content| {
+            _ = try fields_out.append(gpa, .{ .name = name, .content = content });
+        }
+
+        // Follow extension chain
+        var ext_idx = record.ext;
+        while (true) {
+            const content = self.getContent(ext_idx);
+            switch (content) {
+                .structure => |flat| switch (flat) {
+                    .record => |rec| {
+                        const ext_fields = self.sliceRecordFields(rec.fields);
+                        for (ext_fields.items(.name), ext_fields.items(.content)) |name, field_content| {
+                            _ = try fields_out.append(gpa, .{ .name = name, .content = field_content });
+                        }
+                        ext_idx = rec.ext;
+                    },
+                    .record_unbound => |fields_range| {
+                        const ext_fields = self.sliceRecordFields(fields_range);
+                        for (ext_fields.items(.name), ext_fields.items(.content)) |name, field_content| {
+                            _ = try fields_out.append(gpa, .{ .name = name, .content = field_content });
+                        }
+                        break;
+                    },
+                    .empty_record => break,
+                    else => break,
+                },
+                .alias => |alias| {
+                    ext_idx = alias.backing;
+                },
+                .flex, .rigid, .err, .recursive => break,
+            }
+        }
     }
 
     /// Get the pre-formatted string representation of a tag (e.g., "TagName(a, b)").

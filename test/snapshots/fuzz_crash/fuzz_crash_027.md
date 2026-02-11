@@ -209,10 +209,10 @@ UNDEFINED VARIABLE - fuzz_crash_027.md:114:2:114:11
 UNDEFINED VARIABLE - fuzz_crash_027.md:128:2:128:7
 UNDEFINED VARIABLE - fuzz_crash_027.md:131:63:131:69
 UNDEFINED VARIABLE - fuzz_crash_027.md:132:42:132:48
+INVALID ASSIGNMENT TO ITSELF - fuzz_crash_027.md:132:50:132:55
 UNDEFINED VARIABLE - fuzz_crash_027.md:136:3:136:7
 UNDEFINED VARIABLE - fuzz_crash_027.md:138:4:138:10
 UNDEFINED VARIABLE - fuzz_crash_027.md:141:14:141:17
-NOT IMPLEMENTED - fuzz_crash_027.md:141:10:141:24
 UNDEFINED VARIABLE - fuzz_crash_027.md:142:10:142:17
 UNDEFINED VARIABLE - fuzz_crash_027.md:142:18:142:22
 DOES NOT EXIST - fuzz_crash_027.md:145:4:145:13
@@ -224,15 +224,14 @@ UNUSED VARIABLE - fuzz_crash_027.md:141:2:141:7
 UNUSED VARIABLE - fuzz_crash_027.md:142:2:142:7
 UNDECLARED TYPE - fuzz_crash_027.md:153:9:153:14
 TOO FEW ARGS - fuzz_crash_027.md:21:3:22:4
-INVALID IF CONDITION - fuzz_crash_027.md:50:5:50:5
-INCOMPATIBLE MATCH PATTERNS - fuzz_crash_027.md:64:2:64:2
-UNUSED VALUE - fuzz_crash_027.md:1:1:1:1
-TOO FEW ARGUMENTS - fuzz_crash_027.md:111:2:113:3
-MISSING METHOD - fuzz_crash_027.md:125:6:125:9
-MISSING METHOD - fuzz_crash_027.md:102:15:102:18
+TYPE MISMATCH - fuzz_crash_027.md:50:5:50:8
+TYPE MISMATCH - fuzz_crash_027.md:64:2:64:2
+TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
+TYPE MISMATCH - fuzz_crash_027.md:125:6:125:9
+TYPE MISMATCH - fuzz_crash_027.md:102:15:102:18
 MISSING METHOD - fuzz_crash_027.md:129:12:129:22
 + - :0:0:0:0
-TYPE MISMATCH - fuzz_crash_027.md:143:2:147:3
+TYPE MISMATCH - fuzz_crash_027.md:106:3:106:6
 TYPE MISMATCH - fuzz_crash_027.md:100:9:148:2
 # PROBLEMS
 **LEADING ZERO**
@@ -725,6 +724,18 @@ Is there an `import` or `exposing` missing up-top?
 	                                        ^^^^^^
 
 
+**INVALID ASSIGNMENT TO ITSELF**
+The value `tuple` is assigned to itself, which would cause an infinite loop at runtime.
+
+Only functions can reference themselves (for recursion). For non-function values, the right-hand side must be fully computable without referring to the value being assigned.
+
+**fuzz_crash_027.md:132:50:132:55:**
+```roc
+	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
+```
+	                                                ^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `tag1` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -756,18 +767,6 @@ Is there an `import` or `exposing` missing up-top?
 	bsult = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
 ```
 	            ^^^
-
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: unsupported operator
-
-**fuzz_crash_027.md:141:10:141:24:**
-```roc
-	bsult = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
-```
-	        ^^^^^^^^^^^^^^
-
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 
 **UNDEFINED VARIABLE**
@@ -894,22 +893,22 @@ The type _List_ expects 1 argument, but got 0 instead.
 ```
 
 
-**INVALID IF CONDITION**
-This `if` condition needs to be a _Bool_:
-**fuzz_crash_027.md:50:5:**
+**TYPE MISMATCH**
+This `if` condition must evaluate to a `Bool`–either `True` or `False`:
+**fuzz_crash_027.md:50:5:50:8:**
 ```roc
 	if num {
 ```
-    ^^^
+	   ^^^
 
-Right now, it has the type:
+It is:
 
     U64
 
-Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
+But I need this to be a `Bool` value.
 
-**INCOMPATIBLE MATCH PATTERNS**
-The pattern in the third branch of this `match` differs from previous ones:
+**TYPE MISMATCH**
+The third branch of this `match` does not match the previous ones:
 **fuzz_crash_027.md:64:2:**
 ```roc
 	match a {lue | Red => {
@@ -946,30 +945,18 @@ ist
 ```
   ^^^^^
 
-The third pattern has this type:
+This third branch is trying to match:
 
     Str
 
-But all the previous patterns have this type: 
+But the expression between the `match` parenthesis has the type:
 
-    [Red, Blue, .._others2]
+    [Red, Blue, ..]
 
-All patterns in an `match` must have compatible types.
+These can never match! Either the pattern or expression has a problem.
 
-**UNUSED VALUE**
-This expression produces a value, but it's not being used:
-**fuzz_crash_027.md:1:1:1:1:**
-```roc
-# Thnt!
-```
-^
-
-It has the type:
-
-    _d
-
-**TOO FEW ARGUMENTS**
-The function `match_time` expects 2 arguments, but 1 was provided:
+**TOO FEW ARGS**
+The `match_time` function expects 2 arguments, but it got 1 instead:
 **fuzz_crash_027.md:111:2:113:3:**
 ```roc
 	match_time(
@@ -977,37 +964,49 @@ The function `match_time` expects 2 arguments, but 1 was provided:
 	)
 ```
 
-The function has the signature:
+The `match_time` function has the type:
 
-    [Blue, Red, .._others2], _arg -> Error
+    [Blue, Red, ..], _arg -> Error
 
-**MISSING METHOD**
-This **from_numeral** method is being called on a value whose type doesn't have that method:
+Are there any missing commas?
+
+**TYPE MISMATCH**
+This number is being used where a non-number type is needed:
 **fuzz_crash_027.md:125:6:125:9:**
 ```roc
 		),	456, # ee
 ```
 		  	^^^
 
-The value's type, which does not have a method named **from_numeral**, is:
+The type was determined to be non-numeric here:
+**fuzz_crash_027.md:128:18:128:19:**
+```roc
+	line!("Adding ${n} to ${number}")
+```
+	                ^
+
+Other code expects this to have the type:
 
     Str
 
-**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
-
-**MISSING METHOD**
-This **from_numeral** method is being called on a value whose type doesn't have that method:
+**TYPE MISMATCH**
+This number is being used where a non-number type is needed:
 **fuzz_crash_027.md:102:15:102:18:**
 ```roc
 	var number = 123
 ```
 	             ^^^
 
-The value's type, which does not have a method named **from_numeral**, is:
+The type was determined to be non-numeric here:
+**fuzz_crash_027.md:128:26:128:32:**
+```roc
+	line!("Adding ${n} to ${number}")
+```
+	                        ^^^^^^
+
+Other code expects this to have the type:
 
     Str
-
-**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 **MISSING METHOD**
 The value before this **+** operator has a type that doesn't have a **plus** method:
@@ -1017,30 +1016,29 @@ The value before this **+** operator has a type that doesn't have a **plus** met
 ```
 		         ^^^^^^^^^^
 
-The value's type, which does not have a method named **plus**, is:
+The value's type, which does not have a method named**plus**, is:
 
     Str
 
-**Hint:**The **+** operator calls a method named **plus** on the value preceding it, passing the value after the operator as the one argument.
+**Hint:** The **+** operator calls a method named **plus** on the value preceding it, passing the value after the operator as the one argument.
 
 **TYPE MISMATCH**
-This expression is used in an unexpected way:
-**fuzz_crash_027.md:143:2:147:3:**
+This `return` does not match the function's return type:
+**fuzz_crash_027.md:106:3:106:6:**
 ```roc
-	Stdoline!(
-		"How about ${ #
-			Num.toStr(number) # on expr
-		} as a",
-	)
+		tag
 ```
+		^^^
 
 It has the type:
 
-    [Stdoline!(Error), .._others2]
+    [Blue, ..]
 
-But the type annotation says it should have the type:
+But the function's return type is:
 
     Try({  }, _d)
+
+**Hint:** All `return` statements and the final expression in a function must have the same type.
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -1101,9 +1099,11 @@ It has the type:
 
     List(Error) => Error
 
-But the type annotation says it should have the type:
+But the annotation say it should be:
 
     List(Error) -> Error
+
+**Hint:** This function is effectful, but a pure function is expected.
 
 # TOKENS
 ~~~zig
@@ -2199,8 +2199,7 @@ expect {
 								(e-tuple
 									(elems
 										(e-runtime-error (tag "ident_not_in_scope"))
-										(e-lookup-local
-											(p-assign (ident "tuple")))))
+										(e-runtime-error (tag "self_referential_definition"))))
 								(e-list
 									(elems
 										(e-num (value "1"))
@@ -2232,7 +2231,28 @@ expect {
 						(p-assign (ident "bsult"))
 						(e-binop (op "or")
 							(e-binop (op "gt")
-								(e-runtime-error (tag "not_implemented"))
+								(e-match
+									(match
+										(cond
+											(e-tag (name "Err")
+												(args
+													(e-runtime-error (tag "ident_not_in_scope")))))
+										(branches
+											(branch
+												(patterns
+													(pattern (degenerate false)
+														(p-nominal-external (builtin)
+															(p-applied-tag))))
+												(value
+													(e-lookup-local
+														(p-assign (ident "#ok")))))
+											(branch
+												(patterns
+													(pattern (degenerate false)
+														(p-nominal-external (builtin)
+															(p-applied-tag))))
+												(value
+													(e-num (value "12")))))))
 								(e-binop (op "mul")
 									(e-num (value "5"))
 									(e-num (value "5"))))
@@ -2280,76 +2300,92 @@ expect {
 																								(branch
 																									(patterns
 																										(pattern (degenerate false)
-																											(p-applied-tag)))
+																											(p-nominal-external (builtin)
+																												(p-applied-tag))))
 																									(value
 																										(e-lookup-local
 																											(p-assign (ident "#ok")))))
 																								(branch
 																									(patterns
 																										(pattern (degenerate false)
-																											(p-applied-tag)))
+																											(p-nominal-external (builtin)
+																												(p-applied-tag))))
 																									(value
 																										(e-return
-																											(e-tag (name "Err")
-																												(args
-																													(e-lookup-local
-																														(p-assign (ident "#err"))))))))))))
+																											(e-nominal-external
+																												(builtin)
+																												(e-tag (name "Err")
+																													(args
+																														(e-lookup-local
+																															(p-assign (ident "#err")))))))))))))
 																				(args)))
 																		(branches
 																			(branch
 																				(patterns
 																					(pattern (degenerate false)
-																						(p-applied-tag)))
+																						(p-nominal-external (builtin)
+																							(p-applied-tag))))
 																				(value
 																					(e-lookup-local
 																						(p-assign (ident "#ok")))))
 																			(branch
 																				(patterns
 																					(pattern (degenerate false)
-																						(p-applied-tag)))
+																						(p-nominal-external (builtin)
+																							(p-applied-tag))))
 																				(value
 																					(e-return
-																						(e-tag (name "Err")
-																							(args
-																								(e-lookup-local
-																									(p-assign (ident "#err"))))))))))))
+																						(e-nominal-external
+																							(builtin)
+																							(e-tag (name "Err")
+																								(args
+																									(e-lookup-local
+																										(p-assign (ident "#err")))))))))))))
 															(args)))
 													(branches
 														(branch
 															(patterns
 																(pattern (degenerate false)
-																	(p-applied-tag)))
+																	(p-nominal-external (builtin)
+																		(p-applied-tag))))
 															(value
 																(e-lookup-local
 																	(p-assign (ident "#ok")))))
 														(branch
 															(patterns
 																(pattern (degenerate false)
-																	(p-applied-tag)))
+																	(p-nominal-external (builtin)
+																		(p-applied-tag))))
 															(value
 																(e-return
-																	(e-tag (name "Err")
-																		(args
-																			(e-lookup-local
-																				(p-assign (ident "#err"))))))))))))))
+																	(e-nominal-external
+																		(builtin)
+																		(e-tag (name "Err")
+																			(args
+																				(e-lookup-local
+																					(p-assign (ident "#err")))))))))))))))
 								(branches
 									(branch
 										(patterns
 											(pattern (degenerate false)
-												(p-applied-tag)))
+												(p-nominal-external (builtin)
+													(p-applied-tag))))
 										(value
 											(e-lookup-local
 												(p-assign (ident "#ok")))))
 									(branch
 										(patterns
 											(pattern (degenerate false)
-												(p-applied-tag)))
+												(p-nominal-external (builtin)
+													(p-applied-tag))))
 										(value
 											(e-return
-												(e-tag (name "Err")
-													(args
-														(e-lookup-local
-															(p-assign (ident "#err"))))))))))))
+												(e-nominal-external
+													(builtin)
+													(e-tag (name "Err")
+														(args
+															(e-lookup-local
+																(p-assign (ident "#err")))))))))))))
 					(e-tag (name "Stdoline!")
 						(args
 							(e-string
@@ -2476,9 +2512,9 @@ expect {
 (inferred-types
 	(defs
 		(patt (type "(Error, Error)"))
-		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(patt (type "Bool -> Dec"))
 		(patt (type "U64 -> U64"))
-		(patt (type "[Red, Blue, .._others2], _arg -> Error"))
+		(patt (type "[Red, Blue, ..], _arg -> Error"))
 		(patt (type "List(Error) -> Try({  }, _d)"))
 		(patt (type "{}"))
 		(patt (type "Error")))
@@ -2513,10 +2549,10 @@ expect {
 					(ty-rigid-var (name "a"))))))
 	(expressions
 		(expr (type "(Error, Error)"))
-		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(expr (type "Error -> U64"))
-		(expr (type "[Red, Blue, .._others2], _arg -> Error"))
-		(expr (type "Error"))
+		(expr (type "Bool -> Dec"))
+		(expr (type "U64 -> U64"))
+		(expr (type "[Red, Blue, ..], _arg -> Error"))
+		(expr (type "List(Error) -> Try({  }, _d)"))
 		(expr (type "{}"))
 		(expr (type "Error"))))
 ~~~

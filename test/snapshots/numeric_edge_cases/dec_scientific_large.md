@@ -26,9 +26,9 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-frac-dec (value "1.5e18"))
+(e-frac-dec (value "1500000000000000000"))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+(expr (type "Dec"))
 ~~~

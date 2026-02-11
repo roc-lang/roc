@@ -4,8 +4,8 @@
     .minimum_zig_version = "0.15.2",
     .dependencies = .{
         .afl_kit = .{
-            .url = "git+https://github.com/bhansconnect/zig-afl-kit?ref=main#b863c41ca47ed05729e0b509fb1926c111aa2800",
-            .hash = "afl_kit-0.1.0-NdJ3cncdAAA4154gtkRqNApovBYfOs-LWADNE-9BzzPC",
+            .url = "git+https://github.com/lukewilliamboswell/zig-afl-kit?ref=main#8ed981dd8f19a2ad08361d94e5ff1dc89a49a23b",
+            .hash = "afl_kit-0.1.0-NdJ3ch8eAADZak2C-CorilfD0YPqdT6cxxbLJyyXfw6J",
             .lazy = true,
         },
         .roc_deps_aarch64_macos_none = .{
@@ -55,6 +55,11 @@
         .zstd = .{
             .url = "git+https://github.com/allyourcodebase/zstd.git#01327d49cbc56dc24c20a167bb0055d7fc23de84", // 1.5.7
             .hash = "1220b9feb4652a62df95843e78a5db008401599366989b52d7cab421bf6263fa73d0",
+        },
+        .kcov = .{
+            .url = "git+https://github.com/roc-lang/zig-kcov?ref=kcov-zig#e07217311a31e2df80964aa56b2f0d345066e49c",
+            .hash = "kcov-42.0.1-EuAG4UCZCwA6gie2SyAZmh2uglbjSO0vlE4btRmOkD6q",
+            .lazy = true,
         },
     },
     .fingerprint = 0x9eea22a6c3bd0034,

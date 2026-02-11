@@ -87,17 +87,111 @@ test "roc version outputs at least 5 chars to stdout" {
     try testing.expect(result.stdout.len >= 5);
 }
 
-// Once repl is implemented, this test should be updated to check for the expected output.
-test "roc repl outputs at least 5 chars to stderr" {
+test "roc repl shows welcome banner" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    const result = try util.runRocCommand(gpa, &.{"repl"});
+    // Send empty input (just EOF) to exit the REPL
+    const result = try util.runRocWithStdin(gpa, &.{"repl"}, "");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
-    // Output (stderr) contains at least 5 characters
-    try testing.expect(result.stderr.len >= 5);
+    // Command exits successfully (EOF closes REPL gracefully)
+    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+
+    // Stdout contains the welcome banner
+    const has_welcome = std.mem.indexOf(u8, result.stdout, "Roc REPL") != null;
+    try testing.expect(has_welcome);
+
+    // Stdout mentions help
+    const has_help_hint = std.mem.indexOf(u8, result.stdout, ":help") != null;
+    try testing.expect(has_help_hint);
+}
+
+test "roc repl evaluates simple expression" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    // Evaluate a simple expression
+    const result = try util.runRocWithStdin(gpa, &.{"repl"}, "1 + 1\n");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Command exits successfully
+    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+
+    // Output contains the result "2"
+    const has_result = std.mem.indexOf(u8, result.stdout, "2") != null;
+    try testing.expect(has_result);
+}
+
+test "roc repl :help command works" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    // Send :help command
+    const result = try util.runRocWithStdin(gpa, &.{"repl"}, ":help\n");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Command exits successfully
+    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+
+    // Output contains help text (mentions commands)
+    const has_help_output = std.mem.indexOf(u8, result.stdout, ":exit") != null or
+        std.mem.indexOf(u8, result.stdout, ":quit") != null;
+    try testing.expect(has_help_output);
+}
+
+test "roc repl :exit command exits cleanly" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    // Send :exit command
+    const result = try util.runRocWithStdin(gpa, &.{"repl"}, ":exit\n");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Command exits successfully
+    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+
+    // Output contains goodbye message
+    const has_goodbye = std.mem.indexOf(u8, result.stdout, "Goodbye") != null;
+    try testing.expect(has_goodbye);
+}
+
+test "roc repl variable definition and usage" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    // Define a variable and use it
+    const result = try util.runRocWithStdin(gpa, &.{"repl"}, "x = 5\nx + 3\n");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Command exits successfully
+    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+
+    // Output contains the result "8"
+    const has_result = std.mem.indexOf(u8, result.stdout, "8") != null;
+    try testing.expect(has_result);
+}
+
+test "roc repl string expression" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    // Evaluate a string expression
+    const result = try util.runRocWithStdin(gpa, &.{"repl"}, "\"hello\"\n");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Command exits successfully
+    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+
+    // Output contains the string (with quotes in output)
+    const has_string = std.mem.indexOf(u8, result.stdout, "hello") != null;
+    try testing.expect(has_string);
 }
 
 test "roc help contains Usage:" {
@@ -393,6 +487,31 @@ test "roc check reports type error - plus operator with incompatible types" {
         std.mem.indexOf(u8, result.stderr, "error") != null or
         std.mem.indexOf(u8, result.stderr, "Found") != null;
     try testing.expect(has_type_error);
+}
+
+test "roc check test/int/app.roc does not panic" {
+    // Skip on Windows - test/int platform doesn't have Windows host libraries
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "check", "--no-cache" }, "test/int/app.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Verify that roc check does not panic on test/int/app.roc.
+    // Prior to fix for issue #8947, this would panic with:
+    // "trying unifyWith unexpected ranks 1 & 0"
+    // Now it should fail gracefully (exit code 1) with type errors, not panic (abort).
+
+    // 1. Should not abort (panic would cause exit code 134 on macOS/Linux)
+    const did_panic = result.term == .Signal or (result.term == .Exited and result.term.Exited == 134);
+    try testing.expect(!did_panic);
+
+    // 2. Should not contain "panic" in output
+    const has_panic_text = std.mem.indexOf(u8, result.stderr, "panic") != null;
+    try testing.expect(!has_panic_text);
 }
 
 test "roc test/int/app.roc runs successfully" {
@@ -798,4 +917,244 @@ test "roc test with nested list chunks does not panic on layout upgrade" {
     const has_panic = std.mem.indexOf(u8, result.stderr, "panic") != null or
         std.mem.indexOf(u8, result.stderr, "overflow") != null;
     try testing.expect(!has_panic);
+}
+
+// Exit code tests for warnings
+
+test "roc check returns exit code 2 for warnings" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "check", "--no-cache" }, "test/fx/run_warning_only.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Verify that:
+    // 1. Command exits with code 2 (warnings present, no errors)
+    try testing.expect(result.term == .Exited and result.term.Exited == 2);
+
+    // 2. Stderr contains warning information
+    const has_warning = std.mem.indexOf(u8, result.stderr, "UNUSED VARIABLE") != null or
+        std.mem.indexOf(u8, result.stderr, "warning") != null;
+    try testing.expect(has_warning);
+
+    // 3. Output shows 0 errors and at least 1 warning
+    const has_zero_errors = std.mem.indexOf(u8, result.stderr, "0 error") != null;
+    try testing.expect(has_zero_errors);
+}
+
+test "roc check returns exit code 0 for no warnings or errors" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "check", "--no-cache" }, "test/cli/simple_success.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Print diagnostic info on failure
+    if (!(result.term == .Exited and result.term.Exited == 0)) {
+        std.debug.print("\n=== Test Failure Diagnostics ===\n", .{});
+        std.debug.print("Expected: exit code 0\n", .{});
+        switch (result.term) {
+            .Exited => |code| std.debug.print("Actual: exit code {}\n", .{code}),
+            .Signal => |sig| std.debug.print("Actual: killed by signal {}\n", .{sig}),
+            else => std.debug.print("Actual: {}\n", .{result.term}),
+        }
+        std.debug.print("stdout: {s}\n", .{result.stdout});
+        std.debug.print("stderr: {s}\n", .{result.stderr});
+        std.debug.print("================================\n", .{});
+    }
+
+    // Verify that command exits with code 0 (no warnings, no errors)
+    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+}
+
+test "roc check returns exit code 1 for errors" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "check", "--no-cache" }, "test/cli/has_type_error_annotation.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Verify that command exits with code 1 (errors present)
+    try testing.expect(result.term == .Exited and result.term.Exited == 1);
+}
+
+test "roc run returns exit code 2 for warnings" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{"--no-cache"}, "test/fx/run_warning_only.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Verify that:
+    // 1. Command exits with code 2 (warnings present, no errors)
+    try testing.expect(result.term == .Exited and result.term.Exited == 2);
+
+    // 2. Stderr contains warning information
+    const has_warning = std.mem.indexOf(u8, result.stderr, "UNUSED VARIABLE") != null or
+        std.mem.indexOf(u8, result.stderr, "warning") != null;
+    try testing.expect(has_warning);
+}
+
+test "roc build returns exit code 2 for warnings" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    // Create a temp directory for the output
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const tmp_path = try tmp_dir.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(tmp_path);
+
+    const output_path = try std.fs.path.join(gpa, &.{ tmp_path, "test_app_warning" });
+    defer gpa.free(output_path);
+
+    const output_arg = try std.fmt.allocPrint(gpa, "--output={s}", .{output_path});
+    defer gpa.free(output_arg);
+
+    const result = try util.runRoc(gpa, &.{ "build", output_arg }, "test/fx/run_warning_only.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Verify that:
+    // 1. Command exits with code 2 (warnings present, no errors)
+    try testing.expect(result.term == .Exited and result.term.Exited == 2);
+
+    // 2. Stderr contains warning information
+    const has_warning = std.mem.indexOf(u8, result.stderr, "UNUSED VARIABLE") != null or
+        std.mem.indexOf(u8, result.stderr, "warning") != null;
+    try testing.expect(has_warning);
+
+    // 3. Binary was still created successfully
+    const stat = tmp_dir.dir.statFile("test_app_warning") catch |err| {
+        std.debug.print("Failed to stat output file: {}\nstderr: {s}\n", .{ err, result.stderr });
+        return err;
+    };
+    try testing.expect(stat.size > 0);
+
+    // 4. Success message was printed
+    try testing.expect(std.mem.indexOf(u8, result.stdout, "Successfully built") != null);
+}
+
+// Tests for --jobs flag
+test "roc check with -j1 succeeds on valid file" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "check", "--no-cache", "-j1" }, "test/cli/simple_success.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Verify that command succeeded
+    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+}
+
+test "roc check with --jobs=1 succeeds on valid file" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "check", "--no-cache", "--jobs=1" }, "test/cli/simple_success.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Verify that command succeeded
+    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+}
+
+test "roc check with --jobs=2 succeeds on valid file" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "check", "--no-cache", "--jobs=2" }, "test/cli/simple_success.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Verify that command succeeded
+    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+}
+
+test "roc check with invalid --jobs value returns error" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "check", "--jobs=abc" }, "test/cli/simple_success.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Verify that command failed with error
+    try testing.expect(result.term == .Exited and result.term.Exited == 1);
+
+    // Verify error message mentions invalid value
+    const has_error = std.mem.indexOf(u8, result.stderr, "not a valid value") != null;
+    try testing.expect(has_error);
+}
+
+test "roc check does not panic on invalid package shorthand import (issue 9084)" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    // This test verifies that importing from a non-existent package shorthand
+    // (e.g., "import f.S" where "f" is not defined) produces an error message
+    // instead of causing the coordinator to panic with "Coordinator stuck in infinite loop".
+    const result = try util.runRoc(gpa, &.{ "check", "--no-cache" }, "test/cli/invalid_package_shorthand.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Verify that:
+    // 1. Command did not abort/panic (exit code 134 on macOS/Linux indicates SIGABRT)
+    const did_panic = result.term == .Signal or (result.term == .Exited and result.term.Exited == 134);
+    try testing.expect(!did_panic);
+
+    // 2. Stderr should not contain "panic" or "Coordinator stuck"
+    const has_panic_text = std.mem.indexOf(u8, result.stderr, "panic") != null or
+        std.mem.indexOf(u8, result.stderr, "Coordinator stuck") != null;
+    try testing.expect(!has_panic_text);
+
+    // 3. Command should fail with a non-zero exit code (error, not success)
+    try testing.expect(result.term != .Exited or result.term.Exited != 0);
+
+    // 4. Stderr should contain some error information
+    try testing.expect(result.stderr.len > 0);
+}
+
+test "roc check succeeds on Parser type module" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "check", "--no-cache" }, "test/package_simple_parser/Parser.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Verify that:
+    // 1. Command succeeded (zero exit code)
+    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+
+    // 2. No errors should be reported
+    const has_error = std.mem.indexOf(u8, result.stderr, "error") != null;
+    try testing.expect(!has_error);
+}
+
+test "roc test runs expects in Parser type module" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "test", "--no-cache" }, "test/package_simple_parser/Parser.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Verify that:
+    // 1. Command succeeded (zero exit code)
+    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+
+    // 2. Output indicates tests passed
+    const has_passed = std.mem.indexOf(u8, result.stdout, "passed") != null;
+    try testing.expect(has_passed);
+
+    // 3. Should have run at least 2 tests
+    const has_tests = std.mem.indexOf(u8, result.stdout, "(2)") != null;
+    try testing.expect(has_tests);
 }

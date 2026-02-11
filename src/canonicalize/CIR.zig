@@ -157,7 +157,37 @@ pub const Def = struct {
 
         const attrs = tree.beginNode();
 
-        try cir.store.getPattern(self.pattern).pushToSExprTree(cir, tree, self.pattern);
+        // Safety check: verify pattern index points to actual pattern node
+        // This prevents crashes from cross-module node index issues
+        const pattern_node_idx: @TypeOf(cir.store.nodes).Idx = @enumFromInt(@intFromEnum(self.pattern));
+        const pattern_node = cir.store.nodes.get(pattern_node_idx);
+        const is_valid_pattern = switch (pattern_node.tag) {
+            .pattern_identifier,
+            .pattern_as,
+            .pattern_applied_tag,
+            .pattern_nominal,
+            .pattern_nominal_external,
+            .pattern_record_destructure,
+            .pattern_list,
+            .pattern_tuple,
+            .pattern_num_literal,
+            .pattern_dec_literal,
+            .pattern_f32_literal,
+            .pattern_f64_literal,
+            .pattern_small_dec_literal,
+            .pattern_str_literal,
+            .pattern_underscore,
+            => true,
+            else => false,
+        };
+
+        if (is_valid_pattern) {
+            try cir.store.getPattern(self.pattern).pushToSExprTree(cir, tree, self.pattern);
+        } else {
+            // Pattern index is invalid - output placeholder to avoid crash
+            try tree.pushStaticAtom("invalid-pattern");
+        }
+
         try cir.store.getExpr(self.expr).pushToSExprTree(cir, tree, self.expr);
 
         if (self.annotation) |annotation_idx| {
@@ -475,14 +505,17 @@ pub const IntValue = struct {
     }
 
     pub fn bufPrint(self: IntValue, buf: []u8) ![]u8 {
+        const i128h = builtins.compiler_rt_128;
         switch (self.kind) {
             .i128 => {
                 const val: i128 = @bitCast(self.bytes);
-                return std.fmt.bufPrint(buf, "{d}", .{val});
+                const result = i128h.i128_to_str(buf, val);
+                return buf[result.start..buf.len];
             },
             .u128 => {
                 const val: u128 = @bitCast(self.bytes);
-                return std.fmt.bufPrint(buf, "{d}", .{val});
+                const result = i128h.u128_to_str(buf, val);
+                return buf[result.start..buf.len];
             },
         }
     }
@@ -534,13 +567,13 @@ pub const IntValue = struct {
     pub fn toFracRequirements(self: IntValue) types_mod.FracRequirements {
         // Convert to f64 for checking
         const f64_val: f64 = switch (self.kind) {
-            .i128 => @floatFromInt(@as(i128, @bitCast(self.bytes))),
+            .i128 => builtins.compiler_rt_128.i128_to_f64(@as(i128, @bitCast(self.bytes))),
             .u128 => blk: {
                 const val = @as(u128, @bitCast(self.bytes));
                 if (val > @as(u128, 1) << 64) {
                     break :blk std.math.inf(f64);
                 }
-                break :blk @floatFromInt(val);
+                break :blk builtins.compiler_rt_128.u128_to_f64(val);
             },
         };
 
@@ -669,7 +702,8 @@ pub fn formatBase256ToDecimal(
     for (digits_before_pt) |digit| {
         value = value * 256 + digit;
     }
-    w.print("{d}", .{value}) catch {};
+    var int_buf: [40]u8 = undefined;
+    w.writeAll(builtins.compiler_rt_128.u128_to_str(&int_buf, value).str) catch {};
 
     // Format fractional part if present and non-zero
     if (digits_after_pt.len > 0) {
@@ -684,14 +718,14 @@ pub fn formatBase256ToDecimal(
             w.writeAll(".") catch {};
             // Convert base-256 fractional digits to decimal
             var frac: f64 = 0;
-            var mult: f64 = 1.0 / 256.0;
+            var frac_mult: f64 = 1.0 / 256.0;
             for (digits_after_pt) |digit| {
-                frac += @as(f64, @floatFromInt(digit)) * mult;
-                mult /= 256.0;
+                frac += @as(f64, @floatFromInt(digit)) * frac_mult;
+                frac_mult /= 256.0;
             }
             // Print fractional part (removing leading "0.")
-            var frac_buf: [32]u8 = undefined;
-            const frac_str = std.fmt.bufPrint(&frac_buf, "{d:.6}", .{frac}) catch "0";
+            var frac_buf: [400]u8 = undefined;
+            const frac_str = builtins.compiler_rt_128.f64_to_str(&frac_buf, frac);
             if (frac_str.len > 2 and std.mem.startsWith(u8, frac_str, "0.")) {
                 w.writeAll(frac_str[2..]) catch {};
             }
@@ -713,7 +747,7 @@ pub fn toI128(self: RocDec) i128 {
 /// Creates a RocDec from an f64 value, returns null if conversion fails
 pub fn fromF64(f: f64) ?RocDec {
     // Simple conversion - the real implementation is in builtins/dec.zig
-    const scaled = @as(i128, @intFromFloat(f * 1_000_000_000_000_000_000.0));
+    const scaled = builtins.compiler_rt_128.f64_to_i128(f * 1_000_000_000_000_000_000.0);
     return RocDec{ .num = scaled };
 }
 
@@ -748,6 +782,13 @@ pub const Import = struct {
             self.imports.deinit(allocator);
             self.import_idents.deinit(allocator);
             self.resolved_modules.deinit(allocator);
+        }
+
+        /// Deinit only the hash map, not the SafeLists.
+        /// Used for cached modules where the SafeLists point into the cache buffer
+        /// but the map was heap-allocated during deserialization.
+        pub fn deinitMapOnly(self: *Store, allocator: std.mem.Allocator) void {
+            self.map.deinit(allocator);
         }
 
         /// Get or create an Import.Idx for the given module name.
@@ -921,17 +962,15 @@ pub const Import = struct {
                 // Note: The map is not serialized as it's only used for deduplication during insertion
             }
 
-            /// Deserialize this Serialized struct into a Store
+            /// Deserialize into a Store value (no in-place modification of cache buffer).
             /// The base parameter is the base address of the serialized buffer in memory.
-            pub fn deserialize(self: *Serialized, base_addr: usize, allocator: std.mem.Allocator) std.mem.Allocator.Error!*Store {
-                // Overwrite ourself with the deserialized version, and return our pointer after casting it to Store.
-                const store = @as(*Store, @ptrFromInt(@intFromPtr(self)));
-
-                store.* = .{
+            /// Note: The map is freshly allocated and populated from the deserialized imports.
+            pub fn deserializeInto(self: *const Serialized, base_addr: usize, allocator: std.mem.Allocator) std.mem.Allocator.Error!Store {
+                var store = Store{
                     .map = .{}, // Will be repopulated below
-                    .imports = self.imports.deserialize(base_addr).*,
-                    .import_idents = self.import_idents.deserialize(base_addr).*,
-                    .resolved_modules = self.resolved_modules.deserialize(base_addr).*,
+                    .imports = self.imports.deserializeInto(base_addr),
+                    .import_idents = self.import_idents.deserializeInto(base_addr),
+                    .resolved_modules = self.resolved_modules.deserializeInto(base_addr),
                 };
 
                 // Pre-allocate the exact capacity needed for the map

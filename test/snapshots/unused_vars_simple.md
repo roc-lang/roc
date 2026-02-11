@@ -254,15 +254,15 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_arg -> e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "_arg -> Dec"))
 		(patt (type "e -> e"))
-		(patt (type "_arg -> e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e -> e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]), e.plus : e, e -> e]"))
-		(patt (type "_arg -> e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]), e.plus : e, e -> e]")))
+		(patt (type "_arg -> Dec"))
+		(patt (type "e -> e where [e.plus : e, Dec -> e]"))
+		(patt (type "_arg -> Dec")))
 	(expressions
-		(expr (type "_arg -> e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "_arg -> Dec"))
 		(expr (type "e -> e"))
-		(expr (type "_arg -> e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e -> e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]), e.plus : e, e -> e]"))
-		(expr (type "_arg -> e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]), e.plus : e, e -> e]"))))
+		(expr (type "_arg -> Dec"))
+		(expr (type "e -> e where [e.plus : e, Dec -> e]"))
+		(expr (type "_arg -> Dec"))))
 ~~~

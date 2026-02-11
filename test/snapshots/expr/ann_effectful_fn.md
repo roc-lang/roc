@@ -14,8 +14,8 @@ type=expr
 ~~~
 # EXPECTED
 DUPLICATE DEFINITION - ann_effectful_fn.md:3:5:3:19
-UNUSED VALUE - ann_effectful_fn.md:2:32:2:36
-UNUSED VALUE - ann_effectful_fn.md:2:37:2:50
+TYPE MISMATCH - ann_effectful_fn.md:2:32:2:36
+TYPE MISMATCH - ann_effectful_fn.md:2:37:2:50
 # PROBLEMS
 **DUPLICATE DEFINITION**
 The name `launchTheNukes` is being redeclared in this scope.
@@ -35,7 +35,7 @@ But `launchTheNukes` was already defined here:
     ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
-**UNUSED VALUE**
+**TYPE MISMATCH**
 This expression produces a value, but it's not being used:
 **ann_effectful_fn.md:2:32:2:36:**
 ```roc
@@ -45,9 +45,12 @@ This expression produces a value, but it's not being used:
 
 It has the type:
 
-    [Bool, .._others]
+    [Bool, ..]
 
-**UNUSED VALUE**
+Since this expression is used as a statement, it must evaluate to `{}`.
+If you don't need the value, you can ignore it with `_ =`.
+
+**TYPE MISMATCH**
 This expression produces a value, but it's not being used:
 **ann_effectful_fn.md:2:37:2:50:**
 ```roc
@@ -57,7 +60,10 @@ This expression produces a value, but it's not being used:
 
 It has the type:
 
-    [LaunchNukeErr, .._others]
+    [LaunchNukeErr, ..]
+
+Since this expression is used as a statement, it must evaluate to `{}`.
+If you don't need the value, you can ignore it with `_ =`.
 
 # TOKENS
 ~~~zig

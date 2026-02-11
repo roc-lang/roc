@@ -94,18 +94,18 @@ EndOfFile,
 # FORMATTED
 ~~~roc
 # Test qualified function calls with arrow syntax
-test1 = "hello"->Str.is_empty
-test2 = "hello"->Str.is_empty
+test1 = "hello"->Str.is_empty()
+test2 = "hello"->Str.is_empty()
 test3 = "hello"->Str.concat("bar")
 
 # Test unqualified function calls
 fn0 = |a| a
-test4 = 10->fn0
-test5 = 10->fn0
+test4 = 10->fn0()
+test5 = 10->fn0()
 
 # Test tag syntax
 test6 = 42->Ok
-test7 = 42->Ok
+test7 = 42->Ok()
 ~~~
 # CANONICALIZE
 ~~~clojure
@@ -171,17 +171,17 @@ test7 = 42->Ok
 		(patt (type "Bool"))
 		(patt (type "Str"))
 		(patt (type "b -> b"))
-		(patt (type "b where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
-		(patt (type "b where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
-		(patt (type "[Ok(b), .._others] where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
-		(patt (type "[Ok(b), .._others] where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]")))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "[Ok(Dec), ..]"))
+		(patt (type "[Ok(Dec), ..]")))
 	(expressions
 		(expr (type "Bool"))
 		(expr (type "Bool"))
 		(expr (type "Str"))
 		(expr (type "b -> b"))
-		(expr (type "b where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
-		(expr (type "b where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
-		(expr (type "[Ok(b), .._others] where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
-		(expr (type "[Ok(b), .._others] where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "[Ok(Dec), ..]"))
+		(expr (type "[Ok(Dec), ..]"))))
 ~~~

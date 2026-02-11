@@ -59,10 +59,10 @@ UNRECOGNIZED SYNTAX - record_different_fields_error.md:7:17:7:18
 UNRECOGNIZED SYNTAX - record_different_fields_error.md:7:30:7:31
 UNUSED VARIABLE - record_different_fields_error.md:3:5:3:14
 UNUSED VARIABLE - record_different_fields_error.md:6:5:6:21
-UNUSED VALUE - record_different_fields_error.md:4:5:4:15
-UNUSED VALUE - record_different_fields_error.md:4:17:4:25
-UNUSED VALUE - record_different_fields_error.md:5:17:5:24
-UNUSED VALUE - record_different_fields_error.md:7:19:7:30
+TYPE MISMATCH - record_different_fields_error.md:4:5:4:15
+TYPE MISMATCH - record_different_fields_error.md:4:17:4:25
+TYPE MISMATCH - record_different_fields_error.md:5:17:5:24
+TYPE MISMATCH - record_different_fields_error.md:7:19:7:30
 # PROBLEMS
 **STRAY DOLLAR SIGN**
 Dollar sign ($) is only allowed at the very beginning of a name, not in the middle or at the end.
@@ -546,7 +546,7 @@ The unused variable is declared here:
     ^^^^^^^^^^^^^^^^
 
 
-**UNUSED VALUE**
+**TYPE MISMATCH**
 This expression produces a value, but it's not being used:
 **record_different_fields_error.md:4:5:4:15:**
 ```roc
@@ -556,9 +556,12 @@ This expression produces a value, but it's not being used:
 
 It has the type:
 
-    [PascalCase, .._others]
+    [PascalCase, ..]
 
-**UNUSED VALUE**
+Since this expression is used as a statement, it must evaluate to `{}`.
+If you don't need the value, you can ignore it with `_ =`.
+
+**TYPE MISMATCH**
 This expression produces a value, but it's not being used:
 **record_different_fields_error.md:4:17:4:25:**
 ```roc
@@ -570,7 +573,10 @@ It has the type:
 
     Str
 
-**UNUSED VALUE**
+Since this expression is used as a statement, it must evaluate to `{}`.
+If you don't need the value, you can ignore it with `_ =`.
+
+**TYPE MISMATCH**
 This expression produces a value, but it's not being used:
 **record_different_fields_error.md:5:17:5:24:**
 ```roc
@@ -582,7 +588,10 @@ It has the type:
 
     Str
 
-**UNUSED VALUE**
+Since this expression is used as a statement, it must evaluate to `{}`.
+If you don't need the value, you can ignore it with `_ =`.
+
+**TYPE MISMATCH**
 This expression produces a value, but it's not being used:
 **record_different_fields_error.md:7:19:7:30:**
 ```roc
@@ -593,6 +602,9 @@ This expression produces a value, but it's not being used:
 It has the type:
 
     Str
+
+Since this expression is used as a statement, it must evaluate to `{}`.
+If you don't need the value, you can ignore it with `_ =`.
 
 # TOKENS
 ~~~zig

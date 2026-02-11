@@ -25,7 +25,7 @@ It has the type:
 
     U8
 
-But I expected it to be:
+But you are trying to use it as:
 
     Str
 

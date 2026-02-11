@@ -16,17 +16,17 @@ swap = |(x, y)| (y, x)
 main = swap(1, 2)
 ~~~
 # EXPECTED
-TOO MANY ARGUMENTS - test_tuple_instantiation_crash.md:9:8:9:18
+TOO MANY ARGS - test_tuple_instantiation_crash.md:9:8:9:18
 # PROBLEMS
-**TOO MANY ARGUMENTS**
-The function `swap` expects 1 argument, but 2 were provided:
+**TOO MANY ARGS**
+The `swap` function expects 1 argument, but it got 2 instead:
 **test_tuple_instantiation_crash.md:9:8:9:18:**
 ```roc
 main = swap(1, 2)
 ```
        ^^^^^^^^^^
 
-The function has the signature:
+The `swap` function has the type:
 
     (a, b) -> (b, a)
 
@@ -120,8 +120,8 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "(a, b) -> (b, a)"))
-		(patt (type "Error")))
+		(patt (type "_c")))
 	(expressions
 		(expr (type "(a, b) -> (b, a)"))
-		(expr (type "Error"))))
+		(expr (type "_c"))))
 ~~~

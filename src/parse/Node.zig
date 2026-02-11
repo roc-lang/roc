@@ -332,6 +332,16 @@ pub const Tag = enum {
     /// * lhs - LHS DESCRIPTION
     /// * rhs - RHS DESCRIPTION
     frac,
+    /// An integer with explicit type annotation: 123.U64
+    /// * main_token - Token index of the integer literal
+    /// * lhs - Token index of the type (e.g., .U64)
+    /// * rhs - Unused
+    typed_int,
+    /// A fractional with explicit type annotation: 3.14.Dec
+    /// * main_token - Token index of the fractional literal
+    /// * lhs - Token index of the type (e.g., .Dec)
+    /// * rhs - Unused
+    typed_frac,
     /// A character literal enclosed in single quotes
     /// Example: 'a'
     /// * main_token - Token index containing the character
@@ -399,6 +409,10 @@ pub const Tag = enum {
     /// * lhs - LHS DESCRIPTION
     /// * rhs - RHS DESCRIPTION
     field_access,
+    /// Tuple element access: tuple.0, tuple.1, etc.
+    /// * lhs - node index of tuple expression
+    /// * main_token - the element index token (NoSpaceDotInt or DotInt)
+    tuple_access,
     /// DESCRIPTION
     /// Example: EXAMPLE
     /// * lhs - LHS DESCRIPTION

@@ -5,6 +5,7 @@
 //! parsing, formatting, and conversions for precise decimal calculations
 //! without floating-point precision issues.
 const std = @import("std");
+const i128h = @import("compiler_rt_128.zig");
 
 const U256 = @import("num.zig").U256;
 const TestEnv = @import("utils.zig").TestEnv;
@@ -15,14 +16,47 @@ const RocStr = @import("str.zig").RocStr;
 const mul_u128 = @import("num.zig").mul_u128;
 const math = std.math;
 
+/// Format an i128 as decimal into a buffer, returning the number of bytes written.
+/// Uses i128h helpers to avoid compiler_rt 128-bit div/mod intrinsics.
+fn printI128Decimal(buf: []u8, val: i128) usize {
+    if (val == 0) {
+        buf[0] = '0';
+        return 1;
+    }
+    const is_negative = val < 0;
+    var abs_val: u128 = if (is_negative) ~@as(u128, @bitCast(val)) +% 1 else @intCast(val);
+
+    // Write digits in reverse into a temp buffer
+    var tmp: [40]u8 = undefined;
+    var len: usize = 0;
+    while (abs_val != 0) {
+        const digit: u8 = @truncate(i128h.rem_u128(abs_val, 10));
+        tmp[len] = '0' + digit;
+        len += 1;
+        abs_val = i128h.divTrunc_u128(abs_val, 10);
+    }
+
+    // Write sign then reversed digits into output buffer
+    var pos: usize = 0;
+    if (is_negative) {
+        buf[pos] = '-';
+        pos += 1;
+    }
+    for (0..len) |i| {
+        buf[pos] = tmp[len - 1 - i];
+        pos += 1;
+    }
+    return pos;
+}
+
 /// TODO: Document the RocDec struct.
 pub const RocDec = extern struct {
     num: i128,
 
     pub const decimal_places: u5 = 18;
     pub const whole_number_places: u5 = 21;
-    const max_digits: u6 = 39;
-    const max_str_length: u6 = max_digits + 2; // + 2 here to account for the sign & decimal dot
+    pub const max_digits: u6 = 39;
+    pub const max_str_length: u6 = max_digits + 2; // + 2 here to account for the sign & decimal dot
 
     pub const min: RocDec = .{ .num = math.minInt(i128) };
     pub const max: RocDec = .{ .num = math.maxInt(i128) };
@@ -42,7 +76,7 @@ pub const RocDec = extern struct {
     );
 
     pub fn fromU64(num: u64) RocDec {
-        return .{ .num = num * one_point_zero_i128 };
+        return .{ .num = i128h.mul_i128(@as(i128, num), one_point_zero_i128) };
     }
 
     /// Convert a fraction represented as numerator / 10^denominator_power to RocDec.
@@ -53,8 +87,8 @@ pub const RocDec = extern struct {
             0
         else
             decimal_places - @as(u5, @intCast(denominator_power));
-        const scale = math.pow(i128, 10, scale_power);
-        return .{ .num = numerator * scale };
+        const scale = i128h.pow10_i128(@intCast(scale_power));
+        return .{ .num = i128h.mul_i128(numerator, scale) };
     }
 
     pub fn fromF64(num: f64) ?RocDec {
@@ -68,12 +102,12 @@ pub const RocDec = extern struct {
             return null;
         }
 
-        const ret: RocDec = .{ .num = @as(i128, @intFromFloat(result)) };
+        const ret: RocDec = .{ .num = i128h.f64_to_i128(result) };
         return ret;
     }
 
     pub fn toF64(dec: RocDec) f64 {
-        return @as(f64, @floatFromInt(dec.num)) / comptime @as(f64, @floatFromInt(one_point_zero_i128));
+        return i128h.i128_to_f64(dec.num) / comptime @as(f64, @floatFromInt(one_point_zero_i128));
     }
 
     // TODO: If Str.toDec eventually supports more error types, return errors here.
@@ -122,7 +156,7 @@ pub const RocDec = extern struct {
 
             const after_str = roc_str_slice[pi + 1 .. length];
             const after_u64 = std.fmt.parseUnsigned(u64, after_str, 10) catch null;
-            after_val_i128 = if (after_u64) |f| @as(i128, @intCast(f)) * math.pow(i128, 10, diff_decimal_places) else null;
+            after_val_i128 = if (after_u64) |f| i128h.mul_i128(@as(i128, @intCast(f)), i128h.pow10_i128(@intCast(diff_decimal_places))) else null;
         }
 
         const before_str = roc_str_slice[initial_index..before_str_length];
@@ -130,10 +164,10 @@ pub const RocDec = extern struct {
 
         var before_val_i128: ?i128 = null;
         if (before_val_not_adjusted) |before| {
-            const answer = @mulWithOverflow(before, one_point_zero_i128);
-            const result = answer[0];
-            const overflowed = answer[1];
-            if (overflowed == 1) {
+            const mul_ans = @import("num.zig").mulWithOverflow(i128, before, one_point_zero_i128);
+            const result = mul_ans.value;
+            const overflowed = mul_ans.has_overflowed;
+            if (overflowed) {
                 // TODO: runtime exception for overflow!
                 return null;
             }
@@ -172,28 +206,32 @@ pub const RocDec = extern struct {
         return (c -% 48) <= 9;
     }
 
-    pub fn to_str(self: RocDec, roc_ops: *RocOps) RocStr {
-
+    /// Format this Dec value into the provided buffer, returning the slice containing the result.
+    /// The buffer must be at least `max_str_length` bytes.
+    /// This is the allocation-free version; use `to_str` if you need a RocStr.
+    pub fn format_to_buf(self: RocDec, buf: *[max_str_length]u8) []const u8 {
         // Special case
         if (self.num == 0) {
-            return RocStr.init("0.0", 3, roc_ops);
+            buf[0] = '0';
+            buf[1] = '.';
+            buf[2] = '0';
+            return buf[0..3];
         }
 
         const num = self.num;
         const is_negative = num < 0;
 
         // Format the backing i128 into an array of digit (ascii) characters (u8s)
+        // Uses i128h helpers to avoid compiler_rt 128-bit div/mod intrinsics.
         var digit_bytes_storage: [max_digits + 1]u8 = undefined;
-        var num_digits = std.fmt.printInt(digit_bytes_storage[0..], num, 10, .lower, .{});
+        var num_digits = printI128Decimal(&digit_bytes_storage, num);
         var digit_bytes: [*]u8 = digit_bytes_storage[0..];
 
-        // space where we assemble all the characters that make up the final string
-        var str_bytes: [max_str_length]u8 = undefined;
         var position: usize = 0;
 
         // if negative, the first character is a negating minus
         if (is_negative) {
-            str_bytes[position] = '-';
+            buf[position] = '-';
             position += 1;
 
             // but also, we have one fewer digit than we have characters
@@ -211,24 +249,24 @@ pub const RocDec = extern struct {
             before_digits_offset = num_digits - decimal_places;
 
             for (digit_bytes[0..before_digits_offset]) |c| {
-                str_bytes[position] = c;
+                buf[position] = c;
                 position += 1;
             }
         } else {
             // otherwise there are no actual digits before the decimal point
             // but we format it with a '0'
-            str_bytes[position] = '0';
+            buf[position] = '0';
             position += 1;
         }
 
         // we've done everything before the decimal point, so now we can put the decimal point in
-        str_bytes[position] = '.';
+        buf[position] = '.';
         position += 1;
 
         const trailing_zeros: u6 = count_trailing_zeros_base10(num);
         if (trailing_zeros >= decimal_places) {
             // add just a single zero if all decimal digits are zero
-            str_bytes[position] = '0';
+            buf[position] = '0';
             position += 1;
         } else {
             // Figure out if we need to prepend any zeros to the after decimal point
@@ -237,18 +275,24 @@ pub const RocDec = extern struct {
 
             var i: usize = 0;
             while (i < after_zeros_num) : (i += 1) {
-                str_bytes[position] = '0';
+                buf[position] = '0';
                 position += 1;
             }
 
             // otherwise append the decimal digits except the trailing zeros
             for (digit_bytes[before_digits_offset .. num_digits - trailing_zeros]) |c| {
-                str_bytes[position] = c;
+                buf[position] = c;
                 position += 1;
             }
         }
 
-        return RocStr.init(&str_bytes, position, roc_ops);
+        return buf[0..position];
+    }
+
+    pub fn to_str(self: RocDec, roc_ops: *RocOps) RocStr {
+        var buf: [max_str_length]u8 = undefined;
+        const len = self.format_to_buf(&buf).len;
+        return RocStr.init(&buf, len, roc_ops);
     }
 
     pub fn toI128(self: RocDec) i128 {
@@ -257,6 +301,19 @@ pub const RocDec = extern struct {
 
     pub fn fromI128(num: i128) RocDec {
         return .{ .num = num };
+    }
+
+    /// Extract the whole number part of a Dec via truncating division.
+    /// Truncates toward zero: -1.5 → -1, 1.5 → 1
+    pub fn toWholeInt(self: RocDec) i128 {
+        return i128h.divTrunc_i128(self.num, one_point_zero_i128);
+    }
+
+    /// Convert a whole number to Dec representation.
+    /// Returns null if the integer would overflow Dec's range.
+    pub fn fromWholeInt(int: i128) ?RocDec {
+        const result = @import("num.zig").mulWithOverflow(i128, int, one_point_zero_i128);
+        return if (result.has_overflowed) null else RocDec{ .num = result.value };
     }
 
     pub fn eq(self: RocDec, other: RocDec) bool {
@@ -402,10 +459,11 @@ pub const RocDec = extern struct {
     }
 
     pub fn fract(self: RocDec) RocDec {
-        const sign = std.math.sign(self.num);
-        const digits = @mod(sign * self.num, RocDec.one_point_zero.num);
+        const abs_num: u128 = @abs(self.num);
+        const digits = i128h.rem_u128(abs_num, @as(u128, @intCast(RocDec.one_point_zero.num)));
+        const digits_i128: i128 = @intCast(digits);
 
-        return RocDec{ .num = sign * digits };
+        return RocDec{ .num = if (self.num < 0) -digits_i128 else digits_i128 };
     }
 
     // Returns the nearest integer to self. If a value is half-way between two integers, round away from 0.0.
@@ -416,13 +474,14 @@ pub const RocDec = extern struct {
         // this rounds towards zero
         const tmp = arg1.trunc(roc_ops);
 
-        const sign = std.math.sign(arg1.num);
-        const abs_fract = sign * arg1.fract().num;
+        const fract_num = arg1.fract().num;
+        const abs_fract: i128 = if (fract_num < 0) -fract_num else fract_num;
 
         if (abs_fract >= RocDec.zero_point_five.num) {
+            const one_signed: i128 = if (arg1.num < 0) -RocDec.one_point_zero.num else RocDec.one_point_zero.num;
             return RocDec.add(
                 tmp,
-                RocDec{ .num = sign * RocDec.one_point_zero.num },
+                RocDec{ .num = one_signed },
                 roc_ops,
             );
         } else {
@@ -470,8 +529,8 @@ pub const RocDec = extern struct {
         if (exponent == 0) {
             return RocDec.one_point_zero;
         } else if (exponent > 0) {
-            if (@mod(exponent, 2) == 0) {
-                const half_power = RocDec.powInt(base, exponent >> 1, roc_ops); // `>> 1` == `/ 2`
+            if (exponent & 1 == 0) {
+                const half_power = RocDec.powInt(base, i128h.shr_i128(exponent, 1), roc_ops); // `>> 1` == `/ 2`
                 return RocDec.mul(half_power, half_power, roc_ops);
             } else {
                 return RocDec.mul(base, RocDec.powInt(base, exponent - 1, roc_ops), roc_ops);
@@ -488,7 +547,7 @@ pub const RocDec = extern struct {
     ) RocDec {
         if (exponent.trunc(roc_ops).num == exponent.num) {
             return base.powInt(
-                @divTrunc(exponent.num, RocDec.one_point_zero_i128),
+                i128h.divTrunc_i128(exponent.num, RocDec.one_point_zero_i128),
                 roc_ops,
             );
         } else {
@@ -597,7 +656,7 @@ pub const RocDec = extern struct {
             }
         }
 
-        const numerator_u256: U256 = mul_u128(numerator_u128, math.pow(u128, 10, decimal_places));
+        const numerator_u256: U256 = mul_u128(numerator_u128, comptime math.pow(u128, 10, decimal_places));
         const answer = div_u256_by_u128(numerator_u256, denominator_u128);
 
         var unsigned_answer: i128 = undefined;
@@ -623,19 +682,19 @@ pub const RocDec = extern struct {
         // This is dec/(b0+1), but as a multiplication.
         // So dec * (1/(b0+1)). This is way faster.
         const dec = self.num;
-        const tmp = @as(i128, @intCast(mul_u128(@abs(dec), 249757942369376157886101012127821356963).hi >> (190 - 128)));
+        const tmp = @as(i128, @intCast(i128h.shr(mul_u128(@abs(dec), 249757942369376157886101012127821356963).hi, 62)));
         const q0 = if (dec < 0) -tmp else tmp;
 
-        const upper = q0 * b0;
-        const answer = @mulWithOverflow(q0, b1);
-        const lower = answer[0];
-        const overflowed = answer[1];
+        const upper = i128h.mul_i128(q0, @as(i128, b0));
+        const mul_result = @import("num.zig").mulWithOverflow(i128, q0, @as(i128, b1));
+        const lower = mul_result.value;
+        const overflowed: u1 = @intFromBool(mul_result.has_overflowed);
         // TODO: maybe write this out branchlessly.
         // Currently is is probably cmovs, but could be just math?
         const q0_sign: i128 =
             if (q0 > 0) 1 else -1;
-        const overflowed_val: i128 = if (overflowed == 1) q0_sign << 64 else 0;
-        const full = upper + @as(i128, @intCast(lower >> 64)) + overflowed_val;
+        const overflowed_val: i128 = if (overflowed == 1) @as(i128, @bitCast(i128h.shl(@as(u128, @bitCast(q0_sign)), 64))) else 0;
+        const full = upper + i128h.shr_i128(lower, 64) + overflowed_val;
 
         var out = dec - full;
         if (out < 0) {
@@ -687,7 +746,7 @@ pub const RocDec = extern struct {
         }
 
         // For Dec, remainder is straightforward since both operands have the same scaling factor
-        return RocDec{ .num = @rem(self.num, other.num) };
+        return RocDec{ .num = i128h.rem_i128(self.num, other.num) };
     }
 };
 
@@ -702,7 +761,7 @@ inline fn count_trailing_zeros_base10(input: i128) u6 {
     var k: i128 = 1;
 
     while (true) {
-        if (@mod(input, std.math.pow(i128, 10, k)) == 0) {
+        if (i128h.mod_i128(input, i128h.pow10_i128(@intCast(k))) == 0) {
             count += 1;
             k += 1;
         } else {
@@ -838,8 +897,8 @@ fn mul_and_decimalize(a: u128, b: u128) WithOverflow(i128) {
 
     // Since d is being shift left 69 times, all of those 69 bits (+1 for the sign bit)
     // must be zero. Otherwise, we have an overflow.
-    const d_high_bits = d >> 58;
-    return .{ .value = @as(i128, @intCast(c >> 59 | (d << (128 - 59)))), .has_overflowed = overflowed | d_high_bits != 0 };
+    const d_high_bits = i128h.shr(d, 58);
+    return .{ .value = @as(i128, @intCast(i128h.shr(c, 59) | i128h.shl(d, 69))), .has_overflowed = overflowed | d_high_bits != 0 };
 }
 
 // Multiply two 128-bit ints and divide the result by 10^DECIMAL_PLACES
@@ -866,7 +925,7 @@ fn div_u256_by_u128(numerator: U256, denominator: u128) U256 {
         // 0 X
         return .{
             .hi = 0,
-            .lo = numerator.lo / denominator,
+            .lo = i128h.divTrunc_u128(numerator.lo, denominator),
         };
     }
 
@@ -877,7 +936,7 @@ fn div_u256_by_u128(numerator: U256, denominator: u128) U256 {
         // 0 0
         return .{
             .hi = 0,
-            .lo = numerator.hi / denominator,
+            .lo = i128h.divTrunc_u128(numerator.hi, denominator),
         };
     } else {
         // K X
@@ -893,8 +952,8 @@ fn div_u256_by_u128(numerator: U256, denominator: u128) U256 {
             sr = @ctz(denominator);
 
             return .{
-                .hi = math.shr(u128, numerator.hi, sr),
-                .lo = math.shl(u128, numerator.hi, N_UDWORD_BITS - sr) | math.shr(u128, numerator.lo, sr),
+                .hi = i128h.shr(numerator.hi, @intCast(sr)),
+                .lo = i128h.shl(numerator.hi, @intCast(N_UDWORD_BITS - sr)) | i128h.shr(numerator.lo, @intCast(sr)),
             };
         }
 
@@ -920,22 +979,22 @@ fn div_u256_by_u128(numerator: U256, denominator: u128) U256 {
         } else if (sr < N_UDWORD_BITS) {
             // 2 <= sr <= N_UDWORD_BITS - 1
             q = .{
-                .hi = math.shl(u128, numerator.lo, N_UDWORD_BITS - sr),
+                .hi = i128h.shl(numerator.lo, @intCast(N_UDWORD_BITS - sr)),
                 .lo = 0,
             };
             r = .{
-                .hi = math.shr(u128, numerator.hi, sr),
-                .lo = math.shl(u128, numerator.hi, N_UDWORD_BITS - sr) | math.shr(u128, numerator.lo, sr),
+                .hi = i128h.shr(numerator.hi, @intCast(sr)),
+                .lo = i128h.shl(numerator.hi, @intCast(N_UDWORD_BITS - sr)) | i128h.shr(numerator.lo, @intCast(sr)),
             };
         } else {
             // N_UDWORD_BITS + 1 <= sr <= N_UTWORD_BITS - 1
             q = .{
-                .hi = math.shl(u128, numerator.hi, N_UTWORD_BITS - sr) | math.shr(u128, numerator.lo, sr - N_UDWORD_BITS),
-                .lo = math.shl(u128, numerator.lo, N_UTWORD_BITS - sr),
+                .hi = i128h.shl(numerator.hi, @intCast(N_UTWORD_BITS - sr)) | i128h.shr(numerator.lo, @intCast(sr - N_UDWORD_BITS)),
+                .lo = i128h.shl(numerator.lo, @intCast(N_UTWORD_BITS - sr)),
             };
             r = .{
                 .hi = 0,
-                .lo = math.shr(u128, numerator.hi, sr - N_UDWORD_BITS),
+                .lo = i128h.shr(numerator.hi, @intCast(sr - N_UDWORD_BITS)),
             };
         }
     }
@@ -949,10 +1008,10 @@ fn div_u256_by_u128(numerator: U256, denominator: u128) U256 {
 
     while (sr > 0) {
         // r:q = ((r:q)  << 1) | carry
-        r.hi = (r.hi << 1) | (r.lo >> (N_UDWORD_BITS - 1));
-        r.lo = (r.lo << 1) | (q.hi >> (N_UDWORD_BITS - 1));
-        q.hi = (q.hi << 1) | (q.lo >> (N_UDWORD_BITS - 1));
-        q.lo = (q.lo << 1) | carry;
+        r.hi = i128h.shl(r.hi, 1) | i128h.shr(r.lo, 127);
+        r.lo = i128h.shl(r.lo, 1) | i128h.shr(q.hi, 127);
+        q.hi = i128h.shl(q.hi, 1) | i128h.shr(q.lo, 127);
+        q.lo = i128h.shl(q.lo, 1) | carry;
 
         // carry = 0;
         // if (r.all >= d.all)
@@ -979,7 +1038,7 @@ fn div_u256_by_u128(numerator: U256, denominator: u128) U256 {
         //
         // As an implementation of `as_u256`, we wrap a negative value around to the maximum value of U256.
 
-        const s_u128 = math.shr(u128, hi, 127);
+        const s_u128 = i128h.shr(hi, 127);
         var s_hi: u128 = undefined;
         var s_lo: u128 = undefined;
         if (s_u128 == 1) {
@@ -1007,10 +1066,10 @@ fn div_u256_by_u128(numerator: U256, denominator: u128) U256 {
         sr -= 1;
     }
 
-    const hi = (q.hi << 1) | (q.lo >> (127));
-    const lo = (q.lo << 1) | carry;
+    const result_hi = i128h.shl(q.hi, 1) | i128h.shr(q.lo, 127);
+    const result_lo = i128h.shl(q.lo, 1) | carry;
 
-    return .{ .hi = hi, .lo = lo };
+    return .{ .hi = result_hi, .lo = result_lo };
 }
 
 const testing = std.testing;
@@ -1091,7 +1150,7 @@ pub fn toF32Try(arg: RocDec) ?f32 {
 /// Convert Dec to integer by truncating the fractional part (wrapping on overflow)
 pub fn toIntWrap(comptime T: type, arg: RocDec) T {
     // Divide by one_point_zero_i128 to get the integer part
-    const whole_part = @divTrunc(arg.num, RocDec.one_point_zero_i128);
+    const whole_part = i128h.divTrunc_i128(arg.num, RocDec.one_point_zero_i128);
     // Truncate to the target type (wrapping)
     // First cast the i128 to u128, then truncate to the target size, then cast back to T if needed
     const as_u128: u128 = @bitCast(whole_part);
@@ -1102,7 +1161,7 @@ pub fn toIntWrap(comptime T: type, arg: RocDec) T {
 /// Convert Dec to integer by truncating the fractional part (returns null if out of range)
 pub fn toIntTry(comptime T: type, arg: RocDec) ?T {
     // Divide by one_point_zero_i128 to get the integer part
-    const whole_part = @divTrunc(arg.num, RocDec.one_point_zero_i128);
+    const whole_part = i128h.divTrunc_i128(arg.num, RocDec.one_point_zero_i128);
     // Check if it fits in the target type
     if (whole_part < math.minInt(T) or whole_part > math.maxInt(T)) {
         return null;
@@ -1119,11 +1178,11 @@ pub fn exportFromInt(comptime T: type, comptime name: []const u8) void {
         ) callconv(.c) i128 {
             const this = @as(i128, @intCast(self));
 
-            const answer = @mulWithOverflow(this, RocDec.one_point_zero_i128);
-            if (answer[1] == 1) {
+            const answer = @import("num.zig").mulWithOverflow(i128, this, RocDec.one_point_zero_i128);
+            if (answer.has_overflowed) {
                 roc_ops.crash("Decimal conversion from Integer failed!");
             } else {
-                return answer[0];
+                return answer.value;
             }
         }
     }.func;
@@ -1200,6 +1259,16 @@ pub fn divC(
     roc_ops: *RocOps,
 ) callconv(.c) i128 {
     return @call(.always_inline, RocDec.div, .{ arg1, arg2, roc_ops }).num;
+}
+
+/// Truncating division: divide and truncate to the nearest integer toward zero.
+pub fn divTruncC(
+    arg1: RocDec,
+    arg2: RocDec,
+    roc_ops: *RocOps,
+) callconv(.c) i128 {
+    const quotient = @call(.always_inline, RocDec.div, .{ arg1, arg2, roc_ops });
+    return @call(.always_inline, RocDec.trunc, .{ quotient, roc_ops }).num;
 }
 
 /// TODO: Document logC.
@@ -1295,7 +1364,7 @@ pub fn exportRound(comptime T: type, comptime name: []const u8) void {
             input: RocDec,
             roc_ops: *RocOps,
         ) callconv(.c) T {
-            return @as(T, @intCast(@divFloor(input.round(roc_ops).num, RocDec.one_point_zero_i128)));
+            return @as(T, @intCast(i128h.divFloor_i128(input.round(roc_ops).num, RocDec.one_point_zero_i128)));
         }
     }.func;
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
@@ -1308,7 +1377,7 @@ pub fn exportFloor(comptime T: type, comptime name: []const u8) void {
             input: RocDec,
             roc_ops: *RocOps,
         ) callconv(.c) T {
-            return @as(T, @intCast(@divFloor(input.floor(roc_ops).num, RocDec.one_point_zero_i128)));
+            return @as(T, @intCast(i128h.divFloor_i128(input.floor(roc_ops).num, RocDec.one_point_zero_i128)));
         }
     }.func;
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
@@ -1321,7 +1390,7 @@ pub fn exportCeiling(comptime T: type, comptime name: []const u8) void {
             input: RocDec,
             roc_ops: *RocOps,
         ) callconv(.c) T {
-            return @as(T, @intCast(@divFloor(input.ceiling(roc_ops).num, RocDec.one_point_zero_i128)));
+            return @as(T, @intCast(i128h.divFloor_i128(input.ceiling(roc_ops).num, RocDec.one_point_zero_i128)));
         }
     }.func;
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });

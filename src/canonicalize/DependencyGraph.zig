@@ -173,6 +173,10 @@ fn collectExprDependencies(
             }
         },
 
+        .e_tuple_access => |tuple_access| {
+            try collectExprDependencies(cir, tuple_access.tuple, dependencies, allocator);
+        },
+
         .e_tuple => |tuple| {
             for (cir.store.sliceExpr(tuple.elems)) |elem_idx| {
                 try collectExprDependencies(cir, elem_idx, dependencies, allocator);
@@ -198,9 +202,6 @@ fn collectExprDependencies(
                 const stmt = cir.store.getStatement(stmt_idx);
                 switch (stmt) {
                     .s_decl => |decl| {
-                        try collectExprDependencies(cir, decl.expr, dependencies, allocator);
-                    },
-                    .s_decl_gen => |decl| {
                         try collectExprDependencies(cir, decl.expr, dependencies, allocator);
                     },
                     .s_var => |var_stmt| {
@@ -246,7 +247,7 @@ fn collectExprDependencies(
         },
 
         // Literals and hosted lambdas have no dependencies
-        .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_str, .e_str_segment, .e_empty_list, .e_empty_record, .e_zero_argument_tag, .e_ellipsis, .e_anno_only, .e_hosted_lambda => {},
+        .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_str, .e_str_segment, .e_empty_list, .e_empty_record, .e_zero_argument_tag, .e_ellipsis, .e_anno_only, .e_hosted_lambda => {},
 
         .e_low_level_lambda => |ll| {
             try collectExprDependencies(cir, ll.body, dependencies, allocator);
@@ -254,6 +255,9 @@ fn collectExprDependencies(
 
         // External lookups reference other modules - skip for now
         .e_lookup_external => {},
+
+        // Pending lookups are deferred external lookups - skip for dependency analysis
+        .e_lookup_pending => {},
 
         // Required lookups reference app-provided values - skip for dependency analysis
         .e_lookup_required => {},
@@ -368,6 +372,109 @@ pub fn computeSCCs(
         .sccs = try state.sccs.toOwnedSlice(allocator),
         .allocator = allocator,
     };
+}
+
+/// Returns indices of all top-level constants (definitions without function parameters).
+/// A constant is a definition whose expression is not a lambda, or is a zero-arg lambda.
+///
+/// This is used to identify definitions that should be evaluated at compile time,
+/// as opposed to functions which are only evaluated when called.
+pub fn getTopLevelConstants(
+    cir: *const ModuleEnv,
+    all_defs: CIR.Def.Span,
+    allocator: std.mem.Allocator,
+) std.mem.Allocator.Error![]const CIR.Def.Idx {
+    const defs_slice = cir.store.sliceDefs(all_defs);
+
+    var constants = std.ArrayList(CIR.Def.Idx){};
+    errdefer constants.deinit(allocator);
+
+    for (defs_slice) |def_idx| {
+        const def = cir.store.getDef(def_idx);
+        const expr = cir.store.getExpr(def.expr);
+
+        const is_constant = switch (expr) {
+            .e_lambda => |lambda| lambda.args.span.len == 0, // Zero-arg lambda is a constant
+            .e_closure => false, // Closures with captures are not constants
+            else => true, // Everything else (literals, records, etc.) is a constant
+        };
+
+        if (is_constant) {
+            try constants.append(allocator, def_idx);
+        }
+    }
+
+    return constants.toOwnedSlice(allocator);
+}
+
+/// Returns constants in dependency order (dependencies first).
+///
+/// This computes the strongly connected components (SCCs) for only the constant
+/// definitions, returning them in topological order so that each constant can
+/// be evaluated after all its dependencies have been evaluated.
+pub fn getConstantsInDependencyOrder(
+    cir: *const ModuleEnv,
+    all_defs: CIR.Def.Span,
+    allocator: std.mem.Allocator,
+) std.mem.Allocator.Error!EvaluationOrder {
+    // Get only the constant definitions
+    const constants = try getTopLevelConstants(cir, all_defs, allocator);
+    defer allocator.free(constants);
+
+    if (constants.len == 0) {
+        return EvaluationOrder{
+            .sccs = &[_]SCC{},
+            .allocator = allocator,
+        };
+    }
+
+    // Build a dependency graph for just the constants
+    var graph = DependencyGraph.init(allocator, constants);
+    errdefer graph.deinit();
+
+    // Map from Ident.Idx to Def.Idx for resolving references (only for constants)
+    var ident_to_def = std.AutoHashMapUnmanaged(base.Ident.Idx, CIR.Def.Idx){};
+    defer ident_to_def.deinit(allocator);
+
+    // First pass: build ident -> def mapping for constants only
+    for (constants) |def_idx| {
+        const def = cir.store.getDef(def_idx);
+        const pattern = cir.store.getPattern(def.pattern);
+
+        if (pattern == .assign) {
+            try ident_to_def.put(allocator, pattern.assign.ident, def_idx);
+        }
+    }
+
+    // Second pass: collect dependencies and build graph
+    for (constants) |def_idx| {
+        const def = cir.store.getDef(def_idx);
+
+        // Collect all identifiers this def's expression references
+        var deps = std.AutoHashMapUnmanaged(base.Ident.Idx, void){};
+        defer deps.deinit(allocator);
+
+        try collectExprDependencies(cir, def.expr, &deps, allocator);
+
+        // Convert ident dependencies to def dependencies
+        var dep_iter = deps.keyIterator();
+        while (dep_iter.next()) |ident_idx| {
+            if (ident_to_def.get(ident_idx.*)) |dep_def_idx| {
+                try graph.addEdge(def_idx, dep_def_idx);
+            }
+            // If ident not found in ident_to_def, it's either:
+            // - A function (not a constant)
+            // - A builtin function
+            // - An external module reference
+            // - A parameter/local variable
+            // In all cases, we don't need to track it for constant evaluation order
+        }
+    }
+
+    // Compute SCCs using Tarjan's algorithm
+    const result = try computeSCCs(&graph, allocator);
+    graph.deinit();
+    return result;
 }
 
 const TarjanState = struct {
