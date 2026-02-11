@@ -169,13 +169,8 @@ test "fx platform IO spec tests" {
 
     var passed: usize = 0;
     var failed: usize = 0;
-    var skipped: usize = 0;
 
     for (fx_test_specs.io_spec_tests) |spec| {
-        if (spec.skip.len > 0) {
-            skipped += 1;
-            continue;
-        }
         const result = runRocTest(allocator, spec.roc_file, spec.io_spec) catch |err| {
             std.debug.print("\n[FAIL] {s}: failed to run: {}\n", .{ spec.roc_file, err });
             failed += 1;
@@ -199,7 +194,7 @@ test "fx platform IO spec tests" {
     // Print summary
     const total = passed + failed;
     if (failed > 0) {
-        std.debug.print("\n{}/{} IO spec tests passed ({} failed, {} skipped)\n", .{ passed, total, failed, skipped });
+        std.debug.print("\n{}/{} IO spec tests passed ({} failed)\n", .{ passed, total, failed });
         return error.SomeTestsFailed;
     }
 }
