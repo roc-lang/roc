@@ -123,7 +123,7 @@ pub const FailureInfo = union(FailureType) {
     not_bool,
 };
 
-// Track test results
+/// The result of evaluating a single top-level `expect` expression.
 pub const TestResult = struct {
     passed: bool,
     region: base.Region,

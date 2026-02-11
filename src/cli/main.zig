@@ -4911,9 +4911,9 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
             defer ctx.gpa.free(dir);
             if (cache_manager.loadRawBytes(cache_key, dir)) |cached_data| {
                 defer ctx.gpa.free(cached_data);
-                replayTestCache(ctx.gpa, cached_data, args, stdout, stderr, source, start_time) catch |err| {
-                    if (err == error.TestsFailed) return err;
-                    // On invalid cache data, fall through to normal path
+                replayTestCache(ctx.gpa, cached_data, args, stdout, stderr, source, start_time) catch |err| switch (err) {
+                    error.TestsFailed => return err,
+                    else => {}, // On invalid cache data, fall through to normal path
                 };
                 return;
             }

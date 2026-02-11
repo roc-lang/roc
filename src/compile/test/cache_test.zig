@@ -3,7 +3,6 @@ const fs_mod = @import("fs");
 
 const CacheManager = @import("../cache_manager.zig").CacheManager;
 const CacheConfig = @import("../cache_config.zig").CacheConfig;
-const CacheStats = @import("../cache_config.zig").CacheStats;
 const Filesystem = fs_mod.Filesystem;
 const testing = std.testing;
 
