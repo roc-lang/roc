@@ -1343,6 +1343,24 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     } else {
                         try self.codegen.emit.movRegMem(.w64, result_reg, .RBP, base_offset + 8);
                     }
+
+                    // Decref the list — list_len only reads, doesn't consume.
+                    // Save result to stack first since the decref call clobbers
+                    // caller-saved registers.
+                    if (self.getExprLayout(args[0])) |list_layout_idx| {
+                        const result_slot = self.codegen.allocStackSlot(8);
+                        if (comptime target.toCpuArch() == .aarch64) {
+                            try self.codegen.emit.strRegMemSoff(.w64, result_reg, .FP, result_slot);
+                        } else {
+                            try self.codegen.emit.movMemReg(.w64, .RBP, result_slot, result_reg);
+                        }
+                        self.codegen.freeGeneral(result_reg);
+
+                        const lai = self.listAllocInfoFromListLayout(list_layout_idx);
+                        try self.emitListDecref(.{ .stack = .{ .offset = base_offset } }, lai.alignment, lai.elements_refcounted);
+                        return .{ .stack = .{ .offset = result_slot } };
+                    }
+
                     return .{ .general_reg = result_reg };
                 },
                 .list_is_empty => {
@@ -1379,6 +1397,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         }
                         self.codegen.freeGeneral(one_reg);
                         self.codegen.freeGeneral(len_reg);
+
                         return .{ .general_reg = result_reg };
                     }
                 },
