@@ -526,40 +526,40 @@ fn wrapStrWithPrefix(out: *RocStr, str_bytes: ?[*]u8, str_len: usize, str_cap: u
 }
 
 /// Wrapper: listConcat(RocList, RocList, alignment, element_width, ..., *RocOps) -> RocList
-fn wrapListConcat(out: *RocList, a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize, alignment: u32, element_width: usize, roc_ops: *RocOps) callconv(.c) void {
+fn wrapListConcat(out: *RocList, a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize, alignment: u32, element_width: usize, elements_refcounted: bool, roc_ops: *RocOps) callconv(.c) void {
     const a = RocList{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
     const b = RocList{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
-    out.* = listConcat(a, b, alignment, element_width, false, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), roc_ops);
+    out.* = listConcat(a, b, alignment, element_width, elements_refcounted, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), roc_ops);
 }
 
 /// Wrapper: listPrepend(RocList, alignment, element, element_width, ..., *RocOps) -> RocList
-fn wrapListPrepend(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, element: ?[*]u8, element_width: usize, roc_ops: *RocOps) callconv(.c) void {
+fn wrapListPrepend(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, element: ?[*]u8, element_width: usize, elements_refcounted: bool, roc_ops: *RocOps) callconv(.c) void {
     const list = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
-    out.* = listPrepend(list, alignment, element, element_width, false, null, @ptrCast(&rcNone), @ptrCast(&copy_fallback), roc_ops);
+    out.* = listPrepend(list, alignment, element, element_width, elements_refcounted, null, @ptrCast(&rcNone), @ptrCast(&copy_fallback), roc_ops);
 }
 
 /// Wrapper: listSublist for drop_first/drop_last/take_first/take_last
-fn wrapListSublist(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, element_width: usize, start: u64, len: u64, roc_ops: *RocOps) callconv(.c) void {
+fn wrapListSublist(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, element_width: usize, start: u64, len: u64, elements_refcounted: bool, roc_ops: *RocOps) callconv(.c) void {
     const list = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
-    out.* = listSublist(list, alignment, element_width, false, start, len, null, @ptrCast(&rcNone), roc_ops);
+    out.* = listSublist(list, alignment, element_width, elements_refcounted, start, len, null, @ptrCast(&rcNone), roc_ops);
 }
 
 /// Wrapper: listReplace for list_set
-fn wrapListReplace(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, index: u64, element: ?[*]u8, element_width: usize, out_element: ?[*]u8, roc_ops: *RocOps) callconv(.c) void {
+fn wrapListReplace(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, index: u64, element: ?[*]u8, element_width: usize, out_element: ?[*]u8, elements_refcounted: bool, roc_ops: *RocOps) callconv(.c) void {
     const list = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
-    out.* = listReplace(list, alignment, index, element, element_width, false, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), out_element, @ptrCast(&copy_fallback), roc_ops);
+    out.* = listReplace(list, alignment, index, element, element_width, elements_refcounted, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), out_element, @ptrCast(&copy_fallback), roc_ops);
 }
 
 /// Wrapper: listReserve
-fn wrapListReserve(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, spare: u64, element_width: usize, roc_ops: *RocOps) callconv(.c) void {
+fn wrapListReserve(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, spare: u64, element_width: usize, elements_refcounted: bool, roc_ops: *RocOps) callconv(.c) void {
     const list = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
-    out.* = listReserve(list, alignment, spare, element_width, false, null, @ptrCast(&rcNone), .Immutable, roc_ops);
+    out.* = listReserve(list, alignment, spare, element_width, elements_refcounted, null, @ptrCast(&rcNone), .Immutable, roc_ops);
 }
 
 /// Wrapper: listReleaseExcessCapacity
-fn wrapListReleaseExcessCapacity(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, element_width: usize, roc_ops: *RocOps) callconv(.c) void {
+fn wrapListReleaseExcessCapacity(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, element_width: usize, elements_refcounted: bool, roc_ops: *RocOps) callconv(.c) void {
     const list = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
-    out.* = listReleaseExcessCapacity(list, alignment, element_width, false, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), .Immutable, roc_ops);
+    out.* = listReleaseExcessCapacity(list, alignment, element_width, elements_refcounted, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), .Immutable, roc_ops);
 }
 
 const MonoProc = mono.MonoProc;
@@ -1420,13 +1420,17 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     const cap_reg = try self.ensureInGeneralReg(capacity_loc);
                     const base_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .FP else .RBP;
 
-                    // roc_builtins_list_with_capacity(out, capacity, alignment, element_width, roc_ops)
+                    // Determine elements_refcounted from element layout
+                    const elems_rc: bool = if (ret_layout.tag == .list) ls.layoutContainsRefcounted(ls.getLayout(ret_layout.data.list)) else false;
+
+                    // roc_builtins_list_with_capacity(out, capacity, alignment, element_width, elements_refcounted, roc_ops)
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                     try builder.addLeaArg(base_reg, result_offset);
                     try builder.addRegArg(cap_reg);
                     self.codegen.freeGeneral(cap_reg);
                     try builder.addImmArg(@intCast(alignment_bytes));
                     try builder.addImmArg(@intCast(elem_size_align.size));
+                    try builder.addImmArg(if (elems_rc) @as(u32, 1) else 0);
                     try builder.addRegArg(roc_ops_reg);
                     try self.callBuiltin(&builder, fn_addr, .list_with_capacity);
 
@@ -1485,6 +1489,14 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
                     const is_zst = (elem_size_align.size == 0);
 
+                    // Determine elements_refcounted from element layout
+                    const elems_rc: bool = blk: {
+                        const ret_layout_val = ls.getLayout(ll.ret_layout);
+                        if (ret_layout_val.tag == .list)
+                            break :blk ls.layoutContainsRefcounted(ls.getLayout(ret_layout_val.data.list));
+                        break :blk false;
+                    };
+
                     const list_offset: i32 = switch (list_loc) {
                         .stack => |s| s.offset,
                         .list_stack => |ls_info| ls_info.struct_offset,
@@ -1542,7 +1554,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_append_safe);
                         const alignment_bytes = elem_size_align.alignment.toByteUnits();
 
-                        // roc_builtins_list_append_safe(out, list_bytes, list_len, list_cap, element, alignment, element_width, roc_ops)
+                        // roc_builtins_list_append_safe(out, list_bytes, list_len, list_cap, element, alignment, element_width, elements_refcounted, roc_ops)
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                         try builder.addLeaArg(base_reg, result_offset);
                         try builder.addMemArg(base_reg, list_offset);
@@ -1551,6 +1563,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         try builder.addLeaArg(base_reg, elem_offset);
                         try builder.addImmArg(@intCast(alignment_bytes));
                         try builder.addImmArg(@intCast(elem_size_align.size));
+                        try builder.addImmArg(if (elems_rc) @as(u32, 1) else 0);
                         try builder.addRegArg(roc_ops_reg);
                         try self.callBuiltin(&builder, fn_addr, .list_append_safe);
                     }
@@ -1635,6 +1648,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
                     if (elem_size == 0 and !is_safe_get) {
                         // ZST element with unsafe get - no actual data to load
+                        const lai = self.listAllocInfo(elem_layout_idx);
+                        try self.emitListDecref(list_loc, lai.alignment, lai.elements_refcounted);
                         return .{ .immediate_i64 = 0 };
                     }
 
@@ -1752,6 +1767,13 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         self.codegen.patchJump(end_patch, self.codegen.currentOffset());
 
                         self.codegen.freeGeneral(index_reg);
+
+                        // Decref the list — both branches have finished reading from it.
+                        {
+                            const lai = self.listAllocInfo(elem_layout_idx);
+                            try self.emitListDecref(list_loc, lai.alignment, lai.elements_refcounted);
+                        }
+
                         return .{ .stack = .{ .offset = result_slot } };
                     }
 
@@ -1813,6 +1835,12 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     self.codegen.freeGeneral(temp_reg);
                     self.codegen.freeGeneral(addr_reg);
 
+                    // Decref the list — the element has been copied out.
+                    {
+                        const lai = self.listAllocInfo(elem_layout_idx);
+                        try self.emitListDecref(list_loc, lai.alignment, lai.elements_refcounted);
+                    }
+
                     // Return with appropriate value location based on element type
                     if (elem_layout_idx == .i128 or elem_layout_idx == .u128 or elem_layout_idx == .dec) {
                         return .{ .stack_i128 = elem_slot };
@@ -1864,8 +1892,16 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     const alignment_bytes = elem_size_align.alignment.toByteUnits();
                     const fn_addr: usize = @intFromPtr(&wrapListConcat);
 
+                    // Determine elements_refcounted from element layout
+                    const elems_rc: bool = blk: {
+                        const ret_layout_val = ls.getLayout(ll.ret_layout);
+                        if (ret_layout_val.tag == .list)
+                            break :blk ls.layoutContainsRefcounted(ls.getLayout(ret_layout_val.data.list));
+                        break :blk false;
+                    };
+
                     {
-                        // wrapListConcat(out, a_bytes, a_len, a_cap, b_bytes, b_len, b_cap, alignment, element_width, roc_ops)
+                        // wrapListConcat(out, a_bytes, a_len, a_cap, b_bytes, b_len, b_cap, alignment, element_width, elements_refcounted, roc_ops)
                         const base_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .FP else .RBP;
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
 
@@ -1878,6 +1914,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         try builder.addMemArg(base_reg, list_b_off + 16);
                         try builder.addImmArg(@intCast(alignment_bytes));
                         try builder.addImmArg(@intCast(elem_size_align.size));
+                        try builder.addImmArg(if (elems_rc) @as(u32, 1) else 0);
                         try builder.addRegArg(roc_ops_reg);
 
                         try self.callBuiltin(&builder, fn_addr, .list_concat);
@@ -1909,8 +1946,16 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     const alignment_bytes = elem_size_align.alignment.toByteUnits();
                     const fn_addr: usize = @intFromPtr(&wrapListPrepend);
 
+                    // Determine elements_refcounted from element layout
+                    const elems_rc: bool = blk: {
+                        const ret_layout_val = ls.getLayout(ll.ret_layout);
+                        if (ret_layout_val.tag == .list)
+                            break :blk ls.layoutContainsRefcounted(ls.getLayout(ret_layout_val.data.list));
+                        break :blk false;
+                    };
+
                     {
-                        // wrapListPrepend(out, list_bytes, list_len, list_cap, alignment, element, element_width, roc_ops)
+                        // wrapListPrepend(out, list_bytes, list_len, list_cap, alignment, element, element_width, elements_refcounted, roc_ops)
                         const base_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .FP else .RBP;
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
 
@@ -1921,6 +1966,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         try builder.addImmArg(@intCast(alignment_bytes));
                         try builder.addLeaArg(base_reg, elem_off);
                         try builder.addImmArg(@intCast(elem_size_align.size));
+                        try builder.addImmArg(if (elems_rc) @as(u32, 1) else 0);
                         try builder.addRegArg(roc_ops_reg);
 
                         try self.callBuiltin(&builder, fn_addr, .list_prepend);
@@ -2002,13 +2048,22 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     const cap_fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_with_capacity);
                     const base_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .FP else .RBP;
 
+                    // Determine elements_refcounted from element layout
+                    const elems_rc: bool = blk: {
+                        const ret_layout_val = ls.getLayout(ll.ret_layout);
+                        if (ret_layout_val.tag == .list)
+                            break :blk ls.layoutContainsRefcounted(ls.getLayout(ret_layout_val.data.list));
+                        break :blk false;
+                    };
+
                     {
-                        // roc_builtins_list_with_capacity(out, capacity, alignment, element_width, roc_ops)
+                        // roc_builtins_list_with_capacity(out, capacity, alignment, element_width, elements_refcounted, roc_ops)
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                         try builder.addLeaArg(base_reg, result_offset);
                         try builder.addMemArg(base_reg, count_slot);
                         try builder.addImmArg(@intCast(alignment_bytes));
                         try builder.addImmArg(@intCast(elem_size_align.size));
+                        try builder.addImmArg(if (elems_rc) @as(u32, 1) else 0);
                         try builder.addRegArg(roc_ops_reg);
                         try self.callBuiltin(&builder, cap_fn_addr, .list_with_capacity);
                     }
@@ -3125,8 +3180,16 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     const alignment_bytes = elem_size_align.alignment.toByteUnits();
                     const fn_addr: usize = @intFromPtr(&wrapListReplace);
 
+                    // Determine elements_refcounted from element layout
+                    const elems_rc: bool = blk: {
+                        const ret_layout_val = ls.getLayout(ll.ret_layout);
+                        if (ret_layout_val.tag == .list)
+                            break :blk ls.layoutContainsRefcounted(ls.getLayout(ret_layout_val.data.list));
+                        break :blk false;
+                    };
+
                     {
-                        // wrapListReplace(out, list_bytes, list_len, list_cap, alignment, index, element, element_width, out_element, roc_ops)
+                        // wrapListReplace(out, list_bytes, list_len, list_cap, alignment, index, element, element_width, out_element, elements_refcounted, roc_ops)
                         const base_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .FP else .RBP;
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
 
@@ -3139,6 +3202,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         try builder.addLeaArg(base_reg, elem_off);
                         try builder.addImmArg(@intCast(elem_size_align.size));
                         try builder.addLeaArg(base_reg, old_elem_slot);
+                        try builder.addImmArg(if (elems_rc) @as(u32, 1) else 0);
                         try builder.addRegArg(roc_ops_reg);
 
                         try self.callBuiltin(&builder, fn_addr, .list_replace);
@@ -3689,13 +3753,21 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             self.codegen.freeGeneral(n_reg);
             self.codegen.freeGeneral(len_reg);
 
-            // Call wrapListSublist(out, list_bytes, list_len, list_cap, alignment, element_width, start, len, roc_ops)
+            // Call wrapListSublist(out, list_bytes, list_len, list_cap, alignment, element_width, start, len, elements_refcounted, roc_ops)
             const result_offset = self.codegen.allocStackSlot(roc_str_size);
             const alignment_bytes = elem_size_align.alignment.toByteUnits();
             const fn_addr: usize = @intFromPtr(&wrapListSublist);
 
+            // Determine elements_refcounted from element layout
+            const elems_rc: bool = blk: {
+                const ret_layout_val = ls.getLayout(ll.ret_layout);
+                if (ret_layout_val.tag == .list)
+                    break :blk ls.layoutContainsRefcounted(ls.getLayout(ret_layout_val.data.list));
+                break :blk false;
+            };
+
             {
-                // wrapListSublist(out, list_bytes, list_len, list_cap, alignment, element_width, start, len, roc_ops)
+                // wrapListSublist(out, list_bytes, list_len, list_cap, alignment, element_width, start, len, elements_refcounted, roc_ops)
                 const base_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .FP else .RBP;
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
 
@@ -3707,6 +3779,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 try builder.addImmArg(@intCast(elem_size_align.size));
                 try builder.addMemArg(base_reg, start_slot);
                 try builder.addMemArg(base_reg, len_slot);
+                try builder.addImmArg(if (elems_rc) @as(u32, 1) else 0);
                 try builder.addRegArg(roc_ops_reg);
 
                 try self.callBuiltin(&builder, fn_addr, .list_sublist);
@@ -3741,6 +3814,14 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             const alignment_bytes = elem_size_align.alignment.toByteUnits();
             const fn_addr: usize = @intFromPtr(&wrapListSublist);
 
+            // Determine elements_refcounted from element layout
+            const elems_rc: bool = blk: {
+                const ret_layout_val = ls.getLayout(ll.ret_layout);
+                if (ret_layout_val.tag == .list)
+                    break :blk ls.layoutContainsRefcounted(ls.getLayout(ret_layout_val.data.list));
+                break :blk false;
+            };
+
             {
                 const base_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .FP else .RBP;
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
@@ -3753,6 +3834,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 try builder.addImmArg(@intCast(elem_size_align.size));
                 try builder.addMemArg(base_reg, start_field_off);
                 try builder.addMemArg(base_reg, len_field_off);
+                try builder.addImmArg(if (elems_rc) @as(u32, 1) else 0);
                 try builder.addRegArg(roc_ops_reg);
 
                 try self.callBuiltin(&builder, fn_addr, .list_sublist);
@@ -4084,6 +4166,12 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             // === END ===
             self.codegen.patchJump(end_patch, self.codegen.currentOffset());
 
+            // Decref the list — both branches have finished reading from it.
+            {
+                const lai = self.listAllocInfo(elem_layout_idx);
+                try self.emitListDecref(list_loc, lai.alignment, lai.elements_refcounted);
+            }
+
             return .{ .stack = .{ .offset = result_slot } };
         }
 
@@ -4150,7 +4238,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             // Track argument positions in the args buffer for post-call decref.
             // We need to decref refcounted args (str, list, box) after the hosted
             // call returns, since the hosted function only borrows them.
-            const ArgDecrefInfo = struct { offset: i32, layout_tag: layout.LayoutTag, scalar_tag: layout.ScalarTag };
+            const ArgDecrefInfo = struct { offset: i32, layout_tag: layout.LayoutTag, scalar_tag: layout.ScalarTag, elem_alignment: u32, elements_refcounted: bool };
             var decref_args: [16]ArgDecrefInfo = undefined;
             var decref_count: usize = 0;
             {
@@ -4167,10 +4255,13 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             else => false,
                         };
                         if (needs_decref and decref_count < decref_args.len) {
+                            const lai: ListAllocInfo = if (arg_layout.tag == .list) self.listAllocInfo(arg_layout.data.list) else .{ .alignment = 8, .elements_refcounted = false };
                             decref_args[decref_count] = .{
                                 .offset = args_slot + @as(i32, @intCast(track_offset)),
                                 .layout_tag = arg_layout.tag,
                                 .scalar_tag = if (arg_layout.tag == .scalar) arg_layout.data.scalar.tag else .int,
+                                .elem_alignment = lai.alignment,
+                                .elements_refcounted = lai.elements_refcounted,
                             };
                             decref_count += 1;
                         }
@@ -4216,7 +4307,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             // so we must decref the originals in the args buffer.
             for (decref_args[0..decref_count]) |info| {
                 switch (info.layout_tag) {
-                    .list, .list_of_zst => try self.emitListDecref(.{ .stack = .{ .offset = info.offset } }),
+                    .list, .list_of_zst => try self.emitListDecref(.{ .stack = .{ .offset = info.offset } }, info.elem_alignment, info.elements_refcounted),
                     .box, .box_of_zst => try self.emitBoxDecref(.{ .stack = .{ .offset = info.offset } }),
                     .scalar => if (info.scalar_tag == .str) {
                         try self.emitStrDecref(.{ .stack_str = info.offset });
@@ -4612,13 +4703,22 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             const cap_fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_with_capacity);
             const base_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .FP else .RBP;
 
+            // Determine elements_refcounted from element layout
+            const elems_rc: bool = blk: {
+                const ret_layout_val = ls.getLayout(ll.ret_layout);
+                if (ret_layout_val.tag == .list)
+                    break :blk ls.layoutContainsRefcounted(ls.getLayout(ret_layout_val.data.list));
+                break :blk false;
+            };
+
             {
-                // roc_builtins_list_with_capacity(out, capacity, alignment, element_width, roc_ops)
+                // roc_builtins_list_with_capacity(out, capacity, alignment, element_width, elements_refcounted, roc_ops)
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                 try builder.addLeaArg(base_reg, result_offset);
                 try builder.addMemArg(base_reg, list_off + 8); // capacity = input length
                 try builder.addImmArg(@intCast(alignment_bytes));
                 try builder.addImmArg(@intCast(elem_size_align.size));
+                try builder.addImmArg(if (elems_rc) @as(u32, 1) else 0);
                 try builder.addRegArg(roc_ops_reg);
                 try self.callBuiltin(&builder, cap_fn_addr, .list_with_capacity);
             }
@@ -4803,8 +4903,16 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             const alignment_bytes = elem_size_align.alignment.toByteUnits();
             const fn_addr: usize = @intFromPtr(&wrapListReserve);
 
+            // Determine elements_refcounted from element layout
+            const elems_rc: bool = blk: {
+                const ret_layout_val = ls.getLayout(ll.ret_layout);
+                if (ret_layout_val.tag == .list)
+                    break :blk ls.layoutContainsRefcounted(ls.getLayout(ret_layout_val.data.list));
+                break :blk false;
+            };
+
             {
-                // wrapListReserve(out, list_bytes, list_len, list_cap, alignment, spare, element_width, roc_ops)
+                // wrapListReserve(out, list_bytes, list_len, list_cap, alignment, spare, element_width, elements_refcounted, roc_ops)
                 const base_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .FP else .RBP;
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
 
@@ -4815,6 +4923,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 try builder.addImmArg(@intCast(alignment_bytes));
                 try builder.addMemArg(base_reg, spare_off);
                 try builder.addImmArg(@intCast(elem_size_align.size));
+                try builder.addImmArg(if (elems_rc) @as(u32, 1) else 0);
                 try builder.addRegArg(roc_ops_reg);
 
                 try self.callBuiltin(&builder, fn_addr, .list_reserve);
@@ -4842,8 +4951,16 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             const alignment_bytes = elem_size_align.alignment.toByteUnits();
             const fn_addr: usize = @intFromPtr(&wrapListReleaseExcessCapacity);
 
+            // Determine elements_refcounted from element layout
+            const elems_rc: bool = blk: {
+                const ret_layout_val = ls.getLayout(ll.ret_layout);
+                if (ret_layout_val.tag == .list)
+                    break :blk ls.layoutContainsRefcounted(ls.getLayout(ret_layout_val.data.list));
+                break :blk false;
+            };
+
             {
-                // wrapListReleaseExcessCapacity(out, list_bytes, list_len, list_cap, alignment, element_width, roc_ops)
+                // wrapListReleaseExcessCapacity(out, list_bytes, list_len, list_cap, alignment, element_width, elements_refcounted, roc_ops)
                 const base_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .FP else .RBP;
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
 
@@ -4853,6 +4970,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 try builder.addMemArg(base_reg, list_off + 16);
                 try builder.addImmArg(@intCast(alignment_bytes));
                 try builder.addImmArg(@intCast(elem_size_align.size));
+                try builder.addImmArg(if (elems_rc) @as(u32, 1) else 0);
                 try builder.addRegArg(roc_ops_reg);
 
                 try self.callBuiltin(&builder, fn_addr, .list_release_excess_capacity);
@@ -9555,6 +9673,15 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             // Patch the exit jump to point here
             const loop_exit_offset = self.codegen.currentOffset();
             self.codegen.patchJump(exit_patch, loop_exit_offset);
+
+            // Decref the list after the loop completes.
+            // The RC insert pass considers ownership "transferred" to the for_loop
+            // (single-use = no decref inserted), but the loop only reads from the
+            // list without consuming it, so we must free it here.
+            {
+                const lai = self.listAllocInfo(effective_elem_layout);
+                try self.emitListDecref(list_loc, lai.alignment, lai.elements_refcounted);
+            }
 
             // For loops return unit (empty record)
             return .{ .immediate_i64 = 0 };
@@ -15208,7 +15335,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             switch (layout_val.tag) {
                 .list, .list_of_zst => {
                     // Lists always have heap-allocated data
-                    try self.emitListDecref(value_loc);
+                    const lai = self.listAllocInfoFromListLayout(rc_op.layout_idx);
+                    try self.emitListDecref(value_loc, lai.alignment, lai.elements_refcounted);
                 },
                 .scalar => {
                     // Check if it's a string
@@ -15245,7 +15373,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             // Only free heap-allocated types: list, str (large), box
             switch (layout_val.tag) {
                 .list, .list_of_zst => {
-                    try self.emitListFree(value_loc);
+                    const lai = self.listAllocInfoFromListLayout(rc_op.layout_idx);
+                    try self.emitListFree(value_loc, lai.alignment, lai.elements_refcounted);
                 },
                 .scalar => {
                     if (layout_val.data.scalar.tag == .str) {
@@ -15299,8 +15428,38 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             try self.callBuiltin(&builder, fn_addr, .incref_data_ptr);
         }
 
-        /// Emit decref for a list value
-        fn emitListDecref(self: *Self, value_loc: ValueLocation) Error!void {
+        const ListAllocInfo = struct { alignment: u32, elements_refcounted: bool };
+
+        /// Compute element alignment and refcountedness for a list, matching
+        /// what generateList uses during allocation. Must be consistent for
+        /// correct deallocation.
+        fn listAllocInfo(self: *Self, elem_layout_idx: layout.Idx) ListAllocInfo {
+            const ls = self.layout_store orelse return .{ .alignment = 8, .elements_refcounted = false };
+            const elem_layout = ls.getLayout(elem_layout_idx);
+            const alignment: u32 = if (elem_layout_idx == .dec or elem_layout_idx == .i128 or elem_layout_idx == .u128 or self.isScalar16Layout(elem_layout_idx))
+                16
+            else
+                @intCast(ls.layoutSizeAlign(elem_layout).alignment.toByteUnits());
+            return .{
+                .alignment = alignment,
+                .elements_refcounted = ls.layoutContainsRefcounted(elem_layout),
+            };
+        }
+
+        /// Derive list allocation info from a list layout index.
+        fn listAllocInfoFromListLayout(self: *Self, list_layout_idx: layout.Idx) ListAllocInfo {
+            const ls = self.layout_store orelse return .{ .alignment = 8, .elements_refcounted = false };
+            const list_layout = ls.getLayout(list_layout_idx);
+            if (list_layout.tag == .list) {
+                return self.listAllocInfo(list_layout.data.list);
+            }
+            return .{ .alignment = 8, .elements_refcounted = false };
+        }
+
+        /// Emit decref for a list value.
+        /// `elem_alignment` and `elements_refcounted` must match what was used
+        /// during allocation (via allocateWithRefcountC).
+        fn emitListDecref(self: *Self, value_loc: ValueLocation, elem_alignment: u32, elements_refcounted: bool) Error!void {
             const roc_ops_reg = self.roc_ops_reg orelse return;
             const fn_addr: usize = @intFromPtr(&decrefDataPtrC);
 
@@ -15328,17 +15487,16 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             }
 
             // Call decrefDataPtrC(ptr, alignment, elements_refcounted, roc_ops)
-            // Lists have 8-byte alignment by default
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             try builder.addRegArg(ptr_reg);
-            try builder.addImmArg(8); // alignment
-            try builder.addImmArg(0); // elements_refcounted = false
+            try builder.addImmArg(elem_alignment);
+            try builder.addImmArg(if (elements_refcounted) @as(u32, 1) else 0);
             try builder.addRegArg(roc_ops_reg);
             try self.callBuiltin(&builder, fn_addr, .decref_data_ptr);
         }
 
         /// Emit free for a list value
-        fn emitListFree(self: *Self, value_loc: ValueLocation) Error!void {
+        fn emitListFree(self: *Self, value_loc: ValueLocation, elem_alignment: u32, elements_refcounted: bool) Error!void {
             const roc_ops_reg = self.roc_ops_reg orelse return;
             const fn_addr: usize = @intFromPtr(&freeDataPtrC);
 
@@ -15367,8 +15525,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             // Call freeDataPtrC(ptr, alignment, elements_refcounted, roc_ops)
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             try builder.addRegArg(ptr_reg);
-            try builder.addImmArg(8); // alignment
-            try builder.addImmArg(0); // elements_refcounted = false
+            try builder.addImmArg(elem_alignment);
+            try builder.addImmArg(if (elements_refcounted) @as(u32, 1) else 0);
             try builder.addRegArg(roc_ops_reg);
             try self.callBuiltin(&builder, fn_addr, .free_data_ptr);
         }
