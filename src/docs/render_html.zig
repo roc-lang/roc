@@ -250,8 +250,7 @@ fn renderSidebar(w: Writer, ctx: *const RenderContext, base: []const u8) !void {
         if (is_active) try w.writeAll(" active");
         try w.writeAll("\" data-module-name=\"");
         try writeHtmlEscaped(w, mod.name);
-        try w.writeAll("\" href=\"");
-        try w.writeAll(base);
+        try w.writeAll("\" href=\"/");
         try writeHtmlEscaped(w, mod.name);
         try w.writeAll("/\">");
         try w.writeAll("<button class=\"entry-toggle\">&#9656;</button>");
@@ -262,10 +261,11 @@ fn renderSidebar(w: Writer, ctx: *const RenderContext, base: []const u8) !void {
         // Sub-entries
         try w.writeAll("                    <div class=\"sidebar-sub-entries\">\n");
         for (mod.entries) |entry| {
-            try w.writeAll("                        <a href=\"");
-            try w.writeAll(base);
+            try w.writeAll("                        <a href=\"/");
             try writeHtmlEscaped(w, mod.name);
             try w.writeAll("/#");
+            try writeHtmlEscaped(w, mod.name);
+            try w.writeAll(".");
             try writeHtmlEscaped(w, entry.name);
             try w.writeAll("\">");
             try writeHtmlEscaped(w, entry.name);
@@ -287,9 +287,17 @@ fn renderEntry(w: Writer, ctx: *const RenderContext, entry: *const DocModel.DocE
 
     // Heading with anchor
     try w.writeAll("            <h3 id=\"");
+    if (ctx.current_module) |mod| {
+        try writeHtmlEscaped(w, mod);
+        try w.writeAll(".");
+    }
     try writeHtmlEscaped(w, entry.name);
     try w.writeAll("\" class=\"entry-name\">");
     try w.writeAll("<a href=\"#");
+    if (ctx.current_module) |mod| {
+        try writeHtmlEscaped(w, mod);
+        try w.writeAll(".");
+    }
     try writeHtmlEscaped(w, entry.name);
     try w.writeAll("\">&#128279;</a> ");
 
@@ -518,24 +526,42 @@ fn writeTypeLink(
     module_path: []const u8,
     type_name: []const u8,
 ) !void {
-    if (module_path.len == 0) {
-        // Anchor in current page
+    // Determine the target module
+    const target_module = if (module_path.len > 0)
+        module_path
+    else if (ctx.current_module) |cur|
+        cur
+    else
+        "";
+
+    if (target_module.len == 0) {
+        // Fallback: unqualified anchor (shouldn't happen)
         try w.writeAll("#");
         try writeHtmlEscaped(w, type_name);
         return;
     }
-    if (ctx.current_module) |cur| {
-        if (std.mem.eql(u8, module_path, cur)) {
-            try w.writeAll("#");
-            try writeHtmlEscaped(w, type_name);
-            return;
-        }
+
+    // Check if same module
+    const is_same_module = if (ctx.current_module) |cur|
+        std.mem.eql(u8, target_module, cur)
+    else
+        false;
+
+    if (is_same_module) {
+        // Same-page link with qualified anchor
+        try w.writeAll("#");
+        try writeHtmlEscaped(w, target_module);
+        try w.writeAll(".");
+        try writeHtmlEscaped(w, type_name);
+    } else {
+        // Cross-module link with absolute path
+        try w.writeAll("/");
+        try writeHtmlEscaped(w, target_module);
+        try w.writeAll("/#");
+        try writeHtmlEscaped(w, target_module);
+        try w.writeAll(".");
+        try writeHtmlEscaped(w, type_name);
     }
-    // Cross-module link
-    try w.writeAll("../");
-    try writeHtmlEscaped(w, module_path);
-    try w.writeAll("/#");
-    try writeHtmlEscaped(w, type_name);
 }
 
 // ── HTML escaping ───────────────────────────────────────────────────

@@ -5811,6 +5811,24 @@ fn generateDocs(
         }
     }
 
+    // Extract documentation from the Builtin module.
+    // The Builtin module is special — it's pre-compiled and lives in build_env.builtin_modules.
+    {
+        const builtin_env = build_env.builtin_modules.builtin_module.env;
+
+        const builtin_docs = extract.extractModuleDocs(ctx.gpa, builtin_env, "Builtin") catch |err| blk: {
+            std.debug.print("Warning: failed to extract docs for Builtin module: {}\n", .{err});
+            break :blk null;
+        };
+
+        if (builtin_docs) |b_docs| {
+            module_docs_list.append(ctx.gpa, b_docs) catch {
+                var d = b_docs;
+                d.deinit(ctx.gpa);
+            };
+        }
+    }
+
     const modules_slice = module_docs_list.toOwnedSlice(ctx.gpa) catch return;
 
     var package_docs = DocModel.PackageDocs{
