@@ -4147,6 +4147,38 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 }
             }
 
+            // Track argument positions in the args buffer for post-call decref.
+            // We need to decref refcounted args (str, list, box) after the hosted
+            // call returns, since the hosted function only borrows them.
+            const ArgDecrefInfo = struct { offset: i32, layout_tag: layout.LayoutTag, scalar_tag: layout.ScalarTag };
+            var decref_args: [16]ArgDecrefInfo = undefined;
+            var decref_count: usize = 0;
+            {
+                var track_offset: usize = 0;
+                for (args) |arg_id| {
+                    if (self.getExprLayout(arg_id)) |arg_layout_idx| {
+                        const arg_layout = ls.getLayout(arg_layout_idx);
+                        const arg_size = ls.layoutSize(arg_layout);
+                        const arg_align = arg_layout.alignment(ls.targetUsize());
+                        track_offset = std.mem.alignForward(usize, track_offset, arg_align.toByteUnits());
+                        const needs_decref = switch (arg_layout.tag) {
+                            .list, .list_of_zst, .box, .box_of_zst => true,
+                            .scalar => arg_layout.data.scalar.tag == .str,
+                            else => false,
+                        };
+                        if (needs_decref and decref_count < decref_args.len) {
+                            decref_args[decref_count] = .{
+                                .offset = args_slot + @as(i32, @intCast(track_offset)),
+                                .layout_tag = arg_layout.tag,
+                                .scalar_tag = if (arg_layout.tag == .scalar) arg_layout.data.scalar.tag else .int,
+                            };
+                            decref_count += 1;
+                        }
+                        track_offset += arg_size;
+                    }
+                }
+            }
+
             // RocOps.hosted_fns is at offset 56 (7 pointers * 8 bytes)
             // HostedFunctions.fns is at offset 8 within HostedFunctions (after count u32 + padding)
             // So hosted_fns.fns is at roc_ops + 56 + 8 = roc_ops + 64
@@ -4177,6 +4209,20 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 try builder.addLeaArg(base_reg, ret_slot);
                 try builder.addLeaArg(base_reg, args_slot);
                 try builder.callReg(fn_ptr_reg);
+            }
+
+            // Decref refcounted arguments after the hosted call returns.
+            // The hosted function only borrows args (reads via args_ptr),
+            // so we must decref the originals in the args buffer.
+            for (decref_args[0..decref_count]) |info| {
+                switch (info.layout_tag) {
+                    .list, .list_of_zst => try self.emitListDecref(.{ .stack = .{ .offset = info.offset } }),
+                    .box, .box_of_zst => try self.emitBoxDecref(.{ .stack = .{ .offset = info.offset } }),
+                    .scalar => if (info.scalar_tag == .str) {
+                        try self.emitStrDecref(.{ .stack_str = info.offset });
+                    },
+                    else => {},
+                }
             }
 
             // Return the result location based on return type
