@@ -7139,15 +7139,24 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         // Signed sub-i32 to unsigned wider wrapping (needs sign extension)
         .i8_to_u32_wrap => {
             try self.generateExpr(args[0]);
+            if (self.exprValType(args[0]) == .i64) {
+                self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
+            }
             self.body.append(self.allocator, Op.i32_extend8_s) catch return error.OutOfMemory;
         },
         .i16_to_u32_wrap => {
             try self.generateExpr(args[0]);
+            if (self.exprValType(args[0]) == .i64) {
+                self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
+            }
             self.body.append(self.allocator, Op.i32_extend16_s) catch return error.OutOfMemory;
         },
         .i8_to_u16_wrap => {
             try self.generateExpr(args[0]);
             // Sign-extend from 8 bits then mask to 16 bits
+            if (self.exprValType(args[0]) == .i64) {
+                self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
+            }
             self.body.append(self.allocator, Op.i32_extend8_s) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
             WasmModule.leb128WriteI32(self.allocator, &self.body, 0xFFFF) catch return error.OutOfMemory;
@@ -9131,9 +9140,13 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         .i8_to_u128_wrap,
         .i16_to_u128_wrap,
         => {
-            // Signed i32→u128 wrap: sign-extend to i64, then i128
+            // Signed i8/i16→u128 wrap: sign-extend to i64, then i128
             try self.generateExpr(args[0]);
-            self.body.append(self.allocator, Op.i64_extend_i32_s) catch return error.OutOfMemory;
+            if (self.exprValType(args[0]) == .i64) {
+                // Already i64, no extension needed
+            } else {
+                self.body.append(self.allocator, Op.i64_extend_i32_s) catch return error.OutOfMemory;
+            }
             try self.emitIntToI128(true);
         },
         .i64_to_u128_wrap,

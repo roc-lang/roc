@@ -3075,9 +3075,9 @@ test "int conversion: I16.to_u32_wrap negative" {
 }
 
 test "int conversion: I32.to_u64_wrap negative" {
-    // -1.I32 sign-extends to 0xFFFFFFFFFFFFFFFF, read as I64 = -1
+    // -1.I32 sign-extends to 0xFFFFFFFFFFFFFFFF, read as I64 via to_i64_wrap = -1
     try runExpectI64(
-        \\{ -1.I32.to_u64_wrap().to_i64() }
+        \\{ -1.I32.to_u64_wrap().to_i64_wrap() }
     , -1, .no_trace);
 }
 
