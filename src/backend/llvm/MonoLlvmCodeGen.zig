@@ -2796,9 +2796,13 @@ pub const MonoLlvmCodeGen = struct {
             },
 
             .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128,
+            .i8_to_u16_wrap, .i8_to_u32_wrap, .i8_to_u64_wrap, .i8_to_u128_wrap,
             .i16_to_i32, .i16_to_i64, .i16_to_i128,
+            .i16_to_u32_wrap, .i16_to_u64_wrap, .i16_to_u128_wrap,
             .i32_to_i64, .i32_to_i128,
+            .i32_to_u64_wrap, .i32_to_u128_wrap,
             .i64_to_i128,
+            .i64_to_u128_wrap,
             => {
                 std.debug.assert(args.len >= 1);
                 const operand = try self.generateExpr(args[0]);
@@ -3150,7 +3154,7 @@ pub const MonoLlvmCodeGen = struct {
             },
 
             // --- Dec truncation/conversion operations ---
-            .dec_to_i64_trunc => {
+            .dec_to_i64_trunc, .dec_to_i64_try_unsafe => {
                 std.debug.assert(args.len >= 1);
                 const operand = try self.generateExpr(args[0]);
                 // Dec is i128 fixed-point with 10^18 scale. Truncate: divide by 10^18
