@@ -127,7 +127,6 @@ pub const LlvmEvaluator = struct {
     pub const Error = error{
         OutOfMemory,
         UnsupportedType,
-        UnsupportedExpression,
         Crash,
         RuntimeError,
         ParseError,
@@ -260,9 +259,7 @@ pub const LlvmEvaluator = struct {
         defer lowerer.deinit();
 
         // Lower the CIR expression to Mono IR
-        const mono_expr_id = lowerer.lowerExpr(module_idx, expr_idx) catch {
-            return error.UnsupportedExpression;
-        };
+        const mono_expr_id = try lowerer.lowerExpr(module_idx, expr_idx);
 
         // 3. Determine result layout from Mono IR expression.
         // Prefer the layout embedded in the Mono expression because the CIR
@@ -273,8 +270,9 @@ pub const LlvmEvaluator = struct {
             const type_var = can.ModuleEnv.varFrom(expr_idx);
             var type_scope = types.TypeScope.init(self.allocator);
             defer type_scope.deinit();
-            break :blk layout_store_ptr.fromTypeVar(module_idx, type_var, &type_scope, null) catch {
-                return error.UnsupportedExpression;
+            break :blk layout_store_ptr.fromTypeVar(module_idx, type_var, &type_scope, null) catch |e| switch (e) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.NotImplemented => unreachable,
             };
         };
 
@@ -292,8 +290,9 @@ pub const LlvmEvaluator = struct {
         // Provide layout store for composite types (records, tuples)
         codegen.layout_store = layout_store_ptr;
 
-        var gen_result = codegen.generateCode(mono_expr_id, result_layout) catch {
-            return error.UnsupportedExpression;
+        var gen_result = codegen.generateCode(mono_expr_id, result_layout) catch |e| switch (e) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.CompilationFailed => unreachable,
         };
         defer gen_result.deinit();
 
