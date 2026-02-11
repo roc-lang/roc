@@ -539,7 +539,7 @@ fn parseTest(args: []const []const u8) CliArgs {
     var no_cache: bool = false;
     for (args) |arg| {
         if (isHelpFlag(arg)) {
-            return CliArgs{ .help =
+            return CliArgs{ .help = 
             \\Run all top-level `expect`s in a main module and any modules it imports
             \\
             \\Usage: roc test [OPTIONS] [ROC_FILE]
