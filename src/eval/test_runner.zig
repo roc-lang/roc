@@ -105,7 +105,7 @@ const Evaluation = enum {
 };
 
 /// Categorizes the type of test failure
-const FailureType = enum {
+pub const FailureType = enum {
     /// expect evaluated to false
     simple_failure,
     /// interpreter error during evaluation
@@ -115,7 +115,7 @@ const FailureType = enum {
 };
 
 /// Detailed information about a test failure
-const FailureInfo = union(FailureType) {
+pub const FailureInfo = union(FailureType) {
     /// No additional info needed
     simple_failure,
     /// The specific interpreter error
@@ -124,8 +124,8 @@ const FailureInfo = union(FailureType) {
     not_bool,
 };
 
-// Track test results
-const TestResult = struct {
+/// The result of evaluating a single top-level `expect` expression.
+pub const TestResult = struct {
     passed: bool,
     region: base.Region,
     failure_info: ?FailureInfo = null,
