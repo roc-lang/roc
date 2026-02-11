@@ -1,20 +1,20 @@
 # META
 ~~~ini
-description=Nominal and opaque type definitions with doc comments
+description=Values without type annotations show inferred types
 type=docs
 ~~~
 # SOURCE
 ## app.roc
 ~~~roc
-app [Color, Id, main] { pf: platform "./platform.roc" }
+app [x, greeting, main] { pf: platform "./platform.roc" }
 
-## A color value.
-Color := [Red, Green, Blue]
+## A number.
+x = 42
 
-## An opaque identifier.
-Id :: U64
+## A greeting.
+greeting = "hello"
 
-main = "hello"
+main = "test"
 ~~~
 ## platform.roc
 ~~~roc
@@ -41,21 +41,21 @@ main_for_host = main
     (name "app")
     (kind app)
     (entry
+      (name "x")
+      (kind value)
+      (type "Dec")
+      (doc "A number.")
+    )
+    (entry
+      (name "greeting")
+      (kind value)
+      (type "Str")
+      (doc "A greeting.")
+    )
+    (entry
       (name "main")
       (kind value)
       (type "Str")
-    )
-    (entry
-      (name "Color")
-      (kind nominal)
-      (type "Color := [Red, Green, Blue]")
-      (doc "A color value.")
-    )
-    (entry
-      (name "Id")
-      (kind opaque)
-      (type "Id :: U64")
-      (doc "An opaque identifier.")
     )
   )
   (module

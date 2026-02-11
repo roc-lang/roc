@@ -7,6 +7,7 @@ const std = @import("std");
 const base = @import("base");
 const CIR = @import("can").CIR;
 const ModuleEnv = @import("can").ModuleEnv;
+const TypeWriter = @import("types").TypeWriter;
 
 const DocModel = @import("DocModel.zig");
 const render_type = @import("render_type.zig");
@@ -269,11 +270,22 @@ fn extractDefEntry(
             const doc_comment = try extractDocComment(gpa, source, offset);
             errdefer if (doc_comment) |d| gpa.free(d);
 
-            // Render type signature
-            const type_sig = if (def.annotation) |anno_idx| blk: {
-                const annotation = module_env.store.getAnnotation(anno_idx);
-                break :blk try render_type.renderTypeAnnoToString(gpa, module_env, annotation.anno);
-            } else null;
+            // Render type signature from inferred type
+            const type_sig: ?[]const u8 = blk: {
+                const def_var = ModuleEnv.varFrom(def_idx);
+                if (@intFromEnum(def_var) >= module_env.types.len()) break :blk null;
+                var type_writer = TypeWriter.initFromParts(
+                    gpa,
+                    &module_env.types,
+                    module_env.getIdentStoreConst(),
+                    null,
+                ) catch break :blk null;
+                defer type_writer.deinit();
+                type_writer.write(def_var, .one_line) catch break :blk null;
+                const result = type_writer.get();
+                if (result.len == 0) break :blk null;
+                break :blk gpa.dupe(u8, result) catch null;
+            };
             errdefer if (type_sig) |s| gpa.free(s);
 
             const empty_children = try gpa.alloc(DocModel.DocEntry, 0);

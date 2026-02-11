@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Type module with doc comments
+description=Nominal type with static dispatch methods
 type=docs
 ~~~
 # SOURCE
@@ -8,26 +8,21 @@ type=docs
 ~~~roc
 app [main] { pf: platform "./platform.roc" }
 
-import Color
+import Counter
 
-main = Color.to_str(Color.red())
+main = Num.to_str(Counter.value(Counter.increment(Counter.new())))
 ~~~
-## Color.roc
+## Counter.roc
 ~~~roc
-## A color value.
-Color := [Red, Green, Blue].{
-    ## The red color.
-    red : {} -> Color
-    red = |{}| Red
+Counter := { count: U64 }.{
+    new : {} -> Counter
+    new = |{}| { count: 0 }
 
-    ## Convert a color to a string.
-    to_str : Color -> Str
-    to_str = |color|
-        match color {
-            Red => "red"
-            Green => "green"
-            Blue => "blue"
-        }
+    increment : Counter -> Counter
+    increment = |{ count }| { count: count + 1 }
+
+    value : Counter -> U64
+    value = |{ count }| count
 }
 ~~~
 ## platform.roc
@@ -57,30 +52,31 @@ main_for_host = main
     (entry
       (name "main")
       (kind value)
-      (type "Str")
+      (type "Error")
     )
   )
   (module
-    (name "Color")
+    (name "Counter")
     (kind type_module)
-    (doc "A color value.")
     (entry
-      (name "Color.red")
+      (name "Counter.new")
       (kind value)
-      (type "{  } -> Color")
-      (doc "The red color.")
+      (type "{  } -> Counter")
     )
     (entry
-      (name "Color.to_str")
+      (name "Counter.increment")
       (kind value)
-      (type "Color -> Str")
-      (doc "Convert a color to a string.")
+      (type "Counter -> Counter")
     )
     (entry
-      (name "Color")
+      (name "Counter.value")
+      (kind value)
+      (type "Counter -> U64")
+    )
+    (entry
+      (name "Counter")
       (kind nominal)
-      (type "Color := [Red, Green, Blue]")
-      (doc "A color value.")
+      (type "Counter := { count : U64 }")
     )
   )
   (module
