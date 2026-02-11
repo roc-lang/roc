@@ -1,3 +1,5 @@
+SomeFailTests := {}
+
 add = |a, b| a + b
 
 expect {

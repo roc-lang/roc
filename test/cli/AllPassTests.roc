@@ -1,3 +1,5 @@
+AllPassTests := {}
+
 add = |a, b| a + b
 
 double = |x| x * 2

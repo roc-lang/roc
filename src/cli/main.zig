@@ -4491,8 +4491,8 @@ const CopiedFile = struct {
     category: []const u8,
 };
 
-// ---- Test cache blob format ----
-// Binary format for caching test results. See plan for full specification.
+// Test cache blob format
+// Binary format for caching test results.
 
 const TestCacheHeader = extern struct {
     magic: u32 = 0x524F4354, // "ROCT"
@@ -4915,6 +4915,15 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
         module_results.deinit();
     }
 
+    // Cache data: built inside the test runner scope while createReport is available
+    var cache_entries = std.ArrayList(TestCacheResultEntry).empty;
+    defer cache_entries.deinit(ctx.gpa);
+    var cache_failure_reports = std.ArrayList([]const u8).empty;
+    defer {
+        for (cache_failure_reports.items) |r| if (r.len > 0) ctx.gpa.free(@constCast(r));
+        cache_failure_reports.deinit(ctx.gpa);
+    }
+
     // Run tests in the root module
     {
         var test_runner = TestRunner.init(
@@ -4955,6 +4964,34 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
             .path = args.path,
             .results = results,
         });
+
+        // Build cache entries while test_runner is still alive (for createReport)
+        // Always render verbose failure reports for caching (even in non-verbose mode)
+        for (test_runner.test_results.items) |test_result| {
+            var report_text: []const u8 = "";
+            if (!test_result.passed) {
+                var report_writer = std.Io.Writer.Allocating.init(ctx.gpa);
+                errdefer report_writer.deinit();
+
+                var report = test_runner.createReport(test_result, args.path) catch null;
+                if (report != null) {
+                    defer report.?.deinit();
+                    const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
+                    const config = reporting.ReportingConfig.initColorTerminal();
+                    reporting.renderReportToTerminal(&report.?, &report_writer.writer, palette, config) catch {};
+                }
+
+                report_text = report_writer.toOwnedSlice() catch "";
+            }
+            try cache_failure_reports.append(ctx.gpa, report_text);
+
+            try cache_entries.append(ctx.gpa, .{
+                .passed = if (test_result.passed) 1 else 0,
+                .region_start = test_result.region.start.offset,
+                .region_end = test_result.region.end.offset,
+                .report_len = @intCast(report_text.len),
+            });
+        }
     }
 
     // Run tests in all imported modules (recursive test execution)
@@ -5032,31 +5069,7 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
     const elapsed_ns = @as(u64, @intCast(end_time - start_time));
     const elapsed_ms = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000.0;
 
-    // --- Build cache blob ---
-    // Always render verbose failure reports for caching (even in non-verbose mode)
-    // Note: only cache single-module test results (root module only)
-    var cache_entries = std.ArrayList(TestCacheResultEntry).empty;
-    defer cache_entries.deinit(ctx.gpa);
-    var cache_failure_reports = std.ArrayList([]const u8).empty;
-    defer {
-        for (cache_failure_reports.items) |r| ctx.gpa.free(r);
-        cache_failure_reports.deinit(ctx.gpa);
-    }
-
-    // Only build cache for root module results (first entry in module_results)
-    if (module_results.items.len > 0) {
-        const root_mr = module_results.items[0];
-        for (root_mr.results) |result| {
-            try cache_entries.append(ctx.gpa, .{
-                .passed = if (result.passed) 1 else 0,
-                .region_start = result.region.start.offset,
-                .region_end = result.region.end.offset,
-                .report_len = 0, // Will be updated below
-            });
-            try cache_failure_reports.append(ctx.gpa, "");
-        }
-    }
-
+    // --- Store test cache blob ---
     const cache_outcome: TestCacheOutcome = if (total_failed == 0 and !has_compilation_errors) .all_passed else .some_failed;
 
     if (!args.no_cache) {

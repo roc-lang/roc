@@ -712,7 +712,7 @@ test "roc test caches passing results" {
     const gpa = testing.allocator;
 
     // First run - should compile and cache
-    const result1 = try util.runRoc(gpa, &.{"test"}, "test/cli/expect_all_pass.roc");
+    const result1 = try util.runRoc(gpa, &.{"test"}, "test/cli/AllPassTests.roc");
     defer gpa.free(result1.stdout);
     defer gpa.free(result1.stderr);
 
@@ -720,7 +720,7 @@ test "roc test caches passing results" {
     try testing.expect(result1.term == .Exited and result1.term.Exited == 0);
 
     // Second run - should hit cache
-    const result2 = try util.runRoc(gpa, &.{"test"}, "test/cli/expect_all_pass.roc");
+    const result2 = try util.runRoc(gpa, &.{"test"}, "test/cli/AllPassTests.roc");
     defer gpa.free(result2.stdout);
     defer gpa.free(result2.stderr);
 
@@ -736,7 +736,7 @@ test "roc test caches failing results" {
     const gpa = testing.allocator;
 
     // First run - should compile and cache
-    const result1 = try util.runRoc(gpa, &.{"test"}, "test/cli/expect_some_fail.roc");
+    const result1 = try util.runRoc(gpa, &.{"test"}, "test/cli/SomeFailTests.roc");
     defer gpa.free(result1.stdout);
     defer gpa.free(result1.stderr);
 
@@ -744,7 +744,7 @@ test "roc test caches failing results" {
     try testing.expect(result1.term == .Exited and result1.term.Exited == 1);
 
     // Second run - should hit cache
-    const result2 = try util.runRoc(gpa, &.{"test"}, "test/cli/expect_some_fail.roc");
+    const result2 = try util.runRoc(gpa, &.{"test"}, "test/cli/SomeFailTests.roc");
     defer gpa.free(result2.stdout);
     defer gpa.free(result2.stderr);
 
@@ -764,14 +764,14 @@ test "roc test cache invalidated by source change" {
     defer tmp_dir.cleanup();
 
     const cwd = std.fs.cwd();
-    const source_content = try cwd.readFileAlloc(gpa, "test/cli/expect_all_pass.roc", 10 * 1024);
-    defer gpa.free(source_content);
 
-    try tmp_dir.dir.writeFile(.{ .sub_path = "test_cache_invalidation.roc", .data = source_content });
+    // Write a type module to temp dir (type name must match filename)
+    const source_content = "CacheTest := {}\nadd = |a, b| a + b\nexpect { add(1, 2) == 3 }\n";
+    try tmp_dir.dir.writeFile(.{ .sub_path = "CacheTest.roc", .data = source_content });
 
     const tmp_path = try tmp_dir.dir.realpathAlloc(gpa, ".");
     defer gpa.free(tmp_path);
-    const temp_file_path = try std.fs.path.join(gpa, &.{ tmp_path, "test_cache_invalidation.roc" });
+    const temp_file_path = try std.fs.path.join(gpa, &.{ tmp_path, "CacheTest.roc" });
     defer gpa.free(temp_file_path);
 
     // Get absolute path to roc binary
@@ -793,10 +793,9 @@ test "roc test cache invalidated by source change" {
 
     try testing.expect(result1.term == .Exited and result1.term.Exited == 0);
 
-    // Modify the source (append a comment)
-    const modified_content = try std.mem.concat(gpa, u8, &.{ source_content, "\n# modified\n" });
-    defer gpa.free(modified_content);
-    try tmp_dir.dir.writeFile(.{ .sub_path = "test_cache_invalidation.roc", .data = modified_content });
+    // Modify the source (change the expect body)
+    const modified_content = "CacheTest := {}\nadd = |a, b| a + b\nexpect { add(2, 3) == 5 }\n";
+    try tmp_dir.dir.writeFile(.{ .sub_path = "CacheTest.roc", .data = modified_content });
 
     // Second run - should NOT be cached (source changed)
     const result2 = try std.process.Child.run(.{
@@ -819,14 +818,14 @@ test "roc test --verbose works from cache" {
     const gpa = testing.allocator;
 
     // First run (non-verbose) - populates cache
-    const result1 = try util.runRoc(gpa, &.{"test"}, "test/cli/expect_all_pass.roc");
+    const result1 = try util.runRoc(gpa, &.{"test"}, "test/cli/AllPassTests.roc");
     defer gpa.free(result1.stdout);
     defer gpa.free(result1.stderr);
 
     try testing.expect(result1.term == .Exited and result1.term.Exited == 0);
 
     // Second run (verbose) - should use cache
-    const result2 = try util.runRoc(gpa, &.{ "test", "--verbose" }, "test/cli/expect_all_pass.roc");
+    const result2 = try util.runRoc(gpa, &.{ "test", "--verbose" }, "test/cli/AllPassTests.roc");
     defer gpa.free(result2.stdout);
     defer gpa.free(result2.stderr);
 
@@ -842,7 +841,7 @@ test "roc test --verbose caches failure reports" {
     const gpa = testing.allocator;
 
     // First run (verbose) - compiles and caches
-    const result1 = try util.runRoc(gpa, &.{ "test", "--verbose" }, "test/cli/expect_some_fail.roc");
+    const result1 = try util.runRoc(gpa, &.{ "test", "--verbose" }, "test/cli/SomeFailTests.roc");
     defer gpa.free(result1.stdout);
     defer gpa.free(result1.stderr);
 
@@ -850,7 +849,7 @@ test "roc test --verbose caches failure reports" {
     try testing.expect(result1.term == .Exited and result1.term.Exited == 1);
 
     // Second run (verbose) - should use cache
-    const result2 = try util.runRoc(gpa, &.{ "test", "--verbose" }, "test/cli/expect_some_fail.roc");
+    const result2 = try util.runRoc(gpa, &.{ "test", "--verbose" }, "test/cli/SomeFailTests.roc");
     defer gpa.free(result2.stdout);
     defer gpa.free(result2.stderr);
 
@@ -870,7 +869,7 @@ test "roc test non-verbose run caches verbose failure reports for later verbose 
     const gpa = testing.allocator;
 
     // First run: non-verbose on failing tests — populates cache with verbose failure reports
-    const result1 = try util.runRoc(gpa, &.{"test"}, "test/cli/expect_some_fail.roc");
+    const result1 = try util.runRoc(gpa, &.{"test"}, "test/cli/SomeFailTests.roc");
     defer gpa.free(result1.stdout);
     defer gpa.free(result1.stderr);
 
@@ -880,7 +879,7 @@ test "roc test non-verbose run caches verbose failure reports for later verbose 
     try testing.expect(std.mem.indexOf(u8, result1.stderr, "expect failed") == null);
 
     // Second run: verbose — should hit cache and show detailed failure reports
-    const result2 = try util.runRoc(gpa, &.{ "test", "--verbose" }, "test/cli/expect_some_fail.roc");
+    const result2 = try util.runRoc(gpa, &.{ "test", "--verbose" }, "test/cli/SomeFailTests.roc");
     defer gpa.free(result2.stdout);
     defer gpa.free(result2.stderr);
 
