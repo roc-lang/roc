@@ -153,10 +153,16 @@ pub const LayoutUnion = packed union {
     tag_union: TagUnionLayout,
 };
 
+/// Index into the layout store's field name string interner.
+/// Unlike Ident.Idx, this is module-independent and can be resolved
+/// by the layout store directly via getFieldName().
+pub const FieldNameIdx = enum(u32) { _ };
+
 /// Record field layout
 pub const RecordField = struct {
-    /// The interned string name of the field
-    name: Ident.Idx,
+    /// The field name, interned in the layout store's field name table.
+    /// Resolve via layout_store.getFieldName(name).
+    name: FieldNameIdx,
     /// The layout of the field's value
     layout: Idx,
 

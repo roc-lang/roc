@@ -22,6 +22,7 @@ pub const ScalarTag = @import("layout.zig").ScalarTag;
 pub const ScalarUnion = @import("layout.zig").ScalarUnion;
 pub const Closure = @import("layout.zig").Closure;
 pub const RecordField = @import("layout.zig").RecordField;
+pub const FieldNameIdx = @import("layout.zig").FieldNameIdx;
 pub const RecordLayout = @import("layout.zig").RecordLayout;
 pub const RecordIdx = @import("layout.zig").RecordIdx;
 pub const RecordData = @import("layout.zig").RecordData;

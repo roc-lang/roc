@@ -3276,7 +3276,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                     var i: u16 = 0;
                     while (i < fields.len) : (i += 1) {
                         const field = fields.get(i);
-                        if (std.mem.eql(u8, module_env.getIdent(field.name), field_name_text)) {
+                        if (std.mem.eql(u8, ls.getFieldName(field.name), field_name_text)) {
                             field_idx = i;
                             field_layout = field.layout;
                             break;
@@ -4062,7 +4062,9 @@ fn lowerRecordUpdate(
 
     for (0..sorted_fields.len) |i| {
         const layout_field = sorted_fields.get(i);
-        const field_name_str = module_env.getIdent(layout_field.name);
+        const field_name_str = ls.getFieldName(layout_field.name);
+        // Convert layout FieldNameIdx back to module Ident.Idx for the mono IR
+        const field_ident_idx = try module_env.insertIdent(base.Ident.for_text(field_name_str));
 
         if (explicit_map.get(field_name_str)) |cir_value_idx| {
             // Explicit field — lower the provided expression
@@ -4076,12 +4078,12 @@ fn lowerRecordUpdate(
                     .record_layout = record_layout_idx,
                     .field_layout = layout_field.layout,
                     .field_idx = @intCast(i),
-                    .field_name = layout_field.name,
+                    .field_name = field_ident_idx,
                 },
             }, region);
             try lowered.append(self.allocator, field_access_id);
         }
-        try names.append(self.allocator, layout_field.name);
+        try names.append(self.allocator, field_ident_idx);
     }
 
     return .{
@@ -5221,7 +5223,7 @@ fn lowerInspectRecord(
             var j: u16 = 0;
             while (j < fields.len) : (j += 1) {
                 const field = fields.get(j);
-                if (std.mem.eql(u8, module_env.getIdent(field.name), field_name)) {
+                if (std.mem.eql(u8, layout_store.getFieldName(field.name), field_name)) {
                     field_idx = j;
                     field_layout = field.layout;
                     break;

@@ -274,13 +274,9 @@ pub fn format(self: RocValue, allocator: std.mem.Allocator, ctx: FormatContext) 
         var i: usize = 0;
         while (i < fields.len) : (i += 1) {
             const fld = fields.get(i);
-            // Resolve field name
-            if (ctx.ident_store) |ident_store| {
-                const name_text = ident_store.getText(fld.name);
-                try out.appendSlice(name_text);
-            } else {
-                try std.fmt.format(out.writer(), "_{d}", .{i});
-            }
+            // Resolve field name from layout store's module-independent interner
+            const name_text = ctx.layout_store.getFieldName(fld.name);
+            try out.appendSlice(name_text);
             try out.appendSlice(": ");
             const offset = ctx.layout_store.getRecordFieldOffset(self.lay.data.record.idx, @intCast(i));
             const field_layout = ctx.layout_store.getLayout(fld.layout);

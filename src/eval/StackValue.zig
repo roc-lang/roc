@@ -1195,10 +1195,10 @@ pub const RecordAccessor = struct {
     }
 
     /// Get a StackValue for the field with the given name
-    pub fn getFieldByName(self: RecordAccessor, field_name_idx: Ident.Idx, field_rt_var: types.Var) !?StackValue {
+    pub fn getFieldByName(self: RecordAccessor, field_name: []const u8, field_rt_var: types.Var) !?StackValue {
         const field_offset = self.layout_cache.getRecordFieldOffsetByName(
             self.record_layout.data.record.idx,
-            field_name_idx,
+            field_name,
         ) orelse return null;
 
         // Find the field layout by name
@@ -1253,11 +1253,11 @@ pub const RecordAccessor = struct {
         return self.layout_cache.getLayout(field_layout_info.layout);
     }
 
-    /// Find field index by comparing field ident indices
-    pub fn findFieldIndex(self: RecordAccessor, field_ident: Ident.Idx) ?usize {
+    /// Find field index by comparing field name strings
+    pub fn findFieldIndex(self: RecordAccessor, field_name: []const u8) ?usize {
         for (0..self.field_layouts.len) |idx| {
             const field = self.field_layouts.get(idx);
-            if (field.name == field_ident) {
+            if (std.mem.eql(u8, self.layout_cache.getFieldName(field.name), field_name)) {
                 return idx;
             }
         }

@@ -28,6 +28,8 @@ const StaticDispatchConstraint = types.StaticDispatchConstraint;
 const Layout = layout_mod.Layout;
 const Idx = layout_mod.Idx;
 const RecordField = layout_mod.RecordField;
+const FieldNameIdx = layout_mod.FieldNameIdx;
+const SmallStringInterner = base.SmallStringInterner;
 const Scalar = layout_mod.Scalar;
 const RecordData = layout_mod.RecordData;
 const RecordIdx = layout_mod.RecordIdx;
@@ -122,6 +124,11 @@ pub const Store = struct {
     /// Optional mutable env reference (used by interpreter for runtime identifier insertion).
     /// When set, getMutableEnv() returns this instead of null.
     mutable_env: ?*ModuleEnv = null,
+
+    /// Module-independent string interner for record field names.
+    /// Record fields store FieldNameIdx values that index into this interner,
+    /// making field name resolution independent of any specific module's ident store.
+    field_name_interner: SmallStringInterner,
 
     layouts: collections.SafeList(Layout),
     tuple_elems: collections.SafeList(Idx),
@@ -282,6 +289,7 @@ pub const Store = struct {
             .recursive_nominal_registry = RecursiveNominalRegistry.init(allocator),
             .computed_nominals = std.AutoHashMap(work.NominalKey, ComputedNominalEntry).init(allocator),
             .raw_layout_placeholders = std.AutoHashMap(ModuleVarKey, Idx).init(allocator),
+            .field_name_interner = try SmallStringInterner.initCapacity(allocator, 64),
             .work = try Work.initCapacity(allocator, 32),
             .builtin_str_ident = builtin_str_ident,
             .builtin_str_plain_ident = env.idents.str,
@@ -405,6 +413,7 @@ pub const Store = struct {
         self.recursive_nominal_registry.deinit();
         self.computed_nominals.deinit();
         self.raw_layout_placeholders.deinit();
+        self.field_name_interner.deinit(self.allocator);
         self.work.deinit(self.allocator);
     }
 
@@ -464,8 +473,10 @@ pub const Store = struct {
 
         for (field_layouts, field_names) |field_layout, field_name| {
             const field_layout_idx = try self.insertLayout(field_layout);
+            const field_name_str = env.getIdent(field_name);
+            const interned_name = try self.internFieldName(field_name_str);
             try temp_fields.append(self.allocator, .{
-                .name = field_name,
+                .name = interned_name,
                 .layout = field_layout_idx,
             });
         }
@@ -473,7 +484,6 @@ pub const Store = struct {
         // Sort fields
         const AlignmentSortCtx = struct {
             store: *Self,
-            env: *const ModuleEnv,
             target_usize: target.TargetUsize,
             pub fn lessThan(ctx: @This(), lhs: RecordField, rhs: RecordField) bool {
                 const lhs_layout = ctx.store.getLayout(lhs.layout);
@@ -483,8 +493,8 @@ pub const Store = struct {
                 if (lhs_alignment.toByteUnits() != rhs_alignment.toByteUnits()) {
                     return lhs_alignment.toByteUnits() > rhs_alignment.toByteUnits();
                 }
-                const lhs_str = ctx.env.getIdent(lhs.name);
-                const rhs_str = ctx.env.getIdent(rhs.name);
+                const lhs_str = ctx.store.getFieldName(lhs.name);
+                const rhs_str = ctx.store.getFieldName(rhs.name);
                 return std.mem.order(u8, lhs_str, rhs_str) == .lt;
             }
         };
@@ -497,7 +507,7 @@ pub const Store = struct {
         std.mem.sort(
             RecordField,
             temp_fields.items,
-            AlignmentSortCtx{ .store = self, .env = env, .target_usize = self.targetUsize() },
+            AlignmentSortCtx{ .store = self, .target_usize = self.targetUsize() },
             AlignmentSortCtx.lessThan,
         );
 
@@ -925,6 +935,19 @@ pub const Store = struct {
         return self.layoutSizeAlign(field_layout).size;
     }
 
+    /// Intern a field name string into the layout store's module-independent interner.
+    /// Returns a FieldNameIdx that can be stored in RecordField.name.
+    pub fn internFieldName(self: *Self, name: []const u8) std.mem.Allocator.Error!FieldNameIdx {
+        const interner_idx = try self.field_name_interner.insert(self.allocator, name);
+        return @enumFromInt(@intFromEnum(interner_idx));
+    }
+
+    /// Resolve a FieldNameIdx back to its string representation.
+    pub fn getFieldName(self: *const Self, idx: FieldNameIdx) []const u8 {
+        const interner_idx: SmallStringInterner.Idx = @enumFromInt(@intFromEnum(idx));
+        return self.field_name_interner.getText(interner_idx);
+    }
+
     /// Get the layout index of a record field at the given sorted index.
     pub fn getRecordFieldLayout(self: *const Self, record_idx: RecordIdx, field_index_in_sorted_fields: u32) Idx {
         const record_data = self.getRecordData(record_idx);
@@ -932,7 +955,7 @@ pub const Store = struct {
         return sorted_fields.get(field_index_in_sorted_fields).layout;
     }
 
-    pub fn getRecordFieldOffsetByName(self: *const Self, record_idx: RecordIdx, field_name_idx: Ident.Idx) ?u32 {
+    pub fn getRecordFieldOffsetByName(self: *const Self, record_idx: RecordIdx, field_name: []const u8) ?u32 {
         const record_data = self.getRecordData(record_idx);
         const sorted_fields = self.record_fields.sliceRange(record_data.getFields());
 
@@ -945,7 +968,7 @@ pub const Store = struct {
 
             current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_size_align.alignment.toByteUnits()))));
 
-            if (field.name == field_name_idx) {
+            if (std.mem.eql(u8, self.getFieldName(field.name), field_name)) {
                 return current_offset;
             }
 
@@ -1378,9 +1401,12 @@ pub const Store = struct {
         var temp_fields = std.ArrayList(RecordField).empty;
         defer temp_fields.deinit(self.allocator);
 
+        const env = self.currentEnv();
         for (updated_record.resolved_fields_start..resolved_fields_end) |i| {
+            const field_name_str = env.getIdent(field_names[i]);
+            const interned_name = try self.internFieldName(field_name_str);
             try temp_fields.append(self.allocator, .{
-                .name = field_names[i],
+                .name = interned_name,
                 .layout = field_idxs[i],
             });
         }
@@ -1388,7 +1414,6 @@ pub const Store = struct {
         // Sort fields by alignment (descending) first, then by name (ascending)
         const AlignmentSortCtx = struct {
             store: *Self,
-            env: *const ModuleEnv,
             target_usize: target.TargetUsize,
             pub fn lessThan(ctx: @This(), lhs: RecordField, rhs: RecordField) bool {
                 const lhs_layout = ctx.store.getLayout(lhs.layout);
@@ -1403,8 +1428,8 @@ pub const Store = struct {
                 }
 
                 // Then sort by name (ascending)
-                const lhs_str = ctx.env.getIdent(lhs.name);
-                const rhs_str = ctx.env.getIdent(rhs.name);
+                const lhs_str = ctx.store.getFieldName(lhs.name);
+                const rhs_str = ctx.store.getFieldName(rhs.name);
                 return std.mem.order(u8, lhs_str, rhs_str) == .lt;
             }
         };
@@ -1412,7 +1437,7 @@ pub const Store = struct {
         std.mem.sort(
             RecordField,
             temp_fields.items,
-            AlignmentSortCtx{ .store = self, .env = self.currentEnv(), .target_usize = self.targetUsize() },
+            AlignmentSortCtx{ .store = self, .target_usize = self.targetUsize() },
             AlignmentSortCtx.lessThan,
         );
 

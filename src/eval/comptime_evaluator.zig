@@ -1849,13 +1849,13 @@ pub const ComptimeEvaluator = struct {
         var accessor = try dest.asRecord(&self.interpreter.runtime_layout_store);
 
         // Use self.env for field lookups since the record was built with self.env's idents
-        const is_neg_idx = accessor.findFieldIndex(self.env.idents.is_negative) orelse return error.OutOfMemory;
+        const is_neg_idx = accessor.findFieldIndex(self.env.getIdent(self.env.idents.is_negative)) orelse return error.OutOfMemory;
         try accessor.setFieldByIndex(is_neg_idx, is_negative, roc_ops);
 
-        const before_pt_idx = accessor.findFieldIndex(self.env.idents.digits_before_pt) orelse return error.OutOfMemory;
+        const before_pt_idx = accessor.findFieldIndex(self.env.getIdent(self.env.idents.digits_before_pt)) orelse return error.OutOfMemory;
         try accessor.setFieldByIndex(before_pt_idx, digits_before_pt, roc_ops);
 
-        const after_pt_idx = accessor.findFieldIndex(self.env.idents.digits_after_pt) orelse return error.OutOfMemory;
+        const after_pt_idx = accessor.findFieldIndex(self.env.getIdent(self.env.idents.digits_after_pt)) orelse return error.OutOfMemory;
         try accessor.setFieldByIndex(after_pt_idx, digits_after_pt, roc_ops);
 
         return dest;
@@ -1914,7 +1914,7 @@ pub const ComptimeEvaluator = struct {
             var accessor = result.asRecord(&self.interpreter.runtime_layout_store) catch return true;
             // Use layout store's env for field lookups since records use that env's idents
             const layout_env = self.interpreter.runtime_layout_store.getEnv();
-            const tag_idx = accessor.findFieldIndex(layout_env.idents.tag) orelse return true;
+            const tag_idx = accessor.findFieldIndex(layout_env.getIdent(layout_env.idents.tag)) orelse return true;
             const tag_rt_var = self.interpreter.runtime_types.fresh() catch return true;
             const tag_field = accessor.getFieldByIndex(tag_idx, tag_rt_var) catch return true;
 
@@ -1991,7 +1991,7 @@ pub const ComptimeEvaluator = struct {
         // Get the payload field from the Try record
         // Use layout store's env for field lookups
         const layout_env = self.interpreter.runtime_layout_store.getEnv();
-        const payload_idx = try_accessor.findFieldIndex(layout_env.idents.payload) orelse {
+        const payload_idx = try_accessor.findFieldIndex(layout_env.getIdent(layout_env.idents.payload)) orelse {
             // This should never happen - Try type must have a payload field
             return try std.fmt.allocPrint(self.allocator, "Internal error: from_numeral returned malformed Try value (missing payload field)", .{});
         };
@@ -2012,7 +2012,7 @@ pub const ComptimeEvaluator = struct {
 
             // Check if this has a payload field (for the Str)
             // Single-tag unions might not have a "tag" field, so we look for payload first
-            if (err_accessor.findFieldIndex(layout_env.idents.payload)) |err_payload_idx| {
+            if (err_accessor.findFieldIndex(layout_env.getIdent(layout_env.idents.payload))) |err_payload_idx| {
                 const err_payload_rt_var = self.interpreter.runtime_types.fresh() catch {
                     return try std.fmt.allocPrint(self.allocator, "Internal error: could not create rt_var for InvalidNumeral payload", .{});
                 };
