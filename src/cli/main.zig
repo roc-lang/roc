@@ -4718,11 +4718,14 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
 
     // --- Test cache check (before any compilation) ---
     // Read source to compute cache key for test result caching
-    const source = std.fs.cwd().readFileAlloc(ctx.gpa, args.path, std.math.maxInt(usize)) catch null;
+    const source: ?[]const u8 = if (!args.no_cache)
+        (std.fs.cwd().readFileAlloc(ctx.gpa, args.path, std.math.maxInt(usize)) catch null)
+    else
+        null;
     defer if (source) |s| ctx.gpa.free(s);
 
     if (source) |src| {
-        if (!args.no_cache) {
+        {
             const cache_key = CacheManager.generateCacheKey(src, build_options.compiler_version);
             const test_cache_dir = cache_config.getTestCacheDir(ctx.gpa) catch null;
             if (test_cache_dir) |dir| {
