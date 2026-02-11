@@ -4778,23 +4778,77 @@ pub const MonoLlvmCodeGen = struct {
         };
     }
 
+    /// Decompose an i128 value into (low_i64, high_i64) for C ABI calls.
+    fn decomposeI128(self: *MonoLlvmCodeGen, val: LlvmBuilder.Value) Error!struct { low: LlvmBuilder.Value, high: LlvmBuilder.Value } {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
+        const low = wip.cast(.trunc, val, .i64, "") catch return error.CompilationFailed;
+        const shifted = wip.bin(.lshr, val, builder.intValue(.i128, 64) catch return error.OutOfMemory, "") catch return error.CompilationFailed;
+        const high = wip.cast(.trunc, shifted, .i64, "") catch return error.CompilationFailed;
+        return .{ .low = low, .high = high };
+    }
+
+    /// Reconstruct an i128 from (low_i64, high_i64) loaded from C ABI output pointers.
+    fn reconstructI128(self: *MonoLlvmCodeGen, low: LlvmBuilder.Value, high: LlvmBuilder.Value) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
+        const low_wide = wip.cast(.zext, low, .i128, "") catch return error.CompilationFailed;
+        const high_wide = wip.cast(.zext, high, .i128, "") catch return error.CompilationFailed;
+        const high_shifted = wip.bin(.shl, high_wide, builder.intValue(.i128, 64) catch return error.OutOfMemory, "") catch return error.CompilationFailed;
+        return wip.bin(.@"or", high_shifted, low_wide, "") catch return error.CompilationFailed;
+    }
+
+    /// Call a Dec builtin that takes two RocDec args and returns RocDec.
+    /// builtins.bc ABI: void @func(ptr %out_low, ptr %out_high, i64, i64, i64, i64, [ptr roc_ops])
+    fn callDecBuiltin(self: *MonoLlvmCodeGen, name: []const u8, lhs: LlvmBuilder.Value, rhs: LlvmBuilder.Value, pass_roc_ops: bool) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
+        const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
+        const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
+
+        // Allocate output space: two i64s for low/high halves of result
+        const out_low = wip.alloca(.normal, .i64, .none, alignment, .default, "dec_lo") catch return error.CompilationFailed;
+        const out_high = wip.alloca(.normal, .i64, .none, alignment, .default, "dec_hi") catch return error.CompilationFailed;
+
+        // Decompose i128 args into i64 pairs
+        const lhs_parts = try self.decomposeI128(lhs);
+        const rhs_parts = try self.decomposeI128(rhs);
+
+        // Call builtin with ABI-matching signature
+        if (pass_roc_ops) {
+            const roc_ops = self.roc_ops_arg orelse return error.CompilationFailed;
+            _ = try self.callBuiltin(name, .void, &.{
+                ptr_type, ptr_type, .i64, .i64, .i64, .i64, ptr_type,
+            }, &.{
+                out_low, out_high, lhs_parts.low, lhs_parts.high, rhs_parts.low, rhs_parts.high, roc_ops,
+            });
+        } else {
+            _ = try self.callBuiltin(name, .void, &.{
+                ptr_type, ptr_type, .i64, .i64, .i64, .i64,
+            }, &.{
+                out_low, out_high, lhs_parts.low, lhs_parts.high, rhs_parts.low, rhs_parts.high,
+            });
+        }
+
+        // Load result halves and reconstruct i128
+        const result_low = wip.load(.normal, .i64, out_low, alignment, "") catch return error.CompilationFailed;
+        const result_high = wip.load(.normal, .i64, out_high, alignment, "") catch return error.CompilationFailed;
+        return self.reconstructI128(result_low, result_high);
+    }
+
     /// Call Dec multiply builtin. Dec multiplication requires (a * b) / 10^18.
-    fn callDecMul(self: *MonoLlvmCodeGen, lhs: LlvmBuilder.Value, rhs: LlvmBuilder.Value) !LlvmBuilder.Value {
-        return self.callBuiltin("roc_builtins_dec_mul_saturated", .i128, &.{ .i128, .i128 }, &.{ lhs, rhs });
+    fn callDecMul(self: *MonoLlvmCodeGen, lhs: LlvmBuilder.Value, rhs: LlvmBuilder.Value) Error!LlvmBuilder.Value {
+        return self.callDecBuiltin("roc_builtins_dec_mul_saturated", lhs, rhs, false);
     }
 
     /// Call Dec divide builtin. Dec division requires (a * 10^18) / b.
-    fn callDecDiv(self: *MonoLlvmCodeGen, lhs: LlvmBuilder.Value, rhs: LlvmBuilder.Value) !LlvmBuilder.Value {
-        const ptr_type = (self.builder orelse return error.CompilationFailed).ptrType(.default) catch return error.CompilationFailed;
-        const roc_ops = self.roc_ops_arg orelse return error.CompilationFailed;
-        return self.callBuiltin("roc_builtins_dec_div", .i128, &.{ .i128, .i128, ptr_type }, &.{ lhs, rhs, roc_ops });
+    fn callDecDiv(self: *MonoLlvmCodeGen, lhs: LlvmBuilder.Value, rhs: LlvmBuilder.Value) Error!LlvmBuilder.Value {
+        return self.callDecBuiltin("roc_builtins_dec_div", lhs, rhs, true);
     }
 
     /// Call Dec truncating divide builtin.
-    fn callDecDivTrunc(self: *MonoLlvmCodeGen, lhs: LlvmBuilder.Value, rhs: LlvmBuilder.Value) !LlvmBuilder.Value {
-        const ptr_type = (self.builder orelse return error.CompilationFailed).ptrType(.default) catch return error.CompilationFailed;
-        const roc_ops = self.roc_ops_arg orelse return error.CompilationFailed;
-        return self.callBuiltin("roc_builtins_dec_div_trunc", .i128, &.{ .i128, .i128, ptr_type }, &.{ lhs, rhs, roc_ops });
+    fn callDecDivTrunc(self: *MonoLlvmCodeGen, lhs: LlvmBuilder.Value, rhs: LlvmBuilder.Value) Error!LlvmBuilder.Value {
+        return self.callDecBuiltin("roc_builtins_dec_div_trunc", lhs, rhs, true);
     }
 
     fn generateUnaryMinus(self: *MonoLlvmCodeGen, unary: anytype) Error!LlvmBuilder.Value {

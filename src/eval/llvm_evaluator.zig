@@ -119,7 +119,6 @@ pub const LlvmEvaluator = struct {
     /// When true, disables LLVM optimization passes (uses OptLevel.None).
     /// This is a bool rather than the LLVM type to preserve the lazy import
     /// pattern — non-LLVM builds don't need the LLVM bindings at struct scope.
-    disable_optimizations: bool = false,
 
     /// Global layout store shared across compilations (cached).
     global_layout_store: ?*layout.Store = null,
@@ -295,26 +294,26 @@ pub const LlvmEvaluator = struct {
         defer gen_result.deinit();
 
         // 5. Compile bitcode to object file
+        // Use optimizations in release builds (CI), no optimizations in debug builds.
+        const opt_level: llvm_compile.bindings.CodeGenOptLevel = if (builtin.mode == .Debug) .None else .Default;
         const object_bytes = llvm_compile.compileToObject(
             self.allocator,
             gen_result.bitcode,
-            .{ .function_sections = false, .opt_level = if (self.disable_optimizations) .None else .Default },
+            .{ .function_sections = false, .opt_level = opt_level },
         ) catch return error.CompilationFailed;
         defer self.allocator.free(object_bytes);
 
-        // 6. Extract .text section and find entry point
+        // 6. Extract code, apply ELF relocations, and find entry point
         const object_reader = backend.dev.object_reader;
-        const code_info = object_reader.extractCodeSectionWithEntry(object_bytes) catch return error.CompilationFailed;
-
-        // 7. Copy code (it's a slice into object_bytes which we're about to free)
-        const code_copy = self.allocator.dupe(u8, code_info.code) catch return error.OutOfMemory;
+        const relocated = object_reader.extractAndRelocateElf(self.allocator, object_bytes) catch return error.CompilationFailed;
+        const code_copy = relocated.code;
 
         return CodeResult{
             .code = code_copy,
             .allocator = self.allocator,
             .result_layout = result_layout,
             .layout_store = layout_store_ptr,
-            .entry_offset = code_info.entry_offset,
+            .entry_offset = relocated.entry_offset,
         };
     }
 };
