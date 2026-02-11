@@ -32,6 +32,55 @@ const posix = std.posix;
 
 const has_fork = builtin.os.tag != .windows;
 
+/// Result of waiting for a forked child process.
+const ChildWaitResult = union(enum) {
+    /// Child exited normally and produced a result string (caller owns the memory).
+    success: []const u8,
+    /// Child was killed by SIGALRM (signal 14) — execution timed out.
+    timed_out,
+    /// Child was killed by a signal (e.g. SIGSEGV=11, SIGABRT=6).
+    signaled: u8,
+    /// Child exited with a non-zero exit code.
+    failed: u8,
+};
+
+/// Wait for a forked child process to exit and read its result from a pipe.
+/// Handles signal detection (including SIGALRM for execution timeouts),
+/// non-zero exit codes, and reading the result string from the pipe.
+fn waitForChildResult(allocator: std.mem.Allocator, pid: posix.pid_t, pipe_read: posix.fd_t) std.mem.Allocator.Error!ChildWaitResult {
+    const wait_result = posix.waitpid(pid, 0);
+    const status = wait_result.status;
+    const signal: u8 = @truncate(status & 0x7f);
+
+    if (signal != 0) {
+        posix.close(pipe_read);
+        if (signal == 14) return .timed_out;
+        return .{ .signaled = signal };
+    }
+
+    const exit_code: u8 = @truncate((status >> 8) & 0xff);
+    if (exit_code != 0) {
+        posix.close(pipe_read);
+        return .{ .failed = exit_code };
+    }
+
+    // Read result string from pipe
+    var result_buf: std.ArrayList(u8) = .empty;
+    errdefer result_buf.deinit(allocator);
+
+    var read_buf: [4096]u8 = undefined;
+    while (true) {
+        const bytes_read = posix.read(pipe_read, &read_buf) catch {
+            posix.close(pipe_read);
+            return .{ .failed = 255 };
+        };
+        if (bytes_read == 0) break;
+        try result_buf.appendSlice(allocator, read_buf[0..bytes_read]);
+    }
+    posix.close(pipe_read);
+    return .{ .success = try result_buf.toOwnedSlice(allocator) };
+}
+
 const Check = check.Check;
 const Can = can.Can;
 const CIR = can.CIR;
@@ -266,10 +315,13 @@ fn forkAndExecute(
         // meaningless since we exit via _exit and no defers run.
         const child_alloc = std.heap.page_allocator;
 
+        // 30-second alarm catches infinite loops in generated code
+        _ = std.c.alarm(30);
         const result_str = executeAndFormat(child_alloc, dev_eval, executable, code_result, module_env, expr_idx) catch {
             posix.close(pipe_write);
             posix.exit(1);
         };
+        _ = std.c.alarm(0);
 
         // Write the result string to the pipe
         var written: usize = 0;
@@ -286,55 +338,19 @@ fn forkAndExecute(
         // Parent process
         posix.close(pipe_write);
 
-        // Wait for child to exit
-        const wait_result = posix.waitpid(fork_result, 0);
-        const status = wait_result.status;
-
-        // Parse the wait status (Unix encoding)
-        const termination_signal: u8 = @truncate(status & 0x7f);
-
-        if (termination_signal != 0) {
-            // Child was killed by a signal (e.g. SIGSEGV)
-            posix.close(pipe_read);
-            std.debug.print("\nChild process killed by signal {d} (", .{termination_signal});
-            switch (termination_signal) {
-                11 => std.debug.print("SIGSEGV", .{}),
-                6 => std.debug.print("SIGABRT", .{}),
-                8 => std.debug.print("SIGFPE", .{}),
-                4 => std.debug.print("SIGILL", .{}),
-                7 => std.debug.print("SIGBUS", .{}),
-                else => std.debug.print("unknown", .{}),
-            }
-            std.debug.print(") during dev backend execution\n", .{});
-            return error.ChildSegfaulted;
-        }
-
-        const exit_code: u8 = @truncate((status >> 8) & 0xff);
-        if (exit_code != 0) {
-            posix.close(pipe_read);
-            return error.ChildExecFailed;
-        }
-
-        // Read result string from pipe
-        var result_buf: std.ArrayList(u8) = .empty;
-        errdefer result_buf.deinit(allocator);
-
-        var read_buf: [4096]u8 = undefined;
-        while (true) {
-            const bytes_read = posix.read(pipe_read, &read_buf) catch {
-                posix.close(pipe_read);
+        const result = waitForChildResult(allocator, fork_result, pipe_read) catch return error.OutOfMemory;
+        switch (result) {
+            .timed_out => {
+                std.debug.print("\nDev execution timed out after 30s (possible infinite loop)\n", .{});
                 return error.ChildExecFailed;
-            };
-            if (bytes_read == 0) break;
-            result_buf.appendSlice(allocator, read_buf[0..bytes_read]) catch {
-                posix.close(pipe_read);
-                return error.OutOfMemory;
-            };
+            },
+            .signaled => |sig| {
+                std.debug.print("\nChild process killed by signal {d} during dev backend execution\n", .{sig});
+                return error.ChildSegfaulted;
+            },
+            .failed => return error.ChildExecFailed,
+            .success => |str| return str,
         }
-
-        posix.close(pipe_read);
-        const result_str = result_buf.toOwnedSlice(allocator) catch return error.OutOfMemory;
-        return result_str;
     }
 }
 
@@ -2016,43 +2032,40 @@ fn numericStringsEqual(a: []const u8, b: []const u8) bool {
     return false;
 }
 
-const LlvmEvalError = error{
-    LlvmEvaluatorInitFailed,
-    GenerateCodeFailed,
-    JitInitFailed,
-    UnsupportedLayout,
-    OutOfMemory,
-};
-
 /// Evaluate an expression using the LlvmEvaluator and return the result as a string.
-fn llvmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) LlvmEvalError![]const u8 {
-    var llvm_eval = LlvmEvaluator.init(allocator) catch {
-        return error.LlvmEvaluatorInitFailed;
+fn llvmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) std.mem.Allocator.Error![]const u8 {
+    var llvm_eval = LlvmEvaluator.init(allocator) catch |e| switch (e) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => unreachable,
     };
     defer llvm_eval.deinit();
 
     const all_module_envs = [_]*ModuleEnv{ module_env, @constCast(builtin_module_env) };
 
-    var code_result = llvm_eval.generateCode(module_env, expr_idx, &all_module_envs, builtin_module_env) catch |err| {
-        std.debug.print("generateCode error: {s}\n", .{@errorName(err)});
-        return error.GenerateCodeFailed;
+    var code_result = llvm_eval.generateCode(module_env, expr_idx, &all_module_envs, builtin_module_env) catch |e| switch (e) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => unreachable,
     };
     defer code_result.deinit();
 
-    var executable = backend.ExecutableMemory.initWithEntryOffset(code_result.code, code_result.entry_offset) catch {
-        return error.JitInitFailed;
-    };
+    var executable = backend.ExecutableMemory.initWithEntryOffset(code_result.code, code_result.entry_offset) catch
+        unreachable;
     defer executable.deinit();
 
     // Use real roc_ops from the LlvmEvaluator (needed for heap allocation in lists, etc.)
     var roc_ops = llvm_eval.roc_ops;
 
     // Execute into a result buffer (512 bytes to accommodate large tuples/records)
+    // Set a 30-second alarm to catch infinite loops in generated code.
+    // LLVM compilation (above) is allowed to take as long as it needs, but
+    // execution should be fast — if it takes >30s it's likely an infinite loop.
+    _ = std.c.alarm(30);
     var result_buf: [512]u8 align(16) = undefined;
     executable.callWithResultPtrAndRocOps(@ptrCast(&result_buf), @ptrCast(&roc_ops));
+    _ = std.c.alarm(0); // cancel alarm
 
     // Format using RocValue.format() -- same as the dev backend
-    const ls = code_result.layout_store orelse return error.UnsupportedLayout;
+    const ls = code_result.layout_store orelse unreachable;
     const result_layout = ls.getLayout(code_result.result_layout);
     const roc_val = values.RocValue{
         .ptr = &result_buf,
@@ -2063,22 +2076,21 @@ fn llvmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_i
         .layout_store = ls,
         .strip_whole_number_decimal = true,
     };
-    return roc_val.format(allocator, fmt_ctx) catch error.UnsupportedLayout;
+    return roc_val.format(allocator, fmt_ctx) catch return error.OutOfMemory;
 }
 
 /// Compare Interpreter result string with LlvmEvaluator result string.
-/// If the LLVM backend can't handle an expression, the comparison is skipped.
 pub fn compareWithLlvmEvaluator(allocator: std.mem.Allocator, interpreter_str: []const u8, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) !void {
     if (!has_fork) return;
 
-    const pipe_fds = posix.pipe() catch return;
+    const pipe_fds = try posix.pipe();
     const pipe_read = pipe_fds[0];
     const pipe_write = pipe_fds[1];
 
-    const fork_result = posix.fork() catch {
+    const fork_result = posix.fork() catch |err| {
         posix.close(pipe_read);
         posix.close(pipe_write);
-        return;
+        return err;
     };
 
     if (fork_result == 0) {
@@ -2106,86 +2118,31 @@ pub fn compareWithLlvmEvaluator(allocator: std.mem.Allocator, interpreter_str: [
         // Parent process
         posix.close(pipe_write);
 
-        // Wait for child with 30-second timeout using non-blocking poll
-        const timeout_ns: u64 = 30 * std.time.ns_per_s;
-        const start_time = std.time.Instant.now() catch {
-            // If we can't get time, just kill child and skip
-            _ = std.posix.kill(fork_result, 9) catch {};
-            _ = posix.waitpid(fork_result, 0);
-            posix.close(pipe_read);
-            return;
-        };
+        const result = try waitForChildResult(allocator, fork_result, pipe_read);
+        switch (result) {
+            .timed_out => {
+                std.debug.print("\nLLVM execution timed out after 30s (possible infinite loop)\n", .{});
+                return error.LlvmEvaluatorTimedOut;
+            },
+            .signaled => |sig| {
+                std.debug.print("\nLLVM evaluator crashed with signal {d}\n", .{sig});
+                return error.LlvmEvaluatorCrashed;
+            },
+            .failed => |code| {
+                std.debug.print("\nLLVM evaluator child failed with exit code {d}\n", .{code});
+                return error.LlvmEvaluatorCrashed;
+            },
+            .success => |llvm_str| {
+                defer allocator.free(llvm_str);
 
-        var status: u32 = undefined;
-        var child_done = false;
-        while (true) {
-            const wait_result = posix.waitpid(fork_result, std.posix.W.NOHANG);
-            if (wait_result.pid != 0) {
-                status = wait_result.status;
-                child_done = true;
-                break;
-            }
-            // Check timeout
-            const elapsed = (std.time.Instant.now() catch break).since(start_time);
-            if (elapsed > timeout_ns) {
-                // Timeout — kill child and skip
-                _ = std.posix.kill(fork_result, 9) catch {};
-                _ = posix.waitpid(fork_result, 0);
-                posix.close(pipe_read);
-                return;
-            }
-            std.Thread.sleep(1_000_000); // 1ms
-        }
-
-        if (!child_done) {
-            _ = std.posix.kill(fork_result, 9) catch {};
-            _ = posix.waitpid(fork_result, 0);
-            posix.close(pipe_read);
-            return;
-        }
-
-        const termination_signal: u8 = @truncate(status & 0x7f);
-
-        if (termination_signal != 0) {
-            posix.close(pipe_read);
-            std.debug.print("\nLLVM evaluator crashed with signal {d}\n", .{termination_signal});
-            return error.LlvmEvaluatorCrashed;
-        }
-
-        const exit_code: u8 = @truncate((status >> 8) & 0xff);
-        if (exit_code != 0) {
-            posix.close(pipe_read);
-            std.debug.print("\nLLVM evaluator returned unsupported expression\n", .{});
-            return error.LlvmEvaluatorUnsupported;
-        }
-
-        // Read result string from pipe
-        var result_buf: std.ArrayList(u8) = .empty;
-        defer result_buf.deinit(allocator);
-
-        var read_buf: [4096]u8 = undefined;
-        while (true) {
-            const bytes_read = posix.read(pipe_read, &read_buf) catch {
-                posix.close(pipe_read);
-                return;
-            };
-            if (bytes_read == 0) break;
-            result_buf.appendSlice(allocator, read_buf[0..bytes_read]) catch {
-                posix.close(pipe_read);
-                return;
-            };
-        }
-        posix.close(pipe_read);
-
-        const llvm_str = result_buf.toOwnedSlice(allocator) catch return;
-        defer allocator.free(llvm_str);
-
-        if (!numericStringsEqual(interpreter_str, llvm_str)) {
-            std.debug.print(
-                "\nEvaluator mismatch! Interpreter: {s}, LlvmEvaluator: {s}\n",
-                .{ interpreter_str, llvm_str },
-            );
-            return error.EvaluatorMismatch;
+                if (!numericStringsEqual(interpreter_str, llvm_str)) {
+                    std.debug.print(
+                        "\nEvaluator mismatch! Interpreter: {s}, LlvmEvaluator: {s}\n",
+                        .{ interpreter_str, llvm_str },
+                    );
+                    return error.EvaluatorMismatch;
+                }
+            },
         }
     }
 }

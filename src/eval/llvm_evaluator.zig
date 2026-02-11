@@ -126,7 +126,6 @@ pub const LlvmEvaluator = struct {
 
     pub const Error = error{
         OutOfMemory,
-        UnsupportedType,
         Crash,
         RuntimeError,
         ParseError,
@@ -134,7 +133,6 @@ pub const LlvmEvaluator = struct {
         TypeError,
         ExecutionError,
         CompilationFailed,
-        UnsupportedLayout,
     };
 
     /// Initialize the evaluator with builtin modules
