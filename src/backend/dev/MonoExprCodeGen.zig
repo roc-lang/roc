@@ -13534,23 +13534,6 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             };
         }
 
-        /// Extract the parameter span from a lambda or closure expression.
-        /// Returns null if the expression is not a lambda/closure.
-        fn getLambdaParams(self: *Self, expr_id: MonoExprId) ?mono.MonoPatternSpan {
-            const expr = self.store.getExpr(expr_id);
-            return switch (expr) {
-                .lambda => |l| l.params,
-                .closure => |c| blk: {
-                    const inner = self.store.getExpr(c.lambda);
-                    break :blk switch (inner) {
-                        .lambda => |l| l.params,
-                        else => null,
-                    };
-                },
-                else => null,
-            };
-        }
-
         const ParamLayout = struct {
             /// Register index where roc_ops should be passed (after all regular params).
             /// Always < max_arg_regs because the pre-scan converts multi-reg params to
@@ -13559,13 +13542,6 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             /// Which params are passed by pointer (multi-reg params that don't fit inline).
             pass_by_ptr: [16]bool,
         };
-
-        /// Pre-compute the register layout for a set of lambda parameters.
-        /// Determines which params are passed by pointer and where roc_ops goes.
-        /// This must match the logic used by generateCallToLambda and bindLambdaParams.
-        fn precomputeParamLayout(self: *Self, params: mono.MonoPatternSpan) ParamLayout {
-            return self.precomputeParamLayoutFrom(params, 0);
-        }
 
         fn precomputeParamLayoutFrom(self: *Self, params: mono.MonoPatternSpan, initial_reg_idx: u8) ParamLayout {
             const pattern_ids = self.store.getPatternSpan(params);

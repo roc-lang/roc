@@ -314,6 +314,11 @@ pub const io_spec_tests = [_]TestSpec{
         .io_spec = "1>Div (correct)",
         .description = "Regression test: cross-module recursive nominal type gets correct layout for pattern matching",
     },
+    .{
+        .roc_file = "test/fx/test_no_dbg.roc",
+        .io_spec = "1>Text",
+        .description = "Regression test: recursive nominal type with list containers and pattern matching",
+    },
 };
 
 /// Get the total number of IO spec tests

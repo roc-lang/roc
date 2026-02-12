@@ -54,7 +54,6 @@ pub const Relocation = union(enum) {
             .jmp_to_return => |r| r.inst_loc,
         };
     }
-
 };
 
 /// Function that resolves a symbol name to its address.

@@ -238,6 +238,14 @@ const CheckTypeCheckerPatternsStep = struct {
         // This is necessary because origin_module is an ident from the type's defining module,
         // while module_name is from the importing module's ident store - no way to compare without strings
         .{ .file = "Check.zig", .start = 5530, .end = 5547 },
+        // Cross-module nominal type matching in store.zig requires string comparison
+        // because ident indices are module-local — same nominal from different modules
+        // has different Ident.Idx values, so we must compare the underlying strings
+        .{ .file = "store.zig", .start = 340, .end = 355 },
+        // Record field lookup by name in store.zig requires string comparison
+        // because FieldNameIdx values come from a module-independent interner
+        // but callers may pass raw field name strings from different modules
+        .{ .file = "store.zig", .start = 965, .end = 975 },
     };
 
     fn isInExcludedRange(file_path: []const u8, line_number: usize) bool {

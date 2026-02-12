@@ -7,7 +7,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
-const base = @import("base");
 const types = @import("types");
 const builtins = @import("builtins");
 const layout_mod = @import("layout");
@@ -15,7 +14,6 @@ const layout_mod = @import("layout");
 // Compile-time flag for refcount tracing - enabled via `zig build -Dtrace-refcount=true`
 const trace_refcount = if (@hasDecl(build_options, "trace_refcount")) build_options.trace_refcount else false;
 
-const Ident = base.Ident;
 const LayoutStore = layout_mod.Store;
 const Layout = layout_mod.Layout;
 const RocOps = builtins.host_abi.RocOps;

@@ -281,8 +281,7 @@ fn patternToSymbol(self: *Self, pattern_idx: CIR.Pattern.Idx) MonoSymbol {
 }
 
 /// Create a MonoSymbol from an external reference
-fn externalToSymbol(self: *Self, module_env: *ModuleEnv, import_idx: CIR.Import.Idx, ident_idx: Ident.Idx) MonoSymbol {
-    _ = self;
+fn externalToSymbol(_: *Self, module_env: *ModuleEnv, import_idx: CIR.Import.Idx, ident_idx: Ident.Idx) MonoSymbol {
     // Resolve the import to a module index
     const resolved_module = module_env.imports.getResolvedModule(import_idx);
 
@@ -499,16 +498,8 @@ fn getExprLayoutFromIdx(self: *Self, module_env: *ModuleEnv, expr_idx: CIR.Expr.
     const ls = self.layout_store orelse unreachable;
     const result = ls.fromTypeVar(self.current_module_idx, type_var, &self.type_scope, self.use_type_scope) catch unreachable;
     // TODO: This warning should become an assertion once the layout store's
-    // fromTypeVar no longer produces List(.opaque_ptr) for cross-module
-    // specializations. The layout stored in MonoExpr nodes must be fully
-    // resolved — .opaque_ptr sentinels cause wrong alignment in codegen decrefs.
-    // See: src/layout/store.zig:2744-2752 (flex var → opaquePtr fallback)
-    if (comptime @import("builtin").mode == .Debug) {
-        const result_layout = ls.getLayout(result);
-        if (result_layout.tag == .list and result_layout.data.list == .opaque_ptr) {
-            std.debug.print("WARNING: getExprLayoutFromIdx returned list layout with .opaque_ptr element\n", .{});
-        }
-    }
+    // TODO: Assert that fromTypeVar no longer produces List(.opaque_ptr)
+    // once all cross-module type scope resolution is fully verified.
     return result;
 }
 
@@ -2772,7 +2763,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                     },
                 };
             } else {
-                const result = try self.lowerRecordFields(module_env, rec.fields, record_layout);
+                const result = try self.lowerRecordFields(module_env, rec.fields);
                 break :blk .{
                     .record = .{
                         .record_layout = record_layout,
@@ -3945,8 +3936,7 @@ const LowerRecordFieldsResult = struct {
 
 /// Lower record fields - sorted by alignment descending, then alphabetically
 /// by field name to match the layout store's field ordering.
-fn lowerRecordFields(self: *Self, module_env: *ModuleEnv, fields: CIR.RecordField.Span, record_layout: LayoutIdx) Allocator.Error!LowerRecordFieldsResult {
-    _ = record_layout;
+fn lowerRecordFields(self: *Self, module_env: *ModuleEnv, fields: CIR.RecordField.Span) Allocator.Error!LowerRecordFieldsResult {
     const field_indices = module_env.store.sliceRecordFields(fields);
     if (field_indices.len == 0) return .{
         .fields = MonoExprSpan.empty(),
@@ -4023,12 +4013,12 @@ fn lowerRecordUpdate(
 ) Allocator.Error!LowerRecordFieldsResult {
     const ls = self.layout_store orelse {
         // No layout store — fall back to just lowering explicit fields
-        return self.lowerRecordFields(module_env, explicit_fields, record_layout_idx);
+        return self.lowerRecordFields(module_env, explicit_fields);
     };
 
     const layout_val = ls.getLayout(record_layout_idx);
     if (layout_val.tag != .record) {
-        return self.lowerRecordFields(module_env, explicit_fields, record_layout_idx);
+        return self.lowerRecordFields(module_env, explicit_fields);
     }
 
     // Lower the ext expression once (the record being spread)

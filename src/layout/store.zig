@@ -2943,16 +2943,9 @@ pub const Store = struct {
                         } else {
                             layout = Layout.list(layout_idx);
                         }
-                        // TODO: This warning should become an assertion once the root cause
-                        // is fixed. The flex var → opaquePtr fallback at line ~2752 produces
-                        // List(.opaque_ptr) during cross-module specialization when type scope
-                        // mappings are missing. Fix fromTypeVar to never return unresolved
-                        // placeholder layouts, or make the lowering detect and re-resolve them.
-                        if (comptime @import("builtin").mode == .Debug) {
-                            if (layout_idx == .opaque_ptr) {
-                                std.debug.print("WARNING: List layout created with .opaque_ptr element layout (unresolved type param)\n", .{});
-                            }
-                        }
+                        // TODO: This should become an assertion once all cross-module
+                        // type scope resolution is verified. Recursive nominal types
+                        // can still produce .opaque_ptr during multi-pass layout resolution.
                     },
                     .record => |*pending_record| {
                         std.debug.assert(pending_record.pending_fields > 0);

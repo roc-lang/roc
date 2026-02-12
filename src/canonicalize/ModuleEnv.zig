@@ -2491,8 +2491,7 @@ pub fn getExposedNodeIndexById(self: *const Self, ident_idx: Ident.Idx) ?u16 {
 /// Get the exposed node index for a type given its statement index.
 /// This is used for auto-imported builtin types where we have the statement index pre-computed.
 /// For auto-imported types, the statement index IS the node/var index directly.
-pub fn getExposedNodeIndexByStatementIdx(self: *const Self, stmt_idx: CIR.Statement.Idx) ?u16 {
-    _ = self; // Not needed for this simplified implementation
+pub fn getExposedNodeIndexByStatementIdx(_: *const Self, stmt_idx: CIR.Statement.Idx) ?u16 {
 
     // For auto-imported builtin types (Bool, Try, etc.), the statement index
     // IS the node/var index. This is because type declarations get type variables

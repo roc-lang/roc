@@ -12,7 +12,6 @@ const CIR = @import("can").CIR;
 
 pub const store = @import("store.zig");
 
-const Ident = base.Ident;
 const target = base.target;
 
 /// Tag for Layout variants
