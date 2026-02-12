@@ -556,6 +556,14 @@ pub const DevEvaluator = struct {
     pub fn callWithCrashProtection(self: *DevEvaluator, executable: *const backend.ExecutableMemory, result_ptr: *anyopaque) error{ RocCrashed, Segfault }!void {
         self.roc_env.crashed = false;
 
+        if (comptime builtin.mode == .Debug) {
+            builtins.utils.DebugRefcountTracker.enable();
+        }
+        defer if (comptime builtin.mode == .Debug) {
+            _ = builtins.utils.DebugRefcountTracker.reportLeaks();
+            builtins.utils.DebugRefcountTracker.disable();
+        };
+
         // On Windows, install the VEH handler to catch segfaults
         const veh_handle = WindowsSEH.install(&self.roc_env.jmp_buf);
         defer WindowsSEH.remove(veh_handle);
@@ -713,6 +721,21 @@ pub const DevEvaluator = struct {
         var rc_pass = mono.RcInsert.RcInsertPass.init(self.allocator, &mono_store, layout_store_ptr);
         defer rc_pass.deinit();
         const mono_expr_id = rc_pass.insertRcOps(lowered_expr_id) catch lowered_expr_id;
+
+        // Run RC insertion pass on all function definitions (symbol_defs)
+        // so that lambda bodies get proper incref/decref annotations.
+        {
+            var def_iter = mono_store.symbol_defs.iterator();
+            while (def_iter.next()) |entry| {
+                var fn_rc = mono.RcInsert.RcInsertPass.init(
+                    self.allocator,
+                    &mono_store,
+                    layout_store_ptr,
+                );
+                defer fn_rc.deinit();
+                entry.value_ptr.* = fn_rc.insertRcOps(entry.value_ptr.*) catch entry.value_ptr.*;
+            }
+        }
 
         // Determine the result layout from the Mono IR expression.
         // We prefer the layout embedded in the Mono expression because the CIR

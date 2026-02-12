@@ -320,6 +320,65 @@ pub const RcInsertPass = struct {
             .block => |block| self.processBlock(block.stmts, block.final_expr, block.result_layout, region),
             .if_then_else => |ite| self.processIfThenElse(ite.branches, ite.final_else, ite.result_layout, region),
             .when => |w| self.processWhen(w.value, w.value_layout, w.branches, w.result_layout, region),
+            .lambda => |lam| {
+                const new_body = try self.processExpr(lam.body);
+
+                // Emit increfs for multi-use lambda parameters.
+                // Lambda params are not bound via block statements, so processBlock
+                // doesn't handle them. We wrap the body in a new block with incref
+                // statements for any parameters used more than once.
+                self.stmt_buf.clearRetainingCapacity();
+                var param_rc_ops: u32 = 0;
+                const params = self.store.getPatternSpan(lam.params);
+                for (params) |pat_id| {
+                    if (pat_id.isNone()) continue;
+                    const pat = self.store.getPattern(pat_id);
+                    switch (pat) {
+                        .bind => |bind| {
+                            if (!bind.symbol.isNone() and self.layoutNeedsRc(bind.layout_idx)) {
+                                const key = @as(u48, @bitCast(bind.symbol));
+                                const use_count = self.symbol_use_counts.get(key) orelse 0;
+                                if (use_count > 1) {
+                                    try self.emitIncref(bind.symbol, bind.layout_idx, @intCast(use_count - 1), region);
+                                    param_rc_ops += 1;
+                                }
+                            }
+                        },
+                        else => {},
+                    }
+                }
+
+                const final_body = if (param_rc_ops > 0) blk: {
+                    // Wrap the body in a block with incref statements prepended
+                    const new_stmts = try self.store.addStmts(self.stmt_buf.items);
+                    break :blk try self.store.addExpr(.{ .block = .{
+                        .stmts = new_stmts,
+                        .final_expr = new_body,
+                        .result_layout = lam.ret_layout,
+                    } }, region);
+                } else new_body;
+
+                if (final_body == lam.body) return expr_id;
+                return self.store.addExpr(.{ .lambda = .{
+                    .fn_layout = lam.fn_layout,
+                    .params = lam.params,
+                    .body = final_body,
+                    .ret_layout = lam.ret_layout,
+                } }, region);
+            },
+            .closure => |clo| {
+                const new_lambda = try self.processExpr(clo.lambda);
+                if (new_lambda == clo.lambda) return expr_id;
+                return self.store.addExpr(.{ .closure = .{
+                    .closure_layout = clo.closure_layout,
+                    .lambda = new_lambda,
+                    .captures = clo.captures,
+                    .representation = clo.representation,
+                    .recursion = clo.recursion,
+                    .self_recursive = clo.self_recursive,
+                    .is_bound_to_variable = clo.is_bound_to_variable,
+                } }, region);
+            },
             // For all other expressions, return as-is.
             // RC operations are inserted at block boundaries, not inside
             // individual expressions.

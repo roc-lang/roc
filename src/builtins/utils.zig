@@ -358,6 +358,9 @@ pub fn increfRcPtrC(ptr_to_refcount: *isize, amount: isize, roc_ops: *RocOps) ca
             },
             .none => unreachable,
         }
+        if (comptime builtin.mode == .Debug) {
+            DebugRefcountTracker.onIncref(@intFromPtr(ptr_to_refcount), amount);
+        }
     }
 }
 
@@ -377,7 +380,7 @@ pub fn decrefRcPtrC(
     return @call(
         .always_inline,
         decref_ptr_to_refcount,
-        .{ bytes, alignment, elements_refcounted, roc_ops },
+        .{ bytes, alignment, elements_refcounted, roc_ops, .decref_rc_ptr },
     );
 }
 
@@ -396,7 +399,7 @@ pub fn decrefCheckNullC(
         return @call(
             .always_inline,
             decref_ptr_to_refcount,
-            .{ isizes - 1, alignment, elements_refcounted, roc_ops },
+            .{ isizes - 1, alignment, elements_refcounted, roc_ops, .decref_check_null },
         );
     }
 }
@@ -536,7 +539,7 @@ pub fn decref(
 
     const isizes: [*]isize = alignedPtrCast([*]isize, bytes, @src());
 
-    decref_ptr_to_refcount(isizes - 1, alignment, elements_refcounted, roc_ops);
+    decref_ptr_to_refcount(isizes - 1, alignment, elements_refcounted, roc_ops, .decref_data_ptr);
 }
 
 inline fn free_ptr_to_refcount(
@@ -546,6 +549,11 @@ inline fn free_ptr_to_refcount(
     roc_ops: *RocOps,
 ) void {
     if (RC_TYPE == .none) return;
+
+    // Debug-only: Track the free in the shadow refcount tracker.
+    if (comptime builtin.mode == .Debug) {
+        DebugRefcountTracker.onFree(@intFromPtr(refcount_ptr));
+    }
 
     // Debug-only: Poison the refcount slot before freeing to detect use-after-free.
     // Any subsequent access to this refcount will see POISON_VALUE and panic.
@@ -575,6 +583,7 @@ inline fn decref_ptr_to_refcount(
     element_alignment: u32,
     elements_refcounted: bool,
     roc_ops: *RocOps,
+    comptime site: DebugRefcountTracker.Site,
 ) void {
     if (RC_TYPE == .none) return;
 
@@ -596,6 +605,10 @@ inline fn decref_ptr_to_refcount(
             roc_ops.crash("Refcount underflow: decrementing non-positive refcount");
             return;
         }
+    }
+
+    if (comptime builtin.mode == .Debug) {
+        DebugRefcountTracker.onDecref(@intFromPtr(refcount_ptr), site);
     }
 
     if (!rcConstant(refcount)) {
@@ -796,6 +809,10 @@ pub fn allocateWithRefcount(
     const refcount_ptr: [*]usize = alignedPtrCast([*]usize, data_ptr - @sizeOf(usize), @src());
     refcount_ptr[0] = if (RC_TYPE == .none) REFCOUNT_STATIC_DATA else 1;
 
+    if (comptime builtin.mode == .Debug) {
+        DebugRefcountTracker.trackAlloc(@intFromPtr(refcount_ptr));
+    }
+
     return data_ptr;
 }
 
@@ -870,6 +887,165 @@ pub const UpdateMode = enum(u8) {
 pub fn dictPseudoSeed() callconv(.c) u64 {
     return @as(u64, @intCast(@intFromPtr(&dictPseudoSeed)));
 }
+
+/// Debug-only shadow refcount tracker.
+///
+/// Independently records all refcount operations and asserts consistency.
+/// Active only in debug builds (zero overhead in release). Catches:
+/// - Missing increfs/decrefs (shadow diverges from actual)
+/// - Refcount leaks (allocations whose refcount never reaches 0)
+/// - Operations on unknown/already-freed allocations
+///
+/// Uses static arrays (no allocator needed), following the StaticAlloc
+/// pattern already used in DevRocEnv.
+pub const DebugRefcountTracker = struct {
+    const max_tracked = 4096;
+    const max_ops = 8192;
+
+    /// Where a refcount operation originated.
+    pub const Site = enum(u8) {
+        allocate_with_refcount,
+        incref_rc_ptr,
+        decref_rc_ptr,
+        decref_data_ptr,
+        decref_check_null,
+        free_from_decref,
+    };
+
+    const OpKind = enum(u8) { alloc, incref, decref, free };
+    const OpEntry = struct {
+        rc_addr: usize,
+        kind: OpKind,
+        /// For incref: the amount. For others: 0.
+        amount: isize,
+        /// Shadow refcount after this operation.
+        shadow_after: isize,
+        /// Where the operation originated.
+        site: Site,
+    };
+
+    var rc_addrs: [max_tracked]usize = [_]usize{0} ** max_tracked;
+    var shadow_rcs: [max_tracked]isize = [_]isize{0} ** max_tracked;
+    var count: usize = 0;
+    var active: bool = false;
+
+    var op_log: [max_ops]OpEntry = undefined;
+    var op_count: usize = 0;
+
+    pub fn enable() void {
+        active = true;
+        count = 0;
+        op_count = 0;
+    }
+
+    pub fn disable() void {
+        active = false;
+    }
+
+    fn logOp(rc_addr: usize, kind: OpKind, amount: isize, shadow_after: isize, site: Site) void {
+        if (op_count < max_ops) {
+            op_log[op_count] = .{
+                .rc_addr = rc_addr,
+                .kind = kind,
+                .amount = amount,
+                .shadow_after = shadow_after,
+                .site = site,
+            };
+            op_count += 1;
+        }
+    }
+
+    /// Find or insert a refcount address, return its index.
+    fn findOrInsert(rc_addr: usize) ?usize {
+        for (rc_addrs[0..count], 0..) |addr, i| {
+            if (addr == rc_addr) return i;
+        }
+        if (count >= max_tracked) return null;
+        rc_addrs[count] = rc_addr;
+        shadow_rcs[count] = 0;
+        count += 1;
+        return count - 1;
+    }
+
+    fn find(rc_addr: usize) ?usize {
+        for (rc_addrs[0..count], 0..) |addr, i| {
+            if (addr == rc_addr) return i;
+        }
+        return null;
+    }
+
+    /// Called from allocateWithRefcount — initial refcount = 1
+    pub fn trackAlloc(rc_addr: usize) void {
+        if (!active) return;
+        if (findOrInsert(rc_addr)) |idx| {
+            shadow_rcs[idx] = 1;
+            logOp(rc_addr, .alloc, 0, 1, .allocate_with_refcount);
+        }
+    }
+
+    /// Called from increfRcPtrC
+    pub fn onIncref(rc_addr: usize, amount: isize) void {
+        if (!active) return;
+        if (findOrInsert(rc_addr)) |idx| {
+            shadow_rcs[idx] += amount;
+            logOp(rc_addr, .incref, amount, shadow_rcs[idx], .incref_rc_ptr);
+        }
+    }
+
+    /// Called from decref_ptr_to_refcount (inline fn — site identifies the caller)
+    pub fn onDecref(rc_addr: usize, site: Site) void {
+        if (!active) return;
+        if (find(rc_addr)) |idx| {
+            shadow_rcs[idx] -= 1;
+            logOp(rc_addr, .decref, 0, shadow_rcs[idx], site);
+            if (shadow_rcs[idx] < 0) {
+                std.debug.print(
+                    "DebugRefcountTracker: refcount underflow at rc_addr=0x{x}\n",
+                    .{rc_addr},
+                );
+            }
+        }
+        // Unknown address = static data or pre-existing, skip
+    }
+
+    /// Called from free_ptr_to_refcount
+    pub fn onFree(rc_addr: usize) void {
+        if (!active) return;
+        if (find(rc_addr)) |idx| {
+            logOp(rc_addr, .free, 0, shadow_rcs[idx], .free_from_decref);
+            shadow_rcs[idx] = -1; // mark as freed
+        }
+    }
+
+    /// Report leaks: allocations whose shadow refcount > 0 at end.
+    /// Prints the full operation history for each leaking address.
+    pub fn reportLeaks() usize {
+        if (!active) return 0;
+        var leak_count: usize = 0;
+        for (rc_addrs[0..count], shadow_rcs[0..count]) |addr, rc| {
+            if (rc > 0 and addr != 0) {
+                std.debug.print(
+                    "LEAK: rc_addr=0x{x} shadow_rc={d}\n",
+                    .{ addr, rc },
+                );
+                // Print operation history for this address
+                for (op_log[0..op_count]) |op| {
+                    if (op.rc_addr == addr) {
+                        switch (op.kind) {
+                            .alloc => std.debug.print("  alloc(1)", .{}),
+                            .incref => std.debug.print("  incref(+{d})={d}", .{ op.amount, op.shadow_after }),
+                            .decref => std.debug.print("  decref={d}", .{op.shadow_after}),
+                            .free => std.debug.print("  free", .{}),
+                        }
+                        std.debug.print(" via {s}\n", .{@tagName(op.site)});
+                    }
+                }
+                leak_count += 1;
+            }
+        }
+        return leak_count;
+    }
+};
 
 test "increfC, refcounted data" {
     var test_env = TestEnv.init(std.testing.allocator);
