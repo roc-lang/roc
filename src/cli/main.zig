@@ -2936,6 +2936,118 @@ fn formatUnbundlePathValidationReason(reason: unbundle.PathValidationReason) []c
     };
 }
 
+/// Validate a bundle by using the Coordinator to discover all transitive module
+/// dependencies, then checking that every discovered .roc file is present in the
+/// bundle file list. Also validates platform target binaries if a platform is found.
+fn validateBundleWithCoordinator(
+    ctx: *CliContext,
+    first_roc_file: []const u8,
+    bundled_file_paths: []const []const u8,
+    stderr: anytype,
+) !void {
+    // Resolve the entry point to an absolute path
+    const abs_entry = std.fs.cwd().realpathAlloc(ctx.gpa, first_roc_file) catch |err| {
+        try stderr.print("Error: Could not resolve path '{s}': {}\n", .{ first_roc_file, err });
+        return err;
+    };
+    defer ctx.gpa.free(abs_entry);
+
+    // Create a BuildEnv to parse headers and discover modules via the Coordinator
+    var build_env = try BuildEnv.init(ctx.gpa, .single_threaded, 1, roc_target.RocTarget.detectNative());
+    defer build_env.deinit();
+
+    // Run the build — the Coordinator discovers all transitive module dependencies
+    build_env.build(abs_entry) catch {
+        // Drain and display any errors from the build
+        const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
+        defer build_env.freeDrainedReportsPathsOnly(drained);
+
+        for (drained) |mod| {
+            for (mod.reports) |report| {
+                switch (report.severity) {
+                    .runtime_error, .fatal => {
+                        try stderr.print("{s}: error in module\n", .{mod.abs_path});
+                    },
+                    .warning => {
+                        try stderr.print("{s}: warning in module\n", .{mod.abs_path});
+                    },
+                    .info => {},
+                }
+            }
+        }
+        // Build errors are not fatal for bundling — continue to check what we can
+    };
+
+    // Detect platform from BuildEnv packages
+    var platform_root_file: ?[]const u8 = null;
+    var pkg_it = build_env.packages.iterator();
+    while (pkg_it.next()) |entry| {
+        if (entry.value_ptr.kind == .platform) {
+            platform_root_file = entry.value_ptr.root_file;
+        }
+    }
+
+    // Collect all discovered module paths from the Coordinator
+    var required_paths = std.ArrayList([]const u8).empty;
+    defer required_paths.deinit(ctx.gpa);
+
+    if (build_env.coordinator) |coord| {
+        var coord_pkg_it = coord.packages.iterator();
+        while (coord_pkg_it.next()) |pkg_entry| {
+            for (pkg_entry.value_ptr.*.modules.items) |mod_state| {
+                try required_paths.append(ctx.gpa, mod_state.path);
+            }
+        }
+    }
+
+    // Build a set of absolute paths from the bundle file list for quick lookup
+    var bundled_set = std.StringHashMap(void).init(ctx.gpa);
+    defer bundled_set.deinit();
+
+    for (bundled_file_paths) |rel_path| {
+        const abs_path = std.fs.cwd().realpathAlloc(ctx.gpa, rel_path) catch continue;
+        defer ctx.gpa.free(abs_path);
+        try bundled_set.put(try ctx.arena.dupe(u8, abs_path), {});
+    }
+
+    // Compare discovered module paths against bundled file list
+    var missing_count: u32 = 0;
+    for (required_paths.items) |req_path| {
+        if (!bundled_set.contains(req_path)) {
+            // Try to make the path relative for a nicer error message
+            const display_path = std.fs.path.relative(ctx.arena, ".", req_path) catch req_path;
+            try stderr.print("Error: Required module file is missing from bundle: {s}\n", .{display_path});
+            missing_count += 1;
+        }
+    }
+
+    if (missing_count > 0) {
+        try stderr.print("Error: {} required module file(s) missing from bundle\n", .{missing_count});
+        return error.MissingBundleFiles;
+    }
+
+    // If a platform was detected, validate target binaries exist
+    if (platform_root_file) |pf| {
+        if (platform_validation.validatePlatformHeader(ctx.arena, pf)) |validation| {
+            if (platform_validation.validateAllTargetFilesExist(
+                ctx.arena,
+                validation.config,
+                validation.platform_dir,
+            )) |result| {
+                _ = platform_validation.renderValidationError(ctx.gpa, result, stderr);
+                return switch (result) {
+                    .missing_target_file => error.MissingTargetFile,
+                    .missing_files_directory => error.MissingFilesDirectory,
+                    else => error.MissingTargetFile,
+                };
+            }
+        } else |_| {
+            // validatePlatformHeader already rendered the error message.
+            // Continue bundling — non-blocking warning.
+        }
+    }
+}
+
 /// Bundles a roc package and its dependencies into a compressed tar archive
 pub fn rocBundle(ctx: *CliContext, args: cli_args.BundleArgs) !void {
     const stdout = ctx.io.stdout();
@@ -3025,42 +3137,14 @@ pub fn rocBundle(ctx: *CliContext, args: cli_args.BundleArgs) !void {
         }
     }
 
-    // Find the platform file among the .roc files (if any)
-    // We need to check each file without side effects first, then validate the actual platform
-    var platform_file: ?[]const u8 = null;
-    for (file_paths.items) |path| {
-        if (std.mem.endsWith(u8, path, ".roc")) {
-            if (platform_validation.isPlatformFile(ctx.arena, path)) |is_platform| {
-                if (is_platform) {
-                    platform_file = path;
-                    break;
-                }
-            }
-        }
-    }
+    // Find the first .roc file to use as entry point for Coordinator-based validation
+    const first_roc_file: ?[]const u8 = for (file_paths.items) |path| {
+        if (std.mem.endsWith(u8, path, ".roc")) break path;
+    } else null;
 
-    // If we found a platform file, validate it has proper targets section
-    if (platform_file) |pf| {
-        if (platform_validation.validatePlatformHeader(ctx.arena, pf)) |validation| {
-            // Platform validation succeeded - validate all target files exist
-            if (platform_validation.validateAllTargetFilesExist(
-                ctx.arena,
-                validation.config,
-                validation.platform_dir,
-            )) |result| {
-                // Render the validation error with nice formatting
-                _ = platform_validation.renderValidationError(ctx.gpa, result, stderr);
-                return switch (result) {
-                    .missing_target_file => error.MissingTargetFile,
-                    .missing_files_directory => error.MissingFilesDirectory,
-                    else => error.MissingTargetFile,
-                };
-            }
-        } else |_| {
-            // validatePlatformHeader already rendered the error message via the reporting system.
-            // We continue bundling for now (non-blocking warning), but the user has seen the error.
-            // This allows bundling apps or platforms that don't yet have targets sections.
-        }
+    // Use the Coordinator to discover all transitive module dependencies and validate
+    if (first_roc_file) |roc_file| {
+        try validateBundleWithCoordinator(ctx, roc_file, file_paths.items, stderr);
     }
 
     // Create temporary output file
