@@ -725,14 +725,13 @@ pub const MonoExpr = union(enum) {
         list_drop_last,
         list_take_first,
         list_take_last,
+        list_sublist,
         list_contains,
         list_reverse,
         list_reserve,
         list_release_excess_capacity,
         list_with_capacity,
         list_repeat,
-        list_split_first,
-        list_split_last,
 
         // Numeric operations
         num_add,
@@ -748,9 +747,6 @@ pub const MonoExpr = union(enum) {
         num_round,
         num_floor,
         num_ceiling,
-        num_to_str,
-        num_from_str,
-        num_from_numeral,
 
         // Numeric conversion operations (U8)
         u8_to_i8_wrap,
@@ -1023,10 +1019,6 @@ pub const MonoExpr = union(enum) {
         dec_to_f32_wrap,
         dec_to_f32_try_unsafe,
         dec_to_f64,
-
-        // Box operations
-        box_box,
-        box_unbox,
 
         // Comparison
         compare,

@@ -3690,14 +3690,15 @@ pub const Interpreter = struct {
                     },
                     .dec => |l| switch (rhs) {
                         .dec => |r| {
-                            // For Dec, div and div_trunc are the same since it's already integer-like
                             if (r.num == 0) return error.DivisionByZero;
-                            out.setDec(RocDec.div(l, r, roc_ops), roc_ops);
+                            const result_num = builtins.dec.divTruncC(l, r, roc_ops);
+                            out.setDec(RocDec{ .num = result_num }, roc_ops);
                         },
                         .int => |r| {
                             if (r == 0) return error.DivisionByZero;
                             const r_dec = RocDec.fromWholeInt(r).?;
-                            out.setDec(RocDec.div(l, r_dec, roc_ops), roc_ops);
+                            const result_num = builtins.dec.divTruncC(l, r_dec, roc_ops);
+                            out.setDec(RocDec{ .num = result_num }, roc_ops);
                         },
                         else => return error.TypeMismatch,
                     },
@@ -6280,11 +6281,22 @@ pub const Interpreter = struct {
                 .dec => |l| switch (rhs_val) {
                     .dec => |r| {
                         if (r.num == 0) return error.DivisionByZero;
-                        out.setDec(RocDec.div(l, r, roc_ops), roc_ops);
+                        if (op == .div_trunc) {
+                            const result_num = builtins.dec.divTruncC(l, r, roc_ops);
+                            out.setDec(RocDec{ .num = result_num }, roc_ops);
+                        } else {
+                            out.setDec(RocDec.div(l, r, roc_ops), roc_ops);
+                        }
                     },
                     .int => |r| {
                         if (r == 0) return error.DivisionByZero;
-                        out.setDec(RocDec.div(l, RocDec.fromWholeInt(r).?, roc_ops), roc_ops);
+                        const r_dec = RocDec.fromWholeInt(r).?;
+                        if (op == .div_trunc) {
+                            const result_num = builtins.dec.divTruncC(l, r_dec, roc_ops);
+                            out.setDec(RocDec{ .num = result_num }, roc_ops);
+                        } else {
+                            out.setDec(RocDec.div(l, r_dec, roc_ops), roc_ops);
+                        }
                     },
                     else => return error.TypeMismatch,
                 },
@@ -12336,14 +12348,17 @@ pub const Interpreter = struct {
                     break :blk try self.translateTypeVar(self.env, ct_var);
                 };
                 var resolved = self.resolveBaseVar(rt_var);
-                // Handle flex types for True/False
-                // Note: We also need to handle non-flex Bool types that might come from
-                // type inference (e.g., in `if True then ...` the condition has Bool type)
-                const is_bool_tag = tag.name == self.env.idents.true_tag or tag.name == self.env.idents.false_tag;
-                if (is_bool_tag) {
-                    // Always use canonical Bool for True/False to ensure consistent layout
-                    rt_var = try self.getCanonicalBoolRuntimeVar();
-                    resolved = self.resolveBaseVar(rt_var);
+                // When the resolved type is truly unresolved (flex/rigid), promote
+                // True/False to canonical Bool so the interpreter has a concrete type.
+                // When the type is already concrete (e.g., [True]* for standalone True,
+                // or Bool from unification in `if True then ...`), respect the actual
+                // type — standalone [True]* correctly has True at discriminant 0.
+                if (resolved.desc.content == .flex or resolved.desc.content == .rigid) {
+                    const is_bool_tag = tag.name == self.env.idents.true_tag or tag.name == self.env.idents.false_tag;
+                    if (is_bool_tag) {
+                        rt_var = try self.getCanonicalBoolRuntimeVar();
+                        resolved = self.resolveBaseVar(rt_var);
+                    }
                 }
                 // Unwrap nominal types (like Try) to get to the underlying tag_union
                 if (resolved.desc.content == .structure and resolved.desc.content.structure == .nominal_type) {

@@ -2409,6 +2409,24 @@ pub fn build(b: *std.Build) void {
     roc_exe.root_module.addImport("compiled_builtins", compiled_builtins_module);
     roc_exe.step.dependOn(&write_compiled_builtins.step);
 
+    // Create llvm_codegen module for MonoLlvmCodeGen (used by llvm_compile)
+    const llvm_codegen_module = b.addModule("llvm_codegen", .{
+        .root_source_file = b.path("src/backend/llvm/MonoLlvmCodeGen.zig"),
+    });
+    llvm_codegen_module.addImport("layout", roc_modules.layout);
+    llvm_codegen_module.addImport("mono", roc_modules.mono);
+
+    // Add llvm_compile module to eval for LLVM evaluator support
+    roc_modules.eval.addAnonymousImport("llvm_compile", .{
+        .root_source_file = b.path("src/llvm_compile/mod.zig"),
+        .imports = &.{
+            .{ .name = "layout", .module = roc_modules.layout },
+            .{ .name = "backend", .module = roc_modules.backend },
+            .{ .name = "mono", .module = roc_modules.mono },
+            .{ .name = "llvm_codegen", .module = llvm_codegen_module },
+        },
+    });
+
     // Add snapshot tool
     const snapshot_exe = b.addExecutable(.{
         .name = "snapshot",
@@ -2429,10 +2447,48 @@ pub fn build(b: *std.Build) void {
     snapshot_exe.addLibraryPath(.{ .cwd_relative = llvm_paths.lib });
     snapshot_exe.addIncludePath(.{ .cwd_relative = llvm_paths.include });
     try addStaticLlvmOptionsToModule(snapshot_exe.root_module);
+
+    // Generate LLVM bitcode from builtins for embedding in the LLVM JIT pipeline.
+    // This bitcode is merged with user code at JIT time instead of looking up
+    // symbols from the process address space.
+    // We use static_lib.zig as the entry point since it has minimal dependencies
+    // and compiles standalone without needing tracy or other external modules.
+    const builtins_bc_obj = b.addObject(.{
+        .name = "roc_builtins_bc",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/builtins/static_lib.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+            .strip = true,
+            .pic = true,
+            // Single-threaded mode disables TLS (thread-local storage) which avoids
+            // references to __tlsdesc_resolver that don't exist on all platforms.
+            .single_threaded = true,
+        }),
+    });
+    builtins_bc_obj.root_module.omit_frame_pointer = true;
+    builtins_bc_obj.root_module.stack_check = false;
+    builtins_bc_obj.use_llvm = true;
+    builtins_bc_obj.bundle_compiler_rt = true;
+    // Getting the emitted bin is required to trigger LLVM IR generation
+    _ = builtins_bc_obj.getEmittedBin();
+    const builtins_bc_file = builtins_bc_obj.getEmittedLlvmBc();
+    // Copy the bitcode to src/llvm_compile/ for @embedFile
+    const copy_builtins_bc = b.addUpdateSourceFiles();
+    copy_builtins_bc.addCopyFileToSource(builtins_bc_file, "src/llvm_compile/builtins.bc");
+    snapshot_exe.step.dependOn(&copy_builtins_bc.step);
+    roc_exe.step.dependOn(&copy_builtins_bc.step);
+
     // Add llvm_compile module for LLVM compilation pipeline
     snapshot_exe.root_module.addAnonymousImport("llvm_compile", .{
         .root_source_file = b.path("src/llvm_compile/mod.zig"),
-        .imports = &.{.{ .name = "builtins", .module = roc_modules.builtins }},
+        .imports = &.{
+            .{ .name = "builtins", .module = roc_modules.builtins },
+            .{ .name = "layout", .module = roc_modules.layout },
+            .{ .name = "backend", .module = roc_modules.backend },
+            .{ .name = "mono", .module = roc_modules.mono },
+            .{ .name = "llvm_codegen", .module = llvm_codegen_module },
+        },
     });
 
     add_tracy(b, roc_modules.build_options, snapshot_exe, target, true, flag_enable_tracy);
@@ -2597,6 +2653,27 @@ pub fn build(b: *std.Build) void {
             module_test.test_step.step.dependOn(&write_compiled_builtins.step);
         }
 
+        // Add LLVM support for eval and repl tests to enable LLVM evaluator
+        if (std.mem.eql(u8, module_test.test_step.name, "eval") or std.mem.eql(u8, module_test.test_step.name, "repl")) {
+            if (llvmPaths(b, target, use_system_llvm, user_llvm_path)) |llvm_paths_eval| {
+                module_test.test_step.addLibraryPath(.{ .cwd_relative = llvm_paths_eval.lib });
+                module_test.test_step.addIncludePath(.{ .cwd_relative = llvm_paths_eval.include });
+                addStaticLlvmOptionsToModule(module_test.test_step.root_module) catch {};
+                module_test.test_step.step.dependOn(&copy_builtins_bc.step);
+                module_test.test_step.linkLibrary(zstd.artifact("zstd"));
+                module_test.test_step.root_module.addAnonymousImport("llvm_compile", .{
+                    .root_source_file = b.path("src/llvm_compile/mod.zig"),
+                    .imports = &.{
+                        .{ .name = "builtins", .module = roc_modules.builtins },
+                        .{ .name = "layout", .module = roc_modules.layout },
+                        .{ .name = "backend", .module = roc_modules.backend },
+                        .{ .name = "mono", .module = roc_modules.mono },
+                        .{ .name = "llvm_codegen", .module = llvm_codegen_module },
+                    },
+                });
+            }
+        }
+
         // Add bytebox to eval tests for wasm backend testing
         if (std.mem.eql(u8, module_test.test_step.name, "eval")) {
             module_test.test_step.root_module.addImport("bytebox", bytebox.module("bytebox"));
@@ -2644,9 +2721,17 @@ pub fn build(b: *std.Build) void {
         snapshot_test.addLibraryPath(.{ .cwd_relative = llvm_paths_test.lib });
         snapshot_test.addIncludePath(.{ .cwd_relative = llvm_paths_test.include });
         try addStaticLlvmOptionsToModule(snapshot_test.root_module);
+        // Depend on builtins bitcode being generated
+        snapshot_test.step.dependOn(&copy_builtins_bc.step);
         snapshot_test.root_module.addAnonymousImport("llvm_compile", .{
             .root_source_file = b.path("src/llvm_compile/mod.zig"),
-            .imports = &.{.{ .name = "builtins", .module = roc_modules.builtins }},
+            .imports = &.{
+                .{ .name = "builtins", .module = roc_modules.builtins },
+                .{ .name = "layout", .module = roc_modules.layout },
+                .{ .name = "backend", .module = roc_modules.backend },
+                .{ .name = "mono", .module = roc_modules.mono },
+                .{ .name = "llvm_codegen", .module = llvm_codegen_module },
+            },
         });
 
         add_tracy(b, roc_modules.build_options, snapshot_test, target, true, flag_enable_tracy);

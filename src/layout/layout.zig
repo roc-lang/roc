@@ -114,6 +114,17 @@ pub const Idx = enum(@Type(.{
     /// Used by ArrayListMap as the empty slot marker.
     pub const none: Idx = @enumFromInt(std.math.maxInt(@typeInfo(Idx).@"enum".tag_type));
 
+    /// Returns true if this layout represents a signed integer type.
+    /// Used for determining signed vs unsigned operations (sdiv vs udiv, etc.)
+    pub fn isSigned(self: Idx) bool {
+        return switch (self) {
+            .i8, .i16, .i32, .i64, .i128, .dec => true,
+            .u8, .u16, .u32, .u64, .u128 => false,
+            // Default to signed for other types (floats don't use this, bools are unsigned)
+            else => true,
+        };
+    }
+
     /// Sentinel for call expressions where the function is resolved by name
     /// (e.g., external method calls like `List.map`), not by closure dispatch.
     /// The dev backend resolves these via symbol lookup, so no closure layout is needed.

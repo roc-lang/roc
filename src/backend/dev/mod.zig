@@ -17,12 +17,12 @@ const builtins = @import("builtins");
 pub const EvalBackend = enum {
     dev,
     interpreter,
-    // llvm, // Future: LLVM backend
+    llvm,
 
     pub fn fromString(s: []const u8) ?EvalBackend {
         if (std.mem.eql(u8, s, "dev")) return .dev;
         if (std.mem.eql(u8, s, "interpreter")) return .interpreter;
-        // if (std.mem.eql(u8, s, "llvm")) return .llvm;
+        if (std.mem.eql(u8, s, "llvm")) return .llvm;
         return null;
     }
 };
@@ -90,6 +90,9 @@ pub const X64ElfMonoExprCodeGen = MonoExprCodeGenMod.X64ElfMonoExprCodeGen;
 pub const ObjectFileCompiler = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").ObjectFileCompiler;
 pub const Entrypoint = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").Entrypoint;
 pub const CompilationResult = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").CompilationResult;
+
+/// Object file reader for extracting code sections from ELF/Mach-O/COFF
+pub const object_reader = @import("object_reader.zig");
 
 /// Generic development backend parameterized by architecture-specific types.
 ///

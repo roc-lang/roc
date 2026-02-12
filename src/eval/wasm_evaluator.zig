@@ -52,7 +52,7 @@ fn monoExprResultLayout(store: *const MonoExprStore, expr_id: mono.MonoIR.MonoEx
         .field_access => |fa| fa.field_layout,
         .tuple_access => |ta| ta.elem_layout,
         .closure => |c| c.closure_layout,
-        .nominal => |n| monoExprResultLayout(store, n.backing_expr) orelse n.nominal_layout,
+        .nominal => |n| n.nominal_layout,
         .i64_literal => .i64,
         .f64_literal => .f64,
         .f32_literal => .f32,
