@@ -4010,7 +4010,7 @@ fn processDevObjectSnapshot(
                         const type_var = can.ModuleEnv.varFrom(def.expr);
                         var scope = types.TypeScope.init(allocator);
                         defer scope.deinit();
-                        const ret_layout = layout_store.fromTypeVar(@intCast(platform_idx + 1), type_var, &scope, null) catch continue;
+                        const ret_layout = layout_store.fromTypeVar(@intCast(platform_idx + 1), type_var, &scope, false) catch continue;
 
                         const symbol_name = std.fmt.allocPrint(allocator, "roc__{s}", .{entry.ffi_symbol}) catch continue;
                         entrypoints.append(allocator, .{

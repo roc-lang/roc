@@ -492,7 +492,7 @@ pub fn resolveUnspecializedClosuresWithSubstitutions(
 
                 // Check if this type var has a substitution
                 if (type_substitutions.get(ct_var)) |concrete| {
-                    break :blk concrete;
+                    break :blk concrete.var_;
                 }
                 break :blk ct_var;
             },
@@ -1156,13 +1156,13 @@ fn makeSpecialization(self: *Self, pending: *PendingSpecialization) !void {
         var iter = pending.type_substitutions.iterator();
         while (iter.next()) |entry| {
             const poly_var = entry.key_ptr.*;
-            const concrete_var = entry.value_ptr.*;
+            const concrete_module_var = entry.value_ptr.*;
 
             // Resolve unspecialized entries with ambient function unification
             _ = try self.resolveEntriesForTypeVarWithUnification(
                 &transformer.unspec_by_type_var,
                 poly_var,
-                concrete_var,
+                concrete_module_var.var_,
                 self.impl_lambda_sets,
             );
         }
@@ -1203,7 +1203,7 @@ fn buildTypeSubstitutions(
     // If the polymorphic type is a flex or rigid, map it to the concrete type
     switch (poly_resolved.desc.content) {
         .flex, .rigid => {
-            try var_map.put(poly_resolved.var_, concrete_resolved.var_);
+            try var_map.put(poly_resolved.var_, .{ .module_idx = 0, .var_ = concrete_resolved.var_ });
             return;
         },
         else => {},
@@ -1401,7 +1401,7 @@ fn duplicateExpr(
                             // Check if this is a call to a partial proc
                             if (self.partial_procs.get(assign.ident)) |partial_proc| {
                                 // Get the concrete type by applying substitutions to the polymorphic type
-                                const concrete_type = type_subs.get(partial_proc.type_var) orelse partial_proc.type_var;
+                                const concrete_type = if (type_subs.get(partial_proc.type_var)) |mv| mv.var_ else partial_proc.type_var;
 
                                 // Request a specialization for this concrete type
                                 if (try self.requestSpecialization(assign.ident, concrete_type, expr_idx)) |specialized_ident| {
@@ -1948,7 +1948,7 @@ fn resolveTypeVarDispatch(
     const ct_var = ModuleEnv.varFrom(type_var_anno);
 
     // Look up the concrete type in the substitution map
-    const concrete_type = type_subs.get(ct_var) orelse ct_var;
+    const concrete_type = if (type_subs.get(ct_var)) |mv| mv.var_ else ct_var;
 
     // 3. Look up the method implementation for the concrete type
     if (self.lookupStaticDispatch(concrete_type, dispatch.method_name)) |impl| {

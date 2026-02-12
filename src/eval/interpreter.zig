@@ -9036,10 +9036,10 @@ pub const Interpreter = struct {
         const layout_idx = switch (resolved.desc.content) {
             .structure => |st| switch (st) {
                 .empty_record => try self.runtime_layout_store.ensureEmptyRecordLayout(),
-                .nominal_type => try self.runtime_layout_store.fromTypeVar(0, resolved.var_, &self.empty_scope, null),
-                else => try self.runtime_layout_store.fromTypeVar(0, resolved.var_, &self.empty_scope, null),
+                .nominal_type => try self.runtime_layout_store.fromTypeVar(0, resolved.var_, &self.empty_scope, false),
+                else => try self.runtime_layout_store.fromTypeVar(0, resolved.var_, &self.empty_scope, false),
             },
-            else => try self.runtime_layout_store.fromTypeVar(0, resolved.var_, &self.empty_scope, null),
+            else => try self.runtime_layout_store.fromTypeVar(0, resolved.var_, &self.empty_scope, false),
         };
         // Encode: (generation << 24) | (slot + 1)
         const gen_byte: u8 = @truncate(self.poly_context_generation);
@@ -9265,7 +9265,7 @@ pub const Interpreter = struct {
             if (type_arg_resolved.desc.content == .rigid) {
                 // Type arg is itself a rigid - look it up in empty_scope or rigid_subst
                 if (self.empty_scope.lookup(type_args[i])) |mapped| {
-                    resolved_type_arg = mapped;
+                    resolved_type_arg = mapped.var_;
                 } else if (self.rigid_subst.get(type_args[i])) |mapped| {
                     resolved_type_arg = mapped;
                 }
@@ -9276,7 +9276,7 @@ pub const Interpreter = struct {
                 continue;
             }
 
-            try scope.put(rigids[i], resolved_type_arg);
+            try scope.put(rigids[i], .{ .module_idx = 0, .var_ = resolved_type_arg });
         }
     }
 
@@ -9974,7 +9974,7 @@ pub const Interpreter = struct {
                             if (self.empty_scope.scopes.items.len == 0) {
                                 try self.empty_scope.scopes.append(types.VarMap.init(self.allocator));
                             }
-                            try self.empty_scope.scopes.items[0].put(rt_rigid_var, concrete_rt_var);
+                            try self.empty_scope.scopes.items[0].put(rt_rigid_var, .{ .module_idx = 0, .var_ = concrete_rt_var });
                             try self.rigid_subst.put(rt_rigid_var, concrete_rt_var);
                         }
                     }
@@ -12992,7 +12992,7 @@ pub const Interpreter = struct {
                         if (self.wouldCreateRigidSubstCycle(source, target)) continue;
                         try self.rigid_subst.put(source, target);
                         // Also add to empty_scope so layout store finds the mapping
-                        try scope.put(source, target);
+                        try scope.put(source, .{ .module_idx = 0, .var_ = target });
                     }
                 }
 
@@ -18924,7 +18924,7 @@ pub const Interpreter = struct {
                         if (self.wouldCreateRigidSubstCycle(entry.key_ptr.*, entry.value_ptr.*)) continue;
                         try self.rigid_subst.put(entry.key_ptr.*, entry.value_ptr.*);
                         // Also add to empty_scope so layout store finds the mapping via TypeScope.lookup()
-                        try scope.put(entry.key_ptr.*, entry.value_ptr.*);
+                        try scope.put(entry.key_ptr.*, .{ .module_idx = 0, .var_ = entry.value_ptr.* });
                     }
                     // Layout cache invalidation is handled by generation-based checking in getRuntimeLayout.
                     // No explicit @memset needed.

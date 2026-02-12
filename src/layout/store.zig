@@ -1686,10 +1686,10 @@ pub const Store = struct {
     /// This is essential for cross-module layout computation where different modules
     /// may have type variables with the same numeric value referring to different types.
     ///
-    /// The caller_module_idx parameter specifies the module that owns the type variables
-    /// in the type_scope mappings. When a flex/rigid var is looked up in type_scope and
-    /// found, the mapped var belongs to caller_module_idx, not module_idx. This is critical
-    /// for cross-module polymorphic function calls.
+    /// The use_type_scope parameter controls whether type scope lookups are performed.
+    /// When true, flex/rigid vars are looked up in type_scope, and each scope entry's
+    /// ModuleVar carries the correct module index for resolution. When false, the type
+    /// scope is skipped entirely (we're in a same-module context).
     pub const FromTypeVarError = std.mem.Allocator.Error || error{NotImplemented};
 
     pub fn fromTypeVar(
@@ -1697,7 +1697,7 @@ pub const Store = struct {
         module_idx: u16,
         unresolved_var: Var,
         type_scope: *const TypeScope,
-        caller_module_idx: ?u16,
+        use_type_scope: bool,
     ) FromTypeVarError!Idx {
         // Set the current module for this computation
         self.current_module_idx = module_idx;
@@ -2219,18 +2219,11 @@ pub const Store = struct {
                                 const is_elem_zst = switch (elem_content) {
                                     .flex => |flex| blk: {
                                         // If mapped in type scope, check what it maps to
-                                        if (caller_module_idx) |caller_mod| {
-                                            if (type_scope.lookup(elem_resolved.var_)) |mapped_var| {
-                                                // Resolve the mapped type in the caller module
-                                                const caller_env = self.all_module_envs[caller_mod];
-                                                // Guard: the mapped var must be valid for the caller module's type store.
-                                                // If not, the type scope entry is from a different module context
-                                                // (e.g., an inner call within an external def body) and should be ignored.
-                                                const mapped_var_int = @intFromEnum(mapped_var);
-                                                if (mapped_var_int >= caller_env.types.len()) {
-                                                    break :blk flex.constraints.count == 0;
-                                                }
-                                                const mapped_resolved = caller_env.types.resolveVar(mapped_var);
+                                        if (use_type_scope) {
+                                            if (type_scope.lookup(elem_resolved.var_)) |mapped| {
+                                                // Resolve the mapped type in the mapped var's own module
+                                                const caller_env = self.all_module_envs[mapped.module_idx];
+                                                const mapped_resolved = caller_env.types.resolveVar(mapped.var_);
                                                 // If there's a mapping, the element type is NOT ZST.
                                                 // We'll compute the actual layout recursively.
                                                 // Only treat as ZST if the mapped type is truly empty.
@@ -2253,16 +2246,11 @@ pub const Store = struct {
                                     },
                                     .rigid => |rigid| blk: {
                                         // If mapped in type scope, check what it maps to
-                                        if (caller_module_idx) |caller_mod| {
-                                            if (type_scope.lookup(elem_resolved.var_)) |mapped_var| {
-                                                // Resolve the mapped type in the caller module
-                                                const caller_env = self.all_module_envs[caller_mod];
-                                                // Guard: the mapped var must be valid for the caller module's type store.
-                                                const mapped_var_int = @intFromEnum(mapped_var);
-                                                if (mapped_var_int >= caller_env.types.len()) {
-                                                    break :blk rigid.constraints.count == 0;
-                                                }
-                                                const mapped_resolved = caller_env.types.resolveVar(mapped_var);
+                                        if (use_type_scope) {
+                                            if (type_scope.lookup(elem_resolved.var_)) |mapped| {
+                                                // Resolve the mapped type in the mapped var's own module
+                                                const caller_env = self.all_module_envs[mapped.module_idx];
+                                                const mapped_resolved = caller_env.types.resolveVar(mapped.var_);
                                                 // If there's a mapping, the element type is NOT ZST.
                                                 // We'll compute the actual layout recursively.
                                                 // Only treat as ZST if the mapped type is truly empty.
@@ -2280,9 +2268,8 @@ pub const Store = struct {
                                         // No mapping found for this rigid type parameter.
                                         // Try to find ANY rigid mapping as a heuristic - in a monomorphized
                                         // function, all unmapped rigids should map to the same concrete type.
-                                        if (caller_module_idx) |caller_mod| {
+                                        if (use_type_scope) {
                                             if (type_scope.scopes.items.len > 0) {
-                                                const caller_env = self.all_module_envs[caller_mod];
                                                 var iter = type_scope.scopes.items[0].iterator();
                                                 while (iter.next()) |entry| {
                                                     // Check if this mapping is from a rigid (not a specific structure)
@@ -2292,11 +2279,11 @@ pub const Store = struct {
                                                     if (key_int >= ext_env.types.len()) continue;
                                                     const key_resolved = ext_env.types.resolveVar(entry.key_ptr.*);
                                                     if (key_resolved.desc.content == .rigid) {
-                                                        // Guard: ensure value is valid for the caller module's type store
-                                                        const val_int = @intFromEnum(entry.value_ptr.*);
-                                                        if (val_int >= caller_env.types.len()) continue;
+                                                        // Use the module from the scope entry
+                                                        const mapped_entry = entry.value_ptr.*;
+                                                        const caller_env = self.all_module_envs[mapped_entry.module_idx];
                                                         // Found a rigid mapping - use it
-                                                        const mapped_resolved = caller_env.types.resolveVar(entry.value_ptr.*);
+                                                        const mapped_resolved = caller_env.types.resolveVar(mapped_entry.var_);
                                                         break :blk switch (mapped_resolved.desc.content) {
                                                             .structure => |ft| switch (ft) {
                                                                 .empty_record, .empty_tag_union => true,
@@ -2686,11 +2673,11 @@ pub const Store = struct {
                     },
                     .flex => |flex| blk: {
                         // Only look up in TypeScope if we're doing cross-module resolution.
-                        // caller_module_idx being set indicates the type_scope has mappings
-                        // from an external module's vars to the caller's vars. If it's null,
+                        // use_type_scope being true indicates the type_scope has mappings
+                        // from an external module's vars to the caller's vars. If false,
                         // we're already in the target module and shouldn't apply mappings.
-                        if (caller_module_idx != null) {
-                            if (type_scope.lookup(current.var_)) |mapped_var| {
+                        if (use_type_scope) {
+                            if (type_scope.lookup(current.var_)) |mapped| {
                                 // Debug-only cycle detection: if we've visited this var before,
                                 // there's a cycle which indicates a bug in type checking.
                                 if (@import("builtin").mode == .Debug) {
@@ -2704,26 +2691,19 @@ pub const Store = struct {
                                         scope_lookup_count += 1;
                                     }
                                 }
-                                const target_module = caller_module_idx.?;
-                                const target_types = &self.all_module_envs[target_module].types;
-                                const resolve_module = if (@intFromEnum(mapped_var) >= target_types.len())
-                                    // mapped_var is out of bounds for the caller module — it likely
-                                    // belongs to the current module (e.g., an inner function's override
-                                    // composed into the type scope within an external def body).
-                                    // Resolve in the current module instead.
-                                    self.current_module_idx
-                                else
-                                    target_module;
+                                // Each scope entry carries its own module index — no heuristic needed.
+                                const resolve_module = mapped.module_idx;
+                                const mapped_var = mapped.var_;
                                 // IMPORTANT: Remove the flex from in_progress_vars before making
                                 // the recursive call. Otherwise, if the recursive call resolves to
                                 // the same flex, it will see it in in_progress_vars and incorrectly
                                 // detect a cycle.
                                 _ = self.work.in_progress_vars.swapRemove(.{ .module_idx = self.current_module_idx, .var_ = current.var_ });
                                 // Make a recursive call to compute the layout in the resolve module.
-                                // Pass resolve_module as caller so chained type scope lookups
+                                // Pass use_type_scope=true so chained type scope lookups
                                 // work (e.g., rigid → flex → concrete via two scope entries).
                                 // Cycle detection prevents infinite loops.
-                                layout_idx = try self.fromTypeVar(resolve_module, mapped_var, type_scope, resolve_module);
+                                layout_idx = try self.fromTypeVar(resolve_module, mapped_var, type_scope, true);
                                 skip_layout_computation = true;
                                 break :blk self.getLayout(layout_idx);
                             }
@@ -2759,17 +2739,14 @@ pub const Store = struct {
                     },
                     .rigid => |rigid| blk: {
                         // Only look up in TypeScope if we're doing cross-module resolution.
-                        // caller_module_idx being set indicates the type_scope has mappings
-                        // from an external module's vars to the caller's vars. If it's null,
+                        // use_type_scope being true indicates the type_scope has mappings
+                        // from an external module's vars to the caller's vars. If false,
                         // we're already in the target module and shouldn't apply mappings.
-                        if (caller_module_idx != null) {
-                            if (type_scope.lookup(current.var_)) |mapped_var| {
-                                const target_module = caller_module_idx.?;
-                                const target_types = &self.all_module_envs[target_module].types;
-                                const resolve_module = if (@intFromEnum(mapped_var) >= target_types.len())
-                                    self.current_module_idx
-                                else
-                                    target_module;
+                        if (use_type_scope) {
+                            if (type_scope.lookup(current.var_)) |mapped| {
+                                // Each scope entry carries its own module index — no heuristic needed.
+                                const resolve_module = mapped.module_idx;
+                                const mapped_var = mapped.var_;
                                 // Debug-only cycle detection: if we've visited this var before,
                                 // there's a cycle which indicates a bug in type checking.
                                 if (@import("builtin").mode == .Debug) {
@@ -2786,7 +2763,7 @@ pub const Store = struct {
                                 // IMPORTANT: Remove the rigid from in_progress_vars before making
                                 // the recursive call.
                                 _ = self.work.in_progress_vars.swapRemove(.{ .module_idx = self.current_module_idx, .var_ = current.var_ });
-                                layout_idx = try self.fromTypeVar(resolve_module, mapped_var, type_scope, resolve_module);
+                                layout_idx = try self.fromTypeVar(resolve_module, mapped_var, type_scope, true);
                                 skip_layout_computation = true;
                                 break :blk self.getLayout(layout_idx);
                             }
@@ -3267,7 +3244,7 @@ pub const Store = struct {
         module_env: *ModuleEnv,
         list_elem_span: can.CIR.Expr.Span,
         type_scope: *const TypeScope,
-        caller_module_idx: ?u16,
+        use_type_scope: bool,
     ) !Idx {
         const elems = module_env.store.exprSlice(list_elem_span);
 
@@ -3288,7 +3265,7 @@ pub const Store = struct {
                 module_env,
                 first_elem.e_list.elems,
                 type_scope,
-                caller_module_idx,
+                use_type_scope,
             );
             // Return List(nested_list_layout)
             const list_layout = Layout.list(nested_list_layout_idx);
@@ -3297,7 +3274,7 @@ pub const Store = struct {
 
         // For non-list elements, try to compute layout from the type var
         const elem_type_var = ModuleEnv.varFrom(first_elem_idx);
-        const elem_layout_idx = try self.fromTypeVar(module_idx, elem_type_var, type_scope, caller_module_idx);
+        const elem_layout_idx = try self.fromTypeVar(module_idx, elem_type_var, type_scope, use_type_scope);
 
         // Return List(element_layout)
         const list_layout = Layout.list(elem_layout_idx);

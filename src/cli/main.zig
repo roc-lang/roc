@@ -3746,7 +3746,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
             const type_var = can.ModuleEnv.varFrom(expr_idx);
             var type_scope = @import("types").TypeScope.init(ctx.gpa);
             defer type_scope.deinit();
-            const ret_layout = layout_store.fromTypeVar(@intCast(platform_idx + 1), type_var, &type_scope, null) catch {
+            const ret_layout = layout_store.fromTypeVar(@intCast(platform_idx + 1), type_var, &type_scope, false) catch {
                 std.log.err("Failed to get layout for entrypoint {s}", .{entry.roc_ident});
                 continue;
             };

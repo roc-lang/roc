@@ -747,7 +747,7 @@ pub const DevEvaluator = struct {
             const type_var = can.ModuleEnv.varFrom(expr_idx);
             var type_scope = types.TypeScope.init(self.allocator);
             defer type_scope.deinit();
-            break :blk layout_store_ptr.fromTypeVar(module_idx, type_var, &type_scope, null) catch {
+            break :blk layout_store_ptr.fromTypeVar(module_idx, type_var, &type_scope, false) catch {
                 return error.RuntimeError;
             };
         };

@@ -53,12 +53,21 @@ pub const Var = enum(u32) {
     }
 };
 
-/// A mapping from polymorphic type variables to concrete type variables
-pub const VarMap = std.hash_map.HashMap(Var, Var, std.hash_map.AutoContext(Var), 80);
+/// A type variable with its owning module index, for cross-module scope tracking.
+/// The module_idx identifies which module's TypeStore the var_ belongs to.
+pub const ModuleVar = packed struct(u48) {
+    module_idx: u16,
+    var_: Var,
+};
+
+/// A mapping from polymorphic type variables to module-qualified concrete type variables.
+/// Keys are bare Vars (source vars in the module being lowered).
+/// Values are ModuleVars so fromTypeVar knows which module to resolve the mapped var in.
+pub const VarMap = std.hash_map.HashMap(Var, ModuleVar, std.hash_map.AutoContext(Var), 80);
 
 /// TypeScope represents nested type scopes for resolving polymorphic type variables.
 /// Each HashMap in the list represents a scope level, mapping polymorphic type variables
-/// to their resolved monomorphic equivalents.
+/// to their resolved monomorphic equivalents (with module tracking).
 pub const TypeScope = struct {
     scopes: std.array_list.Managed(VarMap),
 
@@ -75,8 +84,8 @@ pub const TypeScope = struct {
         self.scopes.deinit();
     }
 
-    /// Look up a type variable in all nested scopes, returning the mapped variable if found
-    pub fn lookup(self: *const TypeScope, var_to_find: Var) ?Var {
+    /// Look up a type variable in all nested scopes, returning the module-qualified mapped variable if found
+    pub fn lookup(self: *const TypeScope, var_to_find: Var) ?ModuleVar {
         for (self.scopes.items) |*scope| {
             if (scope.get(var_to_find)) |mapped_var| {
                 return mapped_var;

@@ -110,11 +110,11 @@ type_env: std.AutoHashMap(u32, LayoutIdx),
 /// Current module index during lowering
 current_module_idx: u16 = 0,
 
-/// The module whose type variables are in the type_scope mappings.
-/// When we call an external function, we map its rigid type vars to the caller's
-/// concrete types. This tracks the caller's module so fromTypeVar can resolve
-/// the mapped vars using the correct module's types store.
-type_scope_caller_module: ?u16 = null,
+/// Whether type scope lookups should be active in fromTypeVar.
+/// When true, flex/rigid vars are looked up in type_scope (each entry's ModuleVar
+/// carries the correct module for resolution). When false, the type scope is skipped
+/// (we're in a same-module context without cross-module mappings).
+use_type_scope: bool = false,
 
 /// Current binding pattern (for detecting recursive closures)
 /// When lowering a statement like `f = |x| ...`, this holds the pattern for `f`
@@ -339,15 +339,11 @@ fn lowerExternalDefByIdx(self: *Self, symbol: MonoSymbol, target_def_idx: u16) A
     self.current_module_idx = symbol.module_idx;
     defer self.current_module_idx = old_module;
 
-    // Update type_scope_caller_module to the calling module so that type scope
-    // lookups inside the external def resolve mapped vars in the correct module.
-    const old_caller_module = self.type_scope_caller_module;
-    if (old_caller_module) |caller_mod| {
-        if (caller_mod != old_module) {
-            self.type_scope_caller_module = old_module;
-        }
-    }
-    defer self.type_scope_caller_module = old_caller_module;
+    // Save/restore use_type_scope so that type scope lookups inside the external
+    // def resolve mapped vars correctly. Each scope entry's ModuleVar carries
+    // the correct module, so no module index tracking is needed here.
+    const old_use_type_scope = self.use_type_scope;
+    defer self.use_type_scope = old_use_type_scope;
 
     // Set up binding context for recursive closure detection
     // This is necessary for external functions like List.repeat that have recursive helpers
@@ -496,12 +492,12 @@ fn getExprLayoutFromIdx(self: *Self, module_env: *ModuleEnv, expr_idx: CIR.Expr.
     if (resolved_updated.desc.content == .err) {
         if (self.caller_return_type_var) |caller_ret_var| {
             const ls = self.layout_store orelse unreachable;
-            return ls.fromTypeVar(self.current_module_idx, caller_ret_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
+            return ls.fromTypeVar(self.current_module_idx, caller_ret_var, &self.type_scope, self.use_type_scope) catch unreachable;
         }
     }
 
     const ls = self.layout_store orelse unreachable;
-    const result = ls.fromTypeVar(self.current_module_idx, type_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
+    const result = ls.fromTypeVar(self.current_module_idx, type_var, &self.type_scope, self.use_type_scope) catch unreachable;
     // TODO: This warning should become an assertion once the layout store's
     // fromTypeVar no longer produces List(.opaque_ptr) for cross-module
     // specializations. The layout stored in MonoExpr nodes must be fully
@@ -526,11 +522,8 @@ fn resolveTagDiscriminant(self: *Self, module_env: *ModuleEnv, type_var: types.V
     // Follow type scope if unresolved (flex/rigid)
     if (resolved.desc.content == .flex or resolved.desc.content == .rigid) {
         if (self.type_scope.lookup(resolved.var_)) |mapped| {
-            const scope_env = if (self.type_scope_caller_module) |caller_idx|
-                self.all_module_envs[caller_idx]
-            else
-                module_env;
-            resolved = scope_env.types.resolveVar(mapped);
+            const scope_env = self.all_module_envs[mapped.module_idx];
+            resolved = scope_env.types.resolveVar(mapped.var_);
         }
     }
 
@@ -613,7 +606,7 @@ fn resolveTagDiscriminant(self: *Self, module_env: *ModuleEnv, type_var: types.V
             .flex, .rigid => {
                 // Try resolving through type_scope (same logic as initial resolution)
                 if (self.type_scope.lookup(ext_resolved.var_)) |mapped| {
-                    current_ext = mapped;
+                    current_ext = mapped.var_;
                 } else if (self.caller_return_type_var) |caller_ret_var| {
                     // Fallback: use the caller's return type variable to count
                     // missing tags. This handles cases where the lambda body's tag
@@ -702,12 +695,12 @@ fn pushForLoopElementTypeScope(self: *Self, module_env: *const ModuleEnv, list_e
     // If the list type is a flex/rigid var, check type_scope for a concrete mapping
     // (This handles polymorphic functions where the list parameter type is unresolved)
     var list_type_source_env: *const ModuleEnv = module_env;
+    var list_type_source_module: u16 = self.current_module_idx;
     if (list_resolved.desc.content == .flex or list_resolved.desc.content == .rigid) {
         if (self.type_scope.lookup(list_resolved.var_)) |mapped| {
-            if (self.type_scope_caller_module) |caller_idx| {
-                list_type_source_env = self.all_module_envs[caller_idx];
-            }
-            list_resolved = list_type_source_env.types.resolveVar(mapped);
+            list_type_source_env = self.all_module_envs[mapped.module_idx];
+            list_type_source_module = mapped.module_idx;
+            list_resolved = list_type_source_env.types.resolveVar(mapped.var_);
         }
     }
 
@@ -727,9 +720,9 @@ fn pushForLoopElementTypeScope(self: *Self, module_env: *const ModuleEnv, list_e
     // Only add mapping if the pattern's type is unresolved (flex/rigid)
     if (patt_resolved.desc.content != .flex and patt_resolved.desc.content != .rigid) return false;
 
-    // Push a new scope with the mapping
+    // Push a new scope with the mapping — elem_type_var belongs to list_type_source_module
     var new_scope = types.VarMap.init(self.allocator);
-    new_scope.put(patt_resolved.var_, elem_type_var) catch return false;
+    new_scope.put(patt_resolved.var_, .{ .module_idx = list_type_source_module, .var_ = elem_type_var }) catch return false;
     self.type_scope.scopes.append(new_scope) catch return false;
     return true;
 }
@@ -774,17 +767,17 @@ fn getForLoopElementLayout(self: *Self, list_expr_idx: CIR.Expr.Idx) LayoutIdx {
                     const args = module_env.types.sliceNominalArgs(nominal);
                     std.debug.assert(args.len > 0); // List must have element type arg
                     const elem_type_var = args[0];
-                    const effective_caller = self.type_scope_caller_module orelse blk: {
+                    const effective_use_scope = self.use_type_scope or blk: {
                         const elem_resolved = module_env.types.resolveVar(elem_type_var);
                         if (elem_resolved.desc.content == .flex or elem_resolved.desc.content == .rigid) {
                             if (self.type_scope.lookup(elem_resolved.var_) != null) {
-                                break :blk self.current_module_idx;
+                                break :blk true;
                             }
                         }
-                        break :blk null;
+                        break :blk false;
                     };
                     // Compute layout for the element type from the list's type arg
-                    const elem_layout = ls.fromTypeVar(self.current_module_idx, elem_type_var, &self.type_scope, effective_caller) catch unreachable;
+                    const elem_layout = ls.fromTypeVar(self.current_module_idx, elem_type_var, &self.type_scope, effective_use_scope) catch unreachable;
                     return elem_layout;
                 },
                 else => unreachable, // For loop list must be List type
@@ -820,7 +813,7 @@ fn getPatternLayout(self: *Self, pattern_idx: CIR.Pattern.Idx) LayoutIdx {
     if (resolved.desc.content == .err) {
         if (self.caller_return_type_var) |caller_ret_var| {
             const ls = self.layout_store orelse unreachable;
-            return ls.fromTypeVar(self.current_module_idx, caller_ret_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
+            return ls.fromTypeVar(self.current_module_idx, caller_ret_var, &self.type_scope, self.use_type_scope) catch unreachable;
         }
     }
 
@@ -832,7 +825,7 @@ fn getPatternLayout(self: *Self, pattern_idx: CIR.Pattern.Idx) LayoutIdx {
     }
 
     const ls = self.layout_store orelse unreachable;
-    return ls.fromTypeVar(self.current_module_idx, type_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
+    return ls.fromTypeVar(self.current_module_idx, type_var, &self.type_scope, self.use_type_scope) catch unreachable;
 }
 
 /// Convert a CIR low-level op to the corresponding Mono IR low-level op.
@@ -1270,23 +1263,20 @@ fn setupLocalCallLayoutHints(
     // This handles nested type variables (e.g., the element type `a` inside `List a`)
     // that are not directly represented by the parameter patterns.
     //
-    // Only add type scope entries when the current module matches type_scope_caller_module
+    // Only add type scope entries when use_type_scope is false (no cross-module context)
     // (or caller is not set yet). When inside an external def from a different module,
-    // the type_scope_caller_module points to the outer caller, and adding same-module
-    // mappings to the scope would cause fromTypeVar to resolve the mapped vars in the
-    // wrong module's type store. Use buildLayoutVarOverrides for that case instead.
+    // the use_type_scope flag is true, and adding same-module mappings requires the
+    // buildLayoutVarOverrides path to correctly compose override chains.
     const func_type_var = ModuleEnv.varFrom(def_expr_idx);
     const func_resolved = module_env.types.resolveVar(func_type_var);
     if (func_resolved.desc.content.unwrapFunc()) |func| {
         const param_vars = module_env.types.sliceVars(func.args);
         const num_type_mappings = @min(param_vars.len, arg_indices.len);
 
-        const in_own_module = self.type_scope_caller_module == null or
-            self.type_scope_caller_module.? == self.current_module_idx;
+        const in_own_module = !self.use_type_scope;
 
         if (in_own_module) {
-            // Safe to add type scope entries — mapped vars belong to the same module
-            // as type_scope_caller_module.
+            // Safe to add type scope entries — no cross-module context active.
             if (self.type_scope.scopes.items.len == 0) {
                 try self.type_scope.scopes.append(types.VarMap.init(self.allocator));
             }
@@ -1323,18 +1313,15 @@ fn setupLocalCallLayoutHints(
                 while (override_iter.next()) |entry| {
                     const inner_var = entry.key_ptr.*;
                     const outer_var = entry.value_ptr.*;
-                    // Try composing: inner → outer → caller's var
-                    if (scope.get(outer_var)) |caller_var| {
-                        scope.put(inner_var, caller_var) catch {};
+                    // Try composing: inner → outer → caller's var (already has correct module)
+                    if (scope.get(outer_var)) |caller_mapped| {
+                        scope.put(inner_var, caller_mapped) catch {};
                     } else {
                         // No outer mapping in the type scope. This happens when the
                         // outer function has concrete types (not rigids), e.g., I64.to
                         // calling range_to. In this case, map inner_var → outer_var
-                        // directly. The outer_var is in the current module's type store
-                        // and resolves to a concrete type. fromTypeVar will detect that
-                        // the mapped var is out of bounds for the caller module and
-                        // resolve it in the current module instead.
-                        scope.put(inner_var, outer_var) catch {};
+                        // directly. The outer_var is in the current module's type store.
+                        scope.put(inner_var, .{ .module_idx = @intCast(self.current_module_idx), .var_ = outer_var }) catch {};
                     }
                 }
             }
@@ -1378,7 +1365,7 @@ fn setupLocalCallLayoutHints(
                         const ext_resolved = module_env.types.resolveVar(tu.ext);
                         if (ext_resolved.desc.content == .flex or ext_resolved.desc.content == .rigid) {
                             // Compute the correct layout from the caller's return type
-                            const correct_layout = ls.fromTypeVar(self.current_module_idx, caller_ret_var, &self.type_scope, self.type_scope_caller_module) catch null;
+                            const correct_layout = ls.fromTypeVar(self.current_module_idx, caller_ret_var, &self.type_scope, self.use_type_scope) catch null;
                             if (correct_layout) |layout_idx| {
                                 const cache_key = layout_mod.ModuleVarKey{
                                     .module_idx = self.current_module_idx,
@@ -1734,9 +1721,9 @@ fn needsDotAccessReSpec(
 /// This maps the external function's rigid type variables to concrete types from the call site.
 /// The call_expr_idx is the call expression itself, used to map return type params.
 ///
-/// IMPORTANT: This function assigns `self.type_scope_caller_module`. Callers MUST
-/// save and restore `type_scope_caller_module` around calls to this function
-/// (typically via `const old = self.type_scope_caller_module; defer self.type_scope_caller_module = old;`).
+/// IMPORTANT: This function sets `self.use_type_scope = true`. Callers MUST
+/// save and restore `use_type_scope` around calls to this function
+/// (typically via `const old = self.use_type_scope; defer self.use_type_scope = old;`).
 fn setupExternalCallTypeScope(
     self: *Self,
     caller_module_env: *ModuleEnv,
@@ -1776,12 +1763,10 @@ fn setupExternalCallTypeScope(
     }
     const scope = &self.type_scope.scopes.items[0];
 
-    // Track the caller module - mapped vars in type_scope belong to this module.
-    // Always update to current_module_idx. The e_call handler saves/restores this
-    // via old_caller_module, so inner calls (e.g., Elem.walk! calling List.for_each!)
-    // correctly use the intermediate module's types for scope resolution, and the
-    // outer caller's module is restored after the inner call returns.
-    self.type_scope_caller_module = self.current_module_idx;
+    // Activate type scope lookups. Each scope entry's ModuleVar carries the correct
+    // module for resolution, so no global module tracking is needed. The e_call handler
+    // saves/restores use_type_scope so inner calls don't leak scope state.
+    self.use_type_scope = true;
 
     // Get the function's parameter type variables
     const param_vars = ext_module_env.types.sliceVars(func.args);
@@ -1883,7 +1868,7 @@ fn addIntraModuleMappings(
     if (ur.desc.content == .flex or ur.desc.content == .rigid) {
         if (cr.desc.content == .structure or cr.desc.content == .alias) {
             if (scope.get(ur.var_) == null) {
-                try scope.put(ur.var_, cr.var_);
+                try scope.put(ur.var_, .{ .module_idx = @intCast(self.current_module_idx), .var_ = cr.var_ });
             }
         }
         return;
@@ -1995,20 +1980,21 @@ fn collectTypeMappingsWithExpr(
                         // Compute the list layout based on the expression's elements.
                         const list = caller_expr.e_list;
                         if (self.layout_store) |ls| {
+                            const caller_module_var = types.ModuleVar{ .module_idx = @intCast(self.current_module_idx), .var_ = caller_resolved.var_ };
                             const list_layout = ls.computeListLayout(
                                 self.current_module_idx,
                                 caller_env,
                                 list.elems,
                                 &self.type_scope,
-                                self.type_scope_caller_module,
+                                self.use_type_scope,
                             ) catch {
                                 // Fall back to normal mapping if layout computation fails
-                                try scope.put(ext_resolved.var_, caller_resolved.var_);
+                                try scope.put(ext_resolved.var_, caller_module_var);
                                 return;
                             };
                             self.expr_layout_hints.put(ext_resolved.var_, list_layout) catch {};
                             // Still map the var for other lookups
-                            try scope.put(ext_resolved.var_, caller_resolved.var_);
+                            try scope.put(ext_resolved.var_, caller_module_var);
                             return;
                         }
                     }
@@ -2020,22 +2006,24 @@ fn collectTypeMappingsWithExpr(
             // the outermost caller's module (module 0), giving wrong results.
             if (caller_resolved.desc.content == .rigid or caller_resolved.desc.content == .flex) {
                 if (self.type_scope.lookup(caller_resolved.var_)) |transitive_var| {
+                    // transitive_var is already a ModuleVar with the correct module
                     try scope.put(ext_resolved.var_, transitive_var);
                     return;
                 }
             }
-            try scope.put(ext_resolved.var_, caller_resolved.var_);
+            try scope.put(ext_resolved.var_, .{ .module_idx = @intCast(self.current_module_idx), .var_ = caller_resolved.var_ });
         },
         .flex => {
             // Flex vars might also need mapping if they're unresolved
             // Same transitive resolution as rigid vars for nested calls.
             if (caller_resolved.desc.content == .rigid or caller_resolved.desc.content == .flex) {
                 if (self.type_scope.lookup(caller_resolved.var_)) |transitive_var| {
+                    // transitive_var is already a ModuleVar with the correct module
                     try scope.put(ext_resolved.var_, transitive_var);
                     return;
                 }
             }
-            try scope.put(ext_resolved.var_, caller_resolved.var_);
+            try scope.put(ext_resolved.var_, .{ .module_idx = @intCast(self.current_module_idx), .var_ = caller_resolved.var_ });
         },
         .structure => |st| {
             // Recurse into structure to find nested rigids
@@ -2243,11 +2231,9 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                 // computation inside the lambda body resolves these flex vars to concrete types.
                 //
                 // Only do this when we're in the caller module (not inside an external def).
-                // Inside external defs, current_module_idx differs from type_scope_caller_module,
-                // and adding external module vars to a scope resolved via the caller's type store
-                // would cause cross-module variable resolution errors.
-                const in_caller_module = self.type_scope_caller_module == null or
-                    self.type_scope_caller_module.? == self.current_module_idx;
+                // Inside external defs, use_type_scope is true and we should not add
+                // intra-module mappings that could interfere with cross-module resolution.
+                const in_caller_module = !self.use_type_scope;
                 if (in_caller_module and self.type_scope.scopes.items.len > 0) {
                     const pattern_key = @intFromEnum(lookup.pattern_idx);
                     const def_expr_idx: ?CIR.Expr.Idx = def_blk: {
@@ -2381,7 +2367,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                 }
             }
 
-            const old_caller_module = self.type_scope_caller_module;
+            const old_use_type_scope = self.use_type_scope;
             const old_caller_return_type_var = self.caller_return_type_var;
             if (is_external_call) {
                 const lookup = fn_expr.e_lookup_external;
@@ -2391,7 +2377,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             // get the correct concrete layouts from the call arguments.
             const is_local_call_with_hints = fn_expr == .e_lookup_local;
             // Track scope entries added by inner local calls so we can remove them after.
-            // When inside an external def body (old_caller_module != null), inner local calls
+            // When inside an external def body (old_use_type_scope is true), inner local calls
             // compose override chains into scope[0]. These entries must be removed after the
             // inner call to prevent inner-function vars from polluting later expressions.
             var inner_scope_keys: [32]types.Var = undefined;
@@ -2399,14 +2385,14 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             if (is_local_call_with_hints) {
                 const lookup = fn_expr.e_lookup_local;
                 // Snapshot scope[0] count before the call to track new entries
-                const scope_count_before: u32 = if (old_caller_module != null and
+                const scope_count_before: u32 = if (old_use_type_scope and
                     self.type_scope.scopes.items.len > 0)
                     self.type_scope.scopes.items[0].count()
                 else
                     0;
                 try self.setupLocalCallLayoutHints(module_env, lookup.pattern_idx, call.args, expr_idx);
                 // Record which keys were added by the composition
-                if (old_caller_module != null and self.type_scope.scopes.items.len > 0) {
+                if (old_use_type_scope and self.type_scope.scopes.items.len > 0) {
                     const scope_count_after = self.type_scope.scopes.items[0].count();
                     if (scope_count_after > scope_count_before) {
                         // New entries were added — record the keys from layout_var_overrides
@@ -2420,22 +2406,22 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                         }
                     }
                 }
-                // Set type_scope_caller_module so that fromTypeVar checks the type
+                // Set use_type_scope so that fromTypeVar checks the type
                 // scope for flex/rigid vars inside the lambda body. Without this,
                 // layout computations for parameters with unresolved types (like list
                 // elements) would return ZST instead of the concrete type.
-                if (self.type_scope_caller_module == null and self.type_scope.scopes.items.len > 0) {
-                    self.type_scope_caller_module = self.current_module_idx;
+                if (!self.use_type_scope and self.type_scope.scopes.items.len > 0) {
+                    self.use_type_scope = true;
                 }
             }
             // Clean up type scope after this expression, whether we exit normally or break early.
             // Only clear scope[0] if this call was the outermost one that set up the type scope
-            // (old_caller_module was null). Inner calls (where old_caller_module was already set)
+            // (old_use_type_scope was false). Inner calls (where old_use_type_scope was already true)
             // must not clear scope[0] because the outer call still needs those mappings.
             defer if (is_external_call or is_local_call_with_hints) {
-                self.type_scope_caller_module = old_caller_module;
+                self.use_type_scope = old_use_type_scope;
                 self.caller_return_type_var = old_caller_return_type_var;
-                if (old_caller_module == null) {
+                if (!old_use_type_scope) {
                     if (self.type_scope.scopes.items.len > 0) {
                         self.type_scope.scopes.items[0].clearRetainingCapacity();
                     }
@@ -2550,7 +2536,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                                 @intCast(ext_module_idx),
                                 func.ret,
                                 &self.type_scope,
-                                self.type_scope_caller_module,
+                                self.use_type_scope,
                             ) catch self.getExprLayoutFromIdx(module_env, expr_idx);
                         };
                         break :blk .{
@@ -2738,7 +2724,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                                 if (args.len > 0) {
                                     const elem_type_var = args[0];
                                     // Compute layout for the element type
-                                    const el = ls.fromTypeVar(self.current_module_idx, elem_type_var, &self.type_scope, self.type_scope_caller_module) catch LayoutIdx.default_num;
+                                    const el = ls.fromTypeVar(self.current_module_idx, elem_type_var, &self.type_scope, self.use_type_scope) catch LayoutIdx.default_num;
                                     break :elem_blk el;
                                 }
                             },
@@ -2892,10 +2878,8 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                 // Check type_scope for concrete mapping (polymorphic calls)
                 if (recv_resolved.desc.content == .flex or recv_resolved.desc.content == .rigid) {
                     if (self.type_scope.lookup(recv_resolved.var_)) |mapped| {
-                        if (self.type_scope_caller_module) |caller_idx| {
-                            recv_type_source_env = self.all_module_envs[caller_idx];
-                        }
-                        recv_resolved = recv_type_source_env.types.resolveVar(mapped);
+                        recv_type_source_env = self.all_module_envs[mapped.module_idx];
+                        recv_resolved = recv_type_source_env.types.resolveVar(mapped.var_);
                     }
                 }
 
@@ -3076,7 +3060,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                     // Set up type mappings for the method call so that the method's
                     // generic type parameters are mapped to concrete types from the
                     // call site (e.g., ok_or's `ok` type param → Str).
-                    const old_caller_module = self.type_scope_caller_module;
+                    const old_use_type_scope = self.use_type_scope;
                     const is_cross_module_method = origin_module_idx != self.current_module_idx;
                     {
                         const ext_type_var = ModuleEnv.varFrom(method_def.expr);
@@ -3093,8 +3077,8 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                                 }
                                 const scope = &self.type_scope.scopes.items[0];
 
-                                if (self.type_scope_caller_module == null) {
-                                    self.type_scope_caller_module = self.current_module_idx;
+                                if (!self.use_type_scope) {
+                                    self.use_type_scope = true;
                                 }
 
                                 // Map first parameter (receiver) type
@@ -3220,12 +3204,12 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                     const args_span = try self.store.addExprSpan(all_args.items);
 
                     // Clean up type mappings after lowering arguments
-                    self.type_scope_caller_module = old_caller_module;
+                    self.use_type_scope = old_use_type_scope;
                     if (is_cross_module_method) {
                         // Cross-module: clear type scope entries.
-                        // Only clear if we were the outermost caller (old_caller_module
-                        // was null). Inner calls must preserve outer scope entries.
-                        if (old_caller_module == null) {
+                        // Only clear if we were the outermost caller (old_use_type_scope
+                        // was false). Inner calls must preserve outer scope entries.
+                        if (!old_use_type_scope) {
                             if (self.type_scope.scopes.items.len > 0) {
                                 self.type_scope.scopes.items[0].clearRetainingCapacity();
                             }
@@ -3643,7 +3627,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                     const param_vars = module_env.types.sliceVars(ft.args);
                     if (param_idx < param_vars.len) {
                         const param_type_var = param_vars[param_idx];
-                        break :layout_blk ls.fromTypeVar(self.current_module_idx, param_type_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
+                        break :layout_blk ls.fromTypeVar(self.current_module_idx, param_type_var, &self.type_scope, self.use_type_scope) catch unreachable;
                     }
                     unreachable; // Pattern count should match function parameter count
                 } else {
@@ -3663,7 +3647,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
 
             // Use the function's RETURN type for ret_layout, not the function type itself
             const ret_layout = if (func_type) |ft| ret_blk: {
-                break :ret_blk ls.fromTypeVar(self.current_module_idx, ft.ret, &self.type_scope, self.type_scope_caller_module) catch unreachable;
+                break :ret_blk ls.fromTypeVar(self.current_module_idx, ft.ret, &self.type_scope, self.use_type_scope) catch unreachable;
             } else self.getExprLayoutFromIdx(module_env, expr_idx);
 
             // Create the low-level call as the body
@@ -3716,7 +3700,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                     const param_vars = module_env.types.sliceVars(ft.args);
                     if (param_idx < param_vars.len) {
                         const param_type_var = param_vars[param_idx];
-                        break :layout_blk ls.fromTypeVar(self.current_module_idx, param_type_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
+                        break :layout_blk ls.fromTypeVar(self.current_module_idx, param_type_var, &self.type_scope, self.use_type_scope) catch unreachable;
                     }
                     unreachable; // Pattern count should match function parameter count
                 } else {
@@ -3736,7 +3720,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
 
             // Use the function's RETURN type for ret_layout
             const ret_layout = if (func_type) |ft| ret_blk: {
-                break :ret_blk ls.fromTypeVar(self.current_module_idx, ft.ret, &self.type_scope, self.type_scope_caller_module) catch unreachable;
+                break :ret_blk ls.fromTypeVar(self.current_module_idx, ft.ret, &self.type_scope, self.use_type_scope) catch unreachable;
             } else self.getExprLayoutFromIdx(module_env, expr_idx);
 
             // Create the hosted call as the body
@@ -3807,10 +3791,8 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             var type_source_env: *const ModuleEnv = module_env;
             if (resolved.desc.content == .flex or resolved.desc.content == .rigid) {
                 if (self.type_scope.lookup(resolved.var_)) |mapped| {
-                    if (self.type_scope_caller_module) |caller_idx| {
-                        type_source_env = self.all_module_envs[caller_idx];
-                    }
-                    resolved = type_source_env.types.resolveVar(mapped);
+                    type_source_env = self.all_module_envs[mapped.module_idx];
+                    resolved = type_source_env.types.resolveVar(mapped.var_);
                 }
             }
 
@@ -4238,7 +4220,7 @@ fn lowerPattern(self: *Self, module_env: *ModuleEnv, pattern_idx: CIR.Pattern.Id
                                     break :elem_blk hint_layout;
                                 }
                                 // Compute layout for the element type
-                                break :elem_blk ls.fromTypeVar(self.current_module_idx, elem_type_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
+                                break :elem_blk ls.fromTypeVar(self.current_module_idx, elem_type_var, &self.type_scope, self.use_type_scope) catch unreachable;
                             },
                             else => unreachable, // List pattern must match List type
                         }
@@ -4311,7 +4293,7 @@ fn lowerCaptures(self: *Self, module_env: *ModuleEnv, captures: CIR.Expr.Capture
         const capture_layout_idx = blk: {
             const ls = self.layout_store orelse break :blk LayoutIdx.default_num;
             const type_var = ModuleEnv.varFrom(cap.pattern_idx);
-            break :blk ls.fromTypeVar(self.current_module_idx, type_var, &self.type_scope, self.type_scope_caller_module) catch LayoutIdx.default_num;
+            break :blk ls.fromTypeVar(self.current_module_idx, type_var, &self.type_scope, self.use_type_scope) catch LayoutIdx.default_num;
         };
 
         try lowered.append(self.allocator, .{
@@ -5252,7 +5234,7 @@ fn lowerInspectRecord(
         } }, region);
 
         // Compute type-based layout for inspect (may differ from record field layout)
-        const inspect_layout = layout_store.fromTypeVar(self.current_module_idx, field_var, &self.type_scope, self.type_scope_caller_module) catch field_layout;
+        const inspect_layout = layout_store.fromTypeVar(self.current_module_idx, field_var, &self.type_scope, self.use_type_scope) catch field_layout;
 
         // Recursively inspect the field value
         const field_inspect = try self.lowerStrInspekt(
@@ -5396,7 +5378,7 @@ fn lowerInspectTagUnion(
                         .payload_layout = pl,
                     } }, region);
                     // Compute the type-based layout for inspect (may differ from tag union's internal payload layout)
-                    const arg_layout = layout_store.fromTypeVar(self.current_module_idx, args_slice[0], &self.type_scope, self.type_scope_caller_module) catch pl;
+                    const arg_layout = layout_store.fromTypeVar(self.current_module_idx, args_slice[0], &self.type_scope, self.use_type_scope) catch pl;
                     const inspect_expr = try self.lowerStrInspekt(
                         payload_expr,
                         args_slice[0],
@@ -5424,7 +5406,7 @@ fn lowerInspectTagUnion(
                         // Access individual tuple element
                         const elem_layout = self.getTupleElemLayout(layout_store.getLayout(pl), @intCast(arg_i), layout_store);
                         // Compute type-based layout for each element
-                        const arg_elem_layout = layout_store.fromTypeVar(self.current_module_idx, arg_var, &self.type_scope, self.type_scope_caller_module) catch elem_layout;
+                        const arg_elem_layout = layout_store.fromTypeVar(self.current_module_idx, arg_var, &self.type_scope, self.use_type_scope) catch elem_layout;
                         const elem_expr = try self.store.addExpr(.{ .tuple_access = .{
                             .tuple_expr = tuple_expr,
                             .tuple_layout = pl,
