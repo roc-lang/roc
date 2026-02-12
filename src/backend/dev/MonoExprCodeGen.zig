@@ -11015,7 +11015,10 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 .lambda => |lambda| {
                     const ch = self.populateClosureParamMetadata(call.fn_expr, call.ret_layout, call.args);
                     const offset = try self.compileLambdaAsProc(call.fn_expr, lambda, call.ret_layout, ch);
-                    return try self.generateCallToLambda(offset, call.args, call.ret_layout);
+                    const result = try self.generateCallToLambda(offset, call.args, call.ret_layout);
+                    // If the lambda body is a closure, the proc returned raw bytes.
+                    // Reconstruct closure_value with IR metadata for dispatch.
+                    return self.maybeReconstructClosureValue(result, lambda.body);
                 },
 
                 // Direct closure call: compile as proc and call
@@ -11024,7 +11027,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     if (inner == .lambda) {
                         const ch = self.populateClosureParamMetadata(closure.lambda, call.ret_layout, call.args);
                         const offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda, call.ret_layout, ch);
-                        return try self.generateCallToLambda(offset, call.args, call.ret_layout);
+                        const result = try self.generateCallToLambda(offset, call.args, call.ret_layout);
+                        return self.maybeReconstructClosureValue(result, inner.lambda.body);
                     }
                     unreachable; // closure inner must always be a lambda in the IR
                 },
@@ -11145,6 +11149,26 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     } };
                 },
             }
+        }
+
+        /// After calling a compiled lambda proc whose body is a closure expression,
+        /// the return value is raw stack bytes (the closure's runtime data). This
+        /// function reconstructs the closure_value by navigating the IR to find the
+        /// closure expression's compile-time metadata (representation, lambda, captures).
+        /// Navigates through blocks to find the final closure expression.
+        fn maybeReconstructClosureValue(self: *Self, result: ValueLocation, body_expr_id: MonoExprId) ValueLocation {
+            if (result != .stack) return result;
+            const body_expr = self.store.getExpr(body_expr_id);
+            return switch (body_expr) {
+                .closure => |closure| .{ .closure_value = .{
+                    .stack_offset = result.stack.offset,
+                    .representation = closure.representation,
+                    .lambda = closure.lambda,
+                    .captures = closure.captures,
+                } },
+                .block => |block| self.maybeReconstructClosureValue(result, block.final_expr),
+                else => result,
+            };
         }
 
         /// Materialize captured values to a stack location.
@@ -11629,14 +11653,16 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 .lambda => |lambda| {
                     const closure_hash = self.populateClosureParamMetadata(lambda_body, ret_layout, args_span);
                     const code_offset = try self.compileLambdaAsProc(lambda_body, lambda, ret_layout, closure_hash);
-                    return try self.generateCallToLambda(code_offset, args_span, ret_layout);
+                    const result = try self.generateCallToLambda(code_offset, args_span, ret_layout);
+                    return self.maybeReconstructClosureValue(result, lambda.body);
                 },
                 .closure => |closure| {
                     const inner = self.store.getExpr(closure.lambda);
                     if (inner == .lambda) {
                         const closure_hash = self.populateClosureParamMetadata(closure.lambda, ret_layout, args_span);
                         const code_offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda, ret_layout, closure_hash);
-                        return try self.generateCallToLambda(code_offset, args_span, ret_layout);
+                        const result = try self.generateCallToLambda(code_offset, args_span, ret_layout);
+                        return self.maybeReconstructClosureValue(result, inner.lambda.body);
                     }
                     unreachable; // closure inner must always be a lambda in the IR
                 },
@@ -11671,14 +11697,16 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 .lambda => |l| {
                     const ch = self.populateClosureParamMetadata(member.lambda_body, l.ret_layout, args_span);
                     const code_offset = try self.compileLambdaAsProc(member.lambda_body, l, null, ch);
-                    return try self.generateCallToLambda(code_offset, args_span, l.ret_layout);
+                    const result = try self.generateCallToLambda(code_offset, args_span, l.ret_layout);
+                    return self.maybeReconstructClosureValue(result, l.body);
                 },
                 .closure => |c| {
                     const inner = self.store.getExpr(c.lambda);
                     if (inner == .lambda) {
                         const ch = self.populateClosureParamMetadata(c.lambda, inner.lambda.ret_layout, args_span);
                         const code_offset = try self.compileLambdaAsProc(c.lambda, inner.lambda, null, ch);
-                        return try self.generateCallToLambda(code_offset, args_span, inner.lambda.ret_layout);
+                        const result = try self.generateCallToLambda(code_offset, args_span, inner.lambda.ret_layout);
+                        return self.maybeReconstructClosureValue(result, inner.lambda.body);
                     }
                     unreachable; // closure inner must always be a lambda in the IR
                 },
@@ -11782,14 +11810,16 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     .lambda => |lambda| {
                         const ch = self.populateClosureParamMetadata(def_expr_id, ret_layout, args_span);
                         const offset = try self.compileLambdaAsProc(def_expr_id, lambda, ret_layout, ch);
-                        return try self.generateCallToLambda(offset, args_span, ret_layout);
+                        const result = try self.generateCallToLambda(offset, args_span, ret_layout);
+                        return self.maybeReconstructClosureValue(result, lambda.body);
                     },
                     .closure => |closure| {
                         const inner = self.store.getExpr(closure.lambda);
                         if (inner == .lambda) {
                             const ch = self.populateClosureParamMetadata(closure.lambda, ret_layout, args_span);
                             const offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda, ret_layout, ch);
-                            return try self.generateCallToLambda(offset, args_span, ret_layout);
+                            const result = try self.generateCallToLambda(offset, args_span, ret_layout);
+                            return self.maybeReconstructClosureValue(result, inner.lambda.body);
                         }
                         unreachable;
                     },
@@ -11807,14 +11837,16 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         if (inner == .lambda) {
                             const ch = self.populateClosureParamMetadata(nom.backing_expr, ret_layout, args_span);
                             const offset = try self.compileLambdaAsProc(nom.backing_expr, inner.lambda, ret_layout, ch);
-                            return try self.generateCallToLambda(offset, args_span, ret_layout);
+                            const result = try self.generateCallToLambda(offset, args_span, ret_layout);
+                            return self.maybeReconstructClosureValue(result, inner.lambda.body);
                         }
                         if (inner == .closure) {
                             const closure_inner = self.store.getExpr(inner.closure.lambda);
                             if (closure_inner == .lambda) {
                                 const ch = self.populateClosureParamMetadata(inner.closure.lambda, ret_layout, args_span);
                                 const offset = try self.compileLambdaAsProc(inner.closure.lambda, closure_inner.lambda, ret_layout, ch);
-                                return try self.generateCallToLambda(offset, args_span, ret_layout);
+                                const result = try self.generateCallToLambda(offset, args_span, ret_layout);
+                                return self.maybeReconstructClosureValue(result, closure_inner.lambda.body);
                             }
                         }
                         if (inner == .block) {
@@ -13299,11 +13331,34 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             // Generate the body
             const result_loc = try self.generateExpr(lambda.body);
 
+            // If the result is a closure_value, convert to a plain stack location.
+            // closure_value bundles compile-time dispatch metadata with runtime data,
+            // but we can only return raw bytes through registers. The closure's capture
+            // data is already materialized on the stack by generateClosure.
+            // Use representation-specific size (not the CIR closure layout which includes
+            // a compile-time header).
+            const effective_result = if (result_loc == .closure_value) blk: {
+                const cv = result_loc.closure_value;
+                if (cv.representation == .direct_call) {
+                    // direct_call closures have no runtime data (no captures, no tag)
+                    break :blk ValueLocation{ .immediate_i64 = 0 };
+                }
+                // Compute runtime size from representation (captures only)
+                const runtime_size: u32 = if (self.layout_store) |ls| switch (cv.representation) {
+                    .unwrapped_capture => |uc| ls.layoutSizeAlign(ls.getLayout(uc.capture_layout)).size,
+                    .struct_captures => |sc| ls.layoutSizeAlign(ls.getLayout(sc.struct_layout)).size,
+                    .enum_dispatch => 8,
+                    .union_repr => |ur| ls.layoutSizeAlign(ls.getLayout(ur.union_layout)).size,
+                    .direct_call => unreachable, // handled above
+                } else 8;
+                break :blk ValueLocation{ .stack = .{ .offset = cv.stack_offset, .size = ValueSize.fromByteCount(runtime_size) } };
+            } else result_loc;
+
             // Move result to return register or copy to return pointer
             if (self.ret_ptr_slot) |ret_slot| {
-                try self.copyResultToReturnPointer(result_loc, effective_ret_layout, ret_slot);
+                try self.copyResultToReturnPointer(effective_result, effective_ret_layout, ret_slot);
             } else {
-                try self.moveToReturnRegisterWithLayout(result_loc, effective_ret_layout);
+                try self.moveToReturnRegisterWithLayout(effective_result, effective_ret_layout);
             }
 
             // Record epilogue location (relative to body, will adjust after prepending prologue)
@@ -13380,6 +13435,13 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     const layout_val = ls.getLayout(ret_layout);
                     if (layout_val.tag == .record or layout_val.tag == .tag_union or layout_val.tag == .tuple) {
                         return ls.layoutSizeAlign(layout_val).size > max_return_size;
+                    }
+                    // Closure runtime size is based on captures, not the full CIR layout
+                    // (which includes a compile-time header). Same approach as calcArgRegCount.
+                    if (layout_val.tag == .closure) {
+                        const captures_idx = layout_val.data.closure.captures_layout_idx;
+                        const captures_layout = ls.getLayout(captures_idx);
+                        return ls.layoutSizeAlign(captures_layout).size > max_return_size;
                     }
                 }
             }
@@ -14008,6 +14070,32 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         return;
                     }
                 }
+
+                // Closure: runtime size is based on captures, not the full CIR layout
+                if (layout_val.tag == .closure) {
+                    const captures_idx = layout_val.data.closure.captures_layout_idx;
+                    const captures_layout = ls.getLayout(captures_idx);
+                    const captures_size = ls.layoutSizeAlign(captures_layout).size;
+                    if (captures_size > 8) {
+                        const stack_offset: i32 = switch (loc) {
+                            .stack => |s| s.offset,
+                            else => return self.moveToReturnRegister(loc),
+                        };
+                        const num_regs = (captures_size + 7) / 8;
+                        if (comptime target.toCpuArch() == .aarch64) {
+                            const regs = [_]@TypeOf(GeneralReg.X0){ .X0, .X1, .X2, .X3, .X4, .X5, .X6, .X7, .XR, .X9, .X10, .X11, .X12, .X13, .X14, .X15 };
+                            for (0..@min(num_regs, regs.len)) |i| {
+                                try self.codegen.emitLoadStack(.w64, regs[i], stack_offset + @as(i32, @intCast(i * 8)));
+                            }
+                        } else {
+                            const regs = [_]@TypeOf(GeneralReg.RAX){ .RAX, .RDX, .RCX, .R8, .R9, .R10, .R11, .RDI, .RSI };
+                            for (0..@min(num_regs, regs.len)) |i| {
+                                try self.codegen.emitLoadStack(.w64, regs[i], stack_offset + @as(i32, @intCast(i * 8)));
+                            }
+                        }
+                        return;
+                    }
+                }
             }
             // i128/u128/Dec need two registers (X0/X1 or RAX/RDX)
             // Check both builtin sentinels and layout store for 16-byte scalars.
@@ -14504,6 +14592,29 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         // Uses X0-X7 for first 8 words, then X9-X12 for overflow (aarch64)
                         const stack_offset = self.codegen.allocStackSlot(size_align.size);
                         const num_regs = (size_align.size + 7) / 8;
+                        if (comptime target.toCpuArch() == .aarch64) {
+                            const regs = [_]@TypeOf(GeneralReg.X0){ .X0, .X1, .X2, .X3, .X4, .X5, .X6, .X7, .XR, .X9, .X10, .X11, .X12, .X13, .X14, .X15 };
+                            for (0..@min(num_regs, regs.len)) |i| {
+                                try self.codegen.emit.strRegMemSoff(.w64, regs[i], .FP, stack_offset + @as(i32, @intCast(i * 8)));
+                            }
+                        } else {
+                            const regs = [_]@TypeOf(GeneralReg.RAX){ .RAX, .RDX, .RCX, .R8, .R9, .R10, .R11, .RDI, .RSI };
+                            for (0..@min(num_regs, regs.len)) |i| {
+                                try self.codegen.emit.movMemReg(.w64, .RBP, stack_offset + @as(i32, @intCast(i * 8)), regs[i]);
+                            }
+                        }
+                        return .{ .stack = .{ .offset = stack_offset } };
+                    }
+                }
+
+                // Closure: runtime size is based on captures, not the full CIR layout
+                if (layout_val.tag == .closure) {
+                    const captures_idx = layout_val.data.closure.captures_layout_idx;
+                    const captures_layout = ls.getLayout(captures_idx);
+                    const captures_size = ls.layoutSizeAlign(captures_layout).size;
+                    if (captures_size > 8) {
+                        const stack_offset = self.codegen.allocStackSlot(captures_size);
+                        const num_regs = (captures_size + 7) / 8;
                         if (comptime target.toCpuArch() == .aarch64) {
                             const regs = [_]@TypeOf(GeneralReg.X0){ .X0, .X1, .X2, .X3, .X4, .X5, .X6, .X7, .XR, .X9, .X10, .X11, .X12, .X13, .X14, .X15 };
                             for (0..@min(num_regs, regs.len)) |i| {
