@@ -502,6 +502,17 @@ fn getExprLayoutFromIdx(self: *Self, module_env: *ModuleEnv, expr_idx: CIR.Expr.
 
     const ls = self.layout_store orelse unreachable;
     const result = ls.fromTypeVar(self.current_module_idx, type_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
+    // TODO: This warning should become an assertion once the layout store's
+    // fromTypeVar no longer produces List(.opaque_ptr) for cross-module
+    // specializations. The layout stored in MonoExpr nodes must be fully
+    // resolved — .opaque_ptr sentinels cause wrong alignment in codegen decrefs.
+    // See: src/layout/store.zig:2744-2752 (flex var → opaquePtr fallback)
+    if (comptime @import("builtin").mode == .Debug) {
+        const result_layout = ls.getLayout(result);
+        if (result_layout.tag == .list and result_layout.data.list == .opaque_ptr) {
+            std.debug.print("WARNING: getExprLayoutFromIdx returned list layout with .opaque_ptr element\n", .{});
+        }
+    }
     return result;
 }
 

@@ -1174,6 +1174,41 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             return null;
         }
 
+        /// Get the element layout for a list-typed expression using solved types.
+        ///
+        /// Reads the element layout directly from list literal MonoExprs
+        /// (`.list`, `.empty_list`) which carry their solved `elem_layout`.
+        /// For non-literal list expressions (lookups, calls, etc.), extracts
+        /// the element layout from the expression's result layout in the
+        /// layout store.
+        fn getListElemLayout(self: *Self, list_expr_id: MonoExprId) ?layout.Idx {
+            // Priority 1: Read the solved type directly from list literal expressions.
+            // These carry elem_layout computed during lowering in the correct module context.
+            const expr = self.store.getExpr(list_expr_id);
+            switch (expr) {
+                .list => |l| return l.elem_layout,
+                .empty_list => |el| return el.elem_layout,
+                else => {},
+            }
+            // Priority 2: For non-literal expressions (lookups, calls, low_levels, blocks, etc.),
+            // the expression's result layout IS the solved list type.
+            const ls = self.layout_store orelse return null;
+            if (self.getExprLayout(list_expr_id)) |layout_idx| {
+                const layout_val = ls.getLayout(layout_idx);
+                if (layout_val.tag == .list) {
+                    const elem = layout_val.data.list;
+                    // TODO: this guard should be removable once the layout store's
+                    // fromTypeVar no longer produces List(.opaque_ptr) for cross-module
+                    // specializations. When that's fixed, replace this with an assertion:
+                    //   std.debug.assert(elem != .opaque_ptr);
+                    // See: src/layout/store.zig:2744-2752 (flex var → opaquePtr fallback)
+                    if (elem == .opaque_ptr) return null;
+                    return elem;
+                }
+            }
+            return null;
+        }
+
         /// Generate code for an expression. The result is ALWAYS in a stable location
         /// (stack, immediate, closure_value) — never a bare register.
         fn generateExpr(self: *Self, expr_id: MonoExprId) Error!ValueLocation {
@@ -1347,7 +1382,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     // Decref the list — list_len only reads, doesn't consume.
                     // Save result to stack first since the decref call clobbers
                     // caller-saved registers.
-                    if (self.getExprLayout(args[0])) |list_layout_idx| {
+                    if (self.getListElemLayout(args[0])) |elem_layout_idx| {
                         const result_slot = self.codegen.allocStackSlot(8);
                         if (comptime target.toCpuArch() == .aarch64) {
                             try self.codegen.emit.strRegMemSoff(.w64, result_reg, .FP, result_slot);
@@ -1356,7 +1391,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         }
                         self.codegen.freeGeneral(result_reg);
 
-                        const lai = self.listAllocInfoFromListLayout(list_layout_idx);
+                        const lai = self.listAllocInfo(elem_layout_idx);
                         try self.emitListDecref(.{ .stack = .{ .offset = base_offset } }, lai.alignment, lai.elements_refcounted);
                         return .{ .stack = .{ .offset = result_slot } };
                     }
@@ -1397,6 +1432,23 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         }
                         self.codegen.freeGeneral(one_reg);
                         self.codegen.freeGeneral(len_reg);
+
+                        // Decref the list — list_is_empty only reads, doesn't consume.
+                        // Save result to stack first since the decref call clobbers
+                        // caller-saved registers.
+                        if (self.getListElemLayout(args[0])) |elem_layout_idx| {
+                            const result_slot = self.codegen.allocStackSlot(8);
+                            if (comptime target.toCpuArch() == .aarch64) {
+                                try self.codegen.emit.strRegMemSoff(.w64, result_reg, .FP, result_slot);
+                            } else {
+                                try self.codegen.emit.movMemReg(.w64, .RBP, result_slot, result_reg);
+                            }
+                            self.codegen.freeGeneral(result_reg);
+
+                            const lai = self.listAllocInfo(elem_layout_idx);
+                            try self.emitListDecref(.{ .stack = .{ .offset = base_offset } }, lai.alignment, lai.elements_refcounted);
+                            return .{ .stack = .{ .offset = result_slot } };
+                        }
 
                         return .{ .general_reg = result_reg };
                     }
@@ -1636,27 +1688,25 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         else => unreachable, // list must be on the stack
                     };
 
-                    // Determine element layout: extract from the list arg's layout
-                    // (not from ret_layout, which may be a Try tag union)
-                    const elem_layout_idx: layout.Idx = blk: {
-                        // Try to get the list layout from the first argument
-                        if (self.getExprLayout(args[0])) |list_layout_idx| {
-                            const list_layout_val = ls.getLayout(list_layout_idx);
-                            if (list_layout_val.tag == .list) {
-                                break :blk list_layout_val.data.list;
-                            }
-                        }
-                        // Fallback: if ret_layout is a tag_union (Try), extract
-                        // the Ok variant's payload layout as element layout
+                    // Determine element layout from the list arg's solved type.
+                    //
+                    // TODO: the orelse fallback below is a workaround for the layout store's
+                    // fromTypeVar producing List(.opaque_ptr) during cross-module specialization.
+                    // When getListElemLayout returns null, it means the list's layout has an
+                    // unresolved .opaque_ptr element. The fallback extracts the element type
+                    // from the ret_layout's Try tag union (Ok variant) or uses ret_layout
+                    // directly for list_get_unsafe. Once the layout store is fixed to never
+                    // produce .opaque_ptr in container element positions, this entire orelse
+                    // block should be replaced with a simple unwrap/assert.
+                    // See: src/layout/store.zig:2744-2752 (flex var → opaquePtr fallback)
+                    const elem_layout_idx: layout.Idx = self.getListElemLayout(args[0]) orelse blk: {
                         if (ret_layout_val.tag == .tag_union) {
                             const tu_data2 = ls.getTagUnionData(ret_layout_val.data.tag_union.idx);
                             const variants = ls.getTagUnionVariants(tu_data2);
-                            // Ok is discriminant 1 (tags sorted alphabetically: Err=0, Ok=1)
                             if (variants.len > 1) {
                                 break :blk variants.get(1).payload_layout;
                             }
                         }
-                        // Last resort: use ret_layout directly (for list_get_unsafe)
                         break :blk ll.ret_layout;
                     };
                     const elem_layout_val = ls.getLayout(elem_layout_idx);
@@ -4060,15 +4110,13 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 else => unreachable, // list_first/list_last requires a stack-backed list
             };
 
-            // Determine element layout from the list argument (not from ret_layout)
-            const elem_layout_idx: layout.Idx = blk: {
-                if (self.getExprLayout(list_arg)) |list_layout_idx| {
-                    const list_layout_val = ls.getLayout(list_layout_idx);
-                    if (list_layout_val.tag == .list) {
-                        break :blk list_layout_val.data.list;
-                    }
-                }
-                // Fallback: extract Ok variant's payload from the tag union
+            // Determine element layout from the list argument's solved type.
+            //
+            // TODO: the orelse fallback below is a workaround for the layout store's
+            // fromTypeVar producing List(.opaque_ptr) during cross-module specialization.
+            // Once the layout store is fixed, replace with a simple unwrap/assert.
+            // See: src/layout/store.zig:2744-2752 (flex var → opaquePtr fallback)
+            const elem_layout_idx: layout.Idx = self.getListElemLayout(list_arg) orelse blk: {
                 const variants = ls.getTagUnionVariants(tu_data);
                 if (variants.len > 1) {
                     break :blk variants.get(1).payload_layout;
@@ -9479,54 +9527,14 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 else => unreachable,
             };
 
-            // Get element layout and size.
-            // Cross-module layout resolution can produce incorrect elem_layout indices
-            // (e.g., for builtin functions like List.for_each! where the for loop's
-            // elem_layout is computed from a rigid type variable that may have stale
-            // type scope mappings). When this happens, derive the correct element
-            // layout from the list expression's layout, which was computed in the
-            // correct module context during list lowering.
+            // Get element layout from the list expression's solved type.
+            //
+            // TODO: the orelse fallback to for_loop.elem_layout is a workaround for the
+            // layout store's fromTypeVar producing List(.opaque_ptr) during cross-module
+            // specialization. Once the layout store is fixed, replace with unwrap/assert.
+            // See: src/layout/store.zig:2744-2752 (flex var → opaquePtr fallback)
             const ls = self.layout_store orelse unreachable;
-            const effective_elem_layout: layout.Idx = blk: {
-                // Priority 1: Derive from the list expression's computed layout.
-                // This is the most reliable source because the list's element layout
-                // was determined when the list itself was created/lowered.
-                const list_expr_layout = self.getExprLayout(for_loop.list_expr);
-                if (list_expr_layout) |list_layout_idx| {
-                    const list_layout = ls.getLayout(list_layout_idx);
-                    if (list_layout.tag == .list) {
-                        const derived = list_layout.data.list;
-                        const derived_layout = ls.getLayout(derived);
-                        const derived_size = ls.layoutSizeAlign(derived_layout).size;
-                        if (derived_size > 0) {
-                            break :blk derived;
-                        }
-                    }
-                }
-                // Priority 2: Check the element pattern's layout_idx — it was computed
-                // from the pattern's type variable during lowering and may be more
-                // accurate than the for loop's elem_layout (which can be wrong due
-                // to stale type scope mappings for cross-module specializations).
-                const elem_pattern = self.store.getPattern(for_loop.elem_pattern);
-                switch (elem_pattern) {
-                    .bind => |bind| {
-                        const pat_layout = ls.getLayout(bind.layout_idx);
-                        const pat_size = ls.layoutSizeAlign(pat_layout).size;
-                        if (pat_size > 0) {
-                            break :blk bind.layout_idx;
-                        }
-                    },
-                    .wildcard => {},
-                    else => unreachable,
-                }
-                // Priority 3: Use the stored elem_layout
-                const stored_layout = ls.getLayout(for_loop.elem_layout);
-                const stored_size = ls.layoutSizeAlign(stored_layout).size;
-                if (stored_size > 0 or for_loop.elem_layout == .bool) {
-                    break :blk for_loop.elem_layout;
-                }
-                break :blk for_loop.elem_layout;
-            };
+            const effective_elem_layout: layout.Idx = self.getListElemLayout(for_loop.list_expr) orelse for_loop.elem_layout;
             const elem_layout = ls.getLayout(effective_elem_layout);
             const elem_size: u32 = ls.layoutSizeAlign(elem_layout).size;
             // ZST elements (size 0) are valid - they have no data but we still iterate
