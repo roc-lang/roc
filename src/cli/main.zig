@@ -2936,6 +2936,107 @@ fn formatUnbundlePathValidationReason(reason: unbundle.PathValidationReason) []c
     };
 }
 
+/// Validate a bundle by using the Coordinator to discover all transitive module
+/// dependencies, then checking that every discovered .roc file is present in the
+/// bundle file list. Also validates platform target binaries if a platform is found.
+fn validateBundleWithCoordinator(
+    ctx: *CliContext,
+    first_roc_file: []const u8,
+    bundled_file_paths: []const []const u8,
+    stderr: anytype,
+) !void {
+    // Resolve the entry point to an absolute path
+    const abs_entry = std.fs.cwd().realpathAlloc(ctx.gpa, first_roc_file) catch |err| {
+        try stderr.print("Error: Could not resolve path '{s}': {}\n", .{ first_roc_file, err });
+        return err;
+    };
+    defer ctx.gpa.free(abs_entry);
+
+    // Create a BuildEnv to parse headers and discover modules via the Coordinator
+    var build_env = try BuildEnv.init(ctx.gpa, .single_threaded, 1, roc_target.RocTarget.detectNative());
+    defer build_env.deinit();
+
+    // Run the build — the Coordinator discovers all transitive module dependencies
+    build_env.build(abs_entry) catch {
+        // Drain and display any errors from the build
+        const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
+        defer build_env.freeDrainedReportsPathsOnly(drained);
+
+        for (drained) |mod| {
+            for (mod.reports) |report| {
+                switch (report.severity) {
+                    .runtime_error, .fatal => {
+                        try stderr.print("{s}: error in module\n", .{mod.abs_path});
+                    },
+                    .warning => {
+                        try stderr.print("{s}: warning in module\n", .{mod.abs_path});
+                    },
+                    .info => {},
+                }
+            }
+        }
+        // Build errors are not fatal for bundling — continue to check what we can
+    };
+
+    // Detect platform from BuildEnv packages using the accessor
+    const platform_root_file = build_env.getPlatformRootFile();
+
+    // Collect all discovered module paths from the Coordinator
+    var required_paths = std.ArrayList([]const u8).empty;
+    defer required_paths.deinit(ctx.gpa);
+
+    if (build_env.coordinator) |coord| {
+        var coord_pkg_it = coord.packages.iterator();
+        while (coord_pkg_it.next()) |pkg_entry| {
+            for (pkg_entry.value_ptr.*.modules.items) |mod_state| {
+                try required_paths.append(ctx.gpa, mod_state.path);
+            }
+        }
+    }
+
+    // Build a set of absolute paths from the bundle file list for quick lookup
+    var bundled_set = std.StringHashMap(void).init(ctx.gpa);
+    defer bundled_set.deinit();
+
+    for (bundled_file_paths) |rel_path| {
+        const abs_path = std.fs.cwd().realpathAlloc(ctx.gpa, rel_path) catch continue;
+        defer ctx.gpa.free(abs_path);
+        try bundled_set.put(try ctx.arena.dupe(u8, abs_path), {});
+    }
+
+    // Compare discovered module paths against bundled file list
+    var missing_count: u32 = 0;
+    for (required_paths.items) |req_path| {
+        if (!bundled_set.contains(req_path)) {
+            // Try to make the path relative for a nicer error message
+            const display_path = std.fs.path.relative(ctx.arena, ".", req_path) catch req_path;
+            try stderr.print("Error: Required module file is missing from bundle: {s}\n", .{display_path});
+            missing_count += 1;
+        }
+    }
+
+    if (missing_count > 0) {
+        try stderr.print("Error: {} required module file(s) missing from bundle\n", .{missing_count});
+        return error.MissingBundleFiles;
+    }
+
+    // If a platform was detected, validate target binaries exist
+    // Use TargetsConfig from BuildEnv (already extracted during header parsing)
+    if (platform_root_file) |pf| {
+        if (build_env.getPlatformTargetsConfig()) |tc| {
+            const pf_dir = std.fs.path.dirname(pf) orelse ".";
+            if (platform_validation.validateAllTargetFilesExist(ctx.arena, tc, pf_dir)) |result| {
+                _ = platform_validation.renderValidationError(ctx.gpa, result, stderr);
+                return switch (result) {
+                    .missing_target_file => error.MissingTargetFile,
+                    .missing_files_directory => error.MissingFilesDirectory,
+                    else => error.MissingTargetFile,
+                };
+            }
+        }
+    }
+}
+
 /// Bundles a roc package and its dependencies into a compressed tar archive
 pub fn rocBundle(ctx: *CliContext, args: cli_args.BundleArgs) !void {
     const stdout = ctx.io.stdout();
@@ -3025,42 +3126,14 @@ pub fn rocBundle(ctx: *CliContext, args: cli_args.BundleArgs) !void {
         }
     }
 
-    // Find the platform file among the .roc files (if any)
-    // We need to check each file without side effects first, then validate the actual platform
-    var platform_file: ?[]const u8 = null;
-    for (file_paths.items) |path| {
-        if (std.mem.endsWith(u8, path, ".roc")) {
-            if (platform_validation.isPlatformFile(ctx.arena, path)) |is_platform| {
-                if (is_platform) {
-                    platform_file = path;
-                    break;
-                }
-            }
-        }
-    }
+    // Find the first .roc file to use as entry point for Coordinator-based validation
+    const first_roc_file: ?[]const u8 = for (file_paths.items) |path| {
+        if (std.mem.endsWith(u8, path, ".roc")) break path;
+    } else null;
 
-    // If we found a platform file, validate it has proper targets section
-    if (platform_file) |pf| {
-        if (platform_validation.validatePlatformHeader(ctx.arena, pf)) |validation| {
-            // Platform validation succeeded - validate all target files exist
-            if (platform_validation.validateAllTargetFilesExist(
-                ctx.arena,
-                validation.config,
-                validation.platform_dir,
-            )) |result| {
-                // Render the validation error with nice formatting
-                _ = platform_validation.renderValidationError(ctx.gpa, result, stderr);
-                return switch (result) {
-                    .missing_target_file => error.MissingTargetFile,
-                    .missing_files_directory => error.MissingFilesDirectory,
-                    else => error.MissingTargetFile,
-                };
-            }
-        } else |_| {
-            // validatePlatformHeader already rendered the error message via the reporting system.
-            // We continue bundling for now (non-blocking warning), but the user has seen the error.
-            // This allows bundling apps or platforms that don't yet have targets sections.
-        }
+    // Use the Coordinator to discover all transitive module dependencies and validate
+    if (first_roc_file) |roc_file| {
+        try validateBundleWithCoordinator(ctx, roc_file, file_paths.items, stderr);
     }
 
     // Create temporary output file
@@ -3288,52 +3361,51 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         else => return err,
     };
 
-    // Get platform directory and host library
-    const app_dir = std.fs.path.dirname(args.path) orelse ".";
-    const platform_spec = try extractPlatformSpecFromApp(ctx, args.path);
-    std.log.debug("Platform spec: {s}", .{platform_spec});
+    // Phase 1: Create BuildEnv with native target for discovery
+    const thread_count: usize = if (args.max_threads) |t| t else (std.Thread.getCpuCount() catch 1);
+    const mode: compile.package.Mode = if (thread_count <= 1) .single_threaded else .multi_threaded;
 
-    // Resolve platform path
-    const platform_paths: ?PlatformPaths = if (std.mem.startsWith(u8, platform_spec, "./") or
-        std.mem.startsWith(u8, platform_spec, "../") or
-        base.url.isSafeUrl(platform_spec))
-        try resolvePlatformSpecToPaths(ctx, platform_spec, app_dir)
-    else
-        null;
+    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, roc_target.RocTarget.detectNative());
+    build_env.compiler_version = build_options.compiler_version;
+    defer build_env.deinit();
 
-    // Validate platform header
-    const platform_source = if (platform_paths) |pp| pp.platform_source_path else null;
-    const validation = if (platform_source) |ps|
-        platform_validation.validatePlatformHeader(ctx.arena, ps) catch |err| {
-            switch (err) {
-                error.MissingTargetsSection => {
-                    const result = platform_validation.ValidationResult{
-                        .missing_targets_section = .{ .platform_path = ps },
-                    };
-                    _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
-                    return error.MissingTargetsSection;
-                },
-                else => {
-                    renderProblem(ctx.gpa, ctx.io.stderr(), .{
-                        .platform_validation_failed = .{
-                            .message = "Failed to validate platform header",
-                        },
-                    });
-                    return err;
-                },
+    // Set up cache manager for compilation caching
+    if (!args.no_cache) {
+        const build_cache_manager = try ctx.gpa.create(CacheManager);
+        build_cache_manager.* = CacheManager.init(ctx.gpa, .{
+            .enabled = true,
+            .verbose = args.verbose,
+        }, Filesystem.default());
+        build_env.setCacheManager(build_cache_manager);
+    }
+
+    // Phase 2: Discover dependencies (parses headers once, extracts TargetsConfig)
+    build_env.discoverDependencies(args.path) catch |err| {
+        const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
+        defer build_env.freeDrainedReports(drained);
+
+        for (drained) |mod| {
+            for (mod.reports) |*report| {
+                const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
+                const config = reporting.ReportingConfig.initColorTerminal();
+                reporting.renderReportToTerminal(report, ctx.io.stderr(), palette, config) catch {};
             }
         }
-    else {
+        return err;
+    };
+
+    // Phase 3: Get TargetsConfig from the discovered platform package
+    const targets_config = build_env.getPlatformTargetsConfig() orelse {
         renderProblem(ctx.gpa, ctx.io.stderr(), .{
             .no_platform_found = .{ .app_path = args.path },
         });
         return error.NoPlatformSource;
     };
 
-    const targets_config = validation.config;
-    const platform_dir = validation.platform_dir;
+    const platform_source = build_env.getPlatformRootFile();
+    const platform_dir = if (platform_source) |ps| (std.fs.path.dirname(ps) orelse ".") else ".";
 
-    // Select target and link type
+    // Phase 4: Select target and link type
     const target: target_mod.RocTarget, const link_type: target_mod.LinkType = if (args.target) |target_str| blk: {
         const parsed_target = target_mod.RocTarget.fromString(target_str) orelse {
             const result = platform_validation.targets_validator.ValidationResult{
@@ -3351,7 +3423,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
             .shared_lib
         else {
             const result = platform_validation.createUnsupportedTargetResult(
-                platform_source.?,
+                platform_source orelse "<unknown>",
                 parsed_target,
                 .exe,
                 targets_config,
@@ -3411,28 +3483,12 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         break :blk try std.fmt.allocPrint(ctx.arena, "{s}{s}", .{ output_path, ext });
     };
 
-    // Build all modules using BuildEnv
-    const thread_count: usize = if (args.max_threads) |t| t else (std.Thread.getCpuCount() catch 1);
-    const mode: compile.package.Mode = if (thread_count <= 1) .single_threaded else .multi_threaded;
+    // Phase 5: Set target and compile
+    build_env.setTarget(target);
 
-    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, target);
-    build_env.compiler_version = build_options.compiler_version;
-    defer build_env.deinit();
-
-    // Set up cache manager for compilation caching
-    if (!args.no_cache) {
-        const build_cache_manager = try ctx.gpa.create(CacheManager);
-        build_cache_manager.* = CacheManager.init(ctx.gpa, .{
-            .enabled = true,
-            .verbose = args.verbose,
-        }, Filesystem.default());
-        build_env.setCacheManager(build_cache_manager);
-    }
-
-    // Build all modules
-    build_env.build(args.path) catch |err| {
+    build_env.compileDiscovered() catch |err| {
         const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
-        defer build_env.gpa.free(drained);
+        defer build_env.freeDrainedReports(drained);
 
         for (drained) |mod| {
             for (mod.reports) |*report| {
@@ -3958,54 +4014,52 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         else => return err,
     };
 
-    // Get platform directory and host library (do this first to get platform source)
-    const app_dir = std.fs.path.dirname(args.path) orelse ".";
-    // Extract platform spec - errors are recorded in context and propagate up
-    const platform_spec = try extractPlatformSpecFromApp(ctx, args.path);
-    std.log.debug("Platform spec: {s}", .{platform_spec});
+    // Phase 1: Create BuildEnv with native target for discovery
+    const thread_count: usize = if (args.max_threads) |t| t else (std.Thread.getCpuCount() catch 1);
+    const mode: compile.package.Mode = if (thread_count <= 1) .single_threaded else .multi_threaded;
 
-    // Resolve platform path - errors are recorded in context and propagate up
-    const platform_paths: ?PlatformPaths = if (std.mem.startsWith(u8, platform_spec, "./") or
-        std.mem.startsWith(u8, platform_spec, "../") or
-        base.url.isSafeUrl(platform_spec))
-        try resolvePlatformSpecToPaths(ctx, platform_spec, app_dir)
-    else
-        null;
+    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, roc_target.RocTarget.detectNative());
+    build_env.compiler_version = build_options.compiler_version;
+    defer build_env.deinit();
 
-    // Validate platform header has targets section and get link configuration
-    // The targets section is REQUIRED - it defines exactly what to link
-    const platform_source = if (platform_paths) |pp| pp.platform_source_path else null;
-    const validation = if (platform_source) |ps|
-        platform_validation.validatePlatformHeader(ctx.arena, ps) catch |err| {
-            switch (err) {
-                error.MissingTargetsSection => {
-                    const result = platform_validation.ValidationResult{
-                        .missing_targets_section = .{ .platform_path = ps },
-                    };
-                    _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
-                    return error.MissingTargetsSection;
-                },
-                else => {
-                    renderProblem(ctx.gpa, ctx.io.stderr(), .{
-                        .platform_validation_failed = .{
-                            .message = "Failed to validate platform header",
-                        },
-                    });
-                    return err;
-                },
+    // Set up cache manager for compilation caching
+    if (!args.no_cache) {
+        const build_cache_manager = try ctx.gpa.create(CacheManager);
+        build_cache_manager.* = CacheManager.init(ctx.gpa, .{
+            .enabled = true,
+            .verbose = args.verbose,
+        }, Filesystem.default());
+        build_env.setCacheManager(build_cache_manager);
+    }
+
+    // Phase 2: Discover dependencies (parses headers once, extracts TargetsConfig)
+    build_env.discoverDependencies(args.path) catch |err| {
+        // Drain and display error reports
+        const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
+        defer build_env.freeDrainedReports(drained);
+
+        for (drained) |mod| {
+            for (mod.reports) |*report| {
+                const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
+                const config = reporting.ReportingConfig.initColorTerminal();
+                reporting.renderReportToTerminal(report, ctx.io.stderr(), palette, config) catch {};
             }
         }
-    else {
+        return err;
+    };
+
+    // Phase 3: Get TargetsConfig from the discovered platform package
+    const targets_config = build_env.getPlatformTargetsConfig() orelse {
         renderProblem(ctx.gpa, ctx.io.stderr(), .{
             .no_platform_found = .{ .app_path = args.path },
         });
         return error.NoPlatformSource;
     };
 
-    const targets_config = validation.config;
-    const platform_dir = validation.platform_dir;
+    const platform_source = build_env.getPlatformRootFile();
+    const platform_dir = if (platform_source) |ps| (std.fs.path.dirname(ps) orelse ".") else ".";
 
-    // Select target and link type
+    // Phase 4: Select target and link type
     // If --target is provided, use that; otherwise find the first compatible target
     const target: target_mod.RocTarget, const link_type: target_mod.LinkType = if (args.target) |target_str| blk: {
         const parsed_target = target_mod.RocTarget.fromString(target_str) orelse {
@@ -4025,7 +4079,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
             .shared_lib
         else {
             const result = platform_validation.createUnsupportedTargetResult(
-                platform_source.?,
+                platform_source orelse "<unknown>",
                 parsed_target,
                 .exe, // Show exe as the expected type for error message
                 targets_config,
@@ -4079,30 +4133,13 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     // when data is embedded in a binary at arbitrary addresses
     const target_ptr_width = target.ptrBitWidth();
 
-    // Compile using BuildEnv/Coordinator (unified pipeline with roc check)
+    // Phase 5: Set target and compile
     std.log.debug("Compiling Roc file: {s}", .{args.path});
     std.log.debug("Using portable serialization ({d}-bit host -> {d}-bit target)", .{ host_ptr_width, target_ptr_width });
 
-    // Set up BuildEnv with threading and caching
-    const thread_count: usize = if (args.max_threads) |t| t else (std.Thread.getCpuCount() catch 1);
-    const mode: compile.package.Mode = if (thread_count <= 1) .single_threaded else .multi_threaded;
+    build_env.setTarget(target);
 
-    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, target);
-    build_env.compiler_version = build_options.compiler_version;
-    defer build_env.deinit();
-
-    // Set up cache manager for compilation caching
-    if (!args.no_cache) {
-        const build_cache_manager = try ctx.gpa.create(CacheManager);
-        build_cache_manager.* = CacheManager.init(ctx.gpa, .{
-            .enabled = true,
-            .verbose = args.verbose,
-        }, Filesystem.default());
-        build_env.setCacheManager(build_cache_manager);
-    }
-
-    // Build all modules
-    build_env.build(args.path) catch |err| {
+    build_env.compileDiscovered() catch |err| {
         // Drain and display error reports
         const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
         defer build_env.freeDrainedReports(drained);

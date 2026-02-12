@@ -26,6 +26,8 @@ const c = @cImport({
 
 // Constants for magic numbers
 const SIZE_STORAGE_BYTES: usize = 16; // Extra bytes for storing allocation size; use 16 to preserve alignment.
+/// Alignment for zstd custom allocations. Must match SIZE_STORAGE_BYTES (16 bytes).
+const ZSTD_ALLOC_ALIGNMENT: std.mem.Alignment = .@"16";
 const TAR_PATH_MAX_LENGTH: usize = 255; // Maximum path length for tar compatibility
 /// Size of the buffer used for streaming operations (in bytes)
 pub const STREAM_BUFFER_SIZE: usize = 64 * 1024;
@@ -36,16 +38,17 @@ pub const DEFAULT_COMPRESSION_LEVEL: c_int = 22;
 /// Custom allocator function for zstd that adds extra bytes to store allocation size
 pub fn allocForZstd(opaque_ptr: ?*anyopaque, size: usize) callconv(.c) ?*anyopaque {
     const allocator = @as(*std.mem.Allocator, @ptrCast(@alignCast(opaque_ptr.?)));
-    // Allocate extra bytes to store the size
+    // Allocate extra bytes to store the size, with proper alignment to ensure we can
+    // store a usize at the start and return properly aligned memory to zstd.
     const total_size = size + SIZE_STORAGE_BYTES;
-    const mem = allocator.alloc(u8, total_size) catch return null;
+    const mem = allocator.rawAlloc(total_size, ZSTD_ALLOC_ALIGNMENT, @returnAddress()) orelse return null;
 
-    // Store the size in the first 8 bytes (usize)
-    const size_ptr = @as(*usize, @ptrCast(@alignCast(mem.ptr)));
+    // Store the size in the first bytes (usize)
+    const size_ptr: *usize = @ptrCast(@alignCast(mem));
     size_ptr.* = total_size;
 
     // Return pointer offset by overhead bytes
-    return @ptrFromInt(@intFromPtr(mem.ptr) + SIZE_STORAGE_BYTES);
+    return @ptrFromInt(@intFromPtr(mem) + SIZE_STORAGE_BYTES);
 }
 
 /// Custom free function for zstd that retrieves the original allocation size
@@ -54,14 +57,14 @@ pub fn freeForZstd(opaque_ptr: ?*anyopaque, address: ?*anyopaque) callconv(.c) v
     const allocator = @as(*std.mem.Allocator, @ptrCast(@alignCast(opaque_ptr.?)));
 
     // Get the original allocation by subtracting overhead bytes
-    const original_ptr = @as([*]u8, @ptrFromInt(@intFromPtr(address) - SIZE_STORAGE_BYTES));
+    const original_ptr: [*]u8 = @ptrFromInt(@intFromPtr(address) - SIZE_STORAGE_BYTES);
 
-    // Read the size from the first 8 bytes
-    const size_ptr = @as(*const usize, @ptrCast(@alignCast(original_ptr)));
+    // Read the size from the first bytes
+    const size_ptr: *const usize = @ptrCast(@alignCast(original_ptr));
     const total_size = size_ptr.*;
 
-    // Free the full allocation
-    allocator.free(original_ptr[0..total_size]);
+    // Free with the same alignment used during allocation
+    allocator.rawFree(original_ptr[0..total_size], ZSTD_ALLOC_ALIGNMENT, @returnAddress());
 }
 
 /// Errors that can occur during the bundle operation.

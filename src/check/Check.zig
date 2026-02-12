@@ -2228,8 +2228,9 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                     }
                 },
                 .pending => {
-                    // Pending lookups must be resolved before type-checking
-                    unreachable;
+                    // If an import references a non-existent module (e.g., missing from
+                    // platform bundle), the pending lookup can't be resolved. Treat as error.
+                    try self.unifyWith(anno_var, .err, env);
                 },
             }
         },
@@ -2434,8 +2435,9 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                     }
                 },
                 .pending => {
-                    // Pending lookups must be resolved before type-checking
-                    unreachable;
+                    // If an import references a non-existent module (e.g., missing from
+                    // platform bundle), the pending lookup can't be resolved. Treat as error.
+                    try self.unifyWith(anno_var, .err, env);
                 },
             }
         },
