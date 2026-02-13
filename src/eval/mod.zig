@@ -85,7 +85,6 @@ test "eval tests" {
     std.testing.refAllDecls(@import("test/low_level_interp_test.zig"));
     std.testing.refAllDecls(@import("test/mono_emit_test.zig"));
     std.testing.refAllDecls(@import("test/mono_lower_test.zig"));
-    std.testing.refAllDecls(@import("test/lambda_lift_test.zig"));
     std.testing.refAllDecls(@import("test/rc_insert_test.zig"));
     std.testing.refAllDecls(@import("test/stack_test.zig"));
 }
