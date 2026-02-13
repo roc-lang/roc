@@ -209,8 +209,7 @@ to_screaming_snake_case = |s| {
 			$output = $output.append('_')
 		}
 
-		# Convert to uppercase
-		new_byte = if is_lower (byte - 32) else byte
+		new_byte = if is_lower to_uppercase(byte) else byte
 		$output = $output.append(new_byte)
 
 		$prev_was_lower = is_lower
@@ -222,6 +221,12 @@ to_screaming_snake_case = |s| {
 		Err(_) => s
 	}
 }
+
+to_uppercase : U8 -> U8
+to_uppercase = |ch| ch - 32
+
+to_lowercase : U8 -> U8
+to_lowercase = |ch| ch + 32
 
 expect to_screaming_snake_case("fooBar") == "FOO_BAR"
 expect to_screaming_snake_case("FooBar") == "FOO_BAR"
@@ -261,11 +266,8 @@ capitalize_first = |s| {
 		Ok(b) => b
 		Err(_) => 0
 	}
-	new_first = if first >= 'a' and first <= 'z' {
-		first - 32 # Convert to uppercase
-	} else {
-		first
-	}
+	first_is_lower = first >= 'a' and first <= 'z'
+	new_first = if first_is_lower to_uppercase(first) else first
 	rest = List.drop_first(bytes, 1)
 	new_bytes = List.concat([new_first], rest)
 	match Str.from_utf8(new_bytes) {
@@ -360,12 +362,7 @@ to_lower_snake_case = |s| {
 		is_upper = byte >= 'A' and byte <= 'Z'
 		is_lower = byte >= 'a' and byte <= 'z'
 
-		new_byte = 
-			if is_upper {
-				byte + 32 # Convert to lowercase
-			} else {
-				byte
-			}
+		new_byte = if is_upper to_lowercase(byte) else byte
 
 		if is_upper and $prev_was_lower {
 			$output = $output.append('_')
