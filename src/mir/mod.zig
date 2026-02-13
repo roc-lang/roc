@@ -8,6 +8,7 @@ const std = @import("std");
 
 pub const MIR = @import("MIR.zig");
 pub const Monotype = @import("Monotype.zig");
+pub const Lower = @import("Lower.zig");
 
 // Re-export commonly used types
 pub const Expr = MIR.Expr;
@@ -21,4 +22,5 @@ test "mir tests" {
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(MIR);
     std.testing.refAllDecls(Monotype);
+    std.testing.refAllDecls(Lower);
 }

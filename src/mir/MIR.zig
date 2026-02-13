@@ -550,7 +550,7 @@ pub const Store = struct {
         if (names.len == 0) return FieldNameSpan.empty();
         const start: u32 = @intCast(self.extra_data.items.len);
         for (names) |name| {
-            try self.extra_data.append(allocator, @intFromEnum(name));
+            try self.extra_data.append(allocator, @bitCast(name));
         }
         return .{ .start = start, .len = @intCast(names.len) };
     }

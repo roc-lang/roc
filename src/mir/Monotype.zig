@@ -235,7 +235,7 @@ pub const Store = struct {
         type_var: types.Var,
         builtin_indices: CIR.BuiltinIndices,
         seen: *std.AutoHashMap(types.Var, Idx),
-    ) !Idx {
+    ) Allocator.Error!Idx {
         const resolved = types_store.resolveVar(type_var);
 
         // Cycle detection: if we've already seen this var, return the cached idx
@@ -267,7 +267,7 @@ pub const Store = struct {
         flat_type: types.FlatType,
         builtin_indices: CIR.BuiltinIndices,
         seen: *std.AutoHashMap(types.Var, Idx),
-    ) !Idx {
+    ) Allocator.Error!Idx {
         return switch (flat_type) {
             .nominal_type => |nominal| {
                 return try self.fromNominalType(allocator, types_store, var_, nominal, builtin_indices, seen);
@@ -283,12 +283,12 @@ pub const Store = struct {
                 const names = fields_slice.items(.name);
                 const vars = fields_slice.items(.var_);
 
-                var mono_fields = try std.ArrayList(Field).initCapacity(allocator, names.len);
-                defer mono_fields.deinit();
+                var mono_fields = std.ArrayList(Field).empty;
+                defer mono_fields.deinit(allocator);
 
                 for (names, vars) |name, field_var| {
                     const field_type = try self.fromTypeVar(allocator, types_store, field_var, builtin_indices, seen);
-                    try mono_fields.append(.{ .name = name, .type_idx = field_type });
+                    try mono_fields.append(allocator, .{ .name = name, .type_idx = field_type });
                 }
 
                 const field_span = try self.addFields(allocator, mono_fields.items);
@@ -304,12 +304,12 @@ pub const Store = struct {
                 const placeholder_idx = try self.addMonotype(allocator, .err);
                 try seen.put(var_, placeholder_idx);
 
-                var mono_fields = try std.ArrayList(Field).initCapacity(allocator, names.len);
-                defer mono_fields.deinit();
+                var mono_fields = std.ArrayList(Field).empty;
+                defer mono_fields.deinit(allocator);
 
                 for (names, vars) |name, field_var| {
                     const field_type = try self.fromTypeVar(allocator, types_store, field_var, builtin_indices, seen);
-                    try mono_fields.append(.{ .name = name, .type_idx = field_type });
+                    try mono_fields.append(allocator, .{ .name = name, .type_idx = field_type });
                 }
 
                 const field_span = try self.addFields(allocator, mono_fields.items);
@@ -321,12 +321,12 @@ pub const Store = struct {
                 try seen.put(var_, placeholder_idx);
 
                 const elem_vars = types_store.sliceVars(tuple.elems);
-                var mono_elems = try std.ArrayList(Idx).initCapacity(allocator, elem_vars.len);
-                defer mono_elems.deinit();
+                var mono_elems = std.ArrayList(Idx).empty;
+                defer mono_elems.deinit(allocator);
 
                 for (elem_vars) |elem_var| {
                     const elem_type = try self.fromTypeVar(allocator, types_store, elem_var, builtin_indices, seen);
-                    try mono_elems.append(elem_type);
+                    try mono_elems.append(allocator, elem_type);
                 }
 
                 const elem_span = try self.addIdxSpan(allocator, mono_elems.items);
@@ -341,21 +341,21 @@ pub const Store = struct {
                 const tag_names = tags_slice.items(.name);
                 const tag_args = tags_slice.items(.args);
 
-                var mono_tags = try std.ArrayList(Tag).initCapacity(allocator, tag_names.len);
-                defer mono_tags.deinit();
+                var mono_tags = std.ArrayList(Tag).empty;
+                defer mono_tags.deinit(allocator);
 
                 for (tag_names, tag_args) |name, args_range| {
                     const arg_vars = types_store.sliceVars(args_range);
-                    var payload_idxs = try std.ArrayList(Idx).initCapacity(allocator, arg_vars.len);
-                    defer payload_idxs.deinit();
+                    var payload_idxs = std.ArrayList(Idx).empty;
+                    defer payload_idxs.deinit(allocator);
 
                     for (arg_vars) |arg_var| {
                         const payload_type = try self.fromTypeVar(allocator, types_store, arg_var, builtin_indices, seen);
-                        try payload_idxs.append(payload_type);
+                        try payload_idxs.append(allocator, payload_type);
                     }
 
                     const payloads_span = try self.addIdxSpan(allocator, payload_idxs.items);
-                    try mono_tags.append(.{ .name = name, .payloads = payloads_span });
+                    try mono_tags.append(allocator, .{ .name = name, .payloads = payloads_span });
                 }
 
                 const tag_span = try self.addTags(allocator, mono_tags.items);
@@ -377,17 +377,17 @@ pub const Store = struct {
         effectful: bool,
         builtin_indices: CIR.BuiltinIndices,
         seen: *std.AutoHashMap(types.Var, Idx),
-    ) !Idx {
+    ) Allocator.Error!Idx {
         const placeholder_idx = try self.addMonotype(allocator, .err);
         try seen.put(var_, placeholder_idx);
 
         const arg_vars = types_store.sliceVars(func.args);
-        var mono_args = try std.ArrayList(Idx).initCapacity(allocator, arg_vars.len);
-        defer mono_args.deinit();
+        var mono_args = std.ArrayList(Idx).empty;
+        defer mono_args.deinit(allocator);
 
         for (arg_vars) |arg_var| {
             const arg_type = try self.fromTypeVar(allocator, types_store, arg_var, builtin_indices, seen);
-            try mono_args.append(arg_type);
+            try mono_args.append(allocator, arg_type);
         }
 
         const args_span = try self.addIdxSpan(allocator, mono_args.items);
@@ -409,7 +409,7 @@ pub const Store = struct {
         nominal: types.NominalType,
         builtin_indices: CIR.BuiltinIndices,
         seen: *std.AutoHashMap(types.Var, Idx),
-    ) !Idx {
+    ) Allocator.Error!Idx {
         const ident = nominal.ident.ident_idx;
 
         // Check if this is a builtin primitive type
