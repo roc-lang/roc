@@ -215,6 +215,39 @@ test "polymorphic pipe function" {
     );
 }
 
+test "polymorphic identity with if-else (eval regression)" {
+    // Exact source from the failing eval test "polymorphic identity function"
+    const source =
+        \\{
+        \\    identity = |val| val
+        \\    num = identity(5)
+        \\    str = identity("Hello")
+        \\    if (num > 0) str else ""
+        \\}
+    ;
+    try typeCheck(
+        source,
+        "Str",
+    );
+}
+
+test "polymorphic identity with if-else - all intermediate types" {
+    // Same as above but returning a record so we can assert on every intermediate type
+    const source =
+        \\{
+        \\    identity = |val| val
+        \\    num = identity(5)
+        \\    str = identity("Hello")
+        \\    result = if (num > 0) str else ""
+        \\    { num, str, result }
+        \\}
+    ;
+    try typeCheck(
+        source,
+        "{ num: Dec, result: Str, str: Str }",
+    );
+}
+
 /// A unified helper to run the full pipeline: parse, canonicalize, and type-check source code.
 fn typeCheck(comptime source_expr: []const u8, expected_type: []const u8) !void {
     var test_env = try TestEnv.initExpr("Test", source_expr);
