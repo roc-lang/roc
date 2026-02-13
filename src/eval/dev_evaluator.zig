@@ -730,25 +730,65 @@ pub const DevEvaluator = struct {
         };
 
         // Solve needed specializations (discovered during lowering)
-        // This loop re-lowers each polymorphic definition with its concrete type
+        //
+        // APPROACH: Re-lower with concrete type scope (matching COR's strategy)
+        //
+        // For each specialization, we:
+        // 1. Extract the concrete argument/return types from spec.type_var
+        // 2. Build a TypeScope mapping generic parameter type variables to concrete ones
+        // 3. Re-lower the definition with this scope so parameters get correct concrete layouts
+        //
+        // This ensures identity(5) and identity("hello") compile with different calling
+        // conventions based on their concrete parameter types.
         {
             while (instantiator.nextNeededSpecialization()) |spec| {
-                // Create a fresh lowerer context for re-lowering this definition
+                const spec_module_env = all_module_envs[@as(usize, spec.module_idx)];
+
+                // Create a fresh lowerer for this specialization
                 var spec_lowerer = MonoLower.init(self.allocator, &mono_store, all_module_envs, null, layout_store_ptr, null, null);
                 defer spec_lowerer.deinit();
-                spec_lowerer.instantiate = &instantiator;
 
-                // Lower the original definition expression
-                const lowered_def = spec_lowerer.lowerExpr(spec.module_idx, spec.def_expr) catch {
+                // Get the generic definition's function type to extract parameter vars
+                const def_type_var = ModuleEnv.varFrom(spec.def_expr);
+                const def_resolved = spec_module_env.types.resolveVar(def_type_var);
+
+                if (def_resolved.desc.content.unwrapFunc()) |generic_func_type| {
+                    const generic_param_vars = spec_module_env.types.sliceVars(generic_func_type.args);
+                    const generic_ret_var = generic_func_type.ret;
+
+                    // Create type scope mapping generic → concrete
+                    // spec.type_var is the concrete type (argument type) for this specialization
+                    var spec_scope = types.VarMap.init(self.allocator);
+
+                    // Map all generic parameters to spec.type_var (the concrete arg type)
+                    // For single-parameter functions like identity(a), this is sufficient
+                    for (generic_param_vars) |generic| {
+                        try spec_scope.put(generic, types.ModuleVar{
+                            .module_idx = spec.module_idx,
+                            .var_ = spec.type_var,
+                        });
+                    }
+
+                    // Map return type to spec.type_var as well (for identity, same type as param)
+                    try spec_scope.put(generic_ret_var, types.ModuleVar{
+                        .module_idx = spec.module_idx,
+                        .var_ = spec.type_var,
+                    });
+
+                    // Configure lowerer with type scope
+                    try spec_lowerer.type_scope.scopes.append(spec_scope);
+                    spec_lowerer.use_type_scope = true;
+                }
+
+                // Re-lower the definition with type scope configured
+                const lowered_spec = spec_lowerer.lowerExpr(spec.module_idx, spec.def_expr) catch {
                     return error.RuntimeError;
                 };
+                spec.lowered = lowered_spec;
 
-                // Store the lowered result
-                spec.lowered = lowered_def;
-
-                // Add the specialized definition to the symbol table
+                // Register under the fresh symbol
                 const symbol_key: u48 = @bitCast(spec.name_new);
-                try mono_store.symbol_defs.put(symbol_key, lowered_def);
+                try mono_store.symbol_defs.put(symbol_key, lowered_spec);
             }
         }
 

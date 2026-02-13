@@ -13219,9 +13219,33 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
         /// Uses deferred prologue pattern for x86_64 to properly save callee-saved registers.
         fn compileLambdaAsProc(self: *Self, lambda_expr_id: MonoExprId, lambda: anytype, caller_ret_layout: ?layout.Idx, closure_param_hash: u64) Error!usize {
             const effective_ret_layout = caller_ret_layout orelse lambda.ret_layout;
+
+            // Hash parameter layouts to ensure distinct cache keys for specializations
+            // with different concrete types, even when they share the same lambda expression
+            var param_layout_hash: u64 = 0;
+            const params = self.store.getPatternSpan(lambda.params);
+            for (params) |param_pattern| {
+                const pat = self.store.getPattern(param_pattern);
+                const layout_val: u64 = switch (pat) {
+                    .bind => |bind| @intFromEnum(bind.layout_idx),
+                    .wildcard => |wild| @intFromEnum(wild.layout_idx),
+                    .int_literal => |lit| @intFromEnum(lit.layout_idx),
+                    .float_literal => |lit| @intFromEnum(lit.layout_idx),
+                    .tag => |t| @intFromEnum(t.union_layout),
+                    .str_literal => 0,
+                    .record => |rec| @intFromEnum(rec.record_layout),
+                    .tuple => |tup| @intFromEnum(tup.tuple_layout),
+                    .list => |lst| @intFromEnum(lst.elem_layout),
+                    .as_pattern => |asp| @intFromEnum(asp.layout_idx),
+                };
+                param_layout_hash = param_layout_hash *% 31 +% layout_val;
+            }
+
             const base_key = (@as(u64, @intFromEnum(lambda_expr_id)) << 32) | @as(u64, @intFromEnum(effective_ret_layout));
-            // Extend key with closure param hash so different closure arguments get different compiled procs
-            const key = if (closure_param_hash != 0) base_key ^ (closure_param_hash *% 0x9e3779b97f4a7c15) else base_key;
+            var key = base_key ^ param_layout_hash;
+            if (closure_param_hash != 0) {
+                key = key ^ (closure_param_hash *% 0x9e3779b97f4a7c15);
+            }
 
             // Check if already compiled
             if (self.compiled_lambdas.get(key)) |code_offset| {

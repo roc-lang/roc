@@ -2331,12 +2331,18 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
 
                     // If the definition is polymorphic, we should use the specialized symbol
                     if (def_resolved.desc.rank == types.Rank.generalized) {
-                        const call_type_var = ModuleEnv.varFrom(expr_idx);
+                        // Pass the concrete argument type (not result type) to determine specialization
+                        const arg_indices = module_env.store.sliceExpr(call.args);
+                        const specialization_type_var = if (arg_indices.len > 0)
+                            ModuleEnv.varFrom(arg_indices[0])
+                        else
+                            ModuleEnv.varFrom(expr_idx); // Fallback to result type if no args
+
                         if (self.instantiate) |instantiate| {
                             const specialized_symbol = try instantiate.requestSpecialization(
                                 self.current_module_idx,
                                 def.expr,
-                                call_type_var,
+                                specialization_type_var,
                             );
                             // Create a lookup expression for the specialized symbol and add it to the store
                             const specialized_lookup = MonoExpr{
