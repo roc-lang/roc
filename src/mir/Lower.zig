@@ -15,13 +15,11 @@ const std = @import("std");
 const base = @import("base");
 const can = @import("can");
 const types = @import("types");
-const builtins = @import("builtins");
 
 const MIR = @import("MIR.zig");
 const Monotype = @import("Monotype.zig");
 
 const Ident = base.Ident;
-const StringLiteral = base.StringLiteral;
 const Region = base.Region;
 const Allocator = std.mem.Allocator;
 
@@ -236,10 +234,12 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
             } }, lambda_monotype, region);
 
             const args = try self.store.addExprSpan(self.allocator, &.{ list_expr, lambda_expr });
-            return try self.store.addExpr(self.allocator, .{ .call = .{
-                .func = lambda_expr, // placeholder — will be resolved to List.for_each
-                .args = args,
-            } }, monotype, region);
+            return try self.store.addExpr(self.allocator, .{
+                .call = .{
+                    .func = lambda_expr, // placeholder — will be resolved to List.for_each
+                    .args = args,
+                },
+            }, monotype, region);
         },
 
         // --- Special ---
@@ -257,7 +257,7 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
             const args = try self.lowerPatternSpan(module_env, ll.args);
             return try self.store.addExpr(self.allocator, .{ .low_level = .{
                 .op = ll.op,
-                .args = try self.patternSpanToExprSpan(module_env, args),
+                .args = try self.patternSpanToExprSpan(args),
             } }, monotype, region);
         },
 
@@ -464,8 +464,7 @@ fn lowerPattern(self: *Self, module_env: *const ModuleEnv, pattern_idx: CIR.Patt
 }
 
 /// Convert a PatternSpan to an ExprSpan (for low_level args — patterns become lookups).
-fn patternSpanToExprSpan(self: *Self, module_env: *const ModuleEnv, pat_span: MIR.PatternSpan) Allocator.Error!MIR.ExprSpan {
-    _ = module_env;
+fn patternSpanToExprSpan(self: *Self, pat_span: MIR.PatternSpan) Allocator.Error!MIR.ExprSpan {
     const pats = self.store.getPatternSpan(pat_span);
     if (pats.len == 0) return MIR.ExprSpan.empty();
 

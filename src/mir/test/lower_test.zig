@@ -184,7 +184,8 @@ test "MIR Store: multiple expressions round trip" {
     } }, i64_type, Region.zero());
 
     // Add string
-    const str_id = try store.addExpr(test_allocator, .{ .str = @enumFromInt(0) }, str_type, Region.zero());
+    // undefined is fine here: we're testing the store, not reading the string literal index
+    const str_id = try store.addExpr(test_allocator, .{ .str = undefined }, str_type, Region.zero());
 
     // Add list with the int as element
     const list_span = try store.addExprSpan(test_allocator, &.{int_id});
@@ -343,9 +344,13 @@ test "Monotype Store: all primitive types" {
 
     const prims = [_]Monotype.Prim{
         .bool, .str,
-        .u8,  .i8,  .u16,  .i16,
-        .u32, .i32, .u64,  .i64,
-        .u128, .i128, .f32, .f64, .dec,
+        .u8,   .i8,
+        .u16,  .i16,
+        .u32,  .i32,
+        .u64,  .i64,
+        .u128, .i128,
+        .f32,  .f64,
+        .dec,
     };
 
     for (prims) |p| {

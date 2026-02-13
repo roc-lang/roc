@@ -10,12 +10,17 @@ pub const MIR = @import("MIR.zig");
 pub const Monotype = @import("Monotype.zig");
 pub const Lower = @import("Lower.zig");
 
-// Re-export commonly used types
+/// Re-export of MIR expression type
 pub const Expr = MIR.Expr;
+/// Re-export of MIR pattern type
 pub const Pattern = MIR.Pattern;
+/// Globally unique symbol identifier (module + ident)
 pub const MonoSymbol = MIR.MonoSymbol;
+/// Index into the MIR expression store
 pub const ExprId = MIR.ExprId;
+/// Index into the MIR pattern store
 pub const PatternId = MIR.PatternId;
+/// MIR expression and pattern store with parallel type mapping
 pub const Store = MIR.Store;
 
 test "mir tests" {

@@ -205,6 +205,7 @@ pub const Capture = struct {
 
 // --- Expression ---
 
+/// A monomorphic, desugared expression.
 pub const Expr = union(enum) {
     // --- Literals ---
 
@@ -340,6 +341,7 @@ pub const Expr = union(enum) {
 
 // --- Pattern ---
 
+/// A monomorphic pattern for use in match expressions.
 pub const Pattern = union(enum) {
     /// Bind to a symbol
     bind: MonoSymbol,
