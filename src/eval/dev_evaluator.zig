@@ -5,11 +5,16 @@
 //! 2. Canonicalizing to CIR
 //! 3. Type checking
 //! 4. Lowering to Mono IR (globally unique symbols)
-//! 5. Generating native machine code (x86_64/aarch64)
-//! 6. Executing the generated code
+//! 5. Lambda lifting (moving nested lambdas to top-level)
+//! 6. Reference counting insertion
+//! 7. Generating native machine code (x86_64/aarch64)
+//! 8. Executing the generated code
 //!
 //! Code generation uses Mono IR with globally unique MonoSymbol references,
 //! eliminating cross-module index collisions.
+//!
+//! The lambda lifting pass (step 5) runs after monomorphization to ensure all
+//! type variables are fully resolved before lambda extraction and captures are computed.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -717,6 +722,21 @@ pub const DevEvaluator = struct {
             return error.RuntimeError;
         };
 
+        // Perform lambda lifting on all expressions
+        // This lifts nested lambdas to top-level after monomorphization
+        var lambda_lifter = mono.LambdaLift.init(
+            self.allocator,
+            &mono_store,
+            all_module_envs,
+            null, // app_module_idx - not used for JIT evaluation
+            layout_store_ptr,
+            null, // type_store - optional for validation
+        );
+        defer lambda_lifter.deinit();
+        lambda_lifter.liftAllLambdas() catch {
+            return error.RuntimeError;
+        };
+
         // Run RC insertion pass on the Mono IR
         var rc_pass = mono.RcInsert.RcInsertPass.init(self.allocator, &mono_store, layout_store_ptr);
         defer rc_pass.deinit();
@@ -766,6 +786,7 @@ pub const DevEvaluator = struct {
             layout_store_ptr,
             &self.static_interner,
         );
+        codegen.lambda_lifter = &lambda_lifter;
         defer codegen.deinit();
 
         // Compile all procedures first (for recursive functions)

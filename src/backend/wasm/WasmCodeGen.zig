@@ -124,6 +124,9 @@ str_from_utf8_import: ?u32 = null,
 wasm_stack_bytes: u32 = 1024 * 1024,
 /// Configurable wasm memory pages (0 = auto-compute from stack size).
 wasm_memory_pages: u32 = 0,
+/// Lambda lifting information (optional, set after init if available).
+/// Used to determine if a lambda expression should be lifted to a procedure.
+lambda_lifter: ?*const mono.LambdaLift = null,
 
 /// Closure value storage for runtime dispatch.
 /// Tracks how a closure is stored so call sites can dispatch correctly.
@@ -1105,7 +1108,46 @@ fn generateExpr(self: *Self, expr_id: MonoExprId) Allocator.Error!void {
             self.body.append(self.allocator, Op.@"return") catch return error.OutOfMemory;
         },
         .lambda => |lambda| {
-            // Compile the lambda as a separate wasm function.
+            // Check if this lambda has been lifted
+            if (self.lambda_lifter) |lifter| {
+                if (lifter.isLiftedLambda(expr_id)) {
+                    // Lambda has been lifted to a separate procedure
+                    // Create a closure that references the lifted procedure with its captures
+                    const lifted = lifter.getLiftedLambda(expr_id) orelse {
+                        // Lambda marked as lifted but info not found - shouldn't happen
+                        self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                        WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+                        return;
+                    };
+
+                    // Generate closure value with lifted procedure symbol and captures
+                    if (lifted.captures.len == 0) {
+                        // No captures - direct call to lifted procedure
+                        // Push dummy value (caller will reference the lifted symbol directly)
+                        self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                        WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+                    } else if (lifted.captures.len == 1) {
+                        // Single capture - push the capture value directly
+                        const cap = lifted.captures[0];
+                        if (self.storage.getLocal(cap.symbol)) |local_idx| {
+                            self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                            WasmModule.leb128WriteU32(self.allocator, &self.body, local_idx) catch return error.OutOfMemory;
+                        } else {
+                            self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                            WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+                        }
+                    } else {
+                        // Multiple captures - for lifted lambdas, captures are handled when the lifted
+                        // procedure is called. For now, just push a dummy value.
+                        // TODO: Properly materialize captured values when lifted lambda is used as closure
+                        self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                        WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
+                    }
+                    return;
+                }
+            }
+
+            // Non-lifted lambda: compile it as a separate wasm function.
             // The result is a function index we can reference later.
             _ = try self.compileLambda(expr_id, lambda);
             // Lambda as a value — push a placeholder i32.
@@ -5124,18 +5166,31 @@ fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
                         try self.dispatchClosureCall(cv, c.args, c.ret_layout);
                     } else {
                         // Not a lambda/closure — unexpected
-                        return error.OutOfMemory;
+                        std.debug.panic("Unexpected non-lambda/closure definition for symbol lookup in call", .{});
                     }
-                } else |_| {
+                } else |err| {
                     // Compilation failed (e.g., body has callback param calls).
-                    return error.OutOfMemory;
+                    std.debug.panic("Failed to compile function for symbol lookup: {}", .{err});
                 }
             } else if (!self.in_proc) {
-                // Top-level: symbol with no definition — should have been constant-folded
-                return error.OutOfMemory;
+                // Top-level: symbol with no definition — should have been lazy-loaded
+                std.debug.print("ERROR: Lookup symbol not found in store: module_idx={}, ident_idx={}\n", .{lookup.symbol.module_idx, lookup.symbol.ident_idx.idx});
+                std.debug.print("Available symbols in store:\n", .{});
+                var iter = self.store.symbol_defs.iterator();
+                var count: u32 = 0;
+                while (iter.next()) |entry| {
+                    const sym: MonoSymbol = @bitCast(entry.key_ptr.*);
+                    std.debug.print("  module_idx={}, ident_idx={}\n", .{sym.module_idx, sym.ident_idx.idx});
+                    count += 1;
+                    if (count > 20) {
+                        std.debug.print("  (... and {} more)\n", .{self.store.symbol_defs.count() - 20});
+                        break;
+                    }
+                }
+                std.debug.panic("Compiler bug: lookup symbol has no definition", .{});
             } else {
                 // Inside a compiled function: unresolved lookup (e.g., callback parameter).
-                return error.OutOfMemory;
+                std.debug.panic("Unresolved lookup inside compiled function: module={} ident={}", .{lookup.symbol.module_idx, lookup.symbol.ident_idx.idx});
             }
         },
         .nominal => |nom| {

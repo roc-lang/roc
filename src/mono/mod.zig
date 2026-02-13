@@ -40,6 +40,9 @@ pub const MonoExprStore = @import("MonoExprStore.zig");
 /// CIR → Mono IR lowering pass
 pub const Lower = @import("Lower.zig");
 
+/// Lambda lifting pass (after monomorphization)
+pub const LambdaLift = @import("LambdaLift.zig");
+
 /// Tail recursion detection and transformation
 pub const TailRecursion = @import("TailRecursion.zig");
 
@@ -93,6 +96,8 @@ test "mono tests" {
     std.testing.refAllDecls(MonoIR);
     std.testing.refAllDecls(MonoExprStore);
     std.testing.refAllDecls(Lower);
+    std.testing.refAllDecls(LambdaLift);
     std.testing.refAllDecls(TailRecursion);
     std.testing.refAllDecls(RcInsert);
+    std.testing.refAllDecls(@import("test/lambda_lift_test.zig"));
 }

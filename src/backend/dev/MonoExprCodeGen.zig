@@ -723,6 +723,10 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
         /// Set before bindLambdaParams is called so it can look up closure_param_metadata.
         current_lambda_cache_key: u64 = 0,
 
+        /// Lambda lifting information (optional, set after init if available).
+        /// Used to determine if a lambda expression should be lifted to a procedure.
+        lambda_lifter: ?*const mono.LambdaLift = null,
+
         /// Closure dispatch metadata preserved across the calling convention boundary.
         /// When a closure_value is passed as an argument, the raw bytes go through registers
         /// but the dispatch metadata (representation, lambda, captures) is stored here
@@ -1269,6 +1273,20 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 .call => |call| try self.generateCall(call),
                 // Lambdas and closures as first-class values (stored to variables)
                 .lambda => {
+                    // Check if this lambda has been lifted
+                    if (self.lambda_lifter) |lifter| {
+                        if (lifter.isLiftedLambda(expr_id)) {
+                            // Lambda has been lifted to a separate procedure
+                            // Return closure value for the lifted lambda (captures are empty since procedure is separate)
+                            return .{ .closure_value = .{
+                                .stack_offset = 0,
+                                .representation = .direct_call,
+                                .lambda = expr_id,
+                                .captures = mono.MonoIR.MonoCaptureSpan.empty(),
+                            } };
+                        }
+                    }
+                    // Non-lifted lambda: use as-is
                     return .{ .closure_value = .{
                         .stack_offset = 0,
                         .representation = .direct_call,

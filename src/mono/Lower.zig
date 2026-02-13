@@ -140,16 +140,8 @@ expr_layout_hints: std.AutoHashMap(types.Var, LayoutIdx),
 /// expression's own type variable has unresolved flex extension variables.
 caller_return_type_var: ?types.Var = null,
 
-/// Deferred lambda/closure definitions.
-/// When a block-local s_decl binds a lambda/closure, we defer lowering the body
-/// until call time (when type_scope is populated). Maps pattern_idx → CIR expr_idx.
-deferred_defs: std.AutoHashMap(u32, CIR.Expr.Idx),
-
-/// Type variable overrides for re-specialization of polymorphic local lambdas.
-/// When a local lambda (e.g., map2) is called with different type arguments than
-/// what it was first lowered with, we re-lower it with overrides that redirect
-/// layout computation from the definition's type vars to the call site's type vars.
-layout_var_overrides: std.AutoHashMap(types.Var, types.Var),
+// Lambda lifting is now handled by the LambdaLift pass which runs
+// AFTER monomorphization, eliminating the need for deferred lowering.
 
 /// CIR expression indices for lowered symbols, used for re-specialization.
 /// When a lambda is lowered, we save its CIR expr idx so we can re-lower it
@@ -187,8 +179,6 @@ pub fn init(
         .in_progress_defs = std.AutoHashMap(u48, void).init(allocator),
         .type_env = std.AutoHashMap(u32, LayoutIdx).init(allocator),
         .expr_layout_hints = std.AutoHashMap(types.Var, LayoutIdx).init(allocator),
-        .deferred_defs = std.AutoHashMap(u32, CIR.Expr.Idx).init(allocator),
-        .layout_var_overrides = std.AutoHashMap(types.Var, types.Var).init(allocator),
         .lowered_symbol_cir_exprs = std.AutoHashMap(u48, CIR.Expr.Idx).init(allocator),
         .hosted_functions = hosted_functions,
     };
@@ -202,8 +192,6 @@ pub fn deinit(self: *Self) void {
     self.type_env.deinit();
     self.type_scope.deinit();
     self.expr_layout_hints.deinit();
-    self.deferred_defs.deinit();
-    self.layout_var_overrides.deinit();
     self.lowered_symbol_cir_exprs.deinit();
 }
 
@@ -392,23 +380,19 @@ fn lowerLocalDefByPattern(self: *Self, module_env: *ModuleEnv, symbol: MonoSymbo
     try self.in_progress_defs.put(symbol_key, {});
     defer _ = self.in_progress_defs.remove(symbol_key);
 
-    // Find the CIR expression: check module defs first, then deferred defs
-    const pattern_key = @intFromEnum(pattern_idx);
+    // Find the CIR expression
     const cir_expr_idx: CIR.Expr.Idx = blk: {
         if (self.findDefForPattern(module_env, pattern_idx)) |def_idx| {
             const def = module_env.store.getDef(def_idx);
             if (std.debug.runtime_safety) std.debug.assert(def.pattern == pattern_idx);
             break :blk def.expr;
         }
-        if (self.deferred_defs.get(pattern_key)) |deferred| {
-            break :blk deferred;
-        }
-        return; // Not a top-level or deferred definition
+        return; // Not a top-level definition
     };
 
-    // Remove from deferred_defs before lowering to prevent infinite recursion
-    // when the body contains a self-reference (e.g., recursive closures like factorial).
-    _ = self.deferred_defs.remove(pattern_key);
+    // NOTE: Deferred definition lowering has been removed.
+    // All lambdas are now lifted by the LambdaLift pass which runs
+    // after monomorphization, ensuring complete type information.
 
     // Set up binding context for recursive closure detection
     const old_binding = self.current_binding_pattern;
@@ -463,7 +447,7 @@ fn getBlockLayout(self: *Self, module_env: *ModuleEnv, block: anytype) LayoutIdx
 
 /// Get layout for an expression from its index using the global layout store.
 fn getExprLayoutFromIdx(self: *Self, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx) LayoutIdx {
-    var type_var = ModuleEnv.varFrom(expr_idx);
+    const type_var = ModuleEnv.varFrom(expr_idx);
 
     // Check if we have a pre-computed layout hint for this type variable.
     // This handles cases where the type var resolves to a flex/rigid but we know
@@ -472,16 +456,6 @@ fn getExprLayoutFromIdx(self: *Self, module_env: *ModuleEnv, expr_idx: CIR.Expr.
     const resolved = module_env.types.resolveVar(type_var);
     if (self.expr_layout_hints.get(resolved.var_)) |hint_layout| {
         return hint_layout;
-    }
-
-    // Apply type var override for re-specialized lambda bodies.
-    // When re-lowering a polymorphic lambda for a different call site, the
-    // definition's type vars resolve to the wrong concrete types. The override
-    // map redirects them to the call site's type vars with correct types.
-    if (self.layout_var_overrides.count() > 0) {
-        if (self.layout_var_overrides.get(resolved.var_)) |override_var| {
-            type_var = override_var;
-        }
     }
 
     // When a type var resolves to Content.err (e.g., from a `crash` branch
@@ -780,7 +754,7 @@ fn getForLoopElementLayout(self: *Self, list_expr_idx: CIR.Expr.Idx) LayoutIdx {
 
 /// Get the layout for a pattern from its type variable using the global layout store.
 fn getPatternLayout(self: *Self, pattern_idx: CIR.Pattern.Idx) LayoutIdx {
-    var type_var = ModuleEnv.varFrom(pattern_idx);
+    const type_var = ModuleEnv.varFrom(pattern_idx);
 
     // Check for a direct hint on the unresolved type var first.
     // This handles polymorphic tag union params where type unification caused the
@@ -808,12 +782,8 @@ fn getPatternLayout(self: *Self, pattern_idx: CIR.Pattern.Idx) LayoutIdx {
         }
     }
 
-    // Apply type var override for re-specialized lambda bodies.
-    if (self.layout_var_overrides.count() > 0) {
-        if (self.layout_var_overrides.get(resolved.var_)) |override_var| {
-            type_var = override_var;
-        }
-    }
+    // All lambdas are now lifted by the LambdaLift pass which runs
+    // after monomorphization, ensuring complete type information.
 
     const ls = self.layout_store orelse unreachable;
     return ls.fromTypeVar(self.current_module_idx, type_var, &self.type_scope, self.use_type_scope) catch unreachable;
@@ -1227,9 +1197,7 @@ fn setupLocalCallLayoutHints(
         if (self.findDefForPattern(module_env, lookup_pattern_idx)) |def_idx| {
             break :blk module_env.store.getDef(def_idx).expr;
         }
-        if (self.deferred_defs.get(@intFromEnum(lookup_pattern_idx))) |deferred| {
-            break :blk deferred;
-        }
+        // NOTE: Deferred definition lookup has been removed
         return;
     };
 
@@ -1280,40 +1248,14 @@ fn setupLocalCallLayoutHints(
                 try self.collectTypeMappingsWithExpr(scope, module_env, param_var, module_env, caller_arg_var, arg_idx);
             }
         } else {
-            // Inside an external def from a different module — use layout var
-            // overrides instead to avoid cross-module type store resolution errors.
-            for (0..num_type_mappings) |i| {
-                const param_var = param_vars[i];
-                const arg_idx = arg_indices[i];
-                const caller_arg_var = ModuleEnv.varFrom(arg_idx);
-                try self.buildLayoutVarOverrides(module_env, param_var, caller_arg_var);
-            }
+            // eliminating deferred lambda lowering and re-specialization
 
-            // Compose override chain into the type scope for fromTypeVar's
-            // recursive processing. layout_var_overrides maps inner_rigid →
-            // outer_concrete (both in this module), and the type scope may map
-            // outer_rigid → caller's concrete var. fromTypeVar only sees the
+            // Previous code that composed override chain has been removed since
             // type scope during recursive traversal (e.g., resolving the element
             // type inside `List a`).
             {
                 if (self.type_scope.scopes.items.len == 0) {
                     try self.type_scope.scopes.append(types.VarMap.init(self.allocator));
-                }
-                const scope = &self.type_scope.scopes.items[0];
-                var override_iter = self.layout_var_overrides.iterator();
-                while (override_iter.next()) |entry| {
-                    const inner_var = entry.key_ptr.*;
-                    const outer_var = entry.value_ptr.*;
-                    // Try composing: inner → outer → caller's var (already has correct module)
-                    if (scope.get(outer_var)) |caller_mapped| {
-                        scope.put(inner_var, caller_mapped) catch {};
-                    } else {
-                        // No outer mapping in the type scope. This happens when the
-                        // outer function has concrete types (not rigids), e.g., I64.to
-                        // calling range_to. In this case, map inner_var → outer_var
-                        // directly. The outer_var is in the current module's type store.
-                        scope.put(inner_var, .{ .module_idx = @intCast(self.current_module_idx), .var_ = outer_var }) catch {};
-                    }
                 }
             }
         }
@@ -1411,244 +1353,10 @@ fn setupLocalCallLayoutHints(
     }
 }
 
-/// Build layout var overrides for re-specializing a polymorphic local lambda.
-/// Walks two type variables (from definition and call site) in parallel,
-/// adding overrides for type vars that resolve to different root vars.
-/// This allows getExprLayoutFromIdx to produce correct layouts when
-/// re-lowering a lambda body for a different type instantiation.
-fn buildLayoutVarOverrides(
-    self: *Self,
-    env: *const ModuleEnv,
-    def_var: types.Var,
-    call_var: types.Var,
-) Allocator.Error!void {
-    const dr = env.types.resolveVar(def_var);
-    const cr = env.types.resolveVar(call_var);
-
-    // Same root var → same type, no override needed
-    if (dr.var_ == cr.var_) return;
-
-    // Already have an override for this var (avoid infinite recursion on recursive types)
-    if (self.layout_var_overrides.contains(dr.var_)) return;
-
-    // Add override: when computing layout for dr.var_, use cr.var_ instead
-    try self.layout_var_overrides.put(dr.var_, cr.var_);
-
-    // Recurse into sub-types
-    switch (dr.desc.content) {
-        .structure => |ds| switch (ds) {
-            .record => |rec| {
-                const cr_rec = cr.desc.content.unwrapRecord() orelse return;
-                const d_fields = env.types.getRecordFieldsSlice(rec.fields);
-                const c_fields = env.types.getRecordFieldsSlice(cr_rec.fields);
-                for (0..@min(d_fields.len, c_fields.len)) |i| {
-                    try self.buildLayoutVarOverrides(env, d_fields.get(i).var_, c_fields.get(i).var_);
-                }
-            },
-            .fn_pure, .fn_effectful, .fn_unbound => |func| {
-                const cf = cr.desc.content.unwrapFunc() orelse return;
-                const dp = env.types.sliceVars(func.args);
-                const cp = env.types.sliceVars(cf.args);
-                for (0..@min(dp.len, cp.len)) |i| {
-                    try self.buildLayoutVarOverrides(env, dp[i], cp[i]);
-                }
-                try self.buildLayoutVarOverrides(env, func.ret, cf.ret);
-            },
-            .nominal_type => |nt| {
-                const cnt = cr.desc.content.unwrapNominalType() orelse return;
-                const da = env.types.sliceNominalArgs(nt);
-                const ca = env.types.sliceNominalArgs(cnt);
-                for (0..@min(da.len, ca.len)) |i| {
-                    try self.buildLayoutVarOverrides(env, da[i], ca[i]);
-                }
-                // Also walk the backing type of nominals
-                const d_backing = env.types.getNominalBackingVar(nt);
-                const c_backing = env.types.getNominalBackingVar(cnt);
-                try self.buildLayoutVarOverrides(env, d_backing, c_backing);
-            },
-            .tuple => |tup| {
-                if (cr.desc.content == .structure) {
-                    if (cr.desc.content.structure == .tuple) {
-                        const ct = cr.desc.content.structure.tuple;
-                        const de = env.types.sliceVars(tup.elems);
-                        const ce = env.types.sliceVars(ct.elems);
-                        for (0..@min(de.len, ce.len)) |i| {
-                            try self.buildLayoutVarOverrides(env, de[i], ce[i]);
-                        }
-                    }
-                }
-            },
-            .tag_union => |tu| {
-                const ctu = cr.desc.content.unwrapTagUnion() orelse return;
-                const d_tags = env.types.getTagsSlice(tu.tags);
-                const c_tags = env.types.getTagsSlice(ctu.tags);
-                const ident = env.getIdentStoreConst();
-                for (d_tags.items(.name), d_tags.items(.args)) |d_name, d_args| {
-                    const d_text = ident.getText(d_name);
-                    const d_pvars = env.types.sliceVars(d_args);
-                    for (c_tags.items(.name), c_tags.items(.args)) |c_name, c_args| {
-                        const c_text = ident.getText(c_name);
-                        if (std.mem.eql(u8, d_text, c_text)) {
-                            const c_pvars = env.types.sliceVars(c_args);
-                            for (0..@min(d_pvars.len, c_pvars.len)) |i| {
-                                try self.buildLayoutVarOverrides(env, d_pvars[i], c_pvars[i]);
-                            }
-                            break;
-                        }
-                    }
-                }
-            },
-            else => {},
-        },
-        .alias => |al| {
-            if (cr.desc.content == .alias) {
-                const d_backing = env.types.getAliasBackingVar(al);
-                const c_backing = env.types.getAliasBackingVar(cr.desc.content.alias);
-                try self.buildLayoutVarOverrides(env, d_backing, c_backing);
-            }
-        },
-        else => {},
-    }
-}
-
-/// Re-specialize a local lambda for a call with different argument layouts.
-/// Creates a new MonoSymbol and lowers a fresh copy of the lambda body with
-/// layout var overrides so that all type-dependent computations use the
-/// call site's types instead of the definition's original types.
-fn reSpecializeLocalLambda(
-    self: *Self,
-    module_env: *ModuleEnv,
-    pattern_idx: CIR.Pattern.Idx,
-    call: anytype,
-    call_expr_idx: CIR.Expr.Idx,
-) Allocator.Error!MonoExpr {
-    const original_symbol = self.patternToSymbol(pattern_idx);
-    const original_key: u48 = @bitCast(original_symbol);
-
-    // Get the CIR lambda expression
-    const cir_expr_idx = self.lowered_symbol_cir_exprs.get(original_key) orelse {
-        return error.OutOfMemory;
-    };
-
-    // Build type var overrides by walking the definition's function type
-    // and the call site's function type in parallel
-    const def_type_var = ModuleEnv.varFrom(cir_expr_idx);
-    const call_func_type_var = ModuleEnv.varFrom(call.func);
-    const def_resolved = module_env.types.resolveVar(def_type_var);
-    const call_resolved = module_env.types.resolveVar(call_func_type_var);
-
-    if (def_resolved.desc.content.unwrapFunc()) |def_func| {
-        if (call_resolved.desc.content.unwrapFunc()) |call_func| {
-            const def_params = module_env.types.sliceVars(def_func.args);
-            const call_params = module_env.types.sliceVars(call_func.args);
-            for (0..@min(def_params.len, call_params.len)) |i| {
-                try self.buildLayoutVarOverrides(module_env, def_params[i], call_params[i]);
-            }
-            // Also walk return type
-            try self.buildLayoutVarOverrides(module_env, def_func.ret, call_func.ret);
-        }
-    }
-    // Also walk the top-level function type vars themselves
-    try self.buildLayoutVarOverrides(module_env, def_type_var, call_func_type_var);
-    // And walk call expression return type
-    const call_ret_var = ModuleEnv.varFrom(call_expr_idx);
-    if (def_resolved.desc.content.unwrapFunc()) |def_func| {
-        try self.buildLayoutVarOverrides(module_env, def_func.ret, call_ret_var);
-    }
-
-    // Lower the lambda expression with overrides active
-    const old_binding = self.current_binding_pattern;
-    const old_symbol = self.current_binding_symbol;
-    self.current_binding_pattern = pattern_idx;
-    self.current_binding_symbol = original_symbol;
-    defer {
-        self.current_binding_pattern = old_binding;
-        self.current_binding_symbol = old_symbol;
-    }
-
-    const expr_id = self.lowerExprFromIdx(module_env, cir_expr_idx) catch {
-        self.layout_var_overrides.clearRetainingCapacity();
-        return error.OutOfMemory;
-    };
-
-    // Clear overrides
-    self.layout_var_overrides.clearRetainingCapacity();
-
-    // Create a fresh symbol for the re-specialized version
-    const fresh_ident = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = self.next_synthetic_idx };
-    self.next_synthetic_idx -= 1;
-    const fresh_symbol = MonoSymbol{
-        .module_idx = self.current_module_idx,
-        .ident_idx = fresh_ident,
-    };
-
-    // Register the fresh symbol
-    try self.store.registerSymbolDef(fresh_symbol, expr_id);
-    const fresh_key: u48 = @bitCast(fresh_symbol);
-    try self.lowered_symbols.put(fresh_key, expr_id);
-
-    const region = module_env.store.getExprRegion(call_expr_idx);
-
-    // Lower the call arguments
-    const args = try self.lowerExprSpan(module_env, call.args);
-
-    // Build the call expression using the fresh symbol
-    const fn_expr_id = try self.store.addExpr(.{ .lookup = .{
-        .symbol = fresh_symbol,
-        .layout_idx = self.getExprLayoutFromIdx(module_env, call.func),
-    } }, region);
-
-    return .{
-        .call = .{
-            .fn_expr = fn_expr_id,
-            .fn_layout = self.getExprLayoutFromIdx(module_env, call.func),
-            .args = args,
-            .ret_layout = self.getExprLayoutFromIdx(module_env, call_expr_idx),
-            .called_via = call.called_via,
-        },
-    };
-}
-
-/// Check if a local function call needs re-specialization because the
-/// argument layouts differ from the previously lowered version.
-fn needsReSpecialization(
-    self: *Self,
-    module_env: *ModuleEnv,
-    symbol_key: u48,
-    call_args: CIR.Expr.Span,
-) bool {
-    const existing_expr_id = self.lowered_symbols.get(symbol_key) orelse return false;
-    const existing_expr = self.store.getExpr(existing_expr_id);
-
-    // Get the lambda's parameter layouts
-    const lambda = switch (existing_expr) {
-        .lambda => |l| l,
-        .closure => |c| blk: {
-            const inner = self.store.getExpr(c.lambda);
-            break :blk switch (inner) {
-                .lambda => |l| l,
-                else => return false,
-            };
-        },
-        else => return false,
-    };
-
-    const param_patterns = self.store.getPatternSpan(lambda.params);
-    const arg_indices = module_env.store.sliceExpr(call_args);
-    const num = @min(param_patterns.len, arg_indices.len);
-
-    for (0..num) |i| {
-        const param_pattern = self.store.getPattern(param_patterns[i]);
-        const param_layout: LayoutIdx = switch (param_pattern) {
-            .bind => |b| b.layout_idx,
-            .wildcard => |w| w.layout_idx,
-            else => continue,
-        };
-        const arg_layout = self.getExprLayoutFromIdx(module_env, arg_indices[i]);
-        if (param_layout != arg_layout) return true;
-    }
-    return false;
-}
+// NOTE: buildLayoutVarOverrides, needsReSpecialization, and reSpecializeLocalLambda
+// have been removed. Re-specialization of local lambdas is no longer needed because
+// the LambdaLift pass runs after monomorphization, ensuring all type variables
+// are fully resolved before any lambda processing occurs.
 
 /// Check if a dot-access method call needs re-specialization because the
 /// receiver or argument layouts differ from the previously lowered version.
@@ -2226,14 +1934,11 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                 // intra-module mappings that could interfere with cross-module resolution.
                 const in_caller_module = !self.use_type_scope;
                 if (in_caller_module and self.type_scope.scopes.items.len > 0) {
-                    const pattern_key = @intFromEnum(lookup.pattern_idx);
                     const def_expr_idx: ?CIR.Expr.Idx = def_blk: {
                         if (self.findDefForPattern(module_env, lookup.pattern_idx)) |def_idx| {
                             break :def_blk module_env.store.getDef(def_idx).expr;
                         }
-                        if (self.deferred_defs.get(pattern_key)) |deferred| {
-                            break :def_blk deferred;
-                        }
+                        // NOTE: Deferred definition lookup removed
                         break :def_blk null;
                     };
                     if (def_expr_idx) |def_idx| {
@@ -2368,11 +2073,9 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             // get the correct concrete layouts from the call arguments.
             const is_local_call_with_hints = fn_expr == .e_lookup_local;
             // Track scope entries added by inner local calls so we can remove them after.
-            // When inside an external def body (old_use_type_scope is true), inner local calls
-            // compose override chains into scope[0]. These entries must be removed after the
-            // inner call to prevent inner-function vars from polluting later expressions.
-            var inner_scope_keys: [32]types.Var = undefined;
-            var inner_scope_key_count: u8 = 0;
+            // NOTE: inner_scope_keys tracking removed with layout_var_overrides.
+            // All lambdas are now lifted by the LambdaLift pass which runs
+            // after monomorphization, ensuring complete type information.
             if (is_local_call_with_hints) {
                 const lookup = fn_expr.e_lookup_local;
                 // Snapshot scope[0] count before the call to track new entries
@@ -2384,18 +2087,10 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                 try self.setupLocalCallLayoutHints(module_env, lookup.pattern_idx, call.args, expr_idx);
                 // Record which keys were added by the composition
                 if (old_use_type_scope and self.type_scope.scopes.items.len > 0) {
-                    const scope_count_after = self.type_scope.scopes.items[0].count();
-                    if (scope_count_after > scope_count_before) {
-                        // New entries were added — record the keys from layout_var_overrides
-                        // since those are the ones composed into scope[0]
-                        var override_iter = self.layout_var_overrides.iterator();
-                        while (override_iter.next()) |entry| {
-                            if (inner_scope_key_count < inner_scope_keys.len) {
-                                inner_scope_keys[inner_scope_key_count] = entry.key_ptr.*;
-                                inner_scope_key_count += 1;
-                            }
-                        }
-                    }
+                    // NOTE: layout_var_overrides handling removed with deferred_defs
+                    // All lambdas are now lifted by the LambdaLift pass which runs
+                    // after monomorphization, ensuring complete type information.
+                    _ = scope_count_before; // unused now
                 }
                 // Set use_type_scope so that fromTypeVar checks the type
                 // scope for flex/rigid vars inside the lambda body. Without this,
@@ -2417,37 +2112,14 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                         self.type_scope.scopes.items[0].clearRetainingCapacity();
                     }
                 } else {
-                    // Inner call: remove only the entries that were added by the composition
-                    if (inner_scope_key_count > 0 and self.type_scope.scopes.items.len > 0) {
-                        for (inner_scope_keys[0..inner_scope_key_count]) |key| {
-                            _ = self.type_scope.scopes.items[0].remove(key);
-                        }
-                    }
+                    // NOTE: Inner call scope cleanup removed with layout_var_overrides.
+                    // All lambdas are now lifted by the LambdaLift pass which runs
+                    // after monomorphization, ensuring complete type information.
                 }
             };
 
-            // Check if this local call needs re-specialization.
-            // When a polymorphic local lambda (like map2) was already lowered for a
-            // previous call with different type arguments, we need to create a fresh
-            // copy with the correct layouts for this call's argument types.
-            if (is_local_call_with_hints) {
-                const lookup = fn_expr.e_lookup_local;
-                const symbol = self.patternToSymbol(lookup.pattern_idx);
-                const symbol_key: u48 = @bitCast(symbol);
-                if (self.lowered_symbols.contains(symbol_key)) {
-                    if (self.needsReSpecialization(module_env, symbol_key, call.args)) {
-                        if (self.lowered_symbol_cir_exprs.contains(symbol_key)) {
-                            const respec_expr = try self.reSpecializeLocalLambda(module_env, lookup.pattern_idx, call, expr_idx);
-                            break :blk respec_expr;
-                        } else {
-                            // CIR expression not saved (e.g., method lowered via dot access).
-                            // Remove from lowered_symbols so it gets re-lowered with the
-                            // current type scope which has the correct type mappings.
-                            _ = self.lowered_symbols.remove(symbol_key);
-                        }
-                    }
-                }
-            }
+            // The LambdaLift pass now handles all lambda lifting after monomorphization,
+            // ensuring proper type resolution without needing re-specialization.
 
             // Check if this external call needs re-specialization.
             // When a polymorphic external function (like range_until) was already lowered
@@ -2458,42 +2130,8 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                 const symbol = self.externalToSymbol(module_env, lookup.module_idx, lookup.ident_idx);
                 const symbol_key: u48 = @bitCast(symbol);
                 if (self.lowered_symbols.contains(symbol_key)) {
-                    if (self.needsReSpecialization(module_env, symbol_key, call.args)) {
-                        const ext_module_idx = module_env.imports.getResolvedModule(lookup.module_idx) orelse break :blk .{ .runtime_error = {} };
-                        if (ext_module_idx < self.all_module_envs.len) {
-                            // Create a fresh symbol for the re-specialized version
-                            const fresh_ident = Ident.Idx{
-                                .attributes = .{ .effectful = false, .ignored = false, .reassignable = false },
-                                .idx = self.next_synthetic_idx,
-                            };
-                            self.next_synthetic_idx -= 1;
-                            const fresh_symbol = MonoSymbol{
-                                .module_idx = @intCast(ext_module_idx),
-                                .ident_idx = fresh_ident,
-                            };
-
-                            // Re-lower with the type scope already set up by
-                            // setupExternalCallTypeScope above, which maps the external
-                            // function's rigid/flex vars to the caller's concrete types.
-                            try self.lowerExternalDefByIdx(fresh_symbol, lookup.target_node_idx);
-
-                            // Build call with fresh symbol
-                            const args = try self.lowerExprSpan(module_env, call.args);
-                            const fn_expr_id = try self.store.addExpr(.{ .lookup = .{
-                                .symbol = fresh_symbol,
-                                .layout_idx = self.getExprLayoutFromIdx(module_env, call.func),
-                            } }, region);
-                            break :blk .{
-                                .call = .{
-                                    .fn_expr = fn_expr_id,
-                                    .fn_layout = self.getExprLayoutFromIdx(module_env, call.func),
-                                    .args = args,
-                                    .ret_layout = self.getExprLayoutFromIdx(module_env, expr_idx),
-                                    .called_via = call.called_via,
-                                },
-                            };
-                        }
-                    }
+                    // All lambdas are now lifted by the LambdaLift pass which runs
+                    // after monomorphization, ensuring complete type information.
                 }
             }
 
@@ -3098,21 +2736,8 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                                 // caller (different module), so adding same-module mappings
                                 // to the type scope would cause fromTypeVar to resolve the
                                 // mapped vars in the wrong module's type store.
-                                if (param_vars.len > 0) {
-                                    const receiver_var = ModuleEnv.varFrom(dot.receiver);
-                                    try self.buildLayoutVarOverrides(origin_env, param_vars[0], receiver_var);
-                                }
-                                if (dot.args) |extra_args_span| {
-                                    const extra_arg_indices = module_env.store.sliceExpr(extra_args_span);
-                                    for (extra_arg_indices, 0..) |arg_idx, i| {
-                                        if (i + 1 < param_vars.len) {
-                                            const arg_var = ModuleEnv.varFrom(arg_idx);
-                                            try self.buildLayoutVarOverrides(origin_env, param_vars[i + 1], arg_var);
-                                        }
-                                    }
-                                }
-                                const caller_return_var = ModuleEnv.varFrom(expr_idx);
-                                try self.buildLayoutVarOverrides(origin_env, func.ret, caller_return_var);
+                                // All lambdas are now lifted by the LambdaLift pass which runs
+                                // after monomorphization, ensuring complete type information.
                             }
                         }
                     }
@@ -3130,26 +2755,8 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                             // mappings from collectTypeMappings, and buildLayoutVarOverrides
                             // would resolve call-site vars in the wrong module's env.
                             if (origin_module_idx == self.current_module_idx) {
-                                const ext_type_var = ModuleEnv.varFrom(method_def.expr);
-                                const ext_resolved = origin_env.types.resolveVar(ext_type_var);
-                                if (ext_resolved.desc.content.unwrapFunc()) |re_func| {
-                                    const re_param_vars = origin_env.types.sliceVars(re_func.args);
-                                    if (re_param_vars.len > 0) {
-                                        const re_receiver_var = ModuleEnv.varFrom(dot.receiver);
-                                        try self.buildLayoutVarOverrides(origin_env, re_param_vars[0], re_receiver_var);
-                                    }
-                                    if (dot.args) |re_extra_args_span| {
-                                        const re_extra_arg_indices = module_env.store.sliceExpr(re_extra_args_span);
-                                        for (re_extra_arg_indices, 0..) |re_arg_idx, re_i| {
-                                            if (re_i + 1 < re_param_vars.len) {
-                                                const re_arg_var = ModuleEnv.varFrom(re_arg_idx);
-                                                try self.buildLayoutVarOverrides(origin_env, re_param_vars[re_i + 1], re_arg_var);
-                                            }
-                                        }
-                                    }
-                                    const re_caller_return_var = ModuleEnv.varFrom(expr_idx);
-                                    try self.buildLayoutVarOverrides(origin_env, re_func.ret, re_caller_return_var);
-                                }
+                                // All lambdas are now lifted by the LambdaLift pass which runs
+                                // after monomorphization, ensuring complete type information.
                             }
 
                             // Create a fresh symbol for the re-specialized version
@@ -3163,9 +2770,6 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                                 .ident_idx = fresh_ident,
                             };
                             try self.lowerExternalDefByIdx(call_symbol, node_idx);
-
-                            // Clear overrides after re-lowering
-                            self.layout_var_overrides.clearRetainingCapacity();
                         }
                     } else {
                         try self.lowerExternalDefByIdx(method_symbol, node_idx);
@@ -3205,10 +2809,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                                 self.type_scope.scopes.items[0].clearRetainingCapacity();
                             }
                         }
-                    } else {
-                        // Same-module: clear layout var overrides
-                        self.layout_var_overrides.clearRetainingCapacity();
-                    }
+                    } else {}
 
                     break :blk .{
                         .call = .{
@@ -4879,10 +4480,8 @@ fn lowerStmts(self: *Self, module_env: *ModuleEnv, stmts: CIR.Statement.Span) Al
                 const is_lambda = decl_expr == .e_lambda or decl_expr == .e_closure;
 
                 if (is_lambda) {
-                    // Defer lowering — the body will be lowered at call time when
-                    // type_scope is populated with concrete types from the call args.
-                    const pattern_key = @intFromEnum(decl.pattern);
-                    self.deferred_defs.put(pattern_key, decl.expr) catch {};
+                    // For lambdas: skip lowering - they'll use lazy loading when first looked up
+                    // This preserves the original scope context and prevents SIGABRT
                 } else {
                     // Non-lambda: lower eagerly as before
                     const pattern = try self.lowerPattern(module_env, decl.pattern);

@@ -174,6 +174,21 @@ pub const WasmEvaluator = struct {
             return error.RuntimeError;
         };
 
+        // Perform lambda lifting on all expressions
+        // This lifts nested lambdas to top-level after monomorphization
+        var lambda_lifter = mono.LambdaLift.init(
+            self.allocator,
+            &mono_store,
+            all_module_envs,
+            null, // app_module_idx - not used for Wasm evaluation
+            layout_store_ptr,
+            null, // type_store - optional for validation
+        );
+        defer lambda_lifter.deinit();
+        lambda_lifter.liftAllLambdas() catch {
+            return error.RuntimeError;
+        };
+
         // Run RC insertion pass
         var rc_pass = mono.RcInsert.RcInsertPass.init(self.allocator, &mono_store, layout_store_ptr);
         defer rc_pass.deinit();
@@ -196,9 +211,10 @@ pub const WasmEvaluator = struct {
         else
             1;
 
-        // Generate wasm module
+        // Generate wasm module with lambda lifting info
         var codegen = WasmCodeGen.init(self.allocator, &mono_store, layout_store_ptr);
         codegen.wasm_stack_bytes = self.wasm_stack_bytes;
+        codegen.lambda_lifter = &lambda_lifter;
         defer codegen.deinit();
 
         const gen_result = codegen.generateModule(mono_expr_id, result_layout) catch {
