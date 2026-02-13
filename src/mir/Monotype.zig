@@ -9,9 +9,12 @@
 
 const std = @import("std");
 const base = @import("base");
+const types = @import("types");
+const can = @import("can");
 
 const Ident = base.Ident;
 const Allocator = std.mem.Allocator;
+const CIR = can.CIR;
 
 /// Index into the Store's monotypes array.
 /// Since MIR has a 1:1 expr-to-type mapping, an Expr.Idx can be directly
@@ -221,5 +224,243 @@ pub const Store = struct {
     pub fn getFields(self: *const Store, span: FieldSpan) []const Field {
         if (span.len == 0) return &.{};
         return self.fields.items[span.start..][0..span.len];
+    }
+
+    /// Convert a CIR type variable to a Monotype, recursively resolving all
+    /// type structure. Uses `seen` for cycle detection on recursive types.
+    pub fn fromTypeVar(
+        self: *Store,
+        allocator: Allocator,
+        types_store: *const types.Store,
+        type_var: types.Var,
+        builtin_indices: CIR.BuiltinIndices,
+        seen: *std.AutoHashMap(types.Var, Idx),
+    ) !Idx {
+        const resolved = types_store.resolveVar(type_var);
+
+        // Cycle detection: if we've already seen this var, return the cached idx
+        if (seen.get(resolved.var_)) |cached| return cached;
+
+        return switch (resolved.desc.content) {
+            .flex, .rigid => {
+                // Unresolved type variables should not appear in monomorphic code.
+                // This indicates the type checker left something unresolved.
+                return try self.addMonotype(allocator, .err);
+            },
+            .alias => |alias| {
+                // Aliases are transparent — follow the backing var
+                const backing_var = types_store.getAliasBackingVar(alias);
+                return try self.fromTypeVar(allocator, types_store, backing_var, builtin_indices, seen);
+            },
+            .structure => |flat_type| {
+                return try self.fromFlatType(allocator, types_store, resolved.var_, flat_type, builtin_indices, seen);
+            },
+            .err => try self.addMonotype(allocator, .err),
+        };
+    }
+
+    fn fromFlatType(
+        self: *Store,
+        allocator: Allocator,
+        types_store: *const types.Store,
+        var_: types.Var,
+        flat_type: types.FlatType,
+        builtin_indices: CIR.BuiltinIndices,
+        seen: *std.AutoHashMap(types.Var, Idx),
+    ) !Idx {
+        return switch (flat_type) {
+            .nominal_type => |nominal| {
+                return try self.fromNominalType(allocator, types_store, var_, nominal, builtin_indices, seen);
+            },
+            .empty_record => try self.addMonotype(allocator, .unit),
+            .empty_tag_union => try self.addMonotype(allocator, .{ .tag_union = .{ .tags = TagSpan.empty() } }),
+            .record => |record| {
+                // Reserve a slot for cycle detection before recursing into fields
+                const placeholder_idx = try self.addMonotype(allocator, .err);
+                try seen.put(var_, placeholder_idx);
+
+                const fields_slice = types_store.getRecordFieldsSlice(record.fields);
+                const names = fields_slice.items(.name);
+                const vars = fields_slice.items(.var_);
+
+                var mono_fields = try std.ArrayList(Field).initCapacity(allocator, names.len);
+                defer mono_fields.deinit();
+
+                for (names, vars) |name, field_var| {
+                    const field_type = try self.fromTypeVar(allocator, types_store, field_var, builtin_indices, seen);
+                    try mono_fields.append(.{ .name = name, .type_idx = field_type });
+                }
+
+                const field_span = try self.addFields(allocator, mono_fields.items);
+                self.monotypes.items[@intFromEnum(placeholder_idx)] = .{ .record = .{ .fields = field_span } };
+                return placeholder_idx;
+            },
+            .record_unbound => |fields_range| {
+                // Extensible record — treat like a closed record with the known fields
+                const fields_slice = types_store.getRecordFieldsSlice(fields_range);
+                const names = fields_slice.items(.name);
+                const vars = fields_slice.items(.var_);
+
+                const placeholder_idx = try self.addMonotype(allocator, .err);
+                try seen.put(var_, placeholder_idx);
+
+                var mono_fields = try std.ArrayList(Field).initCapacity(allocator, names.len);
+                defer mono_fields.deinit();
+
+                for (names, vars) |name, field_var| {
+                    const field_type = try self.fromTypeVar(allocator, types_store, field_var, builtin_indices, seen);
+                    try mono_fields.append(.{ .name = name, .type_idx = field_type });
+                }
+
+                const field_span = try self.addFields(allocator, mono_fields.items);
+                self.monotypes.items[@intFromEnum(placeholder_idx)] = .{ .record = .{ .fields = field_span } };
+                return placeholder_idx;
+            },
+            .tuple => |tuple| {
+                const placeholder_idx = try self.addMonotype(allocator, .err);
+                try seen.put(var_, placeholder_idx);
+
+                const elem_vars = types_store.sliceVars(tuple.elems);
+                var mono_elems = try std.ArrayList(Idx).initCapacity(allocator, elem_vars.len);
+                defer mono_elems.deinit();
+
+                for (elem_vars) |elem_var| {
+                    const elem_type = try self.fromTypeVar(allocator, types_store, elem_var, builtin_indices, seen);
+                    try mono_elems.append(elem_type);
+                }
+
+                const elem_span = try self.addIdxSpan(allocator, mono_elems.items);
+                self.monotypes.items[@intFromEnum(placeholder_idx)] = .{ .tuple = .{ .elems = elem_span } };
+                return placeholder_idx;
+            },
+            .tag_union => |tag_union| {
+                const placeholder_idx = try self.addMonotype(allocator, .err);
+                try seen.put(var_, placeholder_idx);
+
+                const tags_slice = types_store.getTagsSlice(tag_union.tags);
+                const tag_names = tags_slice.items(.name);
+                const tag_args = tags_slice.items(.args);
+
+                var mono_tags = try std.ArrayList(Tag).initCapacity(allocator, tag_names.len);
+                defer mono_tags.deinit();
+
+                for (tag_names, tag_args) |name, args_range| {
+                    const arg_vars = types_store.sliceVars(args_range);
+                    var payload_idxs = try std.ArrayList(Idx).initCapacity(allocator, arg_vars.len);
+                    defer payload_idxs.deinit();
+
+                    for (arg_vars) |arg_var| {
+                        const payload_type = try self.fromTypeVar(allocator, types_store, arg_var, builtin_indices, seen);
+                        try payload_idxs.append(payload_type);
+                    }
+
+                    const payloads_span = try self.addIdxSpan(allocator, payload_idxs.items);
+                    try mono_tags.append(.{ .name = name, .payloads = payloads_span });
+                }
+
+                const tag_span = try self.addTags(allocator, mono_tags.items);
+                self.monotypes.items[@intFromEnum(placeholder_idx)] = .{ .tag_union = .{ .tags = tag_span } };
+                return placeholder_idx;
+            },
+            .fn_pure => |func| try self.fromFuncType(allocator, types_store, var_, func, false, builtin_indices, seen),
+            .fn_effectful => |func| try self.fromFuncType(allocator, types_store, var_, func, true, builtin_indices, seen),
+            .fn_unbound => |func| try self.fromFuncType(allocator, types_store, var_, func, false, builtin_indices, seen),
+        };
+    }
+
+    fn fromFuncType(
+        self: *Store,
+        allocator: Allocator,
+        types_store: *const types.Store,
+        var_: types.Var,
+        func: types.Func,
+        effectful: bool,
+        builtin_indices: CIR.BuiltinIndices,
+        seen: *std.AutoHashMap(types.Var, Idx),
+    ) !Idx {
+        const placeholder_idx = try self.addMonotype(allocator, .err);
+        try seen.put(var_, placeholder_idx);
+
+        const arg_vars = types_store.sliceVars(func.args);
+        var mono_args = try std.ArrayList(Idx).initCapacity(allocator, arg_vars.len);
+        defer mono_args.deinit();
+
+        for (arg_vars) |arg_var| {
+            const arg_type = try self.fromTypeVar(allocator, types_store, arg_var, builtin_indices, seen);
+            try mono_args.append(arg_type);
+        }
+
+        const args_span = try self.addIdxSpan(allocator, mono_args.items);
+        const ret = try self.fromTypeVar(allocator, types_store, func.ret, builtin_indices, seen);
+
+        self.monotypes.items[@intFromEnum(placeholder_idx)] = .{ .func = .{
+            .args = args_span,
+            .ret = ret,
+            .effectful = effectful,
+        } };
+        return placeholder_idx;
+    }
+
+    fn fromNominalType(
+        self: *Store,
+        allocator: Allocator,
+        types_store: *const types.Store,
+        nominal_var: types.Var,
+        nominal: types.NominalType,
+        builtin_indices: CIR.BuiltinIndices,
+        seen: *std.AutoHashMap(types.Var, Idx),
+    ) !Idx {
+        const ident = nominal.ident.ident_idx;
+
+        // Check if this is a builtin primitive type
+        if (ident == builtin_indices.bool_ident) return try self.addMonotype(allocator, .{ .prim = .bool });
+        if (ident == builtin_indices.str_ident) return try self.addMonotype(allocator, .{ .prim = .str });
+        if (ident == builtin_indices.u8_ident) return try self.addMonotype(allocator, .{ .prim = .u8 });
+        if (ident == builtin_indices.i8_ident) return try self.addMonotype(allocator, .{ .prim = .i8 });
+        if (ident == builtin_indices.u16_ident) return try self.addMonotype(allocator, .{ .prim = .u16 });
+        if (ident == builtin_indices.i16_ident) return try self.addMonotype(allocator, .{ .prim = .i16 });
+        if (ident == builtin_indices.u32_ident) return try self.addMonotype(allocator, .{ .prim = .u32 });
+        if (ident == builtin_indices.i32_ident) return try self.addMonotype(allocator, .{ .prim = .i32 });
+        if (ident == builtin_indices.u64_ident) return try self.addMonotype(allocator, .{ .prim = .u64 });
+        if (ident == builtin_indices.i64_ident) return try self.addMonotype(allocator, .{ .prim = .i64 });
+        if (ident == builtin_indices.u128_ident) return try self.addMonotype(allocator, .{ .prim = .u128 });
+        if (ident == builtin_indices.i128_ident) return try self.addMonotype(allocator, .{ .prim = .i128 });
+        if (ident == builtin_indices.dec_ident) return try self.addMonotype(allocator, .{ .prim = .dec });
+        if (ident == builtin_indices.f32_ident) return try self.addMonotype(allocator, .{ .prim = .f32 });
+        if (ident == builtin_indices.f64_ident) return try self.addMonotype(allocator, .{ .prim = .f64 });
+
+        // Check if this is a builtin List type
+        if (ident == builtin_indices.list_ident) {
+            const type_args = types_store.sliceNominalArgs(nominal);
+            if (type_args.len > 0) {
+                const elem_type = try self.fromTypeVar(allocator, types_store, type_args[0], builtin_indices, seen);
+                return try self.addMonotype(allocator, .{ .list = .{ .elem = elem_type } });
+            }
+            // List with no type arg — shouldn't happen in well-typed code
+            return try self.addMonotype(allocator, .err);
+        }
+
+        // Check if this is a builtin Box type
+        if (ident == builtin_indices.box_ident) {
+            const type_args = types_store.sliceNominalArgs(nominal);
+            if (type_args.len > 0) {
+                const inner_type = try self.fromTypeVar(allocator, types_store, type_args[0], builtin_indices, seen);
+                return try self.addMonotype(allocator, .{ .box = .{ .inner = inner_type } });
+            }
+            return try self.addMonotype(allocator, .err);
+        }
+
+        // For all other nominal types, strip the wrapper and follow the backing var.
+        // In MIR there is no nominal/opaque/structural distinction.
+        // Register in seen before recursing to handle recursive nominal types.
+        const placeholder_idx = try self.addMonotype(allocator, .err);
+        try seen.put(nominal_var, placeholder_idx);
+
+        const backing_var = types_store.getNominalBackingVar(nominal);
+        const backing_idx = try self.fromTypeVar(allocator, types_store, backing_var, builtin_indices, seen);
+
+        // Update placeholder with the resolved type
+        self.monotypes.items[@intFromEnum(placeholder_idx)] = self.monotypes.items[@intFromEnum(backing_idx)];
+        return placeholder_idx;
     }
 };
