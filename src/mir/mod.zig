@@ -23,4 +23,5 @@ test "mir tests" {
     std.testing.refAllDecls(MIR);
     std.testing.refAllDecls(Monotype);
     std.testing.refAllDecls(Lower);
+    std.testing.refAllDecls(@import("test/lower_test.zig"));
 }
