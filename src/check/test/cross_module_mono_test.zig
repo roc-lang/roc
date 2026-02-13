@@ -1,9 +1,8 @@
-//! Tests for cross-module monomorphization and static dispatch.
+//! Tests for cross-module static dispatch and type checking.
 //!
 //! These tests verify that:
 //! 1. Static dispatch to methods defined in other modules works correctly
-//! 2. The Monomorphizer correctly creates external specialization requests
-//! 3. Cross-module type resolution for static dispatch is accurate
+//! 2. Cross-module type resolution for static dispatch is accurate
 
 const std = @import("std");
 const base = @import("base");
@@ -15,7 +14,6 @@ const Allocators = base.Allocators;
 const Can = can.Can;
 const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
-const Monomorphizer = can.Monomorphizer;
 const ClosureTransformer = can.ClosureTransformer;
 
 const Check = @import("../Check.zig");
@@ -297,11 +295,6 @@ const MonoTestEnv = struct {
         };
     }
 
-    /// Create a Monomorphizer for this module
-    pub fn createMonomorphizer(self: *Self) Monomorphizer {
-        return Monomorphizer.init(self.gpa, self.module_env, &self.module_env.types);
-    }
-
     /// Create a ClosureTransformer for this module
     pub fn createClosureTransformer(self: *Self) ClosureTransformer {
         return ClosureTransformer.init(self.gpa, self.module_env);
@@ -369,12 +362,7 @@ test "cross-module mono: importing module can reference methods from imported ty
     var env_b = try MonoTestEnv.initWithImport("B", source_b, "A", &env_a);
     defer env_b.deinit();
 
-    // Create monomorphizer for module B
-    var mono = env_b.createMonomorphizer();
-    defer mono.deinit();
-
-    // The monomorphizer should be able to look up the static dispatch
-    // for A.get_value when given a concrete A type
+    // Module B should have parsed and type-checked successfully with the import
     const a_ident_in_b = env_b.module_env.common.findIdent("A");
     try testing.expect(a_ident_in_b != null);
 }
@@ -409,131 +397,6 @@ test "cross-module mono: closure transformer tracks unspecialized closures" {
 
     // The transformer should be initialized and ready
     _ = &transformer;
-}
-
-test "cross-module mono: monomorphizer tracks external requests" {
-    // This test verifies that when we request specialization from an external module,
-    // the monomorphizer properly tracks the request
-
-    const source_a =
-        \\identity : a -> a
-        \\identity = |x| x
-    ;
-    var env_a = try MonoTestEnv.init("A", source_a);
-    defer env_a.deinit();
-
-    const source_b =
-        \\import A
-        \\
-        \\main : U64
-        \\main = A.identity(42)
-    ;
-    var env_b = try MonoTestEnv.initWithImport("B", source_b, "A", &env_a);
-    defer env_b.deinit();
-
-    var mono = env_b.createMonomorphizer();
-    defer mono.deinit();
-
-    // Create a mock concrete type for testing
-    const concrete_type = try env_b.module_env.types.fresh();
-
-    // Get the identity ident from module B's perspective
-    const identity_ident = env_b.module_env.common.findIdent("identity");
-    try testing.expect(identity_ident != null);
-
-    // Request external specialization
-    // Note: In a real scenario, this would be called during monomorphization
-    // when a polymorphic call to an external function is encountered
-    const result = try mono.requestExternalSpecialization(
-        .first, // source module index
-        identity_ident.?,
-        concrete_type,
-        null, // no call site for this test
-    );
-
-    // Verify the request was tracked
-    try testing.expect(result.is_new);
-    try testing.expectEqual(@as(usize, 1), mono.getExternalRequests().len);
-
-    // Verify the request contains the right information
-    const requests = mono.getExternalRequests();
-    try testing.expect(requests[0].original_ident == identity_ident.?);
-}
-
-test "cross-module mono: resolved external specializations are cached" {
-    const source_a =
-        \\identity : a -> a
-        \\identity = |x| x
-    ;
-    var env_a = try MonoTestEnv.init("A", source_a);
-    defer env_a.deinit();
-
-    const source_b =
-        \\import A
-        \\
-        \\main : U64
-        \\main = A.identity(42)
-    ;
-    var env_b = try MonoTestEnv.initWithImport("B", source_b, "A", &env_a);
-    defer env_b.deinit();
-
-    var mono = env_b.createMonomorphizer();
-    defer mono.deinit();
-
-    const concrete_type = try env_b.module_env.types.fresh();
-    const identity_ident = env_b.module_env.common.findIdent("identity").?;
-
-    // First request - should be new
-    const result1 = try mono.requestExternalSpecialization(.first, identity_ident, concrete_type, null);
-    try testing.expect(result1.is_new);
-
-    // Resolve it
-    const specialized_ident = try env_b.module_env.insertIdent(base.Ident.for_text("identity_U64_0"));
-    try mono.resolveExternalSpecialization(.first, identity_ident, specialized_ident, concrete_type);
-
-    // Second request for same type - should return cached result
-    const result2 = try mono.requestExternalSpecialization(.first, identity_ident, concrete_type, null);
-    try testing.expect(!result2.is_new);
-    try testing.expect(result2.specialized_ident == specialized_ident);
-}
-
-test "cross-module mono: allExternalSpecializationsResolved tracks resolution state" {
-    const source_a =
-        \\identity : a -> a
-        \\identity = |x| x
-    ;
-    var env_a = try MonoTestEnv.init("A", source_a);
-    defer env_a.deinit();
-
-    const source_b =
-        \\import A
-        \\
-        \\main : U64
-        \\main = A.identity(42)
-    ;
-    var env_b = try MonoTestEnv.initWithImport("B", source_b, "A", &env_a);
-    defer env_b.deinit();
-
-    var mono = env_b.createMonomorphizer();
-    defer mono.deinit();
-
-    // Initially all resolved (no requests)
-    try testing.expect(try mono.allExternalSpecializationsResolved());
-
-    // Add a request
-    const concrete_type = try env_b.module_env.types.fresh();
-    const identity_ident = env_b.module_env.common.findIdent("identity").?;
-    _ = try mono.requestExternalSpecialization(.first, identity_ident, concrete_type, null);
-
-    // Now not all resolved
-    try testing.expect(!try mono.allExternalSpecializationsResolved());
-
-    // Resolve it
-    const specialized_ident = try env_b.module_env.insertIdent(base.Ident.for_text("identity_U64_0"));
-    try mono.resolveExternalSpecialization(.first, identity_ident, specialized_ident, concrete_type);
-
-    // Now all resolved again
-    try testing.expect(try mono.allExternalSpecializationsResolved());
 }
 
 test "cross-module mono: static dispatch method registration in type module" {
@@ -601,11 +464,8 @@ test "cross-module mono: static dispatch with chained method calls" {
 
     // Module B should have parsed and type-checked successfully
     // This means the cross-module method resolution worked
-    var mono = env_b.createMonomorphizer();
-    defer mono.deinit();
-
-    // The monomorphizer should be ready to process specializations
-    try testing.expectEqual(@as(u32, 0), mono.specialization_counter);
+    const main_ident = env_b.module_env.common.findIdent("main");
+    try testing.expect(main_ident != null);
 }
 
 test "type checker catches polymorphic recursion (infinite type)" {
