@@ -944,12 +944,7 @@ test "TargetsConfig.fromAST extracts targets configuration" {
     try std.testing.expect(maybe_config != null);
 
     const config = maybe_config.?;
-    defer {
-        for (config.exe) |spec| {
-            allocator.free(spec.items);
-        }
-        allocator.free(config.exe);
-    }
+    defer config.deinit(allocator);
 
     // Check files_dir
     try std.testing.expect(config.files_dir != null);

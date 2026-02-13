@@ -40,6 +40,7 @@ const FileProvider = compile_package.FileProvider;
 const coordinator_mod = @import("coordinator.zig");
 const Coordinator = coordinator_mod.Coordinator;
 const roc_target = @import("roc_target");
+const targets_config_mod = @import("targets_config.zig");
 
 // Compile-time flag for build tracing - enabled via `zig build -Dtrace-build`
 const trace_build = if (@hasDecl(build_options, "trace_build")) build_options.trace_build else false;
@@ -128,6 +129,11 @@ pub const BuildEnv = struct {
     // Builtin modules (Bool, Try, Str) shared across all packages (heap-allocated to prevent moves)
     builtin_modules: *BuiltinModules,
 
+    // Discovery state (populated by discoverDependencies, consumed by compileDiscovered)
+    discovered_root_abs: ?[]const u8 = null,
+    discovered_root_dir: ?[]const u8 = null,
+    discovered_pkg_name: ?[]const u8 = null,
+
     // Owned resolver ctx pointers for cleanup (typed)
     resolver_ctxs: std.array_list.Managed(*ResolverCtx),
     // Owned per-package sink contexts for fully-qualified emission
@@ -194,6 +200,11 @@ pub const BuildEnv = struct {
         if (self.cache_manager) |cm| {
             self.gpa.destroy(cm);
         }
+
+        // Free discovery state
+        if (self.discovered_root_abs) |ra| self.gpa.free(ra);
+        if (self.discovered_root_dir) |rd| self.gpa.free(rd);
+        // discovered_pkg_name is a static string ("app" or "module"), not heap-allocated
 
         // Free resolver ctxs owned by this BuildEnv (if any)
         for (self.resolver_ctxs.items) |ctx_ptr| {
@@ -272,6 +283,34 @@ pub const BuildEnv = struct {
         self.file_provider = provider orelse FileProvider.filesystem;
     }
 
+    /// Get the TargetsConfig from the platform package, if any.
+    pub fn getPlatformTargetsConfig(self: *const BuildEnv) ?targets_config_mod.TargetsConfig {
+        var pit = self.packages.iterator();
+        while (pit.next()) |entry| {
+            if (entry.value_ptr.kind == .platform) {
+                return entry.value_ptr.targets_config;
+            }
+        }
+        return null;
+    }
+
+    /// Get the root_file of the platform package, if any.
+    pub fn getPlatformRootFile(self: *const BuildEnv) ?[]const u8 {
+        var pit = self.packages.iterator();
+        while (pit.next()) |entry| {
+            if (entry.value_ptr.kind == .platform) {
+                return entry.value_ptr.root_file;
+            }
+        }
+        return null;
+    }
+
+    /// Set the target for this build environment.
+    /// Must be called before compileDiscovered() if target needs to change after discovery.
+    pub fn setTarget(self: *BuildEnv, target: roc_target.RocTarget) void {
+        self.target = target;
+    }
+
     /// Build an app file specifically (validates it's an app)
     pub fn buildApp(self: *BuildEnv, app_file: []const u8) !void {
         // Build and let the main function handle everything
@@ -295,11 +334,12 @@ pub const BuildEnv = struct {
     // Uses the actor model coordinator for both single-threaded and multi-threaded modes.
     // The coordinator uses message passing to eliminate race conditions.
     pub fn build(self: *BuildEnv, root_file: []const u8) !void {
-        try self.buildWithCoordinator(root_file);
+        try self.discoverDependencies(root_file);
+        try self.compileDiscovered();
     }
 
     /// Initialize the actor model coordinator.
-    /// This must be called before buildWithCoordinator().
+    /// This must be called before compileDiscovered().
     pub fn initCoordinator(self: *BuildEnv) !void {
         if (self.coordinator != null) return; // Already initialized
 
@@ -320,18 +360,16 @@ pub const BuildEnv = struct {
         self.coordinator = coord;
     }
 
-    /// Build using the actor model coordinator.
-    /// This is an alternative to build() that uses message passing instead of shared mutable state.
-    pub fn buildWithCoordinator(self: *BuildEnv, root_file: []const u8) !void {
-        // Initialize coordinator if not already done
-        try self.initCoordinator();
-        const coord = self.coordinator.?;
-
+    /// Phase 1: Parse headers, create package entries, extract TargetsConfig, and populate
+    /// shorthands. Does NOT init the Coordinator, allowing the caller to inspect
+    /// discovered state (e.g., TargetsConfig) and change the target before compilation.
+    pub fn discoverDependencies(self: *BuildEnv, root_file: []const u8) !void {
         // Parse root file header
         const root_abs = try self.makeAbsolute(root_file);
-        defer self.gpa.free(root_abs);
+        // Store immediately so deinit() frees on any subsequent error
+        self.discovered_root_abs = root_abs;
         const root_dir = if (std.fs.path.dirname(root_abs)) |d| try std.fs.path.resolve(self.gpa, &.{d}) else try self.gpa.dupe(u8, ".");
-        defer self.gpa.free(root_dir);
+        self.discovered_root_dir = root_dir;
 
         try self.workspace_roots.append(try self.gpa.dupe(u8, root_dir));
 
@@ -358,11 +396,13 @@ pub const BuildEnv = struct {
             .root_dir = pkg_root_dir,
         });
 
-        // Transfer provides entries from header to package for platform roots
+        // Transfer provides entries and targets_config from header to package for platform roots
         if (header_info.kind == .platform) {
             if (self.packages.getPtr(pkg_name)) |pkg| {
                 pkg.provides_entries = header_info.provides_entries;
                 header_info.provides_entries = .{}; // Prevent double-free in deinit
+                pkg.targets_config = header_info.targets_config;
+                header_info.targets_config = null; // Prevent double-free in deinit
             }
         }
 
@@ -370,6 +410,23 @@ pub const BuildEnv = struct {
         if (header_info.kind == .app or header_info.kind == .package) {
             try self.populatePackageShorthands(pkg_name, &header_info);
         }
+
+        self.discovered_pkg_name = pkg_name;
+    }
+
+    /// Phase 2: Initialize the Coordinator, create coordinator packages from the
+    /// discovered BuildEnv packages, and run compilation to completion.
+    /// Must be called after discoverDependencies().
+    pub fn compileDiscovered(self: *BuildEnv) !void {
+        const pkg_name = self.discovered_pkg_name orelse unreachable; // Must call discoverDependencies() first
+
+        // Initialize coordinator if not already done
+        try self.initCoordinator();
+        const coord = self.coordinator.?;
+
+        // Look up the root file from the package entry (already stored by discoverDependencies)
+        const root_pkg = self.packages.get(pkg_name) orelse unreachable; // Must call discoverDependencies() first
+        const pkg_root_file = root_pkg.root_file;
 
         // Create coordinator packages mirroring BuildEnv packages
         // Skip .module kind packages - these are platform-exposed modules (e.g., Stdout)
@@ -500,7 +557,7 @@ pub const BuildEnv = struct {
         try self.emitDeterministic();
 
         if (comptime trace_build) {
-            std.debug.print("[BUILD] buildWithCoordinator complete\n", .{});
+            std.debug.print("[BUILD] compileDiscovered complete\n", .{});
         }
     }
 
@@ -1072,8 +1129,10 @@ pub const BuildEnv = struct {
         root_dir: []u8,
         shorthands: std.StringHashMapUnmanaged(PackageRef) = .{},
         provides_entries: std.ArrayListUnmanaged(ProvidesEntry) = .{},
+        targets_config: ?targets_config_mod.TargetsConfig = null,
 
         fn deinit(self: *Package, gpa: Allocator) void {
+            if (self.targets_config) |tc| tc.deinit(gpa);
             for (self.provides_entries.items) |entry| {
                 freeConstSlice(gpa, entry.roc_ident);
                 freeConstSlice(gpa, entry.ffi_symbol);
@@ -1101,8 +1160,11 @@ pub const BuildEnv = struct {
         exposes: std.ArrayListUnmanaged([]const u8) = .{},
         /// Platform provides entries (roc_ident -> ffi_symbol mapping)
         provides_entries: std.ArrayListUnmanaged(ProvidesEntry) = .{},
+        /// Targets configuration extracted from platform header
+        targets_config: ?targets_config_mod.TargetsConfig = null,
 
         fn deinit(self: *HeaderInfo, gpa: Allocator) void {
+            if (self.targets_config) |tc| tc.deinit(gpa);
             if (self.platform_alias) |a| freeSlice(gpa, a);
             if (self.platform_path) |p| freeSlice(gpa, p);
             var it = self.shorthands.iterator();
@@ -1429,6 +1491,9 @@ pub const BuildEnv = struct {
                         .ffi_symbol = try self.gpa.dupe(u8, ffi_symbol),
                     });
                 }
+
+                // Extract targets config from the platform AST
+                info.targets_config = targets_config_mod.TargetsConfig.fromAST(self.gpa, ast) catch null;
             },
             .module => {
                 info.kind = .module;
@@ -1774,11 +1839,15 @@ pub const BuildEnv = struct {
             const dep_name = try self.gpa.dupe(u8, alias);
             try self.ensurePackage(dep_name, .platform, abs);
 
-            // Transfer provides entries from parsed header to platform package
+            // Transfer provides entries and targets_config from parsed header to platform package
             if (self.packages.getPtr(alias)) |plat_pkg| {
                 if (plat_pkg.provides_entries.items.len == 0) {
                     plat_pkg.provides_entries = child_info.provides_entries;
                     child_info.provides_entries = .{}; // Prevent double-free in deinit
+                }
+                if (plat_pkg.targets_config == null) {
+                    plat_pkg.targets_config = child_info.targets_config;
+                    child_info.targets_config = null; // Prevent double-free in deinit
                 }
             }
 
