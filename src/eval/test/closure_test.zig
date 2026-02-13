@@ -564,3 +564,47 @@ test "closure: closure that ignores capture and uses argument" {
     ;
     try runExpectI64(code, 42, .no_trace);
 }
+
+// =============================================================================
+// TIER 11: Monomorphic identity — isolating polymorphic specialization
+// =============================================================================
+
+test "closure: monomorphic Str identity (no polymorphism)" {
+    // Same as the failing "polymorphic identity function" test but with
+    // identity annotated as Str -> Str, so no specialization is needed.
+    const code =
+        \\{
+        \\    identity : Str -> Str
+        \\    identity = |val| val
+        \\    identity("Hello")
+        \\}
+    ;
+    try runExpectStr(code, "Hello", .no_trace);
+}
+
+test "closure: monomorphic Dec identity (no polymorphism)" {
+    const code =
+        \\{
+        \\    identity : Dec -> Dec
+        \\    identity = |val| val
+        \\    num = identity(5)
+        \\    num
+        \\}
+    ;
+    try runExpectI64(code, 5, .no_trace);
+}
+
+test "closure: monomorphic Str identity with if-else (exact failing scenario but monomorphic)" {
+    // Exact structure of the failing test, but identity is annotated Str -> Str
+    // and we use a separate Dec function for the number
+    const code =
+        \\{
+        \\    str_id : Str -> Str
+        \\    str_id = |val| val
+        \\    num = 5
+        \\    str = str_id("Hello")
+        \\    if (num > 0) str else ""
+        \\}
+    ;
+    try runExpectStr(code, "Hello", .no_trace);
+}
