@@ -56,6 +56,13 @@ pattern_symbols: std.AutoHashMap(u64, MIR.MonoSymbol),
 /// Cache for type var → monotype conversion (shared across all fromTypeVar calls)
 type_var_seen: std.AutoHashMap(types.Var, Monotype.Idx),
 
+/// Cache for already-lowered symbol definitions (avoids re-lowering).
+/// Key is @bitCast(MIR.MonoSymbol) → u48.
+lowered_symbols: std.AutoHashMap(u48, MIR.ExprId),
+
+/// Tracks symbols currently being lowered (recursion guard).
+in_progress_defs: std.AutoHashMap(u48, void),
+
 // --- Init/Deinit ---
 
 pub fn init(
@@ -75,12 +82,16 @@ pub fn init(
         .current_module_idx = current_module_idx,
         .pattern_symbols = std.AutoHashMap(u64, MIR.MonoSymbol).init(allocator),
         .type_var_seen = std.AutoHashMap(types.Var, Monotype.Idx).init(allocator),
+        .lowered_symbols = std.AutoHashMap(u48, MIR.ExprId).init(allocator),
+        .in_progress_defs = std.AutoHashMap(u48, void).init(allocator),
     };
 }
 
 pub fn deinit(self: *Self) void {
     self.pattern_symbols.deinit();
     self.type_var_seen.deinit();
+    self.lowered_symbols.deinit();
+    self.in_progress_defs.deinit();
 }
 
 // --- Public API ---
@@ -205,11 +216,8 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
         .e_nominal_external => |nom_ext| try self.lowerExpr(nom_ext.backing_expr),
 
         // --- Type var dispatch (resolved to call) ---
-        .e_type_var_dispatch => |_| {
-            // TODO: Resolve static dispatch — requires type scope
-            return try self.store.addExpr(self.allocator, .{ .runtime_error = .{
-                .diagnostic = @enumFromInt(std.math.maxInt(u32)),
-            } }, monotype, region);
+        .e_type_var_dispatch => |tvd| {
+            return try self.lowerTypeVarDispatch(module_env, tvd, monotype, region);
         },
 
         // --- For (desugared to call) ---
@@ -889,4 +897,158 @@ fn lowerRecord(self: *Self, module_env: *const ModuleEnv, record: anytype, monot
         .fields = fields_span,
         .field_names = names_span,
     } }, monotype, region);
+}
+
+// --- Type var dispatch & cross-module resolution ---
+
+/// Lower `e_type_var_dispatch` by resolving the type alias and dispatching to the method.
+fn lowerTypeVarDispatch(self: *Self, module_env: *const ModuleEnv, tvd: anytype, monotype: Monotype.Idx, region: Region) Allocator.Error!MIR.ExprId {
+    // Step 1: Get the type variable from the alias statement
+    const stmt = module_env.store.getStatement(tvd.type_var_alias_stmt);
+    const type_var_binding = stmt.s_type_var_alias;
+    const type_var = ModuleEnv.varFrom(type_var_binding.type_var_anno);
+    var resolved = self.types_store.resolveVar(type_var);
+
+    // Step 2: Follow aliases to get to the underlying type
+    while (resolved.desc.content == .alias) {
+        const alias = resolved.desc.content.alias;
+        const backing = self.types_store.getAliasBackingVar(alias);
+        resolved = self.types_store.resolveVar(backing);
+    }
+
+    // Step 3: Determine the nominal type's origin and ident
+    const nominal_info: ?struct { origin: Ident.Idx, ident: Ident.Idx } = switch (resolved.desc.content) {
+        .structure => |s| switch (s) {
+            .nominal_type => |nom| .{
+                .origin = nom.origin_module,
+                .ident = nom.ident.ident_idx,
+            },
+            else => null,
+        },
+        else => null,
+    };
+
+    if (nominal_info) |info| {
+        // Step 4: Find the origin module
+        const origin_module_idx = self.findModuleForOrigin(module_env, info.origin) orelse {
+            // Cannot resolve origin — emit runtime error
+            return try self.store.addExpr(self.allocator, .{ .runtime_error = .{
+                .diagnostic = @enumFromInt(std.math.maxInt(u32)),
+            } }, monotype, region);
+        };
+
+        const origin_env = self.all_module_envs[origin_module_idx];
+
+        // Step 5: Look up the method in the origin module
+        const qualified_method = origin_env.lookupMethodIdentFromTwoEnvsConst(
+            module_env,
+            info.ident,
+            module_env,
+            tvd.method_name,
+        ) orelse {
+            // Method not found — emit runtime error
+            return try self.store.addExpr(self.allocator, .{ .runtime_error = .{
+                .diagnostic = @enumFromInt(std.math.maxInt(u32)),
+            } }, monotype, region);
+        };
+
+        // Step 6: Create symbol for the resolved method
+        const method_symbol = MIR.MonoSymbol{
+            .module_idx = @intCast(origin_module_idx),
+            .ident_idx = qualified_method,
+        };
+
+        // Step 7: Lower as a call to the resolved method
+        const func_expr = try self.store.addExpr(self.allocator, .{ .lookup = method_symbol }, monotype, region);
+        const args = try self.lowerExprSpan(module_env, tvd.args);
+
+        return try self.store.addExpr(self.allocator, .{ .call = .{
+            .func = func_expr,
+            .args = args,
+        } }, monotype, region);
+    }
+
+    // Fallback: could not resolve nominal type — lower args and emit a call with method name
+    const args = try self.lowerExprSpan(module_env, tvd.args);
+    const method_symbol = MIR.MonoSymbol{
+        .module_idx = self.current_module_idx,
+        .ident_idx = tvd.method_name,
+    };
+    const func_expr = try self.store.addExpr(self.allocator, .{ .lookup = method_symbol }, monotype, region);
+    return try self.store.addExpr(self.allocator, .{ .call = .{
+        .func = func_expr,
+        .args = args,
+    } }, monotype, region);
+}
+
+/// Find the module index for a given origin module ident.
+fn findModuleForOrigin(self: *Self, source_env: *const ModuleEnv, origin_module: Ident.Idx) ?u16 {
+    // Check if origin is source_env itself
+    if (origin_module == source_env.module_name_idx) {
+        for (self.all_module_envs, 0..) |env, idx| {
+            if (env == source_env) return @intCast(idx);
+        }
+    }
+
+    // Use the import system: iterate source_env's imports
+    const import_count: usize = @intCast(source_env.imports.imports.len());
+    for (0..import_count) |i| {
+        const import_idx: CIR.Import.Idx = @enumFromInt(i);
+        if (source_env.imports.getIdentIdx(import_idx)) |import_ident| {
+            if (import_ident == origin_module) {
+                if (source_env.imports.getResolvedModule(import_idx)) |mod_idx| {
+                    return @intCast(mod_idx);
+                }
+            }
+        }
+    }
+
+    // Fallback: compare origin name against resolved module names
+    const origin_name = source_env.getIdentText(origin_module);
+    for (0..import_count) |i| {
+        const import_idx: CIR.Import.Idx = @enumFromInt(i);
+        if (source_env.imports.getResolvedModule(import_idx)) |mod_idx| {
+            if (mod_idx < self.all_module_envs.len) {
+                const import_env = self.all_module_envs[mod_idx];
+                if (std.mem.eql(u8, import_env.module_name, origin_name)) {
+                    return @intCast(mod_idx);
+                }
+            }
+        }
+    }
+
+    return null;
+}
+
+/// Lower an external definition by symbol, caching the result.
+pub fn lowerExternalDef(self: *Self, symbol: MIR.MonoSymbol, cir_expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId {
+    const symbol_key: u48 = @bitCast(symbol);
+
+    // Check cache
+    if (self.lowered_symbols.get(symbol_key)) |cached| {
+        return cached;
+    }
+
+    // Recursion guard
+    if (self.in_progress_defs.contains(symbol_key)) {
+        // Recursive reference — return a placeholder lookup
+        return try self.store.addExpr(self.allocator, .{ .lookup = symbol }, try self.store.monotype_store.addMonotype(self.allocator, .err), Region.zero());
+    }
+
+    try self.in_progress_defs.put(symbol_key, {});
+
+    // Temporarily switch to the target module
+    const saved_module_idx = self.current_module_idx;
+    self.current_module_idx = symbol.module_idx;
+    defer self.current_module_idx = saved_module_idx;
+
+    const result = try self.lowerExpr(cir_expr_idx);
+
+    // Cache the result and register the symbol definition
+    try self.lowered_symbols.put(symbol_key, result);
+    try self.store.registerSymbolDef(self.allocator, symbol, result);
+
+    _ = self.in_progress_defs.remove(symbol_key);
+
+    return result;
 }
