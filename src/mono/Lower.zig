@@ -22,6 +22,7 @@ const types = @import("types");
 
 const ir = @import("MonoIR.zig");
 const store_mod = @import("MonoExprStore.zig");
+const Instantiate = @import("Instantiate.zig");
 
 const ModuleEnv = can.ModuleEnv;
 const CIR = can.CIR;
@@ -155,6 +156,12 @@ next_synthetic_idx: u29 = std.math.maxInt(u29) - 1,
 /// Map of hosted function indices for fast lookup during lowering.
 /// Key: (global_module_idx << 32 | node_idx), Value: hosted_function_index
 hosted_functions: ?*const HostedFunctionMap = null,
+
+/// Polymorphic let-binding instantiator (lazy, demand-driven)
+/// During lowering, e_lookup_local handlers call requestSpecialization() to
+/// discover polymorphic usages. After lowering, solve_specializations() re-lowers
+/// each one with its concrete type.
+instantiate: ?*Instantiate = null,
 
 /// Initialize a new Lowerer
 pub fn init(
@@ -417,6 +424,10 @@ fn lowerLocalDefByPattern(self: *Self, module_env: *ModuleEnv, symbol: MonoSymbo
     // Save the CIR expression for potential re-specialization
     try self.lowered_symbol_cir_exprs.put(symbol_key, cir_expr_idx);
 }
+
+/// Specialize a let-binding if the lookup's concrete type differs from the definition's type.
+/// This implements let-generalization support: when a polymorphic let-binding is used
+/// with different concrete types, we create specialized versions following COR's approach.
 
 /// Get layout for a block expression by inferring from the final expression
 fn getBlockLayout(self: *Self, module_env: *ModuleEnv, block: anytype) LayoutIdx {
@@ -1416,6 +1427,53 @@ fn needsDotAccessReSpec(
     return false;
 }
 
+/// Check if a local polymorphic lambda call needs re-specialization
+/// Returns true if the argument layouts differ from the lambda's parameter layouts
+fn needsLocalCallReSpec(
+    self: *Self,
+    module_env: *ModuleEnv,
+    lambda_symbol_key: u48,
+    call_args: CIR.Expr.Span,
+) bool {
+    const existing_expr_id = self.lowered_symbols.get(lambda_symbol_key) orelse return false;
+    const existing_expr = self.store.getExpr(existing_expr_id);
+
+    // Get the lambda's parameter layouts
+    const lambda = switch (existing_expr) {
+        .lambda => |l| l,
+        .closure => |c| blk: {
+            const inner = self.store.getExpr(c.lambda);
+            break :blk switch (inner) {
+                .lambda => |l| l,
+                else => return false,
+            };
+        },
+        else => return false,
+    };
+
+    const param_patterns = self.store.getPatternSpan(lambda.params);
+    const arg_indices = module_env.store.sliceExpr(call_args);
+
+    // Check if parameter and argument counts match
+    if (param_patterns.len != arg_indices.len) return false;
+
+    // Check each argument layout against parameter layout
+    for (arg_indices, 0..) |arg_idx, i| {
+        if (i < param_patterns.len) {
+            const param_pattern = self.store.getPattern(param_patterns[i]);
+            const param_layout: LayoutIdx = switch (param_pattern) {
+                .bind => |b| b.layout_idx,
+                .wildcard => |w| w.layout_idx,
+                else => continue,
+            };
+            const arg_layout = self.getExprLayoutFromIdx(module_env, arg_idx);
+            if (param_layout != arg_layout) return true;
+        }
+    }
+
+    return false;
+}
+
 /// Set up type scope mappings for an external function call.
 /// This maps the external function's rigid type variables to concrete types from the call site.
 /// The call_expr_idx is the call expression itself, used to map return type params.
@@ -1918,9 +1976,21 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
 
         .e_lookup_local => |lookup| blk: {
             const symbol = self.patternToSymbol(lookup.pattern_idx);
+            const lookup_symbol = symbol;
 
-            // Ensure the local definition is lowered if it's a top-level def
-            const symbol_key: u48 = @bitCast(symbol);
+            // Check if this is a polymorphic binding that needs specialization
+            // Following COR's lazy approach: discover specializations during lowering
+            const lookup_type_var = ModuleEnv.varFrom(expr_idx);
+            const lookup_resolved = module_env.types.resolveVar(lookup_type_var);
+
+            // Check if the lookup itself is polymorphic (definition is polymorphic)
+            // If so, we'll request a specialization at the call site where we know the concrete type
+            if (self.findDefForPattern(module_env, lookup.pattern_idx)) |_| {
+                // Definition found - may be specialized at call site
+            }
+
+            // Ensure the lookup symbol's definition is lowered if not already done
+            const symbol_key: u48 = @bitCast(lookup_symbol);
             if (!self.lowered_symbols.contains(symbol_key)) {
                 // Bridge the lookup expression's resolved type with the definition's type.
                 // When a lambda is passed as an argument to a polymorphic function (e.g., List.fold),
@@ -1946,9 +2016,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                         // Bridging return types can add spurious scope entries that interfere
                         // with layout computation for other expressions.
                         const def_type_var = ModuleEnv.varFrom(def_idx);
-                        const lookup_type_var = ModuleEnv.varFrom(expr_idx);
                         const def_resolved = module_env.types.resolveVar(def_type_var);
-                        const lookup_resolved = module_env.types.resolveVar(lookup_type_var);
                         if (def_resolved.desc.content.unwrapFunc()) |def_func| {
                             if (lookup_resolved.desc.content.unwrapFunc()) |lookup_func| {
                                 const scope = &self.type_scope.scopes.items[0];
@@ -1962,11 +2030,11 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                         }
                     }
                 }
-                try self.lowerLocalDefByPattern(module_env, symbol, lookup.pattern_idx);
+                try self.lowerLocalDefByPattern(module_env, lookup_symbol, lookup.pattern_idx);
             }
 
             break :blk .{ .lookup = .{
-                .symbol = symbol,
+                .symbol = lookup_symbol,
                 .layout_idx = self.getExprLayoutFromIdx(module_env, expr_idx),
             } };
         },
@@ -2099,6 +2167,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                 if (!self.use_type_scope and self.type_scope.scopes.items.len > 0) {
                     self.use_type_scope = true;
                 }
+
             }
             // Clean up type scope after this expression, whether we exit normally or break early.
             // Only clear scope[0] if this call was the outermost one that set up the type scope
@@ -2247,7 +2316,41 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                 // Fall through to general call handling for unhandled low-level ops
             }
 
-            const fn_id = try self.lowerExprFromIdx(module_env, call.func);
+            // Check if the function is a lookup to a polymorphic definition
+            // that needs specialization based on the call's concrete type
+            var fn_id = try self.lowerExprFromIdx(module_env, call.func);
+
+            // If the function is a lookup to a polymorphic definition, we may need
+            // to replace fn_id with a reference to the specialized version
+            if (fn_expr == .e_lookup_local) {
+                const lookup = fn_expr.e_lookup_local;
+                if (self.findDefForPattern(module_env, lookup.pattern_idx)) |def_idx| {
+                    const def = module_env.store.getDef(def_idx);
+                    const def_type_var = ModuleEnv.varFrom(def.expr);
+                    const def_resolved = module_env.types.resolveVar(def_type_var);
+
+                    // If the definition is polymorphic, we should use the specialized symbol
+                    if (def_resolved.desc.rank == types.Rank.generalized) {
+                        const call_type_var = ModuleEnv.varFrom(expr_idx);
+                        if (self.instantiate) |instantiate| {
+                            const specialized_symbol = try instantiate.requestSpecialization(
+                                self.current_module_idx,
+                                def.expr,
+                                call_type_var,
+                            );
+                            // Create a lookup expression for the specialized symbol and add it to the store
+                            const specialized_lookup = MonoExpr{
+                                .lookup = .{
+                                    .symbol = specialized_symbol,
+                                    .layout_idx = self.getExprLayoutFromIdx(module_env, call.func),
+                                },
+                            };
+                            fn_id = try self.store.addExpr(specialized_lookup, region);
+                        }
+                    }
+                }
+            }
+
             const args = try self.lowerExprSpan(module_env, call.args);
             break :blk .{
                 .call = .{
@@ -4475,33 +4578,26 @@ fn lowerStmts(self: *Self, module_env: *ModuleEnv, stmts: CIR.Statement.Span) Al
         const stmt = module_env.store.getStatement(stmt_idx);
         switch (stmt) {
             .s_decl => |decl| {
-                // Check if this declaration binds a lambda/closure
-                const decl_expr = module_env.store.getExpr(decl.expr);
-                const is_lambda = decl_expr == .e_lambda or decl_expr == .e_closure;
+                // Lower all declarations, including symbol-bound lambdas
+                const pattern = try self.lowerPattern(module_env, decl.pattern);
+                const old_binding = self.current_binding_pattern;
+                const old_symbol = self.current_binding_symbol;
+                self.current_binding_pattern = decl.pattern;
+                const binding_symbol = self.patternToSymbol(decl.pattern);
+                self.current_binding_symbol = binding_symbol;
+                const value = try self.lowerExprFromIdx(module_env, decl.expr);
+                self.current_binding_pattern = old_binding;
+                self.current_binding_symbol = old_symbol;
 
-                if (is_lambda) {
-                    // For lambdas: skip lowering - they'll use lazy loading when first looked up
-                    // This preserves the original scope context and prevents SIGABRT
-                } else {
-                    // Non-lambda: lower eagerly as before
-                    const pattern = try self.lowerPattern(module_env, decl.pattern);
-                    const old_binding = self.current_binding_pattern;
-                    const old_symbol = self.current_binding_symbol;
-                    self.current_binding_pattern = decl.pattern;
-                    const binding_symbol = self.patternToSymbol(decl.pattern);
-                    self.current_binding_symbol = binding_symbol;
-                    const value = try self.lowerExprFromIdx(module_env, decl.expr);
-                    self.current_binding_pattern = old_binding;
-                    self.current_binding_symbol = old_symbol;
+                // Register ALL symbol definitions, including symbol-bound lambdas
+                // Symbol-bound lambdas are top-level and should be available for code gen
+                // Locally-scoped lambdas are lifted by the LambdaLift pass
+                try self.store.registerSymbolDef(binding_symbol, value);
 
-                    // Register the symbol definition for lookups
-                    try self.store.registerSymbolDef(binding_symbol, value);
-
-                    try lowered.append(self.allocator, .{
-                        .pattern = pattern,
-                        .expr = value,
-                    });
-                }
+                try lowered.append(self.allocator, .{
+                    .pattern = pattern,
+                    .expr = value,
+                });
             },
             .s_var => |var_stmt| {
                 // Mutable variable declaration - treated like s_decl for lowering

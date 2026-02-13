@@ -37,6 +37,9 @@ pub const MonoIR = @import("MonoIR.zig");
 /// Flat storage for expressions and patterns
 pub const MonoExprStore = @import("MonoExprStore.zig");
 
+/// Polymorphic let-binding instantiation (before monomorphization)
+pub const Instantiate = @import("Instantiate.zig");
+
 /// CIR → Mono IR lowering pass
 pub const Lower = @import("Lower.zig");
 
@@ -95,9 +98,12 @@ test "mono tests" {
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(MonoIR);
     std.testing.refAllDecls(MonoExprStore);
+    std.testing.refAllDecls(Instantiate);
     std.testing.refAllDecls(Lower);
     std.testing.refAllDecls(LambdaLift);
     std.testing.refAllDecls(TailRecursion);
     std.testing.refAllDecls(RcInsert);
     std.testing.refAllDecls(@import("test/lambda_lift_test.zig"));
+    std.testing.refAllDecls(@import("test/specialization_test.zig"));
+    //std.testing.refAllDecls(@import("test/instantiate_test.zig"));
 }

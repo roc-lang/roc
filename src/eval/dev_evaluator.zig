@@ -711,16 +711,46 @@ pub const DevEvaluator = struct {
         // so that recycled type_var indices don't map to wrong layouts from previous evals.
         layout_store_ptr.resetModuleCache(all_module_envs);
 
-        // Create the lowerer with the layout store
+        // Initialize polymorphic let-binding instantiator (lazy, demand-driven)
+        // During lowering, specializations are discovered when e_lookup_local encounters
+        // polymorphic bindings with concrete types. This follows COR's approach.
+        var instantiator = mono.Instantiate.init(self.allocator, all_module_envs);
+        defer instantiator.deinit();
+
+        // Create the lowerer with the instantiator
         // Note: app_module_idx is null for JIT evaluation (no platform/app distinction)
         // Note: hosted_functions is null because dev evaluator uses interpreter for hosted calls
         var lowerer = MonoLower.init(self.allocator, &mono_store, all_module_envs, null, layout_store_ptr, null, null);
+        lowerer.instantiate = &instantiator;
         defer lowerer.deinit();
 
         // Lower CIR expression to Mono IR
         const lowered_expr_id = lowerer.lowerExpr(module_idx, expr_idx) catch {
             return error.RuntimeError;
         };
+
+        // Solve needed specializations (discovered during lowering)
+        // This loop re-lowers each polymorphic definition with its concrete type
+        {
+            while (instantiator.nextNeededSpecialization()) |spec| {
+                // Create a fresh lowerer context for re-lowering this definition
+                var spec_lowerer = MonoLower.init(self.allocator, &mono_store, all_module_envs, null, layout_store_ptr, null, null);
+                defer spec_lowerer.deinit();
+                spec_lowerer.instantiate = &instantiator;
+
+                // Lower the original definition expression
+                const lowered_def = spec_lowerer.lowerExpr(spec.module_idx, spec.def_expr) catch {
+                    return error.RuntimeError;
+                };
+
+                // Store the lowered result
+                spec.lowered = lowered_def;
+
+                // Add the specialized definition to the symbol table
+                const symbol_key: u48 = @bitCast(spec.name_new);
+                try mono_store.symbol_defs.put(symbol_key, lowered_def);
+            }
+        }
 
         // Perform lambda lifting on all expressions
         // This lifts nested lambdas to top-level after monomorphization

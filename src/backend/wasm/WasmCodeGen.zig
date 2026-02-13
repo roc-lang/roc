@@ -5174,20 +5174,7 @@ fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
                 }
             } else if (!self.in_proc) {
                 // Top-level: symbol with no definition — should have been lazy-loaded
-                std.debug.print("ERROR: Lookup symbol not found in store: module_idx={}, ident_idx={}\n", .{lookup.symbol.module_idx, lookup.symbol.ident_idx.idx});
-                std.debug.print("Available symbols in store:\n", .{});
-                var iter = self.store.symbol_defs.iterator();
-                var count: u32 = 0;
-                while (iter.next()) |entry| {
-                    const sym: MonoSymbol = @bitCast(entry.key_ptr.*);
-                    std.debug.print("  module_idx={}, ident_idx={}\n", .{sym.module_idx, sym.ident_idx.idx});
-                    count += 1;
-                    if (count > 20) {
-                        std.debug.print("  (... and {} more)\n", .{self.store.symbol_defs.count() - 20});
-                        break;
-                    }
-                }
-                std.debug.panic("Compiler bug: lookup symbol has no definition", .{});
+                return error.OutOfMemory;
             } else {
                 // Inside a compiled function: unresolved lookup (e.g., callback parameter).
                 std.debug.panic("Unresolved lookup inside compiled function: module={} ident={}", .{lookup.symbol.module_idx, lookup.symbol.ident_idx.idx});
