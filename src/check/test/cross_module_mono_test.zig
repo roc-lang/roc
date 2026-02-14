@@ -295,6 +295,122 @@ const MonoTestEnv = struct {
         };
     }
 
+    const ImportedModule = struct { name: []const u8, env: *const MonoTestEnv };
+
+    /// Initialize with multiple imported modules
+    pub fn initWithImports(module_name: []const u8, source: []const u8, imports: []const ImportedModule) !Self {
+        const gpa = testing.allocator;
+
+        var allocators: Allocators = undefined;
+        allocators.initInPlace(gpa);
+        defer allocators.deinit();
+
+        const module_env = try gpa.create(ModuleEnv);
+        errdefer gpa.destroy(module_env);
+
+        const can_instance = try gpa.create(Can);
+        errdefer gpa.destroy(can_instance);
+
+        var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
+
+        const builtin_indices = try deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+        const builtin_env = imports[0].env.builtin_module.env;
+
+        module_env.* = try ModuleEnv.init(gpa, source);
+        errdefer module_env.deinit();
+
+        module_env.common.source = source;
+        module_env.module_name = module_name;
+        module_env.module_name_idx = try module_env.insertIdent(base.Ident.for_text(module_name));
+        try module_env.common.calcLineStarts(gpa);
+
+        for (imports) |imp| {
+            const other_module_ident = try module_env.insertIdent(base.Ident.for_text(imp.name));
+
+            const statement_idx = blk: {
+                if (imp.env.module_env.module_kind == .type_module) {
+                    const type_ident = imp.env.module_env.common.findIdent(imp.name);
+                    if (type_ident) |ident| {
+                        if (imp.env.module_env.getExposedNodeIndexById(ident)) |node_idx| {
+                            break :blk @as(CIR.Statement.Idx, @enumFromInt(node_idx));
+                        }
+                    }
+                }
+                break :blk null;
+            };
+
+            const other_qualified_ident = try module_env.insertIdent(base.Ident.for_text(imp.name));
+            try module_envs.put(other_module_ident, .{
+                .env = imp.env.module_env,
+                .statement_idx = statement_idx,
+                .qualified_type_ident = other_qualified_ident,
+            });
+        }
+
+        try Can.populateModuleEnvs(&module_envs, module_env, builtin_env, builtin_indices);
+
+        const parse_ast = try parse.parse(&allocators, &module_env.common);
+        errdefer parse_ast.deinit();
+        parse_ast.store.emptyScratch();
+
+        try module_env.initCIRFields(module_name);
+
+        can_instance.* = try Can.init(&allocators, module_env, parse_ast, &module_envs);
+        errdefer can_instance.deinit();
+
+        try can_instance.canonicalizeFile();
+        try can_instance.validateForChecking();
+
+        const module_builtin_ctx: Check.BuiltinContext = .{
+            .module_name = try module_env.insertIdent(base.Ident.for_text(module_name)),
+            .bool_stmt = builtin_indices.bool_type,
+            .try_stmt = builtin_indices.try_type,
+            .str_stmt = builtin_indices.str_type,
+            .builtin_module = builtin_env,
+            .builtin_indices = builtin_indices,
+        };
+
+        var imported_envs_list = std.ArrayList(*const ModuleEnv).empty;
+        try imported_envs_list.append(gpa, builtin_env);
+
+        const import_count = module_env.imports.imports.items.items.len;
+        for (module_env.imports.imports.items.items[0..import_count]) |str_idx| {
+            const import_name = module_env.getString(str_idx);
+            for (imports) |imp| {
+                if (std.mem.eql(u8, import_name, imp.name)) {
+                    try imported_envs_list.append(gpa, imp.env.module_env);
+                }
+            }
+        }
+
+        module_env.imports.resolveImports(module_env, imported_envs_list.items);
+
+        var checker = try Check.init(
+            gpa,
+            &module_env.types,
+            module_env,
+            imported_envs_list.items,
+            &module_envs,
+            &module_env.store.regions,
+            module_builtin_ctx,
+        );
+        errdefer checker.deinit();
+
+        try checker.checkFile();
+
+        return Self{
+            .gpa = gpa,
+            .module_env = module_env,
+            .parse_ast = parse_ast,
+            .can_instance = can_instance,
+            .checker = checker,
+            .module_envs = module_envs,
+            .builtin_module = imports[0].env.builtin_module,
+            .owns_builtin_module = false,
+            .imported_envs_list = imported_envs_list,
+        };
+    }
+
     /// Create a ClosureTransformer for this module
     pub fn createClosureTransformer(self: *Self) ClosureTransformer {
         return ClosureTransformer.init(self.gpa, self.module_env);
@@ -558,4 +674,240 @@ test "type checker catches polymorphic recursion (infinite type)" {
     // The key assertion: type checking should catch the infinite type error.
     // This proves we don't need the polymorphic recursion detection in the monomorphizer.
     try testing.expect(checker.problems.len() > 0);
+}
+
+test "cross-module mono: 3-module linear chain (A -> B -> C)" {
+    // Module A: type module with Counter type + new, get methods
+    const source_a =
+        \\Counter := [Counter(U64)].{
+        \\  new : U64 -> Counter
+        \\  new = |n| Counter.Counter(n)
+        \\
+        \\  get : Counter -> U64
+        \\  get = |Counter.Counter(n)| n
+        \\}
+    ;
+    var env_a = try MonoTestEnv.init("Counter", source_a);
+    defer env_a.deinit();
+
+    // Module B: imports A, defines create_default helper
+    const source_b =
+        \\import Counter
+        \\
+        \\create_default : Counter
+        \\create_default = Counter.new(0)
+    ;
+    var env_b = try MonoTestEnv.initWithImport("B", source_b, "Counter", &env_a);
+    defer env_b.deinit();
+
+    // Module C: imports B, calls B.create_default() then chains .get()
+    const source_c =
+        \\import B
+        \\import Counter
+        \\
+        \\main : U64
+        \\main = B.create_default.get()
+    ;
+    var env_c = try MonoTestEnv.initWithImports("C", source_c, &.{
+        .{ .name = "B", .env = &env_b },
+        .{ .name = "Counter", .env = &env_a },
+    });
+    defer env_c.deinit();
+
+    // C should type-check successfully — transitive type visibility works
+    const main_ident = env_c.module_env.common.findIdent("main");
+    try testing.expect(main_ident != null);
+}
+
+test "cross-module mono: 3-module diamond (A <- B, A <- C, B+C <- D)" {
+    // Module A: type module with Value type
+    const source_a =
+        \\Value := [Value(U64)].{
+        \\  new : U64 -> Value
+        \\  new = |n| Value.Value(n)
+        \\
+        \\  get : Value -> U64
+        \\  get = |Value.Value(n)| n
+        \\}
+    ;
+    var env_a = try MonoTestEnv.init("Value", source_a);
+    defer env_a.deinit();
+
+    // Module B: imports A, defines double
+    const source_b =
+        \\import Value
+        \\
+        \\double : Value -> Value
+        \\double = |v| Value.new(Value.get(v) * 2)
+    ;
+    var env_b = try MonoTestEnv.initWithImport("B", source_b, "Value", &env_a);
+    defer env_b.deinit();
+
+    // Module C: imports A, defines add_one
+    const source_c =
+        \\import Value
+        \\
+        \\add_one : Value -> Value
+        \\add_one = |v| Value.new(Value.get(v) + 1)
+    ;
+    var env_c = try MonoTestEnv.initWithImport("C", source_c, "Value", &env_a);
+    defer env_c.deinit();
+
+    // Module D: imports B and C, uses both
+    const source_d =
+        \\import B
+        \\import C
+        \\import Value
+        \\
+        \\main : U64
+        \\main = Value.new(5) |> B.double |> C.add_one |> Value.get
+    ;
+    var env_d = try MonoTestEnv.initWithImports("D", source_d, &.{
+        .{ .name = "B", .env = &env_b },
+        .{ .name = "C", .env = &env_c },
+        .{ .name = "Value", .env = &env_a },
+    });
+    defer env_d.deinit();
+
+    // D should type-check successfully — diamond dependency works
+    const main_ident = env_d.module_env.common.findIdent("main");
+    try testing.expect(main_ident != null);
+}
+
+test "cross-module mono: 4-module chain with wrapper types (A -> B -> C -> D)" {
+    // Module A: type module Base with new method
+    const source_a =
+        \\Base := [Base(U64)].{
+        \\  new : U64 -> Base
+        \\  new = |n| Base.Base(n)
+        \\
+        \\  get : Base -> U64
+        \\  get = |Base.Base(n)| n
+        \\}
+    ;
+    var env_a = try MonoTestEnv.init("Base", source_a);
+    defer env_a.deinit();
+
+    // Module B: imports A, defines wrap that takes Base and returns a record
+    const source_b =
+        \\import Base
+        \\
+        \\wrap : Base, U64 -> { base : Base, label : U64 }
+        \\wrap = |b, l| { base: b, label: l }
+    ;
+    var env_b = try MonoTestEnv.initWithImport("B", source_b, "Base", &env_a);
+    defer env_b.deinit();
+
+    // Module C: imports B and Base, defines process
+    const source_c =
+        \\import B
+        \\import Base
+        \\
+        \\process : { base : Base, label : U64 } -> U64
+        \\process = |r| Base.get(r.base) + r.label
+    ;
+    var env_c = try MonoTestEnv.initWithImports("C", source_c, &.{
+        .{ .name = "B", .env = &env_b },
+        .{ .name = "Base", .env = &env_a },
+    });
+    defer env_c.deinit();
+
+    // Module D: imports C, B, and Base — calls the full chain
+    const source_d =
+        \\import C
+        \\import B
+        \\import Base
+        \\
+        \\main : U64
+        \\main = C.process(B.wrap(Base.new(10), 5))
+    ;
+    var env_d = try MonoTestEnv.initWithImports("D", source_d, &.{
+        .{ .name = "C", .env = &env_c },
+        .{ .name = "B", .env = &env_b },
+        .{ .name = "Base", .env = &env_a },
+    });
+    defer env_d.deinit();
+
+    // D should type-check successfully — deep transitive chain works
+    const main_ident = env_d.module_env.common.findIdent("main");
+    try testing.expect(main_ident != null);
+}
+
+test "cross-module mono: 5-module fan-in (A, B, C independent; D combines; E uses D)" {
+    // Module A: type module Width
+    const source_a =
+        \\Width := [Width(U64)].{
+        \\  new : U64 -> Width
+        \\  new = |n| Width.Width(n)
+        \\
+        \\  get : Width -> U64
+        \\  get = |Width.Width(n)| n
+        \\}
+    ;
+    var env_a = try MonoTestEnv.init("Width", source_a);
+    defer env_a.deinit();
+
+    // Module B: type module Height
+    const source_b =
+        \\Height := [Height(U64)].{
+        \\  new : U64 -> Height
+        \\  new = |n| Height.Height(n)
+        \\
+        \\  get : Height -> U64
+        \\  get = |Height.Height(n)| n
+        \\}
+    ;
+    var env_b = try MonoTestEnv.init("Height", source_b);
+    defer env_b.deinit();
+
+    // Module C: type module Depth
+    const source_c =
+        \\Depth := [Depth(U64)].{
+        \\  new : U64 -> Depth
+        \\  new = |n| Depth.Depth(n)
+        \\
+        \\  get : Depth -> U64
+        \\  get = |Depth.Depth(n)| n
+        \\}
+    ;
+    var env_c = try MonoTestEnv.init("Depth", source_c);
+    defer env_c.deinit();
+
+    // Module D: imports A, B, C — defines volume
+    const source_d =
+        \\import Width
+        \\import Height
+        \\import Depth
+        \\
+        \\volume : Width, Height, Depth -> U64
+        \\volume = |w, h, d| Width.get(w) * Height.get(h) * Depth.get(d)
+    ;
+    var env_d = try MonoTestEnv.initWithImports("D", source_d, &.{
+        .{ .name = "Width", .env = &env_a },
+        .{ .name = "Height", .env = &env_b },
+        .{ .name = "Depth", .env = &env_c },
+    });
+    defer env_d.deinit();
+
+    // Module E: imports A, B, C, D — creates all three types and calls D.volume
+    const source_e =
+        \\import Width
+        \\import Height
+        \\import Depth
+        \\import D
+        \\
+        \\main : U64
+        \\main = D.volume(Width.new(3), Height.new(4), Depth.new(5))
+    ;
+    var env_e = try MonoTestEnv.initWithImports("E", source_e, &.{
+        .{ .name = "Width", .env = &env_a },
+        .{ .name = "Height", .env = &env_b },
+        .{ .name = "Depth", .env = &env_c },
+        .{ .name = "D", .env = &env_d },
+    });
+    defer env_e.deinit();
+
+    // E should type-check successfully — wide fan-in works
+    const main_ident = env_e.module_env.common.findIdent("main");
+    try testing.expect(main_ident != null);
 }

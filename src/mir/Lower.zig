@@ -97,8 +97,19 @@ pub fn deinit(self: *Self) void {
 /// Lower a CIR expression to MIR.
 pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId {
     const module_env = self.all_module_envs[self.current_module_idx];
-    const expr = module_env.store.getExpr(expr_idx);
     const region = module_env.store.getExprRegion(expr_idx);
+
+    // Error types from the type checker become runtime_error nodes
+    const type_var = ModuleEnv.varFrom(expr_idx);
+    const resolved = self.types_store.resolveVar(type_var);
+    if (resolved.desc.content == .err) {
+        const monotype = try self.store.monotype_store.addMonotype(self.allocator, .unit);
+        return try self.store.addExpr(self.allocator, .{ .runtime_error = .{
+            .diagnostic = @enumFromInt(std.math.maxInt(u32)),
+        } }, monotype, region);
+    }
+
+    const expr = module_env.store.getExpr(expr_idx);
     const monotype = try self.resolveMonotype(expr_idx);
 
     return switch (expr) {
@@ -1031,7 +1042,7 @@ pub fn lowerExternalDef(self: *Self, symbol: MIR.MonoSymbol, cir_expr_idx: CIR.E
     // Recursion guard
     if (self.in_progress_defs.contains(symbol_key)) {
         // Recursive reference — return a placeholder lookup
-        return try self.store.addExpr(self.allocator, .{ .lookup = symbol }, try self.store.monotype_store.addMonotype(self.allocator, .err), Region.zero());
+        return try self.store.addExpr(self.allocator, .{ .lookup = symbol }, try self.store.monotype_store.addMonotype(self.allocator, .unit), Region.zero());
     }
 
     try self.in_progress_defs.put(symbol_key, {});

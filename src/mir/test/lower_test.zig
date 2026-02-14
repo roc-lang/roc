@@ -238,15 +238,13 @@ test "Monotype Store: primitive types" {
     try testing.expectEqual(Monotype.Prim.i64, store.getMonotype(i64_idx).prim);
 }
 
-test "Monotype Store: unit and err types" {
+test "Monotype Store: unit type" {
     var store = Monotype.Store.init();
     defer store.deinit(test_allocator);
 
     const unit_idx = try store.addMonotype(test_allocator, .unit);
-    const err_idx = try store.addMonotype(test_allocator, .err);
 
     try testing.expect(store.getMonotype(unit_idx) == .unit);
-    try testing.expect(store.getMonotype(err_idx) == .err);
 }
 
 test "Monotype Store: list type" {
