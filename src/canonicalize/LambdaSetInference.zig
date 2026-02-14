@@ -47,7 +47,7 @@ const Self = @This();
 /// Allocator for internal structures
 allocator: std.mem.Allocator,
 
-/// Maps (module_name_idx, local_closure_id) → globally unique Ident.Idx
+/// Maps (display_module_name_idx, local_closure_id) → globally unique Ident.Idx
 /// The Ident is module-qualified: "UserModule.#1_addX"
 closure_names: std.AutoHashMap(ClosureKey, base.Ident.Idx),
 
@@ -63,19 +63,19 @@ collected_closures: std.ArrayList(CollectedClosure),
 
 /// Key for identifying a closure within a specific module
 pub const ClosureKey = struct {
-    /// Module name identifier (from ModuleEnv.module_name_idx)
-    module_name_idx: base.Ident.Idx,
+    /// Module name identifier (from ModuleEnv.display_module_name_idx)
+    display_module_name_idx: base.Ident.Idx,
     /// Local closure ID within that module (the closure_counter value when it was created)
     local_closure_id: u32,
 
     pub fn eql(a: ClosureKey, b: ClosureKey) bool {
-        return @as(u32, @bitCast(a.module_name_idx)) == @as(u32, @bitCast(b.module_name_idx)) and
+        return @as(u32, @bitCast(a.display_module_name_idx)) == @as(u32, @bitCast(b.display_module_name_idx)) and
             a.local_closure_id == b.local_closure_id;
     }
 
     pub fn hash(key: ClosureKey) u64 {
         var hasher = std.hash.Wyhash.init(0);
-        const module_bits = @as(u32, @bitCast(key.module_name_idx));
+        const module_bits = @as(u32, @bitCast(key.display_module_name_idx));
         hasher.update(std.mem.asBytes(&module_bits));
         hasher.update(std.mem.asBytes(&key.local_closure_id));
         return hasher.final();
@@ -85,7 +85,7 @@ pub const ClosureKey = struct {
 /// Key for identifying a call site that may call closures from different modules
 pub const CallSiteKey = struct {
     /// Module where the call site is located
-    module_name_idx: base.Ident.Idx,
+    display_module_name_idx: base.Ident.Idx,
     /// The expression index of the call site
     expr_idx: Expr.Idx,
 };
@@ -93,7 +93,7 @@ pub const CallSiteKey = struct {
 /// Information about a collected closure
 pub const CollectedClosure = struct {
     /// The module this closure belongs to
-    module_name_idx: base.Ident.Idx,
+    display_module_name_idx: base.Ident.Idx,
     /// Local closure ID within the module
     local_closure_id: u32,
     /// The original local tag name (e.g., "#1_addX")
@@ -319,7 +319,7 @@ fn registerClosure(self: *Self, module: *ModuleEnv, closure_expr_idx: Expr.Idx, 
 
     // Create the closure key
     const key = ClosureKey{
-        .module_name_idx = module.module_name_idx,
+        .display_module_name_idx = module.qualified_module_ident,
         .local_closure_id = local_closure_id,
     };
 
@@ -341,7 +341,7 @@ fn registerClosure(self: *Self, module: *ModuleEnv, closure_expr_idx: Expr.Idx, 
 
     // Also store in collected_closures for later iteration
     try self.collected_closures.append(self.allocator, .{
-        .module_name_idx = module.module_name_idx,
+        .display_module_name_idx = module.qualified_module_ident,
         .local_closure_id = local_closure_id,
         .local_tag_name = local_tag_name,
         .global_tag_name = global_name,
@@ -415,17 +415,17 @@ fn buildLambdaSetsFromExpr(self: *Self, module: *ModuleEnv, expr_idx: Expr.Idx) 
                 if (arg_expr == .e_closure) {
                     // This call site receives a closure - record it
                     const call_key = CallSiteKey{
-                        .module_name_idx = module.module_name_idx,
+                        .display_module_name_idx = module.qualified_module_ident,
                         .expr_idx = expr_idx,
                     };
 
                     // Find which closure this is
                     for (self.collected_closures.items) |closure_info| {
                         if (@intFromEnum(closure_info.closure_expr_idx) == @intFromEnum(arg_idx) and
-                            @as(u32, @bitCast(closure_info.module_name_idx)) == @as(u32, @bitCast(module.module_name_idx)))
+                            @as(u32, @bitCast(closure_info.display_module_name_idx)) == @as(u32, @bitCast(module.qualified_module_ident)))
                         {
                             const closure_key = ClosureKey{
-                                .module_name_idx = closure_info.module_name_idx,
+                                .display_module_name_idx = closure_info.display_module_name_idx,
                                 .local_closure_id = closure_info.local_closure_id,
                             };
 
@@ -504,9 +504,9 @@ pub fn getLambdaSet(self: *const Self, key: CallSiteKey) ?[]const ClosureKey {
 }
 
 /// Check if a closure exists in our registry
-pub fn hasClosureFor(self: *const Self, module_name_idx: base.Ident.Idx, closure_id: u32) bool {
+pub fn hasClosureFor(self: *const Self, display_module_name_idx: base.Ident.Idx, closure_id: u32) bool {
     const key = ClosureKey{
-        .module_name_idx = module_name_idx,
+        .display_module_name_idx = display_module_name_idx,
         .local_closure_id = closure_id,
     };
     return self.closure_names.contains(key);
@@ -531,15 +531,15 @@ test "LambdaSetInference: init and deinit" {
 test "LambdaSetInference: ClosureKey equality" {
     const attrs = base.Ident.Attributes{ .effectful = false, .ignored = false, .reassignable = false };
     const key1 = ClosureKey{
-        .module_name_idx = .{ .attributes = attrs, .idx = 1 },
+        .display_module_name_idx = .{ .attributes = attrs, .idx = 1 },
         .local_closure_id = 42,
     };
     const key2 = ClosureKey{
-        .module_name_idx = .{ .attributes = attrs, .idx = 1 },
+        .display_module_name_idx = .{ .attributes = attrs, .idx = 1 },
         .local_closure_id = 42,
     };
     const key3 = ClosureKey{
-        .module_name_idx = .{ .attributes = attrs, .idx = 2 },
+        .display_module_name_idx = .{ .attributes = attrs, .idx = 2 },
         .local_closure_id = 42,
     };
 

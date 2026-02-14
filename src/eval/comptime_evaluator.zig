@@ -1350,7 +1350,7 @@ pub const ComptimeEvaluator = struct {
                 // For user-defined types, use interpreter's module lookup
                 break :blk self.interpreter.module_envs.get(origin_module_ident) orelse {
                     // Module not found - might be current module
-                    if (origin_module_ident == self.env.module_name_idx) {
+                    if (origin_module_ident == self.env.qualified_module_ident) {
                         break :blk self.env;
                     }
                     // Unknown module - skip for now

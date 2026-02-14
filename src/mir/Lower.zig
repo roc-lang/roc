@@ -1009,7 +1009,7 @@ fn lowerTypeVarDispatch(self: *Self, module_env: *const ModuleEnv, tvd: anytype,
 /// Find the module index for a given origin module ident.
 fn findModuleForOrigin(self: *Self, source_env: *const ModuleEnv, origin_module: Ident.Idx) ?u32 {
     // Check if origin is source_env itself
-    if (origin_module == source_env.module_name_idx) {
+    if (origin_module == source_env.qualified_module_ident) {
         return self.current_module_idx;
     }
 
