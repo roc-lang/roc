@@ -45,8 +45,8 @@ fn stderrWriter() *std.Io.Writer {
 // Use the canonical BuiltinIndices from CIR
 const BuiltinIndices = CIR.BuiltinIndices;
 
-/// Replace specific e_anno_only expressions with e_low_level_lambda operations.
-/// This transforms standalone annotations into low-level builtin lambda operations
+/// Replace specific e_anno_only expressions with e_lambda + e_run_low_level operations.
+/// This transforms standalone annotations into lambda operations wrapping low-level builtins
 /// that will be recognized by the compiler backend.
 /// Returns a list of new def indices created.
 fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
@@ -1214,6 +1214,7 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
                         else => std.debug.panic("Low-level operation {s} does not have a function type annotation", .{@tagName(low_level_op)}),
                     };
 
+                    // Create parameter patterns for the lambda
                     const patterns_start = env.store.scratchTop("patterns");
                     var i: u32 = 0;
                     while (i < num_params) : (i += 1) {
@@ -1225,22 +1226,30 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
                     }
                     const args_span = try env.store.patternSpanFrom(patterns_start);
 
-                    // Create an e_runtime_error body that crashes when the function is called
-                    const error_msg_lit = try env.insertString("Low-level builtin not yet implemented in interpreter");
-                    const diagnostic_idx = try env.addDiagnostic(.{ .not_implemented = .{
-                        .feature = error_msg_lit,
-                        .region = base.Region.zero(),
-                    } });
-                    const body_idx = try env.addExpr(.{ .e_runtime_error = .{ .diagnostic = diagnostic_idx } }, base.Region.zero());
+                    // Create e_lookup_local expressions for each parameter
+                    const exprs_start = env.store.scratchExprTop();
+                    const param_patterns = env.store.slicePatterns(args_span);
+                    for (param_patterns) |pat_idx| {
+                        const lookup_idx = try env.addExpr(.{ .e_lookup_local = .{
+                            .pattern_idx = pat_idx,
+                        } }, base.Region.zero());
+                        try env.store.addScratchExpr(lookup_idx);
+                    }
+                    const lookup_span = try env.store.exprSpanFrom(exprs_start);
 
-                    // Create e_low_level_lambda expression
-                    const expr_idx = try env.addExpr(.{ .e_low_level_lambda = .{
+                    // Create e_run_low_level body expression
+                    const body_idx = try env.addExpr(.{ .e_run_low_level = .{
                         .op = low_level_op,
+                        .args = lookup_span,
+                    } }, base.Region.zero());
+
+                    // Create e_lambda expression wrapping the low-level body
+                    const expr_idx = try env.addExpr(.{ .e_lambda = .{
                         .args = args_span,
                         .body = body_idx,
                     } }, base.Region.zero());
 
-                    // Now replace the e_anno_only expression with the e_low_level_lambda
+                    // Now replace the e_anno_only expression with the e_lambda
                     // Def structure is stored in def_data list
                     const def_node_idx = @as(@TypeOf(env.store.nodes).Idx, @enumFromInt(@intFromEnum(def_idx)));
                     const def_node = env.store.nodes.get(def_node_idx);

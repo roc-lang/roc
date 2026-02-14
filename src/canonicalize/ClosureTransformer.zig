@@ -1132,7 +1132,7 @@ fn exprContainsPatternRef(
         .e_anno_only,
         .e_lookup_required,
         .e_hosted_lambda,
-        .e_low_level_lambda,
+        .e_run_low_level,
         .e_crash,
         => return false,
     }
@@ -2243,7 +2243,7 @@ pub fn transformExpr(self: *Self, expr_idx: Expr.Idx) std.mem.Allocator.Error!Ex
         .e_anno_only,
         .e_lookup_required,
         .e_hosted_lambda,
-        .e_low_level_lambda,
+        .e_run_low_level,
         => return expr_idx,
 
         .e_type_var_dispatch => |tvd| {

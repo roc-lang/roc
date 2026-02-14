@@ -149,7 +149,7 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
             for (span[1..]) |seg_idx| {
                 const seg = try self.lowerExpr(seg_idx);
                 const args = try self.store.addExprSpan(self.allocator, &.{ acc, seg });
-                acc = try self.store.addExpr(self.allocator, .{ .low_level = .{
+                acc = try self.store.addExpr(self.allocator, .{ .run_low_level = .{
                     .op = .str_concat,
                     .args = args,
                 } }, monotype, region);
@@ -267,11 +267,11 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
                 .body = body,
             } }, monotype, region);
         },
-        .e_low_level_lambda => |ll| {
-            const args = try self.lowerPatternSpan(module_env, ll.args);
-            return try self.store.addExpr(self.allocator, .{ .low_level = .{
-                .op = ll.op,
-                .args = try self.patternSpanToExprSpan(args),
+        .e_run_low_level => |run_ll| {
+            const args = try self.lowerExprSpan(module_env, run_ll.args);
+            return try self.store.addExpr(self.allocator, .{ .run_low_level = .{
+                .op = run_ll.op,
+                .args = args,
             } }, monotype, region);
         },
 
@@ -492,47 +492,6 @@ fn lowerPattern(self: *Self, module_env: *const ModuleEnv, pattern_idx: CIR.Patt
             return try self.store.addPattern(self.allocator, .{ .tuple_destructure = .{ .elems = elems } }, monotype);
         },
     };
-}
-
-/// Convert a PatternSpan to an ExprSpan (for low_level args — patterns become lookups).
-fn patternSpanToExprSpan(self: *Self, pat_span: MIR.PatternSpan) Allocator.Error!MIR.ExprSpan {
-    const pats = self.store.getPatternSpan(pat_span);
-    if (pats.len == 0) return MIR.ExprSpan.empty();
-
-    var exprs = std.ArrayList(MIR.ExprId).empty;
-    defer exprs.deinit(self.allocator);
-
-    for (pats) |pat_id| {
-        const pat = self.store.getPattern(pat_id);
-        const monotype = self.store.patternTypeOf(pat_id);
-        switch (pat) {
-            .bind => |symbol| {
-                const expr_id = try self.store.addExpr(self.allocator, .{ .lookup = symbol }, monotype, Region.zero());
-                try exprs.append(self.allocator, expr_id);
-            },
-            .wildcard,
-            .tag,
-            .int_literal,
-            .str_literal,
-            .dec_literal,
-            .frac_f32_literal,
-            .frac_f64_literal,
-            .record_destructure,
-            .tuple_destructure,
-            .list_destructure,
-            .as_pattern,
-            .runtime_error,
-            => {
-                // TODO: non-bind patterns need proper handling, not placeholders
-                const expr_id = try self.store.addExpr(self.allocator, .{ .runtime_err_can = .{
-                    .diagnostic = @enumFromInt(std.math.maxInt(u32)),
-                } }, monotype, Region.zero());
-                try exprs.append(self.allocator, expr_id);
-            },
-        }
-    }
-
-    return try self.store.addExprSpan(self.allocator, exprs.items);
 }
 
 // --- Desugaring helpers ---

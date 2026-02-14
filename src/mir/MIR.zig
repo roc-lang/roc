@@ -311,7 +311,7 @@ pub const Expr = union(enum) {
     // --- Low-level ---
 
     /// Low-level builtin operation
-    low_level: struct {
+    run_low_level: struct {
         op: CIR.Expr.LowLevel,
         args: ExprSpan,
     },

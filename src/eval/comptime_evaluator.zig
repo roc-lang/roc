@@ -239,7 +239,7 @@ pub const ComptimeEvaluator = struct {
         const expr = self.env.store.getExpr(expr_idx);
 
         const is_lambda = switch (expr) {
-            .e_lambda, .e_closure, .e_low_level_lambda => true,
+            .e_lambda, .e_closure => true,
             .e_runtime_error => return EvalResult{
                 .crash = .{
                     .message = "Runtime error in expression",
@@ -1676,13 +1676,18 @@ pub const ComptimeEvaluator = struct {
             return false;
         }
 
-        // Check if this is a low-level lambda (builtin type) or a user-defined function
+        // Check if this is a low-level operation (builtin type) or a user-defined function
         const lambda_expr = origin_env.store.getExpr(closure_header.lambda_expr_idx);
 
+        // Extract low-level op from e_lambda whose body is e_run_low_level
+        const ll_op: ?CIR.Expr.LowLevel = if (lambda_expr == .e_lambda) blk: {
+            const body = origin_env.store.getExpr(lambda_expr.e_lambda.body);
+            break :blk if (body == .e_run_low_level) body.e_run_low_level.op else null;
+        } else null;
+
         var result: eval_mod.StackValue = undefined;
-        if (lambda_expr == .e_low_level_lambda) {
+        if (ll_op) |low_level_op| {
             // Builtin type: dispatch directly to low-level implementation
-            const low_level = lambda_expr.e_low_level_lambda;
 
             // Get return type for low-level builtin
             // We need to translate the type variable for the result type
@@ -1713,7 +1718,7 @@ pub const ComptimeEvaluator = struct {
 
             // Call the low-level builtin with our Numeral argument and target type
             var args = [_]eval_mod.StackValue{num_literal_record};
-            result = self.interpreter.callLowLevelBuiltinWithTargetType(low_level.op, &args, roc_ops, return_rt_var, target_rt_var) catch |err| {
+            result = self.interpreter.callLowLevelBuiltinWithTargetType(low_level_op, &args, roc_ops, return_rt_var, target_rt_var) catch |err| {
                 // Include crash message if available for better debugging
                 const crash_msg = self.crash.crashMessage() orelse "no crash message";
                 const error_msg = try self.problems.putFmtExtraString(

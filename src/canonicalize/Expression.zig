@@ -502,14 +502,12 @@ pub const Expr = union(enum) {
     /// it's expected to be implemented by the backend rather than being an error.
     /// It behaves like e_lambda in that it has parameters and a body (which crashes when evaluated).
     ///
-    /// ```roc
-    /// # Str.is_empty is a low-level operation
-    /// is_empty : Str -> Bool
-    /// ```
-    e_low_level_lambda: struct {
+    /// Run a low-level builtin operation with the given argument expressions.
+    /// This is a leaf expression that appears as the body of a normal e_lambda.
+    /// The args are e_lookup_local expressions referencing the enclosing lambda's params.
+    e_run_low_level: struct {
         op: LowLevel,
-        args: CIR.Pattern.Span,
-        body: Expr.Idx,
+        args: Expr.Span,
     },
 
     /// Low-level builtin operations that are implemented by the compiler backend.
@@ -1927,25 +1925,23 @@ pub const Expr = union(enum) {
 
                 try tree.endNode(begin, attrs);
             },
-            .e_low_level_lambda => |low_level| {
+            .e_run_low_level => |run_ll| {
                 const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-low-level-lambda");
-                const op_name = try std.fmt.allocPrint(ir.gpa, "{s}", .{@tagName(low_level.op)});
+                try tree.pushStaticAtom("e-run-low-level");
+                const op_name = try std.fmt.allocPrint(ir.gpa, "{s}", .{@tagName(run_ll.op)});
                 defer ir.gpa.free(op_name);
                 try tree.pushStringPair("op", op_name);
                 const region = ir.store.getExprRegion(expr_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 const attrs = tree.beginNode();
 
-                const args_begin = tree.beginNode();
+                const run_args_begin = tree.beginNode();
                 try tree.pushStaticAtom("args");
-                const args_attrs = tree.beginNode();
-                for (ir.store.slicePatterns(low_level.args)) |arg_idx| {
-                    try ir.store.getPattern(arg_idx).pushToSExprTree(ir, tree, arg_idx);
+                const run_args_attrs = tree.beginNode();
+                for (ir.store.exprSlice(run_ll.args)) |arg_idx| {
+                    try ir.store.getExpr(arg_idx).pushToSExprTree(ir, tree, arg_idx);
                 }
-                try tree.endNode(args_begin, args_attrs);
-
-                try ir.store.getExpr(low_level.body).pushToSExprTree(ir, tree, low_level.body);
+                try tree.endNode(run_args_begin, run_args_attrs);
 
                 try tree.endNode(begin, attrs);
             },

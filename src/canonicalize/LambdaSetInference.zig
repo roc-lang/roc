@@ -298,7 +298,7 @@ fn collectClosuresFromExpr(self: *Self, module: *ModuleEnv, expr_idx: Expr.Idx) 
         .e_expect,
         .e_for,
         .e_hosted_lambda,
-        .e_low_level_lambda,
+        .e_run_low_level,
         .e_type_var_dispatch,
         .e_ellipsis,
         .e_anno_only,

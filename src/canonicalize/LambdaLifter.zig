@@ -600,7 +600,7 @@ fn transformBodyWithCaptures(
         .e_lookup_required,
         .e_type_var_dispatch,
         .e_hosted_lambda,
-        .e_low_level_lambda,
+        .e_run_low_level,
         .e_crash,
         => return body_idx,
 
