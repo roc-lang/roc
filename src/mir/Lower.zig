@@ -139,7 +139,7 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
         .e_str => |str_expr| {
             const span = module_env.store.sliceExpr(str_expr.span);
             if (span.len == 0) {
-                return try self.store.addExpr(self.allocator, .{ .str = @enumFromInt(std.math.maxInt(u32)) }, monotype, region);
+                return try self.store.addExpr(self.allocator, .{ .str = .none }, monotype, region);
             }
             if (span.len == 1) {
                 return try self.lowerExpr(span[0]);
@@ -451,10 +451,10 @@ fn lowerPattern(self: *Self, module_env: *const ModuleEnv, pattern_idx: CIR.Patt
         .runtime_error => try self.store.addPattern(self.allocator, .runtime_error, monotype),
         .list => |list_pat| {
             const patterns = try self.lowerPatternSpan(module_env, list_pat.patterns);
-            var rest_index: u32 = std.math.maxInt(u32);
+            var rest_index: MIR.RestIndex = .none;
             var rest_pattern: MIR.PatternId = MIR.PatternId.none;
             if (list_pat.rest_info) |rest| {
-                rest_index = rest.index;
+                rest_index = @enumFromInt(rest.index);
                 if (rest.pattern) |rest_pat_idx| {
                     rest_pattern = try self.lowerPattern(module_env, rest_pat_idx);
                 }

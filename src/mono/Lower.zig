@@ -3150,7 +3150,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             const inner = try self.lowerExprFromIdx(module_env, dbg.expr);
             break :blk .{
                 .dbg = .{
-                    .msg = @enumFromInt(std.math.maxInt(u32)), // dbg doesn't have a msg in CIR
+                    .msg = .none,
                     .expr = inner,
                     .result_layout = self.getExprLayoutFromIdx(module_env, expr_idx),
                 },

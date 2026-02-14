@@ -80,6 +80,16 @@ pub const PatternId = enum(u32) {
     }
 };
 
+/// Index of the `..` rest pattern within a list destructure, or `.none` if absent.
+pub const RestIndex = enum(u32) {
+    none = std.math.maxInt(u32),
+    _,
+
+    pub fn isNone(self: RestIndex) bool {
+        return self == .none;
+    }
+};
+
 // --- Span types ---
 
 /// Span of ExprId values stored in extra_data.
@@ -424,7 +434,7 @@ pub const Pattern = union(enum) {
     /// Destructure a list
     list_destructure: struct {
         patterns: PatternSpan,
-        rest_index: u32, // std.math.maxInt(u32) if no rest
+        rest_index: RestIndex,
         rest_pattern: PatternId, // PatternId.none if no rest binding
     },
 
