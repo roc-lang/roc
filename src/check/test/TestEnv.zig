@@ -83,8 +83,8 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .external_decls = serialized_ptr.external_decls.deserializeInto(base_ptr),
         .imports = try serialized_ptr.imports.deserializeInto(base_ptr, gpa),
         .module_name = module_name,
-        .display_module_name_idx = undefined, // Not used for deserialized modules (only needed during fresh canonicalization)
-        .qualified_module_ident = undefined,
+        .display_module_name_idx = base.Ident.Idx.NONE, // Not used for deserialized modules (only needed during fresh canonicalization)
+        .qualified_module_ident = base.Ident.Idx.NONE,
         .diagnostics = serialized_ptr.diagnostics,
         .store = serialized_ptr.store.deserializeInto(base_ptr, gpa),
         .evaluation_order = null,
