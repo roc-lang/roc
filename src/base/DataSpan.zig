@@ -5,9 +5,9 @@ pub const DataSpan = extern struct {
     start: u32,
     len: u32,
 
-    /// Creates an empty DataSpan with zero start and zero length.
+    /// Creates an empty DataSpan with zero length.
     pub fn empty() DataSpan {
-        return DataSpan{ .start = 0, .len = 0 };
+        return DataSpan{ .start = undefined, .len = 0 };
     }
 
     /// Creates a DataSpan with the specified start position and length.

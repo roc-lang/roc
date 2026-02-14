@@ -69,7 +69,7 @@ pub const MonoExprSpan = extern struct {
     len: u16,
 
     pub fn empty() MonoExprSpan {
-        return .{ .start = 0, .len = 0 };
+        return .{ .start = undefined, .len = 0 };
     }
 
     pub fn isEmpty(self: MonoExprSpan) bool {
@@ -85,7 +85,7 @@ pub const MonoPatternSpan = extern struct {
     len: u16,
 
     pub fn empty() MonoPatternSpan {
-        return .{ .start = 0, .len = 0 };
+        return .{ .start = undefined, .len = 0 };
     }
 
     pub fn isEmpty(self: MonoPatternSpan) bool {
@@ -101,7 +101,7 @@ pub const MonoCaptureSpan = extern struct {
     len: u16,
 
     pub fn empty() MonoCaptureSpan {
-        return .{ .start = 0, .len = 0 };
+        return .{ .start = undefined, .len = 0 };
     }
 };
 
@@ -202,7 +202,7 @@ pub const LambdaSetMemberSpan = extern struct {
     len: u16,
 
     pub fn empty() LambdaSetMemberSpan {
-        return .{ .start = 0, .len = 0 };
+        return .{ .start = undefined, .len = 0 };
     }
 
     pub fn isEmpty(self: LambdaSetMemberSpan) bool {
@@ -251,7 +251,7 @@ pub const MonoWhenBranchSpan = extern struct {
     len: u16,
 
     pub fn empty() MonoWhenBranchSpan {
-        return .{ .start = 0, .len = 0 };
+        return .{ .start = undefined, .len = 0 };
     }
 };
 
@@ -283,7 +283,7 @@ pub const MonoStmtSpan = extern struct {
     len: u16,
 
     pub fn empty() MonoStmtSpan {
-        return .{ .start = 0, .len = 0 };
+        return .{ .start = undefined, .len = 0 };
     }
 };
 
@@ -299,7 +299,7 @@ pub const MonoFieldNameSpan = extern struct {
     len: u16,
 
     pub fn empty() MonoFieldNameSpan {
-        return .{ .start = 0, .len = 0 };
+        return .{ .start = undefined, .len = 0 };
     }
 };
 
@@ -1103,7 +1103,7 @@ pub const LayoutIdxSpan = extern struct {
     len: u16,
 
     pub fn empty() LayoutIdxSpan {
-        return .{ .start = 0, .len = 0 };
+        return .{ .start = undefined, .len = 0 };
     }
 
     pub fn isEmpty(self: LayoutIdxSpan) bool {
@@ -1125,7 +1125,7 @@ pub const CFSwitchBranchSpan = extern struct {
     len: u16,
 
     pub fn empty() CFSwitchBranchSpan {
-        return .{ .start = 0, .len = 0 };
+        return .{ .start = undefined, .len = 0 };
     }
 
     pub fn isEmpty(self: CFSwitchBranchSpan) bool {

@@ -98,7 +98,7 @@ pub const ExprSpan = extern struct {
     len: u16,
 
     pub fn empty() ExprSpan {
-        return .{ .start = 0, .len = 0 };
+        return .{ .start = undefined, .len = 0 };
     }
 
     pub fn isEmpty(self: ExprSpan) bool {
@@ -112,7 +112,7 @@ pub const PatternSpan = extern struct {
     len: u16,
 
     pub fn empty() PatternSpan {
-        return .{ .start = 0, .len = 0 };
+        return .{ .start = undefined, .len = 0 };
     }
 
     pub fn isEmpty(self: PatternSpan) bool {
@@ -126,7 +126,7 @@ pub const StmtSpan = extern struct {
     len: u16,
 
     pub fn empty() StmtSpan {
-        return .{ .start = 0, .len = 0 };
+        return .{ .start = undefined, .len = 0 };
     }
 
     pub fn isEmpty(self: StmtSpan) bool {
@@ -140,7 +140,7 @@ pub const BranchSpan = extern struct {
     len: u16,
 
     pub fn empty() BranchSpan {
-        return .{ .start = 0, .len = 0 };
+        return .{ .start = undefined, .len = 0 };
     }
 
     pub fn isEmpty(self: BranchSpan) bool {
@@ -154,7 +154,7 @@ pub const BranchPatternSpan = extern struct {
     len: u16,
 
     pub fn empty() BranchPatternSpan {
-        return .{ .start = 0, .len = 0 };
+        return .{ .start = undefined, .len = 0 };
     }
 
     pub fn isEmpty(self: BranchPatternSpan) bool {
@@ -168,7 +168,7 @@ pub const CaptureSpan = extern struct {
     len: u16,
 
     pub fn empty() CaptureSpan {
-        return .{ .start = 0, .len = 0 };
+        return .{ .start = undefined, .len = 0 };
     }
 
     pub fn isEmpty(self: CaptureSpan) bool {
@@ -182,7 +182,7 @@ pub const FieldNameSpan = extern struct {
     len: u16,
 
     pub fn empty() FieldNameSpan {
-        return .{ .start = 0, .len = 0 };
+        return .{ .start = undefined, .len = 0 };
     }
 
     pub fn isEmpty(self: FieldNameSpan) bool {
