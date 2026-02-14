@@ -626,20 +626,24 @@ pub const Interpreter = struct {
         errdefer translated_module_envs.deinit(allocator);
         const mutable_env_for_idents = result.runtime_layout_store.getMutableEnv().?;
 
-        // Helper to check if a module has a valid module_name_idx
+        // Ensure the mutable env's interner supports insertions (it may be deserialized/read-only
+        // when loaded from the module cache).
+        try mutable_env_for_idents.common.idents.interner.enableRuntimeInserts(allocator);
+
+        // Helper to check if a module has a valid qualified_module_ident
         // (handles both unset NONE and corrupted undefined values from deserialized data)
         const hasValidModuleName = struct {
             fn check(mod_env: *const can.ModuleEnv) bool {
-                if (mod_env.module_name_idx.isNone()) return false;
+                if (mod_env.qualified_module_ident.isNone()) return false;
                 const ident_store_size = mod_env.common.idents.interner.bytes.items.items.len;
-                const idx_val = mod_env.module_name_idx.idx;
+                const idx_val = mod_env.qualified_module_ident.idx;
                 return idx_val < ident_store_size;
             }
         }.check;
 
-        // Add current/root module (skip if module_name_idx is unset, e.g., in tests)
+        // Add current/root module (skip if qualified_module_ident is unset, e.g., in tests)
         if (hasValidModuleName(env)) {
-            const current_name_str = env.getIdent(env.module_name_idx);
+            const current_name_str = env.getIdent(env.qualified_module_ident);
             const translated_current = try mutable_env_for_idents.insertIdent(base_pkg.Ident.for_text(current_name_str));
             try translated_module_envs.put(allocator, translated_current, env);
         }
@@ -647,7 +651,7 @@ pub const Interpreter = struct {
         // Add app module if different from env
         if (app_env) |a_env| {
             if (a_env != env and hasValidModuleName(a_env)) {
-                const app_name_str = a_env.getIdent(a_env.module_name_idx);
+                const app_name_str = a_env.getIdent(a_env.qualified_module_ident);
                 const translated_app = try mutable_env_for_idents.insertIdent(base_pkg.Ident.for_text(app_name_str));
                 try translated_module_envs.put(allocator, translated_app, a_env);
             }
@@ -656,7 +660,7 @@ pub const Interpreter = struct {
         // Add builtin module
         if (builtin_module_env) |bme| {
             if (hasValidModuleName(bme)) {
-                const builtin_name_str = bme.getIdent(bme.module_name_idx);
+                const builtin_name_str = bme.getIdent(bme.qualified_module_ident);
                 const translated_builtin = try mutable_env_for_idents.insertIdent(base_pkg.Ident.for_text(builtin_name_str));
                 try translated_module_envs.put(allocator, translated_builtin, bme);
             }
@@ -665,7 +669,7 @@ pub const Interpreter = struct {
         // Add all other modules
         for (all_module_envs) |mod_env| {
             if (hasValidModuleName(mod_env)) {
-                const mod_name_str = mod_env.getIdent(mod_env.module_name_idx);
+                const mod_name_str = mod_env.getIdent(mod_env.qualified_module_ident);
                 const translated_mod = try mutable_env_for_idents.insertIdent(base_pkg.Ident.for_text(mod_name_str));
                 // Use put to handle potential duplicates (same module might be in multiple places)
                 try translated_module_envs.put(allocator, translated_mod, mod_env);
@@ -680,14 +684,14 @@ pub const Interpreter = struct {
 
         // Translate env's module name
         if (hasValidModuleName(env)) {
-            const env_name_str = env.getIdent(env.module_name_idx);
+            const env_name_str = env.getIdent(env.qualified_module_ident);
             result.translated_env_module = try mutable_env_for_idents.insertIdent(base_pkg.Ident.for_text(env_name_str));
         }
 
         // Translate app's module name
         if (app_env) |a_env| {
             if (a_env != env and hasValidModuleName(a_env)) {
-                const app_name_str = a_env.getIdent(a_env.module_name_idx);
+                const app_name_str = a_env.getIdent(a_env.qualified_module_ident);
                 result.translated_app_module = try mutable_env_for_idents.insertIdent(base_pkg.Ident.for_text(app_name_str));
             }
         }
@@ -8357,7 +8361,7 @@ pub const Interpreter = struct {
         if (!self.translated_env_module.isNone() and origin_module.idx == self.translated_env_module.idx) {
             return self.root_env;
         }
-        if (self.root_env.module_name_idx == origin_module) {
+        if (self.root_env.qualified_module_ident == origin_module) {
             return self.root_env;
         }
 
@@ -8366,7 +8370,7 @@ pub const Interpreter = struct {
             if (!self.translated_app_module.isNone() and origin_module.idx == self.translated_app_module.idx) {
                 return a_env;
             }
-            if (a_env.module_name_idx == origin_module) {
+            if (a_env.qualified_module_ident == origin_module) {
                 return a_env;
             }
         }
@@ -8385,7 +8389,7 @@ pub const Interpreter = struct {
     /// Returns current_module_id (always 0) for the current module, otherwise looks it up in the module ID map.
     fn getModuleIdForOrigin(self: *const Interpreter, origin_module: base_pkg.Ident.Idx) u32 {
         // Check if it's the current module
-        if (self.env.module_name_idx == origin_module) {
+        if (self.env.qualified_module_ident == origin_module) {
             return self.current_module_id;
         }
         // Look up in imported modules (should always exist if getModuleEnvForOrigin succeeded)
@@ -14185,7 +14189,7 @@ pub const Interpreter = struct {
 
             // Check both pattern_idx AND source module to avoid cross-module collisions.
             const same_module = (b.source_env == self.env) or
-                (b.source_env.module_name_idx == self.env.module_name_idx);
+                (b.source_env.qualified_module_ident == self.env.qualified_module_ident);
             if (b.pattern_idx == lookup.pattern_idx and same_module) {
                 // Check if this binding came from an e_anno_only expression
                 if (b.expr_idx) |expr_idx| {
@@ -20411,7 +20415,7 @@ test "interpreter: cross-module method resolution should find methods in origin 
     // Verify we can retrieve module A's environment
     const found_env = interp.getModuleEnvForOrigin(module_a_ident);
     try std.testing.expect(found_env != null);
-    try std.testing.expectEqual(module_a.module_name_idx, found_env.?.module_name_idx);
+    try std.testing.expectEqual(module_a.qualified_module_ident, found_env.?.qualified_module_ident);
 
     // Verify we can retrieve module A's ID
     const found_id = interp.getModuleIdForOrigin(module_a_ident);
@@ -20474,8 +20478,8 @@ test "interpreter: transitive module method resolution (A imports B imports C)" 
     try interp.import_envs.put(interp.allocator, second_import_idx, &module_c);
 
     // Verify we can retrieve all module environments
-    try std.testing.expectEqual(module_b.module_name_idx, interp.getModuleEnvForOrigin(module_b_ident).?.module_name_idx);
-    try std.testing.expectEqual(module_c.module_name_idx, interp.getModuleEnvForOrigin(module_c_ident).?.module_name_idx);
+    try std.testing.expectEqual(module_b.qualified_module_ident, interp.getModuleEnvForOrigin(module_b_ident).?.qualified_module_ident);
+    try std.testing.expectEqual(module_c.qualified_module_ident, interp.getModuleEnvForOrigin(module_c_ident).?.qualified_module_ident);
 
     // Verify we can retrieve all module IDs
     try std.testing.expectEqual(module_b_id, interp.getModuleIdForOrigin(module_b_ident));

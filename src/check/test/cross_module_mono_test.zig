@@ -73,7 +73,8 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .external_decls = serialized_ptr.external_decls.deserializeInto(base_ptr),
         .imports = try serialized_ptr.imports.deserializeInto(base_ptr, gpa),
         .module_name = module_name,
-        .module_name_idx = undefined,
+        .display_module_name_idx = undefined,
+        .qualified_module_ident = undefined,
         .diagnostics = serialized_ptr.diagnostics,
         .store = serialized_ptr.store.deserializeInto(base_ptr, gpa),
         .evaluation_order = null,
@@ -130,7 +131,8 @@ const MonoTestEnv = struct {
 
         module_env.common.source = source;
         module_env.module_name = module_name;
-        module_env.module_name_idx = try module_env.insertIdent(base.Ident.for_text(module_name));
+        module_env.display_module_name_idx = try module_env.insertIdent(base.Ident.for_text(module_name));
+        module_env.qualified_module_ident = module_env.display_module_name_idx;
         try module_env.common.calcLineStarts(gpa);
 
         try Can.populateModuleEnvs(&module_envs, module_env, builtin_module.env, builtin_indices);
@@ -211,7 +213,8 @@ const MonoTestEnv = struct {
 
         module_env.common.source = source;
         module_env.module_name = module_name;
-        module_env.module_name_idx = try module_env.insertIdent(base.Ident.for_text(module_name));
+        module_env.display_module_name_idx = try module_env.insertIdent(base.Ident.for_text(module_name));
+        module_env.qualified_module_ident = module_env.display_module_name_idx;
         try module_env.common.calcLineStarts(gpa);
 
         const other_module_ident = try module_env.insertIdent(base.Ident.for_text(other_module_name));
@@ -650,7 +653,8 @@ test "type checker catches polymorphic recursion (infinite type)" {
 
     module_env.common.source = source;
     module_env.module_name = "Test";
-    module_env.module_name_idx = try module_env.insertIdent(base.Ident.for_text("Test"));
+    module_env.display_module_name_idx = try module_env.insertIdent(base.Ident.for_text("Test"));
+    module_env.qualified_module_ident = module_env.display_module_name_idx;
     try module_env.common.calcLineStarts(gpa);
 
     try Can.populateModuleEnvs(&module_envs, module_env, builtin_module.env, builtin_indices);

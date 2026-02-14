@@ -1024,7 +1024,8 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
                 .external_decls = serialized_ptr.external_decls.deserializeInto(base_ptr),
                 .imports = try serialized_ptr.imports.deserializeInto(base_ptr, gpa),
                 .module_name = module_name_param,
-                .module_name_idx = undefined, // Not used for deserialized modules
+                .display_module_name_idx = undefined, // Not used for deserialized modules
+                .qualified_module_ident = undefined, // Not used for deserialized modules
                 .diagnostics = serialized_ptr.diagnostics,
                 .store = serialized_ptr.store.deserializeInto(base_ptr, gpa),
                 .evaluation_order = null,

@@ -83,7 +83,8 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .external_decls = serialized_ptr.external_decls.deserializeInto(base_ptr),
         .imports = try serialized_ptr.imports.deserializeInto(base_ptr, gpa),
         .module_name = module_name,
-        .module_name_idx = undefined, // Not used for deserialized modules (only needed during fresh canonicalization)
+        .display_module_name_idx = undefined, // Not used for deserialized modules (only needed during fresh canonicalization)
+        .qualified_module_ident = undefined,
         .diagnostics = serialized_ptr.diagnostics,
         .store = serialized_ptr.store.deserializeInto(base_ptr, gpa),
         .evaluation_order = null,
@@ -157,7 +158,8 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
 
     module_env.common.source = source;
     module_env.module_name = module_name;
-    module_env.module_name_idx = try module_env.insertIdent(base.Ident.for_text(module_name));
+    module_env.display_module_name_idx = try module_env.insertIdent(base.Ident.for_text(module_name));
+    module_env.qualified_module_ident = module_env.display_module_name_idx;
     try module_env.common.calcLineStarts(gpa);
 
     // Put the other module in the env map using module_env's ident store
@@ -308,7 +310,8 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
 
     module_env.common.source = source;
     module_env.module_name = module_name;
-    module_env.module_name_idx = try module_env.insertIdent(base.Ident.for_text(module_name));
+    module_env.display_module_name_idx = try module_env.insertIdent(base.Ident.for_text(module_name));
+    module_env.qualified_module_ident = module_env.display_module_name_idx;
     try module_env.common.calcLineStarts(gpa);
 
     // Populate module_envs with Bool, Try, Dict, Set using shared function

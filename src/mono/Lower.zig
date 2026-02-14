@@ -216,8 +216,8 @@ fn getModuleEnv(self: *const Self, module_idx: u16) ?*ModuleEnv {
 /// Find the module index for a given origin_module ident (from a NominalType).
 /// Uses the import system of source_env to resolve the origin module name to a module index.
 fn findModuleForOrigin(self: *Self, source_env: *const ModuleEnv, origin_module: Ident.Idx) ?u16 {
-    // Check if origin is source_env itself (by ident index)
-    if (origin_module == source_env.module_name_idx) {
+    // Check if origin is source_env itself (by qualified ident)
+    if (origin_module == source_env.qualified_module_ident) {
         for (self.all_module_envs, 0..) |env, idx| {
             if (env == source_env) return @intCast(idx);
         }
@@ -236,15 +236,20 @@ fn findModuleForOrigin(self: *Self, source_env: *const ModuleEnv, origin_module:
         }
     }
 
-    // Fallback: compare origin name against resolved module names via imports
-    const origin_name = source_env.getIdent(origin_module);
+    // Fallback: look up resolved modules and compare their qualified_module_ident
+    // by translating into source_env's ident store (the ident already exists from copy_import).
     for (0..import_count) |i| {
         const import_idx: CIR.Import.Idx = @enumFromInt(i);
         if (source_env.imports.getResolvedModule(import_idx)) |mod_idx| {
             if (mod_idx < self.all_module_envs.len) {
                 const import_env = self.all_module_envs[mod_idx];
-                if (std.mem.eql(u8, import_env.module_name, origin_name)) {
-                    return @intCast(mod_idx);
+                if (!import_env.qualified_module_ident.isNone()) {
+                    const qname = import_env.getIdent(import_env.qualified_module_ident);
+                    // This ident already exists in source_env's store (copy_import translated it)
+                    const translated = @constCast(source_env).insertIdent(
+                        base.Ident.for_text(qname),
+                    ) catch continue;
+                    if (translated == origin_module) return @intCast(mod_idx);
                 }
             }
         }

@@ -5535,7 +5535,7 @@ fn checkNominalTypeUsage(
 
         // If this nominal type is opaque and we're not in the defining module
         // then report an error
-        if (!nominal_type.canLiftInner(self.cir.module_name_idx)) {
+        if (!nominal_type.canLiftInner(self.cir.qualified_module_ident)) {
             _ = try self.problems.appendProblem(self.cir.gpa, .{ .cannot_access_opaque_nominal = .{
                 .var_ = target_var,
                 .nominal_type_name = nominal_type.ident.ident_idx,
@@ -5872,11 +5872,15 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Erro
                     }
                 } else {
                     // For types from other modules (not this module, not builtin), find the
-                    // module environment from imported_modules by matching the module name.
-                    // We compare string values because origin_module is an ident from where the
-                    // type was defined, while module_name is the canonical name from imported_env.
+                    // module environment from imported_modules by matching the qualified module name.
+                    // We use qualified_module_ident (package-qualified) for comparison since origin_module
+                    // is also package-qualified (e.g., "pf.Builder" rather than just "Builder").
                     for (self.imported_modules) |imported_env| {
-                        const imported_module_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text(imported_env.module_name));
+                        const imported_name = if (!imported_env.qualified_module_ident.isNone())
+                            imported_env.getIdent(imported_env.qualified_module_ident)
+                        else
+                            imported_env.module_name;
+                        const imported_module_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text(imported_name));
                         if (imported_module_ident == original_module_ident) {
                             break :blk imported_env;
                         }
