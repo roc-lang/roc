@@ -155,7 +155,7 @@ pub const WasmEvaluator = struct {
         defer mono_store.deinit();
 
         // Find module index
-        var module_idx: u16 = 0;
+        var module_idx: u32 = 0;
         for (all_module_envs, 0..) |env, i| {
             if (env == module_env) {
                 module_idx = @intCast(i);

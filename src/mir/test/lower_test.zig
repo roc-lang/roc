@@ -43,7 +43,7 @@ test "MIR Store: add and get pattern" {
     defer store.deinit(test_allocator);
 
     const monotype = try store.monotype_store.addMonotype(test_allocator, .{ .prim = .bool });
-    const symbol = MIR.MonoSymbol{ .module_idx = 0, .ident_idx = Ident.Idx.NONE };
+    const symbol = MIR.Symbol{ .module_idx = 0, .ident_idx = Ident.Idx.NONE };
     const pat_id = try store.addPattern(test_allocator, .{ .bind = symbol }, monotype);
 
     const retrieved = store.getPattern(pat_id);
@@ -130,7 +130,7 @@ test "MIR Store: statements" {
     const expr = try store.addExpr(test_allocator, .{ .int = .{
         .value = .{ .bytes = @bitCast(@as(i128, 42)), .kind = .i128 },
     } }, monotype, Region.zero());
-    const symbol = MIR.MonoSymbol{ .module_idx = 0, .ident_idx = Ident.Idx.NONE };
+    const symbol = MIR.Symbol{ .module_idx = 0, .ident_idx = Ident.Idx.NONE };
     const pat = try store.addPattern(test_allocator, .{ .bind = symbol }, monotype);
 
     const stmt_span = try store.addStmts(test_allocator, &.{.{ .pattern = pat, .expr = expr }});
@@ -162,7 +162,7 @@ test "MIR Store: symbol def registration" {
     const expr_id = try store.addExpr(test_allocator, .{ .int = .{
         .value = .{ .bytes = @bitCast(@as(i128, 42)), .kind = .i128 },
     } }, monotype, Region.zero());
-    const symbol = MIR.MonoSymbol{ .module_idx = 0, .ident_idx = Ident.Idx.NONE };
+    const symbol = MIR.Symbol{ .module_idx = 0, .ident_idx = Ident.Idx.NONE };
 
     try store.registerSymbolDef(test_allocator, symbol, expr_id);
     const result = store.getSymbolDef(symbol);
@@ -357,22 +357,22 @@ test "Monotype Store: all primitive types" {
     }
 }
 
-// --- MonoSymbol tests ---
+// --- Symbol tests ---
 
-test "MonoSymbol: equality and hashing" {
-    const s1 = MIR.MonoSymbol{ .module_idx = 0, .ident_idx = Ident.Idx.NONE };
-    const s2 = MIR.MonoSymbol{ .module_idx = 0, .ident_idx = Ident.Idx.NONE };
-    const s3 = MIR.MonoSymbol{ .module_idx = 1, .ident_idx = Ident.Idx.NONE };
+test "Symbol: equality and hashing" {
+    const s1 = MIR.Symbol{ .module_idx = 0, .ident_idx = Ident.Idx.NONE };
+    const s2 = MIR.Symbol{ .module_idx = 0, .ident_idx = Ident.Idx.NONE };
+    const s3 = MIR.Symbol{ .module_idx = 1, .ident_idx = Ident.Idx.NONE };
 
     try testing.expect(s1.eql(s2));
     try testing.expect(!s1.eql(s3));
 }
 
-test "MonoSymbol: none sentinel" {
-    const none = MIR.MonoSymbol.none;
+test "Symbol: none sentinel" {
+    const none = MIR.Symbol.none;
     try testing.expect(none.isNone());
 
-    const some = MIR.MonoSymbol{ .module_idx = 0, .ident_idx = Ident.Idx.NONE };
+    const some = MIR.Symbol{ .module_idx = 0, .ident_idx = Ident.Idx.NONE };
     try testing.expect(!some.isNone());
 }
 
@@ -402,5 +402,5 @@ test "Lower: init and deinit" {
     defer lower.deinit();
 
     // Verify initial state
-    try testing.expectEqual(@as(u16, 0), lower.current_module_idx);
+    try testing.expectEqual(@as(u32, 0), lower.current_module_idx);
 }

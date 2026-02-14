@@ -8,7 +8,7 @@
 //! 5. Generating native machine code (x86_64/aarch64)
 //! 6. Executing the generated code
 //!
-//! Code generation uses Mono IR with globally unique MonoSymbol references,
+//! Code generation uses Mono IR with globally unique Symbol references,
 //! eliminating cross-module index collisions.
 
 const std = @import("std");
@@ -666,7 +666,7 @@ pub const DevEvaluator = struct {
         defer mono_store.deinit();
 
         // Find the module index for this module
-        var module_idx: u16 = 0;
+        var module_idx: u32 = 0;
         for (all_module_envs, 0..) |env, i| {
             if (env == module_env) {
                 module_idx = @intCast(i);

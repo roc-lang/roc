@@ -9,7 +9,7 @@
 //! - `e_type_var_dispatch` → `call` with resolved target
 //! - `e_nominal` → backing expression (strip nominal wrapper)
 //! - `e_closure` → `lambda` with captures
-//! - All lookups unified to `MonoSymbol` (module_idx + ident_idx)
+//! - All lookups unified to `Symbol` (module_idx + ident_idx)
 
 const std = @import("std");
 const base = @import("base");
@@ -46,21 +46,21 @@ types_store: *const types.Store,
 builtin_indices: CIR.BuiltinIndices,
 
 /// Current module being lowered
-current_module_idx: u16,
+current_module_idx: u32,
 
-/// Map from (module_idx << 32 | CIR.Pattern.Idx) → MIR.MonoSymbol
+/// Map from (module_idx << 32 | CIR.Pattern.Idx) → MIR.Symbol
 /// Used to resolve CIR local lookups to global symbols.
-pattern_symbols: std.AutoHashMap(u64, MIR.MonoSymbol),
+pattern_symbols: std.AutoHashMap(u64, MIR.Symbol),
 
 /// Cache for type var → monotype conversion (shared across all fromTypeVar calls)
 type_var_seen: std.AutoHashMap(types.Var, Monotype.Idx),
 
 /// Cache for already-lowered symbol definitions (avoids re-lowering).
-/// Key is @bitCast(MIR.MonoSymbol) → u48.
-lowered_symbols: std.AutoHashMap(u48, MIR.ExprId),
+/// Key is @bitCast(MIR.Symbol) → u64.
+lowered_symbols: std.AutoHashMap(u64, MIR.ExprId),
 
 /// Tracks symbols currently being lowered (recursion guard).
-in_progress_defs: std.AutoHashMap(u48, void),
+in_progress_defs: std.AutoHashMap(u64, void),
 
 // --- Init/Deinit ---
 
@@ -70,7 +70,7 @@ pub fn init(
     all_module_envs: []const *ModuleEnv,
     types_store: *const types.Store,
     builtin_indices: CIR.BuiltinIndices,
-    current_module_idx: u16,
+    current_module_idx: u32,
 ) Self {
     return .{
         .allocator = allocator,
@@ -79,10 +79,10 @@ pub fn init(
         .types_store = types_store,
         .builtin_indices = builtin_indices,
         .current_module_idx = current_module_idx,
-        .pattern_symbols = std.AutoHashMap(u64, MIR.MonoSymbol).init(allocator),
+        .pattern_symbols = std.AutoHashMap(u64, MIR.Symbol).init(allocator),
         .type_var_seen = std.AutoHashMap(types.Var, Monotype.Idx).init(allocator),
-        .lowered_symbols = std.AutoHashMap(u48, MIR.ExprId).init(allocator),
-        .in_progress_defs = std.AutoHashMap(u48, void).init(allocator),
+        .lowered_symbols = std.AutoHashMap(u64, MIR.ExprId).init(allocator),
+        .in_progress_defs = std.AutoHashMap(u64, void).init(allocator),
     };
 }
 
@@ -105,9 +105,7 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
     const resolved = self.types_store.resolveVar(type_var);
     if (resolved.desc.content == .err) {
         const monotype = try self.store.monotype_store.addMonotype(self.allocator, .unit);
-        return try self.store.addExpr(self.allocator, .{ .runtime_error = .{
-            .diagnostic = @enumFromInt(std.math.maxInt(u32)),
-        } }, monotype, region);
+        return try self.store.addExpr(self.allocator, .{ .runtime_err_type = {} }, monotype, region);
     }
 
     const expr = module_env.store.getExpr(expr_idx);
@@ -197,16 +195,17 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
         },
         .e_lookup_external => |ext| {
             const resolved_module = module_env.imports.getResolvedModule(ext.module_idx);
-            const target_module_idx: u16 = if (resolved_module) |m| @intCast(m) else self.current_module_idx;
-            const symbol = MIR.MonoSymbol{
+            const target_module_idx: u32 = if (resolved_module) |m| @intCast(m) else self.current_module_idx;
+            const symbol = MIR.Symbol{
                 .module_idx = target_module_idx,
                 .ident_idx = ext.ident_idx,
             };
             return try self.store.addExpr(self.allocator, .{ .lookup = symbol }, monotype, region);
         },
         .e_lookup_pending, .e_lookup_required => {
-            // Should be resolved before MIR lowering
-            return try self.store.addExpr(self.allocator, .{ .runtime_error = .{ .diagnostic = @enumFromInt(std.math.maxInt(u32)) } }, monotype, region);
+            // These must be resolved to e_lookup_external before MIR lowering;
+            // reaching here means a compiler bug in an earlier phase.
+            unreachable;
         },
 
         // --- Control flow ---
@@ -277,7 +276,7 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
         },
 
         // --- Error/Debug ---
-        .e_runtime_error => |re| try self.store.addExpr(self.allocator, .{ .runtime_error = .{ .diagnostic = re.diagnostic } }, monotype, region),
+        .e_runtime_error => |re| try self.store.addExpr(self.allocator, .{ .runtime_err_can = .{ .diagnostic = re.diagnostic } }, monotype, region),
         .e_crash => |crash| try self.store.addExpr(self.allocator, .{ .crash = crash.msg }, monotype, region),
         .e_dbg => |dbg_expr| {
             const inner = try self.lowerExpr(dbg_expr.expr);
@@ -288,12 +287,10 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
             return try self.store.addExpr(self.allocator, .{ .expect = .{ .body = body } }, monotype, region);
         },
         .e_ellipsis => {
-            return try self.store.addExpr(self.allocator, .{ .crash = @enumFromInt(std.math.maxInt(u32)) }, monotype, region);
+            return try self.store.addExpr(self.allocator, .{ .runtime_err_ellipsis = {} }, monotype, region);
         },
         .e_anno_only => {
-            return try self.store.addExpr(self.allocator, .{ .runtime_error = .{
-                .diagnostic = @enumFromInt(std.math.maxInt(u32)),
-            } }, monotype, region);
+            return try self.store.addExpr(self.allocator, .{ .runtime_err_anno_only = {} }, monotype, region);
         },
         .e_return => |ret| {
             const inner = try self.lowerExpr(ret.expr);
@@ -307,7 +304,7 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
 // --- Helpers ---
 
 /// Resolve a CIR pattern to a global MIR symbol.
-fn patternToSymbol(self: *Self, pattern_idx: CIR.Pattern.Idx) Allocator.Error!MIR.MonoSymbol {
+fn patternToSymbol(self: *Self, pattern_idx: CIR.Pattern.Idx) Allocator.Error!MIR.Symbol {
     const key = (@as(u64, self.current_module_idx) << 32) | @intFromEnum(pattern_idx);
 
     if (self.pattern_symbols.get(key)) |existing| {
@@ -337,7 +334,7 @@ fn patternToSymbol(self: *Self, pattern_idx: CIR.Pattern.Idx) Allocator.Error!MI
         => Ident.Idx.NONE,
     };
 
-    const symbol = MIR.MonoSymbol{
+    const symbol = MIR.Symbol{
         .module_idx = self.current_module_idx,
         .ident_idx = ident_idx,
     };
@@ -404,7 +401,7 @@ fn lowerPattern(self: *Self, module_env: *const ModuleEnv, pattern_idx: CIR.Patt
 
     return switch (pattern) {
         .assign => |a| {
-            const symbol = MIR.MonoSymbol{
+            const symbol = MIR.Symbol{
                 .module_idx = self.current_module_idx,
                 .ident_idx = a.ident,
             };
@@ -416,7 +413,7 @@ fn lowerPattern(self: *Self, module_env: *const ModuleEnv, pattern_idx: CIR.Patt
         .underscore => try self.store.addPattern(self.allocator, .wildcard, monotype),
         .as => |a| {
             const inner = try self.lowerPattern(module_env, a.pattern);
-            const symbol = MIR.MonoSymbol{
+            const symbol = MIR.Symbol{
                 .module_idx = self.current_module_idx,
                 .ident_idx = a.ident,
             };
@@ -526,8 +523,8 @@ fn patternSpanToExprSpan(self: *Self, pat_span: MIR.PatternSpan) Allocator.Error
             .as_pattern,
             .runtime_error,
             => {
-                // For non-bind patterns, create a placeholder
-                const expr_id = try self.store.addExpr(self.allocator, .{ .runtime_error = .{
+                // TODO: non-bind patterns need proper handling, not placeholders
+                const expr_id = try self.store.addExpr(self.allocator, .{ .runtime_err_can = .{
                     .diagnostic = @enumFromInt(std.math.maxInt(u32)),
                 } }, monotype, Region.zero());
                 try exprs.append(self.allocator, expr_id);
@@ -759,7 +756,7 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
             },
             .s_runtime_error => |s_re| {
                 const unit_monotype = try self.store.monotype_store.addMonotype(self.allocator, .unit);
-                const expr = try self.store.addExpr(self.allocator, .{ .runtime_error = .{
+                const expr = try self.store.addExpr(self.allocator, .{ .runtime_err_can = .{
                     .diagnostic = s_re.diagnostic,
                 } }, unit_monotype, Region.zero());
                 const wildcard = try self.store.addPattern(self.allocator, .wildcard, unit_monotype);
@@ -876,7 +873,7 @@ fn lowerBinop(self: *Self, binop: CIR.Expr.Binop, monotype: Monotype.Idx, region
                 module_env,
                 lhs_type_var,
                 method_ident,
-            ) orelse MIR.MonoSymbol{
+            ) orelse MIR.Symbol{
                 .module_idx = self.current_module_idx,
                 .ident_idx = method_ident,
             };
@@ -903,7 +900,7 @@ fn lowerUnaryMinus(self: *Self, um: CIR.Expr.UnaryMinus, monotype: Monotype.Idx,
     const module_env = self.all_module_envs[self.current_module_idx];
     const inner = try self.lowerExpr(um.expr);
 
-    const method_symbol = MIR.MonoSymbol{
+    const method_symbol = MIR.Symbol{
         .module_idx = self.current_module_idx,
         .ident_idx = module_env.idents.negate,
     };
@@ -966,7 +963,7 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, da: anytype, monoty
             module_env,
             receiver_type_var,
             da.field_name,
-        ) orelse MIR.MonoSymbol{
+        ) orelse MIR.Symbol{
             .module_idx = self.current_module_idx,
             .ident_idx = da.field_name,
         };
@@ -1036,7 +1033,7 @@ fn lowerTypeVarDispatch(self: *Self, module_env: *const ModuleEnv, tvd: anytype,
         module_env,
         type_var,
         tvd.method_name,
-    ) orelse MIR.MonoSymbol{
+    ) orelse MIR.Symbol{
         .module_idx = self.current_module_idx,
         .ident_idx = tvd.method_name,
     };
@@ -1051,12 +1048,10 @@ fn lowerTypeVarDispatch(self: *Self, module_env: *const ModuleEnv, tvd: anytype,
 }
 
 /// Find the module index for a given origin module ident.
-fn findModuleForOrigin(self: *Self, source_env: *const ModuleEnv, origin_module: Ident.Idx) ?u16 {
+fn findModuleForOrigin(self: *Self, source_env: *const ModuleEnv, origin_module: Ident.Idx) ?u32 {
     // Check if origin is source_env itself
     if (origin_module == source_env.module_name_idx) {
-        for (self.all_module_envs, 0..) |env, idx| {
-            if (env.module_name_idx == source_env.module_name_idx) return @intCast(idx);
-        }
+        return self.current_module_idx;
     }
 
     // Use the import system: iterate source_env's imports
@@ -1096,7 +1091,7 @@ fn resolveMethodForTypeVar(
     source_env: *const ModuleEnv,
     type_var: types.Var,
     method_name: Ident.Idx,
-) Allocator.Error!?MIR.MonoSymbol {
+) Allocator.Error!?MIR.Symbol {
     var resolved = self.types_store.resolveVar(type_var);
 
     // Follow aliases to get to the underlying type
@@ -1142,15 +1137,15 @@ fn resolveMethodForTypeVar(
         method_name,
     ) orelse return null;
 
-    return MIR.MonoSymbol{
+    return MIR.Symbol{
         .module_idx = @intCast(origin_module_idx),
         .ident_idx = qualified_method,
     };
 }
 
 /// Lower an external definition by symbol, caching the result.
-pub fn lowerExternalDef(self: *Self, symbol: MIR.MonoSymbol, cir_expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId {
-    const symbol_key: u48 = @bitCast(symbol);
+pub fn lowerExternalDef(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId {
+    const symbol_key: u64 = @bitCast(symbol);
 
     // Check cache
     if (self.lowered_symbols.get(symbol_key)) |cached| {

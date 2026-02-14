@@ -15,7 +15,7 @@ pub const Expr = MIR.Expr;
 /// Re-export of MIR pattern type
 pub const Pattern = MIR.Pattern;
 /// Globally unique symbol identifier (module + ident)
-pub const MonoSymbol = MIR.MonoSymbol;
+pub const Symbol = MIR.Symbol;
 /// Index into the MIR expression store
 pub const ExprId = MIR.ExprId;
 /// Index into the MIR pattern store

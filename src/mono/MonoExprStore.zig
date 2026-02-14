@@ -34,7 +34,7 @@ const MonoIfBranch = ir.MonoIfBranch;
 const MonoIfBranchSpan = ir.MonoIfBranchSpan;
 const MonoStmt = ir.MonoStmt;
 const MonoStmtSpan = ir.MonoStmtSpan;
-const MonoSymbol = ir.MonoSymbol;
+const Symbol = ir.Symbol;
 
 // Control flow statement types (for tail recursion)
 const CFStmt = ir.CFStmt;
@@ -88,7 +88,7 @@ procs: std.ArrayList(MonoProc),
 
 /// Map from global symbol to its definition expression
 /// Used for looking up top-level definitions
-symbol_defs: std.AutoHashMap(u48, MonoExprId),
+symbol_defs: std.AutoHashMap(u64, MonoExprId),
 
 /// String literal store for strings generated during lowering (e.g., by str_inspekt)
 /// This allows us to add new string literals without needing mutable module envs.
@@ -113,7 +113,7 @@ pub fn init(allocator: Allocator) Self {
         .cf_stmts = std.ArrayList(CFStmt).empty,
         .cf_switch_branches = std.ArrayList(CFSwitchBranch).empty,
         .procs = std.ArrayList(MonoProc).empty,
-        .symbol_defs = std.AutoHashMap(u48, MonoExprId).init(allocator),
+        .symbol_defs = std.AutoHashMap(u64, MonoExprId).init(allocator),
         .strings = base.StringLiteral.Store{},
         .allocator = allocator,
     };
@@ -366,12 +366,12 @@ pub fn getLambdaSetMembers(self: *const Self, span: LambdaSetMemberSpan) []const
 }
 
 /// Register a top-level symbol definition
-pub fn registerSymbolDef(self: *Self, symbol: MonoSymbol, expr_id: MonoExprId) Allocator.Error!void {
+pub fn registerSymbolDef(self: *Self, symbol: Symbol, expr_id: MonoExprId) Allocator.Error!void {
     try self.symbol_defs.put(@bitCast(symbol), expr_id);
 }
 
 /// Look up a top-level symbol definition
-pub fn getSymbolDef(self: *const Self, symbol: MonoSymbol) ?MonoExprId {
+pub fn getSymbolDef(self: *const Self, symbol: Symbol) ?MonoExprId {
     return self.symbol_defs.get(@bitCast(symbol));
 }
 
@@ -531,7 +531,7 @@ test "pattern storage" {
 
     const region = Region.zero();
     const ident = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 5 };
-    const symbol = MonoSymbol{ .module_idx = 0, .ident_idx = ident };
+    const symbol = Symbol{ .module_idx = 0, .ident_idx = ident };
 
     const pat_id = try store.addPattern(.{ .bind = .{
         .symbol = symbol,
@@ -549,7 +549,7 @@ test "symbol def lookup" {
 
     const region = Region.zero();
     const ident = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 42 };
-    const symbol = MonoSymbol{ .module_idx = 1, .ident_idx = ident };
+    const symbol = Symbol{ .module_idx = 1, .ident_idx = ident };
 
     const expr_id = try store.addExpr(.{ .i64_literal = 100 }, region);
     try store.registerSymbolDef(symbol, expr_id);
@@ -560,6 +560,6 @@ test "symbol def lookup" {
 
     // Non-existent symbol
     const ident2 = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
-    const other = MonoSymbol{ .module_idx = 2, .ident_idx = ident2 };
+    const other = Symbol{ .module_idx = 2, .ident_idx = ident2 };
     try std.testing.expect(store.getSymbolDef(other) == null);
 }

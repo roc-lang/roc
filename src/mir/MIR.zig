@@ -29,26 +29,32 @@ const CIR = @import("can").CIR;
 // --- ID types ---
 
 /// Global identifier — combines module index with local identifier.
-/// References are globally unique, not module-local.
-pub const MonoSymbol = packed struct(u48) {
-    module_idx: u16,
+/// References are globally unique (not module-local), enabling
+/// cross-module code generation without index collisions.
+pub const Symbol = packed struct(u64) {
+    module_idx: u32,
     ident_idx: Ident.Idx,
 
-    pub fn eql(a: MonoSymbol, b: MonoSymbol) bool {
-        return @as(u48, @bitCast(a)) == @as(u48, @bitCast(b));
+    comptime {
+        std.debug.assert(@sizeOf(Symbol) == @sizeOf(u64));
+        std.debug.assert(@alignOf(Symbol) == @alignOf(u64));
     }
 
-    pub fn hash(self: MonoSymbol) u64 {
-        return @as(u64, @bitCast(self));
+    pub fn eql(a: Symbol, b: Symbol) bool {
+        return @as(u64, @bitCast(a)) == @as(u64, @bitCast(b));
     }
 
-    pub const none: MonoSymbol = .{
-        .module_idx = std.math.maxInt(u16),
+    pub fn hash(self: Symbol) u64 {
+        return @bitCast(self);
+    }
+
+    pub const none: Symbol = .{
+        .module_idx = std.math.maxInt(u32),
         .ident_idx = Ident.Idx.NONE,
     };
 
-    pub fn isNone(self: MonoSymbol) bool {
-        return self.module_idx == std.math.maxInt(u16);
+    pub fn isNone(self: Symbol) bool {
+        return self.module_idx == std.math.maxInt(u32);
     }
 };
 
@@ -200,7 +206,7 @@ pub const BranchPattern = struct {
 
 /// A captured variable in a closure.
 pub const Capture = struct {
-    symbol: MonoSymbol,
+    symbol: Symbol,
 };
 
 // --- Expression ---
@@ -253,7 +259,7 @@ pub const Expr = union(enum) {
     // --- Lookup ---
 
     /// Variable reference (globally unique)
-    lookup: MonoSymbol,
+    lookup: Symbol,
 
     // --- Control flow ---
 
@@ -320,10 +326,19 @@ pub const Expr = union(enum) {
 
     // --- Error/Debug ---
 
-    /// Runtime error
-    runtime_error: struct {
+    /// Runtime error from a CIR diagnostic (e.g. e_runtime_error, s_runtime_error)
+    runtime_err_can: struct {
         diagnostic: CIR.Diagnostic.Idx,
     },
+
+    /// Runtime error because the type checker resolved this expression's type to .err
+    runtime_err_type: void,
+
+    /// Runtime error from an ellipsis expression (...)
+    runtime_err_ellipsis: void,
+
+    /// Runtime error from an annotation-only expression (no body)
+    runtime_err_anno_only: void,
 
     /// Crash with message
     crash: StringLiteral.Idx,
@@ -367,7 +382,7 @@ pub const Expr = union(enum) {
 /// A monomorphic pattern for use in match expressions.
 pub const Pattern = union(enum) {
     /// Bind to a symbol
-    bind: MonoSymbol,
+    bind: Symbol,
 
     /// Wildcard (_)
     wildcard: void,
@@ -416,7 +431,7 @@ pub const Pattern = union(enum) {
     /// As-pattern: match inner and also bind
     as_pattern: struct {
         pattern: PatternId,
-        symbol: MonoSymbol,
+        symbol: Symbol,
     },
 
     /// Runtime error pattern
@@ -457,8 +472,8 @@ pub const Store = struct {
     /// The monotype store (owns all monotypes)
     monotype_store: Monotype.Store,
 
-    /// Map from global symbol key (u48 bitcast) to its definition ExprId
-    symbol_defs: std.AutoHashMapUnmanaged(u48, ExprId),
+    /// Map from global symbol key (u64 bitcast) to its definition ExprId
+    symbol_defs: std.AutoHashMapUnmanaged(u64, ExprId),
 
     pub fn init() Store {
         return .{
@@ -644,12 +659,12 @@ pub const Store = struct {
     }
 
     /// Register a symbol definition.
-    pub fn registerSymbolDef(self: *Store, allocator: Allocator, symbol: MonoSymbol, expr_id: ExprId) !void {
+    pub fn registerSymbolDef(self: *Store, allocator: Allocator, symbol: Symbol, expr_id: ExprId) !void {
         try self.symbol_defs.put(allocator, @bitCast(symbol), expr_id);
     }
 
     /// Look up a symbol definition.
-    pub fn getSymbolDef(self: *const Store, symbol: MonoSymbol) ?ExprId {
+    pub fn getSymbolDef(self: *const Store, symbol: Symbol) ?ExprId {
         return self.symbol_defs.get(@bitCast(symbol));
     }
 };

@@ -335,7 +335,7 @@ pub const ModuleType = enum {
             .lsp => &.{ .compile, .reporting, .build_options, .fs, .base, .parse, .can, .types, .fmt, .roc_target },
             .backend => &.{ .base, .layout, .builtins, .can, .mono, .roc_target },
             .mir => &.{ .base, .can, .types, .builtins },
-            .mono => &.{ .base, .layout, .can, .types },
+            .mono => &.{ .base, .layout, .can, .types, .mir },
             .roc_target => &.{.base},
             .sljmp => &.{},
         };
