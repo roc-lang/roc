@@ -337,6 +337,29 @@ pub const Expr = union(enum) {
     expect: struct {
         body: ExprId,
     },
+
+    // --- Control flow (imperative) ---
+
+    /// For loop over a list
+    for_loop: struct {
+        list: ExprId,
+        elem_pattern: PatternId,
+        body: ExprId,
+    },
+
+    /// While loop
+    while_loop: struct {
+        cond: ExprId,
+        body: ExprId,
+    },
+
+    /// Return expression
+    return_expr: struct {
+        expr: ExprId,
+    },
+
+    /// Break expression
+    break_expr: void,
 };
 
 // --- Pattern ---

@@ -13,6 +13,7 @@
 
 const std = @import("std");
 const base = @import("base");
+const builtins = @import("builtins");
 const can = @import("can");
 const types = @import("types");
 
@@ -123,24 +124,39 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
             return try self.store.addExpr(self.allocator, .{ .dec = roc_dec }, monotype, region);
         },
         .e_typed_int => |ti| try self.store.addExpr(self.allocator, .{ .int = .{ .value = ti.value } }, monotype, region),
-        .e_typed_frac => |tf| try self.store.addExpr(self.allocator, .{ .int = .{ .value = tf.value } }, monotype, region),
+        .e_typed_frac => |tf| {
+            const roc_dec = builtins.dec.RocDec{ .num = tf.value.toI128() };
+            if (tf.type_name == module_env.idents.f64) {
+                return try self.store.addExpr(self.allocator, .{ .frac_f64 = roc_dec.toF64() }, monotype, region);
+            } else if (tf.type_name == module_env.idents.f32) {
+                return try self.store.addExpr(self.allocator, .{ .frac_f32 = @floatCast(roc_dec.toF64()) }, monotype, region);
+            } else {
+                // Dec or fallback
+                return try self.store.addExpr(self.allocator, .{ .dec = roc_dec }, monotype, region);
+            }
+        },
 
         // --- Strings ---
         .e_str_segment => |seg| try self.store.addExpr(self.allocator, .{ .str = seg.literal }, monotype, region),
         .e_str => |str_expr| {
-            // Multi-segment string: if single segment, unwrap. Otherwise, lower each segment.
             const span = module_env.store.sliceExpr(str_expr.span);
+            if (span.len == 0) {
+                return try self.store.addExpr(self.allocator, .{ .str = @enumFromInt(std.math.maxInt(u32)) }, monotype, region);
+            }
             if (span.len == 1) {
                 return try self.lowerExpr(span[0]);
             }
-            // For multi-segment strings, lower each segment as its own expr
-            // and produce a list of them. The downstream pass will handle concatenation.
-            // For now, just lower the first segment as a simplification.
-            if (span.len > 0) {
-                return try self.lowerExpr(span[0]);
+            // Multi-segment string: left fold with str_concat
+            var acc = try self.lowerExpr(span[0]);
+            for (span[1..]) |seg_idx| {
+                const seg = try self.lowerExpr(seg_idx);
+                const args = try self.store.addExprSpan(self.allocator, &.{ acc, seg });
+                acc = try self.store.addExpr(self.allocator, .{ .low_level = .{
+                    .op = .str_concat,
+                    .args = args,
+                } }, monotype, region);
             }
-            // Empty string
-            return try self.store.addExpr(self.allocator, .{ .str = @enumFromInt(std.math.maxInt(u32)) }, monotype, region);
+            return acc;
         },
 
         // --- Collections ---
@@ -176,7 +192,7 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
 
         // --- Lookups ---
         .e_lookup_local => |lookup| {
-            const symbol = self.patternToSymbol(lookup.pattern_idx);
+            const symbol = try self.patternToSymbol(lookup.pattern_idx);
             return try self.store.addExpr(self.allocator, .{ .lookup = symbol }, monotype, region);
         },
         .e_lookup_external => |ext| {
@@ -229,28 +245,16 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
             return try self.lowerTypeVarDispatch(module_env, tvd, monotype, region);
         },
 
-        // --- For (desugared to call) ---
+        // --- For loop ---
         .e_for => |for_expr| {
             const list_expr = try self.lowerExpr(for_expr.expr);
             const pat = try self.lowerPattern(module_env, for_expr.patt);
             const body = try self.lowerExpr(for_expr.body);
-
-            // Create a lambda |pat| body for the iteration callback
-            const params = try self.store.addPatternSpan(self.allocator, &.{pat});
-            const lambda_monotype = try self.store.monotype_store.addMonotype(self.allocator, .unit);
-            const lambda_expr = try self.store.addExpr(self.allocator, .{ .lambda = .{
-                .params = params,
+            return try self.store.addExpr(self.allocator, .{ .for_loop = .{
+                .list = list_expr,
+                .elem_pattern = pat,
                 .body = body,
-                .captures = MIR.CaptureSpan.empty(),
-            } }, lambda_monotype, region);
-
-            const args = try self.store.addExprSpan(self.allocator, &.{ list_expr, lambda_expr });
-            return try self.store.addExpr(self.allocator, .{
-                .call = .{
-                    .func = lambda_expr, // placeholder — will be resolved to List.for_each
-                    .args = args,
-                },
-            }, monotype, region);
+            } }, monotype, region);
         },
 
         // --- Special ---
@@ -291,14 +295,19 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
                 .diagnostic = @enumFromInt(std.math.maxInt(u32)),
             } }, monotype, region);
         },
-        .e_return => |ret| try self.lowerExpr(ret.expr),
+        .e_return => |ret| {
+            const inner = try self.lowerExpr(ret.expr);
+            return try self.store.addExpr(self.allocator, .{ .return_expr = .{
+                .expr = inner,
+            } }, monotype, region);
+        },
     };
 }
 
 // --- Helpers ---
 
 /// Resolve a CIR pattern to a global MIR symbol.
-fn patternToSymbol(self: *Self, pattern_idx: CIR.Pattern.Idx) MIR.MonoSymbol {
+fn patternToSymbol(self: *Self, pattern_idx: CIR.Pattern.Idx) Allocator.Error!MIR.MonoSymbol {
     const key = (@as(u64, self.current_module_idx) << 32) | @intFromEnum(pattern_idx);
 
     if (self.pattern_symbols.get(key)) |existing| {
@@ -311,7 +320,21 @@ fn patternToSymbol(self: *Self, pattern_idx: CIR.Pattern.Idx) MIR.MonoSymbol {
     const ident_idx: Ident.Idx = switch (pattern) {
         .assign => |a| a.ident,
         .as => |a| a.ident,
-        else => Ident.Idx.NONE,
+        .applied_tag,
+        .nominal,
+        .nominal_external,
+        .record_destructure,
+        .list,
+        .tuple,
+        .num_literal,
+        .small_dec_literal,
+        .dec_literal,
+        .frac_f32_literal,
+        .frac_f64_literal,
+        .str_literal,
+        .underscore,
+        .runtime_error,
+        => Ident.Idx.NONE,
     };
 
     const symbol = MIR.MonoSymbol{
@@ -319,7 +342,7 @@ fn patternToSymbol(self: *Self, pattern_idx: CIR.Pattern.Idx) MIR.MonoSymbol {
         .ident_idx = ident_idx,
     };
 
-    self.pattern_symbols.put(key, symbol) catch {};
+    try self.pattern_symbols.put(key, symbol);
     return symbol;
 }
 
@@ -490,7 +513,19 @@ fn patternSpanToExprSpan(self: *Self, pat_span: MIR.PatternSpan) Allocator.Error
                 const expr_id = try self.store.addExpr(self.allocator, .{ .lookup = symbol }, monotype, Region.zero());
                 try exprs.append(self.allocator, expr_id);
             },
-            else => {
+            .wildcard,
+            .tag,
+            .int_literal,
+            .str_literal,
+            .dec_literal,
+            .frac_f32_literal,
+            .frac_f64_literal,
+            .record_destructure,
+            .tuple_destructure,
+            .list_destructure,
+            .as_pattern,
+            .runtime_error,
+            => {
                 // For non-bind patterns, create a placeholder
                 const expr_id = try self.store.addExpr(self.allocator, .{ .runtime_error = .{
                     .diagnostic = @enumFromInt(std.math.maxInt(u32)),
@@ -610,7 +645,7 @@ fn lowerClosure(self: *Self, module_env: *const ModuleEnv, closure: CIR.Expr.Clo
 
     for (cir_capture_indices) |cap_idx| {
         const cap = module_env.store.getCapture(cap_idx);
-        const symbol = self.patternToSymbol(cap.pattern_idx);
+        const symbol = try self.patternToSymbol(cap.pattern_idx);
         try mir_captures.append(self.allocator, .{ .symbol = symbol });
     }
 
@@ -677,9 +712,61 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
                 const wildcard = try self.store.addPattern(self.allocator, .wildcard, expr_type);
                 try mir_stmts.append(self.allocator, .{ .pattern = wildcard, .expr = expr });
             },
-            else => {
-                // Skip other statement types (imports, type annotations, etc.)
+            .s_crash => |s_crash| {
+                const unit_monotype = try self.store.monotype_store.addMonotype(self.allocator, .unit);
+                const expr = try self.store.addExpr(self.allocator, .{ .crash = s_crash.msg }, unit_monotype, Region.zero());
+                const wildcard = try self.store.addPattern(self.allocator, .wildcard, unit_monotype);
+                try mir_stmts.append(self.allocator, .{ .pattern = wildcard, .expr = expr });
             },
+            .s_for => |s_for| {
+                const list_expr = try self.lowerExpr(s_for.expr);
+                const pat = try self.lowerPattern(module_env, s_for.patt);
+                const body = try self.lowerExpr(s_for.body);
+                const unit_monotype = try self.store.monotype_store.addMonotype(self.allocator, .unit);
+                const expr = try self.store.addExpr(self.allocator, .{ .for_loop = .{
+                    .list = list_expr,
+                    .elem_pattern = pat,
+                    .body = body,
+                } }, unit_monotype, Region.zero());
+                const wildcard = try self.store.addPattern(self.allocator, .wildcard, unit_monotype);
+                try mir_stmts.append(self.allocator, .{ .pattern = wildcard, .expr = expr });
+            },
+            .s_while => |s_while| {
+                const cond = try self.lowerExpr(s_while.cond);
+                const body = try self.lowerExpr(s_while.body);
+                const unit_monotype = try self.store.monotype_store.addMonotype(self.allocator, .unit);
+                const expr = try self.store.addExpr(self.allocator, .{ .while_loop = .{
+                    .cond = cond,
+                    .body = body,
+                } }, unit_monotype, Region.zero());
+                const wildcard = try self.store.addPattern(self.allocator, .wildcard, unit_monotype);
+                try mir_stmts.append(self.allocator, .{ .pattern = wildcard, .expr = expr });
+            },
+            .s_break => {
+                const unit_monotype = try self.store.monotype_store.addMonotype(self.allocator, .unit);
+                const expr = try self.store.addExpr(self.allocator, .{ .break_expr = {} }, unit_monotype, Region.zero());
+                const wildcard = try self.store.addPattern(self.allocator, .wildcard, unit_monotype);
+                try mir_stmts.append(self.allocator, .{ .pattern = wildcard, .expr = expr });
+            },
+            .s_return => |s_return| {
+                const inner = try self.lowerExpr(s_return.expr);
+                const unit_monotype = try self.store.monotype_store.addMonotype(self.allocator, .unit);
+                const expr = try self.store.addExpr(self.allocator, .{ .return_expr = .{
+                    .expr = inner,
+                } }, unit_monotype, Region.zero());
+                const wildcard = try self.store.addPattern(self.allocator, .wildcard, unit_monotype);
+                try mir_stmts.append(self.allocator, .{ .pattern = wildcard, .expr = expr });
+            },
+            .s_runtime_error => |s_re| {
+                const unit_monotype = try self.store.monotype_store.addMonotype(self.allocator, .unit);
+                const expr = try self.store.addExpr(self.allocator, .{ .runtime_error = .{
+                    .diagnostic = s_re.diagnostic,
+                } }, unit_monotype, Region.zero());
+                const wildcard = try self.store.addPattern(self.allocator, .wildcard, unit_monotype);
+                try mir_stmts.append(self.allocator, .{ .pattern = wildcard, .expr = expr });
+            },
+            // Compile-time declarations — no runtime behavior
+            .s_import, .s_alias_decl, .s_nominal_decl, .s_type_anno, .s_type_var_alias => {},
         }
     }
 
@@ -764,7 +851,7 @@ fn lowerBinop(self: *Self, binop: CIR.Expr.Binop, monotype: Monotype.Idx, region
             } }, monotype, region);
         },
         // All other operators desugar to method calls
-        else => {
+        .add, .sub, .mul, .div, .div_trunc, .rem, .lt, .le, .gt, .ge, .eq, .ne => {
             const method_ident: Ident.Idx = switch (binop.op) {
                 .add => module_env.idents.plus,
                 .sub => module_env.idents.minus,
@@ -783,8 +870,13 @@ fn lowerBinop(self: *Self, binop: CIR.Expr.Binop, monotype: Monotype.Idx, region
             const lhs = try self.lowerExpr(binop.lhs);
             const rhs = try self.lowerExpr(binop.rhs);
 
-            // Create a lookup for the method
-            const method_symbol = MIR.MonoSymbol{
+            // Resolve the method via type-directed dispatch on the LHS operand
+            const lhs_type_var = ModuleEnv.varFrom(binop.lhs);
+            const method_symbol = try self.resolveMethodForTypeVar(
+                module_env,
+                lhs_type_var,
+                method_ident,
+            ) orelse MIR.MonoSymbol{
                 .module_idx = self.current_module_idx,
                 .ident_idx = method_ident,
             };
@@ -868,11 +960,32 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, da: anytype, monoty
     const receiver = try self.lowerExpr(da.receiver);
 
     if (da.args) |args_span| {
-        // Method call: desugar to a function call
-        // TODO: resolve via static dispatch
-        const args = try self.lowerExprSpan(module_env, args_span);
+        // Method call: resolve via the receiver's type
+        const receiver_type_var = ModuleEnv.varFrom(da.receiver);
+        const method_symbol = try self.resolveMethodForTypeVar(
+            module_env,
+            receiver_type_var,
+            da.field_name,
+        ) orelse MIR.MonoSymbol{
+            .module_idx = self.current_module_idx,
+            .ident_idx = da.field_name,
+        };
+        const func_expr = try self.store.addExpr(self.allocator, .{ .lookup = method_symbol }, monotype, region);
+
+        // Build args as [receiver] ++ explicit_args
+        // e.g. list.map(fn) → List.map(list, fn)
+        const explicit_args = module_env.store.sliceExpr(args_span);
+        var all_args = std.ArrayList(MIR.ExprId).empty;
+        defer all_args.deinit(self.allocator);
+        try all_args.append(self.allocator, receiver);
+        for (explicit_args) |arg_idx| {
+            const arg = try self.lowerExpr(arg_idx);
+            try all_args.append(self.allocator, arg);
+        }
+        const args = try self.store.addExprSpan(self.allocator, all_args.items);
+
         return try self.store.addExpr(self.allocator, .{ .call = .{
-            .func = receiver,
+            .func = func_expr,
             .args = args,
         } }, monotype, region);
     } else {
@@ -913,78 +1026,24 @@ fn lowerRecord(self: *Self, module_env: *const ModuleEnv, record: anytype, monot
 
 /// Lower `e_type_var_dispatch` by resolving the type alias and dispatching to the method.
 fn lowerTypeVarDispatch(self: *Self, module_env: *const ModuleEnv, tvd: anytype, monotype: Monotype.Idx, region: Region) Allocator.Error!MIR.ExprId {
-    // Step 1: Get the type variable from the alias statement
+    // Get the type variable from the alias statement
     const stmt = module_env.store.getStatement(tvd.type_var_alias_stmt);
     const type_var_binding = stmt.s_type_var_alias;
     const type_var = ModuleEnv.varFrom(type_var_binding.type_var_anno);
-    var resolved = self.types_store.resolveVar(type_var);
 
-    // Step 2: Follow aliases to get to the underlying type
-    while (resolved.desc.content == .alias) {
-        const alias = resolved.desc.content.alias;
-        const backing = self.types_store.getAliasBackingVar(alias);
-        resolved = self.types_store.resolveVar(backing);
-    }
-
-    // Step 3: Determine the nominal type's origin and ident
-    const nominal_info: ?struct { origin: Ident.Idx, ident: Ident.Idx } = switch (resolved.desc.content) {
-        .structure => |s| switch (s) {
-            .nominal_type => |nom| .{
-                .origin = nom.origin_module,
-                .ident = nom.ident.ident_idx,
-            },
-            else => null,
-        },
-        else => null,
-    };
-
-    if (nominal_info) |info| {
-        // Step 4: Find the origin module
-        const origin_module_idx = self.findModuleForOrigin(module_env, info.origin) orelse {
-            // Cannot resolve origin — emit runtime error
-            return try self.store.addExpr(self.allocator, .{ .runtime_error = .{
-                .diagnostic = @enumFromInt(std.math.maxInt(u32)),
-            } }, monotype, region);
-        };
-
-        const origin_env = self.all_module_envs[origin_module_idx];
-
-        // Step 5: Look up the method in the origin module
-        const qualified_method = origin_env.lookupMethodIdentFromTwoEnvsConst(
-            module_env,
-            info.ident,
-            module_env,
-            tvd.method_name,
-        ) orelse {
-            // Method not found — emit runtime error
-            return try self.store.addExpr(self.allocator, .{ .runtime_error = .{
-                .diagnostic = @enumFromInt(std.math.maxInt(u32)),
-            } }, monotype, region);
-        };
-
-        // Step 6: Create symbol for the resolved method
-        const method_symbol = MIR.MonoSymbol{
-            .module_idx = @intCast(origin_module_idx),
-            .ident_idx = qualified_method,
-        };
-
-        // Step 7: Lower as a call to the resolved method
-        const func_expr = try self.store.addExpr(self.allocator, .{ .lookup = method_symbol }, monotype, region);
-        const args = try self.lowerExprSpan(module_env, tvd.args);
-
-        return try self.store.addExpr(self.allocator, .{ .call = .{
-            .func = func_expr,
-            .args = args,
-        } }, monotype, region);
-    }
-
-    // Fallback: could not resolve nominal type — lower args and emit a call with method name
-    const args = try self.lowerExprSpan(module_env, tvd.args);
-    const method_symbol = MIR.MonoSymbol{
+    // Resolve the method via the shared helper
+    const method_symbol = try self.resolveMethodForTypeVar(
+        module_env,
+        type_var,
+        tvd.method_name,
+    ) orelse MIR.MonoSymbol{
         .module_idx = self.current_module_idx,
         .ident_idx = tvd.method_name,
     };
+
     const func_expr = try self.store.addExpr(self.allocator, .{ .lookup = method_symbol }, monotype, region);
+    const args = try self.lowerExprSpan(module_env, tvd.args);
+
     return try self.store.addExpr(self.allocator, .{ .call = .{
         .func = func_expr,
         .args = args,
@@ -996,7 +1055,7 @@ fn findModuleForOrigin(self: *Self, source_env: *const ModuleEnv, origin_module:
     // Check if origin is source_env itself
     if (origin_module == source_env.module_name_idx) {
         for (self.all_module_envs, 0..) |env, idx| {
-            if (env == source_env) return @intCast(idx);
+            if (env.module_name_idx == source_env.module_name_idx) return @intCast(idx);
         }
     }
 
@@ -1028,6 +1087,65 @@ fn findModuleForOrigin(self: *Self, source_env: *const ModuleEnv, origin_module:
     }
 
     return null;
+}
+
+/// Resolve a type variable to a method symbol via nominal type dispatch.
+/// Returns null if the type variable doesn't resolve to a nominal type or if the method can't be found.
+fn resolveMethodForTypeVar(
+    self: *Self,
+    source_env: *const ModuleEnv,
+    type_var: types.Var,
+    method_name: Ident.Idx,
+) Allocator.Error!?MIR.MonoSymbol {
+    var resolved = self.types_store.resolveVar(type_var);
+
+    // Follow aliases to get to the underlying type
+    while (resolved.desc.content == .alias) {
+        const alias = resolved.desc.content.alias;
+        const backing = self.types_store.getAliasBackingVar(alias);
+        resolved = self.types_store.resolveVar(backing);
+    }
+
+    // Check if it's a nominal type
+    const nominal_info: ?struct { origin: Ident.Idx, ident: Ident.Idx } = switch (resolved.desc.content) {
+        .structure => |s| switch (s) {
+            .nominal_type => |nom| .{
+                .origin = nom.origin_module,
+                .ident = nom.ident.ident_idx,
+            },
+            .record,
+            .record_unbound,
+            .tuple,
+            .fn_pure,
+            .fn_effectful,
+            .fn_unbound,
+            .empty_record,
+            .tag_union,
+            .empty_tag_union,
+            => null,
+        },
+        .flex, .rigid, .alias, .err => null,
+    };
+
+    const info = nominal_info orelse return null;
+
+    // Find the origin module
+    const origin_module_idx = self.findModuleForOrigin(source_env, info.origin) orelse return null;
+
+    const origin_env = self.all_module_envs[origin_module_idx];
+
+    // Look up the method in the origin module
+    const qualified_method = origin_env.lookupMethodIdentFromTwoEnvsConst(
+        source_env,
+        info.ident,
+        source_env,
+        method_name,
+    ) orelse return null;
+
+    return MIR.MonoSymbol{
+        .module_idx = @intCast(origin_module_idx),
+        .ident_idx = qualified_method,
+    };
 }
 
 /// Lower an external definition by symbol, caching the result.
