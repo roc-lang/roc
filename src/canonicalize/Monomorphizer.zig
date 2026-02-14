@@ -579,7 +579,7 @@ pub fn addResolvedToLambdaSet(
 
     const closure_info = ClosureTransformer.ClosureInfo{
         .tag_name = resolved.impl_lookup.method_ident,
-        .source_module = self.module_env.module_name_idx,
+        .source_module = self.module_env.qualified_module_ident,
         .lambda_body = lambda_body,
         .lambda_args = lambda_args,
         .capture_names = std.ArrayList(base.Ident.Idx).empty,

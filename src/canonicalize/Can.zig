@@ -690,9 +690,11 @@ fn processTypeDeclFirstPass(
     try self.env.store.setStatementNode(type_decl_stmt_idx, type_decl_stmt);
     try self.env.store.addScratchStatement(type_decl_stmt_idx);
 
-    // For type modules, associate the node index with the exposed type
+    // For type modules, associate the node index with the exposed type.
+    // display_module_name_idx is the bare module name (e.g., "Color"), which matches
+    // what canonicalization produces for unqualified type module references.
     if (self.env.module_kind == .type_module) {
-        if (qualified_name_idx == self.env.module_name_idx) {
+        if (qualified_name_idx == self.env.display_module_name_idx) {
             // This is the main type of the type module - set its node index
             const node_idx_u16 = @as(u16, @intCast(@intFromEnum(type_decl_stmt_idx)));
             try self.env.setExposedNodeIndexById(qualified_name_idx, node_idx_u16);
@@ -788,9 +790,11 @@ fn processTypeDeclFirstPassWithExisting(
     try self.env.store.setStatementNode(type_decl_stmt_idx, type_decl_stmt);
     try self.env.store.addScratchStatement(type_decl_stmt_idx);
 
-    // For type modules, associate the node index with the exposed type
+    // For type modules, associate the node index with the exposed type.
+    // display_module_name_idx is the bare module name (e.g., "Color"), which matches
+    // what canonicalization produces for unqualified type module references.
     if (self.env.module_kind == .type_module) {
-        if (qualified_name_idx == self.env.module_name_idx) {
+        if (qualified_name_idx == self.env.display_module_name_idx) {
             const node_idx_u16 = @as(u16, @intCast(@intFromEnum(type_decl_stmt_idx)));
             try self.env.setExposedNodeIndexById(qualified_name_idx, node_idx_u16);
         }

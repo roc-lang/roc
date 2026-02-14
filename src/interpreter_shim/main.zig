@@ -401,28 +401,39 @@ fn initializeOnce(roc_ops: *RocOps) ShimError!void {
         };
     }
 
-    // Fix up module_name_idx for deserialized modules
+    // Fix up display_module_name_idx for deserialized modules
     // This is critical for nominal type method dispatch (e.g., is_eq)
-    if (env_ptr.module_name_idx.isNone() and env_ptr.module_name.len > 0) {
-        env_ptr.module_name_idx = env_ptr.insertIdent(base.Ident.for_text(env_ptr.module_name)) catch {
+    if (env_ptr.display_module_name_idx.isNone() and env_ptr.module_name.len > 0) {
+        env_ptr.display_module_name_idx = env_ptr.insertIdent(base.Ident.for_text(env_ptr.module_name)) catch {
             roc_ops.crash("INTERPRETER SHIM: Failed to insert module name for platform env");
             return error.InterpreterSetupFailed;
         };
     }
+    // qualified_module_ident is already set correctly from serialization (set by coordinator before roc build).
+    // Only fix up if it's NONE (shouldn't happen in normal builds, but handle gracefully).
+    if (env_ptr.qualified_module_ident.isNone() and !env_ptr.display_module_name_idx.isNone()) {
+        env_ptr.qualified_module_ident = env_ptr.display_module_name_idx;
+    }
     if (app_env != env_ptr) {
-        if (app_env.module_name_idx.isNone() and app_env.module_name.len > 0) {
-            @constCast(app_env).module_name_idx = @constCast(app_env).insertIdent(base.Ident.for_text(app_env.module_name)) catch {
+        if (app_env.display_module_name_idx.isNone() and app_env.module_name.len > 0) {
+            @constCast(app_env).display_module_name_idx = @constCast(app_env).insertIdent(base.Ident.for_text(app_env.module_name)) catch {
                 roc_ops.crash("INTERPRETER SHIM: Failed to insert module name for app env");
                 return error.InterpreterSetupFailed;
             };
         }
+        if (app_env.qualified_module_ident.isNone() and !app_env.display_module_name_idx.isNone()) {
+            @constCast(app_env).qualified_module_ident = app_env.display_module_name_idx;
+        }
     }
     for (full_imported_envs) |imp_env| {
-        if (imp_env.module_name_idx.isNone() and imp_env.module_name.len > 0) {
-            @constCast(imp_env).module_name_idx = @constCast(imp_env).insertIdent(base.Ident.for_text(imp_env.module_name)) catch {
+        if (imp_env.display_module_name_idx.isNone() and imp_env.module_name.len > 0) {
+            @constCast(imp_env).display_module_name_idx = @constCast(imp_env).insertIdent(base.Ident.for_text(imp_env.module_name)) catch {
                 roc_ops.crash("INTERPRETER SHIM: Failed to insert module name for imported env");
                 return error.InterpreterSetupFailed;
             };
+        }
+        if (imp_env.qualified_module_ident.isNone() and !imp_env.display_module_name_idx.isNone()) {
+            @constCast(imp_env).qualified_module_ident = imp_env.display_module_name_idx;
         }
     }
 

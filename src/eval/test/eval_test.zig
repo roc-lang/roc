@@ -890,13 +890,15 @@ test "ModuleEnv serialization and interpreter evaluation" {
             try deserialized_env.common.idents.interner.enableRuntimeInserts(gpa);
             try @constCast(builtin_module.env).common.idents.interner.enableRuntimeInserts(gpa);
 
-            // Fix up module_name_idx for deserialized modules (critical for method dispatch).
-            // Deserialized modules have module_name_idx set to NONE - we need to re-intern the name.
-            if (deserialized_env.module_name_idx.isNone() and deserialized_env.module_name.len > 0) {
-                deserialized_env.module_name_idx = try deserialized_env.insertIdent(base.Ident.for_text(deserialized_env.module_name));
+            // Fix up display_module_name_idx and qualified_module_ident for deserialized modules (critical for method dispatch).
+            // Deserialized modules have display_module_name_idx set to NONE - we need to re-intern the name.
+            if (deserialized_env.display_module_name_idx.isNone() and deserialized_env.module_name.len > 0) {
+                deserialized_env.display_module_name_idx = try deserialized_env.insertIdent(base.Ident.for_text(deserialized_env.module_name));
+                deserialized_env.qualified_module_ident = deserialized_env.display_module_name_idx;
             }
-            if (builtin_module.env.module_name_idx.isNone() and builtin_module.env.module_name.len > 0) {
-                @constCast(builtin_module.env).module_name_idx = try @constCast(builtin_module.env).insertIdent(base.Ident.for_text(builtin_module.env.module_name));
+            if (builtin_module.env.display_module_name_idx.isNone() and builtin_module.env.module_name.len > 0) {
+                @constCast(builtin_module.env).display_module_name_idx = try @constCast(builtin_module.env).insertIdent(base.Ident.for_text(builtin_module.env.module_name));
+                @constCast(builtin_module.env).qualified_module_ident = builtin_module.env.display_module_name_idx;
             }
 
             const builtin_types_local = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);

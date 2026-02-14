@@ -2255,7 +2255,7 @@ fn checkPlatformRequirementsFromCoordinator(
 
     // Build builtin context for the type checker
     const builtin_ctx = Check.BuiltinContext{
-        .module_name = app_root_env.module_name_idx,
+        .module_name = app_root_env.qualified_module_ident,
         .bool_stmt = builtin_indices.bool_type,
         .try_stmt = builtin_indices.try_type,
         .str_stmt = builtin_indices.str_type,
