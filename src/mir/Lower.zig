@@ -54,6 +54,9 @@ builtin_indices: CIR.BuiltinIndices,
 /// Current module being lowered
 current_module_idx: u32,
 
+/// App module index (for resolving `e_lookup_required` from platform modules)
+app_module_idx: ?u32,
+
 /// Map from (module_idx << 32 | CIR.Pattern.Idx) → MIR.Symbol
 /// Used to resolve CIR local lookups to global symbols.
 pattern_symbols: std.AutoHashMap(u64, MIR.Symbol),
@@ -95,6 +98,7 @@ pub fn init(
     types_store: *const types.Store,
     builtin_indices: CIR.BuiltinIndices,
     current_module_idx: u32,
+    app_module_idx: ?u32,
 ) Allocator.Error!Self {
     // Pre-build origin lookup for all modules' imports
     var origin_lookup = std.AutoHashMap(u64, u32).init(allocator);
@@ -118,6 +122,7 @@ pub fn init(
         .types_store = types_store,
         .builtin_indices = builtin_indices,
         .current_module_idx = current_module_idx,
+        .app_module_idx = app_module_idx,
         .pattern_symbols = std.AutoHashMap(u64, MIR.Symbol).init(allocator),
         .type_var_seen = std.AutoHashMap(types.Var, Monotype.Idx).init(allocator),
         .lowered_symbols = std.AutoHashMap(u64, MIR.ExprId).init(allocator),
@@ -279,10 +284,36 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
             };
             return try self.store.addExpr(self.allocator, .{ .lookup = symbol }, monotype, region);
         },
-        .e_lookup_pending, .e_lookup_required => {
-            // These must be resolved to e_lookup_external before MIR lowering;
+        .e_lookup_pending => {
+            // Must be resolved to e_lookup_external before MIR lowering;
             // reaching here means a compiler bug in an earlier phase.
             unreachable;
+        },
+        .e_lookup_required => |lookup| {
+            const app_idx = self.app_module_idx orelse {
+                return try self.store.addExpr(self.allocator, .runtime_err_type, monotype, region);
+            };
+            const required_type = module_env.requires_types.get(lookup.requires_idx);
+            const required_name = module_env.getIdent(required_type.ident);
+
+            // Find matching export in app module
+            const app_env = self.all_module_envs[app_idx];
+            const app_exports = app_env.store.sliceDefs(app_env.exports);
+            for (app_exports) |def_idx| {
+                const def = app_env.store.getDef(def_idx);
+                const pat = app_env.store.getPattern(def.pattern);
+                switch (pat) {
+                    .assign => |assign| {
+                        if (std.mem.eql(u8, app_env.getIdent(assign.ident), required_name)) {
+                            const symbol = MIR.Symbol{ .module_idx = app_idx, .ident_idx = assign.ident };
+                            _ = try self.lowerExternalDef(symbol, def.expr);
+                            return try self.store.addExpr(self.allocator, .{ .lookup = symbol }, monotype, region);
+                        }
+                    },
+                    else => {},
+                }
+            }
+            return try self.store.addExpr(self.allocator, .runtime_err_type, monotype, region);
         },
 
         // --- Control flow ---
@@ -859,10 +890,36 @@ fn lowerBinop(self: *Self, binop: CIR.Expr.Binop, monotype: Monotype.Idx, region
                 module_env,
                 lhs_type_var,
                 method_ident,
-            ) orelse MIR.Symbol{
-                .module_idx = self.current_module_idx,
-                .ident_idx = method_ident,
+            ) orelse {
+                // No nominal type found — emit run_low_level directly
+                const ll_op: CIR.Expr.LowLevel = switch (binop.op) {
+                    .eq, .ne => .num_is_eq,
+                    .lt => .num_is_lt,
+                    .le => .num_is_lte,
+                    .gt => .num_is_gt,
+                    .ge => .num_is_gte,
+                    .add => .num_plus,
+                    .sub => .num_minus,
+                    .mul => .num_times,
+                    .div => .num_div_by,
+                    .div_trunc => .num_div_trunc_by,
+                    .rem => .num_rem_by,
+                    .@"and", .@"or" => unreachable,
+                };
+                const ll_args = try self.store.addExprSpan(self.allocator, &.{ lhs, rhs });
+                const result = try self.store.addExpr(self.allocator, .{ .run_low_level = .{
+                    .op = ll_op,
+                    .args = ll_args,
+                } }, monotype, region);
+                if (binop.op == .ne) return try self.negBool(module_env, result, monotype, region);
+                return result;
             };
+
+            // Ensure the method body is lowered so codegen can find it
+            if (method_symbol.module_idx != self.current_module_idx) {
+                try self.ensureMethodLowered(method_symbol);
+            }
+
             const lhs_monotype = try self.resolveMonotype(binop.lhs);
             const rhs_monotype = try self.resolveMonotype(binop.rhs);
             const func_monotype = try self.buildFuncMonotype(&.{ lhs_monotype, rhs_monotype }, monotype, false);
@@ -1139,6 +1196,28 @@ fn resolveMethodForTypeVar(
         .module_idx = @intCast(origin_module_idx),
         .ident_idx = qualified_method,
     };
+}
+
+/// Ensure a method definition is lowered (for cross-module binop dispatch).
+fn ensureMethodLowered(self: *Self, symbol: MIR.Symbol) Allocator.Error!void {
+    const symbol_key: u64 = @bitCast(symbol);
+    if (self.lowered_symbols.contains(symbol_key)) return;
+
+    const target_env = self.all_module_envs[symbol.module_idx];
+    const defs = target_env.store.sliceDefs(target_env.all_defs);
+    for (defs) |def_idx| {
+        const def = target_env.store.getDef(def_idx);
+        const pat = target_env.store.getPattern(def.pattern);
+        switch (pat) {
+            .assign => |assign| {
+                if (@as(u32, @bitCast(assign.ident)) == @as(u32, @bitCast(symbol.ident_idx))) {
+                    _ = try self.lowerExternalDef(symbol, def.expr);
+                    return;
+                }
+            },
+            else => {},
+        }
+    }
 }
 
 /// Lower an external definition by symbol, caching the result.

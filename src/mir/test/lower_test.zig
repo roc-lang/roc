@@ -393,6 +393,7 @@ test "Lower: init and deinit" {
         &module_env.types,
         std.mem.zeroes(CIR.BuiltinIndices),
         0,
+        null,
     );
     defer lower.deinit();
 
@@ -475,16 +476,14 @@ test "lowerExpr: if-else desugars to match" {
     try testing.expect(env.mir_store.getExpr(expr) == .match_expr);
 }
 
-test "lowerExpr: binop callee lookup has function monotype" {
+test "lowerExpr: binop without nominal type emits run_low_level" {
     var env = try MirTestEnv.initExpr("1 + 2");
     defer env.deinit();
     const expr = try env.lowerFirstDef();
     const result = env.mir_store.getExpr(expr);
-    // Binop desugars to a call
-    try testing.expect(result == .call);
-    // The callee lookup must have a function monotype, not the call's result type
-    const func_monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(result.call.func));
-    try testing.expect(func_monotype == .func);
+    // Binop on non-nominal type desugars to run_low_level
+    try testing.expect(result == .run_low_level);
+    try testing.expectEqual(CIR.Expr.LowLevel.num_plus, result.run_low_level.op);
 }
 
 test "lowerExpr: block with decl_const" {

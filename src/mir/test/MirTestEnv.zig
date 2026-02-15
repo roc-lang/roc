@@ -234,6 +234,7 @@ pub fn initFull(module_name: []const u8, source: []const u8) !MirTestEnv {
         &module_env.types,
         builtin_indices,
         0,
+        null,
     );
     errdefer lower.deinit();
 
@@ -430,6 +431,7 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
         &module_env.types,
         builtin_indices,
         2, // current_module_idx = this module
+        null,
     );
     errdefer lower.deinit();
 
