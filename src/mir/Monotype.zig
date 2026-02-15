@@ -290,9 +290,9 @@ pub const Store = struct {
 
         return switch (resolved.desc.content) {
             .flex, .rigid => {
-                // Unresolved type variables should not appear in monomorphic code.
-                // This indicates the type checker left something unresolved.
-                return self.unit_idx;
+                // Unresolved type variables must not appear in monomorphic code.
+                // Reaching here means the type checker left something unresolved.
+                unreachable;
             },
             .alias => |alias| {
                 // Aliases are transparent — follow the backing var
@@ -302,7 +302,9 @@ pub const Store = struct {
             .structure => |flat_type| {
                 return try self.fromFlatType(allocator, types_store, resolved.var_, flat_type, builtin_indices, seen, scratches);
             },
-            .err => self.unit_idx,
+            // Error types are caught in lowerExpr before resolveMonotype;
+            // reaching here means a compiler bug in an earlier phase.
+            .err => unreachable,
         };
     }
 

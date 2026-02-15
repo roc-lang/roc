@@ -495,7 +495,10 @@ test "lowerExpr: block with decl_const" {
 }
 
 test "lowerExpr: lambda" {
-    var env = try MirTestEnv.initExpr("|x| x");
+    var env = try MirTestEnv.initFull("Test",
+        \\main : U64 -> U64
+        \\main = |x| x
+    );
     defer env.deinit();
     const expr = try env.lowerFirstDef();
     const result = env.mir_store.getExpr(expr);
@@ -566,7 +569,10 @@ test "fromTypeVar: record resolves to record with fields" {
 }
 
 test "fromTypeVar: lambda resolves to func type" {
-    var env = try MirTestEnv.initExpr("|x| x");
+    var env = try MirTestEnv.initFull("Test",
+        \\main : U64 -> U64
+        \\main = |x| x
+    );
     defer env.deinit();
     const expr = try env.lowerFirstDef();
     const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));

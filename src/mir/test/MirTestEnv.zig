@@ -132,7 +132,7 @@ pub fn initExpr(comptime source_expr: []const u8) !MirTestEnv {
 }
 
 /// Full init: parse → canonicalize → type-check → init Lower
-fn initFull(module_name: []const u8, source: []const u8) !MirTestEnv {
+pub fn initFull(module_name: []const u8, source: []const u8) !MirTestEnv {
     const gpa = std.testing.allocator;
 
     var allocators: Allocators = undefined;
