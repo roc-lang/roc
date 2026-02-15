@@ -146,7 +146,9 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
     const module_env = self.all_module_envs[self.current_module_idx];
     const region = module_env.store.getExprRegion(expr_idx);
 
-    // Error types from the type checker become runtime_error nodes
+    // Error types from the type checker become runtime_error nodes.
+    // This early return ensures resolveMonotype (below) is never called
+    // on error types, which could otherwise fail or produce nonsense.
     const type_var = ModuleEnv.varFrom(expr_idx);
     const resolved = self.types_store.resolveVar(type_var);
     if (resolved.desc.content == .err) {

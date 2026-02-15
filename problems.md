@@ -64,10 +64,10 @@ All 2811 tests pass.
 
 ### Performance
 
-15. `std.ArrayList` temporaries in tight loops allocate/deallocate repeatedly
-16. `lowerNotBool` duplicated across three call sites (~90 lines)
-17. No deduplication in `Monotype.Store.addMonotype` (e.g. hundreds of duplicate `Bool`)
-18. `findModuleForOrigin` linear scan over all modules
+15. ~~`std.ArrayList` temporaries in tight loops allocate/deallocate repeatedly~~ **DONE**
+16. ~~`lowerNotBool` duplicated across three call sites (~90 lines)~~ **DONE** — extracted `createBoolMatch` helper + `negBool` wrapper
+17. ~~No deduplication in `Monotype.Store.addMonotype` (e.g. hundreds of duplicate `Bool`)~~ **DONE** — pre-interned 16 fixed monotypes (unit + 15 prims) at `Store.init()` with `unit_idx` and `primIdx()` accessor
+18. ~~`findModuleForOrigin` linear scan over all modules~~ **DONE** — pre-built `origin_lookup` HashMap at `init()` for O(1) lookup
 
 ### Testing Gaps
 
@@ -83,6 +83,6 @@ All 2811 tests pass.
 ### Minor
 
 27. ~~Empty string sentinel is `@enumFromInt(std.math.maxInt(u32))`~~ **DONE (covered by #10)**
-28. `lowerExpr` resolves monotype even for error paths
-29. `lowerBlock` uses `@enumFromInt(@intFromEnum(expr))` no-op cast
+28. ~~`lowerExpr` resolves monotype even for error paths~~ **NOT A BUG** — early return on `.err` prevents `resolveMonotype` from being called on error types. Added comment explaining why.
+29. ~~`lowerBlock` uses `@enumFromInt(@intFromEnum(expr))` no-op cast~~ **DONE**
 30. `s_var` and `s_reassign` lowered identically to `s_decl` (loses mutability distinction)
