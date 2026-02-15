@@ -538,27 +538,7 @@ fn lowerIf(self: *Self, module_env: *const ModuleEnv, if_expr: anytype, monotype
         const branch = module_env.store.getIfBranch(branch_indices[i]);
         const cond = try self.lowerExpr(branch.cond);
         const body = try self.lowerExpr(branch.body);
-
-        // Create True and wildcard patterns
-        const true_monotype = try self.store.monotype_store.addMonotype(self.allocator, .{ .prim = .bool });
-        const true_pattern = try self.store.addPattern(self.allocator, .{ .tag = .{
-            .name = module_env.idents.true_tag,
-            .args = MIR.PatternSpan.empty(),
-        } }, true_monotype);
-        const wildcard_pattern = try self.store.addPattern(self.allocator, .wildcard, true_monotype);
-
-        const true_bp = try self.store.addBranchPatterns(self.allocator, &.{.{ .pattern = true_pattern, .degenerate = false }});
-        const else_bp = try self.store.addBranchPatterns(self.allocator, &.{.{ .pattern = wildcard_pattern, .degenerate = false }});
-
-        const branch_span = try self.store.addBranches(self.allocator, &.{
-            .{ .patterns = true_bp, .body = body, .guard = MIR.ExprId.none },
-            .{ .patterns = else_bp, .body = result, .guard = MIR.ExprId.none },
-        });
-
-        result = try self.store.addExpr(self.allocator, .{ .match_expr = .{
-            .cond = cond,
-            .branches = branch_span,
-        } }, monotype, region);
+        result = try self.createBoolMatch(module_env, cond, body, result, monotype, region);
     }
 
     return result;
@@ -772,66 +752,24 @@ fn lowerBinop(self: *Self, binop: CIR.Expr.Binop, monotype: Monotype.Idx, region
         .@"and" => {
             const cond = try self.lowerExpr(binop.lhs);
             const body_true = try self.lowerExpr(binop.rhs);
-
             const bool_monotype = try self.store.monotype_store.addMonotype(self.allocator, .{ .prim = .bool });
-
-            // False value for the else branch
             const false_expr = try self.store.addExpr(self.allocator, .{ .tag = .{
                 .name = module_env.idents.false_tag,
                 .args = MIR.ExprSpan.empty(),
             } }, bool_monotype, region);
-
-            const true_pattern = try self.store.addPattern(self.allocator, .{ .tag = .{
-                .name = module_env.idents.true_tag,
-                .args = MIR.PatternSpan.empty(),
-            } }, bool_monotype);
-            const wildcard_pattern = try self.store.addPattern(self.allocator, .wildcard, bool_monotype);
-
-            const true_bp = try self.store.addBranchPatterns(self.allocator, &.{.{ .pattern = true_pattern, .degenerate = false }});
-            const else_bp = try self.store.addBranchPatterns(self.allocator, &.{.{ .pattern = wildcard_pattern, .degenerate = false }});
-
-            const branch_span = try self.store.addBranches(self.allocator, &.{
-                .{ .patterns = true_bp, .body = body_true, .guard = MIR.ExprId.none },
-                .{ .patterns = else_bp, .body = false_expr, .guard = MIR.ExprId.none },
-            });
-
-            return try self.store.addExpr(self.allocator, .{ .match_expr = .{
-                .cond = cond,
-                .branches = branch_span,
-            } }, monotype, region);
+            return try self.createBoolMatch(module_env, cond, body_true, false_expr, monotype, region);
         },
         // Short-circuit `or`: desugar to match on Bool
         // `a or b` → `match a { True => True, _ => b }`
         .@"or" => {
             const cond = try self.lowerExpr(binop.lhs);
             const body_else = try self.lowerExpr(binop.rhs);
-
             const bool_monotype = try self.store.monotype_store.addMonotype(self.allocator, .{ .prim = .bool });
-
-            // True value for the true branch
             const true_expr = try self.store.addExpr(self.allocator, .{ .tag = .{
                 .name = module_env.idents.true_tag,
                 .args = MIR.ExprSpan.empty(),
             } }, bool_monotype, region);
-
-            const true_pattern = try self.store.addPattern(self.allocator, .{ .tag = .{
-                .name = module_env.idents.true_tag,
-                .args = MIR.PatternSpan.empty(),
-            } }, bool_monotype);
-            const wildcard_pattern = try self.store.addPattern(self.allocator, .wildcard, bool_monotype);
-
-            const true_bp = try self.store.addBranchPatterns(self.allocator, &.{.{ .pattern = true_pattern, .degenerate = false }});
-            const else_bp = try self.store.addBranchPatterns(self.allocator, &.{.{ .pattern = wildcard_pattern, .degenerate = false }});
-
-            const branch_span = try self.store.addBranches(self.allocator, &.{
-                .{ .patterns = true_bp, .body = true_expr, .guard = MIR.ExprId.none },
-                .{ .patterns = else_bp, .body = body_else, .guard = MIR.ExprId.none },
-            });
-
-            return try self.store.addExpr(self.allocator, .{ .match_expr = .{
-                .cond = cond,
-                .branches = branch_span,
-            } }, monotype, region);
+            return try self.createBoolMatch(module_env, cond, true_expr, body_else, monotype, region);
         },
         // All other operators desugar to method calls
         .add, .sub, .mul, .div, .div_trunc, .rem, .lt, .le, .gt, .ge, .eq, .ne => {
@@ -873,7 +811,7 @@ fn lowerBinop(self: *Self, binop: CIR.Expr.Binop, monotype: Monotype.Idx, region
 
             // For != (ne), wrap result in Bool.not
             if (binop.op == .ne) {
-                return try self.lowerNotBool(module_env, result, monotype, region);
+                return try self.negBool(module_env, result, monotype, region);
             }
 
             return result;
@@ -902,21 +840,21 @@ fn lowerUnaryMinus(self: *Self, um: CIR.Expr.UnaryMinus, monotype: Monotype.Idx,
 fn lowerUnaryNot(self: *Self, un: CIR.Expr.UnaryNot, monotype: Monotype.Idx, region: Region) Allocator.Error!MIR.ExprId {
     const inner = try self.lowerExpr(un.expr);
     const module_env = self.all_module_envs[self.current_module_idx];
-    return try self.lowerNotBool(module_env, inner, monotype, region);
+    return try self.negBool(module_env, inner, monotype, region);
 }
 
-/// Desugar Bool negation: `match expr { True => False, _ => True }`
-fn lowerNotBool(self: *Self, module_env: *const ModuleEnv, expr: MIR.ExprId, monotype: Monotype.Idx, region: Region) Allocator.Error!MIR.ExprId {
+/// Create `match cond { True => true_body, _ => false_body }`.
+/// Used by if-desugaring, and/or short-circuit, and Bool negation.
+fn createBoolMatch(
+    self: *Self,
+    module_env: *const ModuleEnv,
+    cond: MIR.ExprId,
+    true_body: MIR.ExprId,
+    false_body: MIR.ExprId,
+    monotype: Monotype.Idx,
+    region: Region,
+) Allocator.Error!MIR.ExprId {
     const bool_monotype = try self.store.monotype_store.addMonotype(self.allocator, .{ .prim = .bool });
-
-    const false_expr = try self.store.addExpr(self.allocator, .{ .tag = .{
-        .name = module_env.idents.false_tag,
-        .args = MIR.ExprSpan.empty(),
-    } }, bool_monotype, region);
-    const true_expr = try self.store.addExpr(self.allocator, .{ .tag = .{
-        .name = module_env.idents.true_tag,
-        .args = MIR.ExprSpan.empty(),
-    } }, bool_monotype, region);
 
     const true_pattern = try self.store.addPattern(self.allocator, .{ .tag = .{
         .name = module_env.idents.true_tag,
@@ -928,14 +866,28 @@ fn lowerNotBool(self: *Self, module_env: *const ModuleEnv, expr: MIR.ExprId, mon
     const else_bp = try self.store.addBranchPatterns(self.allocator, &.{.{ .pattern = wildcard_pattern, .degenerate = false }});
 
     const branch_span = try self.store.addBranches(self.allocator, &.{
-        .{ .patterns = true_bp, .body = false_expr, .guard = MIR.ExprId.none },
-        .{ .patterns = else_bp, .body = true_expr, .guard = MIR.ExprId.none },
+        .{ .patterns = true_bp, .body = true_body, .guard = MIR.ExprId.none },
+        .{ .patterns = else_bp, .body = false_body, .guard = MIR.ExprId.none },
     });
 
     return try self.store.addExpr(self.allocator, .{ .match_expr = .{
-        .cond = expr,
+        .cond = cond,
         .branches = branch_span,
     } }, monotype, region);
+}
+
+/// Negate a Bool: `match expr { True => False, _ => True }`
+fn negBool(self: *Self, module_env: *const ModuleEnv, expr: MIR.ExprId, monotype: Monotype.Idx, region: Region) Allocator.Error!MIR.ExprId {
+    const bool_monotype = try self.store.monotype_store.addMonotype(self.allocator, .{ .prim = .bool });
+    const false_expr = try self.store.addExpr(self.allocator, .{ .tag = .{
+        .name = module_env.idents.false_tag,
+        .args = MIR.ExprSpan.empty(),
+    } }, bool_monotype, region);
+    const true_expr = try self.store.addExpr(self.allocator, .{ .tag = .{
+        .name = module_env.idents.true_tag,
+        .args = MIR.ExprSpan.empty(),
+    } }, bool_monotype, region);
+    return try self.createBoolMatch(module_env, expr, false_expr, true_expr, monotype, region);
 }
 
 /// Lower `e_dot_access` — field access or method call.
