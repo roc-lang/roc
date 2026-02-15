@@ -62,6 +62,10 @@ lowered_symbols: std.AutoHashMap(u64, MIR.ExprId),
 /// Tracks symbols currently being lowered (recursion guard).
 in_progress_defs: std.AutoHashMap(u64, void),
 
+/// Pre-built lookup for findModuleForOrigin: (module_idx, import_ident) → resolved module index.
+/// Key is (module_idx << 32 | @bitCast(import_ident)), value is resolved module u32.
+origin_lookup: std.AutoHashMap(u64, u32),
+
 scratch_expr_ids: base.Scratch(MIR.ExprId),
 scratch_pattern_ids: base.Scratch(MIR.PatternId),
 scratch_ident_idxs: base.Scratch(Ident.Idx),
@@ -81,6 +85,21 @@ pub fn init(
     builtin_indices: CIR.BuiltinIndices,
     current_module_idx: u32,
 ) Allocator.Error!Self {
+    // Pre-build origin lookup for all modules' imports
+    var origin_lookup = std.AutoHashMap(u64, u32).init(allocator);
+    for (all_module_envs, 0..) |env, mod_idx| {
+        const import_count: usize = @intCast(env.imports.imports.len());
+        for (0..import_count) |i| {
+            const import_idx: CIR.Import.Idx = @enumFromInt(i);
+            if (env.imports.getIdentIdx(import_idx)) |import_ident| {
+                if (env.imports.getResolvedModule(import_idx)) |resolved_mod| {
+                    const key = (@as(u64, @intCast(mod_idx)) << 32) | @as(u64, @as(u32, @bitCast(import_ident)));
+                    try origin_lookup.put(key, resolved_mod);
+                }
+            }
+        }
+    }
+
     return .{
         .allocator = allocator,
         .store = store,
@@ -92,6 +111,7 @@ pub fn init(
         .type_var_seen = std.AutoHashMap(types.Var, Monotype.Idx).init(allocator),
         .lowered_symbols = std.AutoHashMap(u64, MIR.ExprId).init(allocator),
         .in_progress_defs = std.AutoHashMap(u64, void).init(allocator),
+        .origin_lookup = origin_lookup,
         .scratch_expr_ids = try base.Scratch(MIR.ExprId).init(allocator),
         .scratch_pattern_ids = try base.Scratch(MIR.PatternId).init(allocator),
         .scratch_ident_idxs = try base.Scratch(Ident.Idx).init(allocator),
@@ -108,6 +128,7 @@ pub fn deinit(self: *Self) void {
     self.type_var_seen.deinit();
     self.lowered_symbols.deinit();
     self.in_progress_defs.deinit();
+    self.origin_lookup.deinit();
     self.scratch_expr_ids.deinit();
     self.scratch_pattern_ids.deinit();
     self.scratch_ident_idxs.deinit();
@@ -985,40 +1006,15 @@ fn lowerTypeVarDispatch(self: *Self, module_env: *const ModuleEnv, tvd: anytype,
 }
 
 /// Find the module index for a given origin module ident.
-fn findModuleForOrigin(self: *Self, source_env: *const ModuleEnv, origin_module: Ident.Idx) ?u32 {
+fn findModuleForOrigin(self: *Self, source_env: *const ModuleEnv, origin_module: Ident.Idx) u32 {
     // Check if origin is source_env itself
     if (origin_module == source_env.qualified_module_ident) {
         return self.current_module_idx;
     }
 
-    // Use the import system: iterate source_env's imports
-    const import_count: usize = @intCast(source_env.imports.imports.len());
-    for (0..import_count) |i| {
-        const import_idx: CIR.Import.Idx = @enumFromInt(i);
-        if (source_env.imports.getIdentIdx(import_idx)) |import_ident| {
-            if (import_ident == origin_module) {
-                if (source_env.imports.getResolvedModule(import_idx)) |mod_idx| {
-                    return @intCast(mod_idx);
-                }
-            }
-        }
-    }
-
-    // Fallback: compare origin name against resolved module names
-    const origin_name = source_env.getIdentText(origin_module);
-    for (0..import_count) |i| {
-        const import_idx: CIR.Import.Idx = @enumFromInt(i);
-        if (source_env.imports.getResolvedModule(import_idx)) |mod_idx| {
-            if (mod_idx < self.all_module_envs.len) {
-                const import_env = self.all_module_envs[mod_idx];
-                if (std.mem.eql(u8, import_env.module_name, origin_name)) {
-                    return @intCast(mod_idx);
-                }
-            }
-        }
-    }
-
-    return null;
+    // O(1) lookup in pre-built HashMap
+    const key = (@as(u64, self.current_module_idx) << 32) | @as(u64, @as(u32, @bitCast(origin_module)));
+    return self.origin_lookup.get(key) orelse unreachable;
 }
 
 /// Resolve a type variable to a method symbol via nominal type dispatch.
@@ -1062,7 +1058,7 @@ fn resolveMethodForTypeVar(
     const info = nominal_info orelse return null;
 
     // Find the origin module
-    const origin_module_idx = self.findModuleForOrigin(source_env, info.origin) orelse return null;
+    const origin_module_idx = self.findModuleForOrigin(source_env, info.origin);
 
     const origin_env = self.all_module_envs[origin_module_idx];
 
