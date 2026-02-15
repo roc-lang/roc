@@ -288,6 +288,10 @@ pub fn getWhenBranches(self: *const Self, span: MonoWhenBranchSpan) []const Mono
 
 /// Add if branches and return a span
 pub fn addIfBranches(self: *Self, branches: []const MonoIfBranch) Allocator.Error!MonoIfBranchSpan {
+    if (branches.len == 0) {
+        return MonoIfBranchSpan.empty();
+    }
+
     const start = @as(u32, @intCast(self.if_branches.items.len));
     try self.if_branches.appendSlice(self.allocator, branches);
 
@@ -299,6 +303,7 @@ pub fn addIfBranches(self: *Self, branches: []const MonoIfBranch) Allocator.Erro
 
 /// Get if branches from a span
 pub fn getIfBranches(self: *const Self, span: MonoIfBranchSpan) []const MonoIfBranch {
+    if (span.len == 0) return &.{};
     return self.if_branches.items[span.start..][0..span.len];
 }
 
