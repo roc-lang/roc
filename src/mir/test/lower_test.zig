@@ -133,11 +133,11 @@ test "MIR Store: statements" {
     const symbol = MIR.Symbol{ .module_idx = 0, .ident_idx = Ident.Idx.NONE };
     const pat = try store.addPattern(test_allocator, .{ .bind = symbol }, monotype);
 
-    const stmt_span = try store.addStmts(test_allocator, &.{.{ .pattern = pat, .expr = expr }});
+    const stmt_span = try store.addStmts(test_allocator, &.{.{ .decl_const = .{ .pattern = pat, .expr = expr } }});
     const stmts = store.getStmts(stmt_span);
     try testing.expectEqual(@as(usize, 1), stmts.len);
-    try testing.expectEqual(pat, stmts[0].pattern);
-    try testing.expectEqual(expr, stmts[0].expr);
+    try testing.expectEqual(pat, stmts[0].decl_const.pattern);
+    try testing.expectEqual(expr, stmts[0].decl_const.expr);
 }
 
 test "MIR Store: field name spans" {

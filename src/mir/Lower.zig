@@ -666,42 +666,42 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
             .s_decl => |decl| {
                 const pat = try self.lowerPattern(module_env, decl.pattern);
                 const expr = try self.lowerExpr(decl.expr);
-                try self.scratch_stmts.append(.{ .pattern = pat, .expr = expr });
+                try self.scratch_stmts.append(.{ .decl_const = .{ .pattern = pat, .expr = expr } });
             },
             .s_var => |var_decl| {
                 const pat = try self.lowerPattern(module_env, var_decl.pattern_idx);
                 const expr = try self.lowerExpr(var_decl.expr);
-                try self.scratch_stmts.append(.{ .pattern = pat, .expr = expr });
+                try self.scratch_stmts.append(.{ .decl_var = .{ .pattern = pat, .expr = expr } });
             },
             .s_reassign => |reassign| {
                 const pat = try self.lowerPattern(module_env, reassign.pattern_idx);
                 const expr = try self.lowerExpr(reassign.expr);
-                try self.scratch_stmts.append(.{ .pattern = pat, .expr = expr });
+                try self.scratch_stmts.append(.{ .mutate_var = .{ .pattern = pat, .expr = expr } });
             },
             .s_expr => |s_expr| {
                 // Expression statement: bind to wildcard
                 const expr = try self.lowerExpr(s_expr.expr);
                 const expr_type = self.store.typeOf(expr);
                 const wildcard = try self.store.addPattern(self.allocator, .wildcard, expr_type);
-                try self.scratch_stmts.append(.{ .pattern = wildcard, .expr = expr });
+                try self.scratch_stmts.append(.{ .decl_const = .{ .pattern = wildcard, .expr = expr } });
             },
             .s_dbg => |s_dbg| {
                 const expr = try self.lowerExpr(s_dbg.expr);
                 const expr_type = self.store.typeOf(expr);
                 const wildcard = try self.store.addPattern(self.allocator, .wildcard, expr_type);
-                try self.scratch_stmts.append(.{ .pattern = wildcard, .expr = expr });
+                try self.scratch_stmts.append(.{ .decl_const = .{ .pattern = wildcard, .expr = expr } });
             },
             .s_expect => |s_expect| {
                 const expr = try self.lowerExpr(s_expect.body);
                 const expr_type = self.store.typeOf(expr);
                 const wildcard = try self.store.addPattern(self.allocator, .wildcard, expr_type);
-                try self.scratch_stmts.append(.{ .pattern = wildcard, .expr = expr });
+                try self.scratch_stmts.append(.{ .decl_const = .{ .pattern = wildcard, .expr = expr } });
             },
             .s_crash => |s_crash| {
                 const unit_monotype = self.store.monotype_store.unit_idx;
                 const expr = try self.store.addExpr(self.allocator, .{ .crash = s_crash.msg }, unit_monotype, Region.zero());
                 const wildcard = try self.store.addPattern(self.allocator, .wildcard, unit_monotype);
-                try self.scratch_stmts.append(.{ .pattern = wildcard, .expr = expr });
+                try self.scratch_stmts.append(.{ .decl_const = .{ .pattern = wildcard, .expr = expr } });
             },
             .s_for => |s_for| {
                 const list_expr = try self.lowerExpr(s_for.expr);
@@ -714,7 +714,7 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
                     .body = body,
                 } }, unit_monotype, Region.zero());
                 const wildcard = try self.store.addPattern(self.allocator, .wildcard, unit_monotype);
-                try self.scratch_stmts.append(.{ .pattern = wildcard, .expr = expr });
+                try self.scratch_stmts.append(.{ .decl_const = .{ .pattern = wildcard, .expr = expr } });
             },
             .s_while => |s_while| {
                 const cond = try self.lowerExpr(s_while.cond);
@@ -725,13 +725,13 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
                     .body = body,
                 } }, unit_monotype, Region.zero());
                 const wildcard = try self.store.addPattern(self.allocator, .wildcard, unit_monotype);
-                try self.scratch_stmts.append(.{ .pattern = wildcard, .expr = expr });
+                try self.scratch_stmts.append(.{ .decl_const = .{ .pattern = wildcard, .expr = expr } });
             },
             .s_break => {
                 const unit_monotype = self.store.monotype_store.unit_idx;
                 const expr = try self.store.addExpr(self.allocator, .{ .break_expr = {} }, unit_monotype, Region.zero());
                 const wildcard = try self.store.addPattern(self.allocator, .wildcard, unit_monotype);
-                try self.scratch_stmts.append(.{ .pattern = wildcard, .expr = expr });
+                try self.scratch_stmts.append(.{ .decl_const = .{ .pattern = wildcard, .expr = expr } });
             },
             .s_return => |s_return| {
                 const inner = try self.lowerExpr(s_return.expr);
@@ -740,7 +740,7 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
                     .expr = inner,
                 } }, unit_monotype, Region.zero());
                 const wildcard = try self.store.addPattern(self.allocator, .wildcard, unit_monotype);
-                try self.scratch_stmts.append(.{ .pattern = wildcard, .expr = expr });
+                try self.scratch_stmts.append(.{ .decl_const = .{ .pattern = wildcard, .expr = expr } });
             },
             .s_runtime_error => |s_re| {
                 const unit_monotype = self.store.monotype_store.unit_idx;
@@ -748,7 +748,7 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
                     .diagnostic = s_re.diagnostic,
                 } }, unit_monotype, Region.zero());
                 const wildcard = try self.store.addPattern(self.allocator, .wildcard, unit_monotype);
-                try self.scratch_stmts.append(.{ .pattern = wildcard, .expr = expr });
+                try self.scratch_stmts.append(.{ .decl_const = .{ .pattern = wildcard, .expr = expr } });
             },
             // Compile-time declarations — no runtime behavior
             .s_import, .s_alias_decl, .s_nominal_decl, .s_type_anno, .s_type_var_alias => {},

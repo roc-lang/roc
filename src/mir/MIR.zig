@@ -193,9 +193,18 @@ pub const FieldNameSpan = extern struct {
 // --- Composite types ---
 
 /// A let binding in a block.
-pub const Stmt = struct {
-    pattern: PatternId,
-    expr: ExprId,
+pub const Stmt = union(enum) {
+    /// Immutable binding (e.g. `x = expr`)
+    decl_const: Binding,
+    /// Mutable binding (e.g. `x = expr` declared with `var`)
+    decl_var: Binding,
+    /// Mutation of existing var (e.g. `x = new_value`)
+    mutate_var: Binding,
+
+    pub const Binding = struct {
+        pattern: PatternId,
+        expr: ExprId,
+    };
 };
 
 /// A branch in a match expression.
