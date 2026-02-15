@@ -2626,9 +2626,12 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
 pub fn addTypeHeader(store: *NodeStore, typeHeader: CIR.TypeHeader, region: base.Region) Allocator.Error!CIR.TypeHeader.Idx {
-    std.debug.assert(typeHeader.args.span.start <= std.math.maxInt(u16));
     std.debug.assert(typeHeader.args.span.len <= std.math.maxInt(u16));
-    const packed_args: u32 = (@as(u32, @intCast(typeHeader.args.span.start)) << 16) | @as(u32, @intCast(typeHeader.args.span.len));
+    std.debug.assert(typeHeader.args.span.len == 0 or typeHeader.args.span.start <= std.math.maxInt(u16));
+    const packed_args: u32 = if (typeHeader.args.span.len == 0)
+        0
+    else
+        (@as(u32, @intCast(typeHeader.args.span.start)) << 16) | @as(u32, @intCast(typeHeader.args.span.len));
 
     var node = Node.init(.type_header);
     node.setPayload(.{ .type_header = .{

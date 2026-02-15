@@ -897,7 +897,8 @@ pub const Expr = union(enum) {
         pub fn getArgOwnership(self: LowLevel) []const ArgOwnership {
             return switch (self) {
                 // String operations - borrowing (read-only)
-                .str_is_empty, .str_is_eq, .str_contains, .str_starts_with, .str_ends_with, .str_count_utf8_bytes, .str_caseless_ascii_equals => &.{ .borrow, .borrow },
+                .str_is_empty, .str_count_utf8_bytes => &.{.borrow},
+                .str_is_eq, .str_contains, .str_starts_with, .str_ends_with, .str_caseless_ascii_equals => &.{ .borrow, .borrow },
 
                 // String operations - consuming (take ownership)
                 .str_concat => &.{ .consume, .borrow }, // first consumed, second borrowed
@@ -925,13 +926,14 @@ pub const Expr = union(enum) {
                 .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str => &.{.borrow},
 
                 // List operations - borrowing
-                .list_len, .list_is_empty, .list_get_unsafe => &.{.borrow},
+                .list_len, .list_is_empty => &.{.borrow},
+                .list_get_unsafe => &.{ .borrow, .borrow }, // list borrowed, index is value type
 
                 // List operations - consuming
                 .list_concat => &.{ .consume, .consume },
                 .list_with_capacity => &.{.borrow}, // capacity is value type
-                .list_sort_with => &.{.consume},
-                .list_append_unsafe => &.{.consume},
+                .list_sort_with => &.{ .consume, .borrow }, // list consumed, comparator borrowed
+                .list_append_unsafe => &.{ .consume, .borrow }, // list consumed, element borrowed
                 .list_append => &.{ .consume, .borrow }, // list consumed, element borrowed
                 .list_drop_at => &.{ .consume, .borrow }, // list consumed, index is value type
                 .list_sublist => &.{ .consume, .borrow }, // list consumed, {start, len} record is value type
