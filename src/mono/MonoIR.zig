@@ -269,6 +269,14 @@ pub const MonoWhenBranch = struct {
 pub const MonoIfBranchSpan = extern struct {
     start: u32,
     len: u16,
+
+    pub fn empty() MonoIfBranchSpan {
+        return .{ .start = undefined, .len = 0 };
+    }
+
+    pub fn isEmpty(self: MonoIfBranchSpan) bool {
+        return self.len == 0;
+    }
 };
 
 /// A branch in an if expression (condition + body)
