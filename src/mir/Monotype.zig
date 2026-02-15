@@ -152,6 +152,26 @@ pub const Store = struct {
     tags: std.ArrayListUnmanaged(Tag),
     fields: std.ArrayListUnmanaged(Field),
 
+    pub const Scratches = struct {
+        fields: base.Scratch(Field),
+        tags: base.Scratch(Tag),
+        idxs: base.Scratch(Idx),
+
+        pub fn init(allocator: Allocator) Allocator.Error!Scratches {
+            return .{
+                .fields = try base.Scratch(Field).init(allocator),
+                .tags = try base.Scratch(Tag).init(allocator),
+                .idxs = try base.Scratch(Idx).init(allocator),
+            };
+        }
+
+        pub fn deinit(self: *Scratches) void {
+            self.fields.deinit();
+            self.tags.deinit();
+            self.idxs.deinit();
+        }
+    };
+
     pub fn init() Store {
         return .{
             .monotypes = .empty,
@@ -232,6 +252,7 @@ pub const Store = struct {
         type_var: types.Var,
         builtin_indices: CIR.BuiltinIndices,
         seen: *std.AutoHashMap(types.Var, Idx),
+        scratches: *Scratches,
     ) Allocator.Error!Idx {
         const resolved = types_store.resolveVar(type_var);
 
@@ -247,10 +268,10 @@ pub const Store = struct {
             .alias => |alias| {
                 // Aliases are transparent — follow the backing var
                 const backing_var = types_store.getAliasBackingVar(alias);
-                return try self.fromTypeVar(allocator, types_store, backing_var, builtin_indices, seen);
+                return try self.fromTypeVar(allocator, types_store, backing_var, builtin_indices, seen, scratches);
             },
             .structure => |flat_type| {
-                return try self.fromFlatType(allocator, types_store, resolved.var_, flat_type, builtin_indices, seen);
+                return try self.fromFlatType(allocator, types_store, resolved.var_, flat_type, builtin_indices, seen, scratches);
             },
             .err => try self.addMonotype(allocator, .unit),
         };
@@ -264,10 +285,11 @@ pub const Store = struct {
         flat_type: types.FlatType,
         builtin_indices: CIR.BuiltinIndices,
         seen: *std.AutoHashMap(types.Var, Idx),
+        scratches: *Scratches,
     ) Allocator.Error!Idx {
         return switch (flat_type) {
             .nominal_type => |nominal| {
-                return try self.fromNominalType(allocator, types_store, var_, nominal, builtin_indices, seen);
+                return try self.fromNominalType(allocator, types_store, var_, nominal, builtin_indices, seen, scratches);
             },
             .empty_record => try self.addMonotype(allocator, .unit),
             .empty_tag_union => try self.addMonotype(allocator, .{ .tag_union = .{ .tags = TagSpan.empty() } }),
@@ -280,15 +302,15 @@ pub const Store = struct {
                 const names = fields_slice.items(.name);
                 const vars = fields_slice.items(.var_);
 
-                var mono_fields = std.ArrayList(Field).empty;
-                defer mono_fields.deinit(allocator);
+                const scratch_top = scratches.fields.top();
+                defer scratches.fields.clearFrom(scratch_top);
 
                 for (names, vars) |name, field_var| {
-                    const field_type = try self.fromTypeVar(allocator, types_store, field_var, builtin_indices, seen);
-                    try mono_fields.append(allocator, .{ .name = name, .type_idx = field_type });
+                    const field_type = try self.fromTypeVar(allocator, types_store, field_var, builtin_indices, seen, scratches);
+                    try scratches.fields.append(.{ .name = name, .type_idx = field_type });
                 }
 
-                const field_span = try self.addFields(allocator, mono_fields.items);
+                const field_span = try self.addFields(allocator, scratches.fields.sliceFromStart(scratch_top));
                 self.monotypes.items[@intFromEnum(placeholder_idx)] = .{ .record = .{ .fields = field_span } };
                 return placeholder_idx;
             },
@@ -301,15 +323,15 @@ pub const Store = struct {
                 const placeholder_idx = try self.addMonotype(allocator, .unit);
                 try seen.put(var_, placeholder_idx);
 
-                var mono_fields = std.ArrayList(Field).empty;
-                defer mono_fields.deinit(allocator);
+                const scratch_top = scratches.fields.top();
+                defer scratches.fields.clearFrom(scratch_top);
 
                 for (names, vars) |name, field_var| {
-                    const field_type = try self.fromTypeVar(allocator, types_store, field_var, builtin_indices, seen);
-                    try mono_fields.append(allocator, .{ .name = name, .type_idx = field_type });
+                    const field_type = try self.fromTypeVar(allocator, types_store, field_var, builtin_indices, seen, scratches);
+                    try scratches.fields.append(.{ .name = name, .type_idx = field_type });
                 }
 
-                const field_span = try self.addFields(allocator, mono_fields.items);
+                const field_span = try self.addFields(allocator, scratches.fields.sliceFromStart(scratch_top));
                 self.monotypes.items[@intFromEnum(placeholder_idx)] = .{ .record = .{ .fields = field_span } };
                 return placeholder_idx;
             },
@@ -318,15 +340,15 @@ pub const Store = struct {
                 try seen.put(var_, placeholder_idx);
 
                 const elem_vars = types_store.sliceVars(tuple.elems);
-                var mono_elems = std.ArrayList(Idx).empty;
-                defer mono_elems.deinit(allocator);
+                const scratch_top = scratches.idxs.top();
+                defer scratches.idxs.clearFrom(scratch_top);
 
                 for (elem_vars) |elem_var| {
-                    const elem_type = try self.fromTypeVar(allocator, types_store, elem_var, builtin_indices, seen);
-                    try mono_elems.append(allocator, elem_type);
+                    const elem_type = try self.fromTypeVar(allocator, types_store, elem_var, builtin_indices, seen, scratches);
+                    try scratches.idxs.append(elem_type);
                 }
 
-                const elem_span = try self.addIdxSpan(allocator, mono_elems.items);
+                const elem_span = try self.addIdxSpan(allocator, scratches.idxs.sliceFromStart(scratch_top));
                 self.monotypes.items[@intFromEnum(placeholder_idx)] = .{ .tuple = .{ .elems = elem_span } };
                 return placeholder_idx;
             },
@@ -338,30 +360,30 @@ pub const Store = struct {
                 const tag_names = tags_slice.items(.name);
                 const tag_args = tags_slice.items(.args);
 
-                var mono_tags = std.ArrayList(Tag).empty;
-                defer mono_tags.deinit(allocator);
+                const tags_top = scratches.tags.top();
+                defer scratches.tags.clearFrom(tags_top);
 
                 for (tag_names, tag_args) |name, args_range| {
                     const arg_vars = types_store.sliceVars(args_range);
-                    var payload_idxs = std.ArrayList(Idx).empty;
-                    defer payload_idxs.deinit(allocator);
+                    const idxs_top = scratches.idxs.top();
+                    defer scratches.idxs.clearFrom(idxs_top);
 
                     for (arg_vars) |arg_var| {
-                        const payload_type = try self.fromTypeVar(allocator, types_store, arg_var, builtin_indices, seen);
-                        try payload_idxs.append(allocator, payload_type);
+                        const payload_type = try self.fromTypeVar(allocator, types_store, arg_var, builtin_indices, seen, scratches);
+                        try scratches.idxs.append(payload_type);
                     }
 
-                    const payloads_span = try self.addIdxSpan(allocator, payload_idxs.items);
-                    try mono_tags.append(allocator, .{ .name = name, .payloads = payloads_span });
+                    const payloads_span = try self.addIdxSpan(allocator, scratches.idxs.sliceFromStart(idxs_top));
+                    try scratches.tags.append(.{ .name = name, .payloads = payloads_span });
                 }
 
-                const tag_span = try self.addTags(allocator, mono_tags.items);
+                const tag_span = try self.addTags(allocator, scratches.tags.sliceFromStart(tags_top));
                 self.monotypes.items[@intFromEnum(placeholder_idx)] = .{ .tag_union = .{ .tags = tag_span } };
                 return placeholder_idx;
             },
-            .fn_pure => |func| try self.fromFuncType(allocator, types_store, var_, func, false, builtin_indices, seen),
-            .fn_effectful => |func| try self.fromFuncType(allocator, types_store, var_, func, true, builtin_indices, seen),
-            .fn_unbound => |func| try self.fromFuncType(allocator, types_store, var_, func, false, builtin_indices, seen),
+            .fn_pure => |func| try self.fromFuncType(allocator, types_store, var_, func, false, builtin_indices, seen, scratches),
+            .fn_effectful => |func| try self.fromFuncType(allocator, types_store, var_, func, true, builtin_indices, seen, scratches),
+            .fn_unbound => |func| try self.fromFuncType(allocator, types_store, var_, func, false, builtin_indices, seen, scratches),
         };
     }
 
@@ -374,21 +396,22 @@ pub const Store = struct {
         effectful: bool,
         builtin_indices: CIR.BuiltinIndices,
         seen: *std.AutoHashMap(types.Var, Idx),
+        scratches: *Scratches,
     ) Allocator.Error!Idx {
         const placeholder_idx = try self.addMonotype(allocator, .unit);
         try seen.put(var_, placeholder_idx);
 
         const arg_vars = types_store.sliceVars(func.args);
-        var mono_args = std.ArrayList(Idx).empty;
-        defer mono_args.deinit(allocator);
+        const scratch_top = scratches.idxs.top();
+        defer scratches.idxs.clearFrom(scratch_top);
 
         for (arg_vars) |arg_var| {
-            const arg_type = try self.fromTypeVar(allocator, types_store, arg_var, builtin_indices, seen);
-            try mono_args.append(allocator, arg_type);
+            const arg_type = try self.fromTypeVar(allocator, types_store, arg_var, builtin_indices, seen, scratches);
+            try scratches.idxs.append(arg_type);
         }
 
-        const args_span = try self.addIdxSpan(allocator, mono_args.items);
-        const ret = try self.fromTypeVar(allocator, types_store, func.ret, builtin_indices, seen);
+        const args_span = try self.addIdxSpan(allocator, scratches.idxs.sliceFromStart(scratch_top));
+        const ret = try self.fromTypeVar(allocator, types_store, func.ret, builtin_indices, seen, scratches);
 
         self.monotypes.items[@intFromEnum(placeholder_idx)] = .{ .func = .{
             .args = args_span,
@@ -406,6 +429,7 @@ pub const Store = struct {
         nominal: types.NominalType,
         builtin_indices: CIR.BuiltinIndices,
         seen: *std.AutoHashMap(types.Var, Idx),
+        scratches: *Scratches,
     ) Allocator.Error!Idx {
         const ident = nominal.ident.ident_idx;
 
@@ -430,7 +454,7 @@ pub const Store = struct {
         if (ident == builtin_indices.list_ident) {
             const type_args = types_store.sliceNominalArgs(nominal);
             if (type_args.len > 0) {
-                const elem_type = try self.fromTypeVar(allocator, types_store, type_args[0], builtin_indices, seen);
+                const elem_type = try self.fromTypeVar(allocator, types_store, type_args[0], builtin_indices, seen, scratches);
                 return try self.addMonotype(allocator, .{ .list = .{ .elem = elem_type } });
             }
             // List with no type arg — shouldn't happen in well-typed code
@@ -441,7 +465,7 @@ pub const Store = struct {
         if (ident == builtin_indices.box_ident) {
             const type_args = types_store.sliceNominalArgs(nominal);
             if (type_args.len > 0) {
-                const inner_type = try self.fromTypeVar(allocator, types_store, type_args[0], builtin_indices, seen);
+                const inner_type = try self.fromTypeVar(allocator, types_store, type_args[0], builtin_indices, seen, scratches);
                 return try self.addMonotype(allocator, .{ .box = .{ .inner = inner_type } });
             }
             return try self.addMonotype(allocator, .unit);
@@ -460,7 +484,7 @@ pub const Store = struct {
         try seen.put(nominal_var, placeholder_idx);
 
         const backing_var = types_store.getNominalBackingVar(nominal);
-        const backing_idx = try self.fromTypeVar(allocator, types_store, backing_var, builtin_indices, seen);
+        const backing_idx = try self.fromTypeVar(allocator, types_store, backing_var, builtin_indices, seen, scratches);
 
         // Copy the resolved backing type's value into our placeholder slot.
         // This value-copy is safe (unlike the other handlers which build fresh

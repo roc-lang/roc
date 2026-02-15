@@ -391,7 +391,7 @@ test "Lower: init and deinit" {
 
     const all_module_envs = [_]*ModuleEnv{module_env};
 
-    var lower = Lower.init(
+    var lower = try Lower.init(
         test_allocator,
         &store,
         @as([]const *ModuleEnv, &all_module_envs),

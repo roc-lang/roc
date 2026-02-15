@@ -62,6 +62,15 @@ lowered_symbols: std.AutoHashMap(u64, MIR.ExprId),
 /// Tracks symbols currently being lowered (recursion guard).
 in_progress_defs: std.AutoHashMap(u64, void),
 
+scratch_expr_ids: base.Scratch(MIR.ExprId),
+scratch_pattern_ids: base.Scratch(MIR.PatternId),
+scratch_ident_idxs: base.Scratch(Ident.Idx),
+scratch_branches: base.Scratch(MIR.Branch),
+scratch_branch_patterns: base.Scratch(MIR.BranchPattern),
+scratch_stmts: base.Scratch(MIR.Stmt),
+scratch_captures: base.Scratch(MIR.Capture),
+mono_scratches: Monotype.Store.Scratches,
+
 // --- Init/Deinit ---
 
 pub fn init(
@@ -71,7 +80,7 @@ pub fn init(
     types_store: *const types.Store,
     builtin_indices: CIR.BuiltinIndices,
     current_module_idx: u32,
-) Self {
+) Allocator.Error!Self {
     return .{
         .allocator = allocator,
         .store = store,
@@ -83,6 +92,14 @@ pub fn init(
         .type_var_seen = std.AutoHashMap(types.Var, Monotype.Idx).init(allocator),
         .lowered_symbols = std.AutoHashMap(u64, MIR.ExprId).init(allocator),
         .in_progress_defs = std.AutoHashMap(u64, void).init(allocator),
+        .scratch_expr_ids = try base.Scratch(MIR.ExprId).init(allocator),
+        .scratch_pattern_ids = try base.Scratch(MIR.PatternId).init(allocator),
+        .scratch_ident_idxs = try base.Scratch(Ident.Idx).init(allocator),
+        .scratch_branches = try base.Scratch(MIR.Branch).init(allocator),
+        .scratch_branch_patterns = try base.Scratch(MIR.BranchPattern).init(allocator),
+        .scratch_stmts = try base.Scratch(MIR.Stmt).init(allocator),
+        .scratch_captures = try base.Scratch(MIR.Capture).init(allocator),
+        .mono_scratches = try Monotype.Store.Scratches.init(allocator),
     };
 }
 
@@ -91,6 +108,14 @@ pub fn deinit(self: *Self) void {
     self.type_var_seen.deinit();
     self.lowered_symbols.deinit();
     self.in_progress_defs.deinit();
+    self.scratch_expr_ids.deinit();
+    self.scratch_pattern_ids.deinit();
+    self.scratch_ident_idxs.deinit();
+    self.scratch_branches.deinit();
+    self.scratch_branch_patterns.deinit();
+    self.scratch_stmts.deinit();
+    self.scratch_captures.deinit();
+    self.mono_scratches.deinit();
 }
 
 // --- Public API ---
@@ -352,6 +377,7 @@ fn resolveMonotype(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!Monotype
         type_var,
         self.builtin_indices,
         &self.type_var_seen,
+        &self.mono_scratches,
     );
 }
 
@@ -360,15 +386,15 @@ fn lowerExprSpan(self: *Self, module_env: *const ModuleEnv, span: CIR.Expr.Span)
     const cir_ids = module_env.store.sliceExpr(span);
     if (cir_ids.len == 0) return MIR.ExprSpan.empty();
 
-    var mir_ids = std.ArrayList(MIR.ExprId).empty;
-    defer mir_ids.deinit(self.allocator);
+    const scratch_top = self.scratch_expr_ids.top();
+    defer self.scratch_expr_ids.clearFrom(scratch_top);
 
     for (cir_ids) |cir_id| {
         const mir_id = try self.lowerExpr(cir_id);
-        try mir_ids.append(self.allocator, mir_id);
+        try self.scratch_expr_ids.append(mir_id);
     }
 
-    return try self.store.addExprSpan(self.allocator, mir_ids.items);
+    return try self.store.addExprSpan(self.allocator, self.scratch_expr_ids.sliceFromStart(scratch_top));
 }
 
 /// Lower a CIR Pattern.Span to an MIR PatternSpan.
@@ -376,15 +402,15 @@ fn lowerPatternSpan(self: *Self, module_env: *const ModuleEnv, span: CIR.Pattern
     const cir_ids = module_env.store.slicePatterns(span);
     if (cir_ids.len == 0) return MIR.PatternSpan.empty();
 
-    var mir_ids = std.ArrayList(MIR.PatternId).empty;
-    defer mir_ids.deinit(self.allocator);
+    const scratch_top = self.scratch_pattern_ids.top();
+    defer self.scratch_pattern_ids.clearFrom(scratch_top);
 
     for (cir_ids) |cir_id| {
         const mir_id = try self.lowerPattern(module_env, cir_id);
-        try mir_ids.append(self.allocator, mir_id);
+        try self.scratch_pattern_ids.append(mir_id);
     }
 
-    return try self.store.addPatternSpan(self.allocator, mir_ids.items);
+    return try self.store.addPatternSpan(self.allocator, self.scratch_pattern_ids.sliceFromStart(scratch_top));
 }
 
 /// Lower a CIR pattern to an MIR pattern.
@@ -397,6 +423,7 @@ fn lowerPattern(self: *Self, module_env: *const ModuleEnv, pattern_idx: CIR.Patt
         type_var,
         self.builtin_indices,
         &self.type_var_seen,
+        &self.mono_scratches,
     );
 
     return switch (pattern) {
@@ -467,21 +494,21 @@ fn lowerPattern(self: *Self, module_env: *const ModuleEnv, pattern_idx: CIR.Patt
         },
         .record_destructure => |record_pat| {
             const cir_destructs = module_env.store.sliceRecordDestructs(record_pat.destructs);
-            var destruct_pats = std.ArrayList(MIR.PatternId).empty;
-            defer destruct_pats.deinit(self.allocator);
-            var field_names = std.ArrayList(Ident.Idx).empty;
-            defer field_names.deinit(self.allocator);
+            const pats_top = self.scratch_pattern_ids.top();
+            defer self.scratch_pattern_ids.clearFrom(pats_top);
+            const names_top = self.scratch_ident_idxs.top();
+            defer self.scratch_ident_idxs.clearFrom(names_top);
 
             for (cir_destructs) |destruct_idx| {
                 const destruct = module_env.store.getRecordDestruct(destruct_idx);
-                try field_names.append(self.allocator, destruct.label);
+                try self.scratch_ident_idxs.append(destruct.label);
                 const pat_idx = destruct.kind.toPatternIdx();
                 const mir_pat = try self.lowerPattern(module_env, pat_idx);
-                try destruct_pats.append(self.allocator, mir_pat);
+                try self.scratch_pattern_ids.append(mir_pat);
             }
 
-            const destructs_span = try self.store.addPatternSpan(self.allocator, destruct_pats.items);
-            const names_span = try self.store.addFieldNameSpan(self.allocator, field_names.items);
+            const destructs_span = try self.store.addPatternSpan(self.allocator, self.scratch_pattern_ids.sliceFromStart(pats_top));
+            const names_span = try self.store.addFieldNameSpan(self.allocator, self.scratch_ident_idxs.sliceFromStart(names_top));
             return try self.store.addPattern(self.allocator, .{ .record_destructure = .{
                 .destructs = destructs_span,
                 .field_names = names_span,
@@ -542,8 +569,8 @@ fn lowerMatch(self: *Self, module_env: *const ModuleEnv, match_expr: CIR.Expr.Ma
     const cond = try self.lowerExpr(match_expr.cond);
     const cir_branch_indices = module_env.store.sliceMatchBranches(match_expr.branches);
 
-    var mir_branches = std.ArrayList(MIR.Branch).empty;
-    defer mir_branches.deinit(self.allocator);
+    const branches_top = self.scratch_branches.top();
+    defer self.scratch_branches.clearFrom(branches_top);
 
     for (cir_branch_indices) |branch_idx| {
         const cir_branch = module_env.store.getMatchBranch(branch_idx);
@@ -555,20 +582,20 @@ fn lowerMatch(self: *Self, module_env: *const ModuleEnv, match_expr: CIR.Expr.Ma
 
         // Lower branch patterns
         const cir_bp_indices = module_env.store.sliceMatchBranchPatterns(cir_branch.patterns);
-        var branch_pats = std.ArrayList(MIR.BranchPattern).empty;
-        defer branch_pats.deinit(self.allocator);
+        const bp_top = self.scratch_branch_patterns.top();
+        defer self.scratch_branch_patterns.clearFrom(bp_top);
 
         for (cir_bp_indices) |bp_idx| {
             const cir_bp = module_env.store.getMatchBranchPattern(bp_idx);
             const pat = try self.lowerPattern(module_env, cir_bp.pattern);
-            try branch_pats.append(self.allocator, .{ .pattern = pat, .degenerate = cir_bp.degenerate });
+            try self.scratch_branch_patterns.append(.{ .pattern = pat, .degenerate = cir_bp.degenerate });
         }
 
-        const bp_span = try self.store.addBranchPatterns(self.allocator, branch_pats.items);
-        try mir_branches.append(self.allocator, .{ .patterns = bp_span, .body = body, .guard = guard });
+        const bp_span = try self.store.addBranchPatterns(self.allocator, self.scratch_branch_patterns.sliceFromStart(bp_top));
+        try self.scratch_branches.append(.{ .patterns = bp_span, .body = body, .guard = guard });
     }
 
-    const branch_span = try self.store.addBranches(self.allocator, mir_branches.items);
+    const branch_span = try self.store.addBranches(self.allocator, self.scratch_branches.sliceFromStart(branches_top));
     return try self.store.addExpr(self.allocator, .{ .match_expr = .{
         .cond = cond,
         .branches = branch_span,
@@ -596,16 +623,16 @@ fn lowerClosure(self: *Self, module_env: *const ModuleEnv, closure: CIR.Expr.Clo
 
     // Lower captures
     const cir_capture_indices = module_env.store.sliceCaptures(closure.captures);
-    var mir_captures = std.ArrayList(MIR.Capture).empty;
-    defer mir_captures.deinit(self.allocator);
+    const captures_top = self.scratch_captures.top();
+    defer self.scratch_captures.clearFrom(captures_top);
 
     for (cir_capture_indices) |cap_idx| {
         const cap = module_env.store.getCapture(cap_idx);
         const symbol = try self.patternToSymbol(cap.pattern_idx);
-        try mir_captures.append(self.allocator, .{ .symbol = symbol });
+        try self.scratch_captures.append(.{ .symbol = symbol });
     }
 
-    const capture_span = try self.store.addCaptures(self.allocator, mir_captures.items);
+    const capture_span = try self.store.addCaptures(self.allocator, self.scratch_captures.sliceFromStart(captures_top));
 
     return try self.store.addExpr(self.allocator, .{ .lambda = .{
         .params = params,
@@ -628,8 +655,8 @@ fn lowerCall(self: *Self, module_env: *const ModuleEnv, call: anytype, monotype:
 /// Lower `e_block` to MIR block.
 fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotype: Monotype.Idx, region: Region) Allocator.Error!MIR.ExprId {
     const cir_stmt_indices = module_env.store.sliceStatements(block.stmts);
-    var mir_stmts = std.ArrayList(MIR.Stmt).empty;
-    defer mir_stmts.deinit(self.allocator);
+    const stmts_top = self.scratch_stmts.top();
+    defer self.scratch_stmts.clearFrom(stmts_top);
 
     for (cir_stmt_indices) |stmt_idx| {
         const cir_stmt = module_env.store.getStatement(stmt_idx);
@@ -637,42 +664,42 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
             .s_decl => |decl| {
                 const pat = try self.lowerPattern(module_env, decl.pattern);
                 const expr = try self.lowerExpr(decl.expr);
-                try mir_stmts.append(self.allocator, .{ .pattern = pat, .expr = expr });
+                try self.scratch_stmts.append(.{ .pattern = pat, .expr = expr });
             },
             .s_var => |var_decl| {
                 const pat = try self.lowerPattern(module_env, var_decl.pattern_idx);
                 const expr = try self.lowerExpr(var_decl.expr);
-                try mir_stmts.append(self.allocator, .{ .pattern = pat, .expr = expr });
+                try self.scratch_stmts.append(.{ .pattern = pat, .expr = expr });
             },
             .s_reassign => |reassign| {
                 const pat = try self.lowerPattern(module_env, reassign.pattern_idx);
                 const expr = try self.lowerExpr(reassign.expr);
-                try mir_stmts.append(self.allocator, .{ .pattern = pat, .expr = expr });
+                try self.scratch_stmts.append(.{ .pattern = pat, .expr = expr });
             },
             .s_expr => |s_expr| {
                 // Expression statement: bind to wildcard
                 const expr = try self.lowerExpr(s_expr.expr);
                 const expr_type = self.store.typeOf(@enumFromInt(@intFromEnum(expr)));
                 const wildcard = try self.store.addPattern(self.allocator, .wildcard, expr_type);
-                try mir_stmts.append(self.allocator, .{ .pattern = wildcard, .expr = expr });
+                try self.scratch_stmts.append(.{ .pattern = wildcard, .expr = expr });
             },
             .s_dbg => |s_dbg| {
                 const expr = try self.lowerExpr(s_dbg.expr);
                 const expr_type = self.store.typeOf(@enumFromInt(@intFromEnum(expr)));
                 const wildcard = try self.store.addPattern(self.allocator, .wildcard, expr_type);
-                try mir_stmts.append(self.allocator, .{ .pattern = wildcard, .expr = expr });
+                try self.scratch_stmts.append(.{ .pattern = wildcard, .expr = expr });
             },
             .s_expect => |s_expect| {
                 const expr = try self.lowerExpr(s_expect.body);
                 const expr_type = self.store.typeOf(@enumFromInt(@intFromEnum(expr)));
                 const wildcard = try self.store.addPattern(self.allocator, .wildcard, expr_type);
-                try mir_stmts.append(self.allocator, .{ .pattern = wildcard, .expr = expr });
+                try self.scratch_stmts.append(.{ .pattern = wildcard, .expr = expr });
             },
             .s_crash => |s_crash| {
                 const unit_monotype = try self.store.monotype_store.addMonotype(self.allocator, .unit);
                 const expr = try self.store.addExpr(self.allocator, .{ .crash = s_crash.msg }, unit_monotype, Region.zero());
                 const wildcard = try self.store.addPattern(self.allocator, .wildcard, unit_monotype);
-                try mir_stmts.append(self.allocator, .{ .pattern = wildcard, .expr = expr });
+                try self.scratch_stmts.append(.{ .pattern = wildcard, .expr = expr });
             },
             .s_for => |s_for| {
                 const list_expr = try self.lowerExpr(s_for.expr);
@@ -685,7 +712,7 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
                     .body = body,
                 } }, unit_monotype, Region.zero());
                 const wildcard = try self.store.addPattern(self.allocator, .wildcard, unit_monotype);
-                try mir_stmts.append(self.allocator, .{ .pattern = wildcard, .expr = expr });
+                try self.scratch_stmts.append(.{ .pattern = wildcard, .expr = expr });
             },
             .s_while => |s_while| {
                 const cond = try self.lowerExpr(s_while.cond);
@@ -696,13 +723,13 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
                     .body = body,
                 } }, unit_monotype, Region.zero());
                 const wildcard = try self.store.addPattern(self.allocator, .wildcard, unit_monotype);
-                try mir_stmts.append(self.allocator, .{ .pattern = wildcard, .expr = expr });
+                try self.scratch_stmts.append(.{ .pattern = wildcard, .expr = expr });
             },
             .s_break => {
                 const unit_monotype = try self.store.monotype_store.addMonotype(self.allocator, .unit);
                 const expr = try self.store.addExpr(self.allocator, .{ .break_expr = {} }, unit_monotype, Region.zero());
                 const wildcard = try self.store.addPattern(self.allocator, .wildcard, unit_monotype);
-                try mir_stmts.append(self.allocator, .{ .pattern = wildcard, .expr = expr });
+                try self.scratch_stmts.append(.{ .pattern = wildcard, .expr = expr });
             },
             .s_return => |s_return| {
                 const inner = try self.lowerExpr(s_return.expr);
@@ -711,7 +738,7 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
                     .expr = inner,
                 } }, unit_monotype, Region.zero());
                 const wildcard = try self.store.addPattern(self.allocator, .wildcard, unit_monotype);
-                try mir_stmts.append(self.allocator, .{ .pattern = wildcard, .expr = expr });
+                try self.scratch_stmts.append(.{ .pattern = wildcard, .expr = expr });
             },
             .s_runtime_error => |s_re| {
                 const unit_monotype = try self.store.monotype_store.addMonotype(self.allocator, .unit);
@@ -719,14 +746,14 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
                     .diagnostic = s_re.diagnostic,
                 } }, unit_monotype, Region.zero());
                 const wildcard = try self.store.addPattern(self.allocator, .wildcard, unit_monotype);
-                try mir_stmts.append(self.allocator, .{ .pattern = wildcard, .expr = expr });
+                try self.scratch_stmts.append(.{ .pattern = wildcard, .expr = expr });
             },
             // Compile-time declarations — no runtime behavior
             .s_import, .s_alias_decl, .s_nominal_decl, .s_type_anno, .s_type_var_alias => {},
         }
     }
 
-    const stmt_span = try self.store.addStmts(self.allocator, mir_stmts.items);
+    const stmt_span = try self.store.addStmts(self.allocator, self.scratch_stmts.sliceFromStart(stmts_top));
     const final_expr = try self.lowerExpr(block.final_expr);
 
     return try self.store.addExpr(self.allocator, .{ .block = .{
@@ -931,14 +958,14 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, da: anytype, monoty
         // Build args as [receiver] ++ explicit_args
         // e.g. list.map(fn) → List.map(list, fn)
         const explicit_args = module_env.store.sliceExpr(args_span);
-        var all_args = std.ArrayList(MIR.ExprId).empty;
-        defer all_args.deinit(self.allocator);
-        try all_args.append(self.allocator, receiver);
+        const args_top = self.scratch_expr_ids.top();
+        defer self.scratch_expr_ids.clearFrom(args_top);
+        try self.scratch_expr_ids.append(receiver);
         for (explicit_args) |arg_idx| {
             const arg = try self.lowerExpr(arg_idx);
-            try all_args.append(self.allocator, arg);
+            try self.scratch_expr_ids.append(arg);
         }
-        const args = try self.store.addExprSpan(self.allocator, all_args.items);
+        const args = try self.store.addExprSpan(self.allocator, self.scratch_expr_ids.sliceFromStart(args_top));
 
         return try self.store.addExpr(self.allocator, .{ .call = .{
             .func = func_expr,
@@ -957,20 +984,20 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, da: anytype, monoty
 fn lowerRecord(self: *Self, module_env: *const ModuleEnv, record: anytype, monotype: Monotype.Idx, region: Region) Allocator.Error!MIR.ExprId {
     const cir_field_indices = module_env.store.sliceRecordFields(record.fields);
 
-    var field_exprs = std.ArrayList(MIR.ExprId).empty;
-    defer field_exprs.deinit(self.allocator);
-    var field_names = std.ArrayList(Ident.Idx).empty;
-    defer field_names.deinit(self.allocator);
+    const exprs_top = self.scratch_expr_ids.top();
+    defer self.scratch_expr_ids.clearFrom(exprs_top);
+    const names_top = self.scratch_ident_idxs.top();
+    defer self.scratch_ident_idxs.clearFrom(names_top);
 
     for (cir_field_indices) |field_idx| {
         const field = module_env.store.getRecordField(field_idx);
         const expr = try self.lowerExpr(field.value);
-        try field_exprs.append(self.allocator, expr);
-        try field_names.append(self.allocator, field.name);
+        try self.scratch_expr_ids.append(expr);
+        try self.scratch_ident_idxs.append(field.name);
     }
 
-    const fields_span = try self.store.addExprSpan(self.allocator, field_exprs.items);
-    const names_span = try self.store.addFieldNameSpan(self.allocator, field_names.items);
+    const fields_span = try self.store.addExprSpan(self.allocator, self.scratch_expr_ids.sliceFromStart(exprs_top));
+    const names_span = try self.store.addFieldNameSpan(self.allocator, self.scratch_ident_idxs.sliceFromStart(names_top));
 
     return try self.store.addExpr(self.allocator, .{ .record = .{
         .fields = fields_span,
