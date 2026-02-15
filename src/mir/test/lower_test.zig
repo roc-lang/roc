@@ -475,6 +475,18 @@ test "lowerExpr: if-else desugars to match" {
     try testing.expect(env.mir_store.getExpr(expr) == .match_expr);
 }
 
+test "lowerExpr: binop callee lookup has function monotype" {
+    var env = try MirTestEnv.initExpr("1 + 2");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    // Binop desugars to a call
+    try testing.expect(result == .call);
+    // The callee lookup must have a function monotype, not the call's result type
+    const func_monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(result.call.func));
+    try testing.expect(func_monotype == .func);
+}
+
 test "lowerExpr: block with decl_const" {
     var env = try MirTestEnv.initExpr(
         \\{
