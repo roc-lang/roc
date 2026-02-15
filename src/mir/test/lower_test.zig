@@ -507,3 +507,194 @@ test "lowerExpr: Bool.and short-circuit desugars to match" {
     try testing.expect(result == .block);
     try testing.expect(env.mir_store.getExpr(result.block.final_expr) == .match_expr);
 }
+
+// --- Gap #23: fromTypeVar monotype resolution tests ---
+
+test "fromTypeVar: int with suffix resolves to prim i64" {
+    var env = try MirTestEnv.initExpr("42.I64");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
+    try testing.expect(monotype == .prim);
+    try testing.expectEqual(Monotype.Prim.i64, monotype.prim);
+}
+
+test "fromTypeVar: string resolves to valid monotype" {
+    var env = try MirTestEnv.initExpr(
+        \\"hello"
+    );
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    // The expression itself is a string
+    try testing.expect(env.mir_store.getExpr(expr) == .str);
+    // The monotype should be resolved (not unit placeholder)
+    const type_idx = env.mir_store.typeOf(expr);
+    try testing.expect(!type_idx.isNone());
+}
+
+test "fromTypeVar: list resolves to valid monotype" {
+    var env = try MirTestEnv.initExpr("[1.I64, 2.I64, 3.I64]");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    // The expression itself is a list
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result == .list);
+    try testing.expectEqual(@as(u16, 3), result.list.elems.len);
+    // The monotype should be resolved (not unit placeholder)
+    const type_idx = env.mir_store.typeOf(expr);
+    try testing.expect(!type_idx.isNone());
+}
+
+test "fromTypeVar: record resolves to record with fields" {
+    var env = try MirTestEnv.initExpr("{ x: 1, y: 2 }");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
+    try testing.expect(monotype == .record);
+    try testing.expectEqual(@as(u16, 2), monotype.record.fields.len);
+}
+
+test "fromTypeVar: lambda resolves to func type" {
+    var env = try MirTestEnv.initExpr("|x| x");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
+    try testing.expect(monotype == .func);
+    try testing.expectEqual(@as(u16, 1), monotype.func.args.len);
+}
+
+test "fromTypeVar: tag resolves to tag_union" {
+    var env = try MirTestEnv.initExpr("Ok(42)");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
+    try testing.expect(monotype == .tag_union);
+}
+
+test "fromTypeVar: tuple resolves to tuple type" {
+    var env = try MirTestEnv.initExpr(
+        \\(1, "hello")
+    );
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
+    try testing.expect(monotype == .tuple);
+    try testing.expectEqual(@as(u16, 2), monotype.tuple.elems.len);
+}
+
+// --- Gap #25: Recursive types in fromTypeVar ---
+
+test "fromTypeVar: recursive linked list type completes without hanging" {
+    var env = try MirTestEnv.initModule("ConsList",
+        \\ConsList := [Nil, Cons(U64, ConsList)]
+        \\
+        \\x : ConsList
+        \\x = ConsList.Cons(1, ConsList.Nil)
+    );
+    defer env.deinit();
+    const expr = try env.lowerNamedDef("x");
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result == .tag);
+    const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
+    try testing.expect(monotype == .tag_union);
+}
+
+test "fromTypeVar: recursive binary tree type completes without hanging" {
+    var env = try MirTestEnv.initModule("Tree",
+        \\Tree := [Empty, Node({ value: U64, left: Tree, right: Tree })]
+        \\
+        \\x : Tree
+        \\x = Tree.Empty
+    );
+    defer env.deinit();
+    const expr = try env.lowerNamedDef("x");
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result == .tag);
+    const monotype = env.mir_store.monotype_store.getMonotype(env.mir_store.typeOf(expr));
+    try testing.expect(monotype == .tag_union);
+}
+
+// --- Gap #26: lowerExternalDef recursion guard ---
+
+test "lowerExternalDef: recursion guard returns lookup placeholder" {
+    var env = try MirTestEnv.initModule("Test",
+        \\my_val = 42
+    );
+    defer env.deinit();
+    const def_info = try env.getDefExprByName("my_val");
+    const symbol = MIR.Symbol{ .module_idx = 0, .ident_idx = def_info.ident_idx };
+
+    // Manually insert the symbol into in_progress_defs to simulate recursion
+    const symbol_key: u64 = @bitCast(symbol);
+    try env.lower.in_progress_defs.put(symbol_key, {});
+
+    const result = try env.lower.lowerExternalDef(symbol, def_info.expr_idx);
+    const expr = env.mir_store.getExpr(result);
+    // The recursion guard should return a lookup placeholder
+    try testing.expect(expr == .lookup);
+    // The type should be unit_idx (the guard behavior)
+    try testing.expectEqual(env.mir_store.monotype_store.unit_idx, env.mir_store.typeOf(result));
+}
+
+test "lowerExternalDef: caching returns same ExprId on second call" {
+    var env = try MirTestEnv.initModule("Test",
+        \\my_val = 42
+    );
+    defer env.deinit();
+    const def_info = try env.getDefExprByName("my_val");
+    const symbol = MIR.Symbol{ .module_idx = 0, .ident_idx = def_info.ident_idx };
+
+    const first = try env.lower.lowerExternalDef(symbol, def_info.expr_idx);
+    const second = try env.lower.lowerExternalDef(symbol, def_info.expr_idx);
+    try testing.expectEqual(first, second);
+}
+
+// --- Gap #24: Cross-module MIR lowering ---
+
+test "cross-module: type module import lowers tag constructor" {
+    // Module A defines a nominal type
+    var env_a = try MirTestEnv.initModule("A",
+        \\A := [A(U64)].{
+        \\  get_value : A -> U64
+        \\  get_value = |A.A(val)| val
+        \\}
+    );
+    defer env_a.deinit();
+
+    // Module B imports A and constructs a value
+    var env_b = try MirTestEnv.initWithImport("B",
+        \\import A
+        \\
+        \\main = A.A(42)
+    , "A", &env_a);
+    defer env_b.deinit();
+
+    const expr = try env_b.lowerFirstDef();
+    // The expression should lower successfully (not be a runtime error)
+    const result = env_b.mir_store.getExpr(expr);
+    try testing.expect(result != .runtime_err_type);
+}
+
+test "cross-module: type module method call lowers successfully" {
+    // Module A defines a nominal type with a method
+    var env_a = try MirTestEnv.initModule("A",
+        \\A := [A(U64)].{
+        \\  get_value : A -> U64
+        \\  get_value = |A.A(val)| val
+        \\}
+    );
+    defer env_a.deinit();
+
+    // Module B imports A and calls a method
+    var env_b = try MirTestEnv.initWithImport("B",
+        \\import A
+        \\
+        \\main = A.get_value(A.A(42))
+    , "A", &env_a);
+    defer env_b.deinit();
+
+    const expr = try env_b.lowerFirstDef();
+    // The expression should lower successfully (not be a runtime error)
+    const result = env_b.mir_store.getExpr(expr);
+    try testing.expect(result != .runtime_err_type);
+}

@@ -105,6 +105,8 @@ lower: *Lower,
 
 builtin_module: LoadedModule,
 owned_source: ?[]u8 = null,
+owns_builtin_module: bool = true,
+imported_envs_list: ?std.ArrayList(*const ModuleEnv) = null,
 
 const MirTestEnv = @This();
 
@@ -257,6 +259,195 @@ pub fn lowerFirstDef(self: *MirTestEnv) !MIR.ExprId {
     return self.lower.lowerExpr(first_def.expr);
 }
 
+/// Lower a named def's expression and return the MIR ExprId.
+pub fn lowerNamedDef(self: *MirTestEnv, name: []const u8) !MIR.ExprId {
+    const defs_slice = self.module_env.store.sliceDefs(self.module_env.all_defs);
+    for (defs_slice) |def_idx| {
+        const def = self.module_env.store.getDef(def_idx);
+        const pattern = self.module_env.store.getPattern(def.pattern);
+        if (pattern == .assign) {
+            const ident_text = self.module_env.getIdent(pattern.assign.ident);
+            if (std.mem.eql(u8, ident_text, name)) {
+                return self.lower.lowerExpr(def.expr);
+            }
+        }
+    }
+    return error.TestUnexpectedResult;
+}
+
+/// Get the CIR ident and expr indices for a named def, for direct lowerExternalDef calls.
+pub fn getDefExprByName(self: *MirTestEnv, name: []const u8) !struct { ident_idx: base.Ident.Idx, expr_idx: CIR.Expr.Idx } {
+    const defs_slice = self.module_env.store.sliceDefs(self.module_env.all_defs);
+    for (defs_slice) |def_idx| {
+        const def = self.module_env.store.getDef(def_idx);
+        const pattern = self.module_env.store.getPattern(def.pattern);
+        if (pattern == .assign) {
+            const ident_text = self.module_env.getIdent(pattern.assign.ident);
+            if (std.mem.eql(u8, ident_text, name)) {
+                return .{ .ident_idx = pattern.assign.ident, .expr_idx = def.expr };
+            }
+        }
+    }
+    return error.TestUnexpectedResult;
+}
+
+/// Initialize with raw source (no `main =` wrapping), for type modules and nominal type tests.
+pub fn initModule(module_name: []const u8, source: []const u8) !MirTestEnv {
+    return initFull(module_name, source);
+}
+
+/// Initialize with an import from another MirTestEnv module.
+pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_name: []const u8, other_env: *const MirTestEnv) !MirTestEnv {
+    const gpa = std.testing.allocator;
+
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(gpa);
+    defer allocators.deinit();
+
+    const module_env: *ModuleEnv = try gpa.create(ModuleEnv);
+    errdefer gpa.destroy(module_env);
+
+    const can_ptr = try gpa.create(Can);
+    errdefer gpa.destroy(can_ptr);
+
+    var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
+    defer module_envs.deinit();
+
+    // Reuse the Builtin module from the imported module
+    const builtin_indices = try deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    const builtin_env = other_env.builtin_module.env;
+
+    module_env.* = try ModuleEnv.init(gpa, source);
+    errdefer module_env.deinit();
+
+    module_env.common.source = source;
+    module_env.module_name = module_name;
+    module_env.display_module_name_idx = try module_env.insertIdent(base.Ident.for_text(module_name));
+    module_env.qualified_module_ident = module_env.display_module_name_idx;
+    try module_env.common.calcLineStarts(gpa);
+
+    // Put the other module in the env map
+    const other_module_ident = try module_env.insertIdent(base.Ident.for_text(other_module_name));
+
+    const statement_idx = blk: {
+        if (other_env.module_env.module_kind == .type_module) {
+            const type_ident = other_env.module_env.common.findIdent(other_module_name);
+            if (type_ident) |ident| {
+                if (other_env.module_env.getExposedNodeIndexById(ident)) |node_idx| {
+                    break :blk @as(CIR.Statement.Idx, @enumFromInt(node_idx));
+                }
+            }
+        }
+        break :blk null;
+    };
+
+    const other_qualified_ident = try module_env.insertIdent(base.Ident.for_text(other_module_name));
+    try module_envs.put(other_module_ident, .{
+        .env = other_env.module_env,
+        .statement_idx = statement_idx,
+        .qualified_type_ident = other_qualified_ident,
+    });
+
+    try Can.populateModuleEnvs(
+        &module_envs,
+        module_env,
+        builtin_env,
+        builtin_indices,
+    );
+
+    // Parse
+    const parse_ast = try parse.parse(&allocators, &module_env.common);
+    errdefer parse_ast.deinit();
+    parse_ast.store.emptyScratch();
+
+    // Canonicalize
+    try module_env.initCIRFields(module_name);
+
+    can_ptr.* = try Can.init(&allocators, module_env, parse_ast, &module_envs);
+    errdefer can_ptr.deinit();
+
+    try can_ptr.canonicalizeFile();
+
+    const module_builtin_ctx: Check.BuiltinContext = .{
+        .module_name = try module_env.insertIdent(base.Ident.for_text(module_name)),
+        .bool_stmt = builtin_indices.bool_type,
+        .try_stmt = builtin_indices.try_type,
+        .str_stmt = builtin_indices.str_type,
+        .builtin_module = builtin_env,
+        .builtin_indices = builtin_indices,
+    };
+
+    // Build imported_envs array
+    var imported_envs = try std.ArrayList(*const ModuleEnv).initCapacity(gpa, 2);
+    errdefer imported_envs.deinit(gpa);
+
+    try imported_envs.append(gpa, builtin_env);
+
+    // Process explicit imports
+    const import_count = module_env.imports.imports.items.items.len;
+    for (module_env.imports.imports.items.items[0..import_count]) |str_idx| {
+        const import_name = module_env.getString(str_idx);
+        if (std.mem.eql(u8, import_name, other_module_name)) {
+            try imported_envs.append(gpa, other_env.module_env);
+        }
+    }
+
+    module_env.imports.resolveImports(module_env, imported_envs.items);
+
+    // Type Check
+    var checker = try Check.init(
+        gpa,
+        &module_env.types,
+        module_env,
+        imported_envs.items,
+        &module_envs,
+        &module_env.store.regions,
+        module_builtin_ctx,
+    );
+    errdefer checker.deinit();
+
+    try checker.checkFile();
+
+    // Init MIR Store and Lower
+    const mir_store = try gpa.create(MIR.Store);
+    errdefer gpa.destroy(mir_store);
+    mir_store.* = try MIR.Store.init(gpa);
+    errdefer mir_store.deinit(gpa);
+
+    // all_module_envs: [builtin_env, other_env.module_env, this_module_env]
+    const all_module_envs_slice = try gpa.alloc(*ModuleEnv, 3);
+    errdefer gpa.free(all_module_envs_slice);
+    all_module_envs_slice[0] = @constCast(builtin_env);
+    all_module_envs_slice[1] = other_env.module_env;
+    all_module_envs_slice[2] = module_env;
+
+    const lower = try gpa.create(Lower);
+    errdefer gpa.destroy(lower);
+    lower.* = try Lower.init(
+        gpa,
+        mir_store,
+        @as([]const *ModuleEnv, all_module_envs_slice),
+        &module_env.types,
+        builtin_indices,
+        2, // current_module_idx = this module
+    );
+    errdefer lower.deinit();
+
+    return MirTestEnv{
+        .gpa = gpa,
+        .module_env = module_env,
+        .parse_ast = parse_ast,
+        .can = can_ptr,
+        .checker = checker,
+        .builtin_indices = builtin_indices,
+        .mir_store = mir_store,
+        .lower = lower,
+        .builtin_module = other_env.builtin_module,
+        .owns_builtin_module = false,
+        .imported_envs_list = imported_envs,
+    };
+}
+
 pub fn deinit(self: *MirTestEnv) void {
     const all_module_envs_ptr = self.lower.all_module_envs;
 
@@ -278,5 +469,11 @@ pub fn deinit(self: *MirTestEnv) void {
         self.gpa.free(buffer);
     }
 
-    self.builtin_module.deinit();
+    if (self.imported_envs_list) |*list| {
+        list.deinit(self.gpa);
+    }
+
+    if (self.owns_builtin_module) {
+        self.builtin_module.deinit();
+    }
 }
