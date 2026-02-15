@@ -129,8 +129,7 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
     const type_var = ModuleEnv.varFrom(expr_idx);
     const resolved = self.types_store.resolveVar(type_var);
     if (resolved.desc.content == .err) {
-        const monotype = try self.store.monotype_store.addMonotype(self.allocator, .unit);
-        return try self.store.addExpr(self.allocator, .{ .runtime_err_type = {} }, monotype, region);
+        return try self.store.addExpr(self.allocator, .{ .runtime_err_type = {} }, self.store.monotype_store.unit_idx, region);
     }
 
     const expr = module_env.store.getExpr(expr_idx);
@@ -676,7 +675,7 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
                 try self.scratch_stmts.append(.{ .pattern = wildcard, .expr = expr });
             },
             .s_crash => |s_crash| {
-                const unit_monotype = try self.store.monotype_store.addMonotype(self.allocator, .unit);
+                const unit_monotype = self.store.monotype_store.unit_idx;
                 const expr = try self.store.addExpr(self.allocator, .{ .crash = s_crash.msg }, unit_monotype, Region.zero());
                 const wildcard = try self.store.addPattern(self.allocator, .wildcard, unit_monotype);
                 try self.scratch_stmts.append(.{ .pattern = wildcard, .expr = expr });
@@ -685,7 +684,7 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
                 const list_expr = try self.lowerExpr(s_for.expr);
                 const pat = try self.lowerPattern(module_env, s_for.patt);
                 const body = try self.lowerExpr(s_for.body);
-                const unit_monotype = try self.store.monotype_store.addMonotype(self.allocator, .unit);
+                const unit_monotype = self.store.monotype_store.unit_idx;
                 const expr = try self.store.addExpr(self.allocator, .{ .for_loop = .{
                     .list = list_expr,
                     .elem_pattern = pat,
@@ -697,7 +696,7 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
             .s_while => |s_while| {
                 const cond = try self.lowerExpr(s_while.cond);
                 const body = try self.lowerExpr(s_while.body);
-                const unit_monotype = try self.store.monotype_store.addMonotype(self.allocator, .unit);
+                const unit_monotype = self.store.monotype_store.unit_idx;
                 const expr = try self.store.addExpr(self.allocator, .{ .while_loop = .{
                     .cond = cond,
                     .body = body,
@@ -706,14 +705,14 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
                 try self.scratch_stmts.append(.{ .pattern = wildcard, .expr = expr });
             },
             .s_break => {
-                const unit_monotype = try self.store.monotype_store.addMonotype(self.allocator, .unit);
+                const unit_monotype = self.store.monotype_store.unit_idx;
                 const expr = try self.store.addExpr(self.allocator, .{ .break_expr = {} }, unit_monotype, Region.zero());
                 const wildcard = try self.store.addPattern(self.allocator, .wildcard, unit_monotype);
                 try self.scratch_stmts.append(.{ .pattern = wildcard, .expr = expr });
             },
             .s_return => |s_return| {
                 const inner = try self.lowerExpr(s_return.expr);
-                const unit_monotype = try self.store.monotype_store.addMonotype(self.allocator, .unit);
+                const unit_monotype = self.store.monotype_store.unit_idx;
                 const expr = try self.store.addExpr(self.allocator, .{ .return_expr = .{
                     .expr = inner,
                 } }, unit_monotype, Region.zero());
@@ -721,7 +720,7 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
                 try self.scratch_stmts.append(.{ .pattern = wildcard, .expr = expr });
             },
             .s_runtime_error => |s_re| {
-                const unit_monotype = try self.store.monotype_store.addMonotype(self.allocator, .unit);
+                const unit_monotype = self.store.monotype_store.unit_idx;
                 const expr = try self.store.addExpr(self.allocator, .{ .runtime_err_can = .{
                     .diagnostic = s_re.diagnostic,
                 } }, unit_monotype, Region.zero());
@@ -752,7 +751,7 @@ fn lowerBinop(self: *Self, binop: CIR.Expr.Binop, monotype: Monotype.Idx, region
         .@"and" => {
             const cond = try self.lowerExpr(binop.lhs);
             const body_true = try self.lowerExpr(binop.rhs);
-            const bool_monotype = try self.store.monotype_store.addMonotype(self.allocator, .{ .prim = .bool });
+            const bool_monotype = self.store.monotype_store.primIdx(.bool);
             const false_expr = try self.store.addExpr(self.allocator, .{ .tag = .{
                 .name = module_env.idents.false_tag,
                 .args = MIR.ExprSpan.empty(),
@@ -764,7 +763,7 @@ fn lowerBinop(self: *Self, binop: CIR.Expr.Binop, monotype: Monotype.Idx, region
         .@"or" => {
             const cond = try self.lowerExpr(binop.lhs);
             const body_else = try self.lowerExpr(binop.rhs);
-            const bool_monotype = try self.store.monotype_store.addMonotype(self.allocator, .{ .prim = .bool });
+            const bool_monotype = self.store.monotype_store.primIdx(.bool);
             const true_expr = try self.store.addExpr(self.allocator, .{ .tag = .{
                 .name = module_env.idents.true_tag,
                 .args = MIR.ExprSpan.empty(),
@@ -854,7 +853,7 @@ fn createBoolMatch(
     monotype: Monotype.Idx,
     region: Region,
 ) Allocator.Error!MIR.ExprId {
-    const bool_monotype = try self.store.monotype_store.addMonotype(self.allocator, .{ .prim = .bool });
+    const bool_monotype = self.store.monotype_store.primIdx(.bool);
 
     const true_pattern = try self.store.addPattern(self.allocator, .{ .tag = .{
         .name = module_env.idents.true_tag,
@@ -878,7 +877,7 @@ fn createBoolMatch(
 
 /// Negate a Bool: `match expr { True => False, _ => True }`
 fn negBool(self: *Self, module_env: *const ModuleEnv, expr: MIR.ExprId, monotype: Monotype.Idx, region: Region) Allocator.Error!MIR.ExprId {
-    const bool_monotype = try self.store.monotype_store.addMonotype(self.allocator, .{ .prim = .bool });
+    const bool_monotype = self.store.monotype_store.primIdx(.bool);
     const false_expr = try self.store.addExpr(self.allocator, .{ .tag = .{
         .name = module_env.idents.false_tag,
         .args = MIR.ExprSpan.empty(),
@@ -1093,7 +1092,7 @@ pub fn lowerExternalDef(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.Expr.
     // Recursion guard
     if (self.in_progress_defs.contains(symbol_key)) {
         // Recursive reference — return a placeholder lookup
-        return try self.store.addExpr(self.allocator, .{ .lookup = symbol }, try self.store.monotype_store.addMonotype(self.allocator, .unit), Region.zero());
+        return try self.store.addExpr(self.allocator, .{ .lookup = symbol }, self.store.monotype_store.unit_idx, Region.zero());
     }
 
     try self.in_progress_defs.put(symbol_key, {});

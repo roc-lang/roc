@@ -21,10 +21,10 @@ const test_allocator = testing.allocator;
 // --- MIR Store tests ---
 
 test "MIR Store: add and get expression" {
-    var store = MIR.Store.init();
+    var store = try MIR.Store.init(test_allocator);
     defer store.deinit(test_allocator);
 
-    const monotype = try store.monotype_store.addMonotype(test_allocator, .{ .prim = .i64 });
+    const monotype = store.monotype_store.primIdx(.i64);
     const expr_id = try store.addExpr(test_allocator, .{ .int = .{
         .value = .{ .bytes = @bitCast(@as(i128, 42)), .kind = .i128 },
     } }, monotype, Region.zero());
@@ -39,10 +39,10 @@ test "MIR Store: add and get expression" {
 }
 
 test "MIR Store: add and get pattern" {
-    var store = MIR.Store.init();
+    var store = try MIR.Store.init(test_allocator);
     defer store.deinit(test_allocator);
 
-    const monotype = try store.monotype_store.addMonotype(test_allocator, .{ .prim = .bool });
+    const monotype = store.monotype_store.primIdx(.bool);
     const symbol = MIR.Symbol{ .module_idx = 0, .ident_idx = Ident.Idx.NONE };
     const pat_id = try store.addPattern(test_allocator, .{ .bind = symbol }, monotype);
 
@@ -56,10 +56,10 @@ test "MIR Store: add and get pattern" {
 }
 
 test "MIR Store: expression spans" {
-    var store = MIR.Store.init();
+    var store = try MIR.Store.init(test_allocator);
     defer store.deinit(test_allocator);
 
-    const monotype = try store.monotype_store.addMonotype(test_allocator, .{ .prim = .i64 });
+    const monotype = store.monotype_store.primIdx(.i64);
     const e1 = try store.addExpr(test_allocator, .{ .int = .{
         .value = .{ .bytes = @bitCast(@as(i128, 1)), .kind = .i128 },
     } }, monotype, Region.zero());
@@ -81,7 +81,7 @@ test "MIR Store: expression spans" {
 }
 
 test "MIR Store: empty spans" {
-    var store = MIR.Store.init();
+    var store = try MIR.Store.init(test_allocator);
     defer store.deinit(test_allocator);
 
     const empty_expr_span = MIR.ExprSpan.empty();
@@ -94,10 +94,10 @@ test "MIR Store: empty spans" {
 }
 
 test "MIR Store: branches" {
-    var store = MIR.Store.init();
+    var store = try MIR.Store.init(test_allocator);
     defer store.deinit(test_allocator);
 
-    const monotype = try store.monotype_store.addMonotype(test_allocator, .{ .prim = .bool });
+    const monotype = store.monotype_store.primIdx(.bool);
     const body1 = try store.addExpr(test_allocator, .{ .int = .{
         .value = .{ .bytes = @bitCast(@as(i128, 1)), .kind = .i128 },
     } }, monotype, Region.zero());
@@ -123,10 +123,10 @@ test "MIR Store: branches" {
 }
 
 test "MIR Store: statements" {
-    var store = MIR.Store.init();
+    var store = try MIR.Store.init(test_allocator);
     defer store.deinit(test_allocator);
 
-    const monotype = try store.monotype_store.addMonotype(test_allocator, .{ .prim = .i64 });
+    const monotype = store.monotype_store.primIdx(.i64);
     const expr = try store.addExpr(test_allocator, .{ .int = .{
         .value = .{ .bytes = @bitCast(@as(i128, 42)), .kind = .i128 },
     } }, monotype, Region.zero());
@@ -141,7 +141,7 @@ test "MIR Store: statements" {
 }
 
 test "MIR Store: field name spans" {
-    var store = MIR.Store.init();
+    var store = try MIR.Store.init(test_allocator);
     defer store.deinit(test_allocator);
 
     const name1 = Ident.Idx.NONE;
@@ -155,10 +155,10 @@ test "MIR Store: field name spans" {
 }
 
 test "MIR Store: symbol def registration" {
-    var store = MIR.Store.init();
+    var store = try MIR.Store.init(test_allocator);
     defer store.deinit(test_allocator);
 
-    const monotype = try store.monotype_store.addMonotype(test_allocator, .{ .prim = .i64 });
+    const monotype = store.monotype_store.primIdx(.i64);
     const expr_id = try store.addExpr(test_allocator, .{ .int = .{
         .value = .{ .bytes = @bitCast(@as(i128, 42)), .kind = .i128 },
     } }, monotype, Region.zero());
@@ -171,12 +171,12 @@ test "MIR Store: symbol def registration" {
 }
 
 test "MIR Store: multiple expressions round trip" {
-    var store = MIR.Store.init();
+    var store = try MIR.Store.init(test_allocator);
     defer store.deinit(test_allocator);
 
-    const i64_type = try store.monotype_store.addMonotype(test_allocator, .{ .prim = .i64 });
-    const str_type = try store.monotype_store.addMonotype(test_allocator, .{ .prim = .str });
-    const bool_type = try store.monotype_store.addMonotype(test_allocator, .{ .prim = .bool });
+    const i64_type = store.monotype_store.primIdx(.i64);
+    const str_type = store.monotype_store.primIdx(.str);
+    const bool_type = store.monotype_store.primIdx(.bool);
 
     // Add int
     const int_id = try store.addExpr(test_allocator, .{ .int = .{
@@ -226,32 +226,26 @@ test "MIR Store: multiple expressions round trip" {
 // --- Monotype Store tests ---
 
 test "Monotype Store: primitive types" {
-    var store = Monotype.Store.init();
+    var store = try Monotype.Store.init(test_allocator);
     defer store.deinit(test_allocator);
 
-    const bool_idx = try store.addMonotype(test_allocator, .{ .prim = .bool });
-    const str_idx = try store.addMonotype(test_allocator, .{ .prim = .str });
-    const i64_idx = try store.addMonotype(test_allocator, .{ .prim = .i64 });
-
-    try testing.expectEqual(Monotype.Prim.bool, store.getMonotype(bool_idx).prim);
-    try testing.expectEqual(Monotype.Prim.str, store.getMonotype(str_idx).prim);
-    try testing.expectEqual(Monotype.Prim.i64, store.getMonotype(i64_idx).prim);
+    try testing.expectEqual(Monotype.Prim.bool, store.getMonotype(store.primIdx(.bool)).prim);
+    try testing.expectEqual(Monotype.Prim.str, store.getMonotype(store.primIdx(.str)).prim);
+    try testing.expectEqual(Monotype.Prim.i64, store.getMonotype(store.primIdx(.i64)).prim);
 }
 
 test "Monotype Store: unit type" {
-    var store = Monotype.Store.init();
+    var store = try Monotype.Store.init(test_allocator);
     defer store.deinit(test_allocator);
 
-    const unit_idx = try store.addMonotype(test_allocator, .unit);
-
-    try testing.expect(store.getMonotype(unit_idx) == .unit);
+    try testing.expect(store.getMonotype(store.unit_idx) == .unit);
 }
 
 test "Monotype Store: list type" {
-    var store = Monotype.Store.init();
+    var store = try Monotype.Store.init(test_allocator);
     defer store.deinit(test_allocator);
 
-    const elem = try store.addMonotype(test_allocator, .{ .prim = .str });
+    const elem = store.primIdx(.str);
     const list = try store.addMonotype(test_allocator, .{ .list = .{ .elem = elem } });
 
     const retrieved = store.getMonotype(list);
@@ -259,12 +253,12 @@ test "Monotype Store: list type" {
 }
 
 test "Monotype Store: func type" {
-    var store = Monotype.Store.init();
+    var store = try Monotype.Store.init(test_allocator);
     defer store.deinit(test_allocator);
 
-    const arg1 = try store.addMonotype(test_allocator, .{ .prim = .i64 });
-    const arg2 = try store.addMonotype(test_allocator, .{ .prim = .str });
-    const ret = try store.addMonotype(test_allocator, .{ .prim = .bool });
+    const arg1 = store.primIdx(.i64);
+    const arg2 = store.primIdx(.str);
+    const ret = store.primIdx(.bool);
 
     const args_span = try store.addIdxSpan(test_allocator, &.{ arg1, arg2 });
     const func = try store.addMonotype(test_allocator, .{ .func = .{
@@ -279,11 +273,11 @@ test "Monotype Store: func type" {
 }
 
 test "Monotype Store: record type" {
-    var store = Monotype.Store.init();
+    var store = try Monotype.Store.init(test_allocator);
     defer store.deinit(test_allocator);
 
-    const field1_type = try store.addMonotype(test_allocator, .{ .prim = .i64 });
-    const field2_type = try store.addMonotype(test_allocator, .{ .prim = .str });
+    const field1_type = store.primIdx(.i64);
+    const field2_type = store.primIdx(.str);
 
     const field_span = try store.addFields(test_allocator, &.{
         .{ .name = Ident.Idx.NONE, .type_idx = field1_type },
@@ -296,10 +290,10 @@ test "Monotype Store: record type" {
 }
 
 test "Monotype Store: tag union type" {
-    var store = Monotype.Store.init();
+    var store = try Monotype.Store.init(test_allocator);
     defer store.deinit(test_allocator);
 
-    const payload_type = try store.addMonotype(test_allocator, .{ .prim = .str });
+    const payload_type = store.primIdx(.str);
     const payload_span = try store.addIdxSpan(test_allocator, &.{payload_type});
 
     const tag_span = try store.addTags(test_allocator, &.{
@@ -312,10 +306,10 @@ test "Monotype Store: tag union type" {
 }
 
 test "Monotype Store: box type" {
-    var store = Monotype.Store.init();
+    var store = try Monotype.Store.init(test_allocator);
     defer store.deinit(test_allocator);
 
-    const inner = try store.addMonotype(test_allocator, .{ .prim = .i64 });
+    const inner = store.primIdx(.i64);
     const boxed = try store.addMonotype(test_allocator, .{ .box = .{ .inner = inner } });
 
     const retrieved = store.getMonotype(boxed);
@@ -323,11 +317,11 @@ test "Monotype Store: box type" {
 }
 
 test "Monotype Store: tuple type" {
-    var store = Monotype.Store.init();
+    var store = try Monotype.Store.init(test_allocator);
     defer store.deinit(test_allocator);
 
-    const elem1 = try store.addMonotype(test_allocator, .{ .prim = .i64 });
-    const elem2 = try store.addMonotype(test_allocator, .{ .prim = .str });
+    const elem1 = store.primIdx(.i64);
+    const elem2 = store.primIdx(.str);
 
     const elems_span = try store.addIdxSpan(test_allocator, &.{ elem1, elem2 });
     const tuple = try store.addMonotype(test_allocator, .{ .tuple = .{ .elems = elems_span } });
@@ -337,7 +331,7 @@ test "Monotype Store: tuple type" {
 }
 
 test "Monotype Store: all primitive types" {
-    var store = Monotype.Store.init();
+    var store = try Monotype.Store.init(test_allocator);
     defer store.deinit(test_allocator);
 
     const prims = [_]Monotype.Prim{
@@ -352,7 +346,7 @@ test "Monotype Store: all primitive types" {
     };
 
     for (prims) |p| {
-        const idx = try store.addMonotype(test_allocator, .{ .prim = p });
+        const idx = store.primIdx(p);
         try testing.expectEqual(p, store.getMonotype(idx).prim);
     }
 }
@@ -379,7 +373,7 @@ test "Symbol: none sentinel" {
 // --- Lower init/deinit tests ---
 
 test "Lower: init and deinit" {
-    var store = MIR.Store.init();
+    var store = try MIR.Store.init(test_allocator);
     defer store.deinit(test_allocator);
 
     var module_env = try test_allocator.create(ModuleEnv);

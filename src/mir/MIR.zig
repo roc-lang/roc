@@ -485,7 +485,7 @@ pub const Store = struct {
     /// Map from global symbol key (u64 bitcast) to its definition ExprId
     symbol_defs: std.AutoHashMapUnmanaged(u64, ExprId),
 
-    pub fn init() Store {
+    pub fn init(allocator: Allocator) Allocator.Error!Store {
         return .{
             .exprs = .empty,
             .type_map = .empty,
@@ -497,7 +497,7 @@ pub const Store = struct {
             .branch_patterns = .empty,
             .stmts = .empty,
             .captures = .empty,
-            .monotype_store = Monotype.Store.init(),
+            .monotype_store = try Monotype.Store.init(allocator),
             .symbol_defs = .empty,
         };
     }

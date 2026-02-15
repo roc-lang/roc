@@ -152,6 +152,13 @@ pub const Store = struct {
     tags: std.ArrayListUnmanaged(Tag),
     fields: std.ArrayListUnmanaged(Field),
 
+    /// Pre-interned index for the unit monotype.
+    unit_idx: Idx,
+    /// Pre-interned indices for each primitive monotype, indexed by `@intFromEnum(Prim)`.
+    prim_idxs: [prim_count]Idx,
+
+    const prim_count = @typeInfo(Prim).@"enum".fields.len;
+
     pub const Scratches = struct {
         fields: base.Scratch(Field),
         tags: base.Scratch(Tag),
@@ -172,12 +179,34 @@ pub const Store = struct {
         }
     };
 
-    pub fn init() Store {
+    /// Look up the pre-interned index for a primitive type.
+    pub fn primIdx(self: *const Store, prim: Prim) Idx {
+        return self.prim_idxs[@intFromEnum(prim)];
+    }
+
+    /// Pre-populate the store with the 16 fixed monotypes (unit + 15 primitives).
+    pub fn init(allocator: Allocator) Allocator.Error!Store {
+        var monotypes: std.ArrayListUnmanaged(Monotype) = .empty;
+        try monotypes.ensureTotalCapacity(allocator, 1 + prim_count);
+
+        // Unit slot
+        const unit_idx: Idx = @enumFromInt(monotypes.items.len);
+        monotypes.appendAssumeCapacity(.unit);
+
+        // Primitive slots in enum order
+        var prim_idxs: [prim_count]Idx = undefined;
+        for (0..prim_count) |i| {
+            prim_idxs[i] = @enumFromInt(monotypes.items.len);
+            monotypes.appendAssumeCapacity(.{ .prim = @enumFromInt(i) });
+        }
+
         return .{
-            .monotypes = .empty,
+            .monotypes = monotypes,
             .extra_idx = .empty,
             .tags = .empty,
             .fields = .empty,
+            .unit_idx = unit_idx,
+            .prim_idxs = prim_idxs,
         };
     }
 
@@ -263,7 +292,7 @@ pub const Store = struct {
             .flex, .rigid => {
                 // Unresolved type variables should not appear in monomorphic code.
                 // This indicates the type checker left something unresolved.
-                return try self.addMonotype(allocator, .unit);
+                return self.unit_idx;
             },
             .alias => |alias| {
                 // Aliases are transparent — follow the backing var
@@ -273,7 +302,7 @@ pub const Store = struct {
             .structure => |flat_type| {
                 return try self.fromFlatType(allocator, types_store, resolved.var_, flat_type, builtin_indices, seen, scratches);
             },
-            .err => try self.addMonotype(allocator, .unit),
+            .err => self.unit_idx,
         };
     }
 
@@ -291,7 +320,7 @@ pub const Store = struct {
             .nominal_type => |nominal| {
                 return try self.fromNominalType(allocator, types_store, var_, nominal, builtin_indices, seen, scratches);
             },
-            .empty_record => try self.addMonotype(allocator, .unit),
+            .empty_record => self.unit_idx,
             .empty_tag_union => try self.addMonotype(allocator, .{ .tag_union = .{ .tags = TagSpan.empty() } }),
             .record => |record| {
                 // Reserve a slot for cycle detection before recursing into fields
@@ -434,21 +463,21 @@ pub const Store = struct {
         const ident = nominal.ident.ident_idx;
 
         // Check if this is a builtin primitive type
-        if (ident == builtin_indices.bool_ident) return try self.addMonotype(allocator, .{ .prim = .bool });
-        if (ident == builtin_indices.str_ident) return try self.addMonotype(allocator, .{ .prim = .str });
-        if (ident == builtin_indices.u8_ident) return try self.addMonotype(allocator, .{ .prim = .u8 });
-        if (ident == builtin_indices.i8_ident) return try self.addMonotype(allocator, .{ .prim = .i8 });
-        if (ident == builtin_indices.u16_ident) return try self.addMonotype(allocator, .{ .prim = .u16 });
-        if (ident == builtin_indices.i16_ident) return try self.addMonotype(allocator, .{ .prim = .i16 });
-        if (ident == builtin_indices.u32_ident) return try self.addMonotype(allocator, .{ .prim = .u32 });
-        if (ident == builtin_indices.i32_ident) return try self.addMonotype(allocator, .{ .prim = .i32 });
-        if (ident == builtin_indices.u64_ident) return try self.addMonotype(allocator, .{ .prim = .u64 });
-        if (ident == builtin_indices.i64_ident) return try self.addMonotype(allocator, .{ .prim = .i64 });
-        if (ident == builtin_indices.u128_ident) return try self.addMonotype(allocator, .{ .prim = .u128 });
-        if (ident == builtin_indices.i128_ident) return try self.addMonotype(allocator, .{ .prim = .i128 });
-        if (ident == builtin_indices.dec_ident) return try self.addMonotype(allocator, .{ .prim = .dec });
-        if (ident == builtin_indices.f32_ident) return try self.addMonotype(allocator, .{ .prim = .f32 });
-        if (ident == builtin_indices.f64_ident) return try self.addMonotype(allocator, .{ .prim = .f64 });
+        if (ident == builtin_indices.bool_ident) return self.primIdx(.bool);
+        if (ident == builtin_indices.str_ident) return self.primIdx(.str);
+        if (ident == builtin_indices.u8_ident) return self.primIdx(.u8);
+        if (ident == builtin_indices.i8_ident) return self.primIdx(.i8);
+        if (ident == builtin_indices.u16_ident) return self.primIdx(.u16);
+        if (ident == builtin_indices.i16_ident) return self.primIdx(.i16);
+        if (ident == builtin_indices.u32_ident) return self.primIdx(.u32);
+        if (ident == builtin_indices.i32_ident) return self.primIdx(.i32);
+        if (ident == builtin_indices.u64_ident) return self.primIdx(.u64);
+        if (ident == builtin_indices.i64_ident) return self.primIdx(.i64);
+        if (ident == builtin_indices.u128_ident) return self.primIdx(.u128);
+        if (ident == builtin_indices.i128_ident) return self.primIdx(.i128);
+        if (ident == builtin_indices.dec_ident) return self.primIdx(.dec);
+        if (ident == builtin_indices.f32_ident) return self.primIdx(.f32);
+        if (ident == builtin_indices.f64_ident) return self.primIdx(.f64);
 
         // Check if this is a builtin List type
         if (ident == builtin_indices.list_ident) {
@@ -458,7 +487,7 @@ pub const Store = struct {
                 return try self.addMonotype(allocator, .{ .list = .{ .elem = elem_type } });
             }
             // List with no type arg — shouldn't happen in well-typed code
-            return try self.addMonotype(allocator, .unit);
+            return self.unit_idx;
         }
 
         // Check if this is a builtin Box type
@@ -468,7 +497,7 @@ pub const Store = struct {
                 const inner_type = try self.fromTypeVar(allocator, types_store, type_args[0], builtin_indices, seen, scratches);
                 return try self.addMonotype(allocator, .{ .box = .{ .inner = inner_type } });
             }
-            return try self.addMonotype(allocator, .unit);
+            return self.unit_idx;
         }
 
         // For all other nominal types, strip the wrapper and follow the backing var.
