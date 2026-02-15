@@ -983,8 +983,7 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, da: anytype, monoty
         for (explicit_args) |arg_idx| {
             try self.mono_scratches.idxs.append(try self.resolveMonotype(arg_idx));
         }
-        const func_monotype = try self.buildFuncMonotype(
-            self.mono_scratches.idxs.sliceFromStart(mono_top), monotype, false);
+        const func_monotype = try self.buildFuncMonotype(self.mono_scratches.idxs.sliceFromStart(mono_top), monotype, false);
 
         const func_expr = try self.store.addExpr(self.allocator, .{ .lookup = method_symbol }, func_monotype, region);
 
@@ -1060,8 +1059,7 @@ fn lowerTypeVarDispatch(self: *Self, module_env: *const ModuleEnv, tvd: anytype,
     for (cir_args) |arg_idx| {
         try self.mono_scratches.idxs.append(try self.resolveMonotype(arg_idx));
     }
-    const func_monotype = try self.buildFuncMonotype(
-        self.mono_scratches.idxs.sliceFromStart(mono_top), monotype, false);
+    const func_monotype = try self.buildFuncMonotype(self.mono_scratches.idxs.sliceFromStart(mono_top), monotype, false);
 
     const func_expr = try self.store.addExpr(self.allocator, .{ .lookup = method_symbol }, func_monotype, region);
     const args = try self.lowerExprSpan(module_env, tvd.args);
