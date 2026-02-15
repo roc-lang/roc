@@ -449,14 +449,24 @@ pub const Store = struct {
 
         // For all other nominal types, strip the wrapper and follow the backing var.
         // In MIR there is no nominal/opaque/structural distinction.
-        // Register in seen before recursing to handle recursive nominal types.
+        //
+        // We must register a placeholder in `seen` before recursing so that
+        // mutually-recursive nominal types (e.g. A → B → {field: A}) don't
+        // loop forever. Cycle detection returns `placeholder_idx` to callers,
+        // so we must overwrite it in-place with the real value — we can't just
+        // return `backing_idx` because earlier callers already captured
+        // `placeholder_idx`.
         const placeholder_idx = try self.addMonotype(allocator, .unit);
         try seen.put(nominal_var, placeholder_idx);
 
         const backing_var = types_store.getNominalBackingVar(nominal);
         const backing_idx = try self.fromTypeVar(allocator, types_store, backing_var, builtin_indices, seen);
 
-        // Update placeholder with the resolved type
+        // Copy the resolved backing type's value into our placeholder slot.
+        // This value-copy is safe (unlike the other handlers which build fresh
+        // values from indices) because every field inside a Monotype is an index
+        // (Idx, Span, Ident.Idx) — never a pointer. The monotype store is
+        // append-only, so all indices remain valid after the copy.
         self.monotypes.items[@intFromEnum(placeholder_idx)] = self.monotypes.items[@intFromEnum(backing_idx)];
         return placeholder_idx;
     }
