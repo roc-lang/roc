@@ -186,7 +186,8 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
         .e_str => |str_expr| {
             const span = module_env.store.sliceExpr(str_expr.span);
             if (span.len == 0) {
-                return try self.store.addExpr(self.allocator, .{ .str = .none }, monotype, region);
+                const empty_str_idx = try module_env.insertString("");
+                return try self.store.addExpr(self.allocator, .{ .str = empty_str_idx }, monotype, region);
             }
             if (span.len == 1) {
                 return try self.lowerExpr(span[0]);
@@ -241,8 +242,10 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
             return try self.store.addExpr(self.allocator, .{ .lookup = symbol }, monotype, region);
         },
         .e_lookup_external => |ext| {
-            const resolved_module = module_env.imports.getResolvedModule(ext.module_idx);
-            const target_module_idx: u32 = if (resolved_module) |m| @intCast(m) else self.current_module_idx;
+            // Import must be resolved before MIR lowering; reaching here
+            // with an unresolved import means a compiler bug in an earlier phase.
+            const target_module_idx: u32 = @intCast(module_env.imports.getResolvedModule(ext.module_idx) orelse
+                unreachable);
             const symbol = MIR.Symbol{
                 .module_idx = target_module_idx,
                 .ident_idx = ext.ident_idx,

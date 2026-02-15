@@ -425,6 +425,17 @@ test "lowerExpr: string literal" {
     try testing.expect(env.mir_store.getExpr(expr) == .str);
 }
 
+test "lowerExpr: empty string" {
+    var env = try MirTestEnv.initExpr(
+        \\""
+    );
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result == .str);
+    try testing.expect(!result.str.isNone());
+}
+
 test "lowerExpr: empty list" {
     var env = try MirTestEnv.initExpr("[]");
     defer env.deinit();
