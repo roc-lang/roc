@@ -12,6 +12,7 @@
 //! - All lookups unified to `Symbol` (module_idx + ident_idx)
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const builtins = @import("builtins");
 const can = @import("can");
@@ -28,6 +29,11 @@ const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
 
 const Self = @This();
+
+const DebugPlaceholder = struct {
+    expr_id: MIR.ExprId,
+    symbol_key: u64,
+};
 
 // --- Fields ---
 
@@ -75,6 +81,11 @@ scratch_stmts: base.Scratch(MIR.Stmt),
 scratch_captures: base.Scratch(MIR.Capture),
 mono_scratches: Monotype.Store.Scratches,
 
+debug_recursion_placeholders: if (builtin.mode == .Debug)
+    std.ArrayListUnmanaged(DebugPlaceholder)
+else
+    void = if (builtin.mode == .Debug) .{} else {},
+
 // --- Init/Deinit ---
 
 pub fn init(
@@ -120,10 +131,26 @@ pub fn init(
         .scratch_stmts = try base.Scratch(MIR.Stmt).init(allocator),
         .scratch_captures = try base.Scratch(MIR.Capture).init(allocator),
         .mono_scratches = try Monotype.Store.Scratches.init(allocator),
+        .debug_recursion_placeholders = if (builtin.mode == .Debug) .{} else {},
     };
 }
 
 pub fn deinit(self: *Self) void {
+    if (builtin.mode == .Debug) {
+        for (self.debug_recursion_placeholders.items) |placeholder| {
+            if (self.lowered_symbols.get(placeholder.symbol_key)) |resolved_expr| {
+                const resolved_monotype = self.store.typeOf(resolved_expr);
+                const placeholder_monotype = self.store.typeOf(placeholder.expr_id);
+                if (placeholder_monotype != resolved_monotype) {
+                    std.debug.panic(
+                        "Recursion guard placeholder has wrong monotype: placeholder has {d} but resolved symbol has {d}",
+                        .{ @intFromEnum(placeholder_monotype), @intFromEnum(resolved_monotype) },
+                    );
+                }
+            }
+        }
+        self.debug_recursion_placeholders.deinit(self.allocator);
+    }
     self.pattern_symbols.deinit();
     self.type_var_seen.deinit();
     self.lowered_symbols.deinit();
@@ -1128,7 +1155,14 @@ pub fn lowerExternalDef(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.Expr.
     // Recursion guard
     if (self.in_progress_defs.contains(symbol_key)) {
         // Recursive reference — return a placeholder lookup
-        return try self.store.addExpr(self.allocator, .{ .lookup = symbol }, self.store.monotype_store.unit_idx, Region.zero());
+        const placeholder = try self.store.addExpr(self.allocator, .{ .lookup = symbol }, self.store.monotype_store.unit_idx, Region.zero());
+        if (builtin.mode == .Debug) {
+            try self.debug_recursion_placeholders.append(self.allocator, .{
+                .expr_id = placeholder,
+                .symbol_key = symbol_key,
+            });
+        }
+        return placeholder;
     }
 
     try self.in_progress_defs.put(symbol_key, {});
