@@ -1119,10 +1119,24 @@ pub fn lowerExternalDef(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.Expr.
 
     try self.in_progress_defs.put(symbol_key, {});
 
-    // Temporarily switch to the target module
+    // When crossing module boundaries, switch types_store and isolate the
+    // type_var_seen cache — the same numeric type variable means different
+    // things in different modules' type stores.
+    const switching_module = symbol.module_idx != self.current_module_idx;
     const saved_module_idx = self.current_module_idx;
-    self.current_module_idx = symbol.module_idx;
-    defer self.current_module_idx = saved_module_idx;
+    const saved_types_store = self.types_store;
+    const saved_type_var_seen = self.type_var_seen;
+    if (switching_module) {
+        self.current_module_idx = symbol.module_idx;
+        self.types_store = &self.all_module_envs[symbol.module_idx].types;
+        self.type_var_seen = std.AutoHashMap(types.Var, Monotype.Idx).init(self.allocator);
+    }
+    defer if (switching_module) {
+        self.type_var_seen.deinit();
+        self.type_var_seen = saved_type_var_seen;
+        self.types_store = saved_types_store;
+        self.current_module_idx = saved_module_idx;
+    };
 
     const result = try self.lowerExpr(cir_expr_idx);
 
