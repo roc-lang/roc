@@ -679,19 +679,19 @@ fn lowerBlock(self: *Self, module_env: *const ModuleEnv, block: anytype, monotyp
             .s_expr => |s_expr| {
                 // Expression statement: bind to wildcard
                 const expr = try self.lowerExpr(s_expr.expr);
-                const expr_type = self.store.typeOf(@enumFromInt(@intFromEnum(expr)));
+                const expr_type = self.store.typeOf(expr);
                 const wildcard = try self.store.addPattern(self.allocator, .wildcard, expr_type);
                 try self.scratch_stmts.append(.{ .pattern = wildcard, .expr = expr });
             },
             .s_dbg => |s_dbg| {
                 const expr = try self.lowerExpr(s_dbg.expr);
-                const expr_type = self.store.typeOf(@enumFromInt(@intFromEnum(expr)));
+                const expr_type = self.store.typeOf(expr);
                 const wildcard = try self.store.addPattern(self.allocator, .wildcard, expr_type);
                 try self.scratch_stmts.append(.{ .pattern = wildcard, .expr = expr });
             },
             .s_expect => |s_expect| {
                 const expr = try self.lowerExpr(s_expect.body);
-                const expr_type = self.store.typeOf(@enumFromInt(@intFromEnum(expr)));
+                const expr_type = self.store.typeOf(expr);
                 const wildcard = try self.store.addPattern(self.allocator, .wildcard, expr_type);
                 try self.scratch_stmts.append(.{ .pattern = wildcard, .expr = expr });
             },
