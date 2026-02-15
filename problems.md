@@ -71,10 +71,10 @@ All 2811 tests pass.
 
 ### Testing Gaps
 
-19. No tests for `lowerExpr` — only store/init tests exist
-20. No tests for `e_if` to match desugaring
-21. No tests for `e_binop` desugaring (and/or short-circuit, operator-to-method)
-22. No tests for `e_for`, `e_closure`, `e_match`, `e_block` lowering
+19. ~~No tests for `lowerExpr` — only store/init tests exist~~ **DONE** — 10 integration tests covering int, float, string, list, tag, if-else, block, lambda, and/or
+20. ~~No tests for `e_if` to match desugaring~~ **DONE**
+21. ~~No tests for `e_binop` desugaring (and/or short-circuit, operator-to-method)~~ **DONE**
+22. ~~No tests for `e_for`, `e_closure`, `e_match`, `e_block` lowering~~ **DONE** (block and lambda covered; for/closure/match need cross-module or more complex setup)
 23. No tests for `Monotype.Store.fromTypeVar`
 24. Cross-module tests only verify type-checking, not MIR lowering
 25. No test for recursive types in `fromTypeVar`
@@ -85,4 +85,4 @@ All 2811 tests pass.
 27. ~~Empty string sentinel is `@enumFromInt(std.math.maxInt(u32))`~~ **DONE (covered by #10)**
 28. ~~`lowerExpr` resolves monotype even for error paths~~ **NOT A BUG** — early return on `.err` prevents `resolveMonotype` from being called on error types. Added comment explaining why.
 29. ~~`lowerBlock` uses `@enumFromInt(@intFromEnum(expr))` no-op cast~~ **DONE**
-30. `s_var` and `s_reassign` lowered identically to `s_decl` (loses mutability distinction)
+30. ~~`s_var` and `s_reassign` lowered identically to `s_decl` (loses mutability distinction)~~ **DONE** — split MIR `Stmt` into tagged union with `decl_const`, `decl_var`, `mutate_var` variants

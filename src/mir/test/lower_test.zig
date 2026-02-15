@@ -10,6 +10,7 @@ const types = @import("types");
 const MIR = @import("../MIR.zig");
 const Monotype = @import("../Monotype.zig");
 const Lower = @import("../Lower.zig");
+const MirTestEnv = @import("MirTestEnv.zig");
 
 const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
@@ -397,4 +398,112 @@ test "Lower: init and deinit" {
 
     // Verify initial state
     try testing.expectEqual(@as(u32, 0), lower.current_module_idx);
+}
+
+// --- Integration tests: source → parse → canonicalize → type-check → MIR lower ---
+
+test "lowerExpr: integer literal" {
+    var env = try MirTestEnv.initExpr("42");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    try testing.expect(env.mir_store.getExpr(expr) == .int);
+}
+
+test "lowerExpr: float literal" {
+    var env = try MirTestEnv.initExpr("3.14f64");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    try testing.expect(env.mir_store.getExpr(expr) == .frac_f64);
+}
+
+test "lowerExpr: string literal" {
+    var env = try MirTestEnv.initExpr(
+        \\"hello"
+    );
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    try testing.expect(env.mir_store.getExpr(expr) == .str);
+}
+
+test "lowerExpr: empty list" {
+    var env = try MirTestEnv.initExpr("[]");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result == .list);
+    try testing.expectEqual(@as(u16, 0), result.list.elems.len);
+}
+
+test "lowerExpr: list literal" {
+    var env = try MirTestEnv.initExpr("[1, 2, 3]");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result == .list);
+    try testing.expectEqual(@as(u16, 3), result.list.elems.len);
+    // Each element should be an int
+    const elems = env.mir_store.getExprSpan(result.list.elems);
+    for (elems) |elem| {
+        try testing.expect(env.mir_store.getExpr(elem) == .int);
+    }
+}
+
+test "lowerExpr: tag" {
+    var env = try MirTestEnv.initExpr("Ok");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result == .tag);
+    try testing.expectEqual(@as(u16, 0), result.tag.args.len);
+}
+
+test "lowerExpr: if-else desugars to match" {
+    var env = try MirTestEnv.initExpr("if True 1 else 2");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    try testing.expect(env.mir_store.getExpr(expr) == .match_expr);
+}
+
+test "lowerExpr: block with decl_const" {
+    var env = try MirTestEnv.initExpr(
+        \\{
+        \\    x = 1
+        \\    x
+        \\}
+    );
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result == .block);
+    try testing.expectEqual(@as(u16, 1), result.block.stmts.len);
+    // The statement should be a decl_const
+    const stmts = env.mir_store.getStmts(result.block.stmts);
+    try testing.expect(stmts[0] == .decl_const);
+    // The final expression should be a lookup
+    try testing.expect(env.mir_store.getExpr(result.block.final_expr) == .lookup);
+}
+
+test "lowerExpr: lambda" {
+    var env = try MirTestEnv.initExpr("|x| x");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result == .lambda);
+    try testing.expectEqual(@as(u16, 1), result.lambda.params.len);
+}
+
+test "lowerExpr: Bool.and short-circuit desugars to match" {
+    var env = try MirTestEnv.initExpr(
+        \\{
+        \\    x = True
+        \\    y = False
+        \\    x and y
+        \\}
+    );
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    // The block's final expression (x and y) should desugar to a match
+    try testing.expect(result == .block);
+    try testing.expect(env.mir_store.getExpr(result.block.final_expr) == .match_expr);
 }
