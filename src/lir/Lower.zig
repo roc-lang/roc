@@ -5475,13 +5475,3 @@ pub fn lowerFromEntryPoints(
         _ = try lowerer.lowerExpr(entry.module_idx, entry.expr_idx);
     }
 }
-
-test "basic lowering" {
-    // This is a smoke test - proper testing requires a full ModuleEnv
-    const allocator = std.testing.allocator;
-    var store = MonoExprStore.init(allocator);
-    defer store.deinit();
-
-    // Test passes if no crash
-    try std.testing.expect(store.exprCount() == 0);
-}

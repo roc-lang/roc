@@ -24,20 +24,16 @@ const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
 const Region = base.Region;
 const StringLiteral = base.StringLiteral;
-const CalledVia = base.CalledVia;
 const CIR = @import("can").CIR;
 
 const LirExpr = LIR.LirExpr;
 const LirExprId = LIR.LirExprId;
 const LirExprSpan = LIR.LirExprSpan;
-const LirPattern = LIR.LirPattern;
 const LirPatternId = LIR.LirPatternId;
 const LirPatternSpan = LIR.LirPatternSpan;
 const LirStmt = LIR.LirStmt;
-const LirStmtSpan = LIR.LirStmtSpan;
 const LirWhenBranch = LIR.LirWhenBranch;
 const LirCapture = LIR.LirCapture;
-const LirCaptureSpan = LIR.LirCaptureSpan;
 const Symbol = LIR.Symbol;
 
 const Self = @This();
@@ -94,14 +90,10 @@ pub fn deinit(self: *Self) void {
     self.scratch_field_names.deinit(self.allocator);
 }
 
-// ── Public API ──────────────────────────────────────────────────────
-
 /// Lower a MIR expression to a LIR expression.
 pub fn lower(self: *Self, mir_expr_id: MIR.ExprId) Allocator.Error!LirExprId {
     return self.lowerExpr(mir_expr_id);
 }
-
-// ── Monotype → Layout conversion ────────────────────────────────────
 
 /// Convert a Monotype.Idx to a layout.Idx, using a cache.
 fn layoutFromMonotype(self: *Self, mono_idx: Monotype.Idx) Allocator.Error!layout.Idx {
@@ -236,8 +228,6 @@ fn layoutFromTagUnion(self: *Self, tu: anytype) Allocator.Error!layout.Idx {
     return self.layout_store.putTuple(elems.items);
 }
 
-// ── Tag name → discriminant ─────────────────────────────────────────
-
 /// Given a tag name and the monotype of the containing tag union,
 /// return the discriminant (sorted index of the tag name).
 fn tagDiscriminant(self: *const Self, tag_name: Ident.Idx, union_mono_idx: Monotype.Idx) u16 {
@@ -255,8 +245,6 @@ fn tagDiscriminant(self: *const Self, tag_name: Ident.Idx, union_mono_idx: Monot
     }
     return 0;
 }
-
-// ── Expression lowering ─────────────────────────────────────────────
 
 fn lowerExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator.Error!LirExprId {
     const expr = self.mir_store.getExpr(mir_expr_id);
@@ -686,8 +674,6 @@ fn lowerReturn(self: *Self, r: anytype, mono_idx: Monotype.Idx, region: Region) 
     } }, region);
 }
 
-// ── Pattern lowering ────────────────────────────────────────────────
-
 fn lowerPattern(self: *Self, mir_pat_id: MIR.PatternId) Allocator.Error!LirPatternId {
     const pat = self.mir_store.getPattern(mir_pat_id);
     const mono_idx = self.mir_store.patternTypeOf(mir_pat_id);
@@ -788,8 +774,6 @@ fn lowerPattern(self: *Self, mir_pat_id: MIR.PatternId) Allocator.Error!LirPatte
     };
 }
 
-// ── Span helpers ────────────────────────────────────────────────────
-
 fn lowerExprSpan(self: *Self, mir_expr_ids: []const MIR.ExprId) Allocator.Error!LirExprSpan {
     self.scratch_lir_expr_ids.clearRetainingCapacity();
     for (mir_expr_ids) |mir_id| {
@@ -807,8 +791,6 @@ fn lowerPatternSpan(self: *Self, mir_pat_ids: []const MIR.PatternId) Allocator.E
     }
     return self.lir_store.addPatternSpan(self.scratch_lir_pattern_ids.items);
 }
-
-// ── Low-level op mapping ────────────────────────────────────────────
 
 fn mapLowLevel(cir_op: CIR.Expr.LowLevel) ?LirExpr.LowLevel {
     return switch (cir_op) {
