@@ -406,6 +406,16 @@ fn resolveMonotype(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!Monotype
     );
 }
 
+/// Build a function monotype from argument types, return type, and effectfulness.
+fn buildFuncMonotype(self: *Self, arg_monotypes: []const Monotype.Idx, ret: Monotype.Idx, effectful: bool) Allocator.Error!Monotype.Idx {
+    const args_span = try self.store.monotype_store.addIdxSpan(self.allocator, arg_monotypes);
+    return try self.store.monotype_store.addMonotype(self.allocator, .{ .func = .{
+        .args = args_span,
+        .ret = ret,
+        .effectful = effectful,
+    } });
+}
+
 /// Lower a CIR Expr.Span to an MIR ExprSpan.
 fn lowerExprSpan(self: *Self, module_env: *const ModuleEnv, span: CIR.Expr.Span) Allocator.Error!MIR.ExprSpan {
     const cir_ids = module_env.store.sliceExpr(span);
@@ -826,7 +836,10 @@ fn lowerBinop(self: *Self, binop: CIR.Expr.Binop, monotype: Monotype.Idx, region
                 .module_idx = self.current_module_idx,
                 .ident_idx = method_ident,
             };
-            const func_expr = try self.store.addExpr(self.allocator, .{ .lookup = method_symbol }, monotype, region);
+            const lhs_monotype = try self.resolveMonotype(binop.lhs);
+            const rhs_monotype = try self.resolveMonotype(binop.rhs);
+            const func_monotype = try self.buildFuncMonotype(&.{ lhs_monotype, rhs_monotype }, monotype, false);
+            const func_expr = try self.store.addExpr(self.allocator, .{ .lookup = method_symbol }, func_monotype, region);
 
             const args = try self.store.addExprSpan(self.allocator, &.{ lhs, rhs });
             const result = try self.store.addExpr(self.allocator, .{ .call = .{
@@ -853,7 +866,9 @@ fn lowerUnaryMinus(self: *Self, um: CIR.Expr.UnaryMinus, monotype: Monotype.Idx,
         .module_idx = self.current_module_idx,
         .ident_idx = module_env.idents.negate,
     };
-    const func_expr = try self.store.addExpr(self.allocator, .{ .lookup = method_symbol }, monotype, region);
+    const inner_monotype = try self.resolveMonotype(um.expr);
+    const func_monotype = try self.buildFuncMonotype(&.{inner_monotype}, monotype, false);
+    const func_expr = try self.store.addExpr(self.allocator, .{ .lookup = method_symbol }, func_monotype, region);
     const args = try self.store.addExprSpan(self.allocator, &.{inner});
     return try self.store.addExpr(self.allocator, .{ .call = .{
         .func = func_expr,
@@ -930,11 +945,22 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, da: anytype, monoty
             .module_idx = self.current_module_idx,
             .ident_idx = da.field_name,
         };
-        const func_expr = try self.store.addExpr(self.allocator, .{ .lookup = method_symbol }, monotype, region);
-
         // Build args as [receiver] ++ explicit_args
         // e.g. list.map(fn) → List.map(list, fn)
         const explicit_args = module_env.store.sliceExpr(args_span);
+
+        const mono_top = self.mono_scratches.idxs.top();
+        defer self.mono_scratches.idxs.clearFrom(mono_top);
+        const receiver_monotype = try self.resolveMonotype(da.receiver);
+        try self.mono_scratches.idxs.append(receiver_monotype);
+        for (explicit_args) |arg_idx| {
+            try self.mono_scratches.idxs.append(try self.resolveMonotype(arg_idx));
+        }
+        const func_monotype = try self.buildFuncMonotype(
+            self.mono_scratches.idxs.sliceFromStart(mono_top), monotype, false);
+
+        const func_expr = try self.store.addExpr(self.allocator, .{ .lookup = method_symbol }, func_monotype, region);
+
         const args_top = self.scratch_expr_ids.top();
         defer self.scratch_expr_ids.clearFrom(args_top);
         try self.scratch_expr_ids.append(receiver);
@@ -1001,7 +1027,16 @@ fn lowerTypeVarDispatch(self: *Self, module_env: *const ModuleEnv, tvd: anytype,
         .ident_idx = tvd.method_name,
     };
 
-    const func_expr = try self.store.addExpr(self.allocator, .{ .lookup = method_symbol }, monotype, region);
+    const cir_args = module_env.store.sliceExpr(tvd.args);
+    const mono_top = self.mono_scratches.idxs.top();
+    defer self.mono_scratches.idxs.clearFrom(mono_top);
+    for (cir_args) |arg_idx| {
+        try self.mono_scratches.idxs.append(try self.resolveMonotype(arg_idx));
+    }
+    const func_monotype = try self.buildFuncMonotype(
+        self.mono_scratches.idxs.sliceFromStart(mono_top), monotype, false);
+
+    const func_expr = try self.store.addExpr(self.allocator, .{ .lookup = method_symbol }, func_monotype, region);
     const args = try self.lowerExprSpan(module_env, tvd.args);
 
     return try self.store.addExpr(self.allocator, .{ .call = .{
