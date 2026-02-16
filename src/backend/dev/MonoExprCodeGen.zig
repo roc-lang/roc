@@ -3119,9 +3119,22 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     // list_contains(list, element) -> bool
                     // Linear scan: iterate through list, compare each element
                     if (args.len != 2) unreachable;
-                    const list_loc = try self.generateExpr(args[0]);
-                    const needle_loc = try self.generateExpr(args[1]);
-                    return try self.generateListContains(list_loc, needle_loc);
+                    const ls = self.layout_store orelse unreachable;
+                    const list_layout_idx = self.getExprLayout(args[0]) orelse unreachable;
+                    const list_layout = ls.getLayout(list_layout_idx);
+                    switch (list_layout.tag) {
+                        .list => {
+                            const list_loc = try self.generateExpr(args[0]);
+                            const needle_loc = try self.generateExpr(args[1]);
+                            return try self.generateListContains(list_loc, needle_loc, list_layout.data.list);
+                        },
+                        .list_of_zst => {
+                            const list_loc = try self.generateExpr(args[0]);
+                            _ = try self.generateExpr(args[1]);
+                            return try self.generateZstListContains(list_loc);
+                        },
+                        else => unreachable,
+                    }
                 },
                 .list_reverse => {
                     // list_reverse(list) -> List
@@ -3929,7 +3942,12 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
         }
 
         /// Generate list_contains: linear scan comparing each element
-        fn generateListContains(self: *Self, list_loc: ValueLocation, needle_loc: ValueLocation) Allocator.Error!ValueLocation {
+        fn generateListContains(self: *Self, list_loc: ValueLocation, needle_loc: ValueLocation, elem_layout_idx: layout.Idx) Allocator.Error!ValueLocation {
+            const ls = self.layout_store orelse unreachable;
+            const elem_layout = ls.getLayout(elem_layout_idx);
+            const elem_sa = ls.layoutSizeAlign(elem_layout);
+            const elem_size: u32 = elem_sa.size;
+
             const list_base: i32 = switch (list_loc) {
                 .stack => |s| s.offset,
                 .list_stack => |ls_info| ls_info.struct_offset,
@@ -3941,95 +3959,130 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 else => unreachable,
             };
 
-            // Save needle to stack
-            const needle_reg = try self.ensureInGeneralReg(needle_loc);
-            const needle_slot = self.codegen.allocStackSlot(8);
-            if (comptime target.toCpuArch() == .aarch64) {
-                try self.codegen.emit.strRegMemSoff(.w64, needle_reg, .FP, needle_slot);
-            } else {
-                try self.codegen.emit.movMemReg(.w64, .RBP, needle_slot, needle_reg);
-            }
-            self.codegen.freeGeneral(needle_reg);
+            // Save needle to stack (handles any type/size)
+            const needle_slot = try self.ensureOnStack(needle_loc, elem_size);
 
-            // Load list ptr and len
-            const ptr_reg = try self.allocTempGeneral();
-            const len_reg = try self.allocTempGeneral();
-            if (comptime target.toCpuArch() == .aarch64) {
-                try self.codegen.emit.ldrRegMemSoff(.w64, ptr_reg, .FP, list_base);
-                try self.codegen.emit.ldrRegMemSoff(.w64, len_reg, .FP, list_base + 8);
-            } else {
-                try self.codegen.emit.movRegMem(.w64, ptr_reg, .RBP, list_base);
-                try self.codegen.emit.movRegMem(.w64, len_reg, .RBP, list_base + 8);
+            // Save list ptr and len to stack (they must survive compareFieldByLayout
+            // which may call builtins that clobber caller-saved registers)
+            const ptr_slot = self.codegen.allocStackSlot(8);
+            const len_slot = self.codegen.allocStackSlot(8);
+            {
+                const ptr_reg = try self.allocTempGeneral();
+                const len_reg = try self.allocTempGeneral();
+                if (comptime target.toCpuArch() == .aarch64) {
+                    try self.codegen.emit.ldrRegMemSoff(.w64, ptr_reg, .FP, list_base);
+                    try self.codegen.emit.ldrRegMemSoff(.w64, len_reg, .FP, list_base + 8);
+                } else {
+                    try self.codegen.emit.movRegMem(.w64, ptr_reg, .RBP, list_base);
+                    try self.codegen.emit.movRegMem(.w64, len_reg, .RBP, list_base + 8);
+                }
+                try self.codegen.emitStoreStack(.w64, ptr_slot, ptr_reg);
+                try self.codegen.emitStoreStack(.w64, len_slot, len_reg);
+                self.codegen.freeGeneral(ptr_reg);
+                self.codegen.freeGeneral(len_reg);
             }
 
-            // Initialize counter = 0, result = false
-            const ctr_reg = try self.allocTempGeneral();
-            try self.codegen.emitLoadImm(ctr_reg, 0);
+            // Initialize counter and byte offset on stack, result = false
+            const ctr_slot = self.codegen.allocStackSlot(8);
+            const offset_slot = self.codegen.allocStackSlot(8);
             const result_slot = self.codegen.allocStackSlot(8);
-            const tmp_r = try self.allocTempGeneral();
-            try self.codegen.emitLoadImm(tmp_r, 0);
-            if (comptime target.toCpuArch() == .aarch64) {
-                try self.codegen.emit.strRegMemSoff(.w64, tmp_r, .FP, result_slot);
-            } else {
-                try self.codegen.emit.movMemReg(.w64, .RBP, result_slot, tmp_r);
+            // Allocate 8-byte-aligned slot so 8-byte copy loop doesn't overflow
+            const elem_slot = self.codegen.allocStackSlot(@intCast(std.mem.alignForward(u32, elem_size, 8)));
+            {
+                const tmp = try self.allocTempGeneral();
+                try self.codegen.emitLoadImm(tmp, 0);
+                try self.codegen.emitStoreStack(.w64, ctr_slot, tmp);
+                try self.codegen.emitStoreStack(.w64, offset_slot, tmp);
+                try self.codegen.emitStoreStack(.w64, result_slot, tmp);
+                self.codegen.freeGeneral(tmp);
             }
-            self.codegen.freeGeneral(tmp_r);
 
             // Loop start
             const loop_start = self.codegen.currentOffset();
 
             // if ctr >= len, jump to end
-            try self.codegen.emit.cmpRegReg(.w64, ctr_reg, len_reg);
+            {
+                const ctr_reg = try self.allocTempGeneral();
+                const len_reg = try self.allocTempGeneral();
+                try self.codegen.emitLoadStack(.w64, ctr_reg, ctr_slot);
+                try self.codegen.emitLoadStack(.w64, len_reg, len_slot);
+                try self.codegen.emit.cmpRegReg(.w64, ctr_reg, len_reg);
+                self.codegen.freeGeneral(ctr_reg);
+                self.codegen.freeGeneral(len_reg);
+            }
             const exit_patch = try self.codegen.emitCondJump(condGreaterOrEqual());
 
-            // Load element at ptr[ctr * 8] (assuming 8-byte elements for I64)
-            const elem_reg = try self.allocTempGeneral();
-            const offset_reg = try self.allocTempGeneral();
-            try self.codegen.emit.movRegReg(.w64, offset_reg, ctr_reg);
-            // Multiply by 8 (shift left 3)
-            if (comptime target.toCpuArch() == .aarch64) {
-                try self.codegen.emit.lslRegRegImm(.w64, offset_reg, offset_reg, 3);
-                try self.codegen.emit.addRegRegReg(.w64, offset_reg, ptr_reg, offset_reg);
-                try self.codegen.emit.ldrRegMemSoff(.w64, elem_reg, offset_reg, 0);
-            } else {
-                try self.codegen.emit.shlRegImm8(.w64, offset_reg, 3);
-                try self.codegen.emit.addRegReg(.w64, offset_reg, ptr_reg);
-                try self.codegen.emit.movRegMem(.w64, elem_reg, offset_reg, 0);
-            }
-            self.codegen.freeGeneral(offset_reg);
+            // Copy element from heap (ptr + offset) to elem_slot
+            {
+                const ptr_reg = try self.allocTempGeneral();
+                const off_reg = try self.allocTempGeneral();
+                try self.codegen.emitLoadStack(.w64, ptr_reg, ptr_slot);
+                try self.codegen.emitLoadStack(.w64, off_reg, offset_slot);
+                // addr_reg = ptr + byte_offset
+                if (comptime target.toCpuArch() == .aarch64) {
+                    try self.codegen.emit.addRegRegReg(.w64, ptr_reg, ptr_reg, off_reg);
+                } else {
+                    try self.codegen.emit.addRegReg(.w64, ptr_reg, off_reg);
+                }
+                self.codegen.freeGeneral(off_reg);
 
-            // Compare with needle
-            const ndl_reg = try self.allocTempGeneral();
-            if (comptime target.toCpuArch() == .aarch64) {
-                try self.codegen.emit.ldrRegMemSoff(.w64, ndl_reg, .FP, needle_slot);
-            } else {
-                try self.codegen.emit.movRegMem(.w64, ndl_reg, .RBP, needle_slot);
+                // Copy elem_size bytes from ptr_reg to elem_slot (8-byte chunks)
+                const tmp = try self.allocTempGeneral();
+                var copied: u32 = 0;
+                while (copied < elem_size) : (copied += 8) {
+                    if (comptime target.toCpuArch() == .aarch64) {
+                        try self.codegen.emit.ldrRegMemSoff(.w64, tmp, ptr_reg, @intCast(copied));
+                        try self.codegen.emit.strRegMemSoff(.w64, tmp, .FP, elem_slot + @as(i32, @intCast(copied)));
+                    } else {
+                        try self.codegen.emit.movRegMem(.w64, tmp, ptr_reg, @intCast(copied));
+                        try self.codegen.emit.movMemReg(.w64, .RBP, elem_slot + @as(i32, @intCast(copied)), tmp);
+                    }
+                }
+                self.codegen.freeGeneral(tmp);
+                self.codegen.freeGeneral(ptr_reg);
             }
-            try self.codegen.emit.cmpRegReg(.w64, elem_reg, ndl_reg);
-            self.codegen.freeGeneral(elem_reg);
-            self.codegen.freeGeneral(ndl_reg);
+
+            // Compare element with needle using layout-aware comparison
+            const eq_reg = try self.allocTempGeneral();
+            try self.compareFieldByLayout(elem_slot, needle_slot, elem_layout_idx, elem_size, eq_reg);
 
             // If equal, set result = true and jump to end
+            try self.emitCmpImm(eq_reg, 1);
+            self.codegen.freeGeneral(eq_reg);
             const not_equal_patch = try self.codegen.emitCondJump(condNotEqual());
             // Found! Set result = 1
-            const one_reg = try self.allocTempGeneral();
-            try self.codegen.emitLoadImm(one_reg, 1);
-            if (comptime target.toCpuArch() == .aarch64) {
-                try self.codegen.emit.strRegMemSoff(.w64, one_reg, .FP, result_slot);
-            } else {
-                try self.codegen.emit.movMemReg(.w64, .RBP, result_slot, one_reg);
+            {
+                const one_reg = try self.allocTempGeneral();
+                try self.codegen.emitLoadImm(one_reg, 1);
+                try self.codegen.emitStoreStack(.w64, result_slot, one_reg);
+                self.codegen.freeGeneral(one_reg);
             }
-            self.codegen.freeGeneral(one_reg);
             // Jump to end
             const found_patch = try self.codegen.emitJump();
             // Not equal: continue
             self.codegen.patchJump(not_equal_patch, self.codegen.currentOffset());
 
-            // Increment counter
-            if (comptime target.toCpuArch() == .aarch64) {
-                try self.codegen.emit.addRegRegImm12(.w64, ctr_reg, ctr_reg, 1);
-            } else {
-                try self.codegen.emit.addImm(ctr_reg, 1);
+            // Increment counter and byte offset
+            {
+                const ctr_reg = try self.allocTempGeneral();
+                try self.codegen.emitLoadStack(.w64, ctr_reg, ctr_slot);
+                if (comptime target.toCpuArch() == .aarch64) {
+                    try self.codegen.emit.addRegRegImm12(.w64, ctr_reg, ctr_reg, 1);
+                } else {
+                    try self.codegen.emit.addImm(ctr_reg, 1);
+                }
+                try self.codegen.emitStoreStack(.w64, ctr_slot, ctr_reg);
+                self.codegen.freeGeneral(ctr_reg);
+
+                const off_reg = try self.allocTempGeneral();
+                try self.codegen.emitLoadStack(.w64, off_reg, offset_slot);
+                if (comptime target.toCpuArch() == .aarch64) {
+                    try self.codegen.emit.addRegRegImm12(.w64, off_reg, off_reg, @intCast(elem_size));
+                } else {
+                    try self.codegen.emit.addImm(off_reg, @intCast(elem_size));
+                }
+                try self.codegen.emitStoreStack(.w64, offset_slot, off_reg);
+                self.codegen.freeGeneral(off_reg);
             }
 
             // Jump back to loop start
@@ -4040,18 +4093,39 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             self.codegen.patchJump(exit_patch, self.codegen.currentOffset());
             self.codegen.patchJump(found_patch, self.codegen.currentOffset());
 
-            self.codegen.freeGeneral(ctr_reg);
-            self.codegen.freeGeneral(len_reg);
-            self.codegen.freeGeneral(ptr_reg);
-
             // Load result from stack
             const res_reg = try self.allocTempGeneral();
-            if (comptime target.toCpuArch() == .aarch64) {
-                try self.codegen.emit.ldrRegMemSoff(.w64, res_reg, .FP, result_slot);
-            } else {
-                try self.codegen.emit.movRegMem(.w64, res_reg, .RBP, result_slot);
-            }
+            try self.codegen.emitLoadStack(.w64, res_reg, result_slot);
             return .{ .general_reg = res_reg };
+        }
+
+        /// Generate list_contains for zero-sized element types: true iff list is non-empty
+        fn generateZstListContains(self: *Self, list_loc: ValueLocation) Allocator.Error!ValueLocation {
+            const list_base: i32 = switch (list_loc) {
+                .stack => |s| s.offset,
+                .list_stack => |ls_info| ls_info.struct_offset,
+                .immediate_i64 => |val| {
+                    if (val != 0) unreachable;
+                    return .{ .immediate_i64 = 0 };
+                },
+                else => unreachable,
+            };
+            const len_reg = try self.allocTempGeneral();
+            if (comptime target.toCpuArch() == .aarch64) {
+                try self.codegen.emit.ldrRegMemSoff(.w64, len_reg, .FP, list_base + 8);
+            } else {
+                try self.codegen.emit.movRegMem(.w64, len_reg, .RBP, list_base + 8);
+            }
+            const result_reg = try self.allocTempGeneral();
+            try self.emitCmpImm(len_reg, 0);
+            if (comptime target.toCpuArch() == .aarch64) {
+                try self.codegen.emit.cset(.w64, result_reg, .ne);
+            } else {
+                try self.codegen.emit.setcc(.not_equal, result_reg);
+                try self.codegen.emit.andRegImm32(result_reg, 0xFF);
+            }
+            self.codegen.freeGeneral(len_reg);
+            return .{ .general_reg = result_reg };
         }
 
         /// Generate list_reverse: allocate new list, copy elements in reverse order

@@ -29,23 +29,28 @@ Fixes applied:
   (tag unions with payloads fell through to scalar comparison, giving wrong results)
 - Added 30+ eval tests covering tag union, tuple, record, and nested equality/inequality
 
-### [H3] `lowerUnaryMinus` has no type-directed dispatch
-**File:** `src/mir/Lower.zig` (line 944)
+### ~~[H3] `lowerUnaryMinus` has no type-directed dispatch~~ FIXED
 
-Always looks up `negate` in the current module without calling `resolveMethodForTypeVar`.
-Won't find `negate` on nominal types from other modules.
+Rewrote `lowerUnaryMinus` to use `resolveMethodForTypeVar` like `lowerBinop` does, with
+fallback to `run_low_level` with `num_negate` for flex/rigid type vars. Added debug
+assertion that panics on non-numeric types reaching the fallback. Also fixed
+`MirTestEnv.initFull` to include the Builtin module in `all_module_envs` (was only
+including the test module, which caused cross-module method lookups to fail).
 
-**Fix:** Use `resolveMethodForTypeVar` like `lowerBinop` does, with fallback to a low-level
-`num_negate` op.
+### ~~[H4] `generateListContains` hardcodes 8-byte element size~~ FIXED
 
-### [H4] `generateListContains` hardcodes 8-byte element size
-**File:** `src/backend/dev/LirCodeGen.zig` (line 3993)
+Rewrote `generateListContains` in both LirCodeGen and MonoExprCodeGen to:
+- Accept an `elem_layout_idx` parameter and compute element size from layout
+- Use `compareFieldByLayout` for layout-aware equality (handles strings, 128-bit,
+  records, tuples, tag unions, and scalar types)
+- Track byte offset instead of counter-times-constant
+- Save all loop state to stack (safe against register clobbering from builtin calls)
+- Handle ZST lists separately (`generateZstListContains`)
+- Allocate 8-byte-aligned stack slots for element copy buffer
 
-Element offset is computed as `ctr << 3` (multiply by 8) and comparison uses `.w64`
-regardless of actual element size. Breaks for `List U8`, `List U16`, `List U32`, etc.
-
-**Fix:** Get element size from the layout and compute `ctr * elem_size` dynamically. Use
-appropriate register width for comparison.
+Note: `List.contains` in the builtins is implemented as `List.any(list, |x| x == needle)`,
+so the `.list_contains` low-level is not currently exercised by end-to-end tests. The
+codegen fix is correct and will be exercised when the full pipeline uses it.
 
 ### [H5] `getI128Parts` zero-extends signed values
 **File:** `src/backend/dev/LirCodeGen.zig` (line 5447)
