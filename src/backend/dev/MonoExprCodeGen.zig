@@ -16274,27 +16274,27 @@ pub const UnsupportedArchCodeGen = struct {
     pub fn deinit(_: *Self) void {}
 
     pub fn compileAllProcs(_: *Self, _: anytype) Allocator.Error!void {
-        return error.UnsupportedArchitecture;
+        @panic("UnsupportedArchitecture");
     }
 
     pub fn generateCode(_: *Self, _: anytype, _: anytype, _: anytype) Allocator.Error!CodeResult {
-        return error.UnsupportedArchitecture;
+        @panic("UnsupportedArchitecture");
     }
 
     pub fn generateExpr(_: *Self, _: anytype) Allocator.Error!void {
-        return error.UnsupportedArchitecture;
+        @panic("UnsupportedArchitecture");
     }
 
     pub fn generateProc(_: *Self, _: anytype) Allocator.Error!void {
-        return error.UnsupportedArchitecture;
+        @panic("UnsupportedArchitecture");
     }
 
     pub fn generateEntrypointWrapper(_: *Self, _: []const u8, _: anytype, _: anytype, _: anytype) Allocator.Error!ExportedSymbol {
-        return error.UnsupportedArchitecture;
+        @panic("UnsupportedArchitecture");
     }
 
     pub fn finalize(_: *Self) Allocator.Error![]const u8 {
-        return error.UnsupportedArchitecture;
+        @panic("UnsupportedArchitecture");
     }
 
     pub fn getCode(_: *const Self) []const u8 {
