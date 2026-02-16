@@ -400,22 +400,23 @@ fn lowerMatch(self: *Self, match_data: anytype, mono_idx: Monotype.Idx, region: 
     const save_len = self.scratch_lir_when_branches.items.len;
     defer self.scratch_lir_when_branches.shrinkRetainingCapacity(save_len);
     for (mir_branches) |branch| {
-        // Use the first pattern of the branch (MIR branches can have alternatives via |)
         const branch_patterns = self.mir_store.getBranchPatterns(branch.patterns);
         if (branch_patterns.len == 0) continue;
 
-        const lir_pat = try self.lowerPattern(branch_patterns[0].pattern);
         const lir_body = try self.lowerExpr(branch.body);
         const guard = if (branch.guard.isNone())
             LirExprId.none
         else
             try self.lowerExpr(branch.guard);
 
-        try self.scratch_lir_when_branches.append(self.allocator, .{
-            .pattern = lir_pat,
-            .guard = guard,
-            .body = lir_body,
-        });
+        for (branch_patterns) |bp| {
+            const lir_pat = try self.lowerPattern(bp.pattern);
+            try self.scratch_lir_when_branches.append(self.allocator, .{
+                .pattern = lir_pat,
+                .guard = guard,
+                .body = lir_body,
+            });
+        }
     }
 
     const when_branches = try self.lir_store.addWhenBranches(self.scratch_lir_when_branches.items[save_len..]);
@@ -1382,4 +1383,73 @@ test "MIR block lowers to LIR block" {
 
     const final = env.lir_store.getExpr(lir_expr.block.final_expr);
     try testing.expect(final == .lookup);
+}
+
+test "MIR match with pattern alternatives lowers to multiple LIR when-branches" {
+    const allocator = testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
+
+    // Condition: integer literal 1
+    const cond = try env.mir_store.addExpr(allocator, .{ .int = .{
+        .value = .{ .bytes = @bitCast(@as(i128, 1)), .kind = .i128 },
+    } }, i64_mono, Region.zero());
+
+    // Body for the alternatives branch: integer literal 99
+    const body1 = try env.mir_store.addExpr(allocator, .{ .int = .{
+        .value = .{ .bytes = @bitCast(@as(i128, 99)), .kind = .i128 },
+    } }, i64_mono, Region.zero());
+
+    // Body for the wildcard branch: integer literal 0
+    const body2 = try env.mir_store.addExpr(allocator, .{ .int = .{
+        .value = .{ .bytes = @bitCast(@as(i128, 0)), .kind = .i128 },
+    } }, i64_mono, Region.zero());
+
+    // Two wildcard patterns simulating `_ | _ => 99` (2 alternatives in one branch)
+    const pat1 = try env.mir_store.addPattern(allocator, .wildcard, i64_mono);
+    const pat2 = try env.mir_store.addPattern(allocator, .wildcard, i64_mono);
+    const bp_multi = try env.mir_store.addBranchPatterns(allocator, &.{
+        .{ .pattern = pat1, .degenerate = false },
+        .{ .pattern = pat2, .degenerate = false },
+    });
+
+    // Wildcard fallback branch: `_ => 0`
+    const pat3 = try env.mir_store.addPattern(allocator, .wildcard, i64_mono);
+    const bp_single = try env.mir_store.addBranchPatterns(allocator, &.{
+        .{ .pattern = pat3, .degenerate = false },
+    });
+
+    // Two MIR branches: one with 2 alternatives, one with 1
+    const branches = try env.mir_store.addBranches(allocator, &.{
+        .{ .patterns = bp_multi, .body = body1, .guard = MIR.ExprId.none },
+        .{ .patterns = bp_single, .body = body2, .guard = MIR.ExprId.none },
+    });
+
+    const match_expr = try env.mir_store.addExpr(allocator, .{ .match_expr = .{
+        .cond = cond,
+        .branches = branches,
+    } }, i64_mono, Region.zero());
+
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    defer translator.deinit();
+
+    const lir_id = try translator.lower(match_expr);
+    const lir_expr = env.lir_store.getExpr(lir_id);
+
+    // Should be a when expression
+    try testing.expect(lir_expr == .when);
+
+    // Should have 3 LIR branches: 2 from alternatives + 1 from wildcard
+    const lir_branches = env.lir_store.getWhenBranches(lir_expr.when.branches);
+    try testing.expectEqual(@as(usize, 3), lir_branches.len);
+
+    // The first two branches should share the same body
+    try testing.expectEqual(lir_branches[0].body, lir_branches[1].body);
+
+    // The third branch should have a different body
+    try testing.expect(lir_branches[2].body != lir_branches[0].body);
 }

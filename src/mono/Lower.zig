@@ -4339,13 +4339,8 @@ fn lowerWhenBranches(self: *Self, module_env: *ModuleEnv, branches: CIR.Expr.Mat
     for (branch_indices) |branch_idx| {
         const branch = module_env.store.getMatchBranch(branch_idx);
 
-        // Match branches can have multiple patterns (for or-patterns like `A | B => ...`)
-        // For now, we lower just the first pattern
         const pattern_indices = module_env.store.sliceMatchBranchPatterns(branch.patterns);
         if (pattern_indices.len == 0) continue;
-
-        const first_bp = module_env.store.getMatchBranchPattern(pattern_indices[0]);
-        const pattern = try self.lowerPattern(module_env, first_bp.pattern);
 
         const guard = if (branch.guard) |guard_idx|
             try self.lowerExprFromIdx(module_env, guard_idx)
@@ -4353,11 +4348,15 @@ fn lowerWhenBranches(self: *Self, module_env: *ModuleEnv, branches: CIR.Expr.Mat
             MonoExprId.none;
         const body = try self.lowerExprFromIdx(module_env, branch.value);
 
-        try lowered.append(self.allocator, .{
-            .pattern = pattern,
-            .guard = guard,
-            .body = body,
-        });
+        for (pattern_indices) |pat_idx| {
+            const bp = module_env.store.getMatchBranchPattern(pat_idx);
+            const pattern = try self.lowerPattern(module_env, bp.pattern);
+            try lowered.append(self.allocator, .{
+                .pattern = pattern,
+                .guard = guard,
+                .body = body,
+            });
+        }
     }
 
     return self.store.addWhenBranches(lowered.items);

@@ -1644,6 +1644,14 @@ test "match with list destructuring - baseline" {
     );
 }
 
+test "match with pattern alternatives" {
+    try runExpectI64(
+        "match Err(42) { Ok(x) | Err(x) => x, _ => 0 }",
+        42,
+        .no_trace,
+    );
+}
+
 // List destructuring tests with record accumulators
 
 test "List.fold with record accumulator - list destructuring in lambda" {

@@ -858,6 +858,22 @@ test "lowerExpr: list destructure pattern in match" {
     try testing.expect(env.mir_store.getExpr(expr) == .match_expr);
 }
 
+test "lowerExpr: match with pattern alternatives preserves all patterns" {
+    var env = try MirTestEnv.initExpr(
+        \\match Ok(1) { Ok(x) | Err(x) => x, _ => 0 }
+    );
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result == .match_expr);
+
+    // The first branch should have 2 patterns (Ok(x) and Err(x))
+    const branches = env.mir_store.getBranches(result.match_expr.branches);
+    try testing.expect(branches.len >= 1);
+    const first_branch_patterns = env.mir_store.getBranchPatterns(branches[0].patterns);
+    try testing.expect(first_branch_patterns.len >= 2);
+}
+
 test "lowerExpr: tuple access" {
     var env = try MirTestEnv.initExpr(
         \\{
