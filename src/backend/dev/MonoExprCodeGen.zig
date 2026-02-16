@@ -872,14 +872,6 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
         };
 
         /// Errors that can occur during code generation
-        pub const Error = error{
-            OutOfMemory,
-            NoRegisterToSpill,
-            InvalidLocalLocation,
-            LocalNotFound,
-            Crash,
-        };
-
         /// Initialize the code generator
         /// Target is determined at compile time via the MonoExprCodeGen(target) parameter
         pub fn init(
@@ -16118,11 +16110,6 @@ pub const HostMonoExprCodeGen = blk: {
 /// but will error at runtime if actually used.
 pub const UnsupportedArchCodeGen = struct {
     const Self = @This();
-
-    pub const Error = error{
-        UnsupportedArchitecture,
-        OutOfMemory,
-    };
 
     pub const CodeResult = struct {
         code: []const u8,
