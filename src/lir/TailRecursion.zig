@@ -271,15 +271,28 @@ pub fn makeTailRecursive(
 
     for (param_patterns) |pattern_id| {
         const pattern = store.getPattern(pattern_id);
-        if (pattern == .bind) {
-            // Create lookup expression for this parameter
-            const lookup_id = try store.addExpr(.{
-                .lookup = .{
-                    .symbol = pattern.bind.symbol,
-                    .layout_idx = pattern.bind.layout_idx,
-                },
-            }, @import("base").Region.zero());
-            try initial_args.append(allocator, lookup_id);
+        switch (pattern) {
+            .bind => |bind| {
+                // Create lookup expression for this parameter
+                const lookup_id = try store.addExpr(.{
+                    .lookup = .{
+                        .symbol = bind.symbol,
+                        .layout_idx = bind.layout_idx,
+                    },
+                }, @import("base").Region.zero());
+                try initial_args.append(allocator, lookup_id);
+            },
+            .wildcard => {
+                // Wildcard parameter: pass a zero placeholder to maintain arity.
+                // rebindJoinPointParams skips non-bind patterns, so this value
+                // is never stored or used.
+                const placeholder_id = try store.addExpr(
+                    .{ .i64_literal = 0 },
+                    @import("base").Region.zero(),
+                );
+                try initial_args.append(allocator, placeholder_id);
+            },
+            else => unreachable, // Only bind and wildcard should appear as function params after desugaring
         }
     }
 

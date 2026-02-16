@@ -67,16 +67,12 @@ Replaced hardcoded `[RBP-16]` with `self.codegen.allocStackSlot(8)` in both LirC
 and MonoExprCodeGen. The x86_64 path for loading float immediates now uses a properly
 allocated stack slot instead of a fixed offset that could overlap with local variables.
 
-### [H7] `TailRecursion` skips non-bind parameters
-**File:** `src/lir/TailRecursion.zig` (line 272)
+### ~~[H7] `TailRecursion` skips non-bind parameters~~ FIXED
 
-When building initial jump args, non-bind patterns (wildcards, destructuring) are silently
-skipped, creating an arity mismatch between the jump point's expected args and provided
-args. Any tail-recursive function with a wildcard parameter (e.g., `factorial = |_, acc| ...`)
-will be miscompiled.
-
-**Fix:** Include all parameters. For wildcards, use a zero-sized placeholder. For other
-non-bind patterns, use `unreachable` (they shouldn't appear as function params after
+Changed the initial jump arg builder to use a switch on pattern type: `.bind` creates a
+lookup expression (as before), `.wildcard` creates an `i64_literal(0)` placeholder to
+maintain arity (rebindJoinPointParams skips non-bind patterns so the value is never used),
+and all other patterns hit `unreachable` (shouldn't appear as function params after
 desugaring).
 
 ### [H8] `rc_insert.zig` uses global use counts instead of scope-aware counts
