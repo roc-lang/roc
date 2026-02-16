@@ -582,7 +582,16 @@ fn lowerRecordAccess(self: *Self, ra: anytype, mir_expr_id: MIR.ExprId, region: 
                 }
             }
         },
-        else => {},
+        // Record access is only valid on record types; type checking
+        // guarantees the monotype here is .record.
+        .func,
+        .tag_union,
+        .tuple,
+        .list,
+        .prim,
+        .box,
+        .unit,
+        => unreachable,
     }
 
     return self.lir_store.addExpr(.{ .field_access = .{

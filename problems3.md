@@ -14,22 +14,9 @@ Fixed in commit ac6bb6cabb. Implemented "branch-owns-its-RC" model: each branchi
 
 Fixed in latest commit. `processExpr` now handles `.lambda`, `.closure`, `.for_loop`, and `.while_loop` in both `src/lir/rc_insert.zig` and `src/mono/rc_insert.zig`. Lambda/for-loop bodies get body-local use counting with RC ops for parameters/element bindings (decref if unused, incref if multi-use). `processBlock` was also fixed for reentrancy (local buffer instead of shared `self.stmt_buf`) and now processes `stmt.expr` values so lambdas bound in block statements get RC-processed. 6 new tests added.
 
-### 1.4 [MODERATE] `lowerRecordAccess` silently defaults to `field_idx = 0` for non-records
+### 1.4 [FIXED] `lowerRecordAccess` silently defaults to `field_idx = 0` for non-records
 
-**File:** `src/lir/MirToLir.zig:572-585`
-
-```zig
-var field_idx: u16 = 0;
-const monotype = self.mir_store.monotype_store.getMonotype(record_mono);
-switch (monotype) {
-    .record => |r| { /* find field */ },
-    else => {},  // ← field_idx stays 0!
-}
-```
-
-If the monotype isn't `.record`, the field index silently defaults to 0. Per the project's design principles, this should be `unreachable` since it can only happen from a compiler bug.
-
-**Fix:** Change `else => {},` to `else => unreachable,`
+Fixed in latest commit. Changed `else => {}` to an exhaustive match listing all non-record monotype variants (`.func`, `.tag_union`, `.tuple`, `.list`, `.prim`, `.box`, `.unit`) as `unreachable`.
 
 ### 1.5 [MODERATE] `lowerInt` discards the monotype — always emits i64 or i128
 
@@ -185,7 +172,7 @@ The surface language uses `match`, not `when`, but the LIR and Mono IR layers st
 | P0 | 1.1 Pattern alternatives dropped | Wrong match behavior at runtime |
 | ~~P0~~ | ~~1.2 Global RC use counts~~ | ~~Memory leaks~~ FIXED |
 | ~~P0~~ | ~~1.3 RC doesn't process lambdas/loops~~ | ~~Missing RC ops → leaks or use-after-free~~ FIXED |
-| P1 | 1.4 Record access defaults to idx 0 | Wrong field access (compiler bug path) |
+| ~~P1~~ | ~~1.4 Record access defaults to idx 0~~ | ~~Wrong field access (compiler bug path)~~ FIXED |
 | P1 | 2.1 No sorted-tags assertion | Silent wrong discriminants |
 | P1 | 2.2 Tag union layout approximation | Potential layout mismatch with codegen |
 | P1 | 1.6 break_expr → runtime_error | Break crashes at runtime |
