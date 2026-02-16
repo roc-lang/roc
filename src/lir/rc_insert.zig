@@ -551,3 +551,163 @@ test "RcInsertPass compiles" {
     const T = RcInsertPass;
     std.debug.assert(@sizeOf(T) > 0);
 }
+
+// --- Test helpers (same pattern as MirToLir.zig) ---
+
+fn testInit() !struct { lir_store: LirExprStore, layout_store: layout_mod.Store, module_env: @import("can").ModuleEnv, module_env_ptrs: [1]*const @import("can").ModuleEnv } {
+    const allocator = std.testing.allocator;
+    var result: @TypeOf(testInit() catch unreachable) = undefined;
+    result.module_env = try @import("can").ModuleEnv.init(allocator, "");
+    result.lir_store = LirExprStore.init(allocator);
+    return result;
+}
+
+fn testInitLayoutStore(self: *@TypeOf(testInit() catch unreachable)) !void {
+    self.module_env_ptrs[0] = &self.module_env;
+    self.layout_store = try layout_mod.Store.init(&self.module_env_ptrs, null, std.testing.allocator, @import("base").target.TargetUsize.native);
+}
+
+fn testDeinit(self: *@TypeOf(testInit() catch unreachable)) void {
+    self.layout_store.deinit();
+    self.lir_store.deinit();
+    self.module_env.deinit();
+}
+
+test "RC pass-through: non-refcounted i64 block unchanged" {
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    // Build: { x = 42; x }
+    const i64_layout: LayoutIdx = .i64;
+
+    const ident_x = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
+    const sym_x = LIR.Symbol{ .module_idx = 0, .ident_idx = ident_x };
+
+    const int_lit = try env.lir_store.addExpr(.{ .i64_literal = 42 }, Region.zero());
+    const pat_x = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_x, .layout_idx = i64_layout } }, Region.zero());
+    const stmts = try env.lir_store.addStmts(&.{.{ .pattern = pat_x, .expr = int_lit }});
+    const lookup_x = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_x, .layout_idx = i64_layout } }, Region.zero());
+
+    const block_expr = try env.lir_store.addExpr(.{ .block = .{
+        .stmts = stmts,
+        .final_expr = lookup_x,
+        .result_layout = i64_layout,
+    } }, Region.zero());
+
+    var pass = RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    defer pass.deinit();
+
+    const result = try pass.insertRcOps(block_expr);
+    const result_expr = env.lir_store.getExpr(result);
+    try std.testing.expect(result_expr == .block);
+
+    // No RC ops should have been added — statement count should be 1
+    const result_stmts = env.lir_store.getStmts(result_expr.block.stmts);
+    try std.testing.expectEqual(@as(usize, 1), result_stmts.len);
+}
+
+test "RC: string binding used twice gets incref" {
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    // Build: { s = "hello"; use(s); s }
+    // where s is used twice (the use(s) stmt + final lookup)
+    const str_layout: LayoutIdx = .str;
+
+    const ident_s = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
+    const sym_s = LIR.Symbol{ .module_idx = 0, .ident_idx = ident_s };
+
+    const str_lit = try env.lir_store.addExpr(.{ .str_literal = base.StringLiteral.Idx.none }, Region.zero());
+    const pat_s = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
+
+    // Two lookups to get use_count = 2
+    const lookup1 = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
+    const lookup2 = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
+
+    // Statement: s = "hello"
+    // Statement: _ = s (use to bump count)
+    const wildcard = try env.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = str_layout } }, Region.zero());
+    const stmts = try env.lir_store.addStmts(&.{
+        .{ .pattern = pat_s, .expr = str_lit },
+        .{ .pattern = wildcard, .expr = lookup1 },
+    });
+
+    const block_expr = try env.lir_store.addExpr(.{ .block = .{
+        .stmts = stmts,
+        .final_expr = lookup2,
+        .result_layout = str_layout,
+    } }, Region.zero());
+
+    var pass = RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    defer pass.deinit();
+
+    const result = try pass.insertRcOps(block_expr);
+    const result_expr = env.lir_store.getExpr(result);
+    try std.testing.expect(result_expr == .block);
+
+    // Should have more statements than original (incref added after the bind)
+    const result_stmts = env.lir_store.getStmts(result_expr.block.stmts);
+    try std.testing.expect(result_stmts.len > 2);
+
+    // Find the incref in the statements
+    var found_incref = false;
+    for (result_stmts) |stmt| {
+        const stmt_expr = env.lir_store.getExpr(stmt.expr);
+        if (stmt_expr == .incref) found_incref = true;
+    }
+    try std.testing.expect(found_incref);
+}
+
+test "RC: unused string binding gets decref" {
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    // Build: { s = "hello"; 42 }
+    // s is bound but never used, so it should get a decref
+    const str_layout: LayoutIdx = .str;
+    const i64_layout: LayoutIdx = .i64;
+
+    const ident_s = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
+    const sym_s = LIR.Symbol{ .module_idx = 0, .ident_idx = ident_s };
+
+    const str_lit = try env.lir_store.addExpr(.{ .str_literal = base.StringLiteral.Idx.none }, Region.zero());
+    const pat_s = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
+    const stmts = try env.lir_store.addStmts(&.{.{ .pattern = pat_s, .expr = str_lit }});
+
+    // Final expression is an i64 literal (s is unused)
+    const int_lit = try env.lir_store.addExpr(.{ .i64_literal = 42 }, Region.zero());
+
+    const block_expr = try env.lir_store.addExpr(.{ .block = .{
+        .stmts = stmts,
+        .final_expr = int_lit,
+        .result_layout = i64_layout,
+    } }, Region.zero());
+
+    var pass = RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    defer pass.deinit();
+
+    const result = try pass.insertRcOps(block_expr);
+    const result_expr = env.lir_store.getExpr(result);
+    try std.testing.expect(result_expr == .block);
+
+    // Should have more statements than original (decref added)
+    const result_stmts = env.lir_store.getStmts(result_expr.block.stmts);
+    try std.testing.expect(result_stmts.len > 1);
+
+    // Find the decref in the statements
+    var found_decref = false;
+    for (result_stmts) |stmt| {
+        const stmt_expr = env.lir_store.getExpr(stmt.expr);
+        if (stmt_expr == .decref) found_decref = true;
+    }
+    try std.testing.expect(found_decref);
+}

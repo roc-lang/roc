@@ -1246,3 +1246,140 @@ test "lowerExprSpan re-entrancy: list of calls preserves all elements" {
     try testing.expect(elem0 == .call);
     try testing.expect(elem1 == .call);
 }
+
+test "MIR int literal lowers to LIR i64_literal" {
+    const allocator = testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
+
+    const int_expr = try env.mir_store.addExpr(allocator, .{ .int = .{
+        .value = .{ .bytes = @bitCast(@as(i128, 42)), .kind = .i128 },
+    } }, i64_mono, Region.zero());
+
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    defer translator.deinit();
+
+    const lir_id = try translator.lower(int_expr);
+    const lir_expr = env.lir_store.getExpr(lir_id);
+    try testing.expect(lir_expr == .i64_literal);
+    try testing.expectEqual(@as(i64, 42), lir_expr.i64_literal);
+}
+
+test "MIR zero-arg tag lowers to LIR zero_arg_tag" {
+    const allocator = testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    // Create a single-tag union monotype: [MyTag]
+    const tag_name = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
+    const tag_span = try env.mir_store.monotype_store.addTags(allocator, &.{
+        .{ .name = tag_name, .payloads = Monotype.Span.empty() },
+    });
+    const union_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .tag_union = .{ .tags = tag_span } });
+
+    const tag_expr = try env.mir_store.addExpr(allocator, .{ .tag = .{
+        .name = tag_name,
+        .args = MIR.ExprSpan.empty(),
+    } }, union_mono, Region.zero());
+
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    defer translator.deinit();
+
+    const lir_id = try translator.lower(tag_expr);
+    const lir_expr = env.lir_store.getExpr(lir_id);
+    try testing.expect(lir_expr == .zero_arg_tag);
+    try testing.expectEqual(@as(u16, 0), lir_expr.zero_arg_tag.discriminant);
+}
+
+test "MIR empty list lowers to LIR empty_list" {
+    const allocator = testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
+    const list_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .list = .{ .elem = i64_mono } });
+
+    const list_expr = try env.mir_store.addExpr(allocator, .{ .list = .{
+        .elems = MIR.ExprSpan.empty(),
+    } }, list_mono, Region.zero());
+
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    defer translator.deinit();
+
+    const lir_id = try translator.lower(list_expr);
+    const lir_expr = env.lir_store.getExpr(lir_id);
+    try testing.expect(lir_expr == .empty_list);
+}
+
+test "MIR lookup lowers to LIR lookup" {
+    const allocator = testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
+
+    const ident_x = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
+    const sym_x = Symbol{ .module_idx = 0, .ident_idx = ident_x };
+
+    const lookup_expr = try env.mir_store.addExpr(allocator, .{ .lookup = sym_x }, i64_mono, Region.zero());
+
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    defer translator.deinit();
+
+    const lir_id = try translator.lower(lookup_expr);
+    const lir_expr = env.lir_store.getExpr(lir_id);
+    try testing.expect(lir_expr == .lookup);
+    try testing.expect(lir_expr.lookup.symbol.eql(sym_x));
+}
+
+test "MIR block lowers to LIR block" {
+    const allocator = testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
+
+    // Create a simple block: { x = 42; x }
+    const ident_x = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
+    const sym_x = Symbol{ .module_idx = 0, .ident_idx = ident_x };
+
+    const int_42 = try env.mir_store.addExpr(allocator, .{ .int = .{
+        .value = .{ .bytes = @bitCast(@as(i128, 42)), .kind = .i128 },
+    } }, i64_mono, Region.zero());
+
+    const pat_x = try env.mir_store.addPattern(allocator, .{ .bind = sym_x }, i64_mono);
+    const stmts = try env.mir_store.addStmts(allocator, &.{.{ .decl_const = .{ .pattern = pat_x, .expr = int_42 } }});
+
+    const lookup_x = try env.mir_store.addExpr(allocator, .{ .lookup = sym_x }, i64_mono, Region.zero());
+
+    const block_expr = try env.mir_store.addExpr(allocator, .{ .block = .{
+        .stmts = stmts,
+        .final_expr = lookup_x,
+    } }, i64_mono, Region.zero());
+
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    defer translator.deinit();
+
+    const lir_id = try translator.lower(block_expr);
+    const lir_expr = env.lir_store.getExpr(lir_id);
+    try testing.expect(lir_expr == .block);
+
+    // The block should have 1 statement and a final lookup
+    const lir_stmts = env.lir_store.getStmts(lir_expr.block.stmts);
+    try testing.expectEqual(@as(usize, 1), lir_stmts.len);
+
+    const final = env.lir_store.getExpr(lir_expr.block.final_expr);
+    try testing.expect(final == .lookup);
+}

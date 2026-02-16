@@ -744,6 +744,141 @@ test "cross-module: type module method call lowers successfully" {
     try testing.expect(result != .runtime_err_type);
 }
 
+// --- Additional Lower code path tests ---
+
+test "lowerExpr: unary not desugars to match" {
+    var env = try MirTestEnv.initFull("Test",
+        \\main : Bool
+        \\main = !True
+    );
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    // !True desugars via negBool to: match True { True => False, _ => True }
+    try testing.expect(env.mir_store.getExpr(expr) == .match_expr);
+}
+
+test "lowerExpr: Bool.or short-circuit desugars to match" {
+    var env = try MirTestEnv.initExpr(
+        \\{
+        \\    x = True
+        \\    y = False
+        \\    x or y
+        \\}
+    );
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result == .block);
+    try testing.expect(env.mir_store.getExpr(result.block.final_expr) == .match_expr);
+}
+
+test "lowerExpr: != desugars through negBool to match" {
+    var env = try MirTestEnv.initExpr(
+        \\{
+        \\    x = 1
+        \\    y = 2
+        \\    x != y
+        \\}
+    );
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result == .block);
+    try testing.expect(env.mir_store.getExpr(result.block.final_expr) == .match_expr);
+}
+
+test "lowerExpr: for loop" {
+    var env = try MirTestEnv.initExpr(
+        \\{
+        \\    var $x = 0.I64
+        \\    for item in [1.I64, 2.I64, 3.I64] {
+        \\        $x = item
+        \\    }
+        \\    $x
+        \\}
+    );
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result == .block);
+    // The block should contain a for_loop in its statements
+    // (expression stmts are lowered as `_ = expr`, i.e. decl_const with wildcard)
+    const stmts = env.mir_store.getStmts(result.block.stmts);
+    var found_for = false;
+    for (stmts) |stmt| {
+        switch (stmt) {
+            .decl_const => |dc| {
+                if (env.mir_store.getExpr(dc.expr) == .for_loop) found_for = true;
+            },
+            else => {},
+        }
+    }
+    try testing.expect(found_for);
+}
+
+test "lowerExpr: multi-segment string interpolation produces str_concat" {
+    var env = try MirTestEnv.initFull("Test",
+        \\main = {
+        \\    x = "world"
+        \\    "hello ${x}!"
+        \\}
+    );
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result == .block);
+    // The final expression should be a run_low_level(str_concat, ...) from the left-fold
+    try testing.expect(env.mir_store.getExpr(result.block.final_expr) == .run_low_level);
+}
+
+test "lowerExpr: record destructure pattern in match" {
+    var env = try MirTestEnv.initExpr(
+        \\match { x: 1, y: 2 } { { x, y } => x, _ => 0 }
+    );
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    try testing.expect(env.mir_store.getExpr(expr) == .match_expr);
+}
+
+test "lowerExpr: tuple destructure pattern in match" {
+    var env = try MirTestEnv.initExpr(
+        \\match (1, 2) { (a, b) => a, _ => 0 }
+    );
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    try testing.expect(env.mir_store.getExpr(expr) == .match_expr);
+}
+
+test "lowerExpr: list destructure pattern in match" {
+    var env = try MirTestEnv.initExpr(
+        \\match [1, 2, 3] { [a, b, c] => a, _ => 0 }
+    );
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    try testing.expect(env.mir_store.getExpr(expr) == .match_expr);
+}
+
+test "lowerExpr: tuple access" {
+    var env = try MirTestEnv.initExpr(
+        \\{
+        \\    t = (1, 2)
+        \\    t.0
+        \\}
+    );
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    const result = env.mir_store.getExpr(expr);
+    try testing.expect(result == .block);
+    try testing.expect(env.mir_store.getExpr(result.block.final_expr) == .tuple_access);
+}
+
+test "lowerExpr: typed F64 fractional via dot syntax" {
+    var env = try MirTestEnv.initExpr("3.14.F64");
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    try testing.expect(env.mir_store.getExpr(expr) == .frac_f64);
+}
+
 test "cross-module: dot-access method call ensures method is lowered" {
     // Module A defines a nominal type with a method
     var env_a = try MirTestEnv.initModule("A",
