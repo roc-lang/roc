@@ -1029,6 +1029,12 @@ fn lowerDotAccess(self: *Self, module_env: *const ModuleEnv, da: anytype, monoty
             .module_idx = self.current_module_idx,
             .ident_idx = da.field_name,
         };
+
+        // Ensure the method body is lowered so codegen can find it
+        if (method_symbol.module_idx != self.current_module_idx) {
+            try self.ensureMethodLowered(method_symbol);
+        }
+
         // Build args as [receiver] ++ explicit_args
         // e.g. list.map(fn) → List.map(list, fn)
         const explicit_args = module_env.store.sliceExpr(args_span);
@@ -1109,6 +1115,11 @@ fn lowerTypeVarDispatch(self: *Self, module_env: *const ModuleEnv, tvd: anytype,
         .module_idx = self.current_module_idx,
         .ident_idx = tvd.method_name,
     };
+
+    // Ensure the method body is lowered so codegen can find it
+    if (method_symbol.module_idx != self.current_module_idx) {
+        try self.ensureMethodLowered(method_symbol);
+    }
 
     const cir_args = module_env.store.sliceExpr(tvd.args);
     const mono_top = self.mono_scratches.idxs.top();

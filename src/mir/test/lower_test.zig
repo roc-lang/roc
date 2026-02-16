@@ -726,3 +726,41 @@ test "cross-module: type module method call lowers successfully" {
     const result = env_b.mir_store.getExpr(expr);
     try testing.expect(result != .runtime_err_type);
 }
+
+test "cross-module: dot-access method call ensures method is lowered" {
+    // Module A defines a nominal type with a method
+    var env_a = try MirTestEnv.initModule("A",
+        \\A := [A(U64)].{
+        \\  get_value : A -> U64
+        \\  get_value = |A.A(val)| val
+        \\}
+    );
+    defer env_a.deinit();
+
+    // Module B imports A and calls a method via dot-access syntax
+    // This exercises lowerDotAccess (not lowerBinop) which was missing ensureMethodLowered
+    var env_b = try MirTestEnv.initWithImport("B",
+        \\import A
+        \\
+        \\main = A.A(42).get_value()
+    , "A", &env_a);
+    defer env_b.deinit();
+
+    const expr = try env_b.lowerFirstDef();
+    const result = env_b.mir_store.getExpr(expr);
+
+    // Should lower successfully (not a runtime error)
+    try testing.expect(result != .runtime_err_type);
+
+    // The result should be a call to a cross-module method
+    try testing.expect(result == .call);
+    const func = env_b.mir_store.getExpr(result.call.func);
+    try testing.expect(func == .lookup);
+    const method_sym = func.lookup;
+
+    // The method is from module A (idx 1), not module B (idx 2)
+    try testing.expect(method_sym.module_idx != 2);
+
+    // The cross-module method body must have been lowered into the MIR store
+    try testing.expect(env_b.mir_store.getSymbolDef(method_sym) != null);
+}
