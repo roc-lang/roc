@@ -143,7 +143,7 @@ fn layoutFromRecord(self: *Self, record: anytype) Allocator.Error!layout.Idx {
     if (fields.len == 0) return .zst;
 
     // Build field layouts and names, then use the layout store's putRecord-like logic
-    const env = self.layout_store.all_module_envs[0];
+    const env = self.layout_store.all_module_envs[self.layout_store.current_module_idx];
     var field_layouts = std.ArrayList(layout.Layout).empty;
     defer field_layouts.deinit(self.allocator);
     var field_names = std.ArrayList(Ident.Idx).empty;
@@ -179,10 +179,22 @@ fn layoutFromTagUnion(self: *Self, tu: anytype) Allocator.Error!layout.Idx {
     const tags = self.mir_store.monotype_store.getTags(tu.tags);
     if (tags.len == 0) return .zst;
 
-    // Single tag with no payload → ZST
+    // Single tag → no discriminant needed
     if (tags.len == 1) {
         const payloads = self.mir_store.monotype_store.getIdxSpan(tags[0].payloads);
         if (payloads.len == 0) return .zst;
+        // Single tag with payload: return just the payload layout (no discriminant)
+        if (payloads.len == 1) {
+            return self.layoutFromMonotype(payloads[0]);
+        }
+        // Multiple payload fields: wrap in a tuple
+        var elem_layouts = std.ArrayList(layout.Layout).empty;
+        defer elem_layouts.deinit(self.allocator);
+        for (payloads) |p| {
+            const p_idx = try self.layoutFromMonotype(p);
+            try elem_layouts.append(self.allocator, self.layout_store.getLayout(p_idx));
+        }
+        return self.layout_store.putTuple(elem_layouts.items);
     }
 
     // For now, represent tag unions as a tuple: [u64 discriminant, max-payload]
@@ -209,16 +221,24 @@ fn layoutFromTagUnion(self: *Self, tu: anytype) Allocator.Error!layout.Idx {
             payload_idx = try self.layout_store.putTuple(elem_layouts.items);
         }
         const sa = self.layout_store.layoutSizeAlign(self.layout_store.getLayout(payload_idx));
-        if (sa.size > max_payload_size) {
-            max_payload_size = sa.size;
+        const effective_size = std.mem.alignForward(u32, sa.size, @intCast(sa.alignment.toByteUnits()));
+        if (effective_size > max_payload_size) {
+            max_payload_size = effective_size;
             max_payload_layout = payload_idx;
         }
     }
 
     // Build a tuple of [discriminant, payload]
+    // Choose discriminant size based on tag count
+    const disc_layout: layout.Layout = if (tags.len <= 256)
+        layout.Layout.int(.u8)
+    else if (tags.len <= 65536)
+        layout.Layout.int(.u16)
+    else
+        layout.Layout.int(.u64);
     var elems = std.ArrayList(layout.Layout).empty;
     defer elems.deinit(self.allocator);
-    try elems.append(self.allocator, layout.Layout.int(.u64)); // discriminant
+    try elems.append(self.allocator, disc_layout);
     if (max_payload_layout) |pl| {
         try elems.append(self.allocator, self.layout_store.getLayout(pl));
     }
@@ -447,18 +467,47 @@ fn lowerLambda(self: *Self, lam: anytype, mono_idx: Monotype.Idx, region: Region
             .ret_layout = ret_layout,
         } }, region);
 
-        return self.lir_store.addExpr(.{ .closure = .{
-            .closure_layout = fn_layout,
-            .lambda = lambda_expr,
-            .captures = lir_captures,
-            .representation = .{ .struct_captures = .{
+        // Compute closure layout and representation based on capture count
+        const capture_items = self.scratch_lir_captures.items[save_captures_len..];
+        if (capture_items.len == 1) {
+            // Single capture: unwrapped_capture (zero overhead)
+            const cap_layout = capture_items[0].layout_idx;
+            return self.lir_store.addExpr(.{ .closure = .{
+                .closure_layout = cap_layout,
+                .lambda = lambda_expr,
                 .captures = lir_captures,
-                .struct_layout = fn_layout,
-            } },
-            .recursion = .not_recursive,
-            .self_recursive = .not_self_recursive,
-            .is_bound_to_variable = false,
-        } }, region);
+                .representation = .{ .unwrapped_capture = .{
+                    .capture_layout = cap_layout,
+                } },
+                .recursion = .not_recursive,
+                .self_recursive = .not_self_recursive,
+                .is_bound_to_variable = false,
+            } }, region);
+        } else {
+            // Multiple captures: struct_captures with a record layout
+            var cap_field_layouts = std.ArrayList(layout.Layout).empty;
+            defer cap_field_layouts.deinit(self.allocator);
+            var cap_field_names = std.ArrayList(Ident.Idx).empty;
+            defer cap_field_names.deinit(self.allocator);
+            for (capture_items) |cap| {
+                try cap_field_layouts.append(self.allocator, self.layout_store.getLayout(cap.layout_idx));
+                try cap_field_names.append(self.allocator, cap.symbol.ident_idx);
+            }
+            const env = self.layout_store.all_module_envs[self.layout_store.current_module_idx];
+            const closure_layout = try self.layout_store.putRecord(env, cap_field_layouts.items, cap_field_names.items);
+            return self.lir_store.addExpr(.{ .closure = .{
+                .closure_layout = closure_layout,
+                .lambda = lambda_expr,
+                .captures = lir_captures,
+                .representation = .{ .struct_captures = .{
+                    .captures = lir_captures,
+                    .struct_layout = closure_layout,
+                } },
+                .recursion = .not_recursive,
+                .self_recursive = .not_self_recursive,
+                .is_bound_to_variable = false,
+            } }, region);
+        }
     }
 
     return self.lir_store.addExpr(.{ .lambda = .{

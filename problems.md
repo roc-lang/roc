@@ -169,54 +169,35 @@ Changed `addExpr` and `addPattern` in both MIR.zig and LirExprStore.zig to use
 Changed `start = undefined` to `start = 0` in all `empty()` functions across MIR.zig,
 LIR.zig, DataSpan.zig, MonoIR.zig, and Monotype.zig (31 occurrences total).
 
-### [M10] Tag union layout always uses u64 discriminant
-**File:** `src/lir/MirToLir.zig` (line 224)
+### ~~[M10] Tag union layout always uses u64 discriminant~~ FIXED
 
-Wastes 7 bytes per tag union value for the common case of <256 variants. If the LIR layout
-disagrees with the backend's layout, field offsets will be inconsistent.
+Now chooses discriminant size based on tag count: u8 for <=256 tags, u16 for <=65536,
+u64 otherwise. Saves 7 bytes per tag union value for the common case.
 
-**Fix:** Choose discriminant size based on tag count, or document that the backend ignores
-this layout.
+### ~~[M11] Tag union max payload selection ignores alignment~~ FIXED
 
-### [M11] Tag union max payload selection ignores alignment
-**File:** `src/lir/MirToLir.zig` (line 214)
+Changed payload comparison from `sa.size` to `alignForward(sa.size, sa.alignment.toByteUnits())`
+so a smaller payload with higher alignment requirements is correctly accounted for.
 
-Only compares `size`, but a smaller payload with higher alignment could require more total
-space due to padding.
+### ~~[M12] Single-tag-with-payload union gets unnecessary discriminant~~ FIXED
 
-**Fix:** Compare by effective allocated size: `alignForward(size, alignment)`.
+Single-tag unions now return just the payload layout (single payload) or a payload tuple
+(multiple payloads) without any discriminant.
 
-### [M12] Single-tag-with-payload union gets unnecessary discriminant
-**File:** `src/lir/MirToLir.zig` (line 186)
+### ~~[M13] `lowerLambda` always uses `struct_captures` closure representation~~ FIXED
 
-A single-tag union with payload (e.g., `[Ok payload]`) still gets a `[u64, payload]` tuple
-layout. No discriminant is needed.
+Now uses `unwrapped_capture` for single-capture closures (zero overhead) and
+`struct_captures` with a proper record layout for multiple captures.
 
-**Fix:** Return just the payload layout for single-tag unions.
+### ~~[M14] `lowerLambda` uses `fn_layout` as `closure_layout`~~ FIXED
 
-### [M13] `lowerLambda` always uses `struct_captures` closure representation
-**File:** `src/lir/MirToLir.zig` (line 451)
+`closure_layout` now uses the capture's layout (single capture) or a computed record
+layout from the capture fields (multiple captures), not the function's layout.
 
-Should use `unwrapped_capture` for 1 capture, `enum_dispatch` for no-capture lambda sets,
-etc. Using `struct_captures` for everything means lambda set dispatch won't work correctly.
+### ~~[M15] `layout_store.all_module_envs[0]` hardcoded~~ FIXED
 
-**Fix:** Use lambda set analysis results to choose the correct representation.
-
-### [M14] `lowerLambda` uses `fn_layout` as `closure_layout`
-**File:** `src/lir/MirToLir.zig` (line 451)
-
-A function's layout describes `(args) -> ret`. A closure's layout should describe the
-capture struct. Using the wrong layout causes incorrect memory allocation for closures.
-
-**Fix:** Compute the actual capture struct layout from the capture fields.
-
-### [M15] `layout_store.all_module_envs[0]` hardcoded
-**File:** `src/lir/MirToLir.zig` (line 149)
-
-Always uses module 0's environment for `putRecord`. Multi-module programs will use the
-wrong module environment for record layout computation.
-
-**Fix:** Use `self.layout_store.currentModuleEnv()` or track the current module index.
+Changed to `all_module_envs[self.layout_store.current_module_idx]` so multi-module
+programs use the correct module environment for record layout computation.
 
 ---
 
