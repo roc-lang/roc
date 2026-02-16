@@ -2587,7 +2587,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 => {
                     if (args.len < 1) unreachable;
                     const src_loc = try self.generateExpr(args[0]);
-                    const parts = try self.getI128Parts(src_loc);
+                    const src_signedness: std.builtin.Signedness = switch (ll.op) {
+                        .i128_to_i8_wrap, .i128_to_i16_wrap, .i128_to_i32_wrap, .i128_to_i64_wrap, .i128_to_u8_wrap, .i128_to_u16_wrap, .i128_to_u32_wrap, .i128_to_u64_wrap, .i128_to_u128_wrap => .signed,
+                        else => .unsigned,
+                    };
+                    const parts = try self.getI128Parts(src_loc, src_signedness);
 
                     const dst_bits: u8 = switch (ll.op) {
                         .u128_to_i8_wrap, .u128_to_u8_wrap, .i128_to_i8_wrap, .i128_to_u8_wrap => 8,
@@ -2607,7 +2611,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try self.codegen.emitStoreStack(.w64, stack_offset, parts.low);
                         // Re-load high part (we freed it)
                         const high_reg = try self.allocTempGeneral();
-                        const src_parts = try self.getI128Parts(src_loc);
+                        const src_parts = try self.getI128Parts(src_loc, src_signedness);
                         try self.codegen.emitStoreStack(.w64, stack_offset + 8, src_parts.high);
                         self.codegen.freeGeneral(src_parts.low);
                         self.codegen.freeGeneral(src_parts.high);
@@ -2709,7 +2713,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 => {
                     if (args.len < 1) unreachable;
                     const src_loc = try self.generateExpr(args[0]);
-                    const parts = try self.getI128Parts(src_loc);
+                    const parts = try self.getI128Parts(src_loc, .signed); // Dec is signed i128
 
                     // Call roc_builtins_dec_to_i64_trunc(low, high) -> i64
                     const result_reg = self.codegen.allocGeneral() orelse unreachable;
@@ -2749,7 +2753,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .dec_to_i128_trunc => {
                     if (args.len < 1) unreachable;
                     const src_loc = try self.generateExpr(args[0]);
-                    const parts = try self.getI128Parts(src_loc);
+                    const parts = try self.getI128Parts(src_loc, .signed); // Dec is signed i128
                     const fn_addr = @intFromPtr(&dev_wrappers.roc_builtins_dec_to_i64_trunc);
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                     try builder.addRegArg(parts.low);
@@ -2776,7 +2780,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .dec_to_u128_trunc => {
                     if (args.len < 1) unreachable;
                     const src_loc = try self.generateExpr(args[0]);
-                    const parts = try self.getI128Parts(src_loc);
+                    const parts = try self.getI128Parts(src_loc, .signed); // Dec is signed i128
                     const fn_addr = @intFromPtr(&dev_wrappers.roc_builtins_dec_to_i64_trunc);
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                     try builder.addRegArg(parts.low);
@@ -2802,14 +2806,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .dec_to_f64 => {
                     if (args.len < 1) unreachable;
                     const src_loc = try self.generateExpr(args[0]);
-                    const parts = try self.getI128Parts(src_loc);
+                    const parts = try self.getI128Parts(src_loc, .signed); // Dec is signed i128
                     return try self.callI128PartsToF64(parts, @intFromPtr(&dev_wrappers.roc_builtins_dec_to_f64), .dec_to_f64);
                 },
                 .dec_to_f32_wrap => {
                     // Dec to f32: convert to f64 first (f32 narrowing happens at store)
                     if (args.len < 1) unreachable;
                     const src_loc = try self.generateExpr(args[0]);
-                    const parts = try self.getI128Parts(src_loc);
+                    const parts = try self.getI128Parts(src_loc, .signed); // Dec is signed i128
                     return try self.callI128PartsToF64(parts, @intFromPtr(&dev_wrappers.roc_builtins_dec_to_f64), .dec_to_f64);
                 },
 
@@ -2819,7 +2823,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 => {
                     if (args.len < 1) unreachable;
                     const src_loc = try self.generateExpr(args[0]);
-                    const parts = try self.getI128Parts(src_loc);
+                    const parts = try self.getI128Parts(src_loc, .signed);
                     return try self.callI128PartsToF64(parts, @intFromPtr(&dev_wrappers.roc_builtins_i128_to_f64), .i128_to_f64);
                 },
                 .u128_to_f32,
@@ -2827,7 +2831,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 => {
                     if (args.len < 1) unreachable;
                     const src_loc = try self.generateExpr(args[0]);
-                    const parts = try self.getI128Parts(src_loc);
+                    const parts = try self.getI128Parts(src_loc, .unsigned);
                     return try self.callI128PartsToF64(parts, @intFromPtr(&dev_wrappers.roc_builtins_u128_to_f64), .u128_to_f64);
                 },
 
@@ -4669,8 +4673,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Low word at offset 0, high word at offset 8
 
             // Get low and high parts of both operands
-            const lhs_parts = try self.getI128Parts(lhs_loc);
-            const rhs_parts = try self.getI128Parts(rhs_loc);
+            const signedness: std.builtin.Signedness = if (result_layout == .u128) .unsigned else .signed;
+            const lhs_parts = try self.getI128Parts(lhs_loc, signedness);
+            const rhs_parts = try self.getI128Parts(rhs_loc, signedness);
 
             // Allocate registers for result
             const result_low = try self.allocTempGeneral();
@@ -5066,7 +5071,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             if (info.src_bits > 64) {
                 // 128-bit source: load as two registers, call 128-bit C wrapper
-                const parts = try self.getI128Parts(src_loc);
+                const parts = try self.getI128Parts(src_loc, if (info.src_signed) .signed else .unsigned);
 
                 const builtin_fn: BuiltinFn = if (info.src_signed) .i128_try_convert else .u128_try_convert;
                 const fn_addr: usize = if (info.src_signed)
@@ -5302,7 +5307,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     if (info.src_kind == .dec) {
                         // Dec source: get i128 parts, call Dec-to-int wrapper
-                        const parts = try self.getI128Parts(src_loc);
+                        const parts = try self.getI128Parts(src_loc, .signed); // Dec is signed i128
                         const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_dec_to_int_try_unsafe);
                         const base_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .FP else .RBP;
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
@@ -5344,7 +5349,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // Float/Dec narrowing to f32: result is {val: F32, success: Bool}
                     if (info.src_kind == .dec) {
                         // Dec to f32
-                        const parts = try self.getI128Parts(src_loc);
+                        const parts = try self.getI128Parts(src_loc, .signed); // Dec is signed i128
                         const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_dec_to_f32_try_unsafe);
                         const base_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .FP else .RBP;
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
@@ -5378,7 +5383,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 .dec => {
                     // Integer to Dec: result is {val: Dec(i128), is_int: Bool}
-                    const parts = try self.getI128Parts(src_loc);
+                    const parts = try self.getI128Parts(src_loc, if (info.tgt_signed) .signed else .unsigned);
                     const builtin_fn: BuiltinFn = if (info.tgt_signed) .i128_to_dec_try_unsafe else .u128_to_dec_try_unsafe;
                     const fn_addr: usize = if (info.tgt_signed)
                         @intFromPtr(&dev_wrappers.roc_builtins_i128_to_dec_try_unsafe)
@@ -5511,7 +5516,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             high: GeneralReg,
         };
 
-        fn getI128Parts(self: *Self, loc: ValueLocation) Allocator.Error!I128Parts {
+        fn getI128Parts(self: *Self, loc: ValueLocation, signedness: std.builtin.Signedness) Allocator.Error!I128Parts {
             const low_reg = try self.allocTempGeneral();
             const high_reg = try self.allocTempGeneral();
 
@@ -5537,22 +5542,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 .general_reg => |reg| {
                     try self.emitMovRegReg(low_reg, reg);
-                    try self.codegen.emitLoadImm(high_reg, 0);
+                    try self.emitSignExtendHighReg(high_reg, low_reg, signedness);
                 },
                 .stack_str => |offset| {
-                    // 8-byte stack values - sign extend to 128 bits
                     try self.codegen.emitLoadStack(.w64, low_reg, offset);
-                    // Sign-extend: check if negative and set high to -1, otherwise 0
-                    // For simplicity, assume unsigned and zero-extend
-                    try self.codegen.emitLoadImm(high_reg, 0);
+                    try self.emitSignExtendHighReg(high_reg, low_reg, signedness);
                 },
                 .stack => |s| {
-                    const offset = s.offset;
-                    // 8-byte stack values - sign extend to 128 bits
-                    try self.codegen.emitLoadStack(.w64, low_reg, offset);
-                    // Sign-extend: check if negative and set high to -1, otherwise 0
-                    // For simplicity, assume unsigned and zero-extend
-                    try self.codegen.emitLoadImm(high_reg, 0);
+                    try self.codegen.emitLoadStack(.w64, low_reg, s.offset);
+                    try self.emitSignExtendHighReg(high_reg, low_reg, signedness);
                 },
                 else => {
                     unreachable;
@@ -5560,6 +5558,25 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             return .{ .low = low_reg, .high = high_reg };
+        }
+
+        /// For signed values, arithmetic-shift-right the low register by 63 to
+        /// produce all-1s (negative) or all-0s (positive) in the high register.
+        /// For unsigned values, simply zero the high register.
+        fn emitSignExtendHighReg(self: *Self, high_reg: GeneralReg, low_reg: GeneralReg, signedness: std.builtin.Signedness) !void {
+            switch (signedness) {
+                .signed => {
+                    try self.emitMovRegReg(high_reg, low_reg);
+                    if (comptime target.toCpuArch() == .aarch64) {
+                        try self.codegen.emit.asrRegRegImm(.w64, high_reg, high_reg, 63);
+                    } else {
+                        try self.codegen.emit.sarRegImm8(.w64, high_reg, 63);
+                    }
+                },
+                .unsigned => {
+                    try self.codegen.emitLoadImm(high_reg, 0);
+                },
+            }
         }
 
         /// Generate i128 equality comparison (eq or neq)
@@ -6430,8 +6447,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.codegen.freeGeneral(eq_reg);
             } else if (field_layout_idx == .dec or field_layout_idx == .i128 or field_layout_idx == .u128 or field_size == 16) {
                 // 128-bit field: compare as i128 (two 64-bit parts)
-                const lhs_parts = try self.getI128Parts(.{ .stack_i128 = lhs_off });
-                const rhs_parts = try self.getI128Parts(.{ .stack_i128 = rhs_off });
+                const lhs_parts = try self.getI128Parts(.{ .stack_i128 = lhs_off }, .signed);
+                const rhs_parts = try self.getI128Parts(.{ .stack_i128 = rhs_off }, .signed);
                 try self.generateI128Equality(lhs_parts, rhs_parts, result_reg, true);
                 self.codegen.freeGeneral(lhs_parts.low);
                 self.codegen.freeGeneral(lhs_parts.high);
@@ -6847,7 +6864,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 return .{ .float_reg = result_reg };
             } else if (is_i128) {
                 // 128-bit negation: result = 0 - value (using SUBS/SBC or SUB/SBB)
-                const parts = try self.getI128Parts(inner_loc);
+                const parts = try self.getI128Parts(inner_loc, .signed); // negation is signed
 
                 const result_low = try self.allocTempGeneral();
                 const result_high = try self.allocTempGeneral();
@@ -9327,7 +9344,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
             } else {
                 // 128-bit value
-                const parts = try self.getI128Parts(val_loc);
+                const parts = try self.getI128Parts(val_loc, if (is_signed) .signed else .unsigned);
                 val_low = parts.low;
                 val_high = parts.high;
             }

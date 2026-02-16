@@ -52,14 +52,14 @@ Note: `List.contains` in the builtins is implemented as `List.any(list, |x| x ==
 so the `.list_contains` low-level is not currently exercised by end-to-end tests. The
 codegen fix is correct and will be exercised when the full pipeline uses it.
 
-### [H5] `getI128Parts` zero-extends signed values
-**File:** `src/backend/dev/LirCodeGen.zig` (line 5447)
+### ~~[H5] `getI128Parts` zero-extends signed values~~ FIXED
 
-For `.stack` and `.stack_str` locations, the high 64 bits are always set to 0. Negative
-signed values (e.g., `-1` as i64 promoted to i128) become large positive numbers.
-
-**Fix:** Accept a signedness parameter. For signed values, arithmetic-shift-right the low
-register by 63 to produce the high register.
+Added `std.builtin.Signedness` parameter to `getI128Parts` in both LirCodeGen and
+MonoExprCodeGen. For `.general_reg`, `.stack`, `.stack_str` locations: signed values use
+ASR/SAR by 63 to sign-extend; unsigned values zero-extend. Extracted shared logic into
+`emitSignExtendHighReg` helper. Updated all 20 callers with correct signedness. Added Dec
+arithmetic eval tests as correctness baseline. The bug was latent (all current 128-bit
+code paths use `.stack_i128`/`.immediate_i128`) but the fix prevents future miscompilation.
 
 ### [H6] `ensureInFloatReg` uses hardcoded stack offset -16
 **File:** `src/backend/dev/LirCodeGen.zig` (line 11606)

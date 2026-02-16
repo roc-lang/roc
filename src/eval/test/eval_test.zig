@@ -33,6 +33,7 @@ const runExpectStr = helpers.runExpectStr;
 const runExpectRecord = helpers.runExpectRecord;
 const runExpectListI64 = helpers.runExpectListI64;
 const runExpectListZst = helpers.runExpectListZst;
+const runExpectDec = helpers.runExpectDec;
 const ExpectedField = helpers.ExpectedField;
 
 const TraceWriterState = struct {
@@ -476,6 +477,15 @@ test "decimal literal evaluation" {
     try runExpectSuccess("0.0dec", .no_trace);
     try runExpectSuccess("123.456dec", .no_trace);
     try runExpectSuccess("-1.5dec", .no_trace);
+}
+
+test "decimal arithmetic with negative values" {
+    // one_point_zero = 10^18 = 1_000_000_000_000_000_000
+    const one = 1_000_000_000_000_000_000;
+    try runExpectDec("-1.5dec", -one - one / 2, .no_trace);
+    try runExpectDec("1.5dec", one + one / 2, .no_trace);
+    try runExpectDec("-1.5dec + 2.5dec", one, .no_trace);
+    try runExpectDec("0.0dec - 1.0dec", -one, .no_trace);
 }
 
 test "float literal evaluation" {
