@@ -28,7 +28,6 @@ const test_allocator = helpers.interpreter_allocator;
 const runExpectI64 = helpers.runExpectI64;
 const runExpectIntDec = helpers.runExpectIntDec;
 const runExpectBool = helpers.runExpectBool;
-const runExpectBoolNative = helpers.runExpectBoolNative;
 const runExpectError = helpers.runExpectError;
 const runExpectStr = helpers.runExpectStr;
 const runExpectRecord = helpers.runExpectRecord;
@@ -1285,69 +1284,67 @@ test "four-deep nested equality" {
 // Tests for heap-type fields (long strings beyond SSO) inside structural types.
 // These exercise layout-aware comparison rather than raw byte comparison,
 // ensuring heap pointers are compared by content, not address.
-// Uses runExpectBoolNative because the WASM backend doesn't yet support
-// layout-aware structural equality for nested heap types.
 
 test "record with long string field equality" {
     // Long strings exceed SSO (~23 bytes), forcing heap allocation
-    try runExpectBoolNative(
+    try runExpectBool(
         \\{ name: "this string is long enough to avoid SSO optimization" } == { name: "this string is long enough to avoid SSO optimization" }
     , true, .no_trace);
-    try runExpectBoolNative(
+    try runExpectBool(
         \\{ name: "this string is long enough to avoid SSO optimization" } == { name: "different long string that also avoids SSO optimization" }
     , false, .no_trace);
 }
 
 test "record with long string field inequality" {
-    try runExpectBoolNative(
+    try runExpectBool(
         \\{ name: "this string is long enough to avoid SSO optimization" } != { name: "this string is long enough to avoid SSO optimization" }
     , false, .no_trace);
-    try runExpectBoolNative(
+    try runExpectBool(
         \\{ name: "this string is long enough to avoid SSO optimization" } != { name: "different long string that also avoids SSO optimization" }
     , true, .no_trace);
 }
 
 test "tuple with long string element equality" {
-    try runExpectBoolNative(
+    try runExpectBool(
         \\("this string is long enough to avoid SSO optimization", 42) == ("this string is long enough to avoid SSO optimization", 42)
     , true, .no_trace);
-    try runExpectBoolNative(
+    try runExpectBool(
         \\("this string is long enough to avoid SSO optimization", 42) == ("different long string that also avoids SSO optimization", 42)
     , false, .no_trace);
 }
 
 test "record with multiple long string fields equality" {
-    try runExpectBoolNative(
+    try runExpectBool(
         \\{ a: "first long string exceeding SSO limit!!", b: "second long string exceeding SSO limit!" } == { a: "first long string exceeding SSO limit!!", b: "second long string exceeding SSO limit!" }
     , true, .no_trace);
-    try runExpectBoolNative(
+    try runExpectBool(
         \\{ a: "first long string exceeding SSO limit!!", b: "second long string exceeding SSO limit!" } == { a: "first long string exceeding SSO limit!!", b: "DIFFERENT long string exceeding SSO!!!!" }
     , false, .no_trace);
 }
 
 test "long string inside record inside tuple equality" {
-    try runExpectBoolNative(
+    try runExpectBool(
         \\({ name: "this string is long enough to avoid SSO optimization" }, 1) == ({ name: "this string is long enough to avoid SSO optimization" }, 1)
     , true, .no_trace);
-    try runExpectBoolNative(
+    try runExpectBool(
         \\({ name: "this string is long enough to avoid SSO optimization" }, 1) == ({ name: "different long string that also avoids SSO optimization" }, 1)
     , false, .no_trace);
 }
 
 test "tag union with long string payload equality" {
-    try runExpectBoolNative(
+    try runExpectBool(
         \\Ok("this string is long enough to avoid SSO optimization") == Ok("this string is long enough to avoid SSO optimization")
     , true, .no_trace);
-    try runExpectBoolNative(
+    try runExpectBool(
         \\Ok("this string is long enough to avoid SSO optimization") == Ok("different long string that also avoids SSO optimization")
     , false, .no_trace);
 }
 
 test "tag union with long string payload inequality" {
-    try runExpectBoolNative(
+    try runExpectBool(
         \\Ok("this string is long enough to avoid SSO optimization") != Ok("this string is long enough to avoid SSO optimization")
     , false, .no_trace);
-    try runExpectBoolNative(
+    try runExpectBool(
         \\Ok("this string is long enough to avoid SSO optimization") != Ok("different long string that also avoids SSO optimization")
     , true, .no_trace);
 }

@@ -2385,50 +2385,6 @@ pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: enum { 
     try std.testing.expectEqual(expected_bool, bool_val);
 }
 
-/// Like runExpectBool but skips the WasmEvaluator comparison.
-/// Use this for tests that exercise heap-type structural equality (e.g. strings inside records),
-/// which is fixed in the native backend but not yet in the WASM backend.
-pub fn runExpectBoolNative(src: []const u8, expected_bool: bool, should_trace: enum { trace, no_trace }) !void {
-    const resources = try parseAndCanonicalizeExpr(test_allocator, src);
-    defer cleanupParseAndCanonical(test_allocator, resources);
-
-    var test_env_instance = TestEnv.init(interpreter_allocator);
-    defer test_env_instance.deinit();
-
-    const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
-    var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
-    defer interpreter.deinit();
-
-    const enable_trace = should_trace == .trace;
-    if (enable_trace) {
-        interpreter.startTrace();
-    }
-    defer if (enable_trace) interpreter.endTrace();
-
-    const ops = test_env_instance.get_ops();
-    const result = try interpreter.eval(resources.expr_idx, ops);
-    const layout_cache = &interpreter.runtime_layout_store;
-    defer result.decref(layout_cache, ops);
-    defer interpreter.bindings.items.len = 0;
-
-    const int_val: i64 = if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int) blk: {
-        const val = result.asI128();
-        break :blk @intCast(val);
-    } else blk: {
-        std.debug.assert(result.ptr != null);
-        const bool_ptr: *const u8 = @ptrCast(@alignCast(result.ptr.?));
-        break :blk @as(i64, bool_ptr.*);
-    };
-
-    const int_str = try std.fmt.allocPrint(test_allocator, "{}", .{int_val});
-    defer test_allocator.free(int_str);
-    try compareWithDevEvaluator(test_allocator, int_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
-
-    const bool_val = int_val != 0;
-    try std.testing.expectEqual(expected_bool, bool_val);
-}
-
 /// Helper function to run an expression and expect an f32 result (with epsilon tolerance).
 pub fn runExpectF32(src: []const u8, expected_f32: f32, should_trace: enum { trace, no_trace }) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
