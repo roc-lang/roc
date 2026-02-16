@@ -10,6 +10,15 @@
 //! This operates on LirExprStore where every expression carries a concrete
 //! `layout_idx`, eliminating the type-variable corruption issues that
 //! plagued the previous CIR-level RC pass.
+//!
+//! ## Known limitation: global use counts
+//!
+//! Use counts are global across the entire expression tree, not scoped to
+//! control flow. A symbol used once in each branch of an `if` gets count=2,
+//! causing an unnecessary `incref` (only one branch executes at runtime).
+//! This is conservative (leak-safe, never frees too early) but not optimal —
+//! it can cause memory to be retained longer than necessary. A full fix
+//! requires per-scope tracking (Perceus-style).
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;

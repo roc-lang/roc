@@ -75,27 +75,20 @@ maintain arity (rebindJoinPointParams skips non-bind patterns so the value is ne
 and all other patterns hit `unreachable` (shouldn't appear as function params after
 desugaring).
 
-### [H8] `rc_insert.zig` uses global use counts instead of scope-aware counts
-**File:** `src/lir/rc_insert.zig` (lines 66-72, 330-412)
+### ~~[H8] `rc_insert.zig` uses global use counts instead of scope-aware counts~~ DOCUMENTED
 
-Use counts are global across the entire expression tree, not scoped to control flow. A
-symbol used once in each branch of an `if` gets count=2, causing an unnecessary `incref`
-that leaks memory (only one branch executes at runtime).
+Added "Known limitation: global use counts" documentation to the module doc comment in
+`rc_insert.zig`. The current implementation is conservative (leak-safe, never frees too
+early) but can cause memory to be retained longer than necessary. A full fix requires
+per-scope tracking (Perceus-style).
 
-**Fix:** This is a fundamental design issue requiring per-scope tracking (Perceus-style).
-At minimum, document as a known limitation that the current implementation is conservative
-(leak-safe but not optimal).
+### ~~[H9] Recursion placeholder uses wrong monotype~~ FIXED
 
-### [H9] Recursion placeholder uses wrong monotype
-**File:** `src/mir/Lower.zig` (line 1235)
-
-The placeholder lookup for recursive definitions uses `self.store.monotype_store.unit_idx`
-as its type. In release mode, any downstream code calling `store.typeOf(placeholder)` gets
-`unit` instead of the real type (e.g., a function type for a recursive function). The
-existing test at `lower_test.zig:664` asserts this wrong behavior as expected.
-
-**Fix:** After the recursive `lowerExpr` completes and the real definition is cached, patch
-the placeholder's monotype in the `type_map` to match the resolved definition's monotype.
+Changed `debug_recursion_placeholders` to `recursion_placeholders` (always tracked, not
+Debug-only). After `lowerExpr` completes and the real definition is cached, all
+placeholders for that symbol have their monotype patched in `type_map` to match the
+resolved definition's monotype. The Debug-mode assertion in `deinit` now verifies the
+patching is correct.
 
 ### [H10] Known correctness regression masked on aarch64-windows
 **Reference:** `eval_test.zig` (line 2802)

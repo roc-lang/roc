@@ -30,7 +30,7 @@ const ModuleEnv = can.ModuleEnv;
 
 const Self = @This();
 
-const DebugPlaceholder = struct {
+const RecursionPlaceholder = struct {
     expr_id: MIR.ExprId,
     symbol_key: u64,
 };
@@ -84,10 +84,7 @@ scratch_stmts: base.Scratch(MIR.Stmt),
 scratch_captures: base.Scratch(MIR.Capture),
 mono_scratches: Monotype.Store.Scratches,
 
-debug_recursion_placeholders: if (builtin.mode == .Debug)
-    std.ArrayListUnmanaged(DebugPlaceholder)
-else
-    void = if (builtin.mode == .Debug) .{} else {},
+recursion_placeholders: std.ArrayListUnmanaged(RecursionPlaceholder) = .{},
 
 // --- Init/Deinit ---
 
@@ -136,13 +133,13 @@ pub fn init(
         .scratch_stmts = try base.Scratch(MIR.Stmt).init(allocator),
         .scratch_captures = try base.Scratch(MIR.Capture).init(allocator),
         .mono_scratches = try Monotype.Store.Scratches.init(allocator),
-        .debug_recursion_placeholders = if (builtin.mode == .Debug) .{} else {},
     };
 }
 
 pub fn deinit(self: *Self) void {
     if (builtin.mode == .Debug) {
-        for (self.debug_recursion_placeholders.items) |placeholder| {
+        // Verify all recursion placeholders were patched to the correct monotype
+        for (self.recursion_placeholders.items) |placeholder| {
             if (self.lowered_symbols.get(placeholder.symbol_key)) |resolved_expr| {
                 const resolved_monotype = self.store.typeOf(resolved_expr);
                 const placeholder_monotype = self.store.typeOf(placeholder.expr_id);
@@ -154,8 +151,8 @@ pub fn deinit(self: *Self) void {
                 }
             }
         }
-        self.debug_recursion_placeholders.deinit(self.allocator);
     }
+    self.recursion_placeholders.deinit(self.allocator);
     self.pattern_symbols.deinit();
     self.type_var_seen.deinit();
     self.lowered_symbols.deinit();
@@ -1297,14 +1294,13 @@ pub fn lowerExternalDef(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.Expr.
 
     // Recursion guard
     if (self.in_progress_defs.contains(symbol_key)) {
-        // Recursive reference — return a placeholder lookup
+        // Recursive reference — return a placeholder lookup with unit type.
+        // The correct monotype is patched below after lowerExpr completes.
         const placeholder = try self.store.addExpr(self.allocator, .{ .lookup = symbol }, self.store.monotype_store.unit_idx, Region.zero());
-        if (builtin.mode == .Debug) {
-            try self.debug_recursion_placeholders.append(self.allocator, .{
-                .expr_id = placeholder,
-                .symbol_key = symbol_key,
-            });
-        }
+        try self.recursion_placeholders.append(self.allocator, .{
+            .expr_id = placeholder,
+            .symbol_key = symbol_key,
+        });
         return placeholder;
     }
 
@@ -1334,6 +1330,16 @@ pub fn lowerExternalDef(self: *Self, symbol: MIR.Symbol, cir_expr_idx: CIR.Expr.
     // Cache the result and register the symbol definition
     try self.lowered_symbols.put(symbol_key, result);
     try self.store.registerSymbolDef(self.allocator, symbol, result);
+
+    // Patch any recursion placeholders for this symbol with the correct monotype.
+    // During lowerExpr, recursive references create placeholder lookups with unit type;
+    // now that the real definition is resolved, update them to the actual type.
+    const resolved_monotype = self.store.typeOf(result);
+    for (self.recursion_placeholders.items) |placeholder| {
+        if (placeholder.symbol_key == symbol_key) {
+            self.store.type_map.items[@intFromEnum(placeholder.expr_id)] = resolved_monotype;
+        }
+    }
 
     _ = self.in_progress_defs.remove(symbol_key);
 

@@ -676,7 +676,8 @@ test "lowerExternalDef: recursion guard returns lookup placeholder" {
     const expr = env.mir_store.getExpr(result);
     // The recursion guard should return a lookup placeholder
     try testing.expect(expr == .lookup);
-    // The type should be unit_idx (the guard behavior)
+    // Initially unit_idx; in real usage, lowerExternalDef patches this to the
+    // resolved monotype after lowerExpr completes.
     try testing.expectEqual(env.mir_store.monotype_store.unit_idx, env.mir_store.typeOf(result));
 }
 
