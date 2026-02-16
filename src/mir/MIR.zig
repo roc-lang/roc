@@ -98,7 +98,7 @@ pub const ExprSpan = extern struct {
     len: u16,
 
     pub fn empty() ExprSpan {
-        return .{ .start = undefined, .len = 0 };
+        return .{ .start = 0, .len = 0 };
     }
 
     pub fn isEmpty(self: ExprSpan) bool {
@@ -112,7 +112,7 @@ pub const PatternSpan = extern struct {
     len: u16,
 
     pub fn empty() PatternSpan {
-        return .{ .start = undefined, .len = 0 };
+        return .{ .start = 0, .len = 0 };
     }
 
     pub fn isEmpty(self: PatternSpan) bool {
@@ -126,7 +126,7 @@ pub const StmtSpan = extern struct {
     len: u16,
 
     pub fn empty() StmtSpan {
-        return .{ .start = undefined, .len = 0 };
+        return .{ .start = 0, .len = 0 };
     }
 
     pub fn isEmpty(self: StmtSpan) bool {
@@ -140,7 +140,7 @@ pub const BranchSpan = extern struct {
     len: u16,
 
     pub fn empty() BranchSpan {
-        return .{ .start = undefined, .len = 0 };
+        return .{ .start = 0, .len = 0 };
     }
 
     pub fn isEmpty(self: BranchSpan) bool {
@@ -154,7 +154,7 @@ pub const BranchPatternSpan = extern struct {
     len: u16,
 
     pub fn empty() BranchPatternSpan {
-        return .{ .start = undefined, .len = 0 };
+        return .{ .start = 0, .len = 0 };
     }
 
     pub fn isEmpty(self: BranchPatternSpan) bool {
@@ -168,7 +168,7 @@ pub const CaptureSpan = extern struct {
     len: u16,
 
     pub fn empty() CaptureSpan {
-        return .{ .start = undefined, .len = 0 };
+        return .{ .start = 0, .len = 0 };
     }
 
     pub fn isEmpty(self: CaptureSpan) bool {
@@ -182,7 +182,7 @@ pub const FieldNameSpan = extern struct {
     len: u16,
 
     pub fn empty() FieldNameSpan {
-        return .{ .start = undefined, .len = 0 };
+        return .{ .start = 0, .len = 0 };
     }
 
     pub fn isEmpty(self: FieldNameSpan) bool {
@@ -529,9 +529,12 @@ pub const Store = struct {
     /// Add an expression with its monotype and region. Returns the ExprId.
     pub fn addExpr(self: *Store, allocator: Allocator, expr: Expr, monotype: Monotype.Idx, region: Region) !ExprId {
         const idx: u32 = @intCast(self.exprs.items.len);
-        try self.exprs.append(allocator, expr);
-        try self.type_map.append(allocator, monotype);
-        try self.expr_regions.append(allocator, region);
+        try self.exprs.ensureUnusedCapacity(allocator, 1);
+        try self.type_map.ensureUnusedCapacity(allocator, 1);
+        try self.expr_regions.ensureUnusedCapacity(allocator, 1);
+        self.exprs.appendAssumeCapacity(expr);
+        self.type_map.appendAssumeCapacity(monotype);
+        self.expr_regions.appendAssumeCapacity(region);
         return @enumFromInt(idx);
     }
 
@@ -553,8 +556,10 @@ pub const Store = struct {
     /// Add a pattern with its monotype. Returns the PatternId.
     pub fn addPattern(self: *Store, allocator: Allocator, pattern: Pattern, monotype: Monotype.Idx) !PatternId {
         const idx: u32 = @intCast(self.patterns.items.len);
-        try self.patterns.append(allocator, pattern);
-        try self.pattern_type_map.append(allocator, monotype);
+        try self.patterns.ensureUnusedCapacity(allocator, 1);
+        try self.pattern_type_map.ensureUnusedCapacity(allocator, 1);
+        self.patterns.appendAssumeCapacity(pattern);
+        self.pattern_type_map.appendAssumeCapacity(monotype);
         return @enumFromInt(idx);
     }
 

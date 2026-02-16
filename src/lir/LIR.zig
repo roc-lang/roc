@@ -69,7 +69,7 @@ pub const LirExprSpan = extern struct {
     len: u16,
 
     pub fn empty() LirExprSpan {
-        return .{ .start = undefined, .len = 0 };
+        return .{ .start = 0, .len = 0 };
     }
 
     pub fn isEmpty(self: LirExprSpan) bool {
@@ -85,7 +85,7 @@ pub const LirPatternSpan = extern struct {
     len: u16,
 
     pub fn empty() LirPatternSpan {
-        return .{ .start = undefined, .len = 0 };
+        return .{ .start = 0, .len = 0 };
     }
 
     pub fn isEmpty(self: LirPatternSpan) bool {
@@ -101,7 +101,7 @@ pub const LirCaptureSpan = extern struct {
     len: u16,
 
     pub fn empty() LirCaptureSpan {
-        return .{ .start = undefined, .len = 0 };
+        return .{ .start = 0, .len = 0 };
     }
 };
 
@@ -202,7 +202,7 @@ pub const LambdaSetMemberSpan = extern struct {
     len: u16,
 
     pub fn empty() LambdaSetMemberSpan {
-        return .{ .start = undefined, .len = 0 };
+        return .{ .start = 0, .len = 0 };
     }
 
     pub fn isEmpty(self: LambdaSetMemberSpan) bool {
@@ -251,7 +251,7 @@ pub const LirWhenBranchSpan = extern struct {
     len: u16,
 
     pub fn empty() LirWhenBranchSpan {
-        return .{ .start = undefined, .len = 0 };
+        return .{ .start = 0, .len = 0 };
     }
 };
 
@@ -271,7 +271,7 @@ pub const LirIfBranchSpan = extern struct {
     len: u16,
 
     pub fn empty() LirIfBranchSpan {
-        return .{ .start = undefined, .len = 0 };
+        return .{ .start = 0, .len = 0 };
     }
 
     pub fn isEmpty(self: LirIfBranchSpan) bool {
@@ -291,7 +291,7 @@ pub const LirStmtSpan = extern struct {
     len: u16,
 
     pub fn empty() LirStmtSpan {
-        return .{ .start = undefined, .len = 0 };
+        return .{ .start = 0, .len = 0 };
     }
 };
 
@@ -307,7 +307,7 @@ pub const LirFieldNameSpan = extern struct {
     len: u16,
 
     pub fn empty() LirFieldNameSpan {
-        return .{ .start = undefined, .len = 0 };
+        return .{ .start = 0, .len = 0 };
     }
 };
 
@@ -1111,7 +1111,7 @@ pub const LayoutIdxSpan = extern struct {
     len: u16,
 
     pub fn empty() LayoutIdxSpan {
-        return .{ .start = undefined, .len = 0 };
+        return .{ .start = 0, .len = 0 };
     }
 
     pub fn isEmpty(self: LayoutIdxSpan) bool {
@@ -1133,7 +1133,7 @@ pub const CFSwitchBranchSpan = extern struct {
     len: u16,
 
     pub fn empty() CFSwitchBranchSpan {
-        return .{ .start = undefined, .len = 0 };
+        return .{ .start = 0, .len = 0 };
     }
 
     pub fn isEmpty(self: CFSwitchBranchSpan) bool {

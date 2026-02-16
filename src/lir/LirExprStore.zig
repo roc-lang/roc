@@ -152,8 +152,10 @@ pub fn deinit(self: *Self) void {
 /// Add an expression and return its ID
 pub fn addExpr(self: *Self, expr: LirExpr, region: Region) Allocator.Error!LirExprId {
     const idx = self.exprs.items.len;
-    try self.exprs.append(self.allocator, expr);
-    try self.expr_regions.append(self.allocator, region);
+    try self.exprs.ensureUnusedCapacity(self.allocator, 1);
+    try self.expr_regions.ensureUnusedCapacity(self.allocator, 1);
+    self.exprs.appendAssumeCapacity(expr);
+    self.expr_regions.appendAssumeCapacity(region);
     return @enumFromInt(@as(u32, @intCast(idx)));
 }
 
@@ -175,8 +177,10 @@ pub fn getExprPtr(self: *Self, id: LirExprId) *LirExpr {
 /// Add a pattern and return its ID
 pub fn addPattern(self: *Self, pattern: LirPattern, region: Region) Allocator.Error!LirPatternId {
     const idx = self.patterns.items.len;
-    try self.patterns.append(self.allocator, pattern);
-    try self.pattern_regions.append(self.allocator, region);
+    try self.patterns.ensureUnusedCapacity(self.allocator, 1);
+    try self.pattern_regions.ensureUnusedCapacity(self.allocator, 1);
+    self.patterns.appendAssumeCapacity(pattern);
+    self.pattern_regions.appendAssumeCapacity(region);
     return @enumFromInt(@as(u32, @intCast(idx)));
 }
 

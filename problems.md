@@ -176,22 +176,15 @@ values are reordered.
 
 **Fix:** Use an explicit switch for signedness, mirroring the width switch.
 
-### [M8] Parallel array OOM desync in `addExpr`/`addPattern`
-**Files:** `src/mir/MIR.zig` (line 530), `src/lir/LirExprStore.zig` (line 153)
+### ~~[M8] Parallel array OOM desync in `addExpr`/`addPattern`~~ FIXED
 
-Sequential appends to parallel arrays — if the first succeeds but the second OOMs, the
-arrays are permanently out of sync. Any subsequent access panics.
+Changed `addExpr` and `addPattern` in both MIR.zig and LirExprStore.zig to use
+`ensureUnusedCapacity` for all parallel arrays first, then `appendAssumeCapacity`.
 
-**Fix:** Use `ensureUnusedCapacity` for all arrays first, then `appendAssumeCapacity`.
+### ~~[M9] `empty()` spans use `undefined` for `start` field in `extern struct`~~ FIXED
 
-### [M9] `empty()` spans use `undefined` for `start` field in `extern struct`
-**Files:** `src/mir/MIR.zig` (line 100), `src/lir/LIR.zig` (line 71), `src/base/DataSpan.zig` (line 10), `src/mono/MonoIR.zig` (multiple)
-
-All span `empty()` functions set `start = undefined`. Since these are `extern struct` (for
-serialization), the undefined bytes can cause issues in debuggers, bitwise comparisons, or
-actual serialization. All accessors guard on `len == 0` so it's safe at runtime.
-
-**Fix:** Use `start = 0` instead of `undefined`.
+Changed `start = undefined` to `start = 0` in all `empty()` functions across MIR.zig,
+LIR.zig, DataSpan.zig, MonoIR.zig, and Monotype.zig (31 occurrences total).
 
 ### [M10] Tag union layout always uses u64 discriminant
 **File:** `src/lir/MirToLir.zig` (line 224)
