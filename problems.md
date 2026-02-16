@@ -90,42 +90,32 @@ placeholders for that symbol have their monotype patched in `type_map` to match 
 resolved definition's monotype. The Debug-mode assertion in `deinit` now verifies the
 patching is correct.
 
-### [H10] Known correctness regression masked on aarch64-windows
-**Reference:** `eval_test.zig` (line 2802)
+### ~~[H10] Known correctness regression masked on aarch64-windows~~ NOT APPLICABLE
 
-The issue 8927 regression test is skipped on Windows ARM64, so the backend mismatch is no
-longer caught there. This leaves a real platform bug unguarded.
+The issue 8927 regression test at `eval_test.zig:3132` does not have any platform-specific
+skip conditions. The skip referenced in the original report no longer exists.
 
 ---
 
 ## MEDIUM-HIGH
 
-### [MH1] `lowerExpect` uses same expression for both `cond` and `body`
-**File:** `src/lir/MirToLir.zig` (line 627)
+### ~~[MH1] `lowerExpect` uses same expression for both `cond` and `body`~~ FIXED
 
-The MIR `expect` only has a `body` field. The lowering sets both `cond` and `body` to the
-same lowered expression. For non-boolean expect bodies, the backend would try to branch on
-a non-boolean value.
+The MIR `expect.body` is the boolean condition. Now `cond` is set to the lowered body
+expression and `body` is set to a new `empty_record` expression (unit), since the result
+of `expect` after the assertion is `{}`.
 
-**Fix:** Determine correct semantics — if MIR's `expect.body` is the condition, then `body`
-should be unit/empty_record. If MIR doesn't provide enough info, the `expect` node design
-needs revisiting.
+### ~~[MH2] `findModuleForOrigin` uses bare `unreachable`~~ FIXED
 
-### [MH2] `findModuleForOrigin` uses bare `unreachable`
-**File:** `src/mir/Lower.zig` (line 1139)
+Replaced `unreachable` with `std.debug.panic` that includes the current_module_idx and
+origin_ident for diagnostics.
 
-No fallback if the origin module isn't found. Compare with the LIR version (`src/lir/Lower.zig`
-lines 218-257) which has a 3-step fallback including string comparison.
+### ~~[MH3] 128-bit wrap conversion: unused register allocation + premature free~~ FIXED
 
-**Fix:** At minimum use `std.debug.panic` with a diagnostic message. Consider adding the
-string-comparison fallback from the LIR version.
-
-### [MH3] 128-bit wrap conversion: unused register allocation + premature free
-**File:** `src/backend/dev/LirCodeGen.zig` (lines 2609-2624)
-
-When `dst_bits == 128`, `parts.high` is freed before the branch, then inside the branch a
-`high_reg` is allocated but never used. The fix is to move the `freeGeneral(parts.high)` into
-the `else` branch so it's only freed when not needed for the 128-bit case.
+Moved `freeGeneral(parts.high)` after the 128-bit branch. The 128-bit path now uses
+`parts.high` directly instead of freeing it early and re-loading via a redundant
+`getI128Parts` call. Also removed the unused `high_reg` allocation. Fixed in both
+LirCodeGen and MonoExprCodeGen.
 
 ---
 

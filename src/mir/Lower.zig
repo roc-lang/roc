@@ -1199,7 +1199,12 @@ fn findModuleForOrigin(self: *Self, source_env: *const ModuleEnv, origin_module:
 
     // O(1) lookup in pre-built HashMap
     const key = (@as(u64, self.current_module_idx) << 32) | @as(u64, @as(u32, @bitCast(origin_module)));
-    return self.origin_lookup.get(key) orelse unreachable;
+    return self.origin_lookup.get(key) orelse {
+        std.debug.panic(
+            "findModuleForOrigin: origin module not found (current_module_idx={d}, origin_ident={d})",
+            .{ self.current_module_idx, @as(u32, @bitCast(origin_module)) },
+        );
+    };
 }
 
 /// Resolve a type variable to a method symbol via nominal type dispatch.

@@ -2602,23 +2602,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         else => unreachable,
                     };
 
-                    self.codegen.freeGeneral(parts.high);
-
                     if (dst_bits == 128) {
                         // 128-bit to 128-bit wrap is a reinterpret (no-op on bits)
-                        // Need to return as stack_i128
                         const stack_offset = self.codegen.allocStackSlot(16);
                         try self.codegen.emitStoreStack(.w64, stack_offset, parts.low);
-                        // Re-load high part (we freed it)
-                        const high_reg = try self.allocTempGeneral();
-                        const src_parts = try self.getI128Parts(src_loc, src_signedness);
-                        try self.codegen.emitStoreStack(.w64, stack_offset + 8, src_parts.high);
-                        self.codegen.freeGeneral(src_parts.low);
-                        self.codegen.freeGeneral(src_parts.high);
-                        self.codegen.freeGeneral(high_reg);
+                        try self.codegen.emitStoreStack(.w64, stack_offset + 8, parts.high);
                         self.codegen.freeGeneral(parts.low);
+                        self.codegen.freeGeneral(parts.high);
                         return .{ .stack_i128 = stack_offset };
                     }
+
+                    self.codegen.freeGeneral(parts.high);
 
                     if (dst_bits < 64) {
                         const shift_amount: u8 = 64 - dst_bits;

@@ -629,10 +629,14 @@ fn lowerDbg(self: *Self, d: anytype, mono_idx: Monotype.Idx, region: Region) All
 
 fn lowerExpect(self: *Self, e: anytype, mono_idx: Monotype.Idx, region: Region) Allocator.Error!LirExprId {
     const result_layout = try self.layoutFromMonotype(mono_idx);
-    const lir_body = try self.lowerExpr(e.body);
+    const lir_cond = try self.lowerExpr(e.body);
+
+    // The MIR expect body is the boolean condition to assert.
+    // After the assertion, the result is empty_record (unit).
+    const lir_body = try self.lir_store.addExpr(.{ .empty_record = {} }, region);
 
     return self.lir_store.addExpr(.{ .expect = .{
-        .cond = lir_body,
+        .cond = lir_cond,
         .body = lir_body,
         .result_layout = result_layout,
     } }, region);
