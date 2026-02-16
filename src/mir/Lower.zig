@@ -891,7 +891,18 @@ fn lowerBinop(self: *Self, binop: CIR.Expr.Binop, monotype: Monotype.Idx, region
                 lhs_type_var,
                 method_ident,
             ) orelse {
-                // No nominal type found — emit run_low_level directly
+                // No nominal method found — emit run_low_level directly.
+                //
+                // Two cases reach here:
+                // 1. Flex/rigid type vars (e.g. unresolved numerals like `1 + 2`) —
+                //    all arithmetic/comparison ops are valid, defaulting to Dec.
+                // 2. Structural types (records, tuples, tag unions) — only eq/ne are
+                //    valid (the type checker rejects arithmetic/ordering on these).
+                //    num_is_eq maps to LIR .eq, which the backend handles via
+                //    layout-based structural comparison.
+                //
+                // All concrete primitive types (Bool, Str, U8-U128, I8-I128, F32,
+                // F64, Dec) are nominal and resolve via method dispatch above.
                 const ll_op: CIR.Expr.LowLevel = switch (binop.op) {
                     .eq, .ne => .num_is_eq,
                     .lt => .num_is_lt,

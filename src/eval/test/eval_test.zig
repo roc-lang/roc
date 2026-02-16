@@ -1086,6 +1086,274 @@ test "nominal type equality - nested structures with Bool" {
     try runExpectBool("((Bool.True, Bool.False), Bool.True) == ((Bool.True, Bool.False), Bool.True)", true, .no_trace);
 }
 
+// Tests for tag union equality
+
+test "tag union equality - same tag no payload" {
+    try runExpectBool("Ok == Ok", true, .no_trace);
+    try runExpectBool("Err == Err", true, .no_trace);
+    try runExpectBool("Ok == Err", false, .no_trace);
+    try runExpectBool("Err == Ok", false, .no_trace);
+}
+
+test "tag union equality - same tag with payload" {
+    try runExpectBool("Ok(1) == Ok(1)", true, .no_trace);
+    try runExpectBool("Ok(1) == Ok(2)", false, .no_trace);
+    try runExpectBool("Err(1) == Err(1)", true, .no_trace);
+}
+
+test "tag union equality - different tags with payload" {
+    try runExpectBool(
+        \\{
+        \\    x = Ok(1)
+        \\    y = if Bool.False Ok(1) else Err(1)
+        \\    x == y
+        \\}
+    , false, .no_trace);
+}
+
+test "tag union equality - string payloads" {
+    try runExpectBool("Ok(\"hello\") == Ok(\"hello\")", true, .no_trace);
+    try runExpectBool("Ok(\"hello\") == Ok(\"world\")", false, .no_trace);
+}
+
+test "tag union equality - three or more tags" {
+    // Use match to produce values of the same tag union type with 3 variants
+    try runExpectBool(
+        \\{
+        \\    x = Red
+        \\    y = Red
+        \\    x == y
+        \\}
+    , true, .no_trace);
+    try runExpectBool(
+        \\{
+        \\    x = Red
+        \\    y = if Bool.True Red else if Bool.True Green else Blue
+        \\    x == y
+        \\}
+    , true, .no_trace);
+    try runExpectBool(
+        \\{
+        \\    x = Red
+        \\    y = if Bool.False Red else Green
+        \\    x == y
+        \\}
+    , false, .no_trace);
+}
+
+// Tests for inequality operator (!=) on structural types
+
+test "record inequality" {
+    try runExpectBool("{ x: 1, y: 2 } != { x: 1, y: 2 }", false, .no_trace);
+    try runExpectBool("{ x: 1, y: 2 } != { x: 1, y: 3 }", true, .no_trace);
+    try runExpectBool("{ x: 1, y: 2 } != { y: 2, x: 1 }", false, .no_trace);
+}
+
+test "tuple inequality" {
+    try runExpectBool("(1, 2) != (1, 2)", false, .no_trace);
+    try runExpectBool("(1, 2) != (1, 3)", true, .no_trace);
+}
+
+test "tag union inequality" {
+    try runExpectBool("Ok == Ok", true, .no_trace);
+    try runExpectBool("Ok != Ok", false, .no_trace);
+    try runExpectBool("Ok != Err", true, .no_trace);
+    try runExpectBool("Ok(1) != Ok(1)", false, .no_trace);
+    try runExpectBool("Ok(1) != Ok(2)", true, .no_trace);
+}
+
+// Tests for mixed structural types (combinations of records, tuples, tag unions)
+
+test "record containing tuple equality" {
+    try runExpectBool("{ pair: (1, 2) } == { pair: (1, 2) }", true, .no_trace);
+    try runExpectBool("{ pair: (1, 2) } == { pair: (1, 3) }", false, .no_trace);
+}
+
+test "tuple containing record equality" {
+    try runExpectBool("({ x: 1 }, 2) == ({ x: 1 }, 2)", true, .no_trace);
+    try runExpectBool("({ x: 1 }, 2) == ({ x: 9 }, 2)", false, .no_trace);
+}
+
+test "record with multiple types" {
+    try runExpectBool(
+        \\{ name: "alice", age: 30 } == { name: "alice", age: 30 }
+    , true, .no_trace);
+    try runExpectBool(
+        \\{ name: "alice", age: 30 } == { name: "bob", age: 30 }
+    , false, .no_trace);
+    try runExpectBool(
+        \\{ name: "alice", age: 30 } == { name: "alice", age: 31 }
+    , false, .no_trace);
+}
+
+test "deeply nested mixed structures" {
+    try runExpectBool(
+        \\{ a: (1, { b: 2 }), c: 3 } == { a: (1, { b: 2 }), c: 3 }
+    , true, .no_trace);
+    try runExpectBool(
+        \\{ a: (1, { b: 2 }), c: 3 } == { a: (1, { b: 9 }), c: 3 }
+    , false, .no_trace);
+}
+
+test "tuple of tuples equality" {
+    try runExpectBool("((1, 2), (3, 4)) == ((1, 2), (3, 4))", true, .no_trace);
+    try runExpectBool("((1, 2), (3, 4)) == ((1, 2), (3, 5))", false, .no_trace);
+}
+
+test "record with string and bool fields" {
+    try runExpectBool(
+        \\{ name: "hello", active: Bool.True } == { name: "hello", active: Bool.True }
+    , true, .no_trace);
+    try runExpectBool(
+        \\{ name: "hello", active: Bool.True } == { name: "hello", active: Bool.False }
+    , false, .no_trace);
+}
+
+test "tag union inside record equality" {
+    try runExpectBool(
+        \\{
+        \\    a = { status: Ok(42) }
+        \\    b = { status: Ok(42) }
+        \\    a == b
+        \\}
+    , true, .no_trace);
+    try runExpectBool(
+        \\{
+        \\    a = { status: Ok(42) }
+        \\    b = { status: Ok(99) }
+        \\    a == b
+        \\}
+    , false, .no_trace);
+}
+
+test "record inside tag union equality" {
+    try runExpectBool("Ok({ x: 1, y: 2 }) == Ok({ x: 1, y: 2 })", true, .no_trace);
+    try runExpectBool("Ok({ x: 1, y: 2 }) == Ok({ x: 1, y: 9 })", false, .no_trace);
+}
+
+test "tag union inside tuple equality" {
+    try runExpectBool("(Ok(1), 2) == (Ok(1), 2)", true, .no_trace);
+    try runExpectBool("(Ok(1), 2) == (Ok(9), 2)", false, .no_trace);
+}
+
+test "tuple inside tag union equality" {
+    try runExpectBool("Ok((1, 2)) == Ok((1, 2))", true, .no_trace);
+    try runExpectBool("Ok((1, 2)) == Ok((1, 9))", false, .no_trace);
+}
+
+test "record inside tag union inside tuple equality" {
+    // Three-deep nesting: tuple containing tag union containing record
+    try runExpectBool(
+        \\(Ok({ x: 1, y: 2 }), 42) == (Ok({ x: 1, y: 2 }), 42)
+    , true, .no_trace);
+    try runExpectBool(
+        \\(Ok({ x: 1, y: 2 }), 42) == (Ok({ x: 1, y: 9 }), 42)
+    , false, .no_trace);
+}
+
+test "tuple inside record inside tag union equality" {
+    // Three-deep nesting: tag union containing record containing tuple
+    try runExpectBool(
+        \\Ok({ pair: (1, 2), name: "hello" }) == Ok({ pair: (1, 2), name: "hello" })
+    , true, .no_trace);
+    try runExpectBool(
+        \\Ok({ pair: (1, 2), name: "hello" }) == Ok({ pair: (1, 9), name: "hello" })
+    , false, .no_trace);
+}
+
+test "tag union inside record inside tuple equality" {
+    // Three-deep nesting: tuple containing record containing tag union
+    try runExpectBool(
+        \\({ result: Ok(1) }, 99) == ({ result: Ok(1) }, 99)
+    , true, .no_trace);
+    try runExpectBool(
+        \\({ result: Ok(1) }, 99) == ({ result: Ok(2) }, 99)
+    , false, .no_trace);
+}
+
+test "four-deep nested equality" {
+    // Record → tuple → tag union → record
+    try runExpectBool(
+        \\{ data: (Ok({ val: 42 }), 1) } == { data: (Ok({ val: 42 }), 1) }
+    , true, .no_trace);
+    try runExpectBool(
+        \\{ data: (Ok({ val: 42 }), 1) } == { data: (Ok({ val: 99 }), 1) }
+    , false, .no_trace);
+}
+
+test "list inside record equality" {
+    try runExpectBool("{ items: [1, 2, 3] } == { items: [1, 2, 3] }", true, .no_trace);
+    try runExpectBool("{ items: [1, 2, 3] } == { items: [1, 2, 4] }", false, .no_trace);
+    try runExpectBool("{ items: [1, 2, 3] } == { items: [1, 2] }", false, .no_trace);
+}
+
+test "list inside tuple equality" {
+    try runExpectBool("([1, 2], 3) == ([1, 2], 3)", true, .no_trace);
+    try runExpectBool("([1, 2], 3) == ([1, 9], 3)", false, .no_trace);
+}
+
+// Tests for equality in control flow contexts
+
+test "equality result used in if condition" {
+    try runExpectI64(
+        \\if { x: 1 } == { x: 1 } 42 else 0
+    , 42, .no_trace);
+    try runExpectI64(
+        \\if { x: 1 } == { x: 2 } 42 else 0
+    , 0, .no_trace);
+}
+
+test "equality with variable bindings" {
+    try runExpectBool(
+        \\{
+        \\    a = { x: 10, y: 20 }
+        \\    b = { x: 10, y: 20 }
+        \\    a == b
+        \\}
+    , true, .no_trace);
+    try runExpectBool(
+        \\{
+        \\    a = { x: 10, y: 20 }
+        \\    b = { x: 10, y: 99 }
+        \\    a == b
+        \\}
+    , false, .no_trace);
+}
+
+test "inequality with variable bindings - tuples" {
+    try runExpectBool(
+        \\{
+        \\    a = (1, 2, 3)
+        \\    b = (1, 2, 3)
+        \\    a != b
+        \\}
+    , false, .no_trace);
+    try runExpectBool(
+        \\{
+        \\    a = (1, 2, 3)
+        \\    b = (1, 2, 4)
+        \\    a != b
+        \\}
+    , true, .no_trace);
+}
+
+test "inequality with variable bindings - records" {
+    try runExpectBool(
+        \\{
+        \\    a = { x: 10, y: 20 }
+        \\    b = { x: 10, y: 20 }
+        \\    a != b
+        \\}
+    , false, .no_trace);
+    try runExpectBool(
+        \\{
+        \\    a = { x: 10, y: 20 }
+        \\    b = { x: 10, y: 99 }
+        \\    a != b
+        \\}
+    , true, .no_trace);
+}
+
 // Tests for List.fold with record accumulators
 // This exercises record state management within fold operations
 
