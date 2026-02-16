@@ -50,9 +50,6 @@ pub const RcInsertPass = struct {
     /// Tracks layout for each symbol (for generating incref/decref with correct layout).
     symbol_layouts: std.AutoHashMap(u64, LayoutIdx),
 
-    /// Temporary buffer for building statement lists.
-    stmt_buf: std.ArrayList(LirStmt),
-
     pub fn init(allocator: Allocator, store: *LirExprStore, layout_store: *const layout_mod.Store) RcInsertPass {
         return .{
             .allocator = allocator,
@@ -60,14 +57,12 @@ pub const RcInsertPass = struct {
             .layout_store = layout_store,
             .symbol_use_counts = std.AutoHashMap(u64, u32).init(allocator),
             .symbol_layouts = std.AutoHashMap(u64, LayoutIdx).init(allocator),
-            .stmt_buf = std.ArrayList(LirStmt).empty,
         };
     }
 
     pub fn deinit(self: *RcInsertPass) void {
         self.symbol_use_counts.deinit();
         self.symbol_layouts.deinit();
-        self.stmt_buf.deinit(self.allocator);
     }
 
     /// Main entry point: insert RC operations into a LirExpr tree.
@@ -384,6 +379,10 @@ pub const RcInsertPass = struct {
             .block => |block| self.processBlock(block.stmts, block.final_expr, block.result_layout, region),
             .if_then_else => |ite| self.processIfThenElse(ite.branches, ite.final_else, ite.result_layout, region),
             .when => |w| self.processWhen(w.value, w.value_layout, w.branches, w.result_layout, region),
+            .lambda => |lam| self.processLambda(lam, region, expr_id),
+            .closure => |clo| self.processClosure(clo, region, expr_id),
+            .for_loop => |fl| self.processForLoop(fl, region, expr_id),
+            .while_loop => |wl| self.processWhileLoop(wl, region, expr_id),
             // For all other expressions, return as-is.
             // RC operations are inserted at block boundaries, not inside
             // individual expressions.
@@ -402,15 +401,21 @@ pub const RcInsertPass = struct {
     ) Allocator.Error!LirExprId {
         const stmts = self.store.getStmts(stmts_span);
 
-        // Clear the temp buffer
-        self.stmt_buf.clearRetainingCapacity();
+        // Use a local buffer to avoid reentrancy issues — processExpr may
+        // recurse into another processBlock (e.g. lambda/loop bodies).
+        var stmt_buf = std.ArrayList(LirStmt).empty;
+        defer stmt_buf.deinit(self.allocator);
 
-        var rc_ops_added: u32 = 0;
+        var changed = false;
 
         // Process each statement
         for (stmts) |stmt| {
-            // Add the original statement
-            try self.stmt_buf.append(self.allocator, stmt);
+            // Recursively process the statement's expression
+            const new_expr = try self.processExpr(stmt.expr);
+            if (new_expr != stmt.expr) changed = true;
+
+            // Add the (possibly updated) statement
+            try stmt_buf.append(self.allocator, .{ .pattern = stmt.pattern, .expr = new_expr });
 
             // Check if the bound pattern is a refcounted symbol
             if (!stmt.pattern.isNone()) {
@@ -423,8 +428,8 @@ pub const RcInsertPass = struct {
 
                             if (use_count > 1) {
                                 // Multi-use: insert incref with count N-1
-                                try self.emitIncref(bind.symbol, bind.layout_idx, @intCast(use_count - 1), region);
-                                rc_ops_added += 1;
+                                try self.emitIncrefInto(bind.symbol, bind.layout_idx, @intCast(use_count - 1), region, &stmt_buf);
+                                changed = true;
                             }
                         }
                     },
@@ -435,6 +440,7 @@ pub const RcInsertPass = struct {
 
         // Recursively process the final expression
         const new_final = try self.processExpr(final_expr);
+        if (new_final != final_expr) changed = true;
 
         // Insert decrefs for refcounted symbols bound in this block that are never used
         for (stmts) |stmt| {
@@ -446,8 +452,8 @@ pub const RcInsertPass = struct {
                             const key = @as(u64, @bitCast(bind.symbol));
                             const use_count = self.symbol_use_counts.get(key) orelse 0;
                             if (use_count == 0) {
-                                try self.emitDecref(bind.symbol, bind.layout_idx, region);
-                                rc_ops_added += 1;
+                                try self.emitDecrefInto(bind.symbol, bind.layout_idx, region, &stmt_buf);
+                                changed = true;
                             }
                         }
                     },
@@ -457,7 +463,7 @@ pub const RcInsertPass = struct {
         }
 
         // If nothing changed, return a block with the original data
-        if (rc_ops_added == 0 and new_final == final_expr) {
+        if (!changed) {
             return self.store.addExpr(.{ .block = .{
                 .stmts = stmts_span,
                 .final_expr = final_expr,
@@ -466,7 +472,7 @@ pub const RcInsertPass = struct {
         }
 
         // Build the new statement span
-        const new_stmts = try self.store.addStmts(self.stmt_buf.items);
+        const new_stmts = try self.store.addStmts(stmt_buf.items);
 
         return self.store.addExpr(.{ .block = .{
             .stmts = new_stmts,
@@ -607,6 +613,150 @@ pub const RcInsertPass = struct {
         } }, region);
     }
 
+    /// Process a lambda expression.
+    /// Lambda bodies are independent scopes — the calling convention provides
+    /// 1 reference per parameter. We recurse into the body and emit RC ops
+    /// for lambda parameters based on body-local use counts.
+    fn processLambda(self: *RcInsertPass, lam: anytype, region: Region, expr_id: LirExprId) Allocator.Error!LirExprId {
+        const new_body = try self.processExpr(lam.body);
+
+        // Count uses locally within the lambda body
+        var local_uses = try self.countUsesLocal(lam.body);
+        defer local_uses.deinit();
+
+        // Emit RC ops for lambda parameters
+        var rc_stmts = std.ArrayList(LirStmt).empty;
+        defer rc_stmts.deinit(self.allocator);
+
+        const params = self.store.getPatternSpan(lam.params);
+        for (params) |pat_id| {
+            if (pat_id.isNone()) continue;
+            const pat = self.store.getPattern(pat_id);
+            switch (pat) {
+                .bind => |bind| {
+                    if (!bind.symbol.isNone() and self.layoutNeedsRc(bind.layout_idx)) {
+                        const key = @as(u64, @bitCast(bind.symbol));
+                        const use_count = local_uses.get(key) orelse 0;
+                        if (use_count == 0) {
+                            try self.emitDecrefInto(bind.symbol, bind.layout_idx, region, &rc_stmts);
+                        } else if (use_count > 1) {
+                            try self.emitIncrefInto(bind.symbol, bind.layout_idx, @intCast(use_count - 1), region, &rc_stmts);
+                        }
+                    }
+                },
+                else => {},
+            }
+        }
+
+        // If RC ops needed, wrap body in a block with RC stmts prepended
+        var final_body = new_body;
+        if (rc_stmts.items.len > 0) {
+            const stmts_span = try self.store.addStmts(rc_stmts.items);
+            final_body = try self.store.addExpr(.{ .block = .{
+                .stmts = stmts_span,
+                .final_expr = new_body,
+                .result_layout = lam.ret_layout,
+            } }, region);
+        }
+
+        if (final_body != lam.body) {
+            return self.store.addExpr(.{ .lambda = .{
+                .fn_layout = lam.fn_layout,
+                .params = lam.params,
+                .body = final_body,
+                .ret_layout = lam.ret_layout,
+            } }, region);
+        }
+        return expr_id;
+    }
+
+    /// Process a closure expression.
+    /// A closure wraps a lambda — just recurse into the inner lambda.
+    fn processClosure(self: *RcInsertPass, clo: anytype, region: Region, expr_id: LirExprId) Allocator.Error!LirExprId {
+        const new_lambda = try self.processExpr(clo.lambda);
+        if (new_lambda != clo.lambda) {
+            return self.store.addExpr(.{ .closure = .{
+                .closure_layout = clo.closure_layout,
+                .lambda = new_lambda,
+                .captures = clo.captures,
+                .representation = clo.representation,
+                .recursion = clo.recursion,
+                .self_recursive = clo.self_recursive,
+                .is_bound_to_variable = clo.is_bound_to_variable,
+            } }, region);
+        }
+        return expr_id;
+    }
+
+    /// Process a for loop expression.
+    /// For loops bind an element via elem_pattern each iteration.
+    /// The loop provides 1 reference per element. We emit body-local RC ops
+    /// for the element binding similar to lambda params.
+    fn processForLoop(self: *RcInsertPass, fl: anytype, region: Region, expr_id: LirExprId) Allocator.Error!LirExprId {
+        const new_body = try self.processExpr(fl.body);
+
+        // Count uses locally within the loop body
+        var local_uses = try self.countUsesLocal(fl.body);
+        defer local_uses.deinit();
+
+        // Emit RC ops for the elem_pattern
+        var rc_stmts = std.ArrayList(LirStmt).empty;
+        defer rc_stmts.deinit(self.allocator);
+
+        if (!fl.elem_pattern.isNone()) {
+            const pat = self.store.getPattern(fl.elem_pattern);
+            switch (pat) {
+                .bind => |bind| {
+                    if (!bind.symbol.isNone() and self.layoutNeedsRc(bind.layout_idx)) {
+                        const key = @as(u64, @bitCast(bind.symbol));
+                        const use_count = local_uses.get(key) orelse 0;
+                        if (use_count == 0) {
+                            try self.emitDecrefInto(bind.symbol, bind.layout_idx, region, &rc_stmts);
+                        } else if (use_count > 1) {
+                            try self.emitIncrefInto(bind.symbol, bind.layout_idx, @intCast(use_count - 1), region, &rc_stmts);
+                        }
+                    }
+                },
+                else => {},
+            }
+        }
+
+        // If RC ops needed, wrap body in a block with RC stmts prepended
+        var final_body = new_body;
+        if (rc_stmts.items.len > 0) {
+            const stmts_span = try self.store.addStmts(rc_stmts.items);
+            final_body = try self.store.addExpr(.{ .block = .{
+                .stmts = stmts_span,
+                .final_expr = new_body,
+                .result_layout = fl.elem_layout,
+            } }, region);
+        }
+
+        if (final_body != fl.body) {
+            return self.store.addExpr(.{ .for_loop = .{
+                .list_expr = fl.list_expr,
+                .elem_layout = fl.elem_layout,
+                .elem_pattern = fl.elem_pattern,
+                .body = final_body,
+            } }, region);
+        }
+        return expr_id;
+    }
+
+    /// Process a while loop expression.
+    /// While loops don't bind new symbols — just recurse into cond and body.
+    fn processWhileLoop(self: *RcInsertPass, wl: anytype, region: Region, expr_id: LirExprId) Allocator.Error!LirExprId {
+        const new_cond = try self.processExpr(wl.cond);
+        const new_body = try self.processExpr(wl.body);
+        if (new_cond != wl.cond or new_body != wl.body) {
+            return self.store.addExpr(.{ .while_loop = .{
+                .cond = new_cond,
+                .body = new_body,
+            } }, region);
+        }
+        return expr_id;
+    }
+
     /// Collect all symbols bound by a pattern into a set.
     fn collectPatternSymbols(self: *const RcInsertPass, pat_id: LirPatternId, set: *std.AutoHashMap(u64, void)) Allocator.Error!void {
         if (pat_id.isNone()) return;
@@ -690,11 +840,6 @@ pub const RcInsertPass = struct {
         } }, region);
     }
 
-    /// Emit an incref statement into the statement buffer.
-    fn emitIncref(self: *RcInsertPass, symbol: Symbol, layout_idx: LayoutIdx, count: u16, region: Region) Allocator.Error!void {
-        try self.emitIncrefInto(symbol, layout_idx, count, region, &self.stmt_buf);
-    }
-
     /// Emit an incref statement into a given statement list.
     fn emitIncrefInto(self: *RcInsertPass, symbol: Symbol, layout_idx: LayoutIdx, count: u16, region: Region, stmts: *std.ArrayList(LirStmt)) Allocator.Error!void {
         const lookup_id = try self.store.addExpr(.{ .lookup = .{
@@ -713,11 +858,6 @@ pub const RcInsertPass = struct {
             .pattern = wildcard,
             .expr = incref_id,
         });
-    }
-
-    /// Emit a decref statement into the statement buffer.
-    fn emitDecref(self: *RcInsertPass, symbol: Symbol, layout_idx: LayoutIdx, region: Region) Allocator.Error!void {
-        try self.emitDecrefInto(symbol, layout_idx, region, &self.stmt_buf);
     }
 
     /// Emit a decref statement into a given statement list.
@@ -946,6 +1086,29 @@ fn countRcOps(store: *const LirExprStore, expr_id: LirExprId) RcOpCounts {
             const sub = countRcOps(store, ite.final_else);
             increfs += sub.increfs;
             decrefs += sub.decrefs;
+        },
+        .lambda => |lam| {
+            const sub = countRcOps(store, lam.body);
+            increfs += sub.increfs;
+            decrefs += sub.decrefs;
+        },
+        .closure => |clo| {
+            const sub = countRcOps(store, clo.lambda);
+            increfs += sub.increfs;
+            decrefs += sub.decrefs;
+        },
+        .for_loop => |fl| {
+            const sub = countRcOps(store, fl.body);
+            increfs += sub.increfs;
+            decrefs += sub.decrefs;
+        },
+        .while_loop => |wl| {
+            const sub_cond = countRcOps(store, wl.cond);
+            increfs += sub_cond.increfs;
+            decrefs += sub_cond.decrefs;
+            const sub_body = countRcOps(store, wl.body);
+            increfs += sub_body.increfs;
+            decrefs += sub_body.decrefs;
         },
         else => {},
     }
@@ -1200,5 +1363,275 @@ test "RC branch-aware: symbol used outside and inside branches" {
     // incref(1) at binding site, decref in False branch
     const rc = countRcOps(&env.lir_store, result);
     try std.testing.expectEqual(@as(u32, 1), rc.increfs);
+    try std.testing.expectEqual(@as(u32, 1), rc.decrefs);
+}
+
+test "RC lambda: body with nested block gets RC ops" {
+    // |x| { s = "hello"; _ = s; s }
+    // Lambda body is a block where s is str-layout and used twice => incref inside body
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const str_layout: LayoutIdx = .str;
+    const i64_layout: LayoutIdx = .i64;
+    const sym_x = makeSymbol(1);
+    const sym_s = makeSymbol(2);
+
+    // Build the lambda body: { s = "hello"; _ = s; s }
+    const str_lit = try env.lir_store.addExpr(.{ .str_literal = base.StringLiteral.Idx.none }, Region.zero());
+    const pat_s = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
+    const lookup_s1 = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
+    const lookup_s2 = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
+    const wild = try env.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = str_layout } }, Region.zero());
+    const body_stmts = try env.lir_store.addStmts(&.{
+        .{ .pattern = pat_s, .expr = str_lit },
+        .{ .pattern = wild, .expr = lookup_s1 },
+    });
+    const body_block = try env.lir_store.addExpr(.{ .block = .{
+        .stmts = body_stmts,
+        .final_expr = lookup_s2,
+        .result_layout = str_layout,
+    } }, Region.zero());
+
+    // Build lambda: |x| <body_block>
+    const pat_x = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_x, .layout_idx = i64_layout } }, Region.zero());
+    const params = try env.lir_store.addPatternSpan(&.{pat_x});
+    const lambda_expr = try env.lir_store.addExpr(.{ .lambda = .{
+        .fn_layout = i64_layout,
+        .params = params,
+        .body = body_block,
+        .ret_layout = str_layout,
+    } }, Region.zero());
+
+    var pass = RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    defer pass.deinit();
+
+    const result = try pass.insertRcOps(lambda_expr);
+
+    // The block inside the lambda body should have incref for s (used twice)
+    const rc = countRcOps(&env.lir_store, result);
+    try std.testing.expectEqual(@as(u32, 1), rc.increfs);
+    try std.testing.expectEqual(@as(u32, 0), rc.decrefs);
+}
+
+test "RC lambda: refcounted param used twice gets incref" {
+    // |s| binop(s, s)  where s is str-layout
+    // s is used twice in body => incref(1) for the param
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const str_layout: LayoutIdx = .str;
+    const sym_s = makeSymbol(1);
+
+    // Build lambda body: binop(s, s)
+    const lookup_s1 = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
+    const lookup_s2 = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
+    const binop_expr = try env.lir_store.addExpr(.{ .binop = .{
+        .lhs = lookup_s1,
+        .rhs = lookup_s2,
+        .op = .add,
+        .result_layout = str_layout,
+    } }, Region.zero());
+
+    // Build lambda: |s| binop(s, s)
+    const pat_s = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
+    const params = try env.lir_store.addPatternSpan(&.{pat_s});
+    const lambda_expr = try env.lir_store.addExpr(.{ .lambda = .{
+        .fn_layout = str_layout,
+        .params = params,
+        .body = binop_expr,
+        .ret_layout = str_layout,
+    } }, Region.zero());
+
+    var pass = RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    defer pass.deinit();
+
+    const result = try pass.insertRcOps(lambda_expr);
+
+    // incref(1) for the str param used twice
+    const rc = countRcOps(&env.lir_store, result);
+    try std.testing.expectEqual(@as(u32, 1), rc.increfs);
+    try std.testing.expectEqual(@as(u32, 0), rc.decrefs);
+}
+
+test "RC lambda: unused refcounted param gets decref" {
+    // |s| 42  where s is str-layout
+    // s is never used in body => decref for the param
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const str_layout: LayoutIdx = .str;
+    const i64_layout: LayoutIdx = .i64;
+    const sym_s = makeSymbol(1);
+
+    // Build lambda body: 42
+    const int_lit = try env.lir_store.addExpr(.{ .i64_literal = 42 }, Region.zero());
+
+    // Build lambda: |s| 42
+    const pat_s = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
+    const params = try env.lir_store.addPatternSpan(&.{pat_s});
+    const lambda_expr = try env.lir_store.addExpr(.{ .lambda = .{
+        .fn_layout = i64_layout,
+        .params = params,
+        .body = int_lit,
+        .ret_layout = i64_layout,
+    } }, Region.zero());
+
+    var pass = RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    defer pass.deinit();
+
+    const result = try pass.insertRcOps(lambda_expr);
+
+    // decref for unused str param
+    const rc = countRcOps(&env.lir_store, result);
+    try std.testing.expectEqual(@as(u32, 0), rc.increfs);
+    try std.testing.expectEqual(@as(u32, 1), rc.decrefs);
+}
+
+test "RC for_loop: elem used twice gets incref" {
+    // for list |elem| { _ = elem; elem }  where elem is str-layout
+    // elem used twice => incref(1)
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const str_layout: LayoutIdx = .str;
+    const sym_elem = makeSymbol(1);
+    const sym_list = makeSymbol(2);
+
+    // Build for loop body: { _ = elem; elem }
+    const lookup_e1 = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_elem, .layout_idx = str_layout } }, Region.zero());
+    const lookup_e2 = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_elem, .layout_idx = str_layout } }, Region.zero());
+    const wild = try env.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = str_layout } }, Region.zero());
+    const body_stmts = try env.lir_store.addStmts(&.{
+        .{ .pattern = wild, .expr = lookup_e1 },
+    });
+    const body_block = try env.lir_store.addExpr(.{ .block = .{
+        .stmts = body_stmts,
+        .final_expr = lookup_e2,
+        .result_layout = str_layout,
+    } }, Region.zero());
+
+    // Build for loop
+    const list_expr = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_list, .layout_idx = str_layout } }, Region.zero());
+    const pat_elem = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_elem, .layout_idx = str_layout } }, Region.zero());
+    const for_expr = try env.lir_store.addExpr(.{ .for_loop = .{
+        .list_expr = list_expr,
+        .elem_layout = str_layout,
+        .elem_pattern = pat_elem,
+        .body = body_block,
+    } }, Region.zero());
+
+    var pass = RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    defer pass.deinit();
+
+    const result = try pass.insertRcOps(for_expr);
+
+    // incref(1) for the elem used twice in the body
+    const rc = countRcOps(&env.lir_store, result);
+    try std.testing.expectEqual(@as(u32, 1), rc.increfs);
+    try std.testing.expectEqual(@as(u32, 0), rc.decrefs);
+}
+
+test "RC closure: wrapping lambda gets RC ops" {
+    // closure around |s| 42  where s is str-layout
+    // The inner lambda has unused str param => decref
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const str_layout: LayoutIdx = .str;
+    const i64_layout: LayoutIdx = .i64;
+    const sym_s = makeSymbol(1);
+
+    // Build inner lambda: |s| 42
+    const int_lit = try env.lir_store.addExpr(.{ .i64_literal = 42 }, Region.zero());
+    const pat_s = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
+    const params = try env.lir_store.addPatternSpan(&.{pat_s});
+    const lambda_expr = try env.lir_store.addExpr(.{ .lambda = .{
+        .fn_layout = i64_layout,
+        .params = params,
+        .body = int_lit,
+        .ret_layout = i64_layout,
+    } }, Region.zero());
+
+    // Wrap in closure
+    const closure_expr = try env.lir_store.addExpr(.{ .closure = .{
+        .closure_layout = i64_layout,
+        .lambda = lambda_expr,
+        .captures = LIR.LirCaptureSpan.empty(),
+        .representation = .{ .unwrapped_capture = .{ .capture_layout = i64_layout } },
+        .recursion = .not_recursive,
+        .self_recursive = .not_self_recursive,
+        .is_bound_to_variable = false,
+    } }, Region.zero());
+
+    var pass = RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    defer pass.deinit();
+
+    const result = try pass.insertRcOps(closure_expr);
+
+    // decref for unused str param in the inner lambda
+    const rc = countRcOps(&env.lir_store, result);
+    try std.testing.expectEqual(@as(u32, 0), rc.increfs);
+    try std.testing.expectEqual(@as(u32, 1), rc.decrefs);
+}
+
+test "RC block: lambda in stmt.expr gets processed" {
+    // { f = |s| 42; 0 }  where s is str-layout
+    // The lambda bound by f should have its body processed (decref for unused s)
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const str_layout: LayoutIdx = .str;
+    const i64_layout: LayoutIdx = .i64;
+    const sym_f = makeSymbol(1);
+    const sym_s = makeSymbol(2);
+
+    // Build lambda: |s| 42
+    const int_42 = try env.lir_store.addExpr(.{ .i64_literal = 42 }, Region.zero());
+    const pat_s = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
+    const params = try env.lir_store.addPatternSpan(&.{pat_s});
+    const lambda_expr = try env.lir_store.addExpr(.{ .lambda = .{
+        .fn_layout = i64_layout,
+        .params = params,
+        .body = int_42,
+        .ret_layout = i64_layout,
+    } }, Region.zero());
+
+    // Build block: { f = <lambda>; 0 }
+    const pat_f = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_f, .layout_idx = i64_layout } }, Region.zero());
+    const stmts = try env.lir_store.addStmts(&.{.{ .pattern = pat_f, .expr = lambda_expr }});
+    const int_0 = try env.lir_store.addExpr(.{ .i64_literal = 0 }, Region.zero());
+    const block_expr = try env.lir_store.addExpr(.{ .block = .{
+        .stmts = stmts,
+        .final_expr = int_0,
+        .result_layout = i64_layout,
+    } }, Region.zero());
+
+    var pass = RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    defer pass.deinit();
+
+    const result = try pass.insertRcOps(block_expr);
+
+    // decref for unused str param s in the lambda body
+    const rc = countRcOps(&env.lir_store, result);
+    try std.testing.expectEqual(@as(u32, 0), rc.increfs);
     try std.testing.expectEqual(@as(u32, 1), rc.decrefs);
 }

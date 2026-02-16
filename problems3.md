@@ -1,0 +1,195 @@
+# Code Review: `lower-mir` Branch
+
+## 1. CORRECTNESS ISSUES
+
+### 1.1 [FIXED] Pattern alternatives silently dropped in `lowerMatch`
+
+Fixed in commit 1747e08b73. All three lowering paths now iterate over all branch patterns.
+
+### 1.2 [FIXED] RC insertion uses global use counts across control flow branches
+
+Fixed in commit ac6bb6cabb. Implemented "branch-owns-its-RC" model: each branching construct (when/if) contributes 1 use per symbol to the enclosing scope. Per-branch RC ops adjust at branch entry (decref if unused, incref if used >1 time). Pattern-bound symbols are excluded from per-branch analysis. Both `src/lir/rc_insert.zig` and `src/mono/rc_insert.zig` updated. 4 new branch-aware tests added.
+
+### 1.3 [FIXED] RC insertion doesn't process lambda bodies, loop bodies, or closures
+
+Fixed in latest commit. `processExpr` now handles `.lambda`, `.closure`, `.for_loop`, and `.while_loop` in both `src/lir/rc_insert.zig` and `src/mono/rc_insert.zig`. Lambda/for-loop bodies get body-local use counting with RC ops for parameters/element bindings (decref if unused, incref if multi-use). `processBlock` was also fixed for reentrancy (local buffer instead of shared `self.stmt_buf`) and now processes `stmt.expr` values so lambdas bound in block statements get RC-processed. 6 new tests added.
+
+### 1.4 [MODERATE] `lowerRecordAccess` silently defaults to `field_idx = 0` for non-records
+
+**File:** `src/lir/MirToLir.zig:572-585`
+
+```zig
+var field_idx: u16 = 0;
+const monotype = self.mir_store.monotype_store.getMonotype(record_mono);
+switch (monotype) {
+    .record => |r| { /* find field */ },
+    else => {},  // ← field_idx stays 0!
+}
+```
+
+If the monotype isn't `.record`, the field index silently defaults to 0. Per the project's design principles, this should be `unreachable` since it can only happen from a compiler bug.
+
+**Fix:** Change `else => {},` to `else => unreachable,`
+
+### 1.5 [MODERATE] `lowerInt` discards the monotype — always emits i64 or i128
+
+**File:** `src/lir/MirToLir.zig:303-309`
+
+```zig
+fn lowerInt(self: *Self, int_data: anytype, _: Monotype.Idx, region: Region) ...
+```
+
+The `mono_idx` parameter is discarded. All integers are lowered as `i64_literal` or `i128_literal` regardless of their actual type (U8, I32, etc.). This works if the codegen uses surrounding layout information to determine register width, but it means the LIR literal node doesn't carry its actual type. If any codegen path examines the literal variant to determine width (e.g., "this is i64_literal so use 64-bit ops"), it would use 64-bit operations even for U8 values.
+
+**Fix:** Either emit the correct literal variant based on the monotype (e.g., `i8_literal` for I8) if such variants exist in LIR, or add a debug assertion verifying that the codegen always uses layout rather than literal variant for width decisions.
+
+### 1.6 [MODERATE] `break_expr` lowered to `runtime_error`
+
+**File:** `src/lir/MirToLir.zig:299`
+
+```zig
+.break_expr => self.lir_store.addExpr(.runtime_error, region),
+```
+
+A `break` expression is lowered as a runtime error. While this might be intentional if `break` is expected to be eliminated by an earlier pass, it means any `break` that survives to MIR→LIR will silently become a crash at runtime rather than properly breaking out of its loop.
+
+**Fix:** Either implement proper break lowering (emitting a jump to the loop exit), or add an assertion with a comment explaining why break should never reach this point. If it truly should never reach here, `unreachable` would be better than a silent runtime error.
+
+## 2. BRITTLENESS / ERROR-PRONE ISSUES
+
+### 2.1 [HIGH] No debug assertion that tag union tags are sorted by name
+
+**File:** `src/lir/MirToLir.zig:250-264`
+
+`tagDiscriminant` does a linear scan assuming the index of a tag in the tags array IS its discriminant. This relies on tags being sorted alphabetically (as documented in the Monotype definition). If any code path adds tags unsorted, the wrong discriminant would be assigned, causing incorrect pattern matching at runtime.
+
+**Fix:** Add a debug assertion in `tagDiscriminant`:
+```zig
+if (std.debug.runtime_safety) {
+    for (tags[0..tags.len -| 1], tags[1..]) |a, b| {
+        std.debug.assert(@as(u32, @bitCast(a.name)) < @as(u32, @bitCast(b.name)));
+    }
+}
+```
+
+### 2.2 [HIGH] Tag union layout is a simplified approximation
+
+**File:** `src/lir/MirToLir.zig:200-246`
+
+The comment says: *"This is a simplified representation; the dev backend handles the actual layout."* The code creates a `[discriminant, max_payload]` tuple. But this tuple layout may not match what the `layout.Store`'s `putTagUnion` would produce (alignment, padding, discriminant position).
+
+If the layout produced here diverges from what the codegen expects (e.g., the codegen expects the discriminant after the payload, not before), field access offsets would be wrong.
+
+**Fix:** Use the `layout.Store`'s tag union construction method rather than manually building a tuple. If that's not available yet, add a TODO and a debug assertion comparing the generated layout size against what the layout store would produce.
+
+### 2.3 [MEDIUM] `roc_str_size` used instead of `roc_list_size` in empty list codegen
+
+**File:** `src/backend/dev/LirCodeGen.zig:7794, 7821`
+
+The empty list generation uses `roc_str_size` (24 bytes) instead of `roc_list_size` (24 bytes). Both happen to be 24 bytes, so this is not a bug today, but if either constant changes, it will silently break.
+
+**Fix:** Replace `roc_str_size` with `roc_list_size` at those two sites.
+
+### 2.4 [MEDIUM] Closure struct layout uses `ident_idx` as record field name
+
+**File:** `src/lir/MirToLir.zig:494`
+
+```zig
+try cap_field_names.append(self.allocator, cap.symbol.ident_idx);
+```
+
+Using the captured variable's `ident_idx` as a record field name for the closure struct is fragile. If two captured variables from different modules share the same `ident_idx`, the layout store could treat them as the same field, leading to incorrect closure struct layout.
+
+**Fix:** Use synthetic unique field names for closure struct fields (e.g., `_cap0`, `_cap1`), or verify that `ident_idx` values are unique per closure.
+
+### 2.5 [MEDIUM] `propagating_defs` recursion guard in `lowerLookup` doesn't handle mutual recursion between symbol defs
+
+**File:** `src/lir/MirToLir.zig:373-387`
+
+The `propagating_defs` guard prevents infinite recursion for a single symbol, but if symbol A's def references symbol B whose def references symbol A, the guard only protects A's entry, not B's re-entry to A. However, the LIR store's `getSymbolDef` check at line 377 provides a second layer of protection since A would be registered by the first call. This is likely fine in practice but could be made more explicit.
+
+## 3. PERFORMANCE ISSUES
+
+### 3.1 [MEDIUM] `layoutFromMonotype` creates temporary ArrayLists for every record/tuple/tag
+
+**File:** `src/lir/MirToLir.zig:141-246`
+
+`layoutFromRecord`, `layoutFromTuple`, and `layoutFromTagUnion` each create fresh `std.ArrayList` instances that are immediately deinitialized. For a large program with many type references, this causes many small heap allocations.
+
+**Fix:** Use scratch buffers (like the scratch buffers already on `Self` for expr/pattern IDs) for layout building. Add `scratch_layouts: std.ArrayList(layout.Layout)` and `scratch_field_names: std.ArrayList(Ident.Idx)` to `Self` and reuse them with the save/restore pattern.
+
+### 3.2 [LOW] `tagDiscriminant` is O(n) linear scan
+
+**File:** `src/lir/MirToLir.zig:250-264`
+
+For every tag expression and tag pattern, `tagDiscriminant` scans the full tag list. For tag unions with many variants (e.g., 50+ tags in error types), this is O(n) per tag reference.
+
+**Fix:** If this becomes a bottleneck, cache tag-name-to-discriminant mappings per union monotype. For now, this is likely fine since most tag unions are small.
+
+### 3.3 [LOW] RC insertion `countUses` traverses entire tree then `processExpr` traverses again
+
+**File:** `src/lir/rc_insert.zig:76-81`
+
+Two full tree traversals (count phase + transform phase). For very large expression trees, this doubles the work. Note: the branch-aware fix (1.2) adds additional local counting per branch during both phases, making this slightly more expensive but correct.
+
+**Fix:** Merge the two passes into a single bottom-up traversal that both counts and inserts RC operations.
+
+## 4. TEST COVERAGE GAPS
+
+### 4.1 [FIXED] Pattern alternatives (`A | B => body`) in match expressions
+Tests added in MirToLir.zig, lower_test.zig, and eval_test.zig as part of 1.1 fix.
+
+### 4.2 [FIXED] RC insertion for lambda bodies and closures
+Tests added in `src/lir/rc_insert.zig` as part of 1.3 fix: lambda body with nested block, refcounted param used twice (incref), unused refcounted param (decref), for_loop element used twice, closure wrapping lambda, and block with lambda in stmt.expr.
+
+### 4.3 [FIXED] RC insertion across control flow branches
+Tests added in `src/lir/rc_insert.zig` as part of 1.2 fix: symbol used in both branches (no incref), one branch only (decref in unused), multiple times in one branch (incref+decref), and used both inside and outside branches.
+
+### 4.4 Multi-tag union lowering (discriminant correctness)
+The test for `zero_arg_tag` only tests a single-tag union (discriminant 0). There's no test for a multi-tag union verifying that different tags get different discriminants, especially one verifying alphabetical ordering.
+
+### 4.5 Closure with captures lowering
+No test in MirToLir verifies that a lambda with captures produces a `closure` LIR node with correct capture layouts and closure representation (single capture → `unwrapped_capture`, multiple → `struct_captures`).
+
+### 4.6 Record/tuple access field index correctness
+No test verifies that `lowerRecordAccess` finds the correct field index when the record has multiple fields.
+
+### 4.7 Cross-module symbol def propagation in MirToLir
+`lowerLookup` propagates MIR symbol defs to LIR, but no test verifies this works correctly for cross-module references.
+
+### 4.8 `break_expr` behavior
+No test covers what happens when a `break` expression reaches MirToLir. If it's expected to be eliminated earlier, a test in the earlier pass should verify that. If it can reach MirToLir, there should be a test.
+
+## 5. NAMING ISSUES
+
+### 5.1 [MEDIUM] LIR/Mono IR types still use "when" instead of "match"
+
+The surface language uses `match`, not `when`, but the LIR and Mono IR layers still use "when" naming throughout:
+- `LirWhenBranch` / `LirWhenBranchSpan` (in `src/lir/LIR.zig`)
+- `MonoWhenBranch` / `MonoWhenBranchSpan` (in `src/mono/MonoIR.zig`)
+- `.when` variant in LIR/Mono expression enums
+- `when_branches` field in `LirExprStore` and `MonoExprStore`
+- `addWhenBranches` / `getWhenBranches` methods
+- `scratch_lir_when_branches` in `MirToLir.zig`
+- `lowerWhenBranches` in `src/lir/Lower.zig` and `src/mono/Lower.zig`
+- `processWhen` in `src/lir/rc_insert.zig` and `src/mono/rc_insert.zig`
+- `generateWhen` / `generateWhenBranches` in codegen files
+- Stale comments referencing "WhenBranch" in `src/parse/NodeStore.zig`
+
+**Fix:** Rename all to use "match" naming: `LirMatchBranch`, `MonoMatchBranch`, `.match`, `match_branches`, `addMatchBranches`, `lowerMatchBranches`, `processMatch`, `generateMatch`, etc.
+
+## Summary of Recommended Priorities
+
+| Priority | Issue | Impact |
+|----------|-------|--------|
+| P0 | 1.1 Pattern alternatives dropped | Wrong match behavior at runtime |
+| ~~P0~~ | ~~1.2 Global RC use counts~~ | ~~Memory leaks~~ FIXED |
+| ~~P0~~ | ~~1.3 RC doesn't process lambdas/loops~~ | ~~Missing RC ops → leaks or use-after-free~~ FIXED |
+| P1 | 1.4 Record access defaults to idx 0 | Wrong field access (compiler bug path) |
+| P1 | 2.1 No sorted-tags assertion | Silent wrong discriminants |
+| P1 | 2.2 Tag union layout approximation | Potential layout mismatch with codegen |
+| P1 | 1.6 break_expr → runtime_error | Break crashes at runtime |
+| P2 | 1.5 Int literal type discarded | Potential wrong width in codegen |
+| P2 | 2.3 roc_str_size for lists | Latent bug if constants diverge |
+| P2 | 2.4 Closure field name collisions | Potential layout corruption |
+| P2 | 3.1 Temp ArrayLists in layout | Performance waste |

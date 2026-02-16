@@ -50,9 +50,6 @@ pub const RcInsertPass = struct {
     /// Tracks layout for each symbol (for generating incref/decref with correct layout).
     symbol_layouts: std.AutoHashMap(u64, LayoutIdx),
 
-    /// Temporary buffer for building statement lists.
-    stmt_buf: std.ArrayList(MonoStmt),
-
     pub fn init(allocator: Allocator, store: *MonoExprStore, layout_store: *const layout_mod.Store) RcInsertPass {
         return .{
             .allocator = allocator,
@@ -60,14 +57,12 @@ pub const RcInsertPass = struct {
             .layout_store = layout_store,
             .symbol_use_counts = std.AutoHashMap(u64, u32).init(allocator),
             .symbol_layouts = std.AutoHashMap(u64, LayoutIdx).init(allocator),
-            .stmt_buf = std.ArrayList(MonoStmt).empty,
         };
     }
 
     pub fn deinit(self: *RcInsertPass) void {
         self.symbol_use_counts.deinit();
         self.symbol_layouts.deinit();
-        self.stmt_buf.deinit(self.allocator);
     }
 
     /// Main entry point: insert RC operations into a MonoExpr tree.
@@ -384,6 +379,10 @@ pub const RcInsertPass = struct {
             .block => |block| self.processBlock(block.stmts, block.final_expr, block.result_layout, region),
             .if_then_else => |ite| self.processIfThenElse(ite.branches, ite.final_else, ite.result_layout, region),
             .when => |w| self.processWhen(w.value, w.value_layout, w.branches, w.result_layout, region),
+            .lambda => |lam| self.processLambda(lam, region, expr_id),
+            .closure => |clo| self.processClosure(clo, region, expr_id),
+            .for_loop => |fl| self.processForLoop(fl, region, expr_id),
+            .while_loop => |wl| self.processWhileLoop(wl, region, expr_id),
             // For all other expressions, return as-is.
             // RC operations are inserted at block boundaries, not inside
             // individual expressions.
@@ -402,15 +401,21 @@ pub const RcInsertPass = struct {
     ) Allocator.Error!MonoExprId {
         const stmts = self.store.getStmts(stmts_span);
 
-        // Clear the temp buffer
-        self.stmt_buf.clearRetainingCapacity();
+        // Use a local buffer to avoid reentrancy issues — processExpr may
+        // recurse into another processBlock (e.g. lambda/loop bodies).
+        var stmt_buf = std.ArrayList(MonoStmt).empty;
+        defer stmt_buf.deinit(self.allocator);
 
-        var rc_ops_added: u32 = 0;
+        var changed = false;
 
         // Process each statement
         for (stmts) |stmt| {
-            // Add the original statement
-            try self.stmt_buf.append(self.allocator, stmt);
+            // Recursively process the statement's expression
+            const new_expr = try self.processExpr(stmt.expr);
+            if (new_expr != stmt.expr) changed = true;
+
+            // Add the (possibly updated) statement
+            try stmt_buf.append(self.allocator, .{ .pattern = stmt.pattern, .expr = new_expr });
 
             // Check if the bound pattern is a refcounted symbol
             if (!stmt.pattern.isNone()) {
@@ -423,8 +428,8 @@ pub const RcInsertPass = struct {
 
                             if (use_count > 1) {
                                 // Multi-use: insert incref with count N-1
-                                try self.emitIncref(bind.symbol, bind.layout_idx, @intCast(use_count - 1), region);
-                                rc_ops_added += 1;
+                                try self.emitIncrefInto(bind.symbol, bind.layout_idx, @intCast(use_count - 1), region, &stmt_buf);
+                                changed = true;
                             }
                         }
                     },
@@ -435,6 +440,7 @@ pub const RcInsertPass = struct {
 
         // Recursively process the final expression
         const new_final = try self.processExpr(final_expr);
+        if (new_final != final_expr) changed = true;
 
         // Insert decrefs for refcounted symbols bound in this block that are never used
         for (stmts) |stmt| {
@@ -446,8 +452,8 @@ pub const RcInsertPass = struct {
                             const key = @as(u64, @bitCast(bind.symbol));
                             const use_count = self.symbol_use_counts.get(key) orelse 0;
                             if (use_count == 0) {
-                                try self.emitDecref(bind.symbol, bind.layout_idx, region);
-                                rc_ops_added += 1;
+                                try self.emitDecrefInto(bind.symbol, bind.layout_idx, region, &stmt_buf);
+                                changed = true;
                             }
                         }
                     },
@@ -457,7 +463,7 @@ pub const RcInsertPass = struct {
         }
 
         // If nothing changed, return a block with the original data
-        if (rc_ops_added == 0 and new_final == final_expr) {
+        if (!changed) {
             return self.store.addExpr(.{ .block = .{
                 .stmts = stmts_span,
                 .final_expr = final_expr,
@@ -466,7 +472,7 @@ pub const RcInsertPass = struct {
         }
 
         // Build the new statement span
-        const new_stmts = try self.store.addStmts(self.stmt_buf.items);
+        const new_stmts = try self.store.addStmts(stmt_buf.items);
 
         return self.store.addExpr(.{ .block = .{
             .stmts = new_stmts,
@@ -607,6 +613,150 @@ pub const RcInsertPass = struct {
         } }, region);
     }
 
+    /// Process a lambda expression.
+    /// Lambda bodies are independent scopes — the calling convention provides
+    /// 1 reference per parameter. We recurse into the body and emit RC ops
+    /// for lambda parameters based on body-local use counts.
+    fn processLambda(self: *RcInsertPass, lam: anytype, region: Region, expr_id: MonoExprId) Allocator.Error!MonoExprId {
+        const new_body = try self.processExpr(lam.body);
+
+        // Count uses locally within the lambda body
+        var local_uses = try self.countUsesLocal(lam.body);
+        defer local_uses.deinit();
+
+        // Emit RC ops for lambda parameters
+        var rc_stmts = std.ArrayList(MonoStmt).empty;
+        defer rc_stmts.deinit(self.allocator);
+
+        const params = self.store.getPatternSpan(lam.params);
+        for (params) |pat_id| {
+            if (pat_id.isNone()) continue;
+            const pat = self.store.getPattern(pat_id);
+            switch (pat) {
+                .bind => |bind| {
+                    if (!bind.symbol.isNone() and self.layoutNeedsRc(bind.layout_idx)) {
+                        const key = @as(u64, @bitCast(bind.symbol));
+                        const use_count = local_uses.get(key) orelse 0;
+                        if (use_count == 0) {
+                            try self.emitDecrefInto(bind.symbol, bind.layout_idx, region, &rc_stmts);
+                        } else if (use_count > 1) {
+                            try self.emitIncrefInto(bind.symbol, bind.layout_idx, @intCast(use_count - 1), region, &rc_stmts);
+                        }
+                    }
+                },
+                else => {},
+            }
+        }
+
+        // If RC ops needed, wrap body in a block with RC stmts prepended
+        var final_body = new_body;
+        if (rc_stmts.items.len > 0) {
+            const stmts_span = try self.store.addStmts(rc_stmts.items);
+            final_body = try self.store.addExpr(.{ .block = .{
+                .stmts = stmts_span,
+                .final_expr = new_body,
+                .result_layout = lam.ret_layout,
+            } }, region);
+        }
+
+        if (final_body != lam.body) {
+            return self.store.addExpr(.{ .lambda = .{
+                .fn_layout = lam.fn_layout,
+                .params = lam.params,
+                .body = final_body,
+                .ret_layout = lam.ret_layout,
+            } }, region);
+        }
+        return expr_id;
+    }
+
+    /// Process a closure expression.
+    /// A closure wraps a lambda — just recurse into the inner lambda.
+    fn processClosure(self: *RcInsertPass, clo: anytype, region: Region, expr_id: MonoExprId) Allocator.Error!MonoExprId {
+        const new_lambda = try self.processExpr(clo.lambda);
+        if (new_lambda != clo.lambda) {
+            return self.store.addExpr(.{ .closure = .{
+                .closure_layout = clo.closure_layout,
+                .lambda = new_lambda,
+                .captures = clo.captures,
+                .representation = clo.representation,
+                .recursion = clo.recursion,
+                .self_recursive = clo.self_recursive,
+                .is_bound_to_variable = clo.is_bound_to_variable,
+            } }, region);
+        }
+        return expr_id;
+    }
+
+    /// Process a for loop expression.
+    /// For loops bind an element via elem_pattern each iteration.
+    /// The loop provides 1 reference per element. We emit body-local RC ops
+    /// for the element binding similar to lambda params.
+    fn processForLoop(self: *RcInsertPass, fl: anytype, region: Region, expr_id: MonoExprId) Allocator.Error!MonoExprId {
+        const new_body = try self.processExpr(fl.body);
+
+        // Count uses locally within the loop body
+        var local_uses = try self.countUsesLocal(fl.body);
+        defer local_uses.deinit();
+
+        // Emit RC ops for the elem_pattern
+        var rc_stmts = std.ArrayList(MonoStmt).empty;
+        defer rc_stmts.deinit(self.allocator);
+
+        if (!fl.elem_pattern.isNone()) {
+            const pat = self.store.getPattern(fl.elem_pattern);
+            switch (pat) {
+                .bind => |bind| {
+                    if (!bind.symbol.isNone() and self.layoutNeedsRc(bind.layout_idx)) {
+                        const key = @as(u64, @bitCast(bind.symbol));
+                        const use_count = local_uses.get(key) orelse 0;
+                        if (use_count == 0) {
+                            try self.emitDecrefInto(bind.symbol, bind.layout_idx, region, &rc_stmts);
+                        } else if (use_count > 1) {
+                            try self.emitIncrefInto(bind.symbol, bind.layout_idx, @intCast(use_count - 1), region, &rc_stmts);
+                        }
+                    }
+                },
+                else => {},
+            }
+        }
+
+        // If RC ops needed, wrap body in a block with RC stmts prepended
+        var final_body = new_body;
+        if (rc_stmts.items.len > 0) {
+            const stmts_span = try self.store.addStmts(rc_stmts.items);
+            final_body = try self.store.addExpr(.{ .block = .{
+                .stmts = stmts_span,
+                .final_expr = new_body,
+                .result_layout = fl.elem_layout,
+            } }, region);
+        }
+
+        if (final_body != fl.body) {
+            return self.store.addExpr(.{ .for_loop = .{
+                .list_expr = fl.list_expr,
+                .elem_layout = fl.elem_layout,
+                .elem_pattern = fl.elem_pattern,
+                .body = final_body,
+            } }, region);
+        }
+        return expr_id;
+    }
+
+    /// Process a while loop expression.
+    /// While loops don't bind new symbols — just recurse into cond and body.
+    fn processWhileLoop(self: *RcInsertPass, wl: anytype, region: Region, expr_id: MonoExprId) Allocator.Error!MonoExprId {
+        const new_cond = try self.processExpr(wl.cond);
+        const new_body = try self.processExpr(wl.body);
+        if (new_cond != wl.cond or new_body != wl.body) {
+            return self.store.addExpr(.{ .while_loop = .{
+                .cond = new_cond,
+                .body = new_body,
+            } }, region);
+        }
+        return expr_id;
+    }
+
     /// Collect all symbols bound by a pattern into a set.
     fn collectPatternSymbols(self: *const RcInsertPass, pat_id: MonoPatternId, set: *std.AutoHashMap(u64, void)) Allocator.Error!void {
         if (pat_id.isNone()) return;
@@ -690,11 +840,6 @@ pub const RcInsertPass = struct {
         } }, region);
     }
 
-    /// Emit an incref statement into the statement buffer.
-    fn emitIncref(self: *RcInsertPass, symbol: Symbol, layout_idx: LayoutIdx, count: u16, region: Region) Allocator.Error!void {
-        try self.emitIncrefInto(symbol, layout_idx, count, region, &self.stmt_buf);
-    }
-
     /// Emit an incref statement into a given statement list.
     fn emitIncrefInto(self: *RcInsertPass, symbol: Symbol, layout_idx: LayoutIdx, count: u16, region: Region, stmts: *std.ArrayList(MonoStmt)) Allocator.Error!void {
         const lookup_id = try self.store.addExpr(.{ .lookup = .{
@@ -713,11 +858,6 @@ pub const RcInsertPass = struct {
             .pattern = wildcard,
             .expr = incref_id,
         });
-    }
-
-    /// Emit a decref statement into the statement buffer.
-    fn emitDecref(self: *RcInsertPass, symbol: Symbol, layout_idx: LayoutIdx, region: Region) Allocator.Error!void {
-        try self.emitDecrefInto(symbol, layout_idx, region, &self.stmt_buf);
     }
 
     /// Emit a decref statement into a given statement list.
