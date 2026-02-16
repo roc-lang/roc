@@ -952,15 +952,59 @@ fn lowerBinop(self: *Self, binop: CIR.Expr.Binop, monotype: Monotype.Idx, region
     }
 }
 
-/// Lower `e_unary_minus` to a call to `negate`.
+/// Lower `e_unary_minus` to a call to `negate` (type-directed dispatch).
 fn lowerUnaryMinus(self: *Self, um: CIR.Expr.UnaryMinus, monotype: Monotype.Idx, region: Region) Allocator.Error!MIR.ExprId {
     const module_env = self.all_module_envs[self.current_module_idx];
     const inner = try self.lowerExpr(um.expr);
 
-    const method_symbol = MIR.Symbol{
-        .module_idx = self.current_module_idx,
-        .ident_idx = module_env.idents.negate,
+    // Resolve the method via type-directed dispatch on the operand's type var
+    const type_var = ModuleEnv.varFrom(um.expr);
+    const method_symbol = try self.resolveMethodForTypeVar(
+        module_env,
+        type_var,
+        module_env.idents.negate,
+    ) orelse {
+        // No nominal method found — emit run_low_level directly.
+        // This happens for flex/rigid type vars (e.g. unresolved numerals like `-1`)
+        // and for .err types (where the type checker already reported the error).
+        //
+        // Nominal and structural types must not reach here: the type checker
+        // validates all dispatch constraints before lowering, replacing failures
+        // with .err.
+        if (std.debug.runtime_safety) {
+            var resolved = self.types_store.resolveVar(type_var);
+            while (resolved.desc.content == .alias) {
+                const alias = resolved.desc.content.alias;
+                const backing = self.types_store.getAliasBackingVar(alias);
+                resolved = self.types_store.resolveVar(backing);
+            }
+            switch (resolved.desc.content) {
+                .flex, .rigid, .err => {}, // expected fallback cases
+                .structure => |s| switch (s) {
+                    .nominal_type => std.debug.panic(
+                        "lowerUnaryMinus: nominal type reached fallback — type checker should have validated this",
+                        .{},
+                    ),
+                    else => std.debug.panic(
+                        "lowerUnaryMinus: structural type reached fallback — type checker should have rejected this",
+                        .{},
+                    ),
+                },
+                .alias => unreachable, // already followed aliases above
+            }
+        }
+        const ll_args = try self.store.addExprSpan(self.allocator, &.{inner});
+        return try self.store.addExpr(self.allocator, .{ .run_low_level = .{
+            .op = .num_negate,
+            .args = ll_args,
+        } }, monotype, region);
     };
+
+    // Ensure the method body is lowered so codegen can find it
+    if (method_symbol.module_idx != self.current_module_idx) {
+        try self.ensureMethodLowered(method_symbol);
+    }
+
     const inner_monotype = try self.resolveMonotype(um.expr);
     const func_monotype = try self.buildFuncMonotype(&.{inner_monotype}, monotype, false);
     const func_expr = try self.store.addExpr(self.allocator, .{ .lookup = method_symbol }, func_monotype, region);

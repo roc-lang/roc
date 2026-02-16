@@ -476,14 +476,30 @@ test "lowerExpr: if-else desugars to match" {
     try testing.expect(env.mir_store.getExpr(expr) == .match_expr);
 }
 
-test "lowerExpr: binop without nominal type emits run_low_level" {
+test "lowerExpr: binop on defaulted numeral dispatches to method call" {
     var env = try MirTestEnv.initExpr("1 + 2");
     defer env.deinit();
     const expr = try env.lowerFirstDef();
     const result = env.mir_store.getExpr(expr);
-    // Binop on non-nominal type desugars to run_low_level
-    try testing.expect(result == .run_low_level);
-    try testing.expectEqual(CIR.Expr.LowLevel.num_plus, result.run_low_level.op);
+    // Numeric literals default to Dec, so binop dispatches to Dec.plus
+    try testing.expect(result == .call);
+}
+
+test "lowerExpr: unary minus on defaulted numeral dispatches to method call" {
+    // Use a block so that `-x` produces an e_unary_minus (bare `-1` is parsed as a negative literal)
+    var env = try MirTestEnv.initExpr(
+        \\{
+        \\    x = 1
+        \\    -x
+        \\}
+    );
+    defer env.deinit();
+    const expr = try env.lowerFirstDef();
+    // The block's final expression should be the lowered unary minus
+    const block = env.mir_store.getExpr(expr).block;
+    const result = env.mir_store.getExpr(block.final_expr);
+    // Numeric literals default to Dec, so unary minus dispatches to Dec.negate
+    try testing.expect(result == .call);
 }
 
 test "lowerExpr: block with decl_const" {
@@ -650,7 +666,7 @@ test "lowerExternalDef: recursion guard returns lookup placeholder" {
     );
     defer env.deinit();
     const def_info = try env.getDefExprByName("my_val");
-    const symbol = MIR.Symbol{ .module_idx = 0, .ident_idx = def_info.ident_idx };
+    const symbol = MIR.Symbol{ .module_idx = 1, .ident_idx = def_info.ident_idx };
 
     // Manually insert the symbol into in_progress_defs to simulate recursion
     const symbol_key: u64 = @bitCast(symbol);
@@ -670,7 +686,7 @@ test "lowerExternalDef: caching returns same ExprId on second call" {
     );
     defer env.deinit();
     const def_info = try env.getDefExprByName("my_val");
-    const symbol = MIR.Symbol{ .module_idx = 0, .ident_idx = def_info.ident_idx };
+    const symbol = MIR.Symbol{ .module_idx = 1, .ident_idx = def_info.ident_idx };
 
     const first = try env.lower.lowerExternalDef(symbol, def_info.expr_idx);
     const second = try env.lower.lowerExternalDef(symbol, def_info.expr_idx);
