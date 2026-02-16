@@ -237,10 +237,10 @@ fn tagDiscriminant(self: *const Self, tag_name: Ident.Idx, union_mono_idx: Monot
                     return @intCast(i);
                 }
             }
+            unreachable; // compiler bug: tag name not in tag union
         },
-        else => {},
+        else => unreachable, // compiler bug: expected tag_union monotype
     }
-    return 0;
 }
 
 fn lowerExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator.Error!LirExprId {
