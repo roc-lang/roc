@@ -5791,23 +5791,23 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                 const field_size = layout_store.getRecordFieldSize(record_layout.data.record.idx, @intCast(i));
                                 const field_slots: usize = @max(1, (field_size + 7) / 8);
                                 for (0..field_slots) |j| {
-                                    try cmp_offsets.append(self.allocator,@as(i32, @intCast(field_offset)) + @as(i32, @intCast(j)) * 8);
+                                    try cmp_offsets.append(self.allocator, @as(i32, @intCast(field_offset)) + @as(i32, @intCast(j)) * 8);
                                     const remaining = field_size - @as(u32, @intCast(j)) * 8;
-                                    try cmp_sizes.append(self.allocator,@min(remaining, 8));
+                                    try cmp_sizes.append(self.allocator, @min(remaining, 8));
                                 }
                             }
                         } else {
                             // Fallback: 16-byte slots
                             for (0..elem_exprs.len) |i| {
-                                try cmp_offsets.append(self.allocator,@as(i32, @intCast(i)) * 16);
-                                try cmp_sizes.append(self.allocator,8);
+                                try cmp_offsets.append(self.allocator, @as(i32, @intCast(i)) * 16);
+                                try cmp_sizes.append(self.allocator, 8);
                             }
                         }
                     } else {
                         // No layout store: 16-byte slots
                         for (0..elem_exprs.len) |i| {
-                            try cmp_offsets.append(self.allocator,@as(i32, @intCast(i)) * 16);
-                            try cmp_sizes.append(self.allocator,8);
+                            try cmp_offsets.append(self.allocator, @as(i32, @intCast(i)) * 16);
+                            try cmp_sizes.append(self.allocator, 8);
                         }
                     }
                 },
@@ -5823,9 +5823,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                 const elem_slots: usize = @max(1, (elem_size + 7) / 8);
 
                                 for (0..elem_slots) |j| {
-                                    try cmp_offsets.append(self.allocator,@as(i32, @intCast(elem_offset)) + @as(i32, @intCast(j)) * 8);
+                                    try cmp_offsets.append(self.allocator, @as(i32, @intCast(elem_offset)) + @as(i32, @intCast(j)) * 8);
                                     const remaining = elem_size - @as(u32, @intCast(j)) * 8;
-                                    try cmp_sizes.append(self.allocator,@min(remaining, 8));
+                                    try cmp_sizes.append(self.allocator, @min(remaining, 8));
                                 }
                             }
                         } else {
@@ -5838,8 +5838,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                     else => 1,
                                 };
                                 for (0..elem_slots) |_| {
-                                    try cmp_offsets.append(self.allocator,current_offset);
-                                    try cmp_sizes.append(self.allocator,8);
+                                    try cmp_offsets.append(self.allocator, current_offset);
+                                    try cmp_sizes.append(self.allocator, 8);
                                     current_offset += 8;
                                 }
                             }
@@ -5854,8 +5854,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                 else => 1,
                             };
                             for (0..elem_slots) |_| {
-                                try cmp_offsets.append(self.allocator,current_offset);
-                                try cmp_sizes.append(self.allocator,8);
+                                try cmp_offsets.append(self.allocator, current_offset);
+                                try cmp_sizes.append(self.allocator, 8);
                                 current_offset += 8;
                             }
                         }
