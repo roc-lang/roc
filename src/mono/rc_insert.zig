@@ -19,7 +19,7 @@ const MonoIR = @import("MonoIR.zig");
 const MonoExprStore = @import("MonoExprStore.zig");
 
 const MonoExprId = MonoIR.MonoExprId;
-const MonoSymbol = MonoIR.MonoSymbol;
+const Symbol = MonoIR.Symbol;
 const MonoStmt = MonoIR.MonoStmt;
 const MonoStmtSpan = MonoIR.MonoStmtSpan;
 const MonoPatternId = MonoIR.MonoPatternId;
@@ -35,11 +35,11 @@ pub const RcInsertPass = struct {
     layout_store: *const layout_mod.Store,
 
     /// Tracks how many times each symbol is used in the expression tree.
-    /// Keyed by the raw u48 representation of MonoSymbol.
-    symbol_use_counts: std.AutoHashMap(u48, u32),
+    /// Keyed by the raw u64 representation of Symbol.
+    symbol_use_counts: std.AutoHashMap(u64, u32),
 
     /// Tracks layout for each symbol (for generating incref/decref with correct layout).
-    symbol_layouts: std.AutoHashMap(u48, LayoutIdx),
+    symbol_layouts: std.AutoHashMap(u64, LayoutIdx),
 
     /// Temporary buffer for building statement lists.
     stmt_buf: std.ArrayList(MonoStmt),
@@ -49,8 +49,8 @@ pub const RcInsertPass = struct {
             .allocator = allocator,
             .store = store,
             .layout_store = layout_store,
-            .symbol_use_counts = std.AutoHashMap(u48, u32).init(allocator),
-            .symbol_layouts = std.AutoHashMap(u48, LayoutIdx).init(allocator),
+            .symbol_use_counts = std.AutoHashMap(u64, u32).init(allocator),
+            .symbol_layouts = std.AutoHashMap(u64, LayoutIdx).init(allocator),
             .stmt_buf = std.ArrayList(MonoStmt).empty,
         };
     }
@@ -80,7 +80,7 @@ pub const RcInsertPass = struct {
         switch (expr) {
             .lookup => |lookup| {
                 if (!lookup.symbol.isNone()) {
-                    const key = @as(u48, @bitCast(lookup.symbol));
+                    const key = @as(u64, @bitCast(lookup.symbol));
                     const gop = try self.symbol_use_counts.getOrPut(key);
                     if (gop.found_existing) {
                         gop.value_ptr.* += 1;
@@ -260,7 +260,7 @@ pub const RcInsertPass = struct {
         switch (pat) {
             .bind => |bind| {
                 if (!bind.symbol.isNone()) {
-                    const key = @as(u48, @bitCast(bind.symbol));
+                    const key = @as(u64, @bitCast(bind.symbol));
                     try self.symbol_layouts.put(key, bind.layout_idx);
                     if (!self.symbol_use_counts.contains(key)) {
                         try self.symbol_use_counts.put(key, 0);
@@ -269,7 +269,7 @@ pub const RcInsertPass = struct {
             },
             .as_pattern => |as_pat| {
                 if (!as_pat.symbol.isNone()) {
-                    const key = @as(u48, @bitCast(as_pat.symbol));
+                    const key = @as(u64, @bitCast(as_pat.symbol));
                     try self.symbol_layouts.put(key, as_pat.layout_idx);
                     if (!self.symbol_use_counts.contains(key)) {
                         try self.symbol_use_counts.put(key, 0);
@@ -354,7 +354,7 @@ pub const RcInsertPass = struct {
                 switch (pat) {
                     .bind => |bind| {
                         if (!bind.symbol.isNone() and self.layoutNeedsRc(bind.layout_idx)) {
-                            const key = @as(u48, @bitCast(bind.symbol));
+                            const key = @as(u64, @bitCast(bind.symbol));
                             const use_count = self.symbol_use_counts.get(key) orelse 0;
 
                             if (use_count > 1) {
@@ -379,7 +379,7 @@ pub const RcInsertPass = struct {
                 switch (pat) {
                     .bind => |bind| {
                         if (!bind.symbol.isNone() and self.layoutNeedsRc(bind.layout_idx)) {
-                            const key = @as(u48, @bitCast(bind.symbol));
+                            const key = @as(u64, @bitCast(bind.symbol));
                             const use_count = self.symbol_use_counts.get(key) orelse 0;
                             if (use_count == 0) {
                                 try self.emitDecref(bind.symbol, bind.layout_idx, region);
@@ -499,7 +499,7 @@ pub const RcInsertPass = struct {
     }
 
     /// Emit an incref statement into the statement buffer.
-    fn emitIncref(self: *RcInsertPass, symbol: MonoSymbol, layout_idx: LayoutIdx, count: u16, region: Region) Allocator.Error!void {
+    fn emitIncref(self: *RcInsertPass, symbol: Symbol, layout_idx: LayoutIdx, count: u16, region: Region) Allocator.Error!void {
         const lookup_id = try self.store.addExpr(.{ .lookup = .{
             .symbol = symbol,
             .layout_idx = layout_idx,
@@ -519,7 +519,7 @@ pub const RcInsertPass = struct {
     }
 
     /// Emit a decref statement into the statement buffer.
-    fn emitDecref(self: *RcInsertPass, symbol: MonoSymbol, layout_idx: LayoutIdx, region: Region) Allocator.Error!void {
+    fn emitDecref(self: *RcInsertPass, symbol: Symbol, layout_idx: LayoutIdx, region: Region) Allocator.Error!void {
         const lookup_id = try self.store.addExpr(.{ .lookup = .{
             .symbol = symbol,
             .layout_idx = layout_idx,

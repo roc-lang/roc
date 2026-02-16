@@ -3748,7 +3748,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     defer layout_store.deinit();
 
     // Find the app module index
-    var app_module_idx: ?u16 = null;
+    var app_module_idx: ?u32 = null;
     for (modules, 0..) |mod, i| {
         if (mod.is_app) {
             app_module_idx = @intCast(i + 1);

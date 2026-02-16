@@ -451,6 +451,12 @@ test "NodeStore round trip - Expressions" {
             .args = .{ .span = .{ .start = rand.random().int(u32), .len = rand.random().int(u32) } },
         },
     });
+    try expressions.append(gpa, CIR.Expr{
+        .e_run_low_level = .{
+            .op = .str_is_empty,
+            .args = .{ .span = .{ .start = rand.random().int(u32), .len = rand.random().int(u32) } },
+        },
+    });
 
     for (expressions.items, 0..) |expr, i| {
         const region = from_raw_offsets(@intCast(i * 100), @intCast(i * 100 + 50));

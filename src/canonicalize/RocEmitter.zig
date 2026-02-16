@@ -553,8 +553,10 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
         .e_hosted_lambda => {
             try self.write("<hosted_lambda>");
         },
-        .e_low_level_lambda => {
-            try self.write("<low_level>");
+        .e_run_low_level => |run_ll| {
+            try self.write("<run_low_level: ");
+            try self.write(@tagName(run_ll.op));
+            try self.write(">");
         },
     }
 }

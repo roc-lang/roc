@@ -9,7 +9,7 @@
 //!
 //! The lowering process:
 //! 1. Walks CIR expressions recursively
-//! 2. Converts CIR.Pattern.Idx → MonoSymbol (using pattern's module + ident)
+//! 2. Converts CIR.Pattern.Idx → Symbol (using pattern's module + ident)
 //! 3. Resolves type variables → layout.Idx via the layout store
 //! 4. Handles cross-module references via Import resolution
 //! 5. Produces a flat MonoExprStore consumable by any backend
@@ -37,7 +37,7 @@ const MonoPatternId = ir.MonoPatternId;
 const MonoExprSpan = ir.MonoExprSpan;
 const MonoPatternSpan = ir.MonoPatternSpan;
 const MonoFieldNameSpan = ir.MonoFieldNameSpan;
-const MonoSymbol = ir.MonoSymbol;
+const Symbol = ir.Symbol;
 const MonoCapture = ir.MonoCapture;
 const MonoCaptureSpan = ir.MonoCaptureSpan;
 const MonoWhenBranch = ir.MonoWhenBranch;
@@ -66,7 +66,7 @@ const TypeScope = types.TypeScope;
 pub const HostedFunctionMap = std.AutoHashMap(u64, u32);
 
 /// Helper to create a key for the hosted function map.
-pub fn hostedFunctionKey(global_module_idx: u16, node_idx: u32) u64 {
+pub fn hostedFunctionKey(global_module_idx: u32, node_idx: u32) u64 {
     return @as(u64, global_module_idx) << 32 | node_idx;
 }
 
@@ -82,7 +82,7 @@ store: *MonoExprStore,
 all_module_envs: []const *ModuleEnv,
 
 /// Index of the app module in all_module_envs (for resolving e_lookup_required)
-app_module_idx: ?u16,
+app_module_idx: ?u32,
 
 /// Lambda set inference results (for closure dispatch)
 lambda_inference: ?*LambdaSetInference,
@@ -94,36 +94,36 @@ layout_store: ?*LayoutStore,
 type_scope: TypeScope,
 
 /// Track which (module_idx, pattern_idx) pairs have been lowered to avoid duplicates
-/// Maps to the MonoSymbol that was created
-lowered_patterns: std.AutoHashMap(u64, MonoSymbol),
+/// Maps to the Symbol that was created
+lowered_patterns: std.AutoHashMap(u64, Symbol),
 
 /// Track which top-level symbols have been lowered
-lowered_symbols: std.AutoHashMap(u48, MonoExprId),
+lowered_symbols: std.AutoHashMap(u64, MonoExprId),
 
 /// Track which symbols are currently being lowered (cycle detection).
 /// Prevents infinite recursion when a top-level recursive function references itself.
-in_progress_defs: std.AutoHashMap(u48, void),
+in_progress_defs: std.AutoHashMap(u64, void),
 
 /// Type environment: maps pattern_idx to layout (inferred from expressions)
 type_env: std.AutoHashMap(u32, LayoutIdx),
 
 /// Current module index during lowering
-current_module_idx: u16 = 0,
+current_module_idx: u32 = 0,
 
 /// The module whose type variables are in the type_scope mappings.
 /// When we call an external function, we map its rigid type vars to the caller's
 /// concrete types. This tracks the caller's module so fromTypeVar can resolve
 /// the mapped vars using the correct module's types store.
-type_scope_caller_module: ?u16 = null,
+type_scope_caller_module: ?u32 = null,
 
 /// Current binding pattern (for detecting recursive closures)
 /// When lowering a statement like `f = |x| ...`, this holds the pattern for `f`
 /// so we can detect if the closure body references itself.
 current_binding_pattern: ?CIR.Pattern.Idx = null,
 
-/// Current binding symbol (MonoSymbol version of current_binding_pattern)
+/// Current binding symbol (Symbol version of current_binding_pattern)
 /// Used to create MonoProcs for recursive closures.
-current_binding_symbol: ?MonoSymbol = null,
+current_binding_symbol: ?Symbol = null,
 
 /// Counter for generating unique join point IDs
 next_join_point_id: u32 = 0,
@@ -154,7 +154,7 @@ layout_var_overrides: std.AutoHashMap(types.Var, types.Var),
 /// CIR expression indices for lowered symbols, used for re-specialization.
 /// When a lambda is lowered, we save its CIR expr idx so we can re-lower it
 /// if a subsequent call has different argument layouts.
-lowered_symbol_cir_exprs: std.AutoHashMap(u48, CIR.Expr.Idx),
+lowered_symbol_cir_exprs: std.AutoHashMap(u64, CIR.Expr.Idx),
 
 /// Counter for generating unique synthetic ident indices for re-specialized lambdas.
 /// Counts down from max to avoid collision with real idents.
@@ -171,7 +171,7 @@ pub fn init(
     all_module_envs: []const *ModuleEnv,
     lambda_inference: ?*LambdaSetInference,
     layout_store: ?*LayoutStore,
-    app_module_idx: ?u16,
+    app_module_idx: ?u32,
     hosted_functions: ?*const HostedFunctionMap,
 ) Self {
     return .{
@@ -182,14 +182,14 @@ pub fn init(
         .lambda_inference = lambda_inference,
         .layout_store = layout_store,
         .type_scope = TypeScope.init(allocator),
-        .lowered_patterns = std.AutoHashMap(u64, MonoSymbol).init(allocator),
-        .lowered_symbols = std.AutoHashMap(u48, MonoExprId).init(allocator),
-        .in_progress_defs = std.AutoHashMap(u48, void).init(allocator),
+        .lowered_patterns = std.AutoHashMap(u64, Symbol).init(allocator),
+        .lowered_symbols = std.AutoHashMap(u64, MonoExprId).init(allocator),
+        .in_progress_defs = std.AutoHashMap(u64, void).init(allocator),
         .type_env = std.AutoHashMap(u32, LayoutIdx).init(allocator),
         .expr_layout_hints = std.AutoHashMap(types.Var, LayoutIdx).init(allocator),
         .deferred_defs = std.AutoHashMap(u32, CIR.Expr.Idx).init(allocator),
         .layout_var_overrides = std.AutoHashMap(types.Var, types.Var).init(allocator),
-        .lowered_symbol_cir_exprs = std.AutoHashMap(u48, CIR.Expr.Idx).init(allocator),
+        .lowered_symbol_cir_exprs = std.AutoHashMap(u64, CIR.Expr.Idx).init(allocator),
         .hosted_functions = hosted_functions,
     };
 }
@@ -208,19 +208,17 @@ pub fn deinit(self: *Self) void {
 }
 
 /// Get the module environment at the given index
-fn getModuleEnv(self: *const Self, module_idx: u16) ?*ModuleEnv {
+fn getModuleEnv(self: *const Self, module_idx: u32) ?*ModuleEnv {
     if (module_idx >= self.all_module_envs.len) return null;
     return self.all_module_envs[module_idx];
 }
 
 /// Find the module index for a given origin_module ident (from a NominalType).
 /// Uses the import system of source_env to resolve the origin module name to a module index.
-fn findModuleForOrigin(self: *Self, source_env: *const ModuleEnv, origin_module: Ident.Idx) ?u16 {
+fn findModuleForOrigin(self: *Self, source_env: *const ModuleEnv, source_module_idx: u32, origin_module: Ident.Idx) ?u32 {
     // Check if origin is source_env itself (by qualified ident)
     if (origin_module == source_env.qualified_module_ident) {
-        for (self.all_module_envs, 0..) |env, idx| {
-            if (env == source_env) return @intCast(idx);
-        }
+        return source_module_idx;
     }
 
     // Use the import system: iterate source_env's imports
@@ -258,8 +256,8 @@ fn findModuleForOrigin(self: *Self, source_env: *const ModuleEnv, origin_module:
     return null;
 }
 
-/// Create a MonoSymbol from a pattern in the current module
-fn patternToSymbol(self: *Self, pattern_idx: CIR.Pattern.Idx) MonoSymbol {
+/// Create a Symbol from a pattern in the current module
+fn patternToSymbol(self: *Self, pattern_idx: CIR.Pattern.Idx) Symbol {
     const key = (@as(u64, self.current_module_idx) << 32) | @intFromEnum(pattern_idx);
 
     if (self.lowered_patterns.get(key)) |existing| {
@@ -276,7 +274,7 @@ fn patternToSymbol(self: *Self, pattern_idx: CIR.Pattern.Idx) MonoSymbol {
         else => Ident.Idx.NONE,
     };
 
-    const symbol = MonoSymbol{
+    const symbol = Symbol{
         .module_idx = self.current_module_idx,
         .ident_idx = ident_idx,
     };
@@ -285,26 +283,26 @@ fn patternToSymbol(self: *Self, pattern_idx: CIR.Pattern.Idx) MonoSymbol {
     return symbol;
 }
 
-/// Create a MonoSymbol from an external reference
-fn externalToSymbol(self: *Self, import_idx: CIR.Import.Idx, ident_idx: Ident.Idx) MonoSymbol {
+/// Create a Symbol from an external reference
+fn externalToSymbol(self: *Self, import_idx: CIR.Import.Idx, ident_idx: Ident.Idx) Symbol {
     // Resolve the import to a module index
     const module_env = self.all_module_envs[self.current_module_idx];
     const resolved_module = module_env.imports.getResolvedModule(import_idx);
 
     if (resolved_module) |mod_idx| {
-        return MonoSymbol{
+        return Symbol{
             .module_idx = @intCast(mod_idx),
             .ident_idx = ident_idx,
         };
     }
 
     // Unresolved import - use sentinel
-    return MonoSymbol.none;
+    return Symbol.none;
 }
 
 /// Lower an external definition using its direct Def.Idx
 /// This is the primary path - uses the target_node_idx from e_lookup_external
-fn lowerExternalDefByIdx(self: *Self, symbol: MonoSymbol, target_def_idx: u16) Allocator.Error!void {
+fn lowerExternalDefByIdx(self: *Self, symbol: Symbol, target_def_idx: u16) Allocator.Error!void {
     // Skip if symbol is invalid
     if (symbol.module_idx >= self.all_module_envs.len) {
         return;
@@ -329,7 +327,7 @@ fn lowerExternalDefByIdx(self: *Self, symbol: MonoSymbol, target_def_idx: u16) A
     const def = ext_module_env.store.getDef(def_idx);
 
     // Create symbol key for deduplication
-    const symbol_key: u48 = @bitCast(symbol);
+    const symbol_key: u64 = @bitCast(symbol);
 
     // Avoid infinite recursion - check if already lowered
     if (self.lowered_symbols.contains(symbol_key)) return;
@@ -380,9 +378,9 @@ fn findDefForPattern(_: *Self, module_env: *ModuleEnv, pattern_idx: CIR.Pattern.
 
 /// Lower a local definition using its pattern index.
 /// This handles same-module function references (like walk calling walk_help).
-fn lowerLocalDefByPattern(self: *Self, module_env: *ModuleEnv, symbol: MonoSymbol, pattern_idx: CIR.Pattern.Idx) Allocator.Error!void {
+fn lowerLocalDefByPattern(self: *Self, module_env: *ModuleEnv, symbol: Symbol, pattern_idx: CIR.Pattern.Idx) Allocator.Error!void {
     // Create symbol key for deduplication
-    const symbol_key: u48 = @bitCast(symbol);
+    const symbol_key: u64 = @bitCast(symbol);
 
     // Avoid infinite recursion - check if already lowered
     if (self.lowered_symbols.contains(symbol_key)) return;
@@ -1151,9 +1149,10 @@ fn toStrMonoExpr(op: CIR.Expr.LowLevel, module_env: *ModuleEnv, args: anytype, s
     };
 }
 
-/// Look up whether an external definition is a low-level lambda.
-/// Returns the low-level lambda data if so, null otherwise.
-fn getExternalLowLevelLambda(self: *Self, caller_env: *ModuleEnv, lookup: anytype) ?@FieldType(CIR.Expr, "e_low_level_lambda") {
+/// Look up whether an external definition is a low-level operation.
+/// Checks if the def is an e_lambda whose body is e_run_low_level.
+/// Returns the low-level op if found, null otherwise.
+fn getExternalLowLevelOp(self: *Self, caller_env: *ModuleEnv, lookup: anytype) ?CIR.Expr.LowLevel {
     const ext_module_idx = caller_env.imports.getResolvedModule(lookup.module_idx) orelse return null;
     if (ext_module_idx >= self.all_module_envs.len) return null;
     const ext_env = self.all_module_envs[ext_module_idx];
@@ -1165,7 +1164,11 @@ fn getExternalLowLevelLambda(self: *Self, caller_env: *ModuleEnv, lookup: anytyp
     const def_idx: CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
     const def = ext_env.store.getDef(def_idx);
     const def_expr = ext_env.store.getExpr(def.expr);
-    return if (def_expr == .e_low_level_lambda) def_expr.e_low_level_lambda else null;
+    if (def_expr == .e_lambda) {
+        const body_expr = ext_env.store.getExpr(def_expr.e_lambda.body);
+        if (body_expr == .e_run_low_level) return body_expr.e_run_low_level.op;
+    }
+    return null;
 }
 
 /// Look up whether an external definition is a hosted lambda.
@@ -1430,7 +1433,7 @@ fn buildLayoutVarOverrides(
 }
 
 /// Re-specialize a local lambda for a call with different argument layouts.
-/// Creates a new MonoSymbol and lowers a fresh copy of the lambda body with
+/// Creates a new Symbol and lowers a fresh copy of the lambda body with
 /// layout var overrides so that all type-dependent computations use the
 /// call site's types instead of the definition's original types.
 fn reSpecializeLocalLambda(
@@ -1441,7 +1444,7 @@ fn reSpecializeLocalLambda(
     call_expr_idx: CIR.Expr.Idx,
 ) Allocator.Error!MonoExpr {
     const original_symbol = self.patternToSymbol(pattern_idx);
-    const original_key: u48 = @bitCast(original_symbol);
+    const original_key: u64 = @bitCast(original_symbol);
 
     // Get the CIR lambda expression
     const cir_expr_idx = self.lowered_symbol_cir_exprs.get(original_key) orelse {
@@ -1495,14 +1498,14 @@ fn reSpecializeLocalLambda(
     // Create a fresh symbol for the re-specialized version
     const fresh_ident = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = self.next_synthetic_idx };
     self.next_synthetic_idx -= 1;
-    const fresh_symbol = MonoSymbol{
+    const fresh_symbol = Symbol{
         .module_idx = self.current_module_idx,
         .ident_idx = fresh_ident,
     };
 
     // Register the fresh symbol
     try self.store.registerSymbolDef(fresh_symbol, expr_id);
-    const fresh_key: u48 = @bitCast(fresh_symbol);
+    const fresh_key: u64 = @bitCast(fresh_symbol);
     try self.lowered_symbols.put(fresh_key, expr_id);
 
     const region = module_env.store.getExprRegion(call_expr_idx);
@@ -1532,7 +1535,7 @@ fn reSpecializeLocalLambda(
 fn needsReSpecialization(
     self: *Self,
     module_env: *ModuleEnv,
-    symbol_key: u48,
+    symbol_key: u64,
     call_args: CIR.Expr.Span,
 ) bool {
     const existing_expr_id = self.lowered_symbols.get(symbol_key) orelse return false;
@@ -1573,7 +1576,7 @@ fn needsReSpecialization(
 fn needsDotAccessReSpec(
     self: *Self,
     module_env: *ModuleEnv,
-    method_symbol_key: u48,
+    method_symbol_key: u64,
     receiver_expr_idx: CIR.Expr.Idx,
     extra_args: ?CIR.Expr.Span,
 ) bool {
@@ -2058,7 +2061,7 @@ fn collectTypeMappingsWithExpr(
 }
 
 /// Lower a single expression
-pub fn lowerExpr(self: *Self, module_idx: u16, expr_idx: CIR.Expr.Idx) Allocator.Error!MonoExprId {
+pub fn lowerExpr(self: *Self, module_idx: u32, expr_idx: CIR.Expr.Idx) Allocator.Error!MonoExprId {
     const old_module = self.current_module_idx;
     self.current_module_idx = module_idx;
     defer self.current_module_idx = old_module;
@@ -2128,7 +2131,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             const symbol = self.patternToSymbol(lookup.pattern_idx);
 
             // Ensure the local definition is lowered if it's a top-level def
-            const symbol_key: u48 = @bitCast(symbol);
+            const symbol_key: u64 = @bitCast(symbol);
             if (!self.lowered_symbols.contains(symbol_key)) {
                 // Bridge the lookup expression's resolved type with the definition's type.
                 // When a lambda is passed as an argument to a polymorphic function (e.g., List.fold),
@@ -2188,7 +2191,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             const symbol = self.externalToSymbol(lookup.module_idx, lookup.ident_idx);
 
             // Ensure the external definition is lowered using target_node_idx
-            const symbol_key: u48 = @bitCast(symbol);
+            const symbol_key: u64 = @bitCast(symbol);
             if (!self.lowered_symbols.contains(symbol_key)) {
                 // Lower the external definition using the direct Def.Idx
                 try self.lowerExternalDefByIdx(symbol, lookup.target_node_idx);
@@ -2237,13 +2240,13 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             }
 
             // Create symbol for the app's export
-            const symbol = MonoSymbol{
+            const symbol = Symbol{
                 .module_idx = app_idx,
                 .ident_idx = found_ident_idx.?,
             };
 
             // Ensure the app definition is lowered
-            const symbol_key: u48 = @bitCast(symbol);
+            const symbol_key: u64 = @bitCast(symbol);
             if (!self.lowered_symbols.contains(symbol_key)) {
                 try self.lowerExternalDefByIdx(symbol, @intCast(@intFromEnum(found_def_idx.?)));
             }
@@ -2317,7 +2320,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             if (is_local_call_with_hints) {
                 const lookup = fn_expr.e_lookup_local;
                 const symbol = self.patternToSymbol(lookup.pattern_idx);
-                const symbol_key: u48 = @bitCast(symbol);
+                const symbol_key: u64 = @bitCast(symbol);
                 if (self.lowered_symbols.contains(symbol_key)) {
                     if (self.needsReSpecialization(module_env, symbol_key, call.args)) {
                         if (self.lowered_symbol_cir_exprs.contains(symbol_key)) {
@@ -2340,8 +2343,8 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             // using the external function's return type variable with the scope mappings.
             if (is_external_call) {
                 const lookup = fn_expr.e_lookup_external;
-                if (self.getExternalLowLevelLambda(module_env, lookup)) |ll| {
-                    if (convertToMonoLowLevel(ll.op)) |mono_op| {
+                if (self.getExternalLowLevelOp(module_env, lookup)) |ll_op| {
+                    if (convertToMonoLowLevel(ll_op)) |mono_op| {
                         const args = try self.lowerExprSpan(module_env, call.args);
                         // Compute ret_layout from the external function's return type
                         // using the type scope mappings (which map rigid vars to caller types).
@@ -2376,7 +2379,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                     }
                     // Non-convertible ops: check for str_inspekt which needs
                     // type-directed expansion rather than a simple op conversion.
-                    if (ll.op == .str_inspekt) {
+                    if (ll_op == .str_inspekt) {
                         const arg_indices = module_env.store.sliceExpr(call.args);
                         if (arg_indices.len == 1) {
                             const arg_idx = arg_indices[0];
@@ -2387,46 +2390,10 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                         }
                     }
                     // Non-convertible ops: *_to_str needs type-specific MonoExprs.
-                    if (toStrMonoExpr(ll.op, module_env, call.args, self)) |mono_expr| {
+                    if (toStrMonoExpr(ll_op, module_env, call.args, self)) |mono_expr| {
                         return try self.store.addExpr(mono_expr, region);
                     }
                 }
-            }
-
-            if (fn_expr == .e_low_level_lambda) {
-                const ll = fn_expr.e_low_level_lambda;
-                if (ll.op == .str_inspekt) {
-                    // Expand str_inspekt at lowering time
-                    const arg_indices = module_env.store.sliceExpr(call.args);
-                    if (arg_indices.len == 1) {
-                        const arg_idx = arg_indices[0];
-                        const arg_id = try self.lowerExprFromIdx(module_env, arg_idx);
-                        // Get the type variable for the argument
-                        // In the Zig implementation, expr indices ARE type variables
-                        const arg_type_var = ModuleEnv.varFrom(arg_idx);
-                        const arg_layout = self.getExprLayoutFromIdx(module_env, arg_idx);
-                        return self.lowerStrInspekt(arg_id, arg_type_var, arg_layout, module_env, region);
-                    }
-                }
-                // *_to_str ops need type-specific MonoExprs (int_to_str, float_to_str, dec_to_str)
-                if (toStrMonoExpr(ll.op, module_env, call.args, self)) |mono_expr| {
-                    return try self.store.addExpr(mono_expr, region);
-                }
-                // Convert CIR LowLevel ops to MonoExpr LowLevel ops
-                // Using the CALL expression's type for ret_layout (not the lambda's rigid type vars)
-                // because the lambda's type vars are from the builtin definition and may not be
-                // in the type scope. The call expression's type IS resolved through the caller's context.
-                if (convertToMonoLowLevel(ll.op)) |op| {
-                    const args = try self.lowerExprSpan(module_env, call.args);
-                    break :blk .{
-                        .low_level = .{
-                            .op = op,
-                            .args = args,
-                            .ret_layout = self.getExprLayoutFromIdx(module_env, expr_idx),
-                        },
-                    };
-                }
-                // Fall through to general call handling for unhandled low-level ops
             }
 
             const fn_id = try self.lowerExprFromIdx(module_env, call.func);
@@ -2656,12 +2623,14 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                 const receiver_type_var = ModuleEnv.varFrom(dot.receiver);
                 var recv_resolved = module_env.types.resolveVar(receiver_type_var);
                 var recv_type_source_env: *const ModuleEnv = module_env;
+                var recv_type_source_idx: u32 = self.current_module_idx;
 
                 // Check type_scope for concrete mapping (polymorphic calls)
                 if (recv_resolved.desc.content == .flex or recv_resolved.desc.content == .rigid) {
                     if (self.type_scope.lookup(recv_resolved.var_)) |mapped| {
                         if (self.type_scope_caller_module) |caller_idx| {
                             recv_type_source_env = self.all_module_envs[caller_idx];
+                            recv_type_source_idx = caller_idx;
                         }
                         recv_resolved = recv_type_source_env.types.resolveVar(mapped);
                     }
@@ -2715,7 +2684,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
 
                 if (recv_nominal) |rn| {
                     // Origin must be resolvable — resolveImports must have run for all modules
-                    const origin_module_idx = self.findModuleForOrigin(recv_type_source_env, rn.origin) orelse {
+                    const origin_module_idx = self.findModuleForOrigin(recv_type_source_env, recv_type_source_idx, rn.origin) orelse {
                         unreachable;
                     };
                     const origin_env = self.all_module_envs[origin_module_idx];
@@ -2733,16 +2702,20 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                         unreachable;
                     };
 
-                    // Check if the method definition is a low-level lambda
+                    // Check if the method definition is a low-level operation
                     const method_def_idx: CIR.Def.Idx = @enumFromInt(node_idx);
                     const method_def = origin_env.store.getDef(method_def_idx);
                     const method_expr = origin_env.store.getExpr(method_def.expr);
 
-                    if (method_expr == .e_low_level_lambda) {
-                        const ll = method_expr.e_low_level_lambda;
+                    const method_ll_op: ?CIR.Expr.LowLevel = if (method_expr == .e_lambda) blk_ll: {
+                        const body = origin_env.store.getExpr(method_expr.e_lambda.body);
+                        break :blk_ll if (body == .e_run_low_level) body.e_run_low_level.op else null;
+                    } else null;
+
+                    if (method_ll_op) |ll_op| {
                         // Emit the low-level op directly as a MonoIR expression
                         const CIRLowLevel = CIR.Expr.LowLevel;
-                        break :blk switch (ll.op) {
+                        break :blk switch (ll_op) {
                             CIRLowLevel.u8_to_str => .{ .int_to_str = .{ .value = receiver, .int_precision = .u8 } },
                             CIRLowLevel.i8_to_str => .{ .int_to_str = .{ .value = receiver, .int_precision = .i8 } },
                             CIRLowLevel.u16_to_str => .{ .int_to_str = .{ .value = receiver, .int_precision = .u16 } },
@@ -2760,7 +2733,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                                 // Inline convertible low-level ops directly at the call site.
                                 // This uses the call expression's type (resolved in the caller's module)
                                 // for ret_layout, avoiding cross-module type scope mapping issues.
-                                if (convertToMonoLowLevel(ll.op)) |mono_op| {
+                                if (convertToMonoLowLevel(ll_op)) |mono_op| {
                                     const ll_extra_args = module_env.store.sliceExpr(dot.args.?);
                                     var ll_all_args = std.ArrayList(ir.MonoExprId).empty;
                                     defer ll_all_args.deinit(self.allocator);
@@ -2778,11 +2751,11 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                                     };
                                 }
                                 // Non-convertible ops: fall back to general call
-                                const method_symbol = MonoSymbol{
+                                const method_symbol = Symbol{
                                     .module_idx = origin_module_idx,
                                     .ident_idx = qualified_method,
                                 };
-                                const method_symbol_key: u48 = @bitCast(method_symbol);
+                                const method_symbol_key: u64 = @bitCast(method_symbol);
                                 if (!self.lowered_symbols.contains(method_symbol_key)) {
                                     try self.lowerExternalDefByIdx(method_symbol, node_idx);
                                 }
@@ -2836,7 +2809,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                     }
 
                     // Regular function method - lower as external definition + call
-                    const method_symbol = MonoSymbol{
+                    const method_symbol = Symbol{
                         .module_idx = origin_module_idx,
                         .ident_idx = qualified_method,
                     };
@@ -2884,7 +2857,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                         }
                     }
 
-                    const method_symbol_key: u48 = @bitCast(method_symbol);
+                    const method_symbol_key: u64 = @bitCast(method_symbol);
                     var call_symbol = method_symbol;
                     if (self.lowered_symbols.contains(method_symbol_key)) {
                         // Method already lowered - check if receiver/arg layouts match
@@ -2925,7 +2898,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                                 .idx = self.next_synthetic_idx,
                             };
                             self.next_synthetic_idx -= 1;
-                            call_symbol = MonoSymbol{
+                            call_symbol = Symbol{
                                 .module_idx = origin_module_idx,
                                 .ident_idx = fresh_ident,
                             };
@@ -3177,7 +3150,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             const inner = try self.lowerExprFromIdx(module_env, dbg.expr);
             break :blk .{
                 .dbg = .{
-                    .msg = @enumFromInt(std.math.maxInt(u32)), // dbg doesn't have a msg in CIR
+                    .msg = .none,
                     .expr = inner,
                     .result_layout = self.getExprLayoutFromIdx(module_env, expr_idx),
                 },
@@ -3230,129 +3203,34 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
 
         .e_typed_frac => |tf| .{ .dec_literal = tf.value.toI128() },
 
-        // Low-level lambda - these are compiler-generated intrinsics
-        .e_low_level_lambda => |ll| blk: {
-            // When a low-level lambda is evaluated directly (not called),
-            // we need to produce a lambda that wraps the low-level call.
-            // This happens when a low-level function is passed as a value
-            // or stored as a definition that's looked up later.
-
+        .e_run_low_level => |run_ll| blk: {
+            // Handle str_inspekt which needs type-directed expansion
+            if (run_ll.op == .str_inspekt) {
+                const arg_indices = module_env.store.sliceExpr(run_ll.args);
+                if (arg_indices.len == 1) {
+                    const arg_idx = arg_indices[0];
+                    const arg_id = try self.lowerExprFromIdx(module_env, arg_idx);
+                    const arg_type_var = ModuleEnv.varFrom(arg_idx);
+                    const arg_layout = self.getExprLayoutFromIdx(module_env, arg_idx);
+                    return self.lowerStrInspekt(arg_id, arg_type_var, arg_layout, module_env, region);
+                }
+            }
+            // *_to_str ops need type-specific MonoExprs
+            if (toStrMonoExpr(run_ll.op, module_env, run_ll.args, self)) |mono_expr| {
+                return try self.store.addExpr(mono_expr, region);
+            }
             // Convert CIR LowLevel ops to MonoExpr LowLevel ops
-            const mono_op = convertToMonoLowLevel(ll.op) orelse
-                break :blk .{ .runtime_error = {} };
-
-            // Get the function type from the expression to extract parameter types.
-            // This is needed because the pattern type variables in builtins are generic (flex),
-            // but the function type has the proper mappings through the type scope.
-            const expr_type_var = ModuleEnv.varFrom(expr_idx);
-            const expr_resolved = module_env.types.resolveVar(expr_type_var);
-            const func_type = expr_resolved.desc.content.unwrapFunc();
-            const ls = self.layout_store orelse unreachable;
-
-            // CRITICAL: Set up type scope mappings BEFORE lowering patterns.
-            // Low-level lambdas from builtins have their own rigid type variables that
-            // may not be in the type scope (which was set up for the enclosing function).
-            // Without these mappings, lowerPatternSpan -> getPatternLayout -> fromTypeVar
-            // cannot resolve the rigid type variables and produces ZST layouts instead of
-            // the correct concrete types (e.g., List(I64) → list layout instead of zst).
-            if (func_type != null and self.type_scope.scopes.items.len > 0) {
-                const ft = func_type.?;
-                const scope = &self.type_scope.scopes.items[0];
-                // Collect rigid vars from the lambda's function type (params + return)
-                var lambda_rigids: [8]types.Var = undefined;
-                var n_rigids: usize = 0;
-                const ft_params = module_env.types.sliceVars(ft.args);
-                for (ft_params) |pv| {
-                    self.collectRigidVars(module_env, pv, &lambda_rigids, &n_rigids);
-                }
-                self.collectRigidVars(module_env, ft.ret, &lambda_rigids, &n_rigids);
-                // For each unmapped rigid, find a scope entry with the same name
-                for (lambda_rigids[0..n_rigids]) |rigid_var| {
-                    if (scope.get(rigid_var) != null) continue; // already mapped
-                    const rigid_resolved = module_env.types.resolveVar(rigid_var);
-                    const rigid_name = if (rigid_resolved.desc.content == .rigid) rigid_resolved.desc.content.rigid.name else continue;
-                    // Search existing scope entries for a rigid with the same name
-                    const rigid_name_text = module_env.getIdent(rigid_name);
-                    var it = scope.iterator();
-                    while (it.next()) |entry| {
-                        const ext_var = entry.key_ptr.*;
-                        const ext_resolved = module_env.types.resolveVar(ext_var);
-                        if (ext_resolved.desc.content == .rigid) {
-                            const ext_name_text = module_env.getIdent(ext_resolved.desc.content.rigid.name);
-                            if (std.mem.eql(u8, rigid_name_text, ext_name_text)) {
-                                // Same name - add mapping from lambda's rigid to the same caller var
-                                scope.put(rigid_var, entry.value_ptr.*) catch {};
-                                // Invalidate layout cache for this var since it may have been
-                                // cached as opaquePtr from container processing
-                                const cache_key = layout_mod.ModuleVarKey{ .module_idx = self.current_module_idx, .var_ = rigid_var };
-                                _ = ls.layouts_by_module_var.remove(cache_key);
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Lower the parameter patterns (AFTER type scope setup so layouts resolve correctly)
-            const params = try self.lowerPatternSpan(module_env, ll.args);
-
-            // Create argument expressions from the parameter patterns
-            // Each parameter becomes a lookup to itself
-            const param_patterns = module_env.store.slicePatterns(ll.args);
-            var arg_list = std.ArrayList(MonoExprId).empty;
-            defer arg_list.deinit(self.allocator);
-
-            var param_idx: usize = 0;
-            for (param_patterns) |patt_idx| {
-                const symbol = self.patternToSymbol(patt_idx);
-
-                // Get the layout from the function's parameter type, not the pattern's type variable.
-                // The pattern type in builtins is generic (flex), but the function type has the
-                // concrete types through the type scope mappings.
-                const patt_layout = if (func_type) |ft| layout_blk: {
-                    const param_vars = module_env.types.sliceVars(ft.args);
-                    if (param_idx < param_vars.len) {
-                        const param_type_var = param_vars[param_idx];
-                        break :layout_blk ls.fromTypeVar(self.current_module_idx, param_type_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
-                    }
-                    unreachable; // Pattern count should match function parameter count
-                } else {
-                    unreachable; // e_low_level_lambda should always have a function type
-                };
-                param_idx += 1;
-
-                const arg_id = try self.store.addExpr(.{
-                    .lookup = .{
-                        .symbol = symbol,
-                        .layout_idx = patt_layout,
+            if (convertToMonoLowLevel(run_ll.op)) |op| {
+                const args = try self.lowerExprSpan(module_env, run_ll.args);
+                break :blk .{
+                    .low_level = .{
+                        .op = op,
+                        .args = args,
+                        .ret_layout = self.getExprLayoutFromIdx(module_env, expr_idx),
                     },
-                }, region);
-                try arg_list.append(self.allocator, arg_id);
+                };
             }
-            const args_span = try self.store.addExprSpan(arg_list.items);
-
-            // Use the function's RETURN type for ret_layout, not the function type itself
-            const ret_layout = if (func_type) |ft| ret_blk: {
-                break :ret_blk ls.fromTypeVar(self.current_module_idx, ft.ret, &self.type_scope, self.type_scope_caller_module) catch unreachable;
-            } else self.getExprLayoutFromIdx(module_env, expr_idx);
-
-            // Create the low-level call as the body
-            const body_id = try self.store.addExpr(.{
-                .low_level = .{
-                    .op = mono_op,
-                    .args = args_span,
-                    .ret_layout = ret_layout,
-                },
-            }, region);
-
-            break :blk .{
-                .lambda = .{
-                    .fn_layout = self.getExprLayoutFromIdx(module_env, expr_idx),
-                    .params = params,
-                    .body = body_id,
-                    .ret_layout = ret_layout,
-                },
-            };
+            break :blk .{ .runtime_error = {} };
         },
 
         // Hosted lambda - these are platform-provided effects (I/O, etc.)
@@ -3471,10 +3349,12 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
 
             // Step 2: If flex/rigid, check type_scope for concrete mapping (polymorphic calls)
             var type_source_env: *const ModuleEnv = module_env;
+            var type_source_idx: u32 = self.current_module_idx;
             if (resolved.desc.content == .flex or resolved.desc.content == .rigid) {
                 if (self.type_scope.lookup(resolved.var_)) |mapped| {
                     if (self.type_scope_caller_module) |caller_idx| {
                         type_source_env = self.all_module_envs[caller_idx];
+                        type_source_idx = caller_idx;
                     }
                     resolved = type_source_env.types.resolveVar(mapped);
                 }
@@ -3531,7 +3411,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
 
             // Step 4: Find origin module index via imports
             // Origin must be resolvable — resolveImports must have run for all modules
-            const origin_module_idx = self.findModuleForOrigin(type_source_env, info.origin) orelse {
+            const origin_module_idx = self.findModuleForOrigin(type_source_env, type_source_idx, info.origin) orelse {
                 unreachable;
             };
             const origin_env = self.all_module_envs[origin_module_idx];
@@ -3552,12 +3432,12 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             };
 
             // Step 6: Lower as external definition + lookup/call
-            const symbol = MonoSymbol{
+            const symbol = Symbol{
                 .module_idx = origin_module_idx,
                 .ident_idx = qualified_method,
             };
 
-            const symbol_key: u48 = @bitCast(symbol);
+            const symbol_key: u64 = @bitCast(symbol);
             if (!self.lowered_symbols.contains(symbol_key)) {
                 try self.lowerExternalDefByIdx(symbol, node_idx);
             }
@@ -3895,7 +3775,7 @@ fn lowerCaptures(self: *Self, module_env: *ModuleEnv, captures: CIR.Expr.Capture
 
         // Ensure the captured symbol's definition is lowered if it's a top-level def
         // This handles cases like closures capturing local functions
-        const symbol_key: u48 = @bitCast(symbol);
+        const symbol_key: u64 = @bitCast(symbol);
         if (!self.lowered_symbols.contains(symbol_key)) {
             try self.lowerLocalDefByPattern(module_env, symbol, cap.pattern_idx);
         }
@@ -4231,7 +4111,7 @@ fn collectIfClosureLambdaSet(
 }
 
 /// Create a unique symbol for a closure in a lambda set
-fn createClosureSymbol(self: *Self, tag: u16) ir.MonoSymbol {
+fn createClosureSymbol(self: *Self, tag: u16) ir.Symbol {
     // Create a synthetic symbol for this closure
     // Using module index and a unique identifier based on tag
     return .{
@@ -5140,7 +5020,7 @@ fn lowerInspectWithMethod(
 ) Allocator.Error!?MonoExprId {
 
     // Find the origin module for this nominal type
-    const origin_module_idx = self.findModuleForOrigin(module_env, nom.origin_module) orelse return null;
+    const origin_module_idx = self.findModuleForOrigin(module_env, self.current_module_idx, nom.origin_module) orelse return null;
     const origin_env = self.all_module_envs[origin_module_idx];
 
     // Look up the `to_inspect` method
@@ -5155,13 +5035,13 @@ fn lowerInspectWithMethod(
     const node_idx = origin_env.getExposedNodeIndexById(qualified_method) orelse return null;
 
     // Create method symbol
-    const method_symbol = MonoSymbol{
+    const method_symbol = Symbol{
         .module_idx = origin_module_idx,
         .ident_idx = qualified_method,
     };
 
     // Lower the method definition if not already lowered
-    const method_symbol_key: u48 = @bitCast(method_symbol);
+    const method_symbol_key: u64 = @bitCast(method_symbol);
     if (!self.lowered_symbols.contains(method_symbol_key)) {
         try self.lowerExternalDefByIdx(method_symbol, node_idx);
     }
@@ -5401,7 +5281,7 @@ fn lowerClosureToProc(
     self: *Self,
     module_env: *ModuleEnv,
     closure: CIR.Expr.Closure,
-    binding_symbol: MonoSymbol,
+    binding_symbol: Symbol,
     join_point_id: JoinPointId,
 ) Allocator.Error!MonoProc {
     // Get the lambda from the closure
@@ -5484,7 +5364,7 @@ pub fn lowerExpression(
     allocator: Allocator,
     store: *MonoExprStore,
     all_module_envs: []const *ModuleEnv,
-    module_idx: u16,
+    module_idx: u32,
     expr_idx: CIR.Expr.Idx,
 ) Allocator.Error!MonoExprId {
     var lowerer = init(allocator, store, all_module_envs, null, null, null, null);
@@ -5494,7 +5374,7 @@ pub fn lowerExpression(
 
 /// Entry point specification
 pub const EntryPoint = struct {
-    module_idx: u16,
+    module_idx: u32,
     expr_idx: CIR.Expr.Idx,
 };
 
@@ -5503,7 +5383,7 @@ pub const EntryPoint = struct {
 /// evaluated at compile time.
 pub const LoweredConstant = struct {
     /// The module this constant belongs to
-    module_idx: u16,
+    module_idx: u32,
     /// The original CIR definition index
     def_idx: CIR.Def.Idx,
     /// The Mono IR expression ID for this constant's value
@@ -5536,7 +5416,7 @@ pub const LoweredConstants = struct {
 /// constant's def_idx to its mono_expr_id.
 pub fn lowerConstants(
     lowerer: *Self,
-    module_idx: u16,
+    module_idx: u32,
     sccs: []const can.DependencyGraph.SCC,
     allocator: Allocator,
 ) Allocator.Error!LoweredConstants {

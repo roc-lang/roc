@@ -85,7 +85,7 @@ const MonoExprStore = mono.MonoExprStore;
 const MonoExpr = mono.MonoExpr;
 const MonoExprId = mono.MonoExprId;
 const MonoPatternId = mono.MonoPatternId;
-const MonoSymbol = mono.MonoSymbol;
+const Symbol = mono.Symbol;
 const JoinPointId = mono.JoinPointId;
 const LambdaSetMember = mono.LambdaSetMember;
 const LambdaSetMemberSpan = mono.LambdaSetMemberSpan;
@@ -619,27 +619,27 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
         /// Static data interner for string literals
         static_interner: ?*StaticDataInterner,
 
-        /// Map from MonoSymbol to value location (register or stack slot)
-        symbol_locations: std.AutoHashMap(u48, ValueLocation),
+        /// Map from Symbol to value location (register or stack slot)
+        symbol_locations: std.AutoHashMap(u64, ValueLocation),
 
         /// Map from mutable variable symbol to fixed stack slot info
         /// Mutable variables need fixed slots so re-bindings can update the value at runtime
-        mutable_var_slots: std.AutoHashMap(u48, MutableVarInfo),
+        mutable_var_slots: std.AutoHashMap(u64, MutableVarInfo),
 
         /// Map from JoinPointId to code offset (for recursive closure jumps)
         join_points: std.AutoHashMap(u32, usize),
 
         /// Current recursive context (for detecting recursive calls)
         /// When set, lookups of this symbol should jump to the join point instead of re-entering
-        current_recursive_symbol: ?MonoSymbol,
+        current_recursive_symbol: ?Symbol,
         current_recursive_join_point: ?JoinPointId,
 
         /// The symbol currently being bound (during let statement processing).
-        current_binding_symbol: ?MonoSymbol,
+        current_binding_symbol: ?Symbol,
 
         /// Registry of compiled procedures (symbol -> CompiledProc)
         /// Used to find call targets during second pass
-        proc_registry: std.AutoHashMap(u48, CompiledProc),
+        proc_registry: std.AutoHashMap(u64, CompiledProc),
 
         /// Registry of compiled lambdas by expression ID.
         /// Used when a lambda is called - we compile it once and reuse.
@@ -719,7 +719,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             /// Offset where this procedure ends
             code_end: usize,
             /// The symbol this procedure is bound to
-            name: MonoSymbol,
+            name: Symbol,
         };
 
         /// A pending call that needs to be patched after all procedures are compiled.
@@ -727,7 +727,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             /// Offset where the call instruction is (needs patching)
             call_site: usize,
             /// The function being called
-            target_symbol: MonoSymbol,
+            target_symbol: Symbol,
         };
 
         /// Tracks position of a BL/CALL to a compiled lambda proc.
@@ -895,13 +895,13 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 .store = store,
                 .layout_store = layout_store_opt,
                 .static_interner = static_interner,
-                .symbol_locations = std.AutoHashMap(u48, ValueLocation).init(allocator),
-                .mutable_var_slots = std.AutoHashMap(u48, MutableVarInfo).init(allocator),
+                .symbol_locations = std.AutoHashMap(u64, ValueLocation).init(allocator),
+                .mutable_var_slots = std.AutoHashMap(u64, MutableVarInfo).init(allocator),
                 .join_points = std.AutoHashMap(u32, usize).init(allocator),
                 .current_recursive_symbol = null,
                 .current_recursive_join_point = null,
                 .current_binding_symbol = null,
-                .proc_registry = std.AutoHashMap(u48, CompiledProc).init(allocator),
+                .proc_registry = std.AutoHashMap(u64, CompiledProc).init(allocator),
                 .compiled_lambdas = std.AutoHashMap(u32, usize).init(allocator),
                 .pending_calls = std.ArrayList(PendingCall).empty,
                 .join_point_jumps = std.AutoHashMap(u32, std.ArrayList(JumpRecord)).init(allocator),
@@ -4340,9 +4340,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
         }
 
         /// Generate code for a symbol lookup
-        fn generateLookup(self: *Self, symbol: MonoSymbol, _: layout.Idx) Error!ValueLocation {
+        fn generateLookup(self: *Self, symbol: Symbol, _: layout.Idx) Error!ValueLocation {
             // Check if we have a location for this symbol
-            const symbol_key: u48 = @bitCast(symbol);
+            const symbol_key: u64 = @bitCast(symbol);
             if (self.symbol_locations.get(symbol_key)) |loc| {
                 return loc;
             }
@@ -6753,7 +6753,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     },
                     .bind => |bind| {
                         // Bind always matches - bind the value and generate body
-                        const symbol_key: u48 = @bitCast(bind.symbol);
+                        const symbol_key: u64 = @bitCast(bind.symbol);
                         try self.symbol_locations.put(symbol_key, value_loc);
 
                         const body_loc = try self.generateExpr(branch.body);
@@ -6939,7 +6939,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                 const arg_pattern = self.store.getPattern(arg_pattern_id);
                                 switch (arg_pattern) {
                                     .bind => |arg_bind| {
-                                        const symbol_key: u48 = @bitCast(arg_bind.symbol);
+                                        const symbol_key: u64 = @bitCast(arg_bind.symbol);
                                         switch (value_loc) {
                                             .stack => |s| {
                                                 const base_offset = s.offset;
@@ -7020,7 +7020,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                             const inner_arg = self.store.getPattern(inner_arg_id);
                                             switch (inner_arg) {
                                                 .bind => |inner_bind| {
-                                                    const inner_key: u48 = @bitCast(inner_bind.symbol);
+                                                    const inner_key: u64 = @bitCast(inner_bind.symbol);
                                                     // The inner tag's payload is at the same location as the outer arg
                                                     const inner_loc: ValueLocation = if (variant_payload_layout) |pl| inner_blk: {
                                                         const pl_val = ls.getLayout(pl);
@@ -7263,7 +7263,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     },
                     .as_pattern => |as_pat| {
                         // As-pattern: bind the whole value to the symbol, then match the inner pattern
-                        const symbol_key: u48 = @bitCast(as_pat.symbol);
+                        const symbol_key: u64 = @bitCast(as_pat.symbol);
                         try self.symbol_locations.put(symbol_key, value_loc);
 
                         // Also bind the inner pattern
@@ -9525,7 +9525,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
             switch (pattern) {
                 .bind => |bind| {
-                    const symbol_key: u48 = @bitCast(bind.symbol);
+                    const symbol_key: u64 = @bitCast(bind.symbol);
 
                     // Check if this is a reassignable (mutable) variable
                     if (bind.symbol.ident_idx.attributes.reassignable) {
@@ -9641,7 +9641,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 },
                 .as_pattern => |as_pat| {
                     // As-pattern: bind the symbol AND recursively bind the inner pattern
-                    const symbol_key: u48 = @bitCast(as_pat.symbol);
+                    const symbol_key: u64 = @bitCast(as_pat.symbol);
                     try self.symbol_locations.put(symbol_key, value_loc);
 
                     // Also bind the inner pattern
@@ -10072,7 +10072,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 switch (arg_expr) {
                     .lambda, .closure => return true,
                     .lookup => |lk| {
-                        const sk: u48 = @bitCast(lk.symbol);
+                        const sk: u64 = @bitCast(lk.symbol);
                         if (self.symbol_locations.get(sk)) |loc| {
                             switch (loc) {
                                 .lambda_code, .closure_value => return true,
@@ -10197,7 +10197,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
                 // Lookup a function and call it
                 .lookup => |lookup| {
-                    const symbol_key: u48 = @bitCast(lookup.symbol);
+                    const symbol_key: u64 = @bitCast(lookup.symbol);
                     // Check if the symbol is bound to a lambda_code or closure_value location
                     if (self.symbol_locations.get(symbol_key)) |loc| {
                         switch (loc) {
@@ -10311,7 +10311,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             const captures = self.store.getCaptures(captures_span);
             var offset: i32 = 0;
             for (captures) |capture| {
-                const symbol_key: u48 = @bitCast(capture.symbol);
+                const symbol_key: u64 = @bitCast(capture.symbol);
                 if (self.symbol_locations.get(symbol_key)) |capture_loc| {
                     // Get size of this capture
                     const ls = self.layout_store orelse unreachable;
@@ -10668,7 +10668,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             const captures = self.store.getCaptures(cv.captures);
             var offset: i32 = 0;
             for (captures) |capture| {
-                const symbol_key: u48 = @bitCast(capture.symbol);
+                const symbol_key: u64 = @bitCast(capture.symbol);
                 const ls = self.layout_store orelse unreachable;
                 const capture_layout = ls.getLayout(capture.layout_idx);
                 const capture_size = ls.layoutSizeAlign(capture_layout).size;
@@ -10748,7 +10748,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             const captures = self.store.getCaptures(member.captures);
             var offset: i32 = 0;
             for (captures) |capture| {
-                const symbol_key: u48 = @bitCast(capture.symbol);
+                const symbol_key: u64 = @bitCast(capture.symbol);
                 const ls = self.layout_store orelse unreachable;
                 const capture_layout = ls.getLayout(capture.layout_idx);
                 const capture_size = ls.layoutSizeAlign(capture_layout).size;
@@ -10886,7 +10886,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
         /// Generate code for calling a looked-up function definition.
         fn generateLookupCall(self: *Self, lookup: anytype, args_span: anytype, ret_layout: layout.Idx) Error!ValueLocation {
-            const symbol_key: u48 = @bitCast(lookup.symbol);
+            const symbol_key: u64 = @bitCast(lookup.symbol);
 
             // Check if the function was compiled as a procedure
             if (self.proc_registry.get(symbol_key)) |proc| {
@@ -12137,7 +12137,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
         /// Uses deferred prologue pattern: generates body first to determine which
         /// callee-saved registers are used, then prepends prologue and adjusts relocations.
         fn compileProc(self: *Self, proc: MonoProc) Error!void {
-            const key: u48 = @bitCast(proc.name);
+            const key: u64 = @bitCast(proc.name);
 
             // Save current state - procedure has its own scope that shouldn't pollute caller
             const saved_stack_offset = self.codegen.stack_offset;
@@ -12786,7 +12786,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 const pattern = self.store.getPattern(pattern_id);
                 switch (pattern) {
                     .bind => |bind| {
-                        const symbol_key: u48 = @bitCast(bind.symbol);
+                        const symbol_key: u64 = @bitCast(bind.symbol);
                         const num_regs = self.calcParamRegCount(bind.layout_idx);
 
                         // Check if this param is passed by pointer (pre-computed)
@@ -14139,7 +14139,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 const pattern = self.store.getPattern(pattern_id);
                 switch (pattern) {
                     .bind => |bind| {
-                        const symbol_key: u48 = @bitCast(bind.symbol);
+                        const symbol_key: u64 = @bitCast(bind.symbol);
 
                         // Check if this parameter is a 128-bit type
                         const is_128bit = if (param_idx < layouts.len) blk: {
@@ -14512,7 +14512,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 const pattern = self.store.getPattern(pattern_id);
                 switch (pattern) {
                     .bind => |bind| {
-                        const symbol_key: u48 = @bitCast(bind.symbol);
+                        const symbol_key: u64 = @bitCast(bind.symbol);
 
                         // Check if this parameter is a 128-bit type
                         const is_128bit = if (param_idx < layouts.len) blk: {
@@ -14642,7 +14642,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 if (param_idx >= pattern_ids.len) continue;
 
                 const pattern = self.store.getPattern(pattern_ids[param_idx]);
-                const symbol_key: u48 = switch (pattern) {
+                const symbol_key: u64 = switch (pattern) {
                     .bind => |bind| @bitCast(bind.symbol),
                     else => continue, // Skip non-bind patterns
                 };
@@ -15343,7 +15343,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
         pub fn patchPendingCalls(self: *Self) Error!void {
             for (self.pending_calls.items) |pending| {
-                const key: u48 = @bitCast(pending.target_symbol);
+                const key: u64 = @bitCast(pending.target_symbol);
                 const proc = self.proc_registry.get(key) orelse {
                     return Error.LocalNotFound;
                 };

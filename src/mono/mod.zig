@@ -4,7 +4,7 @@
 //! It solves cross-module index collisions by using globally unique symbols.
 //!
 //! Key components:
-//! - `MonoIR`: Core types (MonoExpr, MonoPattern, MonoSymbol)
+//! - `MonoIR`: Core types (MonoExpr, MonoPattern, Symbol)
 //! - `MonoExprStore`: Flat storage for all lowered expressions
 //! - `Lower`: CIR → Mono IR lowering pass
 //!
@@ -31,7 +31,7 @@
 
 const std = @import("std");
 
-/// Core IR types: MonoExpr, MonoPattern, MonoSymbol, etc.
+/// Core IR types: MonoExpr, MonoPattern, Symbol, etc.
 pub const MonoIR = @import("MonoIR.zig");
 
 /// Flat storage for expressions and patterns
@@ -51,7 +51,7 @@ pub const MonoExpr = MonoIR.MonoExpr;
 /// Re-export pattern type
 pub const MonoPattern = MonoIR.MonoPattern;
 /// Re-export symbol type
-pub const MonoSymbol = MonoIR.MonoSymbol;
+pub const Symbol = MonoIR.Symbol;
 /// Re-export expression ID type
 pub const MonoExprId = MonoIR.MonoExprId;
 /// Re-export pattern ID type

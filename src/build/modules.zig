@@ -37,6 +37,7 @@ fn aggregatorFilters(module_type: ModuleType) []const []const u8 {
         .ipc => &.{"ipc tests"},
         .repl => &.{"repl tests"},
         .fmt => &.{"fmt tests"},
+        .mir => &.{"mir tests"},
         else => &.{},
     };
 }
@@ -269,7 +270,7 @@ pub const ModuleTest = struct {
 /// unnamed wrappers) so callers can correct the reported totals.
 pub const ModuleTestsResult = struct {
     /// Compile/run steps for each module's tests, in creation order.
-    tests: [23]ModuleTest,
+    tests: [24]ModuleTest,
     /// Number of synthetic passes the summary must subtract when filters were injected.
     /// Includes aggregator ensures and unconditional wrapper tests.
     forced_passes: usize,
@@ -301,6 +302,7 @@ pub const ModuleType = enum {
     base58,
     lsp,
     backend,
+    mir,
     mono,
     roc_target,
     sljmp,
@@ -332,7 +334,8 @@ pub const ModuleType = enum {
             .base58 => &.{},
             .lsp => &.{ .compile, .reporting, .build_options, .fs, .base, .parse, .can, .types, .fmt, .roc_target },
             .backend => &.{ .base, .layout, .builtins, .can, .mono, .roc_target },
-            .mono => &.{ .base, .layout, .can, .types },
+            .mir => &.{ .base, .can, .types, .builtins, .parse, .check, .collections, .reporting, .build_options, .tracy },
+            .mono => &.{ .base, .layout, .can, .types, .mir },
             .roc_target => &.{.base},
             .sljmp => &.{},
         };
@@ -365,6 +368,7 @@ pub const RocModules = struct {
     base58: *Module,
     lsp: *Module,
     backend: *Module,
+    mir: *Module,
     mono: *Module,
     roc_target: *Module,
     sljmp: *Module,
@@ -401,6 +405,7 @@ pub const RocModules = struct {
             .base58 = b.addModule("base58", .{ .root_source_file = b.path("src/base58/mod.zig") }),
             .lsp = b.addModule("lsp", .{ .root_source_file = b.path("src/lsp/mod.zig") }),
             .backend = b.addModule("backend", .{ .root_source_file = b.path("src/backend/mod.zig") }),
+            .mir = b.addModule("mir", .{ .root_source_file = b.path("src/mir/mod.zig") }),
             .mono = b.addModule("mono", .{ .root_source_file = b.path("src/mono/mod.zig") }),
             .roc_target = b.addModule("roc_target", .{ .root_source_file = b.path("src/target/mod.zig") }),
             .sljmp = b.addModule("sljmp", .{ .root_source_file = b.path("src/sljmp/mod.zig") }),
@@ -443,6 +448,7 @@ pub const RocModules = struct {
             .base58,
             .lsp,
             .backend,
+            .mir,
             .mono,
             .roc_target,
             .sljmp,
@@ -482,6 +488,7 @@ pub const RocModules = struct {
         step.root_module.addImport("base58", self.base58);
         step.root_module.addImport("roc_target", self.roc_target);
         step.root_module.addImport("backend", self.backend);
+        step.root_module.addImport("mir", self.mir);
         step.root_module.addImport("mono", self.mono);
 
         // Don't add thread-dependent modules for WASM targets (threads not supported)
@@ -526,6 +533,7 @@ pub const RocModules = struct {
             .base58 => self.base58,
             .lsp => self.lsp,
             .backend => self.backend,
+            .mir => self.mir,
             .mono => self.mono,
             .roc_target => self.roc_target,
             .sljmp => self.sljmp,
@@ -571,6 +579,7 @@ pub const RocModules = struct {
             .base58,
             .lsp,
             .backend,
+            .mir,
             .mono,
             .sljmp,
         };

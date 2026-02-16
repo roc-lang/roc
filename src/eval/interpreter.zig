@@ -2345,14 +2345,13 @@ pub const Interpreter = struct {
                     const closure_header = method_func.asClosure().?;
                     const lambda_expr = closure_header.source_env.store.getExpr(closure_header.lambda_expr_idx);
 
-                    if (lambda_expr == .e_low_level_lambda) {
+                    if (extractLowLevelOp(lambda_expr, closure_header.source_env.store)) |ll_op| {
                         // The to_inspect method is a low-level op - call it directly
-                        const low_level = lambda_expr.e_low_level_lambda;
                         var inner_args = [1]StackValue{value};
-                        const result = try self.callLowLevelBuiltin(low_level.op, &inner_args, roc_ops, null);
+                        const result = try self.callLowLevelBuiltin(ll_op, &inner_args, roc_ops, null);
 
                         // Decref based on ownership semantics
-                        const arg_ownership = low_level.op.getArgOwnership();
+                        const arg_ownership = ll_op.getArgOwnership();
                         if (arg_ownership.len > 0 and arg_ownership[0] == .borrow) {
                             // Don't decref the value - it's borrowed
                         }
@@ -6774,11 +6773,10 @@ pub const Interpreter = struct {
         const closure_header = method_func.asClosure().?;
         const lambda_expr = closure_header.source_env.store.getExpr(closure_header.lambda_expr_idx);
 
-        if (lambda_expr == .e_low_level_lambda) {
+        if (extractLowLevelOp(lambda_expr, closure_header.source_env.store)) |ll_op| {
             // Low-level builtin is_eq (e.g., for simple types)
-            const low_level = lambda_expr.e_low_level_lambda;
             var args = [2]StackValue{ lhs, rhs };
-            const result = self.callLowLevelBuiltin(low_level.op, &args, roc_ops, null) catch {
+            const result = self.callLowLevelBuiltin(ll_op, &args, roc_ops, null) catch {
                 return error.NotImplemented;
             };
             defer result.decref(&self.runtime_layout_store, roc_ops);
@@ -11349,9 +11347,48 @@ pub const Interpreter = struct {
                 try value_stack.push(value);
             },
 
-            .e_low_level_lambda => |lam| {
-                const value = try self.evalLowLevelLambda(expr_idx, expected_rt_var, lam);
-                try value_stack.push(value);
+            .e_run_low_level => |run_ll| {
+                // Evaluate each argument expression (these are e_lookup_local to bound params)
+                const arg_indices = self.env.store.exprSlice(run_ll.args);
+                var args = try self.allocator.alloc(StackValue, arg_indices.len);
+                defer self.allocator.free(args);
+                for (arg_indices, 0..) |arg_idx, i| {
+                    args[i] = try self.eval(arg_idx, roc_ops);
+                }
+
+                // list_sort_with needs continuation-based evaluation
+                if (run_ll.op == .list_sort_with) {
+                    std.debug.assert(args.len == 2);
+                    const list_arg = args[0];
+                    const compare_fn = args[1];
+
+                    switch (try self.setupSortWith(list_arg, compare_fn, null, null, roc_ops, work_stack)) {
+                        .already_sorted => |result_list| {
+                            compare_fn.decref(&self.runtime_layout_store, roc_ops);
+                            try value_stack.push(result_list);
+                        },
+                        .sorting_started => {},
+                    }
+                } else {
+                    // Get return type
+                    const return_rt_var: ?types.Var = blk: {
+                        const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                        break :blk self.translateTypeVar(self.env, ct_var) catch null;
+                    };
+
+                    // Call the low-level builtin
+                    const result = try self.callLowLevelBuiltin(run_ll.op, args, roc_ops, return_rt_var);
+
+                    // Handle ownership: decref borrowed args
+                    const arg_ownership = run_ll.op.getArgOwnership();
+                    for (args, 0..) |arg, i| {
+                        if (i < arg_ownership.len and arg_ownership[i] == .borrow) {
+                            arg.decref(&self.runtime_layout_store, roc_ops);
+                        }
+                    }
+
+                    try value_stack.push(result);
+                }
             },
 
             .e_hosted_lambda => |hosted| {
@@ -11601,12 +11638,11 @@ pub const Interpreter = struct {
 
                     // Check if low-level lambda
                     const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
-                    if (lambda_expr == .e_low_level_lambda) {
-                        const low_level = lambda_expr.e_low_level_lambda;
+                    if (extractLowLevelOp(lambda_expr, self.env.store)) |ll_op| {
                         var no_args = [0]StackValue{};
                         const return_ct_var = can.ModuleEnv.varFrom(expr_idx);
                         const return_rt_var = try self.translateTypeVar(saved_env, return_ct_var);
-                        const result = try self.callLowLevelBuiltin(low_level.op, &no_args, roc_ops, return_rt_var);
+                        const result = try self.callLowLevelBuiltin(ll_op, &no_args, roc_ops, return_rt_var);
 
                         method_func.decref(&self.runtime_layout_store, roc_ops);
                         self.env = saved_env;
@@ -13913,33 +13949,14 @@ pub const Interpreter = struct {
         return value;
     }
 
-    /// Evaluate a low-level lambda expression (e_low_level_lambda) - creates a closure for builtins
-    fn evalLowLevelLambda(
-        self: *Interpreter,
-        expr_idx: can.CIR.Expr.Idx,
-        expected_rt_var: ?types.Var,
-        lam: @TypeOf(@as(can.CIR.Expr, undefined).e_low_level_lambda),
-    ) Error!StackValue {
-        const rt_var = if (expected_rt_var) |provided_var|
-            provided_var
-        else blk: {
-            const ct_var = can.ModuleEnv.varFrom(expr_idx);
-            break :blk try self.translateTypeVar(self.env, ct_var);
-        };
-        const closure_layout = try self.getRuntimeLayout(rt_var);
-        const value = try self.pushRaw(closure_layout, 0, rt_var);
-        self.registerDefValue(expr_idx, value);
-        if (value.ptr) |ptr| {
-            builtins.utils.writeAs(layout.Closure, ptr, .{
-                .body_idx = lam.body,
-                .params = lam.args,
-                .captures_pattern_idx = @enumFromInt(@as(u32, 0)),
-                .captures_layout_idx = closure_layout.data.closure.captures_layout_idx,
-                .lambda_expr_idx = expr_idx,
-                .source_env = self.env,
-            }, @src());
+    /// Extract the LowLevel op from an e_lambda whose body is e_run_low_level.
+    /// Returns the low-level op if found, null otherwise.
+    fn extractLowLevelOp(lambda_expr: can.CIR.Expr, store: anytype) ?can.CIR.Expr.LowLevel {
+        if (lambda_expr == .e_lambda) {
+            const body = store.getExpr(lambda_expr.e_lambda.body);
+            if (body == .e_run_low_level) return body.e_run_low_level.op;
         }
-        return value;
+        return null;
     }
 
     /// Evaluate a hosted lambda expression (e_hosted_lambda) - creates a closure for host dispatch
@@ -16774,9 +16791,7 @@ pub const Interpreter = struct {
 
                     // Check if this is a low-level lambda
                     const lambda_expr = self.env.store.getExpr(header.lambda_expr_idx);
-                    if (lambda_expr == .e_low_level_lambda) {
-                        const low_level = lambda_expr.e_low_level_lambda;
-
+                    if (extractLowLevelOp(lambda_expr, self.env.store)) |ll_op| {
                         // Determine the return type for this low-level builtin call.
                         //
                         // There are two cases to consider:
@@ -16832,7 +16847,7 @@ pub const Interpreter = struct {
                         };
 
                         // Special handling for list_sort_with which requires continuation-based evaluation
-                        if (low_level.op == .list_sort_with) {
+                        if (ll_op == .list_sort_with) {
                             std.debug.assert(arg_values.len == 2);
                             const list_arg = arg_values[0];
                             const compare_fn = arg_values[1];
@@ -16854,7 +16869,7 @@ pub const Interpreter = struct {
                         }
 
                         // Call the builtin
-                        const result = try self.callLowLevelBuiltin(low_level.op, arg_values, roc_ops, ret_rt_var);
+                        const result = try self.callLowLevelBuiltin(ll_op, arg_values, roc_ops, ret_rt_var);
 
                         // Decref arguments based on ownership semantics.
                         // See src/builtins/OWNERSHIP.md for detailed documentation.
@@ -16862,7 +16877,7 @@ pub const Interpreter = struct {
                         // Simple rule:
                         // - Borrow: decref (we release our copy, builtin didn't take ownership)
                         // - Consume: don't decref (ownership transferred to builtin)
-                        const arg_ownership = low_level.op.getArgOwnership();
+                        const arg_ownership = ll_op.getArgOwnership();
                         for (arg_values, 0..) |arg, arg_idx| {
                             // Only decref borrowed arguments. Consumed arguments have ownership
                             // transferred to the builtin (it handles cleanup or returns the value).
@@ -17248,10 +17263,9 @@ pub const Interpreter = struct {
 
                 // Check if this is a low-level lambda
                 const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
-                if (lambda_expr == .e_low_level_lambda) {
-                    const low_level = lambda_expr.e_low_level_lambda;
+                if (extractLowLevelOp(lambda_expr, self.env.store)) |ll_op| {
                     var args = [1]StackValue{operand};
-                    const result = try self.callLowLevelBuiltin(low_level.op, &args, roc_ops, null);
+                    const result = try self.callLowLevelBuiltin(ll_op, &args, roc_ops, null);
 
                     // Note: We do NOT decref the operand here.
                     // The defer statement at the top of unary_op_apply already handles decrefing.
@@ -17640,10 +17654,9 @@ pub const Interpreter = struct {
 
                 // Check if this is a low-level lambda
                 const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
-                if (lambda_expr == .e_low_level_lambda) {
-                    const low_level = lambda_expr.e_low_level_lambda;
+                if (extractLowLevelOp(lambda_expr, self.env.store)) |ll_op| {
                     var args = [2]StackValue{ lhs, rhs };
-                    var result = try self.callLowLevelBuiltin(low_level.op, &args, roc_ops, null);
+                    var result = try self.callLowLevelBuiltin(ll_op, &args, roc_ops, null);
 
                     // Note: We do NOT decref arguments here for borrow semantics.
                     // The defer statements at the top of binop_apply already handle decrefing
@@ -18409,18 +18422,17 @@ pub const Interpreter = struct {
 
                     // Check if low-level lambda
                     const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
-                    if (lambda_expr == .e_low_level_lambda) {
-                        const low_level = lambda_expr.e_low_level_lambda;
+                    if (extractLowLevelOp(lambda_expr, self.env.store)) |ll_op| {
                         var args = [1]StackValue{receiver_value};
                         // Get return type from the dot access expression for low-level builtins that need it.
                         // Use saved_env (the caller's module) since da.expr_idx is from that module,
                         // not from self.env which has been switched to the closure's source module.
                         const return_ct_var = can.ModuleEnv.varFrom(da.expr_idx);
                         const return_rt_var = try self.translateTypeVar(saved_env, return_ct_var);
-                        const result = try self.callLowLevelBuiltin(low_level.op, &args, roc_ops, return_rt_var);
+                        const result = try self.callLowLevelBuiltin(ll_op, &args, roc_ops, return_rt_var);
 
                         // Decref based on ownership semantics
-                        const arg_ownership = low_level.op.getArgOwnership();
+                        const arg_ownership = ll_op.getArgOwnership();
                         if (arg_ownership.len > 0 and arg_ownership[0] == .borrow) {
                             receiver_value.decref(&self.runtime_layout_store, roc_ops);
                         }
@@ -18712,11 +18724,9 @@ pub const Interpreter = struct {
 
                 // Check if low-level lambda
                 const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
-                if (lambda_expr == .e_low_level_lambda) {
-                    const low_level = lambda_expr.e_low_level_lambda;
-
+                if (extractLowLevelOp(lambda_expr, self.env.store)) |ll_op| {
                     // Special handling for list_sort_with which requires continuation-based evaluation
-                    if (low_level.op == .list_sort_with) {
+                    if (ll_op == .list_sort_with) {
                         std.debug.assert(total_args == 1);
                         const list_arg = receiver_value;
                         const compare_fn = arg_values[0];
@@ -18805,10 +18815,10 @@ pub const Interpreter = struct {
                         break :blk try self.translateTypeVar(saved_env, return_ct_var);
                     };
 
-                    const result = try self.callLowLevelBuiltin(low_level.op, all_args, roc_ops, return_rt_var);
+                    const result = try self.callLowLevelBuiltin(ll_op, all_args, roc_ops, return_rt_var);
 
                     // Decref arguments based on ownership semantics
-                    const arg_ownership = low_level.op.getArgOwnership();
+                    const arg_ownership = ll_op.getArgOwnership();
                     for (all_args, 0..) |arg, arg_idx| {
                         const ownership = if (arg_idx < arg_ownership.len) arg_ownership[arg_idx] else .borrow;
                         if (ownership == .borrow) {
@@ -19074,14 +19084,13 @@ pub const Interpreter = struct {
 
                 // Check if low-level lambda
                 const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
-                if (lambda_expr == .e_low_level_lambda) {
-                    const low_level = lambda_expr.e_low_level_lambda;
+                if (extractLowLevelOp(lambda_expr, self.env.store)) |ll_op| {
                     const return_ct_var = can.ModuleEnv.varFrom(tvdi.expr_idx);
                     const return_rt_var = try self.translateTypeVar(saved_env, return_ct_var);
-                    const result = try self.callLowLevelBuiltin(low_level.op, arg_values, roc_ops, return_rt_var);
+                    const result = try self.callLowLevelBuiltin(ll_op, arg_values, roc_ops, return_rt_var);
 
                     // Decref based on ownership semantics
-                    const arg_ownership = low_level.op.getArgOwnership();
+                    const arg_ownership = ll_op.getArgOwnership();
                     for (arg_values, 0..) |arg, idx| {
                         if (idx < arg_ownership.len and arg_ownership[idx] == .borrow) {
                             arg.decref(&self.runtime_layout_store, roc_ops);

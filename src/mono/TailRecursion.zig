@@ -46,7 +46,7 @@ const MonoExprStore = store_mod;
 const MonoExprId = ir.MonoExprId;
 const MonoExprSpan = ir.MonoExprSpan;
 const MonoPatternSpan = ir.MonoPatternSpan;
-const MonoSymbol = ir.MonoSymbol;
+const Symbol = ir.Symbol;
 const JoinPointId = ir.JoinPointId;
 const CFStmtId = ir.CFStmtId;
 const CFSwitchBranch = ir.CFSwitchBranch;
@@ -57,14 +57,14 @@ const Allocator = std.mem.Allocator;
 /// Transforms tail-recursive calls into loops using join points
 pub const TailRecursionPass = struct {
     store: *MonoExprStore,
-    target_symbol: MonoSymbol,
+    target_symbol: Symbol,
     join_point_id: JoinPointId,
     found_tail_call: bool,
     allocator: Allocator,
 
     pub fn init(
         store: *MonoExprStore,
-        target_symbol: MonoSymbol,
+        target_symbol: Symbol,
         join_point_id: JoinPointId,
         allocator: Allocator,
     ) TailRecursionPass {
@@ -247,7 +247,7 @@ pub const TailRecursionPass = struct {
 /// 3. Wrap the body: `join id(params) = transformed_body in jump id(initial_args)`
 pub fn makeTailRecursive(
     store: *MonoExprStore,
-    proc_symbol: MonoSymbol,
+    proc_symbol: Symbol,
     join_point_id: JoinPointId,
     body: CFStmtId,
     params: MonoPatternSpan,
@@ -314,7 +314,7 @@ test "TailRecursionPass initialization" {
         .attributes = .{ .effectful = false, .ignored = false, .reassignable = false },
         .idx = 42,
     };
-    const symbol = MonoSymbol{ .module_idx = 0, .ident_idx = ident };
+    const symbol = Symbol{ .module_idx = 0, .ident_idx = ident };
     const join_id: JoinPointId = @enumFromInt(1);
 
     var pass = TailRecursionPass.init(&store, symbol, join_id, allocator);

@@ -11,12 +11,6 @@ const builtins = @import("builtins");
 const build_options = @import("build_options");
 const posix = if (builtin.os.tag != .windows and builtin.os.tag != .wasi) std.posix else undefined;
 
-// Compiler modules for type extraction
-const base = @import("base");
-const can = @import("can");
-const types_mod = @import("types");
-const layout_mod = @import("layout");
-
 const trace_refcount = build_options.trace_refcount;
 
 /// Zig logging configuration override
@@ -356,41 +350,6 @@ const EntryPoint = extern struct {
     type_id: TypeId,
 };
 
-/// Tuple2 = [T TypeId (List TypeId)] - single-tag union
-const Tuple2 = extern struct {
-    type_id: TypeId,
-    type_ids: RocList,
-};
-
-/// Shape tag values - alphabetically ordered
-const ShapeTag = enum(u8) {
-    Bool = 0,
-    EmptyTagUnion = 1,
-    Function = 2,
-    Num = 3,
-    RecursivePointer = 4,
-    RocBox = 5,
-    RocDict = 6,
-    RocList = 7,
-    RocResult = 8,
-    RocSet = 9,
-    RocStr = 10,
-    Struct = 11,
-    TagUnion = 12,
-    TagUnionPayload = 13,
-    Unit = 14,
-    Unsized = 15,
-};
-
-/// Shape union - we represent this as the largest possible size
-/// The actual payload depends on the tag
-const Shape = extern struct {
-    // The shape is a tagged union. We'll represent it with enough space for the largest variant.
-    // For simplicity in the minimal implementation, we use a fixed-size payload area.
-    payload: [64]u8 align(8),
-    tag: ShapeTag,
-};
-
 /// FunctionInfo record: { name : Str, type_str : Str }
 /// Roc records are ordered alphabetically by field name: name < type_str
 const FunctionInfoRoc = extern struct {
@@ -527,67 +486,6 @@ const JsonModuleTypeInfo = struct {
     functions: []const JsonFunctionInfo,
     hosted_functions: []const JsonHostedFunctionInfo,
 };
-
-/// Clean up all RocStr values in a ModuleTypeInfoRoc and decref container lists
-/// All allocations now use Roc's allocation scheme, so we use utils.decref instead of allocator.free
-fn cleanupModuleTypeInfo(mod: *ModuleTypeInfoRoc, roc_ops: *builtins.host_abi.RocOps) void {
-    // Decref name and main_type strings
-    mod.name.decref(roc_ops);
-    mod.main_type.decref(roc_ops);
-
-    // Clean up functions list - decref strings first, then decref the list container
-    if (mod.functions.bytes) |func_bytes| {
-        const funcs: [*]FunctionInfoRoc = @ptrCast(@alignCast(func_bytes));
-        for (0..mod.functions.length) |i| {
-            funcs[i].name.decref(roc_ops);
-            funcs[i].type_str.decref(roc_ops);
-        }
-    }
-    // Decref the functions list container (allocated via allocateWithRefcount)
-    builtins.utils.decref(
-        mod.functions.bytes,
-        mod.functions.length * @sizeOf(FunctionInfoRoc),
-        @alignOf(FunctionInfoRoc),
-        true, // elements ARE refcounted (FunctionInfoRoc contains RocStr)
-        roc_ops,
-    );
-
-    // Clean up hosted_functions list - decref strings first, then decref the list container
-    if (mod.hosted_functions.bytes) |hosted_bytes| {
-        const hosted: [*]HostedFunctionInfoRoc = @ptrCast(@alignCast(hosted_bytes));
-        for (0..mod.hosted_functions.length) |i| {
-            hosted[i].name.decref(roc_ops);
-            hosted[i].type_str.decref(roc_ops);
-        }
-    }
-    // Decref the hosted_functions list container
-    builtins.utils.decref(
-        mod.hosted_functions.bytes,
-        mod.hosted_functions.length * @sizeOf(HostedFunctionInfoRoc),
-        @alignOf(HostedFunctionInfoRoc),
-        true, // elements ARE refcounted (HostedFunctionInfoRoc contains RocStr)
-        roc_ops,
-    );
-}
-
-/// Clean up modules_list and all its contained allocations
-/// All allocations now use Roc's allocation scheme, so we use utils.decref instead of allocator.free
-fn cleanupModulesList(modules_list: RocList, roc_ops: *builtins.host_abi.RocOps) void {
-    if (modules_list.bytes) |mod_bytes| {
-        const mods: [*]ModuleTypeInfoRoc = @ptrCast(@alignCast(mod_bytes));
-        for (0..modules_list.length) |i| {
-            cleanupModuleTypeInfo(&mods[i], roc_ops);
-        }
-    }
-    // Decref the modules list container
-    builtins.utils.decref(
-        modules_list.bytes,
-        modules_list.length * @sizeOf(ModuleTypeInfoRoc),
-        @alignOf(ModuleTypeInfoRoc),
-        true, // elements ARE refcounted (ModuleTypeInfoRoc contains RocStr/RocList)
-        roc_ops,
-    );
-}
 
 /// Clean up result payload from roc__make_glue
 fn cleanupResult(result: *ResultListFileStr, roc_ops: *builtins.host_abi.RocOps) void {

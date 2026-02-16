@@ -502,14 +502,12 @@ pub const Expr = union(enum) {
     /// it's expected to be implemented by the backend rather than being an error.
     /// It behaves like e_lambda in that it has parameters and a body (which crashes when evaluated).
     ///
-    /// ```roc
-    /// # Str.is_empty is a low-level operation
-    /// is_empty : Str -> Bool
-    /// ```
-    e_low_level_lambda: struct {
+    /// Run a low-level builtin operation with the given argument expressions.
+    /// This is a leaf expression that appears as the body of a normal e_lambda.
+    /// The args are e_lookup_local expressions referencing the enclosing lambda's params.
+    e_run_low_level: struct {
         op: LowLevel,
-        args: CIR.Pattern.Span,
-        body: Expr.Idx,
+        args: Expr.Span,
     },
 
     /// Low-level builtin operations that are implemented by the compiler backend.
@@ -899,7 +897,8 @@ pub const Expr = union(enum) {
         pub fn getArgOwnership(self: LowLevel) []const ArgOwnership {
             return switch (self) {
                 // String operations - borrowing (read-only)
-                .str_is_empty, .str_is_eq, .str_contains, .str_starts_with, .str_ends_with, .str_count_utf8_bytes, .str_caseless_ascii_equals => &.{ .borrow, .borrow },
+                .str_is_empty, .str_count_utf8_bytes => &.{.borrow},
+                .str_is_eq, .str_contains, .str_starts_with, .str_ends_with, .str_caseless_ascii_equals => &.{ .borrow, .borrow },
 
                 // String operations - consuming (take ownership)
                 .str_concat => &.{ .consume, .borrow }, // first consumed, second borrowed
@@ -927,13 +926,14 @@ pub const Expr = union(enum) {
                 .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str => &.{.borrow},
 
                 // List operations - borrowing
-                .list_len, .list_is_empty, .list_get_unsafe => &.{.borrow},
+                .list_len, .list_is_empty => &.{.borrow},
+                .list_get_unsafe => &.{ .borrow, .borrow }, // list borrowed, index is value type
 
                 // List operations - consuming
                 .list_concat => &.{ .consume, .consume },
                 .list_with_capacity => &.{.borrow}, // capacity is value type
-                .list_sort_with => &.{.consume},
-                .list_append_unsafe => &.{.consume},
+                .list_sort_with => &.{ .consume, .borrow }, // list consumed, comparator borrowed
+                .list_append_unsafe => &.{ .consume, .borrow }, // list consumed, element borrowed
                 .list_append => &.{ .consume, .borrow }, // list consumed, element borrowed
                 .list_drop_at => &.{ .consume, .borrow }, // list consumed, index is value type
                 .list_sublist => &.{ .consume, .borrow }, // list consumed, {start, len} record is value type
@@ -1927,25 +1927,23 @@ pub const Expr = union(enum) {
 
                 try tree.endNode(begin, attrs);
             },
-            .e_low_level_lambda => |low_level| {
+            .e_run_low_level => |run_ll| {
                 const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-low-level-lambda");
-                const op_name = try std.fmt.allocPrint(ir.gpa, "{s}", .{@tagName(low_level.op)});
+                try tree.pushStaticAtom("e-run-low-level");
+                const op_name = try std.fmt.allocPrint(ir.gpa, "{s}", .{@tagName(run_ll.op)});
                 defer ir.gpa.free(op_name);
                 try tree.pushStringPair("op", op_name);
                 const region = ir.store.getExprRegion(expr_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 const attrs = tree.beginNode();
 
-                const args_begin = tree.beginNode();
+                const run_args_begin = tree.beginNode();
                 try tree.pushStaticAtom("args");
-                const args_attrs = tree.beginNode();
-                for (ir.store.slicePatterns(low_level.args)) |arg_idx| {
-                    try ir.store.getPattern(arg_idx).pushToSExprTree(ir, tree, arg_idx);
+                const run_args_attrs = tree.beginNode();
+                for (ir.store.exprSlice(run_ll.args)) |arg_idx| {
+                    try ir.store.getExpr(arg_idx).pushToSExprTree(ir, tree, arg_idx);
                 }
-                try tree.endNode(args_begin, args_attrs);
-
-                try ir.store.getExpr(low_level.body).pushToSExprTree(ir, tree, low_level.body);
+                try tree.endNode(run_args_begin, run_args_attrs);
 
                 try tree.endNode(begin, attrs);
             },

@@ -19,7 +19,7 @@ const Op = WasmModule.Op;
 const ValType = WasmModule.ValType;
 const BlockType = WasmModule.BlockType;
 
-const MonoSymbol = mono.MonoIR.MonoSymbol;
+const Symbol = mono.MonoIR.Symbol;
 const MonoProc = mono.MonoIR.MonoProc;
 const CFStmtId = mono.MonoIR.CFStmtId;
 
@@ -41,8 +41,8 @@ uses_stack_memory: bool = false,
 fp_local: u32 = 0,
 /// Map from lambda expression ID → compiled wasm function index.
 compiled_lambdas: std.AutoHashMap(u32, u32),
-/// Map from MonoSymbol → ClosureValue (for all callable bindings).
-closure_values: std.AutoHashMap(u48, ClosureValue),
+/// Map from Symbol → ClosureValue (for all callable bindings).
+closure_values: std.AutoHashMap(u64, ClosureValue),
 /// Type index for the RocOps function signature: (i32, i32) -> void.
 roc_ops_type_idx: u32 = 0,
 /// Table indices for RocOps functions (used with call_indirect).
@@ -151,7 +151,7 @@ const ReturnedClosureInfo = struct {
 /// When a higher-order function has a pre-bound callback closure with captures,
 /// those captures become extra leading parameters so the function body can access them.
 const ForwardedCapture = struct {
-    symbol: MonoSymbol,
+    symbol: Symbol,
     layout_idx: layout.Idx,
 };
 
@@ -167,7 +167,7 @@ pub fn init(allocator: Allocator, store: *const MonoExprStore, layout_store: ?*c
         .uses_stack_memory = false,
         .fp_local = 0,
         .compiled_lambdas = std.AutoHashMap(u32, u32).init(allocator),
-        .closure_values = std.AutoHashMap(u48, ClosureValue).init(allocator),
+        .closure_values = std.AutoHashMap(u64, ClosureValue).init(allocator),
         .join_point_depths = std.AutoHashMap(u32, u32).init(allocator),
         .join_point_param_locals = std.AutoHashMap(u32, []u32).init(allocator),
         .forwarded_func_captures = std.AutoHashMap(u32, []ForwardedCapture).init(allocator),
@@ -938,7 +938,7 @@ fn generateExpr(self: *Self, expr_id: MonoExprId) Allocator.Error!void {
             try self.generateExpr(b.final_expr);
         },
         .lookup => |l| {
-            const key: u48 = @bitCast(l.symbol);
+            const key: u64 = @bitCast(l.symbol);
             if (self.storage.locals.get(key)) |local_info| {
                 self.body.append(self.allocator, Op.local_get) catch return error.OutOfMemory;
                 WasmModule.leb128WriteU32(self.allocator, &self.body, local_info.idx) catch return error.OutOfMemory;
@@ -3909,7 +3909,7 @@ fn compileLambda(self: *Self, expr_id: MonoExprId, lambda: anytype) Allocator.Er
                 // For pre-bound callable params with unwrapped_capture, use the
                 // capture's type instead of the closure layout type, since the
                 // actual runtime value passed is the capture itself (not a pointer).
-                const param_key: u48 = @bitCast(bind.symbol);
+                const param_key: u64 = @bitCast(bind.symbol);
                 const vt = if (self.closure_values.get(param_key)) |cv| blk: {
                     break :blk switch (cv.representation) {
                         .unwrapped_capture => |repr| self.resolveValType(repr.capture_layout),
@@ -3941,7 +3941,7 @@ fn compileLambda(self: *Self, expr_id: MonoExprId, lambda: anytype) Allocator.Er
         const pat = self.store.getPattern(param_id);
         switch (pat) {
             .bind => |bind| {
-                const param_key: u48 = @bitCast(bind.symbol);
+                const param_key: u64 = @bitCast(bind.symbol);
                 if (self.closure_values.get(param_key)) |cv| {
                     switch (cv.representation) {
                         .struct_captures => {
@@ -3986,7 +3986,7 @@ fn compileLambda(self: *Self, expr_id: MonoExprId, lambda: anytype) Allocator.Er
 
     // Initialize fresh state for the lambda body
     self.body = .empty;
-    self.storage.locals = std.AutoHashMap(u48, Storage.LocalInfo).init(self.allocator);
+    self.storage.locals = std.AutoHashMap(u64, Storage.LocalInfo).init(self.allocator);
     self.storage.next_local_idx = 0;
     self.storage.local_types = .empty;
     // Note: closure_values is NOT reset for compileLambda — the lambda body
@@ -4011,7 +4011,7 @@ fn compileLambda(self: *Self, expr_id: MonoExprId, lambda: anytype) Allocator.Er
         switch (pat) {
             .bind => |bind| {
                 // Match the param type override for unwrapped_capture callables
-                const param_key: u48 = @bitCast(bind.symbol);
+                const param_key: u64 = @bitCast(bind.symbol);
                 const vt = if (self.closure_values.get(param_key)) |cv| blk: {
                     break :blk switch (cv.representation) {
                         .unwrapped_capture => |repr| self.resolveValType(repr.capture_layout),
@@ -4048,14 +4048,14 @@ fn compileLambda(self: *Self, expr_id: MonoExprId, lambda: anytype) Allocator.Er
         const pat = self.store.getPattern(param_id);
         switch (pat) {
             .bind => |bind| {
-                const param_key: u48 = @bitCast(bind.symbol);
+                const param_key: u64 = @bitCast(bind.symbol);
                 if (self.closure_values.get(param_key)) |cv| {
                     switch (cv.representation) {
                         .unwrapped_capture => {
                             const captures = self.store.getCaptures(cv.captures);
                             if (captures.len > 0) {
                                 if (self.storage.getLocal(bind.symbol)) |param_local| {
-                                    const cap_key: u48 = @bitCast(captures[0].symbol);
+                                    const cap_key: u64 = @bitCast(captures[0].symbol);
                                     if (!self.storage.locals.contains(cap_key)) {
                                         const cap_vt = self.resolveValType(captures[0].layout_idx);
                                         self.storage.locals.put(cap_key, .{ .idx = param_local, .val_type = cap_vt }) catch {};
@@ -4184,7 +4184,7 @@ fn compileClosure(self: *Self, expr_id: MonoExprId, closure: anytype) Allocator.
     param_types.append(self.allocator, .i32) catch return error.OutOfMemory;
 
     // Capture types
-    var capture_symbols = self.allocator.alloc(MonoSymbol, captures.len) catch return error.OutOfMemory;
+    var capture_symbols = self.allocator.alloc(Symbol, captures.len) catch return error.OutOfMemory;
     defer self.allocator.free(capture_symbols);
     var capture_val_types = self.allocator.alloc(ValType, captures.len) catch return error.OutOfMemory;
     defer self.allocator.free(capture_val_types);
@@ -4227,7 +4227,7 @@ fn compileClosure(self: *Self, expr_id: MonoExprId, closure: anytype) Allocator.
 
     // Initialize fresh state
     self.body = .empty;
-    self.storage.locals = std.AutoHashMap(u48, Storage.LocalInfo).init(self.allocator);
+    self.storage.locals = std.AutoHashMap(u64, Storage.LocalInfo).init(self.allocator);
     self.storage.next_local_idx = 0;
     self.storage.local_types = .empty;
     // Note: closure_values is NOT reset — the closure body may reference
@@ -4278,14 +4278,14 @@ fn compileClosure(self: *Self, expr_id: MonoExprId, closure: anytype) Allocator.
         const pat = self.store.getPattern(param_id);
         switch (pat) {
             .bind => |bind| {
-                const param_key: u48 = @bitCast(bind.symbol);
+                const param_key: u64 = @bitCast(bind.symbol);
                 if (self.closure_values.get(param_key)) |cv| {
                     switch (cv.representation) {
                         .unwrapped_capture => {
                             const cb_captures = self.store.getCaptures(cv.captures);
                             if (cb_captures.len > 0) {
                                 if (self.storage.getLocal(bind.symbol)) |param_local| {
-                                    const cap_key: u48 = @bitCast(cb_captures[0].symbol);
+                                    const cap_key: u64 = @bitCast(cb_captures[0].symbol);
                                     if (!self.storage.locals.contains(cap_key)) {
                                         const cap_vt = self.resolveValType(cb_captures[0].layout_idx);
                                         self.storage.locals.put(cap_key, .{ .idx = param_local, .val_type = cap_vt }) catch {};
@@ -4437,9 +4437,9 @@ fn preBindCallableArgs(self: *Self, def_expr: MonoExpr, call_args: mono.MonoIR.M
             },
             .lookup => |lk| {
                 // If the argument is a lookup to a known closure, propagate it
-                const src_key: u48 = @bitCast(lk.symbol);
+                const src_key: u64 = @bitCast(lk.symbol);
                 if (self.closure_values.get(src_key)) |cv| {
-                    const dst_key: u48 = @bitCast(param_sym);
+                    const dst_key: u64 = @bitCast(param_sym);
                     self.closure_values.put(dst_key, cv) catch continue;
                 } else if (self.store.getSymbolDef(lk.symbol)) |sym_def_id| {
                     const sym_def = self.store.getExpr(sym_def_id);
@@ -4459,8 +4459,8 @@ fn preBindCallableArgs(self: *Self, def_expr: MonoExpr, call_args: mono.MonoIR.M
 /// Try to bind a function expression (lambda, closure, nominal wrapping one, or
 /// function alias) to a symbol. Returns true if the expression was handled as a
 /// function binding and the caller should `continue` the loop.
-fn tryBindFunction(self: *Self, expr_id: MonoExprId, expr: MonoExpr, symbol: MonoSymbol) Allocator.Error!bool {
-    const key: u48 = @bitCast(symbol);
+fn tryBindFunction(self: *Self, expr_id: MonoExprId, expr: MonoExpr, symbol: Symbol) Allocator.Error!bool {
+    const key: u64 = @bitCast(symbol);
     switch (expr) {
         .lambda => {
             // Lambda with no captures - store as closure_value with direct_call representation
@@ -4522,7 +4522,7 @@ fn tryBindFunction(self: *Self, expr_id: MonoExprId, expr: MonoExpr, symbol: Mon
         },
         .lookup => |lookup_expr| {
             // Function alias: g = f — propagate closure_value
-            const src_key: u48 = @bitCast(lookup_expr.symbol);
+            const src_key: u64 = @bitCast(lookup_expr.symbol);
             if (self.closure_values.get(src_key)) |cv| {
                 self.closure_values.put(key, cv) catch return error.OutOfMemory;
                 return true;
@@ -4610,7 +4610,7 @@ fn tryBindFunction(self: *Self, expr_id: MonoExprId, expr: MonoExpr, symbol: Mon
 
 /// Compile a single MonoProc as a wasm function.
 fn compileProc(self: *Self, proc: MonoProc) Allocator.Error!void {
-    const key: u48 = @bitCast(proc.name);
+    const key: u64 = @bitCast(proc.name);
 
     // Skip if already compiled
     if (self.closure_values.contains(key)) return;
@@ -4648,13 +4648,13 @@ fn compileProc(self: *Self, proc: MonoProc) Allocator.Error!void {
 
     // Initialize fresh state with only self-registration (for recursive calls)
     self.body = .empty;
-    self.storage.locals = std.AutoHashMap(u48, Storage.LocalInfo).init(self.allocator);
+    self.storage.locals = std.AutoHashMap(u64, Storage.LocalInfo).init(self.allocator);
     self.storage.next_local_idx = 0;
     self.storage.local_types = .empty;
     // Free the old closure_values — saveState cloned it independently,
     // so we must free the original to avoid a memory leak.
     self.closure_values.deinit();
-    self.closure_values = std.AutoHashMap(u48, ClosureValue).init(self.allocator);
+    self.closure_values = std.AutoHashMap(u64, ClosureValue).init(self.allocator);
     self.closure_values.put(key, self_cv) catch return error.OutOfMemory;
     self.stack_frame_size = 0;
     self.uses_stack_memory = false;
@@ -4783,11 +4783,11 @@ fn compileProc(self: *Self, proc: MonoProc) Allocator.Error!void {
 const SavedState = struct {
     body_items: []u8,
     body_capacity: usize,
-    locals: std.AutoHashMap(u48, Storage.LocalInfo),
+    locals: std.AutoHashMap(u64, Storage.LocalInfo),
     next_local_idx: u32,
     local_types_items: []ValType,
     local_types_capacity: usize,
-    closure_values: std.AutoHashMap(u48, ClosureValue),
+    closure_values: std.AutoHashMap(u64, ClosureValue),
     stack_frame_size: u32,
     uses_stack_memory: bool,
     fp_local: u32,
@@ -5107,7 +5107,7 @@ fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
             try self.emitCall(func_idx);
         },
         .lookup => |lookup| {
-            const key: u48 = @bitCast(lookup.symbol);
+            const key: u64 = @bitCast(lookup.symbol);
             if (self.closure_values.get(key)) |cv| {
                 try self.dispatchClosureCall(cv, c.args, c.ret_layout);
             } else if (self.store.getSymbolDef(lookup.symbol)) |def_expr_id| {

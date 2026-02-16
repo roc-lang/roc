@@ -18,7 +18,7 @@ const target = base.target;
 /// Different modules can have type variables with the same numeric value that
 /// refer to completely different types, so we key by (module_idx, var).
 pub const ModuleVarKey = packed struct {
-    module_idx: u16,
+    module_idx: u32,
     var_: types.Var,
 };
 const Ident = base.Ident;
@@ -62,7 +62,7 @@ pub const Store = struct {
     allocator: std.mem.Allocator,
 
     /// Current module index during fromTypeVar processing
-    current_module_idx: u16 = 0,
+    current_module_idx: u32 = 0,
 
     /// Optional override types store (used by interpreter for runtime types).
     /// When set, this is used instead of all_module_envs[module_idx].types.
@@ -968,7 +968,7 @@ pub const Store = struct {
     /// Get the boxed layout for a recursive nominal type, if it exists.
     /// This is used for list elements where the element type is a recursive nominal.
     /// Returns null if the type is not a recursive nominal.
-    pub fn getRecursiveBoxedLayout(self: *const Self, module_idx: u16, type_var: Var) ?Layout {
+    pub fn getRecursiveBoxedLayout(self: *const Self, module_idx: u32, type_var: Var) ?Layout {
         const key = ModuleVarKey{ .module_idx = module_idx, .var_ = type_var };
         if (self.recursive_boxed_layouts.get(key)) |boxed_idx| {
             return self.getLayout(boxed_idx);
@@ -1592,10 +1592,10 @@ pub const Store = struct {
     /// for cross-module polymorphic function calls.
     pub fn fromTypeVar(
         self: *Self,
-        module_idx: u16,
+        module_idx: u32,
         unresolved_var: Var,
         type_scope: *const TypeScope,
-        caller_module_idx: ?u16,
+        caller_module_idx: ?u32,
     ) std.mem.Allocator.Error!Idx {
         // Set the current module for this computation
         self.current_module_idx = module_idx;
@@ -2886,11 +2886,11 @@ pub const Store = struct {
     /// numerics) but we need to compute a proper List layout based on the expression structure.
     pub fn computeListLayout(
         self: *Self,
-        module_idx: u16,
+        module_idx: u32,
         module_env: *ModuleEnv,
         list_elem_span: can.CIR.Expr.Span,
         type_scope: *const TypeScope,
-        caller_module_idx: ?u16,
+        caller_module_idx: ?u32,
     ) !Idx {
         const elems = module_env.store.exprSlice(list_elem_span);
 
