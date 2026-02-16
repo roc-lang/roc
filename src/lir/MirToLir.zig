@@ -55,7 +55,6 @@ scratch_lir_pattern_ids: std.ArrayList(LirPatternId),
 scratch_lir_stmts: std.ArrayList(LirStmt),
 scratch_lir_when_branches: std.ArrayList(LirWhenBranch),
 scratch_lir_captures: std.ArrayList(LirCapture),
-scratch_field_names: std.ArrayList(Ident.Idx),
 
 pub fn init(
     allocator: Allocator,
@@ -75,7 +74,6 @@ pub fn init(
         .scratch_lir_stmts = std.ArrayList(LirStmt).empty,
         .scratch_lir_when_branches = std.ArrayList(LirWhenBranch).empty,
         .scratch_lir_captures = std.ArrayList(LirCapture).empty,
-        .scratch_field_names = std.ArrayList(Ident.Idx).empty,
     };
 }
 
@@ -87,7 +85,6 @@ pub fn deinit(self: *Self) void {
     self.scratch_lir_stmts.deinit(self.allocator);
     self.scratch_lir_when_branches.deinit(self.allocator);
     self.scratch_lir_captures.deinit(self.allocator);
-    self.scratch_field_names.deinit(self.allocator);
 }
 
 /// Lower a MIR expression to a LIR expression.
@@ -380,7 +377,8 @@ fn lowerMatch(self: *Self, match_data: anytype, mono_idx: Monotype.Idx, region: 
 
     const mir_branches = self.mir_store.getBranches(match_data.branches);
 
-    self.scratch_lir_when_branches.clearRetainingCapacity();
+    const save_len = self.scratch_lir_when_branches.items.len;
+    defer self.scratch_lir_when_branches.shrinkRetainingCapacity(save_len);
     for (mir_branches) |branch| {
         // Use the first pattern of the branch (MIR branches can have alternatives via |)
         const branch_patterns = self.mir_store.getBranchPatterns(branch.patterns);
@@ -400,7 +398,7 @@ fn lowerMatch(self: *Self, match_data: anytype, mono_idx: Monotype.Idx, region: 
         });
     }
 
-    const when_branches = try self.lir_store.addWhenBranches(self.scratch_lir_when_branches.items);
+    const when_branches = try self.lir_store.addWhenBranches(self.scratch_lir_when_branches.items[save_len..]);
     return self.lir_store.addExpr(.{ .when = .{
         .value = cond_id,
         .value_layout = value_layout,
@@ -424,7 +422,8 @@ fn lowerLambda(self: *Self, lam: anytype, mono_idx: Monotype.Idx, region: Region
     const mir_captures = self.mir_store.getCaptures(lam.captures);
     if (mir_captures.len > 0) {
         // Build capture list with layouts
-        self.scratch_lir_captures.clearRetainingCapacity();
+        const save_captures_len = self.scratch_lir_captures.items.len;
+        defer self.scratch_lir_captures.shrinkRetainingCapacity(save_captures_len);
         for (mir_captures) |cap| {
             // Look up the captured symbol's type by searching symbol_defs
             const cap_layout = if (self.mir_store.getSymbolDef(cap.symbol)) |def_id|
@@ -438,7 +437,7 @@ fn lowerLambda(self: *Self, lam: anytype, mono_idx: Monotype.Idx, region: Region
             });
         }
 
-        const lir_captures = try self.lir_store.addCaptures(self.scratch_lir_captures.items);
+        const lir_captures = try self.lir_store.addCaptures(self.scratch_lir_captures.items[save_captures_len..]);
 
         // Create the lambda expression first
         const lambda_expr = try self.lir_store.addExpr(.{ .lambda = .{
@@ -492,14 +491,18 @@ fn lowerBlock(self: *Self, block_data: anytype, mono_idx: Monotype.Idx, region: 
     const result_layout = try self.layoutFromMonotype(mono_idx);
 
     const mir_stmts = self.mir_store.getStmts(block_data.stmts);
-    self.scratch_lir_stmts.clearRetainingCapacity();
+    const save_stmts_len = self.scratch_lir_stmts.items.len;
+    defer self.scratch_lir_stmts.shrinkRetainingCapacity(save_stmts_len);
     for (mir_stmts) |stmt| {
-        const lir_pat = try self.lowerPattern(stmt.decl_var.pattern);
-        const lir_expr = try self.lowerExpr(stmt.decl_var.expr);
+        const binding = switch (stmt) {
+            .decl_const, .decl_var, .mutate_var => |b| b,
+        };
+        const lir_pat = try self.lowerPattern(binding.pattern);
+        const lir_expr = try self.lowerExpr(binding.expr);
         try self.scratch_lir_stmts.append(self.allocator, .{ .pattern = lir_pat, .expr = lir_expr });
     }
 
-    const lir_stmts = try self.lir_store.addStmts(self.scratch_lir_stmts.items);
+    const lir_stmts = try self.lir_store.addStmts(self.scratch_lir_stmts.items[save_stmts_len..]);
     const lir_final = try self.lowerExpr(block_data.final_expr);
 
     return self.lir_store.addExpr(.{ .block = .{
@@ -775,21 +778,23 @@ fn lowerPattern(self: *Self, mir_pat_id: MIR.PatternId) Allocator.Error!LirPatte
 }
 
 fn lowerExprSpan(self: *Self, mir_expr_ids: []const MIR.ExprId) Allocator.Error!LirExprSpan {
-    self.scratch_lir_expr_ids.clearRetainingCapacity();
+    const save_len = self.scratch_lir_expr_ids.items.len;
+    defer self.scratch_lir_expr_ids.shrinkRetainingCapacity(save_len);
     for (mir_expr_ids) |mir_id| {
         const lir_id = try self.lowerExpr(mir_id);
         try self.scratch_lir_expr_ids.append(self.allocator, lir_id);
     }
-    return self.lir_store.addExprSpan(self.scratch_lir_expr_ids.items);
+    return self.lir_store.addExprSpan(self.scratch_lir_expr_ids.items[save_len..]);
 }
 
 fn lowerPatternSpan(self: *Self, mir_pat_ids: []const MIR.PatternId) Allocator.Error!LirPatternSpan {
-    self.scratch_lir_pattern_ids.clearRetainingCapacity();
+    const save_len = self.scratch_lir_pattern_ids.items.len;
+    defer self.scratch_lir_pattern_ids.shrinkRetainingCapacity(save_len);
     for (mir_pat_ids) |mir_id| {
         const lir_id = try self.lowerPattern(mir_id);
         try self.scratch_lir_pattern_ids.append(self.allocator, lir_id);
     }
-    return self.lir_store.addPatternSpan(self.scratch_lir_pattern_ids.items);
+    return self.lir_store.addPatternSpan(self.scratch_lir_pattern_ids.items[save_len..]);
 }
 
 fn mapLowLevel(cir_op: CIR.Expr.LowLevel) ?LirExpr.LowLevel {
@@ -1092,4 +1097,99 @@ fn mapLowLevel(cir_op: CIR.Expr.LowLevel) ?LirExpr.LowLevel {
         // CIR ops that don't have a direct LIR equivalent
         else => null,
     };
+}
+
+// --- Tests ---
+
+const testing = std.testing;
+
+fn testInit() !struct { mir_store: MIR.Store, lir_store: LirExprStore, layout_store: layout.Store, module_env: @import("can").ModuleEnv, module_env_ptrs: [1]*const @import("can").ModuleEnv } {
+    const allocator = testing.allocator;
+    var result: @TypeOf(testInit() catch unreachable) = undefined;
+    result.module_env = try @import("can").ModuleEnv.init(allocator, "");
+    result.mir_store = try MIR.Store.init(allocator);
+    result.lir_store = LirExprStore.init(allocator);
+    // Must set module_env_ptrs AFTER struct is in final location
+    return result;
+}
+
+fn testInitLayoutStore(self: *@TypeOf(testInit() catch unreachable)) !void {
+    self.module_env_ptrs[0] = &self.module_env;
+    self.layout_store = try layout.Store.init(&self.module_env_ptrs, null, testing.allocator, @import("base").target.TargetUsize.native);
+}
+
+fn testDeinit(self: *@TypeOf(testInit() catch unreachable)) void {
+    self.layout_store.deinit();
+    self.lir_store.deinit();
+    self.mir_store.deinit(testing.allocator);
+    self.module_env.deinit();
+}
+
+test "lowerExprSpan re-entrancy: list of calls preserves all elements" {
+    const allocator = testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    // Build MIR: a list containing two calls, each with one argument.
+    // This triggers lowerExprSpan re-entrancy:
+    //   lowerList -> lowerExprSpan([call0, call1])
+    //     for call0: lowerExpr -> lowerCall -> lowerExprSpan([arg0])  <-- re-entrant!
+    //     for call1: lowerExpr -> lowerCall -> lowerExprSpan([arg1])  <-- re-entrant!
+
+    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
+    const list_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .list = .{ .elem = i64_mono } });
+
+    // func_args_mono: (I64) -> I64
+    const func_arg_span = try env.mir_store.monotype_store.addIdxSpan(allocator, &.{i64_mono});
+    const func_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .func = .{
+        .args = func_arg_span,
+        .ret = i64_mono,
+        .effectful = false,
+    } });
+
+    const ident_f = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
+    const sym_f = Symbol{ .module_idx = 0, .ident_idx = ident_f };
+
+    // func_lookup: lookup of `f`
+    const func_lookup = try env.mir_store.addExpr(allocator, .{ .lookup = sym_f }, func_mono, Region.zero());
+
+    // arg0 and arg1: integer literals
+    const arg0 = try env.mir_store.addExpr(allocator, .{ .int = .{
+        .value = .{ .bytes = @bitCast(@as(i128, 10)), .kind = .i128 },
+    } }, i64_mono, Region.zero());
+    const arg1 = try env.mir_store.addExpr(allocator, .{ .int = .{
+        .value = .{ .bytes = @bitCast(@as(i128, 20)), .kind = .i128 },
+    } }, i64_mono, Region.zero());
+
+    // call0: f(10)
+    const call0_args = try env.mir_store.addExprSpan(allocator, &.{arg0});
+    const call0 = try env.mir_store.addExpr(allocator, .{ .call = .{ .func = func_lookup, .args = call0_args } }, i64_mono, Region.zero());
+
+    // call1: f(20)
+    const call1_args = try env.mir_store.addExprSpan(allocator, &.{arg1});
+    const call1 = try env.mir_store.addExpr(allocator, .{ .call = .{ .func = func_lookup, .args = call1_args } }, i64_mono, Region.zero());
+
+    // list: [f(10), f(20)]
+    const list_elems = try env.mir_store.addExprSpan(allocator, &.{ call0, call1 });
+    const list_expr = try env.mir_store.addExpr(allocator, .{ .list = .{ .elems = list_elems } }, list_mono, Region.zero());
+
+    // Lower MIR -> LIR
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    defer translator.deinit();
+
+    const lir_id = try translator.lower(list_expr);
+    const lir_expr = env.lir_store.getExpr(lir_id);
+
+    // The list should have exactly 2 elements
+    try testing.expect(lir_expr == .list);
+    const elems = env.lir_store.getExprSpan(lir_expr.list.elems);
+    try testing.expectEqual(@as(usize, 2), elems.len);
+
+    // Both elements should be calls
+    const elem0 = env.lir_store.getExpr(elems[0]);
+    const elem1 = env.lir_store.getExpr(elems[1]);
+    try testing.expect(elem0 == .call);
+    try testing.expect(elem1 == .call);
 }
