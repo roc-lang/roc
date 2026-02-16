@@ -10,6 +10,15 @@
 //! This operates on MonoExprStore where every expression carries a concrete
 //! `layout_idx`, eliminating the type-variable corruption issues that
 //! plagued the previous CIR-level RC pass.
+//!
+//! ## Branch-aware RC: "branch-owns-its-RC" model
+//!
+//! For branching constructs (when/if), use counts are scoped per-branch.
+//! The enclosing scope provides exactly 1 reference per branching construct
+//! that uses a symbol. Each branch then adjusts at entry:
+//! - used 0 times: decref (release inherited ref)
+//! - used 1 time: no action (consumes inherited ref)
+//! - used N>1 times: incref(N-1)
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -73,7 +82,22 @@ pub const RcInsertPass = struct {
 
     /// Count how many times each symbol is referenced in the expression tree.
     /// Also records the layout for each symbol found in bind patterns.
+    /// Wrapper around countUsesInto that targets self.symbol_use_counts.
     fn countUses(self: *RcInsertPass, expr_id: MonoExprId) Allocator.Error!void {
+        try self.countUsesInto(expr_id, &self.symbol_use_counts);
+    }
+
+    /// Count uses into a fresh local map and return it. Caller owns the map.
+    fn countUsesLocal(self: *RcInsertPass, expr_id: MonoExprId) Allocator.Error!std.AutoHashMap(u64, u32) {
+        var local = std.AutoHashMap(u64, u32).init(self.allocator);
+        errdefer local.deinit();
+        try self.countUsesInto(expr_id, &local);
+        return local;
+    }
+
+    /// Count how many times each symbol is referenced, writing into `target`.
+    /// Also records the layout for each symbol found in bind patterns.
+    fn countUsesInto(self: *RcInsertPass, expr_id: MonoExprId, target: *std.AutoHashMap(u64, u32)) Allocator.Error!void {
         if (expr_id.isNone()) return;
 
         const expr = self.store.getExpr(expr_id);
@@ -81,7 +105,7 @@ pub const RcInsertPass = struct {
             .lookup => |lookup| {
                 if (!lookup.symbol.isNone()) {
                     const key = @as(u64, @bitCast(lookup.symbol));
-                    const gop = try self.symbol_use_counts.getOrPut(key);
+                    const gop = try target.getOrPut(key);
                     if (gop.found_existing) {
                         gop.value_ptr.* += 1;
                     } else {
@@ -95,145 +119,180 @@ pub const RcInsertPass = struct {
             .block => |block| {
                 const stmts = self.store.getStmts(block.stmts);
                 for (stmts) |stmt| {
-                    try self.registerPatternSymbol(stmt.pattern);
-                    try self.countUses(stmt.expr);
+                    try self.registerPatternSymbolInto(stmt.pattern, target);
+                    try self.countUsesInto(stmt.expr, target);
                 }
-                try self.countUses(block.final_expr);
+                try self.countUsesInto(block.final_expr, target);
             },
             .call => |call| {
-                try self.countUses(call.fn_expr);
+                try self.countUsesInto(call.fn_expr, target);
                 const args = self.store.getExprSpan(call.args);
                 for (args) |arg_id| {
-                    try self.countUses(arg_id);
+                    try self.countUsesInto(arg_id, target);
                 }
             },
             .if_then_else => |ite| {
+                // Count condition uses directly into target
                 const branches = self.store.getIfBranches(ite.branches);
                 for (branches) |branch| {
-                    try self.countUses(branch.cond);
-                    try self.countUses(branch.body);
+                    try self.countUsesInto(branch.cond, target);
                 }
-                try self.countUses(ite.final_else);
+                // Count branch body uses into local maps; each branching construct
+                // contributes 1 use per symbol to the enclosing scope.
+                var symbols_in_any_branch = std.AutoHashMap(u64, void).init(self.allocator);
+                defer symbols_in_any_branch.deinit();
+                for (branches) |branch| {
+                    var local = std.AutoHashMap(u64, u32).init(self.allocator);
+                    defer local.deinit();
+                    try self.countUsesInto(branch.body, &local);
+                    var it = local.keyIterator();
+                    while (it.next()) |key| try symbols_in_any_branch.put(key.*, {});
+                }
+                {
+                    var local = std.AutoHashMap(u64, u32).init(self.allocator);
+                    defer local.deinit();
+                    try self.countUsesInto(ite.final_else, &local);
+                    var it = local.keyIterator();
+                    while (it.next()) |key| try symbols_in_any_branch.put(key.*, {});
+                }
+                var it = symbols_in_any_branch.keyIterator();
+                while (it.next()) |key| {
+                    const gop = try target.getOrPut(key.*);
+                    if (gop.found_existing) gop.value_ptr.* += 1 else gop.value_ptr.* = 1;
+                }
             },
             .when => |w| {
-                try self.countUses(w.value);
+                try self.countUsesInto(w.value, target);
                 const branches = self.store.getWhenBranches(w.branches);
+                // Count branch body uses into local maps; each branching construct
+                // contributes 1 use per symbol to the enclosing scope.
+                var symbols_in_any_branch = std.AutoHashMap(u64, void).init(self.allocator);
+                defer symbols_in_any_branch.deinit();
                 for (branches) |branch| {
-                    try self.registerPatternSymbol(branch.pattern);
-                    try self.countUses(branch.body);
+                    try self.registerPatternSymbolInto(branch.pattern, target);
+                    var local = std.AutoHashMap(u64, u32).init(self.allocator);
+                    defer local.deinit();
+                    try self.countUsesInto(branch.body, &local);
+                    var it = local.keyIterator();
+                    while (it.next()) |key| try symbols_in_any_branch.put(key.*, {});
+                }
+                var it = symbols_in_any_branch.keyIterator();
+                while (it.next()) |key| {
+                    const gop = try target.getOrPut(key.*);
+                    if (gop.found_existing) gop.value_ptr.* += 1 else gop.value_ptr.* = 1;
                 }
             },
             .lambda => |lam| {
                 const params = self.store.getPatternSpan(lam.params);
                 for (params) |pat_id| {
-                    try self.registerPatternSymbol(pat_id);
+                    try self.registerPatternSymbolInto(pat_id, target);
                 }
-                try self.countUses(lam.body);
+                try self.countUsesInto(lam.body, target);
             },
             .closure => |clo| {
-                try self.countUses(clo.lambda);
+                try self.countUsesInto(clo.lambda, target);
             },
             .list => |list| {
                 const elems = self.store.getExprSpan(list.elems);
                 for (elems) |elem_id| {
-                    try self.countUses(elem_id);
+                    try self.countUsesInto(elem_id, target);
                 }
             },
             .record => |rec| {
                 const fields = self.store.getExprSpan(rec.fields);
                 for (fields) |field_id| {
-                    try self.countUses(field_id);
+                    try self.countUsesInto(field_id, target);
                 }
             },
             .tuple => |tup| {
                 const elems = self.store.getExprSpan(tup.elems);
                 for (elems) |elem_id| {
-                    try self.countUses(elem_id);
+                    try self.countUsesInto(elem_id, target);
                 }
             },
             .tag => |t| {
                 const args = self.store.getExprSpan(t.args);
                 for (args) |arg_id| {
-                    try self.countUses(arg_id);
+                    try self.countUsesInto(arg_id, target);
                 }
             },
             .field_access => |fa| {
-                try self.countUses(fa.record_expr);
+                try self.countUsesInto(fa.record_expr, target);
             },
             .tuple_access => |ta| {
-                try self.countUses(ta.tuple_expr);
+                try self.countUsesInto(ta.tuple_expr, target);
             },
             .binop => |b| {
-                try self.countUses(b.lhs);
-                try self.countUses(b.rhs);
+                try self.countUsesInto(b.lhs, target);
+                try self.countUsesInto(b.rhs, target);
             },
             .unary_minus => |u| {
-                try self.countUses(u.expr);
+                try self.countUsesInto(u.expr, target);
             },
             .unary_not => |u| {
-                try self.countUses(u.expr);
+                try self.countUsesInto(u.expr, target);
             },
             .nominal => |n| {
-                try self.countUses(n.backing_expr);
+                try self.countUsesInto(n.backing_expr, target);
             },
             .early_return => |ret| {
-                try self.countUses(ret.expr);
+                try self.countUsesInto(ret.expr, target);
             },
             .dbg => |d| {
-                try self.countUses(d.expr);
+                try self.countUsesInto(d.expr, target);
             },
             .expect => |e| {
-                try self.countUses(e.cond);
-                try self.countUses(e.body);
+                try self.countUsesInto(e.cond, target);
+                try self.countUsesInto(e.body, target);
             },
             .low_level => |ll| {
                 const args = self.store.getExprSpan(ll.args);
                 for (args) |arg_id| {
-                    try self.countUses(arg_id);
+                    try self.countUsesInto(arg_id, target);
                 }
             },
             .hosted_call => |hc| {
                 const args = self.store.getExprSpan(hc.args);
                 for (args) |arg_id| {
-                    try self.countUses(arg_id);
+                    try self.countUsesInto(arg_id, target);
                 }
             },
             .str_concat => |span| {
                 const parts = self.store.getExprSpan(span);
                 for (parts) |part_id| {
-                    try self.countUses(part_id);
+                    try self.countUsesInto(part_id, target);
                 }
             },
             .int_to_str => |its| {
-                try self.countUses(its.value);
+                try self.countUsesInto(its.value, target);
             },
             .float_to_str => |fts| {
-                try self.countUses(fts.value);
+                try self.countUsesInto(fts.value, target);
             },
             .dec_to_str => |d| {
-                try self.countUses(d);
+                try self.countUsesInto(d, target);
             },
             .str_escape_and_quote => |s| {
-                try self.countUses(s);
+                try self.countUsesInto(s, target);
             },
             .discriminant_switch => |ds| {
-                try self.countUses(ds.value);
+                try self.countUsesInto(ds.value, target);
                 const branches = self.store.getExprSpan(ds.branches);
                 for (branches) |br_id| {
-                    try self.countUses(br_id);
+                    try self.countUsesInto(br_id, target);
                 }
             },
             .tag_payload_access => |tpa| {
-                try self.countUses(tpa.value);
+                try self.countUsesInto(tpa.value, target);
             },
             .for_loop => |fl| {
-                try self.countUses(fl.list_expr);
-                try self.registerPatternSymbol(fl.elem_pattern);
-                try self.countUses(fl.body);
+                try self.countUsesInto(fl.list_expr, target);
+                try self.registerPatternSymbolInto(fl.elem_pattern, target);
+                try self.countUsesInto(fl.body, target);
             },
             .while_loop => |wl| {
-                try self.countUses(wl.cond);
-                try self.countUses(wl.body);
+                try self.countUsesInto(wl.cond, target);
+                try self.countUsesInto(wl.body, target);
             },
             // RC ops themselves and terminals don't need counting
             .incref, .decref, .free => {},
@@ -253,8 +312,13 @@ pub const RcInsertPass = struct {
         }
     }
 
-    /// Register a pattern's bound symbol with its layout.
+    /// Register a pattern's bound symbol with its layout (into self.symbol_use_counts).
     fn registerPatternSymbol(self: *RcInsertPass, pat_id: MonoPatternId) Allocator.Error!void {
+        try self.registerPatternSymbolInto(pat_id, &self.symbol_use_counts);
+    }
+
+    /// Register a pattern's bound symbol with its layout into a given target map.
+    fn registerPatternSymbolInto(self: *RcInsertPass, pat_id: MonoPatternId, target: *std.AutoHashMap(u64, u32)) Allocator.Error!void {
         if (pat_id.isNone()) return;
         const pat = self.store.getPattern(pat_id);
         switch (pat) {
@@ -262,8 +326,8 @@ pub const RcInsertPass = struct {
                 if (!bind.symbol.isNone()) {
                     const key = @as(u64, @bitCast(bind.symbol));
                     try self.symbol_layouts.put(key, bind.layout_idx);
-                    if (!self.symbol_use_counts.contains(key)) {
-                        try self.symbol_use_counts.put(key, 0);
+                    if (!target.contains(key)) {
+                        try target.put(key, 0);
                     }
                 }
             },
@@ -271,32 +335,32 @@ pub const RcInsertPass = struct {
                 if (!as_pat.symbol.isNone()) {
                     const key = @as(u64, @bitCast(as_pat.symbol));
                     try self.symbol_layouts.put(key, as_pat.layout_idx);
-                    if (!self.symbol_use_counts.contains(key)) {
-                        try self.symbol_use_counts.put(key, 0);
+                    if (!target.contains(key)) {
+                        try target.put(key, 0);
                     }
                 }
-                try self.registerPatternSymbol(as_pat.inner);
+                try self.registerPatternSymbolInto(as_pat.inner, target);
             },
             .tag => |t| {
                 for (self.store.getPatternSpan(t.args)) |arg_pat| {
-                    try self.registerPatternSymbol(arg_pat);
+                    try self.registerPatternSymbolInto(arg_pat, target);
                 }
             },
             .record => |r| {
                 for (self.store.getPatternSpan(r.fields)) |field_pat| {
-                    try self.registerPatternSymbol(field_pat);
+                    try self.registerPatternSymbolInto(field_pat, target);
                 }
             },
             .tuple => |t| {
                 for (self.store.getPatternSpan(t.elems)) |elem_pat| {
-                    try self.registerPatternSymbol(elem_pat);
+                    try self.registerPatternSymbolInto(elem_pat, target);
                 }
             },
             .list => |l| {
                 for (self.store.getPatternSpan(l.prefix)) |pre_pat| {
-                    try self.registerPatternSymbol(pre_pat);
+                    try self.registerPatternSymbolInto(pre_pat, target);
                 }
-                try self.registerPatternSymbol(l.rest);
+                try self.registerPatternSymbolInto(l.rest, target);
             },
             .wildcard, .int_literal, .float_literal, .str_literal => {},
         }
@@ -412,7 +476,7 @@ pub const RcInsertPass = struct {
     }
 
     /// Process an if-then-else expression.
-    /// Each branch is processed independently.
+    /// Each branch gets per-branch RC ops based on local use counts.
     fn processIfThenElse(
         self: *RcInsertPass,
         branches_span: MonoIR.MonoIfBranchSpan,
@@ -421,30 +485,54 @@ pub const RcInsertPass = struct {
         region: Region,
     ) Allocator.Error!MonoExprId {
         const branches = self.store.getIfBranches(branches_span);
-        var changed = false;
+
+        // Collect per-branch local use counts and union of all refcounted symbols
+        var branch_use_maps = std.ArrayList(std.AutoHashMap(u64, u32)).empty;
+        defer {
+            for (branch_use_maps.items) |*m| m.deinit();
+            branch_use_maps.deinit(self.allocator);
+        }
+        var symbols_in_any_branch = std.AutoHashMap(u64, void).init(self.allocator);
+        defer symbols_in_any_branch.deinit();
+
+        for (branches) |branch| {
+            var local = try self.countUsesLocal(branch.body);
+            var it = local.keyIterator();
+            while (it.next()) |key| {
+                const k = key.*;
+                if (self.symbol_layouts.get(k)) |lay| {
+                    if (self.layoutNeedsRc(lay)) try symbols_in_any_branch.put(k, {});
+                }
+            }
+            try branch_use_maps.append(self.allocator, local);
+        }
+        // else branch
+        var else_uses = try self.countUsesLocal(final_else_id);
+        defer else_uses.deinit();
+        {
+            var it = else_uses.keyIterator();
+            while (it.next()) |key| {
+                const k = key.*;
+                if (self.symbol_layouts.get(k)) |lay| {
+                    if (self.layoutNeedsRc(lay)) try symbols_in_any_branch.put(k, {});
+                }
+            }
+        }
 
         var new_branches = std.ArrayList(MonoIfBranch).empty;
         defer new_branches.deinit(self.allocator);
 
-        for (branches) |branch| {
-            const new_body = try self.processExpr(branch.body);
-            if (new_body != branch.body) changed = true;
+        for (branches, 0..) |branch, i| {
+            const processed_body = try self.processExpr(branch.body);
+            const new_body = try self.wrapBranchWithRcOps(processed_body, &branch_use_maps.items[i], &symbols_in_any_branch, result_layout, region);
             try new_branches.append(self.allocator, .{
                 .cond = branch.cond,
                 .body = new_body,
             });
         }
 
-        const new_else = try self.processExpr(final_else_id);
-        if (new_else != final_else_id) changed = true;
-
-        if (!changed) {
-            return self.store.addExpr(.{ .if_then_else = .{
-                .branches = branches_span,
-                .final_else = final_else_id,
-                .result_layout = result_layout,
-            } }, region);
-        }
+        const processed_else = try self.processExpr(final_else_id);
+        const new_else = try self.wrapBranchWithRcOps(processed_else, &else_uses, &symbols_in_any_branch, result_layout, region);
 
         const new_branch_span = try self.store.addIfBranches(new_branches.items);
         return self.store.addExpr(.{ .if_then_else = .{
@@ -455,7 +543,7 @@ pub const RcInsertPass = struct {
     }
 
     /// Process a when expression.
-    /// Each branch body is processed independently.
+    /// Each branch gets per-branch RC ops based on local use counts.
     fn processWhen(
         self: *RcInsertPass,
         value: MonoExprId,
@@ -465,28 +553,49 @@ pub const RcInsertPass = struct {
         region: Region,
     ) Allocator.Error!MonoExprId {
         const branches = self.store.getWhenBranches(branches_span);
-        var changed = false;
+
+        // Collect symbols bound by branch patterns — these are local to each branch
+        // and must NOT get per-branch RC ops from the enclosing scope.
+        var pattern_bound = std.AutoHashMap(u64, void).init(self.allocator);
+        defer pattern_bound.deinit();
+        for (branches) |branch| {
+            try self.collectPatternSymbols(branch.pattern, &pattern_bound);
+        }
+
+        // Collect per-branch local use counts and union of all refcounted symbols
+        var branch_use_maps = std.ArrayList(std.AutoHashMap(u64, u32)).empty;
+        defer {
+            for (branch_use_maps.items) |*m| m.deinit();
+            branch_use_maps.deinit(self.allocator);
+        }
+        var symbols_in_any_branch = std.AutoHashMap(u64, void).init(self.allocator);
+        defer symbols_in_any_branch.deinit();
+
+        for (branches) |branch| {
+            var local = try self.countUsesLocal(branch.body);
+            var it = local.keyIterator();
+            while (it.next()) |key| {
+                const k = key.*;
+                // Skip pattern-bound symbols — they're local to their branch
+                if (pattern_bound.contains(k)) continue;
+                if (self.symbol_layouts.get(k)) |lay| {
+                    if (self.layoutNeedsRc(lay)) try symbols_in_any_branch.put(k, {});
+                }
+            }
+            try branch_use_maps.append(self.allocator, local);
+        }
 
         var new_branches = std.ArrayList(MonoWhenBranch).empty;
         defer new_branches.deinit(self.allocator);
 
-        for (branches) |branch| {
-            const new_body = try self.processExpr(branch.body);
-            if (new_body != branch.body) changed = true;
+        for (branches, 0..) |branch, i| {
+            const processed_body = try self.processExpr(branch.body);
+            const new_body = try self.wrapBranchWithRcOps(processed_body, &branch_use_maps.items[i], &symbols_in_any_branch, result_layout, region);
             try new_branches.append(self.allocator, .{
                 .pattern = branch.pattern,
                 .guard = branch.guard,
                 .body = new_body,
             });
-        }
-
-        if (!changed) {
-            return self.store.addExpr(.{ .when = .{
-                .value = value,
-                .value_layout = value_layout,
-                .branches = branches_span,
-                .result_layout = result_layout,
-            } }, region);
         }
 
         const new_branch_span = try self.store.addWhenBranches(new_branches.items);
@@ -498,8 +607,96 @@ pub const RcInsertPass = struct {
         } }, region);
     }
 
+    /// Collect all symbols bound by a pattern into a set.
+    fn collectPatternSymbols(self: *const RcInsertPass, pat_id: MonoPatternId, set: *std.AutoHashMap(u64, void)) Allocator.Error!void {
+        if (pat_id.isNone()) return;
+        const pat = self.store.getPattern(pat_id);
+        switch (pat) {
+            .bind => |bind| {
+                if (!bind.symbol.isNone()) {
+                    try set.put(@as(u64, @bitCast(bind.symbol)), {});
+                }
+            },
+            .as_pattern => |as_pat| {
+                if (!as_pat.symbol.isNone()) {
+                    try set.put(@as(u64, @bitCast(as_pat.symbol)), {});
+                }
+                try self.collectPatternSymbols(as_pat.inner, set);
+            },
+            .tag => |t| {
+                for (self.store.getPatternSpan(t.args)) |arg_pat| {
+                    try self.collectPatternSymbols(arg_pat, set);
+                }
+            },
+            .record => |r| {
+                for (self.store.getPatternSpan(r.fields)) |field_pat| {
+                    try self.collectPatternSymbols(field_pat, set);
+                }
+            },
+            .tuple => |t| {
+                for (self.store.getPatternSpan(t.elems)) |elem_pat| {
+                    try self.collectPatternSymbols(elem_pat, set);
+                }
+            },
+            .list => |l| {
+                for (self.store.getPatternSpan(l.prefix)) |pre_pat| {
+                    try self.collectPatternSymbols(pre_pat, set);
+                }
+                try self.collectPatternSymbols(l.rest, set);
+            },
+            .wildcard, .int_literal, .float_literal, .str_literal => {},
+        }
+    }
+
+    /// Wrap a branch body with per-branch RC operations.
+    /// Each branch inherits 1 reference per symbol from the enclosing scope.
+    /// - local_count == 0: emit decref (release inherited ref)
+    /// - local_count == 1: no action (consumes the inherited ref)
+    /// - local_count > 1: emit incref(count - 1)
+    fn wrapBranchWithRcOps(
+        self: *RcInsertPass,
+        body: MonoExprId,
+        local_uses: *const std.AutoHashMap(u64, u32),
+        symbols_in_any_branch: *const std.AutoHashMap(u64, void),
+        result_layout: LayoutIdx,
+        region: Region,
+    ) Allocator.Error!MonoExprId {
+        var rc_stmts = std.ArrayList(MonoStmt).empty;
+        defer rc_stmts.deinit(self.allocator);
+
+        var it = symbols_in_any_branch.keyIterator();
+        while (it.next()) |key_ptr| {
+            const key = key_ptr.*;
+            const layout_idx = self.symbol_layouts.get(key) orelse continue;
+            const symbol: Symbol = @bitCast(key);
+            const local_count = local_uses.get(key) orelse 0;
+
+            if (local_count == 0) {
+                try self.emitDecrefInto(symbol, layout_idx, region, &rc_stmts);
+            } else if (local_count > 1) {
+                try self.emitIncrefInto(symbol, layout_idx, @intCast(local_count - 1), region, &rc_stmts);
+            }
+            // local_count == 1: no action needed
+        }
+
+        if (rc_stmts.items.len == 0) return body;
+
+        // Wrap body in a block with RC stmts prepended
+        const stmts_span = try self.store.addStmts(rc_stmts.items);
+        return self.store.addExpr(.{ .block = .{
+            .stmts = stmts_span,
+            .final_expr = body,
+            .result_layout = result_layout,
+        } }, region);
+    }
+
     /// Emit an incref statement into the statement buffer.
     fn emitIncref(self: *RcInsertPass, symbol: Symbol, layout_idx: LayoutIdx, count: u16, region: Region) Allocator.Error!void {
+        try self.emitIncrefInto(symbol, layout_idx, count, region, &self.stmt_buf);
+    }
+
+    /// Emit an incref statement into a given statement list.
+    fn emitIncrefInto(self: *RcInsertPass, symbol: Symbol, layout_idx: LayoutIdx, count: u16, region: Region, stmts: *std.ArrayList(MonoStmt)) Allocator.Error!void {
         const lookup_id = try self.store.addExpr(.{ .lookup = .{
             .symbol = symbol,
             .layout_idx = layout_idx,
@@ -512,7 +709,7 @@ pub const RcInsertPass = struct {
         } }, region);
 
         const wildcard = try self.store.addPattern(.{ .wildcard = .{ .layout_idx = layout_idx } }, region);
-        try self.stmt_buf.append(self.allocator, .{
+        try stmts.append(self.allocator, .{
             .pattern = wildcard,
             .expr = incref_id,
         });
@@ -520,6 +717,11 @@ pub const RcInsertPass = struct {
 
     /// Emit a decref statement into the statement buffer.
     fn emitDecref(self: *RcInsertPass, symbol: Symbol, layout_idx: LayoutIdx, region: Region) Allocator.Error!void {
+        try self.emitDecrefInto(symbol, layout_idx, region, &self.stmt_buf);
+    }
+
+    /// Emit a decref statement into a given statement list.
+    fn emitDecrefInto(self: *RcInsertPass, symbol: Symbol, layout_idx: LayoutIdx, region: Region, stmts: *std.ArrayList(MonoStmt)) Allocator.Error!void {
         const lookup_id = try self.store.addExpr(.{ .lookup = .{
             .symbol = symbol,
             .layout_idx = layout_idx,
@@ -531,7 +733,7 @@ pub const RcInsertPass = struct {
         } }, region);
 
         const wildcard = try self.store.addPattern(.{ .wildcard = .{ .layout_idx = layout_idx } }, region);
-        try self.stmt_buf.append(self.allocator, .{
+        try stmts.append(self.allocator, .{
             .pattern = wildcard,
             .expr = decref_id,
         });
