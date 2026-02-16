@@ -12026,8 +12026,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             try self.codegen.emit.fmovFloatFromGen(.double, reg, .IP0);
                         } else {
                             // x86_64: Store bits to stack, then load into float register
-                            // Use a temporary stack slot
-                            const stack_offset: i32 = -16; // Below any local variables
+                            const stack_offset = self.codegen.allocStackSlot(8);
                             try self.codegen.emit.movRegImm64(.R11, @bitCast(bits));
                             try self.codegen.emit.movMemReg(.w64, .RBP, stack_offset, .R11);
                             try self.codegen.emit.movsdRegMem(reg, .RBP, stack_offset);

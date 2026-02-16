@@ -61,13 +61,11 @@ ASR/SAR by 63 to sign-extend; unsigned values zero-extend. Extracted shared logi
 arithmetic eval tests as correctness baseline. The bug was latent (all current 128-bit
 code paths use `.stack_i128`/`.immediate_i128`) but the fix prevents future miscompilation.
 
-### [H6] `ensureInFloatReg` uses hardcoded stack offset -16
-**File:** `src/backend/dev/LirCodeGen.zig` (line 11606)
+### ~~[H6] `ensureInFloatReg` uses hardcoded stack offset -16~~ FIXED
 
-Writes to `[RBP-16]` which can overlap with local variable slots allocated from the frame
-pointer downward.
-
-**Fix:** Use `self.codegen.allocStackSlot(8)` instead of a hardcoded offset.
+Replaced hardcoded `[RBP-16]` with `self.codegen.allocStackSlot(8)` in both LirCodeGen
+and MonoExprCodeGen. The x86_64 path for loading float immediates now uses a properly
+allocated stack slot instead of a fixed offset that could overlap with local variables.
 
 ### [H7] `TailRecursion` skips non-bind parameters
 **File:** `src/lir/TailRecursion.zig` (line 272)
