@@ -121,15 +121,10 @@ LirCodeGen and MonoExprCodeGen.
 
 ## MEDIUM
 
-### [M1] Heap buffer overflow for large string literals
-**File:** `src/backend/dev/LirCodeGen.zig` (line 8388)
+### ~~[M1] Heap buffer overflow for large string literals~~ FIXED
 
-Tail bytes (1-7 remaining after 8-byte chunks) are written as a full 8-byte store past the
-heap allocation boundary. Comment says "heap has space" but allocation is for exactly
-`str_bytes.len` bytes.
-
-**Fix:** Either allocate `alignForward(str_bytes.len, 8)` bytes, or use byte-sized stores
-for the remainder.
+Changed heap allocation size from `str_bytes.len` to `alignForward(str_bytes.len, 8)` in
+both LirCodeGen and MonoExprCodeGen, since the tail write stores a full 8-byte word.
 
 ### [M2] `copyStackToStack` overwrites adjacent data on aarch64
 **File:** `src/backend/dev/LirCodeGen.zig` (line 3914)
@@ -168,13 +163,10 @@ comparison points and write past the array bounds (UB).
 
 **Fix:** Use an `ArrayList`, or add a bounds check with `unreachable`.
 
-### [M7] `generateNumFromStr` signedness from enum parity
-**File:** `src/backend/dev/LirCodeGen.zig` (line 5106)
+### ~~[M7] `generateNumFromStr` signedness from enum parity~~ FIXED
 
-`is_signed = (idx_int % 2 == 0)` depends on layout enum ordering. Breaks silently if enum
-values are reordered.
-
-**Fix:** Use an explicit switch for signedness, mirroring the width switch.
+Replaced `idx_int % 2 == 0` parity check with explicit switch on `payload_idx` for
+signedness determination in both LirCodeGen and MonoExprCodeGen.
 
 ### ~~[M8] Parallel array OOM desync in `addExpr`/`addPattern`~~ FIXED
 

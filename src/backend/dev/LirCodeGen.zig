@@ -5196,22 +5196,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const payload_idx = if (variants.len > 1) variants.get(1).payload_layout else variants.get(0).payload_layout;
 
             // Determine integer width and signedness from the layout index
-            const idx_int = @intFromEnum(payload_idx);
             const int_width: u8 = switch (payload_idx) {
                 .u8, .i8 => 1,
                 .u16, .i16 => 2,
                 .u32, .i32 => 4,
                 .u64, .i64 => 8,
-                else => {
-                    // For u128/i128/float/dec, fall back to tag union size
-                    if (idx_int >= 3 and idx_int <= 12) {
-                        unreachable; // Should have matched above
-                    }
-                    // Non-integer num_from_str not yet supported
-                    unreachable;
-                },
+                else => unreachable, // Non-integer num_from_str not yet supported
             };
-            const is_signed: bool = (idx_int % 2 == 0); // i8=4, i16=6, i32=8, i64=10 are even
+            const is_signed: bool = switch (payload_idx) {
+                .i8, .i16, .i32, .i64 => true,
+                .u8, .u16, .u32, .u64 => false,
+                else => unreachable,
+            };
 
             const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_int_from_str);
             const base_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .FP else .RBP;
@@ -8752,8 +8748,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const heap_ptr_slot: i32 = self.codegen.allocStackSlot(8);
 
                 // Allocate string using CallBuilder with automatic R12 handling
+                // Align up to 8 bytes: tail write below stores a full 8-byte word
+                const alloc_size = std.mem.alignForward(usize, str_bytes.len, 8);
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                try builder.addImmArg(@intCast(str_bytes.len));
+                try builder.addImmArg(@intCast(alloc_size));
                 try builder.addImmArg(1); // byte alignment
                 try builder.addImmArg(0); // elements_refcounted = false
                 try builder.addRegArg(roc_ops_reg);
