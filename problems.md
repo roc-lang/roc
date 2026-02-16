@@ -126,42 +126,33 @@ LirCodeGen and MonoExprCodeGen.
 Changed heap allocation size from `str_bytes.len` to `alignForward(str_bytes.len, 8)` in
 both LirCodeGen and MonoExprCodeGen, since the tail write stores a full 8-byte word.
 
-### [M2] `copyStackToStack` overwrites adjacent data on aarch64
-**File:** `src/backend/dev/LirCodeGen.zig` (line 3914)
+### ~~[M2] `copyStackToStack` overwrites adjacent data on aarch64~~ FIXED
 
-Remaining 1-3 bytes after 8-byte and 4-byte chunks are copied as a 4-byte store, writing
-1-3 extra bytes into the next stack slot. The x86_64 path correctly handles this byte-by-byte.
+Changed aarch64 remaining-bytes path from a single 4-byte store to byte-by-byte copy using
+`emitLoadStackByte`/`emitStoreStackByte`. Fixed in both LirCodeGen and MonoExprCodeGen.
 
-**Fix:** Use byte-by-byte copy on aarch64 for the remaining 1-3 bytes.
+### ~~[M3] `zeroStackArea` overwrites adjacent data for non-8-aligned sizes~~ FIXED
 
-### [M3] `zeroStackArea` overwrites adjacent data for non-8-aligned sizes
-**File:** `src/backend/dev/LirCodeGen.zig` (line 8290)
+Replaced single 8-byte store for remaining bytes with a 4/2/1 byte chain using
+arch-appropriate store instructions. Fixed in both LirCodeGen and MonoExprCodeGen.
 
-Remaining 1-7 bytes are zeroed with a full 8-byte store.
+### ~~[M4] `copyBytesToStackOffset` overwrites adjacent data~~ FIXED
 
-**Fix:** Use appropriately-sized stores for the remaining bytes.
+Changed `while (copied < size)` to `while (copied + 8 <= size)` and added 4/2/1 byte tail
+handling with arch-appropriate load/store instructions. Fixed in both LirCodeGen and
+MonoExprCodeGen.
 
-### [M4] `copyBytesToStackOffset` overwrites adjacent data
-**File:** `src/backend/dev/LirCodeGen.zig` (line 8278)
+### ~~[M5] `copyStackToPtr` drops 1-3 tail bytes on aarch64~~ FIXED
 
-Same pattern — 8-byte chunks with no handling of the tail bytes.
+Added 2-byte and 1-byte handling after the existing 4-byte remainder, using
+`emitLoadStackHalfword`/`strhRegMem` and `emitLoadStackByte`/`strbRegMem` on aarch64.
+Fixed in both LirCodeGen and MonoExprCodeGen.
 
-**Fix:** Handle tail bytes with appropriately-sized loads/stores.
+### ~~[M6] `generateStructuralComparison` fixed-size array of 32, no bounds check~~ FIXED
 
-### [M5] `copyStackToPtr` drops 1-3 tail bytes on aarch64
-**File:** `src/backend/dev/LirCodeGen.zig` (line 11938)
-
-After the 4-byte store for the remainder, if 1-3 bytes still remain, they are not copied.
-
-**Fix:** Handle the full remainder chain: 4 bytes, then 2 bytes, then 1 byte.
-
-### [M6] `generateStructuralComparison` fixed-size array of 32, no bounds check
-**File:** `src/backend/dev/LirCodeGen.zig` (line 5666)
-
-Records with many fields or large fields expanding to many 8-byte slots can exceed 32
-comparison points and write past the array bounds (UB).
-
-**Fix:** Use an `ArrayList`, or add a bounds check with `unreachable`.
+Replaced fixed-size `[32]i32`/`[32]u32` arrays with `std.ArrayList(i32)`/`std.ArrayList(u32)`
+to support records/tuples with arbitrarily many comparison points. Fixed in both LirCodeGen
+and MonoExprCodeGen.
 
 ### ~~[M7] `generateNumFromStr` signedness from enum parity~~ FIXED
 

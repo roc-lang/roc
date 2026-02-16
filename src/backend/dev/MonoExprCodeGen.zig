@@ -3914,21 +3914,18 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     copied += 4;
                 }
 
-                // For simplicity, handle remaining 1-3 bytes by copying as 32-bit
-                // (which may copy extra bytes, but they'll be overwritten or unused)
+                // Handle remaining 1-3 bytes byte-by-byte
                 if (copied < size) {
                     const final_src: i32 = src_offset + @as(i32, @intCast(copied));
                     const final_dest: i32 = dest_offset + @as(i32, @intCast(copied));
-                    if (arch == .aarch64 or arch == .aarch64_be) {
-                        // Copy remaining 1-3 bytes as a single 32-bit operation
-                        // Extra bytes will be overwritten or are beyond the allocation
-                        try self.codegen.emit.ldrRegMemSoff(.w32, temp, .FP, final_src);
-                        try self.codegen.emit.strRegMemSoff(.w32, temp, .FP, final_dest);
-                    } else {
-                        const bytes_left = size - copied;
-                        for (0..bytes_left) |i| {
-                            const byte_src = final_src + @as(i32, @intCast(i));
-                            const byte_dest = final_dest + @as(i32, @intCast(i));
+                    const bytes_left = size - copied;
+                    for (0..bytes_left) |i| {
+                        const byte_src = final_src + @as(i32, @intCast(i));
+                        const byte_dest = final_dest + @as(i32, @intCast(i));
+                        if (comptime target.toCpuArch() == .aarch64) {
+                            try self.codegen.emitLoadStackByte(temp, byte_src);
+                            try self.codegen.emitStoreStackByte(byte_dest, temp);
+                        } else {
                             try self.codegen.emit.movRegMem(.w8, temp, .RBP, byte_src);
                             try self.codegen.emit.movMemReg(.w8, .RBP, byte_dest, temp);
                         }
@@ -5776,9 +5773,10 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
             // Calculate comparison byte offsets and sizes using the layout store
             // This must match how generateTuple/generateRecord place elements
-            var offsets: [32]i32 = undefined; // Max 32 comparison points
-            var sizes: [32]u32 = undefined; // Size at each comparison point
-            var offset_count: usize = 0;
+            var cmp_offsets: std.ArrayList(i32) = .empty;
+            defer cmp_offsets.deinit(self.allocator);
+            var cmp_sizes: std.ArrayList(u32) = .empty;
+            defer cmp_sizes.deinit(self.allocator);
 
             const ls = self.layout_store;
 
@@ -5793,26 +5791,23 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                 const field_size = layout_store.getRecordFieldSize(record_layout.data.record.idx, @intCast(i));
                                 const field_slots: usize = @max(1, (field_size + 7) / 8);
                                 for (0..field_slots) |j| {
-                                    offsets[offset_count] = @as(i32, @intCast(field_offset)) + @as(i32, @intCast(j)) * 8;
+                                    try cmp_offsets.append(self.allocator,@as(i32, @intCast(field_offset)) + @as(i32, @intCast(j)) * 8);
                                     const remaining = field_size - @as(u32, @intCast(j)) * 8;
-                                    sizes[offset_count] = @min(remaining, 8);
-                                    offset_count += 1;
+                                    try cmp_sizes.append(self.allocator,@min(remaining, 8));
                                 }
                             }
                         } else {
                             // Fallback: 16-byte slots
                             for (0..elem_exprs.len) |i| {
-                                offsets[offset_count] = @as(i32, @intCast(i)) * 16;
-                                sizes[offset_count] = 8;
-                                offset_count += 1;
+                                try cmp_offsets.append(self.allocator,@as(i32, @intCast(i)) * 16);
+                                try cmp_sizes.append(self.allocator,8);
                             }
                         }
                     } else {
                         // No layout store: 16-byte slots
                         for (0..elem_exprs.len) |i| {
-                            offsets[offset_count] = @as(i32, @intCast(i)) * 16;
-                            sizes[offset_count] = 8;
-                            offset_count += 1;
+                            try cmp_offsets.append(self.allocator,@as(i32, @intCast(i)) * 16);
+                            try cmp_sizes.append(self.allocator,8);
                         }
                     }
                 },
@@ -5828,10 +5823,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                 const elem_slots: usize = @max(1, (elem_size + 7) / 8);
 
                                 for (0..elem_slots) |j| {
-                                    offsets[offset_count] = @as(i32, @intCast(elem_offset)) + @as(i32, @intCast(j)) * 8;
+                                    try cmp_offsets.append(self.allocator,@as(i32, @intCast(elem_offset)) + @as(i32, @intCast(j)) * 8);
                                     const remaining = elem_size - @as(u32, @intCast(j)) * 8;
-                                    sizes[offset_count] = @min(remaining, 8);
-                                    offset_count += 1;
+                                    try cmp_sizes.append(self.allocator,@min(remaining, 8));
                                 }
                             }
                         } else {
@@ -5844,9 +5838,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                     else => 1,
                                 };
                                 for (0..elem_slots) |_| {
-                                    offsets[offset_count] = current_offset;
-                                    sizes[offset_count] = 8;
-                                    offset_count += 1;
+                                    try cmp_offsets.append(self.allocator,current_offset);
+                                    try cmp_sizes.append(self.allocator,8);
                                     current_offset += 8;
                                 }
                             }
@@ -5861,9 +5854,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                 else => 1,
                             };
                             for (0..elem_slots) |_| {
-                                offsets[offset_count] = current_offset;
-                                sizes[offset_count] = 8;
-                                offset_count += 1;
+                                try cmp_offsets.append(self.allocator,current_offset);
+                                try cmp_sizes.append(self.allocator,8);
                                 current_offset += 8;
                             }
                         }
@@ -5876,9 +5868,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             const temp_rhs = try self.allocTempGeneral();
 
             // Compare all elements at their respective offsets
-            for (0..offset_count) |i| {
-                const offset: i32 = offsets[i];
-                const cmp_size: u32 = sizes[i];
+            for (0..cmp_offsets.items.len) |i| {
+                const offset: i32 = cmp_offsets.items[i];
+                const cmp_size: u32 = cmp_sizes.items[i];
 
                 // Load LHS element
                 switch (lhs_loc) {
@@ -8692,10 +8684,35 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             // Copy in 8-byte chunks
             const reg = try self.allocTempGeneral();
             var copied: u32 = 0;
-            while (copied < size) {
+            while (copied + 8 <= size) {
                 try self.codegen.emitLoadStack(.w64, reg, src_offset + @as(i32, @intCast(copied)));
                 try self.codegen.emitStoreStack(.w64, dest_offset + @as(i32, @intCast(copied)), reg);
                 copied += 8;
+            }
+            // Handle remaining bytes with appropriately-sized loads/stores
+            if (size - copied >= 4) {
+                try self.codegen.emitLoadStack(.w32, reg, src_offset + @as(i32, @intCast(copied)));
+                try self.codegen.emitStoreStack(.w32, dest_offset + @as(i32, @intCast(copied)), reg);
+                copied += 4;
+            }
+            if (size - copied >= 2) {
+                if (comptime target.toCpuArch() == .aarch64) {
+                    try self.codegen.emitLoadStackHalfword(reg, src_offset + @as(i32, @intCast(copied)));
+                    try self.codegen.emitStoreStackHalfword(dest_offset + @as(i32, @intCast(copied)), reg);
+                } else {
+                    try self.codegen.emitLoadStack(.w16, reg, src_offset + @as(i32, @intCast(copied)));
+                    try self.codegen.emitStoreStack(.w16, dest_offset + @as(i32, @intCast(copied)), reg);
+                }
+                copied += 2;
+            }
+            if (size - copied >= 1) {
+                if (comptime target.toCpuArch() == .aarch64) {
+                    try self.codegen.emitLoadStackByte(reg, src_offset + @as(i32, @intCast(copied)));
+                    try self.codegen.emitStoreStackByte(dest_offset + @as(i32, @intCast(copied)), reg);
+                } else {
+                    try self.codegen.emitLoadStack(.w8, reg, src_offset + @as(i32, @intCast(copied)));
+                    try self.codegen.emitStoreStack(.w8, dest_offset + @as(i32, @intCast(copied)), reg);
+                }
             }
             self.codegen.freeGeneral(reg);
         }
@@ -8712,9 +8729,27 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 current_offset += 8;
                 remaining -= 8;
             }
-            // Handle remaining bytes (simplified - stores full 8 bytes even for partial)
-            if (remaining > 0) {
-                try self.codegen.emitStoreStack(.w64, current_offset, reg);
+            // Handle remaining bytes with appropriately-sized stores
+            if (remaining >= 4) {
+                try self.codegen.emitStoreStack(.w32, current_offset, reg);
+                current_offset += 4;
+                remaining -= 4;
+            }
+            if (remaining >= 2) {
+                if (comptime target.toCpuArch() == .aarch64) {
+                    try self.codegen.emitStoreStackHalfword(current_offset, reg);
+                } else {
+                    try self.codegen.emitStoreStack(.w16, current_offset, reg);
+                }
+                current_offset += 2;
+                remaining -= 2;
+            }
+            if (remaining >= 1) {
+                if (comptime target.toCpuArch() == .aarch64) {
+                    try self.codegen.emitStoreStackByte(current_offset, reg);
+                } else {
+                    try self.codegen.emitStoreStack(.w8, current_offset, reg);
+                }
             }
 
             self.codegen.freeGeneral(reg);
@@ -12371,6 +12406,27 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         src_offset += 4;
                         dst_offset += 4;
                         remaining -= 4;
+                    }
+                    if (remaining >= 2) {
+                        if (comptime target.toCpuArch() == .aarch64) {
+                            try self.codegen.emitLoadStackHalfword(temp_reg, src_offset);
+                            try self.codegen.emit.strhRegMem(temp_reg, ptr_reg, @intCast(@as(u32, @intCast(dst_offset)) >> 1));
+                        } else {
+                            try self.codegen.emitLoadStack(.w16, temp_reg, src_offset);
+                            try self.codegen.emit.movMemReg(.w16, ptr_reg, dst_offset, temp_reg);
+                        }
+                        src_offset += 2;
+                        dst_offset += 2;
+                        remaining -= 2;
+                    }
+                    if (remaining >= 1) {
+                        if (comptime target.toCpuArch() == .aarch64) {
+                            try self.codegen.emitLoadStackByte(temp_reg, src_offset);
+                            try self.codegen.emit.strbRegMem(temp_reg, ptr_reg, @intCast(dst_offset));
+                        } else {
+                            try self.codegen.emitLoadStack(.w8, temp_reg, src_offset);
+                            try self.codegen.emit.movMemReg(.w8, ptr_reg, dst_offset, temp_reg);
+                        }
                     }
 
                     self.codegen.freeGeneral(temp_reg);
