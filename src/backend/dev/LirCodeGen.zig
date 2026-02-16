@@ -964,7 +964,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             expr_id: LirExprId,
             result_layout: layout.Idx,
             tuple_len: usize,
-        ) Error!CodeResult {
+        ) Allocator.Error!CodeResult {
             // Clear any leftover state from compileAllProcs to ensure clean slate
             // for the main expression. This is critical because procedure compilation
             // uses positive stack offsets while main expression uses negative offsets.
@@ -1086,7 +1086,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const all_code = self.codegen.getCode();
 
             // Make a copy of the code since codegen buffer may be reused
-            const code_copy = self.allocator.dupe(u8, all_code) catch return Error.OutOfMemory;
+            const code_copy = self.allocator.dupe(u8, all_code) catch return error.OutOfMemory;
 
             return CodeResult{
                 .code = code_copy,
@@ -1184,13 +1184,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Generate code for an expression. The result is ALWAYS in a stable location
         /// (stack, immediate, lambda_code, closure_value) — never a bare register.
-        fn generateExpr(self: *Self, expr_id: LirExprId) Error!ValueLocation {
+        fn generateExpr(self: *Self, expr_id: LirExprId) Allocator.Error!ValueLocation {
             const loc = try self.generateExprRaw(expr_id);
             return self.stabilize(loc);
         }
 
         /// Spill bare register values to the stack. All other locations pass through.
-        fn stabilize(self: *Self, loc: ValueLocation) Error!ValueLocation {
+        fn stabilize(self: *Self, loc: ValueLocation) Allocator.Error!ValueLocation {
             return switch (loc) {
                 .general_reg => |reg| {
                     const slot = self.codegen.allocStackSlot(8);
@@ -1209,7 +1209,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Generate code for an expression (raw — may return bare register locations).
-        fn generateExprRaw(self: *Self, expr_id: LirExprId) Error!ValueLocation {
+        fn generateExprRaw(self: *Self, expr_id: LirExprId) Allocator.Error!ValueLocation {
             const expr = self.store.getExpr(expr_id);
 
             return switch (expr) {
@@ -1300,7 +1300,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .expect => |expect_expr| try self.generateExpect(expect_expr),
 
                 // Crash and runtime errors
-                .crash => return Error.Crash,
+                .crash => unreachable,
                 .runtime_error => {
                     // Emit a roc_crashed call for dead code paths (e.g., the Err
                     // branch of a ? suffix at the top level, where the canonicalizer
@@ -1327,7 +1327,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Generate code for low-level operations
-        fn generateLowLevel(self: *Self, ll: anytype) Error!ValueLocation {
+        fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!ValueLocation {
             const args = self.store.getExprSpan(ll.args);
 
             switch (ll.op) {
@@ -2252,7 +2252,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
 
                     // Convert signed i64 to f64
-                    const freg = self.codegen.allocFloat() orelse return Error.NoRegisterToSpill;
+                    const freg = self.codegen.allocFloat() orelse unreachable;
                     if (comptime target.toCpuArch() == .aarch64) {
                         try self.codegen.emit.scvtfFloatFromGen(.double, freg, src_reg, .w64);
                     } else {
@@ -2293,7 +2293,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
 
                     // Convert (now fits in positive i64) to f64
-                    const freg = self.codegen.allocFloat() orelse return Error.NoRegisterToSpill;
+                    const freg = self.codegen.allocFloat() orelse unreachable;
                     if (comptime target.toCpuArch() == .aarch64) {
                         try self.codegen.emit.scvtfFloatFromGen(.double, freg, src_reg, .w64);
                     } else {
@@ -2311,7 +2311,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     if (args.len < 1) unreachable;
                     const src_loc = try self.generateExpr(args[0]);
                     const src_reg = try self.ensureInGeneralReg(src_loc);
-                    const freg = self.codegen.allocFloat() orelse return Error.NoRegisterToSpill;
+                    const freg = self.codegen.allocFloat() orelse unreachable;
 
                     if (comptime target.toCpuArch() == .aarch64) {
                         // UCVTF handles unsigned integers directly
@@ -2395,7 +2395,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const src_loc = try self.generateExpr(args[0]);
                     const freg = try self.ensureInFloatReg(src_loc);
 
-                    const dst_reg = self.codegen.allocGeneral() orelse return Error.NoRegisterToSpill;
+                    const dst_reg = self.codegen.allocGeneral() orelse unreachable;
                     if (comptime target.toCpuArch() == .aarch64) {
                         // FCVTZS natively saturates and handles NaN (→0)
                         try self.codegen.emit.fcvtzsGenFromFloat(.double, dst_reg, freg, .w64);
@@ -2444,7 +2444,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const src_loc = try self.generateExpr(args[0]);
                     const freg = try self.ensureInFloatReg(src_loc);
 
-                    const dst_reg = self.codegen.allocGeneral() orelse return Error.NoRegisterToSpill;
+                    const dst_reg = self.codegen.allocGeneral() orelse unreachable;
                     if (comptime target.toCpuArch() == .aarch64) {
                         // FCVTZU natively handles unsigned conversion with saturation
                         try self.codegen.emit.fcvtzuGenFromFloat(.double, dst_reg, freg, .w64);
@@ -2712,7 +2712,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const parts = try self.getI128Parts(src_loc);
 
                     // Call roc_builtins_dec_to_i64_trunc(low, high) -> i64
-                    const result_reg = self.codegen.allocGeneral() orelse return Error.NoRegisterToSpill;
+                    const result_reg = self.codegen.allocGeneral() orelse unreachable;
                     const fn_addr = @intFromPtr(&dev_wrappers.roc_builtins_dec_to_i64_trunc);
 
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
@@ -3300,7 +3300,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // TODO: Pass the user's crash message string from the args
                     // instead of this static message.
                     try self.emitRocCrash("Roc crashed");
-                    return Error.Crash;
+                    unreachable;
                 },
             }
         }
@@ -3309,7 +3309,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Call a C wrapper: fn(out, str_f0, str_f1, str_f2, roc_ops) -> void
         /// Used for str->str and str->list ops that take 1 string + roc_ops
-        fn callStr1RocOpsToResult(self: *Self, str_off: i32, fn_addr: usize, builtin_fn: BuiltinFn, result_kind: enum { str, list }) Error!ValueLocation {
+        fn callStr1RocOpsToResult(self: *Self, str_off: i32, fn_addr: usize, builtin_fn: BuiltinFn, result_kind: enum { str, list }) Allocator.Error!ValueLocation {
             const roc_ops_reg = self.roc_ops_reg orelse unreachable;
             const result_offset = self.codegen.allocStackSlot(roc_str_size);
 
@@ -3330,7 +3330,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Call a C wrapper: fn(str_f0, str_f1, str_f2) -> scalar (bool or u64)
         /// Used for str->bool and str->u64 ops that take 1 string
-        fn callStr1ToScalar(self: *Self, str_off: i32, fn_addr: usize, builtin_fn: BuiltinFn) Error!ValueLocation {
+        fn callStr1ToScalar(self: *Self, str_off: i32, fn_addr: usize, builtin_fn: BuiltinFn) Allocator.Error!ValueLocation {
             // fn(str_bytes, str_len, str_cap) -> scalar - 3 args
             const base_ptr = if (comptime target.toCpuArch() == .aarch64) .FP else .RBP;
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
@@ -3351,7 +3351,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Call a C wrapper: fn(a_f0, a_f1, a_f2, b_f0, b_f1, b_f2) -> scalar
         /// Used for (str, str) -> bool ops
-        fn callStr2ToScalar(self: *Self, a_off: i32, b_off: i32, fn_addr: usize, builtin_fn: BuiltinFn) Error!ValueLocation {
+        fn callStr2ToScalar(self: *Self, a_off: i32, b_off: i32, fn_addr: usize, builtin_fn: BuiltinFn) Allocator.Error!ValueLocation {
             // fn(a_bytes, a_len, a_cap, b_bytes, b_len, b_cap) -> scalar - 6 args
             const base_ptr = if (comptime target.toCpuArch() == .aarch64) .FP else .RBP;
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
@@ -3375,11 +3375,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Call a C wrapper: fn(out, a_f0, a_f1, a_f2, b_f0, b_f1, b_f2, roc_ops) -> void
         /// Used for (str, str, roc_ops) -> str/list ops
-        fn callStr2RocOpsToStr(self: *Self, a_off: i32, b_off: i32, fn_addr: usize, builtin_fn: BuiltinFn) Error!ValueLocation {
+        fn callStr2RocOpsToStr(self: *Self, a_off: i32, b_off: i32, fn_addr: usize, builtin_fn: BuiltinFn) Allocator.Error!ValueLocation {
             return self.callStr2RocOpsToResult(a_off, b_off, fn_addr, builtin_fn, .str);
         }
 
-        fn callStr2RocOpsToResult(self: *Self, a_off: i32, b_off: i32, fn_addr: usize, builtin_fn: BuiltinFn, result_kind: enum { str, list }) Error!ValueLocation {
+        fn callStr2RocOpsToResult(self: *Self, a_off: i32, b_off: i32, fn_addr: usize, builtin_fn: BuiltinFn, result_kind: enum { str, list }) Allocator.Error!ValueLocation {
             const roc_ops_reg = self.roc_ops_reg orelse unreachable;
             const result_offset = self.codegen.allocStackSlot(roc_str_size);
 
@@ -3404,7 +3404,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Call: fn(out, str_f0, str_f1, str_f2, u64_val, roc_ops) -> void
         /// Used for (str, u64, roc_ops) -> str ops like str_repeat, str_reserve
-        fn callStr1U64RocOpsToStr(self: *Self, str_off: i32, u64_off: i32, fn_addr: usize, builtin_fn: BuiltinFn) Error!ValueLocation {
+        fn callStr1U64RocOpsToStr(self: *Self, str_off: i32, u64_off: i32, fn_addr: usize, builtin_fn: BuiltinFn) Allocator.Error!ValueLocation {
             const roc_ops_reg = self.roc_ops_reg orelse unreachable;
             const result_offset = self.codegen.allocStackSlot(roc_str_size);
 
@@ -3424,7 +3424,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Helper for list_drop_first, list_drop_last, list_take_first, list_take_last
         /// These all map to listSublist with different start/len calculations
-        fn callListSublist(self: *Self, ll: anytype, list_loc: ValueLocation, n_loc: ValueLocation, mode: enum { drop_first, drop_last, take_first, take_last }) Error!ValueLocation {
+        fn callListSublist(self: *Self, ll: anytype, list_loc: ValueLocation, n_loc: ValueLocation, mode: enum { drop_first, drop_last, take_first, take_last }) Allocator.Error!ValueLocation {
             const ls = self.layout_store orelse unreachable;
             const roc_ops_reg = self.roc_ops_reg orelse unreachable;
 
@@ -3565,7 +3565,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Get element at constant index 0 from a list
-        fn listGetAtConstIndex(self: *Self, list_loc: ValueLocation, index: u64, ret_layout_idx: layout.Idx) Error!ValueLocation {
+        fn listGetAtConstIndex(self: *Self, list_loc: ValueLocation, index: u64, ret_layout_idx: layout.Idx) Allocator.Error!ValueLocation {
             const list_base: i32 = switch (list_loc) {
                 .stack => |s| s.offset,
                 .list_stack => |ls_info| ls_info.struct_offset,
@@ -3628,7 +3628,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Get element at last index (len - 1) from a list
-        fn listGetAtLastIndex(self: *Self, list_loc: ValueLocation, ret_layout_idx: layout.Idx) Error!ValueLocation {
+        fn listGetAtLastIndex(self: *Self, list_loc: ValueLocation, ret_layout_idx: layout.Idx) Allocator.Error!ValueLocation {
             const list_base: i32 = switch (list_loc) {
                 .stack => |s| s.offset,
                 .list_stack => |ls_info| ls_info.struct_offset,
@@ -3722,7 +3722,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Generate code for hosted function calls (platform-provided effects).
         /// Hosted functions follow the RocCall ABI: fn(roc_ops, ret_ptr, args_ptr) -> void
-        fn generateHostedCall(self: *Self, hc: anytype) Error!ValueLocation {
+        fn generateHostedCall(self: *Self, hc: anytype) Allocator.Error!ValueLocation {
             const roc_ops_reg = self.roc_ops_reg orelse unreachable;
 
             const ls = self.layout_store orelse unreachable;
@@ -3828,7 +3828,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Copy a value to a stack location
-        fn copyValueToStack(self: *Self, src_loc: ValueLocation, dest_offset: i32, size: usize) Error!void {
+        fn copyValueToStack(self: *Self, src_loc: ValueLocation, dest_offset: i32, size: usize) Allocator.Error!void {
             if (size == 0) return;
 
             switch (src_loc) {
@@ -3867,7 +3867,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Copy data from one stack location to another
-        fn copyStackToStack(self: *Self, src_offset: i32, dest_offset: i32, size: usize) Error!void {
+        fn copyStackToStack(self: *Self, src_offset: i32, dest_offset: i32, size: usize) Allocator.Error!void {
             if (size == 0) return;
 
             const temp = try self.allocTempGeneral();
@@ -3929,7 +3929,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Generate list_contains: linear scan comparing each element
-        fn generateListContains(self: *Self, list_loc: ValueLocation, needle_loc: ValueLocation) Error!ValueLocation {
+        fn generateListContains(self: *Self, list_loc: ValueLocation, needle_loc: ValueLocation) Allocator.Error!ValueLocation {
             const list_base: i32 = switch (list_loc) {
                 .stack => |s| s.offset,
                 .list_stack => |ls_info| ls_info.struct_offset,
@@ -4055,7 +4055,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Generate list_reverse: allocate new list, copy elements in reverse order
-        fn generateListReverse(self: *Self, list_loc: ValueLocation, ll: anytype) Error!ValueLocation {
+        fn generateListReverse(self: *Self, list_loc: ValueLocation, ll: anytype) Allocator.Error!ValueLocation {
             const ls = self.layout_store orelse unreachable;
             const roc_ops_reg = self.roc_ops_reg orelse unreachable;
 
@@ -4248,7 +4248,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Call list_reserve wrapper
-        fn callListReserveOp(self: *Self, list_loc: ValueLocation, spare_loc: ValueLocation, ll: anytype) Error!ValueLocation {
+        fn callListReserveOp(self: *Self, list_loc: ValueLocation, spare_loc: ValueLocation, ll: anytype) Allocator.Error!ValueLocation {
             const ls = self.layout_store orelse unreachable;
             const roc_ops_reg = self.roc_ops_reg orelse unreachable;
 
@@ -4288,7 +4288,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Call list_release_excess_capacity wrapper
-        fn callListReleaseExcessCapOp(self: *Self, list_loc: ValueLocation, ll: anytype) Error!ValueLocation {
+        fn callListReleaseExcessCapOp(self: *Self, list_loc: ValueLocation, ll: anytype) Allocator.Error!ValueLocation {
             const ls = self.layout_store orelse unreachable;
             const roc_ops_reg = self.roc_ops_reg orelse unreachable;
 
@@ -4326,13 +4326,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Generate code for an i128 literal
-        fn generateI128Literal(_: *Self, val: i128) Error!ValueLocation {
+        fn generateI128Literal(_: *Self, val: i128) Allocator.Error!ValueLocation {
             // Return as immediate - will be materialized when needed
             return .{ .immediate_i128 = val };
         }
 
         /// Generate code for a symbol lookup
-        fn generateLookup(self: *Self, symbol: Symbol, _: layout.Idx) Error!ValueLocation {
+        fn generateLookup(self: *Self, symbol: Symbol, _: layout.Idx) Allocator.Error!ValueLocation {
             // Check if we have a location for this symbol
             const symbol_key: u64 = @bitCast(symbol);
             if (self.symbol_locations.get(symbol_key)) |loc| {
@@ -4368,11 +4368,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 return loc;
             }
 
-            return Error.LocalNotFound;
+            unreachable;
         }
 
         /// Generate code for a binary operation
-        fn generateBinop(self: *Self, binop: anytype) Error!ValueLocation {
+        fn generateBinop(self: *Self, binop: anytype) Allocator.Error!ValueLocation {
             // Generate code for LHS first (always stable due to generateExpr wrapper)
             const lhs_loc = try self.generateExpr(binop.lhs);
 
@@ -4501,7 +4501,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             lhs_loc: ValueLocation,
             rhs_loc: ValueLocation,
             result_layout: layout.Idx,
-        ) Error!ValueLocation {
+        ) Allocator.Error!ValueLocation {
             // Load operands into registers
             const rhs_reg = try self.ensureInGeneralReg(rhs_loc);
             const lhs_reg = try self.ensureInGeneralReg(lhs_loc);
@@ -4589,7 +4589,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             lhs_loc: ValueLocation,
             rhs_loc: ValueLocation,
             result_layout: layout.Idx,
-        ) Error!ValueLocation {
+        ) Allocator.Error!ValueLocation {
             // For 128-bit operations, we work with the values as pairs of 64-bit words
             // Low word at offset 0, high word at offset 8
 
@@ -4825,7 +4825,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Call a C function: fn(out_low: *u64, out_high: *u64, val: T) -> void.
         /// Takes a scalar value in a general register, returns i128 on stack via output pointers.
-        fn callScalarToI128(self: *Self, src_reg: GeneralReg, fn_addr: usize, builtin_fn: BuiltinFn) Error!ValueLocation {
+        fn callScalarToI128(self: *Self, src_reg: GeneralReg, fn_addr: usize, builtin_fn: BuiltinFn) Allocator.Error!ValueLocation {
             const stack_offset = self.codegen.allocStackSlot(16);
             const base_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .FP else .RBP;
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
@@ -4839,7 +4839,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Call a C function: fn(low: u64, high: u64) -> f64.
         /// Takes i128 as two registers, returns f64 in float register.
-        fn callI128PartsToF64(self: *Self, parts: I128Parts, fn_addr: usize, builtin_fn: BuiltinFn) Error!ValueLocation {
+        fn callI128PartsToF64(self: *Self, parts: I128Parts, fn_addr: usize, builtin_fn: BuiltinFn) Allocator.Error!ValueLocation {
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             try builder.addRegArg(parts.low);
             try builder.addRegArg(parts.high);
@@ -4848,7 +4848,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.freeGeneral(parts.high);
 
             // f64 return value is in the float return register
-            const freg = self.codegen.allocFloat() orelse return Error.NoRegisterToSpill;
+            const freg = self.codegen.allocFloat() orelse unreachable;
             if (comptime target.toCpuArch() == .aarch64) {
                 try self.codegen.emit.fmovRegReg(.double, freg, .V0);
             } else {
@@ -4861,7 +4861,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Call a C function: fn(out_low: *u64, out_high: *u64, val: f64) -> void.
         /// Takes f64 in float register, returns 128-bit value on stack via output pointers.
-        fn callF64ToI128(self: *Self, freg: FloatReg, fn_addr: usize, builtin_fn: BuiltinFn) Error!ValueLocation {
+        fn callF64ToI128(self: *Self, freg: FloatReg, fn_addr: usize, builtin_fn: BuiltinFn) Allocator.Error!ValueLocation {
             const stack_offset = self.codegen.allocStackSlot(16);
             const base_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .FP else .RBP;
 
@@ -4971,7 +4971,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Generate a checked integer conversion returning Ok(value) | Err(OutOfRange).
-        fn generateIntTryConversion(self: *Self, ll: anytype, args: []const LirExprId) Error!ValueLocation {
+        fn generateIntTryConversion(self: *Self, ll: anytype, args: []const LirExprId) Allocator.Error!ValueLocation {
             if (args.len != 1) unreachable;
             const src_loc = try self.generateExpr(args[0]);
 
@@ -5103,7 +5103,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Generate code for num_from_str: Str -> Result(Num, [InvalidNumStr])
         /// Dispatches to the appropriate C wrapper based on the target numeric type.
-        fn generateNumFromStr(self: *Self, ll: anytype, args: []const LirExprId) Error!ValueLocation {
+        fn generateNumFromStr(self: *Self, ll: anytype, args: []const LirExprId) Allocator.Error!ValueLocation {
             if (args.len != 1) unreachable;
             const str_loc = try self.generateExpr(args[0]);
             const str_off = try self.ensureOnStack(str_loc, roc_str_size);
@@ -5206,7 +5206,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Generate a float/dec try_unsafe conversion returning a record.
-        fn generateFloatDecTryUnsafeConversion(self: *Self, ll: anytype, args: []const LirExprId) Error!ValueLocation {
+        fn generateFloatDecTryUnsafeConversion(self: *Self, ll: anytype, args: []const LirExprId) Allocator.Error!ValueLocation {
             if (args.len != 1) unreachable;
             const src_loc = try self.generateExpr(args[0]);
 
@@ -5327,7 +5327,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Call Dec multiplication builtin via decomposed wrapper.
         /// Wrapper signature: (out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, b_low: u64, b_high: u64) -> void
-        fn callDecMul(self: *Self, lhs_parts: I128Parts, rhs_parts: I128Parts, result_low: GeneralReg, result_high: GeneralReg) Error!void {
+        fn callDecMul(self: *Self, lhs_parts: I128Parts, rhs_parts: I128Parts, result_low: GeneralReg, result_high: GeneralReg) Allocator.Error!void {
             const fn_addr = @intFromPtr(&dev_wrappers.roc_builtins_dec_mul_saturated);
             const result_slot = self.codegen.allocStackSlot(16);
             const base_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .FP else .RBP;
@@ -5348,7 +5348,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Call Dec division builtin via decomposed wrapper.
         /// Wrapper signature: (out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, b_low: u64, b_high: u64, roc_ops: *RocOps) -> void
-        fn callDecDiv(self: *Self, lhs_parts: I128Parts, rhs_parts: I128Parts, result_low: GeneralReg, result_high: GeneralReg) Error!void {
+        fn callDecDiv(self: *Self, lhs_parts: I128Parts, rhs_parts: I128Parts, result_low: GeneralReg, result_high: GeneralReg) Allocator.Error!void {
             const fn_addr = @intFromPtr(&dev_wrappers.roc_builtins_dec_div);
             const roc_ops_reg = self.roc_ops_reg orelse unreachable;
             const result_slot = self.codegen.allocStackSlot(16);
@@ -5371,7 +5371,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Call Dec truncating division builtin via decomposed wrapper.
         /// Wrapper signature: (out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, b_low: u64, b_high: u64, roc_ops: *RocOps) -> void
-        fn callDecDivTrunc(self: *Self, lhs_parts: I128Parts, rhs_parts: I128Parts, result_low: GeneralReg, result_high: GeneralReg) Error!void {
+        fn callDecDivTrunc(self: *Self, lhs_parts: I128Parts, rhs_parts: I128Parts, result_low: GeneralReg, result_high: GeneralReg) Allocator.Error!void {
             const fn_addr = @intFromPtr(&dev_wrappers.roc_builtins_dec_div_trunc);
             const roc_ops_reg = self.roc_ops_reg orelse unreachable;
             const result_slot = self.codegen.allocStackSlot(16);
@@ -5402,7 +5402,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             result_high: GeneralReg,
             is_unsigned: bool,
             is_rem: bool,
-        ) Error!void {
+        ) Allocator.Error!void {
             const fn_addr: usize = if (is_unsigned)
                 if (is_rem) @intFromPtr(&dev_wrappers.roc_builtins_num_rem_trunc_u128) else @intFromPtr(&dev_wrappers.roc_builtins_num_div_trunc_u128)
             else if (is_rem) @intFromPtr(&dev_wrappers.roc_builtins_num_rem_trunc_i128) else @intFromPtr(&dev_wrappers.roc_builtins_num_div_trunc_i128);
@@ -5436,7 +5436,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             high: GeneralReg,
         };
 
-        fn getI128Parts(self: *Self, loc: ValueLocation) Error!I128Parts {
+        fn getI128Parts(self: *Self, loc: ValueLocation) Allocator.Error!I128Parts {
             const low_reg = try self.allocTempGeneral();
             const high_reg = try self.allocTempGeneral();
 
@@ -5480,7 +5480,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.codegen.emitLoadImm(high_reg, 0);
                 },
                 else => {
-                    return Error.InvalidLocalLocation;
+                    unreachable;
                 },
             }
 
@@ -5495,7 +5495,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             rhs_parts: I128Parts,
             result_reg: GeneralReg,
             is_eq: bool,
-        ) Error!void {
+        ) Allocator.Error!void {
             if (comptime target.toCpuArch() == .aarch64) {
                 // Compare low parts
                 try self.codegen.emit.cmpRegReg(.w64, lhs_parts.low, rhs_parts.low);
@@ -5548,7 +5548,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             result_reg: GeneralReg,
             op: LirExpr.BinOp,
             is_unsigned: bool,
-        ) Error!void {
+        ) Allocator.Error!void {
             // Strategy: compare high parts (signed for signed, unsigned for unsigned)
             // If high parts are not equal, use that result
             // If high parts are equal, compare low parts (always unsigned since they're magnitudes)
@@ -5663,7 +5663,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             rhs_loc: ValueLocation,
             lhs_expr: LirExpr,
             op: LirExpr.BinOp,
-        ) Error!ValueLocation {
+        ) Allocator.Error!ValueLocation {
             // Get element expressions to determine sizes for nested structures
             const elem_exprs: []const LirExprId = switch (lhs_expr) {
                 .record => |r| self.store.getExprSpan(r.fields),
@@ -5896,7 +5896,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             rhs_loc: ValueLocation,
             tu_layout_idx: layout.Idx,
             op: LirExpr.BinOp,
-        ) Error!ValueLocation {
+        ) Allocator.Error!ValueLocation {
             const ls = self.layout_store orelse unreachable;
             const stored_layout = ls.getLayout(tu_layout_idx);
             if (stored_layout.tag != .tag_union) unreachable;
@@ -6030,7 +6030,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             rhs_base: i32,
             total_size: u32,
             op: LirExpr.BinOp,
-        ) Error!ValueLocation {
+        ) Allocator.Error!ValueLocation {
             const result_reg = try self.allocTempGeneral();
             try self.codegen.emitLoadImm(result_reg, 1);
 
@@ -6095,7 +6095,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             rhs_loc: ValueLocation,
             lhs_expr: LirExpr,
             op: LirExpr.BinOp,
-        ) Error!ValueLocation {
+        ) Allocator.Error!ValueLocation {
             // Get list elements for element-by-element comparison
             const lhs_list = switch (lhs_expr) {
                 .list => |l| l,
@@ -6344,7 +6344,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             field_layout_idx: layout.Idx,
             field_size: u32,
             result_reg: GeneralReg,
-        ) Error!void {
+        ) Allocator.Error!void {
             const ls = self.layout_store orelse unreachable;
 
             if (field_layout_idx == .str) {
@@ -6485,7 +6485,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             rhs_loc: ValueLocation,
             record_layout_idx: layout.Idx,
             op: LirExpr.BinOp,
-        ) Error!ValueLocation {
+        ) Allocator.Error!ValueLocation {
             const ls = self.layout_store orelse unreachable;
             const stored_layout = ls.getLayout(record_layout_idx);
             if (stored_layout.tag != .record) unreachable;
@@ -6556,7 +6556,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Ensure a record value is on the stack, returning its base offset.
-        fn ensureRecordOnStack(self: *Self, loc: ValueLocation, record_size: u32) Error!i32 {
+        fn ensureRecordOnStack(self: *Self, loc: ValueLocation, record_size: u32) Allocator.Error!i32 {
             return switch (loc) {
                 .stack_str, .stack_i128 => |off| off,
                 .stack => |s| s.offset,
@@ -6592,7 +6592,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             rhs_loc: ValueLocation,
             tuple_layout_idx: layout.Idx,
             op: LirExpr.BinOp,
-        ) Error!ValueLocation {
+        ) Allocator.Error!ValueLocation {
             const ls = self.layout_store orelse unreachable;
             const stored_layout = ls.getLayout(tuple_layout_idx);
             if (stored_layout.tag != .tuple) unreachable;
@@ -6666,7 +6666,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             _: ValueLocation, // rhs_loc
             _: layout.Idx, // list_layout_idx
             _: LirExpr.BinOp, // op
-        ) Error!ValueLocation {
+        ) Allocator.Error!ValueLocation {
             // TODO: Implement list comparison by layout
             unreachable;
         }
@@ -6677,7 +6677,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             op: LirExpr.BinOp,
             lhs_loc: ValueLocation,
             rhs_loc: ValueLocation,
-        ) Error!ValueLocation {
+        ) Allocator.Error!ValueLocation {
             // Load LHS into a float register
             const lhs_reg = try self.ensureInFloatReg(lhs_loc);
 
@@ -6749,7 +6749,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Generate code for unary minus
-        fn generateUnaryMinus(self: *Self, unary: anytype) Error!ValueLocation {
+        fn generateUnaryMinus(self: *Self, unary: anytype) Allocator.Error!ValueLocation {
             const inner_loc = try self.generateExpr(unary.expr);
 
             // Check if float
@@ -6814,7 +6814,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Generate code for unary not
-        fn generateUnaryNot(self: *Self, unary: anytype) Error!ValueLocation {
+        fn generateUnaryNot(self: *Self, unary: anytype) Allocator.Error!ValueLocation {
             const inner_loc = try self.generateExpr(unary.expr);
 
             const reg = try self.ensureInGeneralReg(inner_loc);
@@ -6830,7 +6830,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Generate code for if-then-else
-        fn generateIfThenElse(self: *Self, ite: anytype) Error!ValueLocation {
+        fn generateIfThenElse(self: *Self, ite: anytype) Allocator.Error!ValueLocation {
             const branches = self.store.getIfBranches(ite.branches);
 
             // Collect jump targets for patching
@@ -7019,7 +7019,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Generate code for when/match expression
-        fn generateWhen(self: *Self, when_expr: anytype) Error!ValueLocation {
+        fn generateWhen(self: *Self, when_expr: anytype) Allocator.Error!ValueLocation {
             // Evaluate the scrutinee (the value being matched)
             const value_loc = try self.generateExpr(when_expr.value);
 
@@ -7656,7 +7656,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             result_slot: *i32,
             result_reg: *?GeneralReg,
             result_size: *u32,
-        ) Error!void {
+        ) Allocator.Error!void {
             // Check if we need to upgrade from register to stack mode
             if (!use_stack_result.*) {
                 const needed_size: ?u32 = switch (body_loc) {
@@ -7707,7 +7707,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Generate code for an empty list
-        fn generateEmptyList(self: *Self) Error!ValueLocation {
+        fn generateEmptyList(self: *Self) Allocator.Error!ValueLocation {
             // Empty list: ptr = null, len = 0, capacity = 0
             // Materialize as a proper 24-byte list struct on the stack so that
             // when passed as a function argument, all 3 registers are set correctly.
@@ -7734,7 +7734,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Generate code for a list with elements
-        fn generateList(self: *Self, list: anytype) Error!ValueLocation {
+        fn generateList(self: *Self, list: anytype) Allocator.Error!ValueLocation {
             const elems = self.store.getExprSpan(list.elems);
             if (elems.len == 0) {
                 // Empty list: ptr = null, len = 0, capacity = 0
@@ -7988,7 +7988,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Generate code for a record literal
-        fn generateRecord(self: *Self, rec: anytype) Error!ValueLocation {
+        fn generateRecord(self: *Self, rec: anytype) Allocator.Error!ValueLocation {
             const ls = self.layout_store orelse unreachable;
 
             // Validate layout index before use
@@ -8068,7 +8068,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return .{ .stack = .{ .offset = field_base, .size = ValueSize.fromByteCount(field_size) } };
         }
 
-        fn generateFieldAccess(self: *Self, access: anytype) Error!ValueLocation {
+        fn generateFieldAccess(self: *Self, access: anytype) Allocator.Error!ValueLocation {
             const ls = self.layout_store orelse unreachable;
 
             // Generate code for the record expression
@@ -8138,7 +8138,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Generate code for a tuple literal
-        fn generateTuple(self: *Self, tup: anytype) Error!ValueLocation {
+        fn generateTuple(self: *Self, tup: anytype) Allocator.Error!ValueLocation {
             const ls = self.layout_store orelse unreachable;
 
             // Get the tuple layout
@@ -8175,7 +8175,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Generate code for tuple element access
-        fn generateTupleAccess(self: *Self, access: anytype) Error!ValueLocation {
+        fn generateTupleAccess(self: *Self, access: anytype) Allocator.Error!ValueLocation {
             const ls = self.layout_store orelse unreachable;
 
             // Generate code for the tuple expression
@@ -8248,7 +8248,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Generate code for a zero-argument tag (just discriminant)
-        fn generateZeroArgTag(self: *Self, tag: anytype) Error!ValueLocation {
+        fn generateZeroArgTag(self: *Self, tag: anytype) Allocator.Error!ValueLocation {
             const ls = self.layout_store orelse unreachable;
 
             // Get the union layout
@@ -8287,7 +8287,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Generate code for a tag with payload arguments
-        fn generateTag(self: *Self, tag: anytype) Error!ValueLocation {
+        fn generateTag(self: *Self, tag: anytype) Allocator.Error!ValueLocation {
             const ls = self.layout_store orelse unreachable;
 
             // Get the union layout
@@ -8354,7 +8354,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Copy a value to a stack offset
-        fn copyValueToStackOffset(self: *Self, offset: i32, loc: ValueLocation) Error!void {
+        fn copyValueToStackOffset(self: *Self, offset: i32, loc: ValueLocation) Allocator.Error!void {
             switch (loc) {
                 .immediate_i64 => |val| {
                     const reg = try self.allocTempGeneral();
@@ -8444,7 +8444,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
         /// Copy a specific number of bytes from a value location to a stack offset
         /// This uses the layout-determined size rather than inferring from ValueLocation type
-        fn copyBytesToStackOffset(self: *Self, dest_offset: i32, loc: ValueLocation, size: u32) Error!void {
+        fn copyBytesToStackOffset(self: *Self, dest_offset: i32, loc: ValueLocation, size: u32) Allocator.Error!void {
             // Handle ZST (zero-sized types) - nothing to copy
             if (size == 0) {
                 return;
@@ -8608,7 +8608,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Zero out a stack area
-        fn zeroStackArea(self: *Self, offset: i32, size: u32) Error!void {
+        fn zeroStackArea(self: *Self, offset: i32, size: u32) Allocator.Error!void {
             const reg = try self.allocTempGeneral();
             try self.codegen.emitLoadImm(reg, 0);
 
@@ -8628,7 +8628,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Generate code for a string literal
-        fn generateStrLiteral(self: *Self, str_idx: base.StringLiteral.Idx) Error!ValueLocation {
+        fn generateStrLiteral(self: *Self, str_idx: base.StringLiteral.Idx) Allocator.Error!ValueLocation {
             const str_bytes = self.store.getString(str_idx);
 
             // Allocate space on stack for Roc string representation
@@ -8752,7 +8752,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Generate code for a for loop over a list
         /// Iterates over each element, binding it to the pattern and executing the body
-        fn generateForLoop(self: *Self, for_loop: anytype) Error!ValueLocation {
+        fn generateForLoop(self: *Self, for_loop: anytype) Allocator.Error!ValueLocation {
             // Get the list location
             const list_loc = try self.generateExpr(for_loop.list_expr);
 
@@ -8984,7 +8984,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Generate code for a while loop
         /// Executes body while condition is true
-        fn generateWhileLoop(self: *Self, while_loop: anytype) Error!ValueLocation {
+        fn generateWhileLoop(self: *Self, while_loop: anytype) Allocator.Error!ValueLocation {
             // Record loop start position for the backward jump
             const loop_start = self.codegen.currentOffset();
 
@@ -9055,7 +9055,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Generate code for early return
-        fn generateEarlyReturn(self: *Self, er: anytype) Error!ValueLocation {
+        fn generateEarlyReturn(self: *Self, er: anytype) Allocator.Error!ValueLocation {
             // Generate the return value
             const value_loc = try self.generateExpr(er.expr);
 
@@ -9076,14 +9076,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Generate code for dbg expression (prints and returns value)
-        fn generateDbg(self: *Self, dbg_expr: anytype) Error!ValueLocation {
+        fn generateDbg(self: *Self, dbg_expr: anytype) Allocator.Error!ValueLocation {
             // dbg evaluates its expression and returns the value.
             // Debug printing is handled by the interpreter side in tests.
             return try self.generateExpr(dbg_expr.expr);
         }
 
         /// Generate code for expect expression (assertion)
-        fn generateExpect(self: *Self, expect_expr: anytype) Error!ValueLocation {
+        fn generateExpect(self: *Self, expect_expr: anytype) Allocator.Error!ValueLocation {
             // Evaluate the condition
             const cond_loc = try self.generateExpr(expect_expr.cond);
             const cond_reg = try self.ensureInGeneralReg(cond_loc);
@@ -9112,7 +9112,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Emit a roc_crashed call via RocOps with a static message.
         /// Used for runtime_error expressions (dead code paths that should
         /// never execute, e.g. the Err branch of `?` at the top level).
-        fn emitRocCrash(self: *Self, msg: []const u8) Error!void {
+        fn emitRocCrash(self: *Self, msg: []const u8) Allocator.Error!void {
             const roc_ops_reg = self.roc_ops_reg orelse unreachable;
 
             // Allocate a 16-byte stack slot for the RocCrashed struct { utf8_bytes, len }
@@ -9163,7 +9163,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Generate code for string concatenation
-        fn generateStrConcat(self: *Self, exprs: anytype) Error!ValueLocation {
+        fn generateStrConcat(self: *Self, exprs: anytype) Allocator.Error!ValueLocation {
             const expr_ids = self.store.getExprSpan(exprs);
             if (expr_ids.len == 0) {
                 // Empty concat returns empty string
@@ -9190,7 +9190,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Generate an empty string
-        fn generateEmptyString(self: *Self) Error!ValueLocation {
+        fn generateEmptyString(self: *Self) Allocator.Error!ValueLocation {
             // Empty small string in Roc format: all zeros except byte 23 = 0x80
             // (small string flag set, length 0)
             const str_slot = self.codegen.allocStackSlot(roc_str_size);
@@ -9220,7 +9220,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Generate code for int_to_str by calling the unified wrapper
-        fn generateIntToStr(self: *Self, its: anytype) Error!ValueLocation {
+        fn generateIntToStr(self: *Self, its: anytype) Allocator.Error!ValueLocation {
             const val_loc = try self.generateExpr(its.value);
             const roc_ops_reg = self.roc_ops_reg orelse unreachable;
             const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_int_to_str);
@@ -9274,7 +9274,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Generate code for float_to_str by calling the unified wrapper
-        fn generateFloatToStr(self: *Self, fts: anytype) Error!ValueLocation {
+        fn generateFloatToStr(self: *Self, fts: anytype) Allocator.Error!ValueLocation {
             const val_loc = try self.generateExpr(fts.value);
             // Dec uses a dedicated helper with explicit u64 decomposition to avoid
             // platform-specific i128 calling convention issues
@@ -9303,7 +9303,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Generate code for dec_to_str by calling the wrapper with decomposed i128
-        fn generateDecToStr(self: *Self, expr_id: anytype) Error!ValueLocation {
+        fn generateDecToStr(self: *Self, expr_id: anytype) Allocator.Error!ValueLocation {
             const val_loc = try self.generateExpr(expr_id);
             return try self.callDecToStrWrapped(val_loc);
         }
@@ -9319,7 +9319,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Extract low and high u64 halves from a Dec/i128 ValueLocation.
         /// Returns a DecomposedI128 that can be used to pass to wrapDecToStr.
-        fn decomposeI128Value(self: *Self, val_loc: ValueLocation) Error!DecomposedI128 {
+        fn decomposeI128Value(self: *Self, val_loc: ValueLocation) Allocator.Error!DecomposedI128 {
             return switch (val_loc) {
                 // 128-bit value already on stack - most common case for Dec
                 .stack_i128 => |offset| .{ .on_stack = offset },
@@ -9376,7 +9376,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// (out: *RocStr, low: u64, high: u64, roc_ops: *RocOps) uniformly.
         /// Uses CallBuilder for cross-platform argument setup and callBuiltin
         /// to support both native execution and object file generation modes.
-        fn callDecToStrWrapped(self: *Self, val_loc: ValueLocation) Error!ValueLocation {
+        fn callDecToStrWrapped(self: *Self, val_loc: ValueLocation) Allocator.Error!ValueLocation {
             const roc_ops_reg = self.roc_ops_reg orelse unreachable;
             const result_offset = self.codegen.allocStackSlot(roc_str_size);
             const decomposed = try self.decomposeI128Value(val_loc);
@@ -9403,14 +9403,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Generate code for str_escape_and_quote
-        fn generateStrEscapeAndQuote(self: *Self, expr_id: anytype) Error!ValueLocation {
+        fn generateStrEscapeAndQuote(self: *Self, expr_id: anytype) Allocator.Error!ValueLocation {
             const str_loc = try self.generateExpr(expr_id);
             const str_off = try self.ensureOnStack(str_loc, roc_str_size);
             return try self.callStr1RocOpsToResult(str_off, @intFromPtr(&wrapStrEscapeAndQuote), .str_escape_and_quote, .str);
         }
 
         /// Generate code for discriminant switch
-        fn generateDiscriminantSwitch(self: *Self, ds: anytype) Error!ValueLocation {
+        fn generateDiscriminantSwitch(self: *Self, ds: anytype) Allocator.Error!ValueLocation {
             // Get the value and read its discriminant
             const value_loc = try self.generateExpr(ds.value);
 
@@ -9575,7 +9575,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Extract the payload from a tag union value.
         /// The payload is always at offset 0 in the tag union memory.
-        fn generateTagPayloadAccess(self: *Self, tpa: anytype) Error!ValueLocation {
+        fn generateTagPayloadAccess(self: *Self, tpa: anytype) Allocator.Error!ValueLocation {
             const ls = self.layout_store orelse unreachable;
 
             // Generate the tag union value
@@ -9629,7 +9629,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Helper to store a result to a stack slot
-        fn storeResultToSlot(self: *Self, slot: i32, loc: ValueLocation, slot_size: u32) Error!void {
+        fn storeResultToSlot(self: *Self, slot: i32, loc: ValueLocation, slot_size: u32) Allocator.Error!void {
             const temp_reg = try self.allocTempGeneral();
             switch (loc) {
                 .immediate_i64 => |val| {
@@ -9722,7 +9722,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Emit a compare of two registers
-        fn emitCmpReg(self: *Self, reg1: GeneralReg, reg2: GeneralReg) Error!void {
+        fn emitCmpReg(self: *Self, reg1: GeneralReg, reg2: GeneralReg) Allocator.Error!void {
             if (comptime target.toCpuArch() == .aarch64) {
                 try self.codegen.emit.cmpRegReg(.w64, reg1, reg2);
             } else {
@@ -9731,7 +9731,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Emit a jump if greater or equal (for unsigned comparison)
-        fn emitJumpIfGreaterOrEqual(self: *Self) Error!usize {
+        fn emitJumpIfGreaterOrEqual(self: *Self) Allocator.Error!usize {
             if (comptime target.toCpuArch() == .aarch64) {
                 // B.CS (branch if carry set = unsigned higher or same) with placeholder offset
                 const patch_loc = self.codegen.currentOffset();
@@ -9746,12 +9746,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Emit an unconditional jump
-        fn emitJumpUnconditional(self: *Self) Error!usize {
+        fn emitJumpUnconditional(self: *Self) Allocator.Error!usize {
             return try self.codegen.emitJump();
         }
 
         /// Emit a backward jump to a known location
-        fn emitJumpBackward(self: *Self, jump_target: usize) Error!void {
+        fn emitJumpBackward(self: *Self, jump_target: usize) Allocator.Error!void {
             const current = self.codegen.currentOffset();
             // Calculate offset - need to account for instruction encoding
             if (comptime target.toCpuArch() == .aarch64) {
@@ -9767,7 +9767,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Store a discriminant value at the given offset
-        fn storeDiscriminant(self: *Self, offset: i32, value: u16, disc_size: u8) Error!void {
+        fn storeDiscriminant(self: *Self, offset: i32, value: u16, disc_size: u8) Allocator.Error!void {
             const reg = try self.allocTempGeneral();
             try self.codegen.emitLoadImm(reg, value);
 
@@ -9816,7 +9816,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Generate code for a block
-        fn generateBlock(self: *Self, block: anytype) Error!ValueLocation {
+        fn generateBlock(self: *Self, block: anytype) Allocator.Error!ValueLocation {
             const stmts = self.store.getStmts(block.stmts);
 
             // Process each statement
@@ -9836,12 +9836,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Bind a value to a pattern
         /// expr_layout_override: Optional layout from the expression being bound. If provided,
         /// this is used for mutable variables instead of the pattern's layout_idx (which may be wrong).
-        fn bindPattern(self: *Self, pattern_id: LirPatternId, value_loc: ValueLocation) Error!void {
+        fn bindPattern(self: *Self, pattern_id: LirPatternId, value_loc: ValueLocation) Allocator.Error!void {
             return self.bindPatternWithLayout(pattern_id, value_loc, null);
         }
 
         /// Bind a value to a pattern with an optional expression layout override
-        fn bindPatternWithLayout(self: *Self, pattern_id: LirPatternId, value_loc: ValueLocation, expr_layout_override: ?layout.Idx) Error!void {
+        fn bindPatternWithLayout(self: *Self, pattern_id: LirPatternId, value_loc: ValueLocation, expr_layout_override: ?layout.Idx) Allocator.Error!void {
             const pattern = self.store.getPattern(pattern_id);
 
             switch (pattern) {
@@ -10206,7 +10206,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Emit a correctly-sized load from the stack, zero-extending sub-word
         /// values to 64 bits. This prevents reading garbage upper bytes when
         /// a Bool/U8/U16/U32 was stored with a narrow write.
-        fn emitSizedLoadStack(self: *Self, reg: GeneralReg, offset: i32, size: ValueSize) Error!void {
+        fn emitSizedLoadStack(self: *Self, reg: GeneralReg, offset: i32, size: ValueSize) Allocator.Error!void {
             switch (size) {
                 .byte => {
                     if (comptime target.toCpuArch() == .aarch64) {
@@ -10419,7 +10419,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// lambda may return closures whose capture data must remain on the
         /// current stack frame. Unlike compileLambdaAsProc, this does NOT
         /// create a separate procedure — the body runs in the caller's scope.
-        fn callLambdaBodyDirect(self: *Self, lambda: anytype, args_span: anytype) Error!ValueLocation {
+        fn callLambdaBodyDirect(self: *Self, lambda: anytype, args_span: anytype) Allocator.Error!ValueLocation {
             const args = self.store.getExprSpan(args_span);
             const params = self.store.getPatternSpan(lambda.params);
             const num_args = @min(params.len, args.len);
@@ -10462,7 +10462,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Generate code for a function call
-        fn generateCall(self: *Self, call: anytype) Error!ValueLocation {
+        fn generateCall(self: *Self, call: anytype) Allocator.Error!ValueLocation {
             // Get the function expression
             const fn_expr = self.store.getExpr(call.fn_expr);
 
@@ -10546,7 +10546,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Generate code for a closure expression.
         /// Handles different closure representations based on the lambda set.
-        fn generateClosure(self: *Self, closure: anytype) Error!ValueLocation {
+        fn generateClosure(self: *Self, closure: anytype) Allocator.Error!ValueLocation {
             switch (closure.representation) {
                 .enum_dispatch => |repr| {
                     // Multiple functions, no captures - just store the tag byte
@@ -10628,7 +10628,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Materialize captured values to a stack location.
         /// Used when creating closure values with captures.
-        fn materializeCaptures(self: *Self, captures_span: lir.LIR.LirCaptureSpan, base_offset: i32) Error!void {
+        fn materializeCaptures(self: *Self, captures_span: lir.LIR.LirCaptureSpan, base_offset: i32) Allocator.Error!void {
             const captures = self.store.getCaptures(captures_span);
             var offset: i32 = 0;
             for (captures) |capture| {
@@ -10799,7 +10799,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         }
                         offset += @intCast(capture_size);
                     } else |_| {
-                        return Error.LocalNotFound;
+                        unreachable;
                     }
                 }
             }
@@ -10812,7 +10812,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             cv: anytype,
             args_span: anytype,
             ret_layout: layout.Idx,
-        ) Error!ValueLocation {
+        ) Allocator.Error!ValueLocation {
             switch (cv.representation) {
                 .enum_dispatch => |repr| {
                     return try self.dispatchEnumClosure(cv.stack_offset, repr.lambda_set, args_span, ret_layout);
@@ -10856,7 +10856,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             lambda_set: lir.LambdaSetMemberSpan,
             args_span: anytype,
             ret_layout: layout.Idx,
-        ) Error!ValueLocation {
+        ) Allocator.Error!ValueLocation {
             const members = self.store.getLambdaSetMembers(lambda_set);
 
             if (members.len == 0) {
@@ -10919,7 +10919,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             union_offset: i32,
             repr: anytype,
             args_span: anytype,
-        ) Error!ValueLocation {
+        ) Allocator.Error!ValueLocation {
             const members = self.store.getLambdaSetMembers(repr.lambda_set);
 
             if (members.len == 0) {
@@ -10984,7 +10984,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             cv: anytype,
             args_span: anytype,
             _: layout.Idx,
-        ) Error!ValueLocation {
+        ) Allocator.Error!ValueLocation {
             // Bind captures from the closure's stack data to their symbols
             const captures = self.store.getCaptures(cv.captures);
             var offset: i32 = 0;
@@ -11036,7 +11036,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             lambda_body: lir.LirExprId,
             args_span: anytype,
             ret_layout: layout.Idx,
-        ) Error!ValueLocation {
+        ) Allocator.Error!ValueLocation {
             const lambda_expr = self.store.getExpr(lambda_body);
             switch (lambda_expr) {
                 .lambda => |lambda| {
@@ -11063,7 +11063,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             member: lir.LambdaSetMember,
             captures_offset: i32,
             args_span: anytype,
-        ) Error!ValueLocation {
+        ) Allocator.Error!ValueLocation {
 
             // Bind captures from the stack to their symbols
             const captures = self.store.getCaptures(member.captures);
@@ -11097,7 +11097,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Copy a value location to a stack slot.
-        fn copyToStackSlot(self: *Self, slot: i32, loc: ValueLocation) Error!void {
+        fn copyToStackSlot(self: *Self, slot: i32, loc: ValueLocation) Allocator.Error!void {
             switch (loc) {
                 .general_reg => |reg| {
                     try self.codegen.emitStoreStack(.w64, slot, reg);
@@ -11206,7 +11206,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Generate code for calling a looked-up function definition.
-        fn generateLookupCall(self: *Self, lookup: anytype, args_span: anytype, ret_layout: layout.Idx) Error!ValueLocation {
+        fn generateLookupCall(self: *Self, lookup: anytype, args_span: anytype, ret_layout: layout.Idx) Allocator.Error!ValueLocation {
             const symbol_key: u64 = @bitCast(lookup.symbol);
 
             // Check if the function was compiled as a procedure
@@ -11321,12 +11321,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
             }
 
-            return Error.LocalNotFound;
+            unreachable;
         }
 
         /// Generate a call to an already-compiled procedure.
         /// This is used for recursive functions that were compiled via compileAllProcs.
-        fn generateCallToCompiledProc(self: *Self, proc: CompiledProc, args_span: anytype, ret_layout: layout.Idx) Error!ValueLocation {
+        fn generateCallToCompiledProc(self: *Self, proc: CompiledProc, args_span: anytype, ret_layout: layout.Idx) Allocator.Error!ValueLocation {
             // Evaluate arguments and place them in argument registers or on stack.
             // When registers are exhausted, spill remaining arguments to the stack.
             const args = self.store.getExprSpan(args_span);
@@ -11576,7 +11576,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Move a value to a specific register
-        fn moveToReg(self: *Self, loc: ValueLocation, target_reg: GeneralReg) Error!void {
+        fn moveToReg(self: *Self, loc: ValueLocation, target_reg: GeneralReg) Allocator.Error!void {
             switch (loc) {
                 .general_reg => |src_reg| {
                     if (src_reg != target_reg) {
@@ -11616,7 +11616,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.codegen.emitLoadStack(.w64, target_reg, cv.stack_offset);
                 },
                 .float_reg, .immediate_f64 => {
-                    return Error.InvalidLocalLocation;
+                    unreachable;
                 },
             }
         }
@@ -11650,7 +11650,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Spill an argument to the stack (for arguments that don't fit in registers).
         /// stack_offset is the offset from RSP (x86_64) or SP (aarch64) where the argument should be placed.
-        fn spillArgToStack(self: *Self, arg_loc: ValueLocation, stack_offset: i32, num_regs: u8) Error!void {
+        fn spillArgToStack(self: *Self, arg_loc: ValueLocation, stack_offset: i32, num_regs: u8) Allocator.Error!void {
             // Use a temporary register for copying
             const temp_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X9 else .R11;
 
@@ -11745,7 +11745,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Allocate a general register with a unique temporary local ID.
         /// Use this for temporary registers that don't correspond to real local variables.
         /// This prevents register ownership conflicts that can corrupt spill tracking.
-        fn allocTempGeneral(self: *Self) Error!GeneralReg {
+        fn allocTempGeneral(self: *Self) Allocator.Error!GeneralReg {
             const local_id = self.next_temp_local;
             self.next_temp_local +%= 1;
             return self.codegen.allocGeneralFor(local_id);
@@ -11762,7 +11762,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// - builder: The CallBuilder with arguments already set up
         /// - fn_addr: Direct function address for native execution mode
         /// - symbol_name: Symbol name for object file mode (must match export in dev_wrappers.zig)
-        fn callBuiltin(self: *Self, builder: *Builder, fn_addr: usize, builtin_fn: BuiltinFn) Error!void {
+        fn callBuiltin(self: *Self, builder: *Builder, fn_addr: usize, builtin_fn: BuiltinFn) Allocator.Error!void {
             switch (self.generation_mode) {
                 .native_execution => {
                     try builder.call(fn_addr);
@@ -11774,7 +11774,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Ensure a value location is on the stack, spilling if needed. Returns stack offset.
-        fn ensureOnStack(self: *Self, loc: ValueLocation, size: u32) Error!i32 {
+        fn ensureOnStack(self: *Self, loc: ValueLocation, size: u32) Allocator.Error!i32 {
             return switch (loc) {
                 .stack_i128, .stack_str => |off| off,
                 .stack => |s| s.offset,
@@ -11850,7 +11850,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Ensure a value is in a general-purpose register
-        fn ensureInGeneralReg(self: *Self, loc: ValueLocation) Error!GeneralReg {
+        fn ensureInGeneralReg(self: *Self, loc: ValueLocation) Allocator.Error!GeneralReg {
             switch (loc) {
                 .general_reg => |reg| return reg,
                 .immediate_i64 => |val| {
@@ -11896,17 +11896,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 .float_reg, .immediate_f64, .lambda_code => {
                     // Convert float to int or lambda_code to register - this shouldn't happen in normal code
-                    return Error.InvalidLocalLocation;
+                    unreachable;
                 },
             }
         }
 
         /// Ensure a value is in a floating-point register
-        fn ensureInFloatReg(self: *Self, loc: ValueLocation) Error!FloatReg {
+        fn ensureInFloatReg(self: *Self, loc: ValueLocation) Allocator.Error!FloatReg {
             switch (loc) {
                 .float_reg => |reg| return reg,
                 .immediate_f64 => |val| {
-                    const reg = self.codegen.allocFloat() orelse return Error.NoRegisterToSpill;
+                    const reg = self.codegen.allocFloat() orelse unreachable;
                     const bits: u64 = @bitCast(val);
 
                     if (bits == 0) {
@@ -11934,7 +11934,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 .stack => |s| {
                     const offset = s.offset;
-                    const reg = self.codegen.allocFloat() orelse return Error.NoRegisterToSpill;
+                    const reg = self.codegen.allocFloat() orelse unreachable;
                     try self.codegen.emitLoadStackF64(reg, offset);
                     return reg;
                 },
@@ -11944,14 +11944,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     return self.ensureInFloatReg(.{ .immediate_f64 = f_val });
                 },
                 .general_reg, .immediate_i128, .stack_i128, .stack_str, .list_stack, .lambda_code, .closure_value => {
-                    return Error.InvalidLocalLocation;
+                    unreachable;
                 },
             }
         }
 
         /// Store the result to the output buffer pointed to by a saved register
         /// This is used when the original result pointer (X0/RDI) may have been clobbered
-        fn storeResultToSavedPtr(self: *Self, loc: ValueLocation, result_layout: layout.Idx, saved_ptr_reg: GeneralReg, tuple_len: usize) Error!void {
+        fn storeResultToSavedPtr(self: *Self, loc: ValueLocation, result_layout: layout.Idx, saved_ptr_reg: GeneralReg, tuple_len: usize) Allocator.Error!void {
             // Handle tuples specially - copy all elements from stack to result buffer
             if (tuple_len > 1) {
                 switch (loc) {
@@ -12100,7 +12100,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             const offset = s.offset;
                             // Value was spilled to stack as F64 by stabilize.
                             // Load as F64, convert to F32, then store 4 bytes.
-                            const freg = self.codegen.allocFloat() orelse return Error.NoRegisterToSpill;
+                            const freg = self.codegen.allocFloat() orelse unreachable;
                             try self.codegen.emitLoadStackF64(freg, offset);
                             if (comptime target.toCpuArch() == .aarch64) {
                                 try self.codegen.emit.fcvtFloatFloat(.single, freg, .double, freg);
@@ -12243,7 +12243,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Copy bytes from stack location to memory pointed to by ptr_reg
-        fn copyStackToPtr(self: *Self, loc: ValueLocation, ptr_reg: GeneralReg, size: u32) Error!void {
+        fn copyStackToPtr(self: *Self, loc: ValueLocation, ptr_reg: GeneralReg, size: u32) Allocator.Error!void {
             switch (loc) {
                 .stack => |s| {
                     const stack_offset = s.offset;
@@ -12312,7 +12312,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Store 128-bit value to memory at [ptr_reg]
-        fn storeI128ToMem(self: *Self, ptr_reg: GeneralReg, loc: ValueLocation) Error!void {
+        fn storeI128ToMem(self: *Self, ptr_reg: GeneralReg, loc: ValueLocation) Allocator.Error!void {
             switch (loc) {
                 .immediate_i128 => |val| {
                     // Store low 64 bits, then high 64 bits
@@ -12448,7 +12448,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Compile all procedures first, before generating any calls.
         /// This ensures all call targets are known before we need to patch calls.
-        pub fn compileAllProcs(self: *Self, procs: []const LirProc) Error!void {
+        pub fn compileAllProcs(self: *Self, procs: []const LirProc) Allocator.Error!void {
             for (procs) |proc| {
                 try self.compileProc(proc);
             }
@@ -12457,15 +12457,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Compile a single procedure as a complete unit.
         /// Uses deferred prologue pattern: generates body first to determine which
         /// callee-saved registers are used, then prepends prologue and adjusts relocations.
-        fn compileProc(self: *Self, proc: LirProc) Error!void {
+        fn compileProc(self: *Self, proc: LirProc) Allocator.Error!void {
             const key: u64 = @bitCast(proc.name);
 
             // Save current state - procedure has its own scope that shouldn't pollute caller
             const saved_stack_offset = self.codegen.stack_offset;
             const saved_callee_saved_used = self.codegen.callee_saved_used;
-            var saved_symbol_locations = self.symbol_locations.clone() catch return Error.OutOfMemory;
+            var saved_symbol_locations = self.symbol_locations.clone() catch return error.OutOfMemory;
             defer saved_symbol_locations.deinit();
-            var saved_mutable_var_slots = self.mutable_var_slots.clone() catch return Error.OutOfMemory;
+            var saved_mutable_var_slots = self.mutable_var_slots.clone() catch return error.OutOfMemory;
             defer saved_mutable_var_slots.deinit();
 
             // Clear state for procedure's scope
@@ -12541,7 +12541,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // PHASE 2: Extract body and prepend prologue (x86_64 only - uses deferred pattern)
             if (comptime target.toCpuArch() == .x86_64) {
                 // Save body bytes
-                var body_bytes = self.allocator.dupe(u8, self.codegen.emit.buf.items[body_start..body_end]) catch return Error.OutOfMemory;
+                var body_bytes = self.allocator.dupe(u8, self.codegen.emit.buf.items[body_start..body_end]) catch return error.OutOfMemory;
                 defer self.allocator.free(body_bytes);
 
                 // Truncate buffer back to body_start
@@ -12586,7 +12586,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
 
                 // Re-append body
-                self.codegen.emit.buf.appendSlice(self.allocator, body_bytes) catch return Error.OutOfMemory;
+                self.codegen.emit.buf.appendSlice(self.allocator, body_bytes) catch return error.OutOfMemory;
 
                 // PHASE 3: Adjust relocation offsets
                 for (self.codegen.relocations.items[relocs_before..]) |*reloc| {
@@ -12611,7 +12611,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             } else {
                 // aarch64: Prepend prologue to generated body
                 // Since body was generated without prologue, we need to prepend it.
-                const body_bytes = self.allocator.dupe(u8, self.codegen.emit.buf.items[body_start..body_end]) catch return Error.OutOfMemory;
+                const body_bytes = self.allocator.dupe(u8, self.codegen.emit.buf.items[body_start..body_end]) catch return error.OutOfMemory;
                 defer self.allocator.free(body_bytes);
 
                 // Truncate buffer back to body_start
@@ -12662,7 +12662,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
 
                 // Re-append body
-                self.codegen.emit.buf.appendSlice(self.allocator, body_bytes) catch return Error.OutOfMemory;
+                self.codegen.emit.buf.appendSlice(self.allocator, body_bytes) catch return error.OutOfMemory;
 
                 // Adjust relocation offsets
                 for (self.codegen.relocations.items[relocs_before..]) |*reloc| {
@@ -12690,16 +12690,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.stack_offset = saved_stack_offset;
             self.codegen.callee_saved_used = saved_callee_saved_used;
             self.symbol_locations.deinit();
-            self.symbol_locations = saved_symbol_locations.clone() catch return Error.OutOfMemory;
+            self.symbol_locations = saved_symbol_locations.clone() catch return error.OutOfMemory;
             self.mutable_var_slots.deinit();
-            self.mutable_var_slots = saved_mutable_var_slots.clone() catch return Error.OutOfMemory;
+            self.mutable_var_slots = saved_mutable_var_slots.clone() catch return error.OutOfMemory;
         }
 
         /// Compile a lambda expression as a standalone procedure.
         /// Returns the code offset where the procedure starts.
         /// If the lambda was already compiled, returns the cached offset.
         /// Uses deferred prologue pattern for x86_64 to properly save callee-saved registers.
-        fn compileLambdaAsProc(self: *Self, lambda_expr_id: LirExprId, lambda: anytype) Error!usize {
+        fn compileLambdaAsProc(self: *Self, lambda_expr_id: LirExprId, lambda: anytype) Allocator.Error!usize {
             const key = @intFromEnum(lambda_expr_id);
 
             // Check if already compiled
@@ -12718,9 +12718,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const saved_callee_saved_used = self.codegen.callee_saved_used;
             const saved_callee_saved_available = self.codegen.callee_saved_available;
             const saved_roc_ops_reg = self.roc_ops_reg;
-            var saved_symbol_locations = self.symbol_locations.clone() catch return Error.OutOfMemory;
+            var saved_symbol_locations = self.symbol_locations.clone() catch return error.OutOfMemory;
             defer saved_symbol_locations.deinit();
-            var saved_mutable_var_slots = self.mutable_var_slots.clone() catch return Error.OutOfMemory;
+            var saved_mutable_var_slots = self.mutable_var_slots.clone() catch return error.OutOfMemory;
             defer saved_mutable_var_slots.deinit();
 
             // Clear state for the procedure's scope
@@ -12842,7 +12842,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // PHASE 2: Extract body and prepend prologue
             if (comptime target.toCpuArch() == .x86_64) {
                 // Save body bytes
-                const body_bytes = self.allocator.dupe(u8, self.codegen.emit.buf.items[body_start..body_end]) catch return Error.OutOfMemory;
+                const body_bytes = self.allocator.dupe(u8, self.codegen.emit.buf.items[body_start..body_end]) catch return error.OutOfMemory;
                 defer self.allocator.free(body_bytes);
 
                 // Truncate buffer back to body_start
@@ -12856,7 +12856,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const prologue_size = self.codegen.currentOffset() - prologue_start;
 
                 // Re-append body
-                self.codegen.emit.buf.appendSlice(self.allocator, body_bytes) catch return Error.OutOfMemory;
+                self.codegen.emit.buf.appendSlice(self.allocator, body_bytes) catch return error.OutOfMemory;
 
                 // PHASE 3: Adjust relocation offsets
                 for (self.codegen.relocations.items[relocs_before..]) |*reloc| {
@@ -12892,9 +12892,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.roc_ops_reg = saved_roc_ops_reg;
                 self.ret_ptr_slot = saved_ret_ptr_slot;
                 self.symbol_locations.deinit();
-                self.symbol_locations = saved_symbol_locations.clone() catch return Error.OutOfMemory;
+                self.symbol_locations = saved_symbol_locations.clone() catch return error.OutOfMemory;
                 self.mutable_var_slots.deinit();
-                self.mutable_var_slots = saved_mutable_var_slots.clone() catch return Error.OutOfMemory;
+                self.mutable_var_slots = saved_mutable_var_slots.clone() catch return error.OutOfMemory;
 
                 // Patch the skip jump to point here (after the lambda code)
                 const after_lambda = self.codegen.currentOffset();
@@ -12903,7 +12903,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 return prologue_start;
             } else {
                 // aarch64: Use deferred prologue pattern too for consistency
-                const body_bytes = self.allocator.dupe(u8, self.codegen.emit.buf.items[body_start..body_end]) catch return Error.OutOfMemory;
+                const body_bytes = self.allocator.dupe(u8, self.codegen.emit.buf.items[body_start..body_end]) catch return error.OutOfMemory;
                 defer self.allocator.free(body_bytes);
 
                 // Truncate buffer back to body_start
@@ -12919,7 +12919,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const prologue_size = self.codegen.currentOffset() - prologue_start;
 
                 // Re-append body
-                self.codegen.emit.buf.appendSlice(self.allocator, body_bytes) catch return Error.OutOfMemory;
+                self.codegen.emit.buf.appendSlice(self.allocator, body_bytes) catch return error.OutOfMemory;
 
                 // Adjust relocation offsets
                 for (self.codegen.relocations.items[relocs_before..]) |*reloc| {
@@ -12955,9 +12955,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.roc_ops_reg = saved_roc_ops_reg;
                 self.ret_ptr_slot = saved_ret_ptr_slot;
                 self.symbol_locations.deinit();
-                self.symbol_locations = saved_symbol_locations.clone() catch return Error.OutOfMemory;
+                self.symbol_locations = saved_symbol_locations.clone() catch return error.OutOfMemory;
                 self.mutable_var_slots.deinit();
-                self.mutable_var_slots = saved_mutable_var_slots.clone() catch return Error.OutOfMemory;
+                self.mutable_var_slots = saved_mutable_var_slots.clone() catch return error.OutOfMemory;
 
                 // Patch the skip jump to point here (after the lambda code)
                 const after_lambda = self.codegen.currentOffset();
@@ -13021,7 +13021,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// caller_offset is the offset from RBP/FP to the caller's argument.
         /// For x86_64: first stack arg is at [RBP+16], second at [RBP+24], etc.
         /// For aarch64: first stack arg is at [FP+16], second at [FP+24], etc.
-        fn copyFromCallerStack(self: *Self, caller_offset: i32, local_offset: i32, num_regs: u8) Error!void {
+        fn copyFromCallerStack(self: *Self, caller_offset: i32, local_offset: i32, num_regs: u8) Allocator.Error!void {
             const temp_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X9 else .R11;
             var ri: u8 = 0;
             while (ri < num_regs) : (ri += 1) {
@@ -13036,7 +13036,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        fn bindLambdaParams(self: *Self, params: lir.LirPatternSpan, initial_reg_idx: u8) Error!void {
+        fn bindLambdaParams(self: *Self, params: lir.LirPatternSpan, initial_reg_idx: u8) Allocator.Error!void {
             const pattern_ids = self.store.getPatternSpan(params);
 
             // Pre-scan: determine which params are passed by pointer.
@@ -13415,7 +13415,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Move a value to the return register(s), using layout information for proper sizing.
-        fn moveToReturnRegisterWithLayout(self: *Self, loc: ValueLocation, ret_layout: layout.Idx) Error!void {
+        fn moveToReturnRegisterWithLayout(self: *Self, loc: ValueLocation, ret_layout: layout.Idx) Allocator.Error!void {
             // First check if the layout tells us this is a multi-register type > 8 bytes
             if (self.layout_store) |ls| {
                 const layout_val = ls.getLayout(ret_layout);
@@ -13503,7 +13503,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Copy a result value to the hidden return pointer buffer.
         /// Used when the return type exceeds the register limit and the caller
         /// has passed a pointer to a pre-allocated buffer as a hidden first argument.
-        fn copyResultToReturnPointer(self: *Self, result_loc: ValueLocation, ret_layout: layout.Idx, ret_ptr_stack_slot: i32) Error!void {
+        fn copyResultToReturnPointer(self: *Self, result_loc: ValueLocation, ret_layout: layout.Idx, ret_ptr_stack_slot: i32) Allocator.Error!void {
             const ls = self.layout_store orelse unreachable;
             const layout_val = ls.getLayout(ret_layout);
             const ret_size = ls.layoutSizeAlign(layout_val).size;
@@ -13540,7 +13540,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        fn moveToReturnRegister(self: *Self, loc: ValueLocation) Error!void {
+        fn moveToReturnRegister(self: *Self, loc: ValueLocation) Allocator.Error!void {
             const ret_reg = self.getReturnRegister();
             switch (loc) {
                 .general_reg => |reg| {
@@ -13630,7 +13630,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// registers (X2-X7) that were already loaded with arg[0]'s data.
         ///
         /// When registers are exhausted, spills remaining arguments to the stack.
-        fn generateCallToLambda(self: *Self, code_offset: usize, args_span: anytype, ret_layout: layout.Idx) Error!ValueLocation {
+        fn generateCallToLambda(self: *Self, code_offset: usize, args_span: anytype, ret_layout: layout.Idx) Allocator.Error!ValueLocation {
             const args = self.store.getExprSpan(args_span);
 
             // Pass 1: Generate all argument expressions and calculate register needs
@@ -14034,7 +14034,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Generate an indirect call through a function pointer value.
         /// The fn_ptr_loc contains the absolute runtime address of the target function.
         /// This is used when a lambda is passed as a parameter to a higher-order function.
-        fn generateIndirectCall(self: *Self, fn_ptr_loc: ValueLocation, args_span: anytype, ret_layout: layout.Idx) Error!ValueLocation {
+        fn generateIndirectCall(self: *Self, fn_ptr_loc: ValueLocation, args_span: anytype, ret_layout: layout.Idx) Allocator.Error!ValueLocation {
             const args = self.store.getExprSpan(args_span);
 
             // Save the function pointer to a callee-saved temp before arg setup,
@@ -14411,14 +14411,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Emit prologue for main expression code.
         /// Sets up frame pointer and saves callee-saved registers using ForwardFrameBuilder.
-        fn emitMainPrologue(self: *Self) Error!void {
+        fn emitMainPrologue(self: *Self) Allocator.Error!void {
             var frame = self.initMainFrameBuilder();
             self.codegen.stack_offset = try frame.emitPrologue();
         }
 
         /// Emit epilogue for main expression code.
         /// Restores callee-saved registers and frame pointer using ForwardFrameBuilder, then returns.
-        fn emitMainEpilogue(self: *Self) Error!void {
+        fn emitMainEpilogue(self: *Self) Allocator.Error!void {
             var frame = self.initMainFrameBuilder();
             try frame.emitEpilogue();
         }
@@ -14446,7 +14446,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Bind procedure parameters to argument registers.
         /// Handles stack spilling when arguments exceed available registers.
-        fn bindProcParams(self: *Self, params: lir.LirPatternSpan, param_layouts: LayoutIdxSpan) Error!void {
+        fn bindProcParams(self: *Self, params: lir.LirPatternSpan, param_layouts: LayoutIdxSpan) Allocator.Error!void {
             const pattern_ids = self.store.getPatternSpan(params);
             const layouts = self.store.getLayoutIdxSpan(param_layouts);
 
@@ -14595,7 +14595,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Generate code for a control flow statement
-        fn generateStmt(self: *Self, stmt_id: CFStmtId) Error!void {
+        fn generateStmt(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
             const stmt = self.store.getCFStmt(stmt_id);
 
             switch (stmt) {
@@ -14822,7 +14822,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Set up storage locations for join point parameters
-        fn setupJoinPointParams(self: *Self, _: JoinPointId, params: lir.LirPatternSpan, param_layouts: LayoutIdxSpan) Error!void {
+        fn setupJoinPointParams(self: *Self, _: JoinPointId, params: lir.LirPatternSpan, param_layouts: LayoutIdxSpan) Allocator.Error!void {
             const pattern_ids = self.store.getPatternSpan(params);
             const layouts = self.store.getLayoutIdxSpan(param_layouts);
 
@@ -14951,7 +14951,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Rebind join point parameters to new argument values (for jump)
         /// This writes the new values directly to the stack slots used by symbol_locations,
         /// so that the join point body can read the updated values.
-        fn rebindJoinPointParams(self: *Self, join_point: JoinPointId, arg_locs: []const ValueLocation) Error!void {
+        fn rebindJoinPointParams(self: *Self, join_point: JoinPointId, arg_locs: []const ValueLocation) Allocator.Error!void {
             const jp_key = @intFromEnum(join_point);
             const param_layouts_span = self.join_point_param_layouts.get(jp_key) orelse unreachable;
             const param_patterns_span = self.join_point_param_patterns.get(jp_key) orelse unreachable;
@@ -15066,7 +15066,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Emit a jump placeholder (will be patched later)
-        fn emitJumpPlaceholder(self: *Self) Error!void {
+        fn emitJumpPlaceholder(self: *Self) Allocator.Error!void {
             if (comptime target.toCpuArch() == .aarch64) {
                 // B instruction with offset 0 (will be patched)
                 try self.codegen.emit.b(0);
@@ -15077,7 +15077,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Generate code for a switch statement
-        fn generateSwitchStmt(self: *Self, sw: anytype) Error!void {
+        fn generateSwitchStmt(self: *Self, sw: anytype) Allocator.Error!void {
             // Evaluate condition
             const cond_loc = try self.generateExpr(sw.cond);
             const cond_reg = try self.ensureInGeneralReg(cond_loc);
@@ -15160,7 +15160,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Patch all pending calls after all procedures are compiled
         /// Generate code for incref operation
         /// Increments the reference count of a heap-allocated value
-        fn generateIncref(self: *Self, rc_op: anytype) Error!ValueLocation {
+        fn generateIncref(self: *Self, rc_op: anytype) Allocator.Error!ValueLocation {
             // First generate the value expression
             const value_loc = try self.generateExpr(rc_op.value);
 
@@ -15199,7 +15199,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Generate code for decref operation
         /// Decrements the reference count and frees if it reaches zero
-        fn generateDecref(self: *Self, rc_op: anytype) Error!ValueLocation {
+        fn generateDecref(self: *Self, rc_op: anytype) Allocator.Error!ValueLocation {
             // First generate the value expression
             const value_loc = try self.generateExpr(rc_op.value);
 
@@ -15237,7 +15237,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Generate code for free operation
         /// Directly frees memory without checking refcount
-        fn generateFree(self: *Self, rc_op: anytype) Error!ValueLocation {
+        fn generateFree(self: *Self, rc_op: anytype) Allocator.Error!ValueLocation {
             // First generate the value expression
             const value_loc = try self.generateExpr(rc_op.value);
 
@@ -15269,7 +15269,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Emit incref for a list value
-        fn emitListIncref(self: *Self, value_loc: ValueLocation, count: u16) Error!void {
+        fn emitListIncref(self: *Self, value_loc: ValueLocation, count: u16) Allocator.Error!void {
             const roc_ops_reg = self.roc_ops_reg orelse return;
             const fn_addr: usize = @intFromPtr(&increfDataPtrC);
 
@@ -15305,7 +15305,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Emit decref for a list value
-        fn emitListDecref(self: *Self, value_loc: ValueLocation) Error!void {
+        fn emitListDecref(self: *Self, value_loc: ValueLocation) Allocator.Error!void {
             const roc_ops_reg = self.roc_ops_reg orelse return;
             const fn_addr: usize = @intFromPtr(&decrefDataPtrC);
 
@@ -15343,7 +15343,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Emit free for a list value
-        fn emitListFree(self: *Self, value_loc: ValueLocation) Error!void {
+        fn emitListFree(self: *Self, value_loc: ValueLocation) Allocator.Error!void {
             const roc_ops_reg = self.roc_ops_reg orelse return;
             const fn_addr: usize = @intFromPtr(&freeDataPtrC);
 
@@ -15380,7 +15380,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Emit incref for a string value
         /// Strings use SSO, so we need to check if it's a large string first
-        fn emitStrIncref(self: *Self, value_loc: ValueLocation, count: u16) Error!void {
+        fn emitStrIncref(self: *Self, value_loc: ValueLocation, count: u16) Allocator.Error!void {
             const roc_ops_reg = self.roc_ops_reg orelse return;
             const fn_addr: usize = @intFromPtr(&increfDataPtrC);
 
@@ -15441,7 +15441,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Emit decref for a string value
-        fn emitStrDecref(self: *Self, value_loc: ValueLocation) Error!void {
+        fn emitStrDecref(self: *Self, value_loc: ValueLocation) Allocator.Error!void {
             const roc_ops_reg = self.roc_ops_reg orelse return;
             const fn_addr: usize = @intFromPtr(&decrefDataPtrC);
 
@@ -15498,7 +15498,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Emit free for a string value
-        fn emitStrFree(self: *Self, value_loc: ValueLocation) Error!void {
+        fn emitStrFree(self: *Self, value_loc: ValueLocation) Allocator.Error!void {
             const roc_ops_reg = self.roc_ops_reg orelse return;
             const fn_addr: usize = @intFromPtr(&freeDataPtrC);
 
@@ -15554,7 +15554,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Emit incref for a box value
-        fn emitBoxIncref(self: *Self, value_loc: ValueLocation, count: u16) Error!void {
+        fn emitBoxIncref(self: *Self, value_loc: ValueLocation, count: u16) Allocator.Error!void {
             const roc_ops_reg = self.roc_ops_reg orelse return;
             const fn_addr: usize = @intFromPtr(&increfDataPtrC);
 
@@ -15590,7 +15590,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Emit decref for a box value
-        fn emitBoxDecref(self: *Self, value_loc: ValueLocation) Error!void {
+        fn emitBoxDecref(self: *Self, value_loc: ValueLocation) Allocator.Error!void {
             const roc_ops_reg = self.roc_ops_reg orelse return;
             const fn_addr: usize = @intFromPtr(&decrefDataPtrC);
 
@@ -15627,7 +15627,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Emit free for a box value
-        fn emitBoxFree(self: *Self, value_loc: ValueLocation) Error!void {
+        fn emitBoxFree(self: *Self, value_loc: ValueLocation) Allocator.Error!void {
             const roc_ops_reg = self.roc_ops_reg orelse return;
             const fn_addr: usize = @intFromPtr(&freeDataPtrC);
 
@@ -15662,11 +15662,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.callBuiltin(&builder, fn_addr, .free_data_ptr);
         }
 
-        pub fn patchPendingCalls(self: *Self) Error!void {
+        pub fn patchPendingCalls(self: *Self) Allocator.Error!void {
             for (self.pending_calls.items) |pending| {
                 const key: u64 = @bitCast(pending.target_symbol);
                 const proc = self.proc_registry.get(key) orelse {
-                    return Error.LocalNotFound;
+                    unreachable;
                 };
                 self.patchCallTarget(pending.call_site, proc.code_start);
             }
@@ -15709,7 +15709,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             body_expr: LirExprId,
             arg_layouts: []const layout.Idx,
             ret_layout: layout.Idx,
-        ) Error!ExportedSymbol {
+        ) Allocator.Error!ExportedSymbol {
             _ = name; // Used for the symbol name, passed through to result
 
             // Record start position
@@ -15836,7 +15836,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const body_end = self.codegen.currentOffset();
 
                 // PHASE 2: Extract body and prepend prologue
-                const body_bytes = self.allocator.dupe(u8, self.codegen.emit.buf.items[body_start..body_end]) catch return Error.OutOfMemory;
+                const body_bytes = self.allocator.dupe(u8, self.codegen.emit.buf.items[body_start..body_end]) catch return error.OutOfMemory;
                 defer self.allocator.free(body_bytes);
 
                 // Truncate buffer back to body_start
@@ -15853,7 +15853,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const prologue_size_val = self.codegen.currentOffset() - prologue_start;
 
                 // Re-append body
-                self.codegen.emit.buf.appendSlice(self.allocator, body_bytes) catch return Error.OutOfMemory;
+                self.codegen.emit.buf.appendSlice(self.allocator, body_bytes) catch return error.OutOfMemory;
 
                 // Adjust relocation offsets
                 for (self.codegen.relocations.items[relocs_before..]) |*reloc| {
@@ -16123,28 +16123,28 @@ pub const UnsupportedArchCodeGen = struct {
 
     pub fn deinit(_: *Self) void {}
 
-    pub fn compileAllProcs(_: *Self, _: anytype) Error!void {
-        return error.UnsupportedArchitecture;
+    pub fn compileAllProcs(_: *Self, _: anytype) Allocator.Error!void {
+        unreachable;
     }
 
-    pub fn generateCode(_: *Self, _: anytype, _: anytype, _: anytype) Error!CodeResult {
-        return error.UnsupportedArchitecture;
+    pub fn generateCode(_: *Self, _: anytype, _: anytype, _: anytype) Allocator.Error!CodeResult {
+        unreachable;
     }
 
-    pub fn generateExpr(_: *Self, _: anytype) Error!void {
-        return error.UnsupportedArchitecture;
+    pub fn generateExpr(_: *Self, _: anytype) Allocator.Error!void {
+        unreachable;
     }
 
-    pub fn generateProc(_: *Self, _: anytype) Error!void {
-        return error.UnsupportedArchitecture;
+    pub fn generateProc(_: *Self, _: anytype) Allocator.Error!void {
+        unreachable;
     }
 
-    pub fn generateEntrypointWrapper(_: *Self, _: []const u8, _: anytype, _: anytype, _: anytype) Error!ExportedSymbol {
-        return error.UnsupportedArchitecture;
+    pub fn generateEntrypointWrapper(_: *Self, _: []const u8, _: anytype, _: anytype, _: anytype) Allocator.Error!ExportedSymbol {
+        unreachable;
     }
 
-    pub fn finalize(_: *Self) Error![]const u8 {
-        return error.UnsupportedArchitecture;
+    pub fn finalize(_: *Self) Allocator.Error![]const u8 {
+        unreachable;
     }
 
     pub fn getCode(_: *const Self) []const u8 {
