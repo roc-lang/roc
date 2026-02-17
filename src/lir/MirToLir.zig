@@ -682,17 +682,57 @@ fn lowLevelToBinop(op: CIR.Expr.LowLevel) ?LirExpr.BinOp {
 }
 
 fn lowerHosted(self: *Self, h: anytype, mono_idx: Monotype.Idx, region: Region) Allocator.Error!LirExprId {
-    const ret_layout = try self.layoutFromMonotype(mono_idx);
+    const fn_layout = try self.layoutFromMonotype(mono_idx);
+    const monotype = self.mir_store.monotype_store.getMonotype(mono_idx);
+    const ret_layout = switch (monotype) {
+        .func => |f| try self.layoutFromMonotype(f.ret),
+        else => fn_layout,
+    };
 
-    // Lower the body to get the arguments
-    const lir_body = try self.lowerExpr(h.body);
+    // Lower parameter patterns
+    const mir_params = self.mir_store.getPatternSpan(h.params);
+    const lir_params = try self.lowerPatternSpan(mir_params);
 
-    // Build an args span from the body (hosted calls pass their args directly)
-    const lir_args = try self.lir_store.addExprSpan(&.{lir_body});
+    // Build lookup args from parameters (one lookup per param)
+    const func_args = switch (monotype) {
+        .func => |f| self.mir_store.monotype_store.getIdxSpan(f.args),
+        else => &[_]Monotype.Idx{},
+    };
 
-    return self.lir_store.addExpr(.{ .hosted_call = .{
+    const save_len = self.scratch_lir_expr_ids.items.len;
+    defer self.scratch_lir_expr_ids.shrinkRetainingCapacity(save_len);
+
+    for (mir_params, 0..) |mir_param_id, i| {
+        const mir_pat = self.mir_store.getPattern(mir_param_id);
+        const symbol = switch (mir_pat) {
+            .bind => |sym| sym,
+            else => unreachable, // hosted params should always be simple binds
+        };
+        const param_layout = if (i < func_args.len)
+            try self.layoutFromMonotype(func_args[i])
+        else
+            layout.Idx.zst;
+
+        const lookup = try self.lir_store.addExpr(.{ .lookup = .{
+            .symbol = symbol,
+            .layout_idx = param_layout,
+        } }, region);
+        try self.scratch_lir_expr_ids.append(self.allocator, lookup);
+    }
+    const lir_args = try self.lir_store.addExprSpan(self.scratch_lir_expr_ids.items[save_len..]);
+
+    // Create hosted_call as the lambda body
+    const hosted_call = try self.lir_store.addExpr(.{ .hosted_call = .{
         .index = h.index,
         .args = lir_args,
+        .ret_layout = ret_layout,
+    } }, region);
+
+    // Wrap in lambda (hosted lambdas are function values)
+    return self.lir_store.addExpr(.{ .lambda = .{
+        .fn_layout = fn_layout,
+        .params = lir_params,
+        .body = hosted_call,
         .ret_layout = ret_layout,
     } }, region);
 }
@@ -930,6 +970,7 @@ fn mapLowLevel(cir_op: CIR.Expr.LowLevel) ?LirExpr.LowLevel {
         .str_from_utf8 => .str_from_utf8,
         .str_join_with => .str_join_with,
         .str_split_on => .str_split,
+        .str_inspekt => .str_inspekt,
 
         // List operations
         .list_len => .list_len,
@@ -939,6 +980,9 @@ fn mapLowLevel(cir_op: CIR.Expr.LowLevel) ?LirExpr.LowLevel {
         .list_append => .list_append,
         .list_concat => .list_concat,
         .list_with_capacity => .list_with_capacity,
+        .list_sort_with => .list_sort_with,
+        .list_drop_at => .list_drop_at,
+        .list_sublist => .list_sublist,
 
         // Numeric operations (CIR names differ from LIR names)
         .num_plus => .num_add,
@@ -950,6 +994,11 @@ fn mapLowLevel(cir_op: CIR.Expr.LowLevel) ?LirExpr.LowLevel {
         .num_mod_by => .num_mod,
         .num_from_numeral => .num_from_numeral,
         .num_from_str => .num_from_str,
+        .num_is_zero => .num_is_zero,
+        .num_abs_diff => .num_abs_diff,
+        .num_shift_left_by => .num_shift_left_by,
+        .num_shift_right_by => .num_shift_right_by,
+        .num_shift_right_zf_by => .num_shift_right_zf_by,
 
         // Type conversions (same name in both CIR and LIR)
         .u8_to_i8_wrap => .u8_to_i8_wrap,
@@ -1993,4 +2042,70 @@ test "MIR single-tag union pattern with one arg emits payload pattern directly" 
     try testing.expect(lir_pat != .tag);
     // Should be a .bind pattern (the payload binding)
     try testing.expect(lir_pat == .bind);
+}
+
+test "MIR hosted lambda lowers to LIR lambda wrapping hosted_call" {
+    const allocator = testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
+
+    // Create function type: (I64, I64) -> I64
+    const func_arg_span = try env.mir_store.monotype_store.addIdxSpan(allocator, &.{ i64_mono, i64_mono });
+    const func_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .func = .{
+        .args = func_arg_span,
+        .ret = i64_mono,
+        .effectful = false,
+    } });
+
+    // Create parameter patterns (two binds)
+    const ident_a = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
+    const sym_a = Symbol{ .module_idx = 0, .ident_idx = ident_a };
+    const ident_b = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 2 };
+    const sym_b = Symbol{ .module_idx = 0, .ident_idx = ident_b };
+
+    const pat_a = try env.mir_store.addPattern(allocator, .{ .bind = sym_a }, i64_mono);
+    const pat_b = try env.mir_store.addPattern(allocator, .{ .bind = sym_b }, i64_mono);
+    const param_span = try env.mir_store.addPatternSpan(allocator, &.{ pat_a, pat_b });
+
+    // Hosted body is a crash placeholder (not used by new lowerHosted)
+    const crash_body = try env.mir_store.addExpr(allocator, .runtime_err_ellipsis, i64_mono, Region.zero());
+
+    // Create hosted expression
+    const ident_name = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 3 };
+    const hosted_expr = try env.mir_store.addExpr(allocator, .{ .hosted = .{
+        .symbol_name = ident_name,
+        .index = 7,
+        .params = param_span,
+        .body = crash_body,
+    } }, func_mono, Region.zero());
+
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    defer translator.deinit();
+
+    const lir_id = try translator.lower(hosted_expr);
+    const lir_expr = env.lir_store.getExpr(lir_id);
+
+    // Should be a lambda wrapping a hosted_call
+    try testing.expect(lir_expr == .lambda);
+
+    // The body of the lambda should be a hosted_call
+    const body_expr = env.lir_store.getExpr(lir_expr.lambda.body);
+    try testing.expect(body_expr == .hosted_call);
+
+    // The hosted_call should have 2 args (one per parameter)
+    const args = env.lir_store.getExprSpan(body_expr.hosted_call.args);
+    try testing.expectEqual(@as(usize, 2), args.len);
+
+    // Each arg should be a lookup
+    const arg0 = env.lir_store.getExpr(args[0]);
+    const arg1 = env.lir_store.getExpr(args[1]);
+    try testing.expect(arg0 == .lookup);
+    try testing.expect(arg1 == .lookup);
+
+    // The hosted_call index should be preserved
+    try testing.expectEqual(@as(u32, 7), body_expr.hosted_call.index);
 }

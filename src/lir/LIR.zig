@@ -697,6 +697,7 @@ pub const LirExpr = union(enum) {
         str_with_ascii_uppercased,
         str_with_prefix,
         str_from_utf8_lossy,
+        str_inspekt,
 
         // List operations
         list_len,
@@ -720,6 +721,9 @@ pub const LirExpr = union(enum) {
         list_repeat,
         list_split_first,
         list_split_last,
+        list_sort_with,
+        list_drop_at,
+        list_sublist,
 
         // Numeric operations
         num_add,
@@ -738,6 +742,11 @@ pub const LirExpr = union(enum) {
         num_to_str,
         num_from_str,
         num_from_numeral,
+        num_is_zero,
+        num_abs_diff,
+        num_shift_left_by,
+        num_shift_right_by,
+        num_shift_right_zf_by,
 
         // Numeric conversion operations (U8)
         u8_to_i8_wrap,

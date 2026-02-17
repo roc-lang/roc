@@ -3307,6 +3307,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .num_ceiling,
                 .num_to_str,
                 .num_from_numeral,
+                .num_is_zero,
+                .num_abs_diff,
+                .num_shift_left_by,
+                .num_shift_right_by,
+                .num_shift_right_zf_by,
+                .str_inspekt,
+                .list_sort_with,
+                .list_drop_at,
+                .list_sublist,
                 .compare,
                 => {
                     if (std.debug.runtime_safety) unreachable;
