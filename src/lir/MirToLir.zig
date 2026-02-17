@@ -197,20 +197,18 @@ fn layoutFromTagUnion(self: *Self, tu: anytype) Allocator.Error!layout.Idx {
         return self.layout_store.putTuple(elem_layouts.items);
     }
 
-    // For now, represent tag unions as a tuple: [u64 discriminant, max-payload]
-    // This is a simplified representation; the dev backend handles the actual layout.
-    // We compute the max payload size across all variants.
-    var max_payload_layout: ?layout.Idx = null;
-    var max_payload_size: u32 = 0;
+    // Multi-tag union: build per-variant payload layouts
+    const zst_idx = try self.layout_store.ensureZstLayout();
+
+    var variant_layouts = std.ArrayList(layout.Idx).empty;
+    defer variant_layouts.deinit(self.allocator);
 
     for (tags) |tag| {
         const payloads = self.mir_store.monotype_store.getIdxSpan(tag.payloads);
-        if (payloads.len == 0) continue;
-
-        // For a single payload, use it directly; for multiple, build a tuple
-        var payload_idx: layout.Idx = undefined;
-        if (payloads.len == 1) {
-            payload_idx = try self.layoutFromMonotype(payloads[0]);
+        if (payloads.len == 0) {
+            try variant_layouts.append(self.allocator, zst_idx);
+        } else if (payloads.len == 1) {
+            try variant_layouts.append(self.allocator, try self.layoutFromMonotype(payloads[0]));
         } else {
             var elem_layouts = std.ArrayList(layout.Layout).empty;
             defer elem_layouts.deinit(self.allocator);
@@ -218,31 +216,11 @@ fn layoutFromTagUnion(self: *Self, tu: anytype) Allocator.Error!layout.Idx {
                 const p_idx = try self.layoutFromMonotype(p);
                 try elem_layouts.append(self.allocator, self.layout_store.getLayout(p_idx));
             }
-            payload_idx = try self.layout_store.putTuple(elem_layouts.items);
-        }
-        const sa = self.layout_store.layoutSizeAlign(self.layout_store.getLayout(payload_idx));
-        const effective_size = std.mem.alignForward(u32, sa.size, @intCast(sa.alignment.toByteUnits()));
-        if (effective_size > max_payload_size) {
-            max_payload_size = effective_size;
-            max_payload_layout = payload_idx;
+            try variant_layouts.append(self.allocator, try self.layout_store.putTuple(elem_layouts.items));
         }
     }
 
-    // Build a tuple of [discriminant, payload]
-    // Choose discriminant size based on tag count
-    const disc_layout: layout.Layout = if (tags.len <= 256)
-        layout.Layout.int(.u8)
-    else if (tags.len <= 65536)
-        layout.Layout.int(.u16)
-    else
-        layout.Layout.int(.u64);
-    var elems = std.ArrayList(layout.Layout).empty;
-    defer elems.deinit(self.allocator);
-    try elems.append(self.allocator, disc_layout);
-    if (max_payload_layout) |pl| {
-        try elems.append(self.allocator, self.layout_store.getLayout(pl));
-    }
-    return self.layout_store.putTuple(elems.items);
+    return self.layout_store.putTagUnion(variant_layouts.items);
 }
 
 /// Given a tag name and the monotype of the containing tag union,
@@ -252,6 +230,13 @@ fn tagDiscriminant(self: *const Self, tag_name: Ident.Idx, union_mono_idx: Monot
     switch (monotype) {
         .tag_union => |tu| {
             const tags = self.mir_store.monotype_store.getTags(tu.tags);
+
+            if (std.debug.runtime_safety) {
+                for (tags[0..tags.len -| 1], tags[1..]) |a, b| {
+                    std.debug.assert(@as(u32, @bitCast(a.name)) < @as(u32, @bitCast(b.name)));
+                }
+            }
+
             for (tags, 0..) |tag, i| {
                 if (@as(u32, @bitCast(tag.name)) == @as(u32, @bitCast(tag_name))) {
                     return @intCast(i);
@@ -1461,4 +1446,49 @@ test "MIR match with pattern alternatives lowers to multiple LIR when-branches" 
 
     // The third branch should have a different body
     try testing.expect(lir_branches[2].body != lir_branches[0].body);
+}
+
+test "MIR multi-tag union produces proper tag_union layout" {
+    const allocator = testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
+
+    // Create a 2-tag union: [Foo I64, Bar]
+    // Tags are sorted alphabetically: Bar < Foo, so Bar=0, Foo=1
+    const tag_bar = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
+    const tag_foo = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 2 };
+
+    const foo_payloads = try env.mir_store.monotype_store.addIdxSpan(allocator, &.{i64_mono});
+
+    const tag_span = try env.mir_store.monotype_store.addTags(allocator, &.{
+        .{ .name = tag_bar, .payloads = Monotype.Span.empty() },
+        .{ .name = tag_foo, .payloads = foo_payloads },
+    });
+    const union_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .tag_union = .{ .tags = tag_span } });
+
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    defer translator.deinit();
+
+    const layout_idx = try translator.layoutFromMonotype(union_mono);
+    const result_layout = env.layout_store.getLayout(layout_idx);
+
+    // Should be a proper tag_union, not a tuple
+    try testing.expect(result_layout.tag == .tag_union);
+
+    // Check tag union data
+    const tu_data = env.layout_store.getTagUnionData(result_layout.data.tag_union.idx);
+
+    // 2 tags → discriminant_size should be 1
+    try testing.expectEqual(@as(u8, 1), tu_data.discriminant_size);
+
+    // Max payload is I64 (8 bytes), so discriminant_offset >= 8
+    try testing.expect(tu_data.discriminant_offset >= 8);
+
+    // Check that we have 2 variants
+    const variants = env.layout_store.getTagUnionVariants(tu_data);
+    try testing.expectEqual(@as(usize, 2), variants.len);
 }

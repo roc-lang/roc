@@ -22,46 +22,21 @@ Fixed in latest commit. Changed `else => {}` to an exhaustive match listing all 
 
 This is by design. LIR integer literals use two "storage class" variants (`i64_literal` / `i128_literal`) based on value magnitude, not type. The actual type width is carried separately in `layout_idx` on patterns and variable bindings. The codegen always uses the destination layout's size when storing values, so truncation/extension is handled correctly. Adding a monotype lookup to every integer literal would be a performance regression with no observable benefit.
 
-### 1.6 [MODERATE] `break_expr` lowered to `runtime_error`
+### 1.6 [FIXED] `break_expr` lowered to `runtime_error`
 
-**File:** `src/lir/MirToLir.zig:299`
-
-```zig
-.break_expr => self.lir_store.addExpr(.runtime_error, region),
-```
-
-A `break` expression is lowered as a runtime error. While this might be intentional if `break` is expected to be eliminated by an earlier pass, it means any `break` that survives to MIR→LIR will silently become a crash at runtime rather than properly breaking out of its loop.
-
-**Fix:** Either implement proper break lowering (emitting a jump to the loop exit), or add an assertion with a comment explaining why break should never reach this point. If it truly should never reach here, `unreachable` would be better than a silent runtime error.
+Fixed in latest commit. Added `break_expr: void` variant to LirExpr, lowered properly in MirToLir, added to RC insertion passes (countUsesInto + exhaustive processExpr/countRcOps switches in both lir and mono rc_insert.zig), and implemented codegen via `loop_break_patches` (forward-jump patched to loop exit offset) in both `generateForLoop` and `generateWhileLoop`.
 
 ## 2. BRITTLENESS / ERROR-PRONE ISSUES
 
-### 2.1 [HIGH] No debug assertion that tag union tags are sorted by name
+### 2.1 [FIXED] No debug assertion that tag union tags are sorted by name
 
-**File:** `src/lir/MirToLir.zig:250-264`
+Fixed in latest commit. Added `std.debug.assert` in `tagDiscriminant` that verifies tags are sorted by name index.
 
-`tagDiscriminant` does a linear scan assuming the index of a tag in the tags array IS its discriminant. This relies on tags being sorted alphabetically (as documented in the Monotype definition). If any code path adds tags unsorted, the wrong discriminant would be assigned, causing incorrect pattern matching at runtime.
+### 2.2 [FIXED] Tag union layout uses proper `layout.tag_union` instead of tuple approximation
 
-**Fix:** Add a debug assertion in `tagDiscriminant`:
-```zig
-if (std.debug.runtime_safety) {
-    for (tags[0..tags.len -| 1], tags[1..]) |a, b| {
-        std.debug.assert(@as(u32, @bitCast(a.name)) < @as(u32, @bitCast(b.name)));
-    }
-}
-```
+Fixed in latest commit. Added `putTagUnion` method to `layout.Store` and rewrote `layoutFromTagUnion` in MirToLir to use it, producing proper `.tag_union` layouts with correct discriminant offset/size and per-variant payload layouts. New test verifies multi-tag union layout correctness.
 
-### 2.2 [HIGH] Tag union layout is a simplified approximation
-
-**File:** `src/lir/MirToLir.zig:200-246`
-
-The comment says: *"This is a simplified representation; the dev backend handles the actual layout."* The code creates a `[discriminant, max_payload]` tuple. But this tuple layout may not match what the `layout.Store`'s `putTagUnion` would produce (alignment, padding, discriminant position).
-
-If the layout produced here diverges from what the codegen expects (e.g., the codegen expects the discriminant after the payload, not before), field access offsets would be wrong.
-
-**Fix:** Use the `layout.Store`'s tag union construction method rather than manually building a tuple. If that's not available yet, add a TODO and a debug assertion comparing the generated layout size against what the layout store would produce.
-
-### 2.3 [MEDIUM] `roc_str_size` used instead of `roc_list_size` in empty list codegen
+### 2.3 [FIXED] `roc_str_size` used instead of `roc_list_size` in empty list codegen
 
 **File:** `src/backend/dev/LirCodeGen.zig:7794, 7821`
 
@@ -136,8 +111,8 @@ No test verifies that `lowerRecordAccess` finds the correct field index when the
 ### 4.7 Cross-module symbol def propagation in MirToLir
 `lowerLookup` propagates MIR symbol defs to LIR, but no test verifies this works correctly for cross-module references.
 
-### 4.8 `break_expr` behavior
-No test covers what happens when a `break` expression reaches MirToLir. If it's expected to be eliminated earlier, a test in the earlier pass should verify that. If it can reach MirToLir, there should be a test.
+### 4.8 [FIXED] `break_expr` behavior
+Fixed as part of 1.6 — `break_expr` now properly lowers through MirToLir → LIR → codegen with forward-jump patching.
 
 ## 5. NAMING ISSUES
 
@@ -165,9 +140,9 @@ The surface language uses `match`, not `when`, but the LIR and Mono IR layers st
 | ~~P0~~ | ~~1.2 Global RC use counts~~ | ~~Memory leaks~~ FIXED |
 | ~~P0~~ | ~~1.3 RC doesn't process lambdas/loops~~ | ~~Missing RC ops → leaks or use-after-free~~ FIXED |
 | ~~P1~~ | ~~1.4 Record access defaults to idx 0~~ | ~~Wrong field access (compiler bug path)~~ FIXED |
-| P1 | 2.1 No sorted-tags assertion | Silent wrong discriminants |
-| P1 | 2.2 Tag union layout approximation | Potential layout mismatch with codegen |
-| P1 | 1.6 break_expr → runtime_error | Break crashes at runtime |
+| ~~P1~~ | ~~2.1 No sorted-tags assertion~~ | ~~Silent wrong discriminants~~ FIXED |
+| ~~P1~~ | ~~2.2 Tag union layout approximation~~ | ~~Potential layout mismatch with codegen~~ FIXED |
+| ~~P1~~ | ~~1.6 break_expr → runtime_error~~ | ~~Break crashes at runtime~~ FIXED |
 | ~~P2~~ | ~~1.5 Int literal type discarded~~ | ~~Potential wrong width in codegen~~ NOT A BUG |
 | P2 | 2.3 roc_str_size for lists | Latent bug if constants diverge |
 | P2 | 2.4 Closure field name collisions | Potential layout corruption |
