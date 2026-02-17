@@ -316,7 +316,7 @@ fn lowerList(self: *Self, list_data: anytype, mono_idx: Monotype.Idx, region: Re
     const monotype = self.mir_store.monotype_store.getMonotype(mono_idx);
     const elem_layout = switch (monotype) {
         .list => |l| try self.layoutFromMonotype(l.elem),
-        else => layout.Idx.zst,
+        else => unreachable,
     };
 
     const mir_elems = self.mir_store.getExprSpan(list_data.elems);
@@ -773,7 +773,7 @@ fn lowerForLoop(self: *Self, f: anytype, _: Monotype.Idx, region: Region) Alloca
     const list_monotype = self.mir_store.monotype_store.getMonotype(list_mono);
     const elem_layout = switch (list_monotype) {
         .list => |l| try self.layoutFromMonotype(l.elem),
-        else => layout.Idx.zst,
+        else => unreachable,
     };
     const lir_pat = try self.lowerPattern(f.elem_pattern);
     const lir_body = try self.lowerExpr(f.body);
@@ -900,7 +900,7 @@ fn lowerPattern(self: *Self, mir_pat_id: MIR.PatternId) Allocator.Error!LirPatte
             const list_monotype = self.mir_store.monotype_store.getMonotype(mono_idx);
             const elem_layout = switch (list_monotype) {
                 .list => |l| try self.layoutFromMonotype(l.elem),
-                else => layout.Idx.zst,
+                else => unreachable,
             };
             const lir_prefix = try self.lowerPatternSpan(self.mir_store.getPatternSpan(ld.patterns));
             const rest_pat = if (ld.rest_pattern.isNone())
