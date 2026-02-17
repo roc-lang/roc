@@ -81,17 +81,17 @@ Tests added in `src/lir/rc_insert.zig` as part of 1.3 fix: lambda body with nest
 ### 4.3 [FIXED] RC insertion across control flow branches
 Tests added in `src/lir/rc_insert.zig` as part of 1.2 fix: symbol used in both branches (no incref), one branch only (decref in unused), multiple times in one branch (incref+decref), and used both inside and outside branches.
 
-### 4.4 Multi-tag union lowering (discriminant correctness)
-The test for `zero_arg_tag` only tests a single-tag union (discriminant 0). There's no test for a multi-tag union verifying that different tags get different discriminants, especially one verifying alphabetical ordering.
+### 4.4 [FIXED] Multi-tag union lowering (discriminant correctness)
+Test added: creates [Bar, Foo I64] union, lowers both tags, verifies Bar→discriminant 0 (zero_arg_tag) and Foo→discriminant 1 (tag with payload).
 
-### 4.5 Closure with captures lowering
-No test in MirToLir verifies that a lambda with captures produces a `closure` LIR node with correct capture layouts and closure representation (single capture → `unwrapped_capture`, multiple → `struct_captures`).
+### 4.5 [FIXED] Closure with captures lowering
+Two tests added: single capture → verifies `.closure` with `unwrapped_capture` representation; multiple captures → verifies `.closure` with `struct_captures` representation.
 
-### 4.6 Record/tuple access field index correctness
-No test verifies that `lowerRecordAccess` finds the correct field index when the record has multiple fields.
+### 4.6 [FIXED] Record/tuple access field index correctness
+Two tests added: record access on 3-field record verifies `field_idx == 2` for the third field; tuple access verifies `elem_idx == 2` for the third element.
 
-### 4.7 Cross-module symbol def propagation in MirToLir
-`lowerLookup` propagates MIR symbol defs to LIR, but no test verifies this works correctly for cross-module references.
+### 4.7 [FIXED] Cross-module symbol def propagation in MirToLir
+Test added: registers `x = 42` in MIR symbol defs, lowers a lookup to x, verifies the LIR store now has the propagated def as an `i64_literal` with value 42.
 
 ### 4.8 [FIXED] `break_expr` behavior
 Fixed as part of 1.6 — `break_expr` now properly lowers through MirToLir → LIR → codegen with forward-jump patching.
