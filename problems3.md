@@ -18,17 +18,9 @@ Fixed in latest commit. `processExpr` now handles `.lambda`, `.closure`, `.for_l
 
 Fixed in latest commit. Changed `else => {}` to an exhaustive match listing all non-record monotype variants (`.func`, `.tag_union`, `.tuple`, `.list`, `.prim`, `.box`, `.unit`) as `unreachable`.
 
-### 1.5 [MODERATE] `lowerInt` discards the monotype — always emits i64 or i128
+### 1.5 [NOT A BUG] `lowerInt` discards the monotype — always emits i64 or i128
 
-**File:** `src/lir/MirToLir.zig:303-309`
-
-```zig
-fn lowerInt(self: *Self, int_data: anytype, _: Monotype.Idx, region: Region) ...
-```
-
-The `mono_idx` parameter is discarded. All integers are lowered as `i64_literal` or `i128_literal` regardless of their actual type (U8, I32, etc.). This works if the codegen uses surrounding layout information to determine register width, but it means the LIR literal node doesn't carry its actual type. If any codegen path examines the literal variant to determine width (e.g., "this is i64_literal so use 64-bit ops"), it would use 64-bit operations even for U8 values.
-
-**Fix:** Either emit the correct literal variant based on the monotype (e.g., `i8_literal` for I8) if such variants exist in LIR, or add a debug assertion verifying that the codegen always uses layout rather than literal variant for width decisions.
+This is by design. LIR integer literals use two "storage class" variants (`i64_literal` / `i128_literal`) based on value magnitude, not type. The actual type width is carried separately in `layout_idx` on patterns and variable bindings. The codegen always uses the destination layout's size when storing values, so truncation/extension is handled correctly. Adding a monotype lookup to every integer literal would be a performance regression with no observable benefit.
 
 ### 1.6 [MODERATE] `break_expr` lowered to `runtime_error`
 
@@ -176,7 +168,7 @@ The surface language uses `match`, not `when`, but the LIR and Mono IR layers st
 | P1 | 2.1 No sorted-tags assertion | Silent wrong discriminants |
 | P1 | 2.2 Tag union layout approximation | Potential layout mismatch with codegen |
 | P1 | 1.6 break_expr → runtime_error | Break crashes at runtime |
-| P2 | 1.5 Int literal type discarded | Potential wrong width in codegen |
+| ~~P2~~ | ~~1.5 Int literal type discarded~~ | ~~Potential wrong width in codegen~~ NOT A BUG |
 | P2 | 2.3 roc_str_size for lists | Latent bug if constants diverge |
 | P2 | 2.4 Closure field name collisions | Potential layout corruption |
 | P2 | 3.1 Temp ArrayLists in layout | Performance waste |
