@@ -296,7 +296,7 @@ fn lowerExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator.Error!LirExprId {
         .for_loop => |f| self.lowerForLoop(f, mono_idx, region),
         .while_loop => |w| self.lowerWhileLoop(w, region),
         .return_expr => |r| self.lowerReturn(r, mono_idx, region),
-        .break_expr => self.lir_store.addExpr(.runtime_error, region),
+        .break_expr => self.lir_store.addExpr(.break_expr, region),
     };
 }
 

@@ -478,6 +478,9 @@ pub const LirExpr = union(enum) {
         ret_layout: layout.Idx,
     },
 
+    /// Break out of the enclosing loop (for_loop or while_loop)
+    break_expr: void,
+
     /// Binary operation (specialized, not a method call)
     binop: struct {
         op: BinOp,

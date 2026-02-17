@@ -677,6 +677,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// early return jumps to point to the epilogue.
         early_return_patches: std.ArrayList(usize),
 
+        /// Stack of forward-jump patches for break expressions inside loops.
+        /// Each generateForLoop/generateWhileLoop saves the length, and after
+        /// body generation, patches all new entries to the loop exit offset.
+        loop_break_patches: std.ArrayList(usize),
+
         /// Stack slot where early return value is stored (for compileLambdaAsProc).
         /// Set by compileLambdaAsProc before generating the body.
         early_return_result_slot: ?i32 = null,
@@ -902,6 +907,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .internal_call_patches = std.ArrayList(InternalCallPatch).empty,
                 .internal_addr_patches = std.ArrayList(InternalAddrPatch).empty,
                 .early_return_patches = std.ArrayList(usize).empty,
+                .loop_break_patches = std.ArrayList(usize).empty,
             };
         }
 
@@ -925,6 +931,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.internal_call_patches.deinit(self.allocator);
             self.internal_addr_patches.deinit(self.allocator);
             self.early_return_patches.deinit(self.allocator);
+            self.loop_break_patches.deinit(self.allocator);
         }
 
         /// Reset the code generator for generating a new expression
@@ -1294,6 +1301,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 // Early return from a block
                 .early_return => |er| try self.generateEarlyReturn(er),
+
+                // Break out of a loop
+                .break_expr => try self.generateBreak(),
 
                 // Debug and assertions
                 .dbg => |dbg_expr| try self.generateDbg(dbg_expr),
@@ -9066,6 +9076,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const elem_loc: ValueLocation = if (is_zst) .{ .immediate_i64 = 0 } else self.stackLocationForLayout(effective_elem_layout, elem_slot);
             try self.bindPatternWithLayout(for_loop.elem_pattern, elem_loc, effective_elem_layout);
 
+            // Save break patches length before body generation
+            const saved_break_patches_len = self.loop_break_patches.items.len;
+
             // Execute the body (result is discarded)
             // NOTE: This may call C functions which clobber all caller-saved registers
             {
@@ -9096,6 +9109,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Patch the exit jump to point here
             const loop_exit_offset = self.codegen.currentOffset();
             self.codegen.patchJump(exit_patch, loop_exit_offset);
+
+            // Patch break jumps to loop exit
+            for (self.loop_break_patches.items[saved_break_patches_len..]) |patch| {
+                self.codegen.patchJump(patch, loop_exit_offset);
+            }
+            self.loop_break_patches.shrinkRetainingCapacity(saved_break_patches_len);
 
             // For loops return unit (empty record)
             return .{ .immediate_i64 = 0 };
@@ -9157,6 +9176,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Jump to end if condition is false (equal to 0)
             const exit_patch = try self.emitJumpIfEqual();
 
+            // Save break patches length before body generation
+            const saved_break_patches_len = self.loop_break_patches.items.len;
+
             // Execute the body (result is discarded)
             // NOTE: This may call C functions which clobber all caller-saved registers
             // The body may contain reassignments that update mutable variables
@@ -9168,6 +9190,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Patch the exit jump to point here
             const loop_exit_offset = self.codegen.currentOffset();
             self.codegen.patchJump(exit_patch, loop_exit_offset);
+
+            // Patch break jumps to loop exit
+            for (self.loop_break_patches.items[saved_break_patches_len..]) |patch| {
+                self.codegen.patchJump(patch, loop_exit_offset);
+            }
+            self.loop_break_patches.shrinkRetainingCapacity(saved_break_patches_len);
 
             // While loops return unit (empty record)
             return .{ .immediate_i64 = 0 };
@@ -9191,6 +9219,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const patch = try self.codegen.emitJump();
             try self.early_return_patches.append(self.allocator, patch);
             // Return a dummy value — this code is unreachable at runtime
+            return .{ .immediate_i64 = 0 };
+        }
+
+        /// Generate code for break expression (exits enclosing loop)
+        fn generateBreak(self: *Self) Allocator.Error!ValueLocation {
+            // Emit a forward jump (will be patched to loop exit)
+            const patch = try self.codegen.emitJump();
+            try self.loop_break_patches.append(self.allocator, patch);
+            // Return a dummy value — code after break is unreachable
             return .{ .immediate_i64 = 0 };
         }
 
