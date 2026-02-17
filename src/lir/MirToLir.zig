@@ -477,7 +477,7 @@ fn lowerLambda(self: *Self, lam: anytype, mono_idx: Monotype.Idx, region: Region
             const cap_layout = if (self.mir_store.getSymbolDef(cap.symbol)) |def_id|
                 try self.layoutFromMonotype(self.mir_store.typeOf(def_id))
             else
-                layout.Idx.zst;
+                unreachable;
 
             try self.scratch_lir_captures.append(self.allocator, .{
                 .symbol = cap.symbol,
