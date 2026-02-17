@@ -105,6 +105,7 @@ pub fn lower(self: *Self, mir_expr_id: MIR.ExprId) Allocator.Error!LirExprId {
 
 /// Convert a Monotype.Idx to a layout.Idx, using a cache.
 fn layoutFromMonotype(self: *Self, mono_idx: Monotype.Idx) Allocator.Error!layout.Idx {
+    std.debug.assert(!mono_idx.isNone());
     const key = @intFromEnum(mono_idx);
     if (self.layout_cache.get(key)) |cached| return cached;
 
