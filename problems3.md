@@ -64,13 +64,11 @@ For every tag expression and tag pattern, `tagDiscriminant` scans the full tag l
 
 **Fix:** If this becomes a bottleneck, cache tag-name-to-discriminant mappings per union monotype. For now, this is likely fine since most tag unions are small.
 
-### 3.3 [LOW] RC insertion `countUses` traverses entire tree then `processExpr` traverses again
+### 3.3 [WON'T FIX] RC insertion `countUses` traverses entire tree then `processExpr` traverses again
 
 **File:** `src/lir/rc_insert.zig:76-81`
 
-Two full tree traversals (count phase + transform phase). For very large expression trees, this doubles the work. Note: the branch-aware fix (1.2) adds additional local counting per branch during both phases, making this slightly more expensive but correct.
-
-**Fix:** Merge the two passes into a single bottom-up traversal that both counts and inserts RC operations.
+Two full tree traversals (count phase + transform phase). Merging into a single pass is **not safe**: `processBlock` needs forward-looking use counts at the point of each binding (e.g., when it sees `x = make_list()`, it must already know x is used 2 times total to emit incref, but those uses appear in later statements). A single bottom-up pass would require fundamentally restructuring `processBlock` to defer all RC decisions until after all uses are seen — a much larger refactor with no correctness benefit. The two-pass approach is the standard design for this kind of analysis.
 
 ## 4. TEST COVERAGE GAPS
 
