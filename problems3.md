@@ -98,25 +98,13 @@ Fixed as part of 1.6 — `break_expr` now properly lowers through MirToLir → L
 
 ## 5. NAMING ISSUES
 
-### 5.1 [MEDIUM] LIR/Mono IR types still use "when" instead of "match"
+### 5.1 [FIXED] LIR/Mono IR types still use "when" instead of "match"
 
-The surface language uses `match`, not `when`, but the LIR and Mono IR layers still use "when" naming throughout:
-- `LirWhenBranch` / `LirWhenBranchSpan` (in `src/lir/LIR.zig`)
-- `MonoWhenBranch` / `MonoWhenBranchSpan` (in `src/mono/MonoIR.zig`)
-- `.when` variant in LIR/Mono expression enums
-- `when_branches` field in `LirExprStore` and `MonoExprStore`
-- `addWhenBranches` / `getWhenBranches` methods
-- `scratch_lir_when_branches` in `MirToLir.zig`
-- `lowerWhenBranches` in `src/lir/Lower.zig` and `src/mono/Lower.zig`
-- `processWhen` in `src/lir/rc_insert.zig` and `src/mono/rc_insert.zig`
-- `generateWhen` / `generateWhenBranches` in codegen files
-- Stale comments referencing "WhenBranch" in `src/parse/NodeStore.zig`
+Fixed in latest commit. Renamed all when-related identifiers across 13 files to use "match" naming: `LirMatchBranch`, `MonoMatchBranch`, `.match_expr` (not `.match` since `match` is a Zig keyword), `match_branches`, `addMatchBranches`, `lowerMatchBranches`, `processMatch`, `generateMatch`, etc.
 
-**Fix:** Rename all to use "match" naming: `LirMatchBranch`, `MonoMatchBranch`, `.match`, `match_branches`, `addMatchBranches`, `lowerMatchBranches`, `processMatch`, `generateMatch`, etc.
+### 5.2 [WON'T FIX] still have "src/mono/" dir, should be renamed
 
-### 5.2 [MEDIUM] still have "src/mono/" dir, should be renamed
-
-This module should be src/lir/ now, right? Wouldn't that make more sense
+`src/mono/` and `src/lir/` are two distinct, parallel IR layers — not a rename candidate. `src/mono/` (MonoIR) is the actively-used path: it powers MonoExprCodeGen, WasmCodeGen, dev_evaluator, wasm_evaluator, snapshot_tool, and the CLI. `src/lir/` (LIR) is the newer MIR→LIR path with its own codegen (LirCodeGen) that exists alongside mono but isn't yet wired into the main pipeline. They serve different roles and both need to exist.
 
 ## Summary of Recommended Priorities
 
