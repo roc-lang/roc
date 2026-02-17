@@ -140,8 +140,11 @@ jobs:
 
       - name: Run Test Platforms (Unix)
         if: runner.os != 'Windows'
-        run: |
-          zig build test-cli ${{ matrix.target_flag }}
+        uses: ./.github/actions/flaky-retry
+        with:
+          command: "zig build test-cli ${{ matrix.target_flag }}"
+          error_string_contains: "unhandled file type|build executable runs correctly"
+          retry_count: 3
 
       - name: Setup MSVC (Windows)
         if: runner.os == 'Windows'
