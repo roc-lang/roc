@@ -137,16 +137,16 @@ pub const RcInsertPass = struct {
                 // contributes 1 use per symbol to the enclosing scope.
                 var symbols_in_any_branch = std.AutoHashMap(u64, void).init(self.allocator);
                 defer symbols_in_any_branch.deinit();
+                var local = std.AutoHashMap(u64, u32).init(self.allocator);
+                defer local.deinit();
                 for (branches) |branch| {
-                    var local = std.AutoHashMap(u64, u32).init(self.allocator);
-                    defer local.deinit();
+                    local.clearRetainingCapacity();
                     try self.countUsesInto(branch.body, &local);
                     var it = local.keyIterator();
                     while (it.next()) |key| try symbols_in_any_branch.put(key.*, {});
                 }
                 {
-                    var local = std.AutoHashMap(u64, u32).init(self.allocator);
-                    defer local.deinit();
+                    local.clearRetainingCapacity();
                     try self.countUsesInto(ite.final_else, &local);
                     var it = local.keyIterator();
                     while (it.next()) |key| try symbols_in_any_branch.put(key.*, {});
@@ -164,10 +164,11 @@ pub const RcInsertPass = struct {
                 // contributes 1 use per symbol to the enclosing scope.
                 var symbols_in_any_branch = std.AutoHashMap(u64, void).init(self.allocator);
                 defer symbols_in_any_branch.deinit();
+                var local = std.AutoHashMap(u64, u32).init(self.allocator);
+                defer local.deinit();
                 for (branches) |branch| {
                     try self.registerPatternSymbolInto(branch.pattern, target);
-                    var local = std.AutoHashMap(u64, u32).init(self.allocator);
-                    defer local.deinit();
+                    local.clearRetainingCapacity();
                     try self.countUsesInto(branch.body, &local);
                     var it = local.keyIterator();
                     while (it.next()) |key| try symbols_in_any_branch.put(key.*, {});
