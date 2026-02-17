@@ -116,6 +116,10 @@ The surface language uses `match`, not `when`, but the LIR and Mono IR layers st
 
 **Fix:** Rename all to use "match" naming: `LirMatchBranch`, `MonoMatchBranch`, `.match`, `match_branches`, `addMatchBranches`, `lowerMatchBranches`, `processMatch`, `generateMatch`, etc.
 
+### 5.2 [MEDIUM] still have "src/mono/" dir, should be renamed
+
+This module should be src/lir/ now, right? Wouldn't that make more sense
+
 ## Summary of Recommended Priorities
 
 | Priority | Issue | Impact |
