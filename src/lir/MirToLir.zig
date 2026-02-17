@@ -233,6 +233,15 @@ fn layoutFromTagUnion(self: *Self, tu: anytype) Allocator.Error!layout.Idx {
     return self.layout_store.putTagUnion(self.scratch_layout_idxs.items[save_idxs..]);
 }
 
+/// Check if a monotype is a single-tag union (exactly one variant).
+fn isSingleTagUnion(self: *const Self, mono_idx: Monotype.Idx) bool {
+    const monotype = self.mir_store.monotype_store.getMonotype(mono_idx);
+    return switch (monotype) {
+        .tag_union => |tu| self.mir_store.monotype_store.getTags(tu.tags).len == 1,
+        else => false,
+    };
+}
+
 /// Given a tag name and the monotype of the containing tag union,
 /// return the discriminant (sorted index of the tag name).
 fn tagDiscriminant(self: *const Self, tag_name: Ident.Idx, union_mono_idx: Monotype.Idx) u16 {
@@ -346,10 +355,32 @@ fn lowerTuple(self: *Self, tup: anytype, mono_idx: Monotype.Idx, region: Region)
 }
 
 fn lowerTag(self: *Self, tag_data: anytype, mono_idx: Monotype.Idx, region: Region) Allocator.Error!LirExprId {
+    const mir_args = self.mir_store.getExprSpan(tag_data.args);
+
+    // Single-tag unions are optimized to just their payload layout (no discriminant),
+    // so we must emit the payload directly instead of a .tag LIR node.
+    if (self.isSingleTagUnion(mono_idx)) {
+        if (mir_args.len == 0) {
+            // Zero-arg single tag → ZST, emit zero_arg_tag as before
+            const union_layout = try self.layoutFromMonotype(mono_idx);
+            return self.lir_store.addExpr(.{ .zero_arg_tag = .{
+                .discriminant = 0,
+                .union_layout = union_layout,
+            } }, region);
+        } else if (mir_args.len == 1) {
+            // Single payload → layout is just the payload type, emit it directly
+            return self.lowerExpr(mir_args[0]);
+        } else {
+            // Multiple payloads → layout is a tuple, emit a tuple expression
+            const tuple_layout = try self.layoutFromMonotype(mono_idx);
+            const lir_elems = try self.lowerExprSpan(mir_args);
+            return self.lir_store.addExpr(.{ .tuple = .{ .tuple_layout = tuple_layout, .elems = lir_elems } }, region);
+        }
+    }
+
     const union_layout = try self.layoutFromMonotype(mono_idx);
     const discriminant = self.tagDiscriminant(tag_data.name, mono_idx);
 
-    const mir_args = self.mir_store.getExprSpan(tag_data.args);
     if (mir_args.len == 0) {
         return self.lir_store.addExpr(.{ .zero_arg_tag = .{
             .discriminant = discriminant,
@@ -746,9 +777,29 @@ fn lowerPattern(self: *Self, mir_pat_id: MIR.PatternId) Allocator.Error!LirPatte
             break :blk self.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = layout_idx } }, region);
         },
         .tag => |t| blk: {
+            const mir_pat_args = self.mir_store.getPatternSpan(t.args);
+
+            // Single-tag unions are optimized to just their payload layout,
+            // so emit a payload pattern directly instead of a .tag pattern.
+            if (self.isSingleTagUnion(mono_idx)) {
+                if (mir_pat_args.len == 0) {
+                    const layout_idx = try self.layoutFromMonotype(mono_idx);
+                    break :blk self.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = layout_idx } }, region);
+                } else if (mir_pat_args.len == 1) {
+                    break :blk self.lowerPattern(mir_pat_args[0]);
+                } else {
+                    const tuple_layout = try self.layoutFromMonotype(mono_idx);
+                    const lir_elems = try self.lowerPatternSpan(mir_pat_args);
+                    break :blk self.lir_store.addPattern(.{ .tuple = .{
+                        .tuple_layout = tuple_layout,
+                        .elems = lir_elems,
+                    } }, region);
+                }
+            }
+
             const union_layout = try self.layoutFromMonotype(mono_idx);
             const discriminant = self.tagDiscriminant(t.name, mono_idx);
-            const lir_args = try self.lowerPatternSpan(self.mir_store.getPatternSpan(t.args));
+            const lir_args = try self.lowerPatternSpan(mir_pat_args);
             break :blk self.lir_store.addPattern(.{ .tag = .{
                 .discriminant = discriminant,
                 .union_layout = union_layout,
@@ -1785,4 +1836,161 @@ test "MIR lookup propagates symbol def to LIR store" {
     const def_expr = env.lir_store.getExpr(lir_def.?);
     try testing.expect(def_expr == .i64_literal);
     try testing.expectEqual(@as(i64, 42), def_expr.i64_literal);
+}
+
+test "MIR single-tag union with one payload emits payload directly (P0 fix)" {
+    // Regression test for P0: single-tag unions with payloads (e.g. [Ok I64])
+    // must emit the payload directly, not a .tag LIR node, because the layout
+    // is the payload type (not a tag_union).
+    const allocator = testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
+
+    // Create a single-tag union monotype: [Ok I64]
+    const tag_ok = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
+    const ok_payloads = try env.mir_store.monotype_store.addIdxSpan(allocator, &.{i64_mono});
+    const tag_span = try env.mir_store.monotype_store.addTags(allocator, &.{
+        .{ .name = tag_ok, .payloads = ok_payloads },
+    });
+    const union_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .tag_union = .{ .tags = tag_span } });
+
+    // Create expression: Ok 42
+    const int_42 = try env.mir_store.addExpr(allocator, .{ .int = .{
+        .value = .{ .bytes = @bitCast(@as(i128, 42)), .kind = .i128 },
+    } }, i64_mono, Region.zero());
+    const ok_args = try env.mir_store.addExprSpan(allocator, &.{int_42});
+    const tag_expr = try env.mir_store.addExpr(allocator, .{ .tag = .{
+        .name = tag_ok,
+        .args = ok_args,
+    } }, union_mono, Region.zero());
+
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    defer translator.deinit();
+
+    const lir_id = try translator.lower(tag_expr);
+    const lir_expr = env.lir_store.getExpr(lir_id);
+
+    // Should NOT be a .tag — should be the payload directly
+    try testing.expect(lir_expr != .tag);
+    // Should be an i64 literal (the payload was emitted directly)
+    try testing.expect(lir_expr == .i64_literal);
+    try testing.expectEqual(@as(i64, 42), lir_expr.i64_literal);
+}
+
+test "MIR single-tag union with zero args emits zero_arg_tag" {
+    const allocator = testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    // Create a single zero-arg tag union: [Unit]
+    const tag_unit = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
+    const empty_payloads = try env.mir_store.monotype_store.addIdxSpan(allocator, &.{});
+    const tag_span = try env.mir_store.monotype_store.addTags(allocator, &.{
+        .{ .name = tag_unit, .payloads = empty_payloads },
+    });
+    const union_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .tag_union = .{ .tags = tag_span } });
+
+    // Create expression: Unit
+    const empty_args = try env.mir_store.addExprSpan(allocator, &.{});
+    const tag_expr = try env.mir_store.addExpr(allocator, .{ .tag = .{
+        .name = tag_unit,
+        .args = empty_args,
+    } }, union_mono, Region.zero());
+
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    defer translator.deinit();
+
+    const lir_id = try translator.lower(tag_expr);
+    const lir_expr = env.lir_store.getExpr(lir_id);
+
+    // Zero-arg single tag → zero_arg_tag with ZST layout
+    try testing.expect(lir_expr == .zero_arg_tag);
+    try testing.expectEqual(@as(u16, 0), lir_expr.zero_arg_tag.discriminant);
+}
+
+test "MIR single-tag union with multiple payloads emits tuple" {
+    const allocator = testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
+    const bool_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.bool)];
+
+    // Create a single-tag union with multiple payloads: [Pair I64 Bool]
+    const tag_pair = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
+    const pair_payloads = try env.mir_store.monotype_store.addIdxSpan(allocator, &.{ i64_mono, bool_mono });
+    const tag_span = try env.mir_store.monotype_store.addTags(allocator, &.{
+        .{ .name = tag_pair, .payloads = pair_payloads },
+    });
+    const union_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .tag_union = .{ .tags = tag_span } });
+
+    // Create expression: Pair 42 true
+    const int_42 = try env.mir_store.addExpr(allocator, .{ .int = .{
+        .value = .{ .bytes = @bitCast(@as(i128, 42)), .kind = .i128 },
+    } }, i64_mono, Region.zero());
+    const bool_true = try env.mir_store.addExpr(allocator, .{ .int = .{
+        .value = .{ .bytes = @bitCast(@as(i128, 1)), .kind = .i128 },
+    } }, bool_mono, Region.zero());
+    const pair_args = try env.mir_store.addExprSpan(allocator, &.{ int_42, bool_true });
+    const tag_expr = try env.mir_store.addExpr(allocator, .{ .tag = .{
+        .name = tag_pair,
+        .args = pair_args,
+    } }, union_mono, Region.zero());
+
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    defer translator.deinit();
+
+    const lir_id = try translator.lower(tag_expr);
+    const lir_expr = env.lir_store.getExpr(lir_id);
+
+    // Multiple payloads → should be a tuple, not a .tag
+    try testing.expect(lir_expr != .tag);
+    try testing.expect(lir_expr == .tuple);
+}
+
+test "MIR single-tag union pattern with one arg emits payload pattern directly" {
+    const allocator = testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
+
+    // Create a single-tag union monotype: [Ok I64]
+    const tag_ok = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
+    const ok_payloads = try env.mir_store.monotype_store.addIdxSpan(allocator, &.{i64_mono});
+    const tag_span = try env.mir_store.monotype_store.addTags(allocator, &.{
+        .{ .name = tag_ok, .payloads = ok_payloads },
+    });
+    const union_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .tag_union = .{ .tags = tag_span } });
+
+    // Create pattern: Ok x (bind the payload)
+    const ident_x = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 2 };
+    const sym_x = Symbol{ .module_idx = 0, .ident_idx = ident_x };
+    const bind_pat = try env.mir_store.addPattern(allocator, .{ .bind = sym_x }, i64_mono);
+    const pat_args = try env.mir_store.addPatternSpan(allocator, &.{bind_pat});
+    const tag_pat = try env.mir_store.addPattern(allocator, .{ .tag = .{
+        .name = tag_ok,
+        .args = pat_args,
+    } }, union_mono);
+
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    defer translator.deinit();
+
+    const lir_pat_id = try translator.lowerPattern(tag_pat);
+    const lir_pat = env.lir_store.getPattern(lir_pat_id);
+
+    // Should NOT be a .tag pattern — should be the payload pattern directly
+    try testing.expect(lir_pat != .tag);
+    // Should be a .bind pattern (the payload binding)
+    try testing.expect(lir_pat == .bind);
 }
