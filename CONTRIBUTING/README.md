@@ -2,7 +2,7 @@
 
 ## Code of Conduct
 
-We are committed to providing a friendly, safe and welcoming environment for all. See our [Code of Conduct](code_of_conduct.md) for details.
+We are committed to providing a friendly, safe and welcoming environment for all. See our [Code of Conduct](../code_of_conduct.md) for details.
 
 ## How to contribute
 
@@ -21,7 +21,7 @@ independent research, or just valuable projects to learn from and improve Roc wi
 
 ## Building from Source
 
-Check [Building from source](BUILDING_FROM_SOURCE.md) for instructions.
+Check [Building from source](../BUILDING_FROM_SOURCE.md) for instructions.
 
 ## Running Tests
 
@@ -43,16 +43,16 @@ zig build test -- --test-filter "name of test"
 - If you've never made a pull request on github before, [this](https://www.freecodecamp.org/news/how-to-make-your-first-pull-request-on-github-3/) will be a good place to start.
 - You can find good first issues [here][good-first-issues]. Once you have gained some experience you can take a look at the [intermediate issues](https://github.com/roc-lang/roc/issues?q=is%3Aopen+is%3Aissue+label%3A%22intermediate+issue%22).
 - It's a good idea to open a draft pull request as you begin working on something. This way, others can see that you're working on it, which avoids duplicate effort, and others can give important feedback sooner rather than later. Click the button "ready for review" when it's ready.
-- The [Glossary](Glossary.md) file explains terms commonly used in the compiler.
+- The [Glossary](../Glossary.md) file explains terms commonly used in the compiler.
 
 ### Debugging tips
 
-If you need to do some debugging, check out [our tips](devtools/debug_tips.md).
+If you need to do some debugging, check out [our tips](../devtools/debug_tips.md).
 
 ### Commit signing
 
 All your commits need to be signed [to prevent impersonation](https://dev.to/martiliones/how-i-got-linus-torvalds-in-my-contributors-on-github-3k4g).  
-Check out [our guide for commit signing](devtools/signing.md).
+Check out [our guide for commit signing](../devtools/signing.md).
 
 <details>
 <summary>⚠️ Tip for NixOS users</summary>
