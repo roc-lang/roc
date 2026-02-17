@@ -4475,18 +4475,31 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const lhs_expr = self.store.getExpr(binop.lhs);
                 const rhs_expr = self.store.getExpr(binop.rhs);
 
-                // First try expression-based detection for direct literals (on either side)
-                if (lhs_expr == .record or lhs_expr == .tuple) {
+                // First try expression-based detection for direct literals (on either side).
+                // Use layout-aware comparison when layout_store is available, since
+                // bytewise comparison is incorrect for heap-allocated fields (strings, lists).
+                if (lhs_expr == .record) {
+                    if (self.layout_store != null) {
+                        return self.generateRecordComparisonByLayout(lhs_loc, rhs_loc, lhs_expr.record.record_layout, binop.op);
+                    }
                     return self.generateStructuralComparison(lhs_loc, rhs_loc, lhs_expr, binop.op);
                 }
                 if (rhs_expr == .record) {
-                    // RHS is a record literal - use layout-based comparison with its layout
                     if (self.layout_store != null) {
-                        const record_layout = rhs_expr.record.record_layout;
-                        return self.generateRecordComparisonByLayout(lhs_loc, rhs_loc, record_layout, binop.op);
+                        return self.generateRecordComparisonByLayout(lhs_loc, rhs_loc, rhs_expr.record.record_layout, binop.op);
                     }
+                    return self.generateStructuralComparison(lhs_loc, rhs_loc, rhs_expr, binop.op);
+                }
+                if (lhs_expr == .tuple) {
+                    if (self.layout_store != null) {
+                        return self.generateTupleComparisonByLayout(lhs_loc, rhs_loc, lhs_expr.tuple.tuple_layout, binop.op);
+                    }
+                    return self.generateStructuralComparison(lhs_loc, rhs_loc, lhs_expr, binop.op);
                 }
                 if (rhs_expr == .tuple) {
+                    if (self.layout_store != null) {
+                        return self.generateTupleComparisonByLayout(lhs_loc, rhs_loc, rhs_expr.tuple.tuple_layout, binop.op);
+                    }
                     return self.generateStructuralComparison(lhs_loc, rhs_loc, rhs_expr, binop.op);
                 }
                 if (lhs_expr == .list) {
@@ -16425,6 +16438,88 @@ test "generate addition" {
     defer codegen.deinit();
 
     const result = try codegen.generateCode(add_id, .i64, 1);
+    defer allocator.free(result.code);
+
+    try std.testing.expect(result.code.len > 0);
+}
+
+test "record equality uses layout-aware comparison" {
+    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
+        return error.SkipZigTest;
+    }
+
+    const can = @import("can");
+    const ModuleEnv = can.ModuleEnv;
+    const Ident = base.Ident;
+    const Layout = layout.Layout;
+    const allocator = std.testing.allocator;
+
+    // Set up ModuleEnv for ident storage
+    var module_env = try ModuleEnv.init(allocator, "");
+    defer module_env.deinit();
+
+    // Insert field name identifiers
+    const field_a = try module_env.insertIdent(Ident.for_text("a"));
+    const field_b = try module_env.insertIdent(Ident.for_text("b"));
+
+    // Create layout store with a record layout { a: Str, b: Str }
+    var module_env_ptrs = [1]*const ModuleEnv{&module_env};
+    var layout_store = try layout.Store.init(
+        &module_env_ptrs,
+        null,
+        allocator,
+        base.target.TargetUsize.native,
+    );
+    defer layout_store.deinit();
+
+    const record_layout_idx = try layout_store.putRecord(
+        &module_env,
+        &[_]Layout{ Layout.str(), Layout.str() },
+        &[_]Ident.Idx{ field_a, field_b },
+    );
+
+    // Create LIR expressions: two record literals and an eq binop
+    var store = LirExprStore.init(allocator);
+    defer store.deinit();
+
+    // Field values (string literals represented as i64 placeholders — the codegen
+    // only inspects the layout, not the actual field values for comparison dispatch)
+    const str1 = try store.addExpr(.{ .i64_literal = 0 }, base.Region.zero());
+    const str2 = try store.addExpr(.{ .i64_literal = 0 }, base.Region.zero());
+    const str3 = try store.addExpr(.{ .i64_literal = 0 }, base.Region.zero());
+    const str4 = try store.addExpr(.{ .i64_literal = 0 }, base.Region.zero());
+
+    const fields1 = try store.addExprSpan(&[_]LirExprId{ str1, str2 });
+    const field_names1 = try store.addFieldNameSpan(&[_]Ident.Idx{ field_a, field_b });
+
+    const fields2 = try store.addExprSpan(&[_]LirExprId{ str3, str4 });
+    const field_names2 = try store.addFieldNameSpan(&[_]Ident.Idx{ field_a, field_b });
+
+    const lhs_record = try store.addExpr(.{ .record = .{
+        .record_layout = record_layout_idx,
+        .fields = fields1,
+        .field_names = field_names1,
+    } }, base.Region.zero());
+
+    const rhs_record = try store.addExpr(.{ .record = .{
+        .record_layout = record_layout_idx,
+        .fields = fields2,
+        .field_names = field_names2,
+    } }, base.Region.zero());
+
+    // LHS record == RHS record
+    const eq_expr = try store.addExpr(.{ .binop = .{
+        .op = .eq,
+        .lhs = lhs_record,
+        .rhs = rhs_record,
+        .result_layout = .bool,
+    } }, base.Region.zero());
+
+    // With layout_store: should use generateRecordComparisonByLayout (no crash)
+    var codegen = HostLirCodeGen.init(allocator, &store, &layout_store, null);
+    defer codegen.deinit();
+
+    const result = try codegen.generateCode(eq_expr, .bool, 1);
     defer allocator.free(result.code);
 
     try std.testing.expect(result.code.len > 0);
