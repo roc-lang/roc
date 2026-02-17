@@ -4,7 +4,7 @@ import cli.Arg exposing [Arg]
 import cli.File
 import cli.Cmd
 
-# This script runs `./zig-out/bin/roc check src/PROFILING/bench_repeated_check.roc --time --no-cache` 5 times,
+# This script runs `./zig-out/bin/roc check CONTRIBUTING/profiling/bench_repeated_check.roc --time --no-cache` 5 times,
 # extracts timing data from the output, calculates median values, and appends results to out_file
 
 main! : List Arg => Result {} _
@@ -14,7 +14,7 @@ main! = |raw_args|
     # get the second argument, the first is the executable's path
     out_file = when List.get(args, 1) |> Result.map_err(|_| ZeroArgsGiven) is
         Err(ZeroArgsGiven) ->
-            Err(Exit(1, "Error ZeroArgsGiven:\n\tI expected one argument, but I got none.\n\tRun the app like this: `roc ./src/PROFILING/exec_bench.roc ./output.txt`"))?
+            Err(Exit(1, "Error ZeroArgsGiven:\n\tI expected one argument, but I got none.\n\tRun the app like this: `roc ./CONTRIBUTING/profiling/exec_bench.roc ./output.txt`"))?
         Ok(first_arg) ->
             first_arg
 
@@ -34,7 +34,7 @@ main! = |raw_args|
     # calculate bench file hash so we're aware of changes
     bench_file_hash_out =
         Cmd.new("sha256sum")
-        |> Cmd.arg("src/PROFILING/bench_repeated_check.roc")
+        |> Cmd.arg("CONTRIBUTING/profiling/bench_repeated_check.roc")
         |> Cmd.exec_output!()?
 
     bench_file_hash =
@@ -84,7 +84,7 @@ run_benchmark_command! : {} => Result Str _
 run_benchmark_command! = |{}|
     bench_output =
         Cmd.new("./zig-out/bin/roc")
-        |> Cmd.args(["check", "src/PROFILING/bench_repeated_check.roc", "--time", "--no-cache"])
+        |> Cmd.args(["check", "CONTRIBUTING/profiling/bench_repeated_check.roc", "--time", "--no-cache"])
         |> Cmd.exec_output!()?
 
     Ok(bench_output.stdout_utf8)
@@ -105,7 +105,7 @@ extract_total_time : List Str -> Result Dec _
 extract_total_time = |lines|
     when List.find_first(lines, |line| Str.contains(line, "No errors found in")) is
         Ok line ->
-            # Parse "No errors found in 772.4 ms for src/PROFILING/bench_repeated_check.roc"
+            # Parse "No errors found in 772.4 ms for CONTRIBUTING/profiling/bench_repeated_check.roc"
             parts = Str.split_on(line, " ")
             total_time_str = List.get(parts, 4) ? |_| Err(SplitListShouldHaveAtLeastFiveElts(parts))
 
@@ -329,7 +329,7 @@ expect
 expect
     test_output = 
         """
-        No errors found in 772.4 ms for src/PROFILING/bench_repeated_check.roc
+        No errors found in 772.4 ms for CONTRIBUTING/profiling/bench_repeated_check.roc
 
         Timing breakdown:
           tokenize + parse:             37.6 ms  (37602963 ns)
@@ -356,7 +356,7 @@ expect
 
 expect
     test_lines = [
-        "No errors found in 772.4 ms for src/PROFILING/bench_repeated_check.roc",
+        "No errors found in 772.4 ms for CONTRIBUTING/profiling/bench_repeated_check.roc",
         "",
         "Timing breakdown:",
     ]
