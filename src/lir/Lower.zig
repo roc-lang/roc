@@ -40,7 +40,7 @@ const MonoFieldNameSpan = ir.MonoFieldNameSpan;
 const Symbol = ir.Symbol;
 const MonoCapture = ir.MonoCapture;
 const MonoCaptureSpan = ir.MonoCaptureSpan;
-const MonoWhenBranch = ir.MonoWhenBranch;
+const MonoMatchBranch = ir.MonoMatchBranch;
 const ClosureRepresentation = ir.ClosureRepresentation;
 const Recursive = ir.Recursive;
 const SelfRecursive = ir.SelfRecursive;
@@ -3090,9 +3090,9 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
 
         .e_match => |match_expr| blk: {
             const cond = try self.lowerExprFromIdx(module_env, match_expr.cond);
-            const branches = try self.lowerWhenBranches(module_env, match_expr.branches);
+            const branches = try self.lowerMatchBranches(module_env, match_expr.branches);
             break :blk .{
-                .when = .{
+                .match_expr = .{
                     .value = cond,
                     .value_layout = self.getExprLayoutFromIdx(module_env, match_expr.cond),
                     .branches = branches,
@@ -4329,11 +4329,11 @@ fn computeUnionLayout(self: *Self, ls: *LayoutStore, members: []const ir.LambdaS
     return try ls.putCaptureUnion(S.variants_buf[0..variant_count]);
 }
 
-/// Lower when/match branches
-fn lowerWhenBranches(self: *Self, module_env: *ModuleEnv, branches: CIR.Expr.Match.Branch.Span) Allocator.Error!ir.MonoWhenBranchSpan {
+/// Lower match branches
+fn lowerMatchBranches(self: *Self, module_env: *ModuleEnv, branches: CIR.Expr.Match.Branch.Span) Allocator.Error!ir.MonoMatchBranchSpan {
     const branch_indices = module_env.store.sliceMatchBranches(branches);
 
-    var lowered = std.ArrayList(MonoWhenBranch).empty;
+    var lowered = std.ArrayList(MonoMatchBranch).empty;
     defer lowered.deinit(self.allocator);
 
     for (branch_indices) |branch_idx| {
@@ -4359,7 +4359,7 @@ fn lowerWhenBranches(self: *Self, module_env: *ModuleEnv, branches: CIR.Expr.Mat
         }
     }
 
-    return self.store.addWhenBranches(lowered.items);
+    return self.store.addMatchBranches(lowered.items);
 }
 
 /// Lower statements in a block

@@ -1153,7 +1153,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 .hosted_call => |hc| hc.ret_layout,
                 // Compound expressions with result layouts
                 .if_then_else => |ite| ite.result_layout,
-                .when => |w| w.result_layout,
+                .match_expr => |w| w.result_layout,
                 .block => |b| b.result_layout,
                 .dbg => |d| d.result_layout,
                 .expect => |e| e.result_layout,
@@ -1233,7 +1233,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
                 // Control flow
                 .if_then_else => |ite| try self.generateIfThenElse(ite),
-                .when => |when_expr| try self.generateWhen(when_expr),
+                .match_expr => |m| try self.generateMatch(m),
 
                 // Blocks
                 .block => |block| try self.generateBlock(block),
@@ -7103,13 +7103,13 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        /// Generate code for when/match expression
-        fn generateWhen(self: *Self, when_expr: anytype) Allocator.Error!ValueLocation {
+        /// Generate code for match expression
+        fn generateMatch(self: *Self, when_expr: anytype) Allocator.Error!ValueLocation {
             // Evaluate the scrutinee (the value being matched)
             const value_loc = try self.generateExpr(when_expr.value);
 
             // Get the branches
-            const branches = self.store.getWhenBranches(when_expr.branches);
+            const branches = self.store.getMatchBranches(when_expr.branches);
             if (branches.len == 0) {
                 unreachable;
             }
@@ -7153,7 +7153,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     .wildcard => {
                         // Wildcard always matches - generate the body directly
                         const body_loc = try self.generateExpr(branch.body);
-                        try self.storeWhenResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
+                        try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
                         // No more branches needed after wildcard
                         break;
                     },
@@ -7163,7 +7163,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         try self.symbol_locations.put(symbol_key, value_loc);
 
                         const body_loc = try self.generateExpr(branch.body);
-                        try self.storeWhenResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
+                        try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
                         // No more branches needed after unconditional bind
                         break;
                     },
@@ -7191,7 +7191,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
                         // Pattern matched - generate body
                         const body_loc = try self.generateExpr(branch.body);
-                        try self.storeWhenResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
+                        try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
 
                         // Jump to end (unless this is the last branch)
                         if (!is_last_branch) {
@@ -7231,7 +7231,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
                         // Pattern matched - generate body
                         const body_loc = try self.generateExpr(branch.body);
-                        try self.storeWhenResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
+                        try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
 
                         // Jump to end (unless this is the last branch)
                         if (!is_last_branch) {
@@ -7450,7 +7450,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
                         // Generate body
                         const body_loc = try self.generateExpr(branch.body);
-                        try self.storeWhenResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
+                        try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
 
                         // Jump to end (unless this is the last branch)
                         if (!is_last_branch) {
@@ -7629,7 +7629,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
                         // Generate body
                         const body_loc = try self.generateExpr(branch.body);
-                        try self.storeWhenResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
+                        try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
 
                         // Jump to end (unless this is the last branch)
                         if (!is_last_branch) {
@@ -7651,7 +7651,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         try self.bindPattern(branch.pattern, .{ .stack = .{ .offset = stack_off } });
 
                         const body_loc = try self.generateExpr(branch.body);
-                        try self.storeWhenResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
+                        try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
                         // Record destructuring always matches, no more branches needed
                         break;
                     },
@@ -7663,7 +7663,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         try self.bindPattern(branch.pattern, .{ .stack = .{ .offset = stack_off } });
 
                         const body_loc = try self.generateExpr(branch.body);
-                        try self.storeWhenResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
+                        try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
                         // Tuple destructuring always matches, no more branches needed
                         break;
                     },
@@ -7678,7 +7678,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         try self.bindPattern(as_pat.inner, .{ .stack = .{ .offset = stack_off } });
 
                         const body_loc = try self.generateExpr(branch.body);
-                        try self.storeWhenResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
+                        try self.storeMatchResult(body_loc, &use_stack_result, &result_slot, &result_reg, &result_size);
                         // As-pattern always matches, no more branches needed
                         break;
                     },
@@ -7731,10 +7731,10 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             return .{ .general_reg = result_reg.? };
         }
 
-        /// Store a when-branch result, dynamically upgrading from register to stack
+        /// Store a match-branch result, dynamically upgrading from register to stack
         /// mode if the body produces a multi-register value (e.g., string, i128, list)
         /// but the declared result layout was ZST/small.
-        fn storeWhenResult(
+        fn storeMatchResult(
             self: *Self,
             body_loc: ValueLocation,
             use_stack_result: *bool,
@@ -10312,7 +10312,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 },
                 else => {
                     // Literal patterns (int_literal, float_literal, str_literal) don't bind anything
-                    // They are used for matching in when expressions, not for binding
+                    // They are used for matching in match expressions, not for binding
                 },
             }
         }

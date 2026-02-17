@@ -6,7 +6,7 @@
 //! - Converting Monotype.Idx → layout.Idx for every expression/pattern
 //! - Resolving tag names to numeric discriminants
 //! - Splitting MIR `lambda` into LIR `lambda` (no captures) vs `closure` (with captures)
-//! - Mapping MIR's `match_expr` to LIR's `when`
+//! - Mapping MIR's `match_expr` to LIR's `match_expr`
 //! - Mapping MIR low-level ops to LIR low-level ops
 
 const std = @import("std");
@@ -32,7 +32,7 @@ const LirExprSpan = LIR.LirExprSpan;
 const LirPatternId = LIR.LirPatternId;
 const LirPatternSpan = LIR.LirPatternSpan;
 const LirStmt = LIR.LirStmt;
-const LirWhenBranch = LIR.LirWhenBranch;
+const LirMatchBranch = LIR.LirMatchBranch;
 const LirCapture = LIR.LirCapture;
 const Symbol = LIR.Symbol;
 
@@ -53,7 +53,7 @@ propagating_defs: std.AutoHashMap(u64, void),
 scratch_lir_expr_ids: std.ArrayList(LirExprId),
 scratch_lir_pattern_ids: std.ArrayList(LirPatternId),
 scratch_lir_stmts: std.ArrayList(LirStmt),
-scratch_lir_when_branches: std.ArrayList(LirWhenBranch),
+scratch_lir_match_branches: std.ArrayList(LirMatchBranch),
 scratch_lir_captures: std.ArrayList(LirCapture),
 
 /// Scratch buffers for layout building (reused across layoutFrom* calls)
@@ -77,7 +77,7 @@ pub fn init(
         .scratch_lir_expr_ids = std.ArrayList(LirExprId).empty,
         .scratch_lir_pattern_ids = std.ArrayList(LirPatternId).empty,
         .scratch_lir_stmts = std.ArrayList(LirStmt).empty,
-        .scratch_lir_when_branches = std.ArrayList(LirWhenBranch).empty,
+        .scratch_lir_match_branches = std.ArrayList(LirMatchBranch).empty,
         .scratch_lir_captures = std.ArrayList(LirCapture).empty,
         .scratch_layouts = std.ArrayList(layout.Layout).empty,
         .scratch_layout_idxs = std.ArrayList(layout.Idx).empty,
@@ -91,7 +91,7 @@ pub fn deinit(self: *Self) void {
     self.scratch_lir_expr_ids.deinit(self.allocator);
     self.scratch_lir_pattern_ids.deinit(self.allocator);
     self.scratch_lir_stmts.deinit(self.allocator);
-    self.scratch_lir_when_branches.deinit(self.allocator);
+    self.scratch_lir_match_branches.deinit(self.allocator);
     self.scratch_lir_captures.deinit(self.allocator);
     self.scratch_layouts.deinit(self.allocator);
     self.scratch_layout_idxs.deinit(self.allocator);
@@ -392,8 +392,8 @@ fn lowerMatch(self: *Self, match_data: anytype, mono_idx: Monotype.Idx, region: 
 
     const mir_branches = self.mir_store.getBranches(match_data.branches);
 
-    const save_len = self.scratch_lir_when_branches.items.len;
-    defer self.scratch_lir_when_branches.shrinkRetainingCapacity(save_len);
+    const save_len = self.scratch_lir_match_branches.items.len;
+    defer self.scratch_lir_match_branches.shrinkRetainingCapacity(save_len);
     for (mir_branches) |branch| {
         const branch_patterns = self.mir_store.getBranchPatterns(branch.patterns);
         if (branch_patterns.len == 0) continue;
@@ -406,7 +406,7 @@ fn lowerMatch(self: *Self, match_data: anytype, mono_idx: Monotype.Idx, region: 
 
         for (branch_patterns) |bp| {
             const lir_pat = try self.lowerPattern(bp.pattern);
-            try self.scratch_lir_when_branches.append(self.allocator, .{
+            try self.scratch_lir_match_branches.append(self.allocator, .{
                 .pattern = lir_pat,
                 .guard = guard,
                 .body = lir_body,
@@ -414,11 +414,11 @@ fn lowerMatch(self: *Self, match_data: anytype, mono_idx: Monotype.Idx, region: 
         }
     }
 
-    const when_branches = try self.lir_store.addWhenBranches(self.scratch_lir_when_branches.items[save_len..]);
-    return self.lir_store.addExpr(.{ .when = .{
+    const match_branches = try self.lir_store.addMatchBranches(self.scratch_lir_match_branches.items[save_len..]);
+    return self.lir_store.addExpr(.{ .match_expr = .{
         .value = cond_id,
         .value_layout = value_layout,
-        .branches = when_branches,
+        .branches = match_branches,
         .result_layout = result_layout,
     } }, region);
 }
@@ -1385,7 +1385,7 @@ test "MIR block lowers to LIR block" {
     try testing.expect(final == .lookup);
 }
 
-test "MIR match with pattern alternatives lowers to multiple LIR when-branches" {
+test "MIR match with pattern alternatives lowers to multiple LIR match-branches" {
     const allocator = testing.allocator;
 
     var env = try testInit();
@@ -1441,10 +1441,10 @@ test "MIR match with pattern alternatives lowers to multiple LIR when-branches" 
     const lir_expr = env.lir_store.getExpr(lir_id);
 
     // Should be a when expression
-    try testing.expect(lir_expr == .when);
+    try testing.expect(lir_expr == .match_expr);
 
     // Should have 3 LIR branches: 2 from alternatives + 1 from wildcard
-    const lir_branches = env.lir_store.getWhenBranches(lir_expr.when.branches);
+    const lir_branches = env.lir_store.getMatchBranches(lir_expr.match_expr.branches);
     try testing.expectEqual(@as(usize, 3), lir_branches.len);
 
     // The first two branches should share the same body

@@ -245,18 +245,18 @@ pub const SelfRecursive = union(enum) {
     self_recursive: JoinPointId,
 };
 
-/// Span of when branches
-pub const LirWhenBranchSpan = extern struct {
+/// Span of match branches
+pub const LirMatchBranchSpan = extern struct {
     start: u32,
     len: u16,
 
-    pub fn empty() LirWhenBranchSpan {
+    pub fn empty() LirMatchBranchSpan {
         return .{ .start = 0, .len = 0 };
     }
 };
 
-/// A branch in a when/match expression
-pub const LirWhenBranch = struct {
+/// A branch in a match expression
+pub const LirMatchBranch = struct {
     /// Pattern to match against
     pattern: LirPatternId,
     /// Optional guard expression (must evaluate to Bool)
@@ -455,13 +455,13 @@ pub const LirExpr = union(enum) {
         result_layout: layout.Idx,
     },
 
-    /// When/match expression
-    when: struct {
+    /// Match expression
+    match_expr: struct {
         /// Value being matched
         value: LirExprId,
         value_layout: layout.Idx,
         /// Branches to try
-        branches: LirWhenBranchSpan,
+        branches: LirMatchBranchSpan,
         result_layout: layout.Idx,
     },
 

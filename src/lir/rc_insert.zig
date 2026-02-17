@@ -13,7 +13,7 @@
 //!
 //! ## Branch-aware RC: "branch-owns-its-RC" model
 //!
-//! For branching constructs (when/if), use counts are scoped per-branch.
+//! For branching constructs (match/if), use counts are scoped per-branch.
 //! The enclosing scope provides exactly 1 reference per branching construct
 //! that uses a symbol. Each branch then adjusts at entry:
 //! - used 0 times: decref (release inherited ref)
@@ -33,7 +33,7 @@ const LirStmt = LIR.LirStmt;
 const LirStmtSpan = LIR.LirStmtSpan;
 const LirPatternId = LIR.LirPatternId;
 const LirIfBranch = LIR.LirIfBranch;
-const LirWhenBranch = LIR.LirWhenBranch;
+const LirMatchBranch = LIR.LirMatchBranch;
 const LayoutIdx = layout_mod.Idx;
 const Region = base.Region;
 
@@ -156,9 +156,9 @@ pub const RcInsertPass = struct {
                     if (gop.found_existing) gop.value_ptr.* += 1 else gop.value_ptr.* = 1;
                 }
             },
-            .when => |w| {
+            .match_expr => |w| {
                 try self.countUsesInto(w.value, target);
-                const branches = self.store.getWhenBranches(w.branches);
+                const branches = self.store.getMatchBranches(w.branches);
                 // Count branch body uses into local maps; each branching construct
                 // contributes 1 use per symbol to the enclosing scope.
                 var symbols_in_any_branch = std.AutoHashMap(u64, void).init(self.allocator);
@@ -379,7 +379,7 @@ pub const RcInsertPass = struct {
         return switch (expr) {
             .block => |block| self.processBlock(block.stmts, block.final_expr, block.result_layout, region),
             .if_then_else => |ite| self.processIfThenElse(ite.branches, ite.final_else, ite.result_layout, region),
-            .when => |w| self.processWhen(w.value, w.value_layout, w.branches, w.result_layout, region),
+            .match_expr => |w| self.processMatch(w.value, w.value_layout, w.branches, w.result_layout, region),
             .lambda => |lam| self.processLambda(lam, region, expr_id),
             .closure => |clo| self.processClosure(clo, region, expr_id),
             .for_loop => |fl| self.processForLoop(fl, region, expr_id),
@@ -589,17 +589,17 @@ pub const RcInsertPass = struct {
         } }, region);
     }
 
-    /// Process a when expression.
+    /// Process a match expression.
     /// Each branch gets per-branch RC ops based on local use counts.
-    fn processWhen(
+    fn processMatch(
         self: *RcInsertPass,
         value: LirExprId,
         value_layout: LayoutIdx,
-        branches_span: LIR.LirWhenBranchSpan,
+        branches_span: LIR.LirMatchBranchSpan,
         result_layout: LayoutIdx,
         region: Region,
     ) Allocator.Error!LirExprId {
-        const branches = self.store.getWhenBranches(branches_span);
+        const branches = self.store.getMatchBranches(branches_span);
 
         // Collect symbols bound by branch patterns — these are local to each branch
         // and must NOT get per-branch RC ops from the enclosing scope.
@@ -632,7 +632,7 @@ pub const RcInsertPass = struct {
             try branch_use_maps.append(self.allocator, local);
         }
 
-        var new_branches = std.ArrayList(LirWhenBranch).empty;
+        var new_branches = std.ArrayList(LirMatchBranch).empty;
         defer new_branches.deinit(self.allocator);
 
         for (branches, 0..) |branch, i| {
@@ -645,8 +645,8 @@ pub const RcInsertPass = struct {
             });
         }
 
-        const new_branch_span = try self.store.addWhenBranches(new_branches.items);
-        return self.store.addExpr(.{ .when = .{
+        const new_branch_span = try self.store.addMatchBranches(new_branches.items);
+        return self.store.addExpr(.{ .match_expr = .{
             .value = value,
             .value_layout = value_layout,
             .branches = new_branch_span,
@@ -1109,8 +1109,8 @@ fn countRcOps(store: *const LirExprStore, expr_id: LirExprId) RcOpCounts {
             increfs += sub.increfs;
             decrefs += sub.decrefs;
         },
-        .when => |w| {
-            const branches = store.getWhenBranches(w.branches);
+        .match_expr => |w| {
+            const branches = store.getMatchBranches(w.branches);
             for (branches) |branch| {
                 const sub = countRcOps(store, branch.body);
                 increfs += sub.increfs;
@@ -1205,9 +1205,9 @@ fn makeSymbol(idx: u29) LIR.Symbol {
     };
 }
 
-test "RC branch-aware: symbol used in both when branches — no incref at binding" {
-    // { s = "hello"; when cond is True -> s, False -> s }
-    // s is used once in each branch => global count should be 1 (the when construct counts as 1)
+test "RC branch-aware: symbol used in both match branches — no incref at binding" {
+    // { s = "hello"; match cond is True -> s, False -> s }
+    // s is used once in each branch => global count should be 1 (the match construct counts as 1)
     // Each branch uses s once => no per-branch RC ops needed
     // => no incref at binding site
     const allocator = std.testing.allocator;
@@ -1221,7 +1221,7 @@ test "RC branch-aware: symbol used in both when branches — no incref at bindin
     const sym_s = makeSymbol(1);
     const sym_cond = makeSymbol(2);
 
-    // Build the when: when cond is True -> s, False -> s
+    // Build the match: match cond is True -> s, False -> s
     const cond_expr = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_cond, .layout_idx = i64_layout } }, Region.zero());
     const lookup_s1 = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
     const lookup_s2 = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
@@ -1229,26 +1229,26 @@ test "RC branch-aware: symbol used in both when branches — no incref at bindin
     const wild_pat1 = try env.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = i64_layout } }, Region.zero());
     const wild_pat2 = try env.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = i64_layout } }, Region.zero());
 
-    const when_branches = try env.lir_store.addWhenBranches(&.{
+    const match_branches = try env.lir_store.addMatchBranches(&.{
         .{ .pattern = wild_pat1, .guard = LirExprId.none, .body = lookup_s1 },
         .{ .pattern = wild_pat2, .guard = LirExprId.none, .body = lookup_s2 },
     });
 
-    const when_expr = try env.lir_store.addExpr(.{ .when = .{
+    const match_expr = try env.lir_store.addExpr(.{ .match_expr = .{
         .value = cond_expr,
         .value_layout = i64_layout,
-        .branches = when_branches,
+        .branches = match_branches,
         .result_layout = str_layout,
     } }, Region.zero());
 
-    // Build block: { s = "hello"; <when> }
+    // Build block: { s = "hello"; <match> }
     const str_lit = try env.lir_store.addExpr(.{ .str_literal = base.StringLiteral.Idx.none }, Region.zero());
     const pat_s = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
     const stmts = try env.lir_store.addStmts(&.{.{ .pattern = pat_s, .expr = str_lit }});
 
     const block_expr = try env.lir_store.addExpr(.{ .block = .{
         .stmts = stmts,
-        .final_expr = when_expr,
+        .final_expr = match_expr,
         .result_layout = str_layout,
     } }, Region.zero());
 
@@ -1263,8 +1263,8 @@ test "RC branch-aware: symbol used in both when branches — no incref at bindin
     try std.testing.expectEqual(@as(u32, 0), rc.decrefs);
 }
 
-test "RC branch-aware: symbol used in one when branch only — decref in unused branch" {
-    // { s = "hello"; when cond is True -> s, False -> 42 }
+test "RC branch-aware: symbol used in one match branch only — decref in unused branch" {
+    // { s = "hello"; match cond is True -> s, False -> 42 }
     // s appears in one branch only. Global count = 1 (1 branching construct).
     // True branch: 1 use => no action. False branch: 0 uses => decref.
     const allocator = std.testing.allocator;
@@ -1285,15 +1285,15 @@ test "RC branch-aware: symbol used in one when branch only — decref in unused 
     const wild_pat1 = try env.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = i64_layout } }, Region.zero());
     const wild_pat2 = try env.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = i64_layout } }, Region.zero());
 
-    const when_branches = try env.lir_store.addWhenBranches(&.{
+    const match_branches = try env.lir_store.addMatchBranches(&.{
         .{ .pattern = wild_pat1, .guard = LirExprId.none, .body = lookup_s },
         .{ .pattern = wild_pat2, .guard = LirExprId.none, .body = int_42 },
     });
 
-    const when_expr = try env.lir_store.addExpr(.{ .when = .{
+    const match_expr = try env.lir_store.addExpr(.{ .match_expr = .{
         .value = cond_expr,
         .value_layout = i64_layout,
-        .branches = when_branches,
+        .branches = match_branches,
         .result_layout = str_layout,
     } }, Region.zero());
 
@@ -1303,7 +1303,7 @@ test "RC branch-aware: symbol used in one when branch only — decref in unused 
 
     const block_expr = try env.lir_store.addExpr(.{ .block = .{
         .stmts = stmts,
-        .final_expr = when_expr,
+        .final_expr = match_expr,
         .result_layout = str_layout,
     } }, Region.zero());
 
@@ -1319,7 +1319,7 @@ test "RC branch-aware: symbol used in one when branch only — decref in unused 
 }
 
 test "RC branch-aware: symbol used twice in one branch — incref in that branch, decref in other" {
-    // { s = "hello"; when cond is True -> binop(s, s), False -> 42 }
+    // { s = "hello"; match cond is True -> binop(s, s), False -> 42 }
     // True branch: 2 uses => incref(1). False branch: 0 uses => decref.
     // Global count = 1 => no incref at binding.
     const allocator = std.testing.allocator;
@@ -1349,15 +1349,15 @@ test "RC branch-aware: symbol used twice in one branch — incref in that branch
     const wild_pat1 = try env.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = i64_layout } }, Region.zero());
     const wild_pat2 = try env.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = i64_layout } }, Region.zero());
 
-    const when_branches = try env.lir_store.addWhenBranches(&.{
+    const match_branches = try env.lir_store.addMatchBranches(&.{
         .{ .pattern = wild_pat1, .guard = LirExprId.none, .body = binop_expr },
         .{ .pattern = wild_pat2, .guard = LirExprId.none, .body = int_42 },
     });
 
-    const when_expr = try env.lir_store.addExpr(.{ .when = .{
+    const match_expr = try env.lir_store.addExpr(.{ .match_expr = .{
         .value = cond_expr,
         .value_layout = i64_layout,
-        .branches = when_branches,
+        .branches = match_branches,
         .result_layout = str_layout,
     } }, Region.zero());
 
@@ -1367,7 +1367,7 @@ test "RC branch-aware: symbol used twice in one branch — incref in that branch
 
     const block_expr = try env.lir_store.addExpr(.{ .block = .{
         .stmts = stmts,
-        .final_expr = when_expr,
+        .final_expr = match_expr,
         .result_layout = str_layout,
     } }, Region.zero());
 
@@ -1383,8 +1383,8 @@ test "RC branch-aware: symbol used twice in one branch — incref in that branch
 }
 
 test "RC branch-aware: symbol used outside and inside branches" {
-    // { s = "hello"; _ = s; when cond is True -> s, False -> 42 }
-    // s used outside (1) + when construct (1) = global count 2 => incref(1) at binding.
+    // { s = "hello"; _ = s; match cond is True -> s, False -> 42 }
+    // s used outside (1) + match construct (1) = global count 2 => incref(1) at binding.
     // True branch: 1 use => no action. False branch: 0 uses => decref.
     const allocator = std.testing.allocator;
 
@@ -1397,7 +1397,7 @@ test "RC branch-aware: symbol used outside and inside branches" {
     const sym_s = makeSymbol(1);
     const sym_cond = makeSymbol(2);
 
-    // Build when
+    // Build match
     const cond_expr = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_cond, .layout_idx = i64_layout } }, Region.zero());
     const lookup_s_branch = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
     const int_42 = try env.lir_store.addExpr(.{ .i64_literal = 42 }, Region.zero());
@@ -1405,19 +1405,19 @@ test "RC branch-aware: symbol used outside and inside branches" {
     const wild_pat1 = try env.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = i64_layout } }, Region.zero());
     const wild_pat2 = try env.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = i64_layout } }, Region.zero());
 
-    const when_branches = try env.lir_store.addWhenBranches(&.{
+    const match_branches = try env.lir_store.addMatchBranches(&.{
         .{ .pattern = wild_pat1, .guard = LirExprId.none, .body = lookup_s_branch },
         .{ .pattern = wild_pat2, .guard = LirExprId.none, .body = int_42 },
     });
 
-    const when_expr = try env.lir_store.addExpr(.{ .when = .{
+    const match_expr = try env.lir_store.addExpr(.{ .match_expr = .{
         .value = cond_expr,
         .value_layout = i64_layout,
-        .branches = when_branches,
+        .branches = match_branches,
         .result_layout = str_layout,
     } }, Region.zero());
 
-    // Build block: { s = "hello"; _ = s; <when> }
+    // Build block: { s = "hello"; _ = s; <match> }
     const str_lit = try env.lir_store.addExpr(.{ .str_literal = base.StringLiteral.Idx.none }, Region.zero());
     const pat_s = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
     const lookup_s_outside = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
@@ -1430,7 +1430,7 @@ test "RC branch-aware: symbol used outside and inside branches" {
 
     const block_expr = try env.lir_store.addExpr(.{ .block = .{
         .stmts = stmts,
-        .final_expr = when_expr,
+        .final_expr = match_expr,
         .result_layout = str_layout,
     } }, Region.zero());
 

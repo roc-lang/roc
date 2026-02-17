@@ -245,18 +245,18 @@ pub const SelfRecursive = union(enum) {
     self_recursive: JoinPointId,
 };
 
-/// Span of when branches
-pub const MonoWhenBranchSpan = extern struct {
+/// Span of match branches
+pub const MonoMatchBranchSpan = extern struct {
     start: u32,
     len: u16,
 
-    pub fn empty() MonoWhenBranchSpan {
+    pub fn empty() MonoMatchBranchSpan {
         return .{ .start = 0, .len = 0 };
     }
 };
 
-/// A branch in a when/match expression
-pub const MonoWhenBranch = struct {
+/// A branch in a match expression
+pub const MonoMatchBranch = struct {
     /// Pattern to match against
     pattern: MonoPatternId,
     /// Optional guard expression (must evaluate to Bool)
@@ -455,13 +455,13 @@ pub const MonoExpr = union(enum) {
         result_layout: layout.Idx,
     },
 
-    /// When/match expression
-    when: struct {
+    /// Match expression
+    match_expr: struct {
         /// Value being matched
         value: MonoExprId,
         value_layout: layout.Idx,
         /// Branches to try
-        branches: MonoWhenBranchSpan,
+        branches: MonoMatchBranchSpan,
         result_layout: layout.Idx,
     },
 

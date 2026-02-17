@@ -1020,8 +1020,8 @@ fn generateExpr(self: *Self, expr_id: MonoExprId) Allocator.Error!void {
             const bt = valTypeToBlockType(self.resolveValType(ite.result_layout));
             try self.generateIfChain(branches, ite.final_else, bt);
         },
-        .when => |w| {
-            try self.generateWhen(w);
+        .match_expr => |w| {
+            try self.generateMatch(w);
         },
         .nominal => |nom| {
             // Nominal is transparent at runtime — just generate the backing expression.
@@ -1275,9 +1275,9 @@ fn generateIfChain(self: *Self, branches: []const mono.MonoIR.MonoIfBranch, fina
     self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
 }
 
-/// Generate a when expression (pattern matching).
-fn generateWhen(self: *Self, w: anytype) Allocator.Error!void {
-    const branches = self.store.getWhenBranches(w.branches);
+/// Generate a match expression (pattern matching).
+fn generateMatch(self: *Self, w: anytype) Allocator.Error!void {
+    const branches = self.store.getMatchBranches(w.branches);
     const bt = valTypeToBlockType(self.resolveValType(w.result_layout));
 
     if (branches.len == 0) {
@@ -1295,10 +1295,10 @@ fn generateWhen(self: *Self, w: anytype) Allocator.Error!void {
     WasmModule.leb128WriteU32(self.allocator, &self.body, temp_local) catch return error.OutOfMemory;
 
     // Generate cascading if/else for each branch
-    try self.generateWhenBranches(branches, temp_local, value_vt, bt);
+    try self.generateMatchBranches(branches, temp_local, value_vt, bt);
 }
 
-fn generateWhenBranches(self: *Self, branches: []const mono.MonoIR.MonoWhenBranch, value_local: u32, value_vt: ValType, bt: BlockType) Allocator.Error!void {
+fn generateMatchBranches(self: *Self, branches: []const mono.MonoIR.MonoMatchBranch, value_local: u32, value_vt: ValType, bt: BlockType) Allocator.Error!void {
     if (branches.len == 0) {
         // Fallthrough — unreachable
         self.body.append(self.allocator, Op.@"unreachable") catch return error.OutOfMemory;
@@ -1355,7 +1355,7 @@ fn generateWhenBranches(self: *Self, branches: []const mono.MonoIR.MonoWhenBranc
             self.body.append(self.allocator, @intFromEnum(bt)) catch return error.OutOfMemory;
             try self.generateExpr(branch.body);
             self.body.append(self.allocator, Op.@"else") catch return error.OutOfMemory;
-            try self.generateWhenBranches(remaining, value_local, value_vt, bt);
+            try self.generateMatchBranches(remaining, value_local, value_vt, bt);
             self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
         },
         .tag => |tag_pat| {
@@ -1501,7 +1501,7 @@ fn generateWhenBranches(self: *Self, branches: []const mono.MonoIR.MonoWhenBranc
 
             try self.generateExpr(branch.body);
             self.body.append(self.allocator, Op.@"else") catch return error.OutOfMemory;
-            try self.generateWhenBranches(remaining, value_local, value_vt, bt);
+            try self.generateMatchBranches(remaining, value_local, value_vt, bt);
             self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
         },
         .record => |rec_pat| {
@@ -1624,16 +1624,16 @@ fn generateWhenBranches(self: *Self, branches: []const mono.MonoIR.MonoWhenBranc
             self.body.append(self.allocator, @intFromEnum(bt)) catch return error.OutOfMemory;
             try self.generateExpr(branch.body);
             self.body.append(self.allocator, Op.@"else") catch return error.OutOfMemory;
-            try self.generateWhenBranches(remaining, value_local, value_vt, bt);
+            try self.generateMatchBranches(remaining, value_local, value_vt, bt);
             self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
         },
         .tuple => |tup_pat| {
-            // Tuple destructuring in when branch
+            // Tuple destructuring in match branch
             try self.bindTuplePattern(value_local, tup_pat);
             try self.generateExpr(branch.body);
         },
         .str_literal => |str_idx| {
-            // String literal comparison in when branch
+            // String literal comparison in match branch
             const import_idx = self.str_eq_import orelse unreachable;
 
             // Generate the pattern string as a RocStr
@@ -1652,11 +1652,11 @@ fn generateWhenBranches(self: *Self, branches: []const mono.MonoIR.MonoWhenBranc
             self.body.append(self.allocator, @intFromEnum(bt)) catch return error.OutOfMemory;
             try self.generateExpr(branch.body);
             self.body.append(self.allocator, Op.@"else") catch return error.OutOfMemory;
-            try self.generateWhenBranches(remaining, value_local, value_vt, bt);
+            try self.generateMatchBranches(remaining, value_local, value_vt, bt);
             self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
         },
         .list => |list_pat| {
-            // List destructuring in when branch
+            // List destructuring in match branch
             // Check if length matches prefix count (exact match when no rest pattern)
             const prefix_patterns = self.store.getPatternSpan(list_pat.prefix);
             const prefix_count: u32 = @intCast(prefix_patterns.len);
@@ -1801,7 +1801,7 @@ fn generateWhenBranches(self: *Self, branches: []const mono.MonoIR.MonoWhenBranc
 
             try self.generateExpr(branch.body);
             self.body.append(self.allocator, Op.@"else") catch return error.OutOfMemory;
-            try self.generateWhenBranches(remaining, value_local, value_vt, bt);
+            try self.generateMatchBranches(remaining, value_local, value_vt, bt);
             self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
         },
     }
@@ -1835,7 +1835,7 @@ fn exprLayoutIdx(self: *Self, expr_id: MonoExprId) ?layout.Idx {
         .block => |b| b.result_layout,
         .lookup => |l| l.layout_idx,
         .if_then_else => |ite| ite.result_layout,
-        .when => |w| w.result_layout,
+        .match_expr => |w| w.result_layout,
         .nominal => |nom| self.exprLayoutIdx(nom.backing_expr),
         .call => |c| c.ret_layout,
         .record => |r| r.record_layout,
@@ -1883,7 +1883,7 @@ fn exprValType(self: *Self, expr_id: MonoExprId) ValType {
         .block => |b| self.exprValType(b.final_expr),
         .lookup => |l| self.resolveValType(l.layout_idx),
         .if_then_else => |ite| self.resolveValType(ite.result_layout),
-        .when => |w| self.resolveValType(w.result_layout),
+        .match_expr => |w| self.resolveValType(w.result_layout),
         .nominal => |nom| self.exprValType(nom.backing_expr),
         .empty_record => .i32,
         .empty_list => .i32, // pointer to 12-byte RocList
@@ -1959,7 +1959,7 @@ fn isCompositeExpr(self: *const Self, expr_id: MonoExprId) bool {
         .nominal => |nom| self.isCompositeExpr(nom.backing_expr),
         .block => |b| self.isCompositeExpr(b.final_expr),
         .if_then_else => |ite| self.isCompositeLayout(ite.result_layout),
-        .when => |w| self.isCompositeLayout(w.result_layout),
+        .match_expr => |w| self.isCompositeLayout(w.result_layout),
         .lookup => |l| self.isCompositeLayout(l.layout_idx),
         .call => |c| self.isCompositeLayout(c.ret_layout),
         .field_access => |fa| self.isCompositeLayout(fa.field_layout),

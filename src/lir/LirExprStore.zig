@@ -26,8 +26,8 @@ const LirExprSpan = ir.LirExprSpan;
 const LirPatternSpan = ir.LirPatternSpan;
 const LirCaptureSpan = ir.LirCaptureSpan;
 const LirCapture = ir.LirCapture;
-const LirWhenBranch = ir.LirWhenBranch;
-const LirWhenBranchSpan = ir.LirWhenBranchSpan;
+const LirMatchBranch = ir.LirMatchBranch;
+const LirMatchBranchSpan = ir.LirMatchBranchSpan;
 const LambdaSetMember = ir.LambdaSetMember;
 const LambdaSetMemberSpan = ir.LambdaSetMemberSpan;
 const LirIfBranch = ir.LirIfBranch;
@@ -59,11 +59,11 @@ patterns: std.ArrayList(LirPattern),
 pattern_regions: std.ArrayList(Region),
 
 /// Extra data storage for variable-length spans
-/// Stores: LirExprId[], LirPatternId[], LirCapture[], LirWhenBranch[], etc.
+/// Stores: LirExprId[], LirPatternId[], LirCapture[], LirMatchBranch[], etc.
 extra_data: std.ArrayList(u32),
 
-/// When branches (stored separately for better alignment)
-when_branches: std.ArrayList(LirWhenBranch),
+/// Match branches (stored separately for better alignment)
+match_branches: std.ArrayList(LirMatchBranch),
 
 /// If branches
 if_branches: std.ArrayList(LirIfBranch),
@@ -105,7 +105,7 @@ pub fn init(allocator: Allocator) Self {
         .patterns = std.ArrayList(LirPattern).empty,
         .pattern_regions = std.ArrayList(Region).empty,
         .extra_data = std.ArrayList(u32).empty,
-        .when_branches = std.ArrayList(LirWhenBranch).empty,
+        .match_branches = std.ArrayList(LirMatchBranch).empty,
         .if_branches = std.ArrayList(LirIfBranch).empty,
         .stmts = std.ArrayList(LirStmt).empty,
         .captures = std.ArrayList(LirCapture).empty,
@@ -137,7 +137,7 @@ pub fn deinit(self: *Self) void {
     self.patterns.deinit(self.allocator);
     self.pattern_regions.deinit(self.allocator);
     self.extra_data.deinit(self.allocator);
-    self.when_branches.deinit(self.allocator);
+    self.match_branches.deinit(self.allocator);
     self.if_branches.deinit(self.allocator);
     self.stmts.deinit(self.allocator);
     self.captures.deinit(self.allocator);
@@ -269,14 +269,14 @@ pub fn getFieldNameSpan(self: *const Self, span: ir.LirFieldNameSpan) []const ba
     return @ptrCast(slice);
 }
 
-/// Add when branches and return a span
-pub fn addWhenBranches(self: *Self, branches: []const LirWhenBranch) Allocator.Error!LirWhenBranchSpan {
+/// Add match branches and return a span
+pub fn addMatchBranches(self: *Self, branches: []const LirMatchBranch) Allocator.Error!LirMatchBranchSpan {
     if (branches.len == 0) {
-        return LirWhenBranchSpan.empty();
+        return LirMatchBranchSpan.empty();
     }
 
-    const start = @as(u32, @intCast(self.when_branches.items.len));
-    try self.when_branches.appendSlice(self.allocator, branches);
+    const start = @as(u32, @intCast(self.match_branches.items.len));
+    try self.match_branches.appendSlice(self.allocator, branches);
 
     return .{
         .start = start,
@@ -284,10 +284,10 @@ pub fn addWhenBranches(self: *Self, branches: []const LirWhenBranch) Allocator.E
     };
 }
 
-/// Get when branches from a span
-pub fn getWhenBranches(self: *const Self, span: LirWhenBranchSpan) []const LirWhenBranch {
+/// Get match branches from a span
+pub fn getMatchBranches(self: *const Self, span: LirMatchBranchSpan) []const LirMatchBranch {
     if (span.len == 0) return &.{};
-    return self.when_branches.items[span.start..][0..span.len];
+    return self.match_branches.items[span.start..][0..span.len];
 }
 
 /// Add if branches and return a span

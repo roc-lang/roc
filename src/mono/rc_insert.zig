@@ -13,7 +13,7 @@
 //!
 //! ## Branch-aware RC: "branch-owns-its-RC" model
 //!
-//! For branching constructs (when/if), use counts are scoped per-branch.
+//! For branching constructs (match/if), use counts are scoped per-branch.
 //! The enclosing scope provides exactly 1 reference per branching construct
 //! that uses a symbol. Each branch then adjusts at entry:
 //! - used 0 times: decref (release inherited ref)
@@ -33,7 +33,7 @@ const MonoStmt = MonoIR.MonoStmt;
 const MonoStmtSpan = MonoIR.MonoStmtSpan;
 const MonoPatternId = MonoIR.MonoPatternId;
 const MonoIfBranch = MonoIR.MonoIfBranch;
-const MonoWhenBranch = MonoIR.MonoWhenBranch;
+const MonoMatchBranch = MonoIR.MonoMatchBranch;
 const LayoutIdx = layout_mod.Idx;
 const Region = base.Region;
 
@@ -156,9 +156,9 @@ pub const RcInsertPass = struct {
                     if (gop.found_existing) gop.value_ptr.* += 1 else gop.value_ptr.* = 1;
                 }
             },
-            .when => |w| {
+            .match_expr => |w| {
                 try self.countUsesInto(w.value, target);
-                const branches = self.store.getWhenBranches(w.branches);
+                const branches = self.store.getMatchBranches(w.branches);
                 // Count branch body uses into local maps; each branching construct
                 // contributes 1 use per symbol to the enclosing scope.
                 var symbols_in_any_branch = std.AutoHashMap(u64, void).init(self.allocator);
@@ -378,7 +378,7 @@ pub const RcInsertPass = struct {
         return switch (expr) {
             .block => |block| self.processBlock(block.stmts, block.final_expr, block.result_layout, region),
             .if_then_else => |ite| self.processIfThenElse(ite.branches, ite.final_else, ite.result_layout, region),
-            .when => |w| self.processWhen(w.value, w.value_layout, w.branches, w.result_layout, region),
+            .match_expr => |w| self.processMatch(w.value, w.value_layout, w.branches, w.result_layout, region),
             .lambda => |lam| self.processLambda(lam, region, expr_id),
             .closure => |clo| self.processClosure(clo, region, expr_id),
             .for_loop => |fl| self.processForLoop(fl, region, expr_id),
@@ -587,17 +587,17 @@ pub const RcInsertPass = struct {
         } }, region);
     }
 
-    /// Process a when expression.
+    /// Process a match expression.
     /// Each branch gets per-branch RC ops based on local use counts.
-    fn processWhen(
+    fn processMatch(
         self: *RcInsertPass,
         value: MonoExprId,
         value_layout: LayoutIdx,
-        branches_span: MonoIR.MonoWhenBranchSpan,
+        branches_span: MonoIR.MonoMatchBranchSpan,
         result_layout: LayoutIdx,
         region: Region,
     ) Allocator.Error!MonoExprId {
-        const branches = self.store.getWhenBranches(branches_span);
+        const branches = self.store.getMatchBranches(branches_span);
 
         // Collect symbols bound by branch patterns — these are local to each branch
         // and must NOT get per-branch RC ops from the enclosing scope.
@@ -630,7 +630,7 @@ pub const RcInsertPass = struct {
             try branch_use_maps.append(self.allocator, local);
         }
 
-        var new_branches = std.ArrayList(MonoWhenBranch).empty;
+        var new_branches = std.ArrayList(MonoMatchBranch).empty;
         defer new_branches.deinit(self.allocator);
 
         for (branches, 0..) |branch, i| {
@@ -643,8 +643,8 @@ pub const RcInsertPass = struct {
             });
         }
 
-        const new_branch_span = try self.store.addWhenBranches(new_branches.items);
-        return self.store.addExpr(.{ .when = .{
+        const new_branch_span = try self.store.addMatchBranches(new_branches.items);
+        return self.store.addExpr(.{ .match_expr = .{
             .value = value,
             .value_layout = value_layout,
             .branches = new_branch_span,

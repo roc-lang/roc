@@ -26,8 +26,8 @@ const MonoExprSpan = ir.MonoExprSpan;
 const MonoPatternSpan = ir.MonoPatternSpan;
 const MonoCaptureSpan = ir.MonoCaptureSpan;
 const MonoCapture = ir.MonoCapture;
-const MonoWhenBranch = ir.MonoWhenBranch;
-const MonoWhenBranchSpan = ir.MonoWhenBranchSpan;
+const MonoMatchBranch = ir.MonoMatchBranch;
+const MonoMatchBranchSpan = ir.MonoMatchBranchSpan;
 const LambdaSetMember = ir.LambdaSetMember;
 const LambdaSetMemberSpan = ir.LambdaSetMemberSpan;
 const MonoIfBranch = ir.MonoIfBranch;
@@ -59,11 +59,11 @@ patterns: std.ArrayList(MonoPattern),
 pattern_regions: std.ArrayList(Region),
 
 /// Extra data storage for variable-length spans
-/// Stores: MonoExprId[], MonoPatternId[], MonoCapture[], MonoWhenBranch[], etc.
+/// Stores: MonoExprId[], MonoPatternId[], MonoCapture[], MonoMatchBranch[], etc.
 extra_data: std.ArrayList(u32),
 
-/// When branches (stored separately for better alignment)
-when_branches: std.ArrayList(MonoWhenBranch),
+/// Match branches (stored separately for better alignment)
+match_branches: std.ArrayList(MonoMatchBranch),
 
 /// If branches
 if_branches: std.ArrayList(MonoIfBranch),
@@ -105,7 +105,7 @@ pub fn init(allocator: Allocator) Self {
         .patterns = std.ArrayList(MonoPattern).empty,
         .pattern_regions = std.ArrayList(Region).empty,
         .extra_data = std.ArrayList(u32).empty,
-        .when_branches = std.ArrayList(MonoWhenBranch).empty,
+        .match_branches = std.ArrayList(MonoMatchBranch).empty,
         .if_branches = std.ArrayList(MonoIfBranch).empty,
         .stmts = std.ArrayList(MonoStmt).empty,
         .captures = std.ArrayList(MonoCapture).empty,
@@ -137,7 +137,7 @@ pub fn deinit(self: *Self) void {
     self.patterns.deinit(self.allocator);
     self.pattern_regions.deinit(self.allocator);
     self.extra_data.deinit(self.allocator);
-    self.when_branches.deinit(self.allocator);
+    self.match_branches.deinit(self.allocator);
     self.if_branches.deinit(self.allocator);
     self.stmts.deinit(self.allocator);
     self.captures.deinit(self.allocator);
@@ -265,14 +265,14 @@ pub fn getFieldNameSpan(self: *const Self, span: ir.MonoFieldNameSpan) []const b
     return @ptrCast(slice);
 }
 
-/// Add when branches and return a span
-pub fn addWhenBranches(self: *Self, branches: []const MonoWhenBranch) Allocator.Error!MonoWhenBranchSpan {
+/// Add match branches and return a span
+pub fn addMatchBranches(self: *Self, branches: []const MonoMatchBranch) Allocator.Error!MonoMatchBranchSpan {
     if (branches.len == 0) {
-        return MonoWhenBranchSpan.empty();
+        return MonoMatchBranchSpan.empty();
     }
 
-    const start = @as(u32, @intCast(self.when_branches.items.len));
-    try self.when_branches.appendSlice(self.allocator, branches);
+    const start = @as(u32, @intCast(self.match_branches.items.len));
+    try self.match_branches.appendSlice(self.allocator, branches);
 
     return .{
         .start = start,
@@ -280,10 +280,10 @@ pub fn addWhenBranches(self: *Self, branches: []const MonoWhenBranch) Allocator.
     };
 }
 
-/// Get when branches from a span
-pub fn getWhenBranches(self: *const Self, span: MonoWhenBranchSpan) []const MonoWhenBranch {
+/// Get match branches from a span
+pub fn getMatchBranches(self: *const Self, span: MonoMatchBranchSpan) []const MonoMatchBranch {
     if (span.len == 0) return &.{};
-    return self.when_branches.items[span.start..][0..span.len];
+    return self.match_branches.items[span.start..][0..span.len];
 }
 
 /// Add if branches and return a span
