@@ -56,6 +56,11 @@ scratch_lir_stmts: std.ArrayList(LirStmt),
 scratch_lir_when_branches: std.ArrayList(LirWhenBranch),
 scratch_lir_captures: std.ArrayList(LirCapture),
 
+/// Scratch buffers for layout building (reused across layoutFrom* calls)
+scratch_layouts: std.ArrayList(layout.Layout),
+scratch_layout_idxs: std.ArrayList(layout.Idx),
+scratch_field_names: std.ArrayList(Ident.Idx),
+
 pub fn init(
     allocator: Allocator,
     mir_store: *const MIR.Store,
@@ -74,6 +79,9 @@ pub fn init(
         .scratch_lir_stmts = std.ArrayList(LirStmt).empty,
         .scratch_lir_when_branches = std.ArrayList(LirWhenBranch).empty,
         .scratch_lir_captures = std.ArrayList(LirCapture).empty,
+        .scratch_layouts = std.ArrayList(layout.Layout).empty,
+        .scratch_layout_idxs = std.ArrayList(layout.Idx).empty,
+        .scratch_field_names = std.ArrayList(Ident.Idx).empty,
     };
 }
 
@@ -85,6 +93,9 @@ pub fn deinit(self: *Self) void {
     self.scratch_lir_stmts.deinit(self.allocator);
     self.scratch_lir_when_branches.deinit(self.allocator);
     self.scratch_lir_captures.deinit(self.allocator);
+    self.scratch_layouts.deinit(self.allocator);
+    self.scratch_layout_idxs.deinit(self.allocator);
+    self.scratch_field_names.deinit(self.allocator);
 }
 
 /// Lower a MIR expression to a LIR expression.
@@ -142,37 +153,36 @@ fn layoutFromRecord(self: *Self, record: anytype) Allocator.Error!layout.Idx {
     const fields = self.mir_store.monotype_store.getFields(record.fields);
     if (fields.len == 0) return .zst;
 
-    // Build field layouts and names, then use the layout store's putRecord-like logic
     const env = self.layout_store.all_module_envs[self.layout_store.current_module_idx];
-    var field_layouts = std.ArrayList(layout.Layout).empty;
-    defer field_layouts.deinit(self.allocator);
-    var field_names = std.ArrayList(Ident.Idx).empty;
-    defer field_names.deinit(self.allocator);
+    const save_layouts = self.scratch_layouts.items.len;
+    defer self.scratch_layouts.shrinkRetainingCapacity(save_layouts);
+    const save_names = self.scratch_field_names.items.len;
+    defer self.scratch_field_names.shrinkRetainingCapacity(save_names);
 
     for (fields) |field| {
         const field_layout_idx = try self.layoutFromMonotype(field.type_idx);
         const field_layout = self.layout_store.getLayout(field_layout_idx);
-        try field_layouts.append(self.allocator, field_layout);
-        try field_names.append(self.allocator, field.name);
+        try self.scratch_layouts.append(self.allocator, field_layout);
+        try self.scratch_field_names.append(self.allocator, field.name);
     }
 
-    return self.layout_store.putRecord(env, field_layouts.items, field_names.items);
+    return self.layout_store.putRecord(env, self.scratch_layouts.items[save_layouts..], self.scratch_field_names.items[save_names..]);
 }
 
 fn layoutFromTuple(self: *Self, tup: anytype) Allocator.Error!layout.Idx {
     const elems = self.mir_store.monotype_store.getIdxSpan(tup.elems);
     if (elems.len == 0) return .zst;
 
-    var elem_layouts = std.ArrayList(layout.Layout).empty;
-    defer elem_layouts.deinit(self.allocator);
+    const save_layouts = self.scratch_layouts.items.len;
+    defer self.scratch_layouts.shrinkRetainingCapacity(save_layouts);
 
     for (elems) |elem_mono_idx| {
         const elem_layout_idx = try self.layoutFromMonotype(elem_mono_idx);
         const elem_layout = self.layout_store.getLayout(elem_layout_idx);
-        try elem_layouts.append(self.allocator, elem_layout);
+        try self.scratch_layouts.append(self.allocator, elem_layout);
     }
 
-    return self.layout_store.putTuple(elem_layouts.items);
+    return self.layout_store.putTuple(self.scratch_layouts.items[save_layouts..]);
 }
 
 fn layoutFromTagUnion(self: *Self, tu: anytype) Allocator.Error!layout.Idx {
@@ -188,39 +198,39 @@ fn layoutFromTagUnion(self: *Self, tu: anytype) Allocator.Error!layout.Idx {
             return self.layoutFromMonotype(payloads[0]);
         }
         // Multiple payload fields: wrap in a tuple
-        var elem_layouts = std.ArrayList(layout.Layout).empty;
-        defer elem_layouts.deinit(self.allocator);
+        const save_layouts = self.scratch_layouts.items.len;
+        defer self.scratch_layouts.shrinkRetainingCapacity(save_layouts);
         for (payloads) |p| {
             const p_idx = try self.layoutFromMonotype(p);
-            try elem_layouts.append(self.allocator, self.layout_store.getLayout(p_idx));
+            try self.scratch_layouts.append(self.allocator, self.layout_store.getLayout(p_idx));
         }
-        return self.layout_store.putTuple(elem_layouts.items);
+        return self.layout_store.putTuple(self.scratch_layouts.items[save_layouts..]);
     }
 
     // Multi-tag union: build per-variant payload layouts
     const zst_idx = try self.layout_store.ensureZstLayout();
 
-    var variant_layouts = std.ArrayList(layout.Idx).empty;
-    defer variant_layouts.deinit(self.allocator);
+    const save_idxs = self.scratch_layout_idxs.items.len;
+    defer self.scratch_layout_idxs.shrinkRetainingCapacity(save_idxs);
 
     for (tags) |tag| {
         const payloads = self.mir_store.monotype_store.getIdxSpan(tag.payloads);
         if (payloads.len == 0) {
-            try variant_layouts.append(self.allocator, zst_idx);
+            try self.scratch_layout_idxs.append(self.allocator, zst_idx);
         } else if (payloads.len == 1) {
-            try variant_layouts.append(self.allocator, try self.layoutFromMonotype(payloads[0]));
+            try self.scratch_layout_idxs.append(self.allocator, try self.layoutFromMonotype(payloads[0]));
         } else {
-            var elem_layouts = std.ArrayList(layout.Layout).empty;
-            defer elem_layouts.deinit(self.allocator);
+            const save_layouts = self.scratch_layouts.items.len;
+            defer self.scratch_layouts.shrinkRetainingCapacity(save_layouts);
             for (payloads) |p| {
                 const p_idx = try self.layoutFromMonotype(p);
-                try elem_layouts.append(self.allocator, self.layout_store.getLayout(p_idx));
+                try self.scratch_layouts.append(self.allocator, self.layout_store.getLayout(p_idx));
             }
-            try variant_layouts.append(self.allocator, try self.layout_store.putTuple(elem_layouts.items));
+            try self.scratch_layout_idxs.append(self.allocator, try self.layout_store.putTuple(self.scratch_layouts.items[save_layouts..]));
         }
     }
 
-    return self.layout_store.putTagUnion(variant_layouts.items);
+    return self.layout_store.putTagUnion(self.scratch_layout_idxs.items[save_idxs..]);
 }
 
 /// Given a tag name and the monotype of the containing tag union,

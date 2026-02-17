@@ -38,11 +38,7 @@ Fixed in latest commit. Added `putTagUnion` method to `layout.Store` and rewrote
 
 ### 2.3 [FIXED] `roc_str_size` used instead of `roc_list_size` in empty list codegen
 
-**File:** `src/backend/dev/LirCodeGen.zig:7794, 7821`
-
-The empty list generation uses `roc_str_size` (24 bytes) instead of `roc_list_size` (24 bytes). Both happen to be 24 bytes, so this is not a bug today, but if either constant changes, it will silently break.
-
-**Fix:** Replace `roc_str_size` with `roc_list_size` at those two sites.
+Fixed in latest commit. Replaced all three `roc_str_size` → `roc_list_size` in empty list and list literal codegen paths.
 
 ### 2.4 [FIXED] Closure struct layout uses `ident_idx` as record field name
 
@@ -56,13 +52,9 @@ The `propagating_defs` guard prevents infinite recursion for a single symbol, bu
 
 ## 3. PERFORMANCE ISSUES
 
-### 3.1 [MEDIUM] `layoutFromMonotype` creates temporary ArrayLists for every record/tuple/tag
+### 3.1 [FIXED] `layoutFromMonotype` creates temporary ArrayLists for every record/tuple/tag
 
-**File:** `src/lir/MirToLir.zig:141-246`
-
-`layoutFromRecord`, `layoutFromTuple`, and `layoutFromTagUnion` each create fresh `std.ArrayList` instances that are immediately deinitialized. For a large program with many type references, this causes many small heap allocations.
-
-**Fix:** Use scratch buffers (like the scratch buffers already on `Self` for expr/pattern IDs) for layout building. Add `scratch_layouts: std.ArrayList(layout.Layout)` and `scratch_field_names: std.ArrayList(Ident.Idx)` to `Self` and reuse them with the save/restore pattern.
+Fixed in latest commit. Added `scratch_layouts`, `scratch_layout_idxs`, and `scratch_field_names` scratch buffers to `Self`, replacing per-call `ArrayList` allocations in `layoutFromRecord`, `layoutFromTuple`, and `layoutFromTagUnion` with the save/restore pattern used by other scratch buffers.
 
 ### 3.2 [LOW] `tagDiscriminant` is O(n) linear scan
 
@@ -136,6 +128,6 @@ The surface language uses `match`, not `when`, but the LIR and Mono IR layers st
 | ~~P1~~ | ~~2.2 Tag union layout approximation~~ | ~~Potential layout mismatch with codegen~~ FIXED |
 | ~~P1~~ | ~~1.6 break_expr → runtime_error~~ | ~~Break crashes at runtime~~ FIXED |
 | ~~P2~~ | ~~1.5 Int literal type discarded~~ | ~~Potential wrong width in codegen~~ NOT A BUG |
-| P2 | 2.3 roc_str_size for lists | Latent bug if constants diverge |
+| ~~P2~~ | ~~2.3 roc_str_size for lists~~ | ~~Latent bug if constants diverge~~ FIXED |
 | ~~P2~~ | ~~2.4 Closure field name collisions~~ | ~~Potential layout corruption~~ FIXED |
-| P2 | 3.1 Temp ArrayLists in layout | Performance waste |
+| ~~P2~~ | ~~3.1 Temp ArrayLists in layout~~ | ~~Performance waste~~ FIXED |
