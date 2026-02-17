@@ -7795,7 +7795,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Empty list: ptr = null, len = 0, capacity = 0
             // Materialize as a proper 24-byte list struct on the stack so that
             // when passed as a function argument, all 3 registers are set correctly.
-            const list_struct_offset: i32 = self.codegen.allocStackSlot(roc_str_size);
+            const list_struct_offset: i32 = self.codegen.allocStackSlot(roc_list_size);
             const zero_reg = try self.allocTempGeneral();
             try self.codegen.emitLoadImm(zero_reg, 0);
 
@@ -7822,7 +7822,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const elems = self.store.getExprSpan(list.elems);
             if (elems.len == 0) {
                 // Empty list: ptr = null, len = 0, capacity = 0
-                const list_struct_offset: i32 = self.codegen.allocStackSlot(roc_str_size);
+                const list_struct_offset: i32 = self.codegen.allocStackSlot(roc_list_size);
                 const zero_reg = try self.allocTempGeneral();
                 try self.codegen.emitLoadImm(zero_reg, 0);
 
@@ -8032,7 +8032,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             // Create the list struct: (ptr, len, capacity)
             // ptr points to heap memory, len = capacity = num_elems
-            const list_struct_offset: i32 = self.codegen.allocStackSlot(roc_str_size);
+            const list_struct_offset: i32 = self.codegen.allocStackSlot(roc_list_size);
 
             // Load heap pointer and length
             const ptr_reg = try self.allocTempGeneral();
