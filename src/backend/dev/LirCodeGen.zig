@@ -9999,12 +9999,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             // Process each statement
             for (stmts) |stmt| {
+                const b = stmt.binding();
                 // Generate code for the expression
-                const expr_loc = try self.generateExpr(stmt.expr);
+                const expr_loc = try self.generateExpr(b.expr);
                 // Get the expression's layout (for mutable variable binding with correct size)
-                const expr_layout = self.getExprLayout(stmt.expr);
+                const expr_layout = self.getExprLayout(b.expr);
                 // Bind the result to the pattern, using expr layout for mutable vars
-                try self.bindPatternWithLayout(stmt.pattern, expr_loc, expr_layout);
+                try self.bindPatternWithLayout(b.pattern, expr_loc, expr_layout);
             }
 
             // Generate the final expression

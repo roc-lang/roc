@@ -114,8 +114,9 @@ pub const RcInsertPass = struct {
             .block => |block| {
                 const stmts = self.store.getStmts(block.stmts);
                 for (stmts) |stmt| {
-                    try self.registerPatternSymbolInto(stmt.pattern, target);
-                    try self.countUsesInto(stmt.expr, target);
+                    const b = stmt.binding();
+                    try self.registerPatternSymbolInto(b.pattern, target);
+                    try self.countUsesInto(b.expr, target);
                 }
                 try self.countUsesInto(block.final_expr, target);
             },
@@ -451,16 +452,35 @@ pub const RcInsertPass = struct {
 
         // Process each statement
         for (stmts) |stmt| {
+            const b = stmt.binding();
             // Recursively process the statement's expression
-            const new_expr = try self.processExpr(stmt.expr);
-            if (new_expr != stmt.expr) changed = true;
+            const new_expr = try self.processExpr(b.expr);
+            if (new_expr != b.expr) changed = true;
 
-            // Add the (possibly updated) statement
-            try stmt_buf.append(self.allocator, .{ .pattern = stmt.pattern, .expr = new_expr });
+            // For mutations of refcounted symbols, decref the old value first
+            if (stmt == .mutate and !b.pattern.isNone()) {
+                const pat = self.store.getPattern(b.pattern);
+                switch (pat) {
+                    .bind => |bind| {
+                        if (!bind.symbol.isNone() and self.layoutNeedsRc(bind.layout_idx)) {
+                            try self.emitDecrefInto(bind.symbol, bind.layout_idx, region, &stmt_buf);
+                            changed = true;
+                        }
+                    },
+                    else => {},
+                }
+            }
+
+            // Add the (possibly updated) statement, preserving decl/mutate kind
+            const new_binding: LirStmt.Binding = .{ .pattern = b.pattern, .expr = new_expr };
+            try stmt_buf.append(self.allocator, switch (stmt) {
+                .decl => .{ .decl = new_binding },
+                .mutate => .{ .mutate = new_binding },
+            });
 
             // Check if the bound pattern is a refcounted symbol
-            if (!stmt.pattern.isNone()) {
-                const pat = self.store.getPattern(stmt.pattern);
+            if (!b.pattern.isNone()) {
+                const pat = self.store.getPattern(b.pattern);
                 switch (pat) {
                     .bind => |bind| {
                         if (!bind.symbol.isNone() and self.layoutNeedsRc(bind.layout_idx)) {
@@ -485,8 +505,9 @@ pub const RcInsertPass = struct {
 
         // Insert decrefs for refcounted symbols bound in this block that are never used
         for (stmts) |stmt| {
-            if (!stmt.pattern.isNone()) {
-                const pat = self.store.getPattern(stmt.pattern);
+            const b = stmt.binding();
+            if (!b.pattern.isNone()) {
+                const pat = self.store.getPattern(b.pattern);
                 switch (pat) {
                     .bind => |bind| {
                         if (!bind.symbol.isNone() and self.layoutNeedsRc(bind.layout_idx)) {
@@ -895,10 +916,10 @@ pub const RcInsertPass = struct {
         } }, region);
 
         const wildcard = try self.store.addPattern(.{ .wildcard = .{ .layout_idx = layout_idx } }, region);
-        try stmts.append(self.allocator, .{
+        try stmts.append(self.allocator, .{ .decl = .{
             .pattern = wildcard,
             .expr = incref_id,
-        });
+        } });
     }
 
     /// Emit a decref statement into a given statement list.
@@ -914,10 +935,10 @@ pub const RcInsertPass = struct {
         } }, region);
 
         const wildcard = try self.store.addPattern(.{ .wildcard = .{ .layout_idx = layout_idx } }, region);
-        try stmts.append(self.allocator, .{
+        try stmts.append(self.allocator, .{ .decl = .{
             .pattern = wildcard,
             .expr = decref_id,
-        });
+        } });
     }
 };
 
@@ -962,7 +983,7 @@ test "RC pass-through: non-refcounted i64 block unchanged" {
 
     const int_lit = try env.lir_store.addExpr(.{ .i64_literal = 42 }, Region.zero());
     const pat_x = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_x, .layout_idx = i64_layout } }, Region.zero());
-    const stmts = try env.lir_store.addStmts(&.{.{ .pattern = pat_x, .expr = int_lit }});
+    const stmts = try env.lir_store.addStmts(&.{.{ .decl = .{ .pattern = pat_x, .expr = int_lit } }});
     const lookup_x = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_x, .layout_idx = i64_layout } }, Region.zero());
 
     const block_expr = try env.lir_store.addExpr(.{ .block = .{
@@ -1008,8 +1029,8 @@ test "RC: string binding used twice gets incref" {
     // Statement: _ = s (use to bump count)
     const wildcard = try env.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = str_layout } }, Region.zero());
     const stmts = try env.lir_store.addStmts(&.{
-        .{ .pattern = pat_s, .expr = str_lit },
-        .{ .pattern = wildcard, .expr = lookup1 },
+        .{ .decl = .{ .pattern = pat_s, .expr = str_lit } },
+        .{ .decl = .{ .pattern = wildcard, .expr = lookup1 } },
     });
 
     const block_expr = try env.lir_store.addExpr(.{ .block = .{
@@ -1032,7 +1053,7 @@ test "RC: string binding used twice gets incref" {
     // Find the incref in the statements
     var found_incref = false;
     for (result_stmts) |stmt| {
-        const stmt_expr = env.lir_store.getExpr(stmt.expr);
+        const stmt_expr = env.lir_store.getExpr(stmt.binding().expr);
         if (stmt_expr == .incref) found_incref = true;
     }
     try std.testing.expect(found_incref);
@@ -1055,7 +1076,7 @@ test "RC: unused string binding gets decref" {
 
     const str_lit = try env.lir_store.addExpr(.{ .str_literal = base.StringLiteral.Idx.none }, Region.zero());
     const pat_s = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
-    const stmts = try env.lir_store.addStmts(&.{.{ .pattern = pat_s, .expr = str_lit }});
+    const stmts = try env.lir_store.addStmts(&.{.{ .decl = .{ .pattern = pat_s, .expr = str_lit } }});
 
     // Final expression is an i64 literal (s is unused)
     const int_lit = try env.lir_store.addExpr(.{ .i64_literal = 42 }, Region.zero());
@@ -1080,7 +1101,7 @@ test "RC: unused string binding gets decref" {
     // Find the decref in the statements
     var found_decref = false;
     for (result_stmts) |stmt| {
-        const stmt_expr = env.lir_store.getExpr(stmt.expr);
+        const stmt_expr = env.lir_store.getExpr(stmt.binding().expr);
         if (stmt_expr == .decref) found_decref = true;
     }
     try std.testing.expect(found_decref);
@@ -1101,7 +1122,7 @@ fn countRcOps(store: *const LirExprStore, expr_id: LirExprId) RcOpCounts {
         .block => |block| {
             const stmts = store.getStmts(block.stmts);
             for (stmts) |stmt| {
-                const sub = countRcOps(store, stmt.expr);
+                const sub = countRcOps(store, stmt.binding().expr);
                 increfs += sub.increfs;
                 decrefs += sub.decrefs;
             }
@@ -1244,7 +1265,7 @@ test "RC branch-aware: symbol used in both match branches — no incref at bindi
     // Build block: { s = "hello"; <match> }
     const str_lit = try env.lir_store.addExpr(.{ .str_literal = base.StringLiteral.Idx.none }, Region.zero());
     const pat_s = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
-    const stmts = try env.lir_store.addStmts(&.{.{ .pattern = pat_s, .expr = str_lit }});
+    const stmts = try env.lir_store.addStmts(&.{.{ .decl = .{ .pattern = pat_s, .expr = str_lit } }});
 
     const block_expr = try env.lir_store.addExpr(.{ .block = .{
         .stmts = stmts,
@@ -1299,7 +1320,7 @@ test "RC branch-aware: symbol used in one match branch only — decref in unused
 
     const str_lit = try env.lir_store.addExpr(.{ .str_literal = base.StringLiteral.Idx.none }, Region.zero());
     const pat_s = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
-    const stmts = try env.lir_store.addStmts(&.{.{ .pattern = pat_s, .expr = str_lit }});
+    const stmts = try env.lir_store.addStmts(&.{.{ .decl = .{ .pattern = pat_s, .expr = str_lit } }});
 
     const block_expr = try env.lir_store.addExpr(.{ .block = .{
         .stmts = stmts,
@@ -1363,7 +1384,7 @@ test "RC branch-aware: symbol used twice in one branch — incref in that branch
 
     const str_lit = try env.lir_store.addExpr(.{ .str_literal = base.StringLiteral.Idx.none }, Region.zero());
     const pat_s = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
-    const stmts = try env.lir_store.addStmts(&.{.{ .pattern = pat_s, .expr = str_lit }});
+    const stmts = try env.lir_store.addStmts(&.{.{ .decl = .{ .pattern = pat_s, .expr = str_lit } }});
 
     const block_expr = try env.lir_store.addExpr(.{ .block = .{
         .stmts = stmts,
@@ -1424,8 +1445,8 @@ test "RC branch-aware: symbol used outside and inside branches" {
     const wild_use = try env.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = str_layout } }, Region.zero());
 
     const stmts = try env.lir_store.addStmts(&.{
-        .{ .pattern = pat_s, .expr = str_lit },
-        .{ .pattern = wild_use, .expr = lookup_s_outside },
+        .{ .decl = .{ .pattern = pat_s, .expr = str_lit } },
+        .{ .decl = .{ .pattern = wild_use, .expr = lookup_s_outside } },
     });
 
     const block_expr = try env.lir_store.addExpr(.{ .block = .{
@@ -1466,8 +1487,8 @@ test "RC lambda: body with nested block gets RC ops" {
     const lookup_s2 = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
     const wild = try env.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = str_layout } }, Region.zero());
     const body_stmts = try env.lir_store.addStmts(&.{
-        .{ .pattern = pat_s, .expr = str_lit },
-        .{ .pattern = wild, .expr = lookup_s1 },
+        .{ .decl = .{ .pattern = pat_s, .expr = str_lit } },
+        .{ .decl = .{ .pattern = wild, .expr = lookup_s1 } },
     });
     const body_block = try env.lir_store.addExpr(.{ .block = .{
         .stmts = body_stmts,
@@ -1594,7 +1615,7 @@ test "RC for_loop: elem used twice gets incref" {
     const lookup_e2 = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_elem, .layout_idx = str_layout } }, Region.zero());
     const wild = try env.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = str_layout } }, Region.zero());
     const body_stmts = try env.lir_store.addStmts(&.{
-        .{ .pattern = wild, .expr = lookup_e1 },
+        .{ .decl = .{ .pattern = wild, .expr = lookup_e1 } },
     });
     const body_block = try env.lir_store.addExpr(.{ .block = .{
         .stmts = body_stmts,
@@ -1696,7 +1717,7 @@ test "RC block: lambda in stmt.expr gets processed" {
 
     // Build block: { f = <lambda>; 0 }
     const pat_f = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_f, .layout_idx = i64_layout } }, Region.zero());
-    const stmts = try env.lir_store.addStmts(&.{.{ .pattern = pat_f, .expr = lambda_expr }});
+    const stmts = try env.lir_store.addStmts(&.{.{ .decl = .{ .pattern = pat_f, .expr = lambda_expr } }});
     const int_0 = try env.lir_store.addExpr(.{ .i64_literal = 0 }, Region.zero());
     const block_expr = try env.lir_store.addExpr(.{ .block = .{
         .stmts = stmts,
@@ -1713,4 +1734,58 @@ test "RC block: lambda in stmt.expr gets processed" {
     const rc = countRcOps(&env.lir_store, result);
     try std.testing.expectEqual(@as(u32, 0), rc.increfs);
     try std.testing.expectEqual(@as(u32, 1), rc.decrefs);
+}
+
+test "RC mutation: reassigning refcounted var emits decref before mutation" {
+    // { var s = "hello"; s = "world"; s }
+    // The mutation (s = "world") should emit a decref of the old value before the assignment.
+    // s is used once (final expr), so no incref at decl, but decref before mutation.
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const str_layout: LayoutIdx = .str;
+    const sym_s = makeSymbol(1);
+
+    // Build: { var s = "hello"; s = "world"; s }
+    const str_hello = try env.lir_store.addExpr(.{ .str_literal = base.StringLiteral.Idx.none }, Region.zero());
+    const str_world = try env.lir_store.addExpr(.{ .str_literal = base.StringLiteral.Idx.none }, Region.zero());
+    const pat_s_decl = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
+    const pat_s_mut = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
+    const lookup_s = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
+
+    const stmts = try env.lir_store.addStmts(&.{
+        .{ .decl = .{ .pattern = pat_s_decl, .expr = str_hello } },
+        .{ .mutate = .{ .pattern = pat_s_mut, .expr = str_world } },
+    });
+
+    const block_expr = try env.lir_store.addExpr(.{ .block = .{
+        .stmts = stmts,
+        .final_expr = lookup_s,
+        .result_layout = str_layout,
+    } }, Region.zero());
+
+    var pass = RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    defer pass.deinit();
+
+    const result = try pass.insertRcOps(block_expr);
+    const result_expr = env.lir_store.getExpr(result);
+    try std.testing.expect(result_expr == .block);
+
+    // Should have a decref (for the old value before mutation)
+    const rc = countRcOps(&env.lir_store, result);
+    try std.testing.expect(rc.decrefs >= 1);
+
+    // Verify the decref appears before the mutation statement
+    const result_stmts = env.lir_store.getStmts(result_expr.block.stmts);
+    var found_decref_before_mutate = false;
+    var found_decref = false;
+    for (result_stmts) |stmt| {
+        const stmt_expr = env.lir_store.getExpr(stmt.binding().expr);
+        if (stmt_expr == .decref) found_decref = true;
+        if (stmt == .mutate and found_decref) found_decref_before_mutate = true;
+    }
+    try std.testing.expect(found_decref_before_mutate);
 }

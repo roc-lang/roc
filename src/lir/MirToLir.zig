@@ -571,7 +571,11 @@ fn lowerBlock(self: *Self, block_data: anytype, mono_idx: Monotype.Idx, region: 
         };
         const lir_pat = try self.lowerPattern(binding.pattern);
         const lir_expr = try self.lowerExpr(binding.expr);
-        try self.scratch_lir_stmts.append(self.allocator, .{ .pattern = lir_pat, .expr = lir_expr });
+        const lir_binding: LirStmt.Binding = .{ .pattern = lir_pat, .expr = lir_expr };
+        try self.scratch_lir_stmts.append(self.allocator, switch (stmt) {
+            .decl_const, .decl_var => .{ .decl = lir_binding },
+            .mutate_var => .{ .mutate = lir_binding },
+        });
     }
 
     const lir_stmts = try self.lir_store.addStmts(self.scratch_lir_stmts.items[save_stmts_len..]);

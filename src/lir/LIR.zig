@@ -295,10 +295,22 @@ pub const LirStmtSpan = extern struct {
     }
 };
 
-/// A statement in a block (let binding)
-pub const LirStmt = struct {
-    pattern: LirPatternId,
-    expr: LirExprId,
+/// A statement in a block — either a declaration or a mutation of an existing variable.
+/// RC insertion uses the distinction to emit a decref of the old value before mutation.
+pub const LirStmt = union(enum) {
+    decl: Binding,
+    mutate: Binding,
+
+    pub const Binding = struct {
+        pattern: LirPatternId,
+        expr: LirExprId,
+    };
+
+    pub fn binding(self: LirStmt) Binding {
+        return switch (self) {
+            .decl, .mutate => |b| b,
+        };
+    }
 };
 
 /// Span of field names (Ident.Idx) for records
