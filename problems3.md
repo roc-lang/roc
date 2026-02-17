@@ -44,17 +44,9 @@ The empty list generation uses `roc_str_size` (24 bytes) instead of `roc_list_si
 
 **Fix:** Replace `roc_str_size` with `roc_list_size` at those two sites.
 
-### 2.4 [MEDIUM] Closure struct layout uses `ident_idx` as record field name
+### 2.4 [FIXED] Closure struct layout uses `ident_idx` as record field name
 
-**File:** `src/lir/MirToLir.zig:494`
-
-```zig
-try cap_field_names.append(self.allocator, cap.symbol.ident_idx);
-```
-
-Using the captured variable's `ident_idx` as a record field name for the closure struct is fragile. If two captured variables from different modules share the same `ident_idx`, the layout store could treat them as the same field, leading to incorrect closure struct layout.
-
-**Fix:** Use synthetic unique field names for closure struct fields (e.g., `_cap0`, `_cap1`), or verify that `ident_idx` values are unique per closure.
+Fixed in latest commit. Switched from `putRecord` (which required field names and could collide) to `putCaptureStruct` (tuple-based, positional), matching what the old CIR→LIR path already does. Codegen accesses captures by positional byte offset, never by name.
 
 ### 2.5 [MEDIUM] `propagating_defs` recursion guard in `lowerLookup` doesn't handle mutual recursion between symbol defs
 
@@ -145,5 +137,5 @@ The surface language uses `match`, not `when`, but the LIR and Mono IR layers st
 | ~~P1~~ | ~~1.6 break_expr → runtime_error~~ | ~~Break crashes at runtime~~ FIXED |
 | ~~P2~~ | ~~1.5 Int literal type discarded~~ | ~~Potential wrong width in codegen~~ NOT A BUG |
 | P2 | 2.3 roc_str_size for lists | Latent bug if constants diverge |
-| P2 | 2.4 Closure field name collisions | Potential layout corruption |
+| ~~P2~~ | ~~2.4 Closure field name collisions~~ | ~~Potential layout corruption~~ FIXED |
 | P2 | 3.1 Temp ArrayLists in layout | Performance waste |

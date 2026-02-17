@@ -470,17 +470,13 @@ fn lowerLambda(self: *Self, lam: anytype, mono_idx: Monotype.Idx, region: Region
                 .is_bound_to_variable = false,
             } }, region);
         } else {
-            // Multiple captures: struct_captures with a record layout
-            var cap_field_layouts = std.ArrayList(layout.Layout).empty;
-            defer cap_field_layouts.deinit(self.allocator);
-            var cap_field_names = std.ArrayList(Ident.Idx).empty;
-            defer cap_field_names.deinit(self.allocator);
+            // Multiple captures: struct_captures with a tuple layout (positional, no names needed)
+            var cap_layout_idxs = std.ArrayList(layout.Idx).empty;
+            defer cap_layout_idxs.deinit(self.allocator);
             for (capture_items) |cap| {
-                try cap_field_layouts.append(self.allocator, self.layout_store.getLayout(cap.layout_idx));
-                try cap_field_names.append(self.allocator, cap.symbol.ident_idx);
+                try cap_layout_idxs.append(self.allocator, cap.layout_idx);
             }
-            const env = self.layout_store.all_module_envs[self.layout_store.current_module_idx];
-            const closure_layout = try self.layout_store.putRecord(env, cap_field_layouts.items, cap_field_names.items);
+            const closure_layout = try self.layout_store.putCaptureStruct(cap_layout_idxs.items);
             return self.lir_store.addExpr(.{ .closure = .{
                 .closure_layout = closure_layout,
                 .lambda = lambda_expr,
