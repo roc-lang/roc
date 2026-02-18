@@ -136,16 +136,16 @@ pub const RcInsertPass = struct {
                 // contributes 1 use per symbol to the enclosing scope.
                 var symbols_in_any_branch = std.AutoHashMap(u64, void).init(self.allocator);
                 defer symbols_in_any_branch.deinit();
+                var local = std.AutoHashMap(u64, u32).init(self.allocator);
+                defer local.deinit();
                 for (branches) |branch| {
-                    var local = std.AutoHashMap(u64, u32).init(self.allocator);
-                    defer local.deinit();
+                    local.clearRetainingCapacity();
                     try self.countUsesInto(branch.body, &local);
                     var it = local.keyIterator();
                     while (it.next()) |key| try symbols_in_any_branch.put(key.*, {});
                 }
                 {
-                    var local = std.AutoHashMap(u64, u32).init(self.allocator);
-                    defer local.deinit();
+                    local.clearRetainingCapacity();
                     try self.countUsesInto(ite.final_else, &local);
                     var it = local.keyIterator();
                     while (it.next()) |key| try symbols_in_any_branch.put(key.*, {});
@@ -163,10 +163,11 @@ pub const RcInsertPass = struct {
                 // contributes 1 use per symbol to the enclosing scope.
                 var symbols_in_any_branch = std.AutoHashMap(u64, void).init(self.allocator);
                 defer symbols_in_any_branch.deinit();
+                var local = std.AutoHashMap(u64, u32).init(self.allocator);
+                defer local.deinit();
                 for (branches) |branch| {
                     try self.registerPatternSymbolInto(branch.pattern, target);
-                    var local = std.AutoHashMap(u64, u32).init(self.allocator);
-                    defer local.deinit();
+                    local.clearRetainingCapacity();
                     try self.countUsesInto(branch.guard, &local);
                     try self.countUsesInto(branch.body, &local);
                     var it = local.keyIterator();
@@ -453,24 +454,11 @@ pub const RcInsertPass = struct {
             // Add the (possibly updated) statement
             try stmt_buf.append(self.allocator, .{ .pattern = stmt.pattern, .expr = new_expr });
 
-            // Check if the bound pattern is a refcounted symbol
-            if (!stmt.pattern.isNone()) {
-                const pat = self.store.getPattern(stmt.pattern);
-                switch (pat) {
-                    .bind => |bind| {
-                        if (!bind.symbol.isNone() and self.layoutNeedsRc(bind.layout_idx)) {
-                            const key = @as(u64, @bitCast(bind.symbol));
-                            const use_count = self.symbol_use_counts.get(key) orelse 0;
-
-                            if (use_count > 1) {
-                                // Multi-use: insert incref with count N-1
-                                try self.emitIncrefInto(bind.symbol, bind.layout_idx, @intCast(use_count - 1), region, &stmt_buf);
-                                changed = true;
-                            }
-                        }
-                    },
-                    else => {},
-                }
+            // Emit increfs for multi-use refcounted symbols bound by this pattern
+            {
+                const before_len = stmt_buf.items.len;
+                try self.emitBlockIncrefsForPattern(stmt.pattern, region, &stmt_buf);
+                if (stmt_buf.items.len > before_len) changed = true;
             }
         }
 
@@ -479,23 +467,12 @@ pub const RcInsertPass = struct {
         if (new_final != final_expr) changed = true;
 
         // Insert decrefs for refcounted symbols bound in this block that are never used
-        for (stmts) |stmt| {
-            if (!stmt.pattern.isNone()) {
-                const pat = self.store.getPattern(stmt.pattern);
-                switch (pat) {
-                    .bind => |bind| {
-                        if (!bind.symbol.isNone() and self.layoutNeedsRc(bind.layout_idx)) {
-                            const key = @as(u64, @bitCast(bind.symbol));
-                            const use_count = self.symbol_use_counts.get(key) orelse 0;
-                            if (use_count == 0) {
-                                try self.emitDecrefInto(bind.symbol, bind.layout_idx, region, &stmt_buf);
-                                changed = true;
-                            }
-                        }
-                    },
-                    else => {},
-                }
+        {
+            const before_len = stmt_buf.items.len;
+            for (stmts) |stmt| {
+                try self.emitBlockDecrefsForPattern(stmt.pattern, region, &stmt_buf);
             }
+            if (stmt_buf.items.len > before_len) changed = true;
         }
 
         // If nothing changed, return a block with the original data
@@ -708,22 +685,7 @@ pub const RcInsertPass = struct {
 
         const params = self.store.getPatternSpan(lam.params);
         for (params) |pat_id| {
-            if (pat_id.isNone()) continue;
-            const pat = self.store.getPattern(pat_id);
-            switch (pat) {
-                .bind => |bind| {
-                    if (!bind.symbol.isNone() and self.layoutNeedsRc(bind.layout_idx)) {
-                        const key = @as(u64, @bitCast(bind.symbol));
-                        const use_count = local_uses.get(key) orelse 0;
-                        if (use_count == 0) {
-                            try self.emitDecrefInto(bind.symbol, bind.layout_idx, region, &rc_stmts);
-                        } else if (use_count > 1) {
-                            try self.emitIncrefInto(bind.symbol, bind.layout_idx, @intCast(use_count - 1), region, &rc_stmts);
-                        }
-                    }
-                },
-                else => {},
-            }
+            try self.emitRcOpsForPatternInto(pat_id, &local_uses, region, &rc_stmts);
         }
 
         // If RC ops needed, wrap body in a block with RC stmts prepended
@@ -781,23 +743,7 @@ pub const RcInsertPass = struct {
         var rc_stmts = std.ArrayList(MonoStmt).empty;
         defer rc_stmts.deinit(self.allocator);
 
-        if (!fl.elem_pattern.isNone()) {
-            const pat = self.store.getPattern(fl.elem_pattern);
-            switch (pat) {
-                .bind => |bind| {
-                    if (!bind.symbol.isNone() and self.layoutNeedsRc(bind.layout_idx)) {
-                        const key = @as(u64, @bitCast(bind.symbol));
-                        const use_count = local_uses.get(key) orelse 0;
-                        if (use_count == 0) {
-                            try self.emitDecrefInto(bind.symbol, bind.layout_idx, region, &rc_stmts);
-                        } else if (use_count > 1) {
-                            try self.emitIncrefInto(bind.symbol, bind.layout_idx, @intCast(use_count - 1), region, &rc_stmts);
-                        }
-                    }
-                },
-                else => {},
-            }
-        }
+        try self.emitRcOpsForPatternInto(fl.elem_pattern, &local_uses, region, &rc_stmts);
 
         // If RC ops needed, wrap body in a block with RC stmts prepended
         var final_body = new_body;
@@ -1084,6 +1030,179 @@ pub const RcInsertPass = struct {
             .final_expr = guard,
             .result_layout = .bool,
         } }, region);
+    }
+
+    /// Recursively emit increfs for multi-use refcounted symbols bound by a pattern.
+    /// Uses self.symbol_use_counts (global counts) — for use in processBlock.
+    fn emitBlockIncrefsForPattern(
+        self: *RcInsertPass,
+        pat_id: MonoPatternId,
+        region: Region,
+        stmts: *std.ArrayList(MonoStmt),
+    ) Allocator.Error!void {
+        if (pat_id.isNone()) return;
+        const pat = self.store.getPattern(pat_id);
+        switch (pat) {
+            .bind => |bind| {
+                if (!bind.symbol.isNone() and self.layoutNeedsRc(bind.layout_idx)) {
+                    const key = @as(u64, @bitCast(bind.symbol));
+                    const use_count = self.symbol_use_counts.get(key) orelse 0;
+                    if (use_count > 1) {
+                        try self.emitIncrefInto(bind.symbol, bind.layout_idx, @intCast(use_count - 1), region, stmts);
+                    }
+                }
+            },
+            .as_pattern => |as_pat| {
+                if (!as_pat.symbol.isNone() and self.layoutNeedsRc(as_pat.layout_idx)) {
+                    const key = @as(u64, @bitCast(as_pat.symbol));
+                    const use_count = self.symbol_use_counts.get(key) orelse 0;
+                    if (use_count > 1) {
+                        try self.emitIncrefInto(as_pat.symbol, as_pat.layout_idx, @intCast(use_count - 1), region, stmts);
+                    }
+                }
+                try self.emitBlockIncrefsForPattern(as_pat.inner, region, stmts);
+            },
+            .tag => |t| {
+                for (self.store.getPatternSpan(t.args)) |arg_pat| {
+                    try self.emitBlockIncrefsForPattern(arg_pat, region, stmts);
+                }
+            },
+            .record => |r| {
+                for (self.store.getPatternSpan(r.fields)) |field_pat| {
+                    try self.emitBlockIncrefsForPattern(field_pat, region, stmts);
+                }
+            },
+            .tuple => |t| {
+                for (self.store.getPatternSpan(t.elems)) |elem_pat| {
+                    try self.emitBlockIncrefsForPattern(elem_pat, region, stmts);
+                }
+            },
+            .list => |l| {
+                for (self.store.getPatternSpan(l.prefix)) |pre_pat| {
+                    try self.emitBlockIncrefsForPattern(pre_pat, region, stmts);
+                }
+                try self.emitBlockIncrefsForPattern(l.rest, region, stmts);
+            },
+            .wildcard, .int_literal, .float_literal, .str_literal => {},
+        }
+    }
+
+    /// Recursively emit decrefs for unused refcounted symbols bound by a pattern.
+    /// Uses self.symbol_use_counts (global counts) — for use in processBlock.
+    fn emitBlockDecrefsForPattern(
+        self: *RcInsertPass,
+        pat_id: MonoPatternId,
+        region: Region,
+        stmts: *std.ArrayList(MonoStmt),
+    ) Allocator.Error!void {
+        if (pat_id.isNone()) return;
+        const pat = self.store.getPattern(pat_id);
+        switch (pat) {
+            .bind => |bind| {
+                if (!bind.symbol.isNone() and self.layoutNeedsRc(bind.layout_idx)) {
+                    const key = @as(u64, @bitCast(bind.symbol));
+                    const use_count = self.symbol_use_counts.get(key) orelse 0;
+                    if (use_count == 0) {
+                        try self.emitDecrefInto(bind.symbol, bind.layout_idx, region, stmts);
+                    }
+                }
+            },
+            .as_pattern => |as_pat| {
+                if (!as_pat.symbol.isNone() and self.layoutNeedsRc(as_pat.layout_idx)) {
+                    const key = @as(u64, @bitCast(as_pat.symbol));
+                    const use_count = self.symbol_use_counts.get(key) orelse 0;
+                    if (use_count == 0) {
+                        try self.emitDecrefInto(as_pat.symbol, as_pat.layout_idx, region, stmts);
+                    }
+                }
+                try self.emitBlockDecrefsForPattern(as_pat.inner, region, stmts);
+            },
+            .tag => |t| {
+                for (self.store.getPatternSpan(t.args)) |arg_pat| {
+                    try self.emitBlockDecrefsForPattern(arg_pat, region, stmts);
+                }
+            },
+            .record => |r| {
+                for (self.store.getPatternSpan(r.fields)) |field_pat| {
+                    try self.emitBlockDecrefsForPattern(field_pat, region, stmts);
+                }
+            },
+            .tuple => |t| {
+                for (self.store.getPatternSpan(t.elems)) |elem_pat| {
+                    try self.emitBlockDecrefsForPattern(elem_pat, region, stmts);
+                }
+            },
+            .list => |l| {
+                for (self.store.getPatternSpan(l.prefix)) |pre_pat| {
+                    try self.emitBlockDecrefsForPattern(pre_pat, region, stmts);
+                }
+                try self.emitBlockDecrefsForPattern(l.rest, region, stmts);
+            },
+            .wildcard, .int_literal, .float_literal, .str_literal => {},
+        }
+    }
+
+    /// Recursively emit RC ops for all symbols bound by a pattern.
+    /// For each bound symbol with a refcounted layout:
+    /// - use_count == 0: emit decref (release the provided reference)
+    /// - use_count == 1: no action (consumes the provided reference)
+    /// - use_count > 1: emit incref(count - 1)
+    fn emitRcOpsForPatternInto(
+        self: *RcInsertPass,
+        pat_id: MonoPatternId,
+        local_uses: *const std.AutoHashMap(u64, u32),
+        region: Region,
+        rc_stmts: *std.ArrayList(MonoStmt),
+    ) Allocator.Error!void {
+        if (pat_id.isNone()) return;
+        const pat = self.store.getPattern(pat_id);
+        switch (pat) {
+            .bind => |bind| {
+                if (!bind.symbol.isNone() and self.layoutNeedsRc(bind.layout_idx)) {
+                    const key = @as(u64, @bitCast(bind.symbol));
+                    const use_count = local_uses.get(key) orelse 0;
+                    if (use_count == 0) {
+                        try self.emitDecrefInto(bind.symbol, bind.layout_idx, region, rc_stmts);
+                    } else if (use_count > 1) {
+                        try self.emitIncrefInto(bind.symbol, bind.layout_idx, @intCast(use_count - 1), region, rc_stmts);
+                    }
+                }
+            },
+            .as_pattern => |as_pat| {
+                if (!as_pat.symbol.isNone() and self.layoutNeedsRc(as_pat.layout_idx)) {
+                    const key = @as(u64, @bitCast(as_pat.symbol));
+                    const use_count = local_uses.get(key) orelse 0;
+                    if (use_count == 0) {
+                        try self.emitDecrefInto(as_pat.symbol, as_pat.layout_idx, region, rc_stmts);
+                    } else if (use_count > 1) {
+                        try self.emitIncrefInto(as_pat.symbol, as_pat.layout_idx, @intCast(use_count - 1), region, rc_stmts);
+                    }
+                }
+                try self.emitRcOpsForPatternInto(as_pat.inner, local_uses, region, rc_stmts);
+            },
+            .tag => |t| {
+                for (self.store.getPatternSpan(t.args)) |arg_pat| {
+                    try self.emitRcOpsForPatternInto(arg_pat, local_uses, region, rc_stmts);
+                }
+            },
+            .record => |r| {
+                for (self.store.getPatternSpan(r.fields)) |field_pat| {
+                    try self.emitRcOpsForPatternInto(field_pat, local_uses, region, rc_stmts);
+                }
+            },
+            .tuple => |t| {
+                for (self.store.getPatternSpan(t.elems)) |elem_pat| {
+                    try self.emitRcOpsForPatternInto(elem_pat, local_uses, region, rc_stmts);
+                }
+            },
+            .list => |l| {
+                for (self.store.getPatternSpan(l.prefix)) |pre_pat| {
+                    try self.emitRcOpsForPatternInto(pre_pat, local_uses, region, rc_stmts);
+                }
+                try self.emitRcOpsForPatternInto(l.rest, local_uses, region, rc_stmts);
+            },
+            .wildcard, .int_literal, .float_literal, .str_literal => {},
+        }
     }
 
     /// Emit an incref statement into a given statement list.

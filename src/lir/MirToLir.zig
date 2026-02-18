@@ -685,6 +685,27 @@ fn lowerLowLevel(self: *Self, ll: anytype, mono_idx: Monotype.Idx, region: Regio
         } }, region);
     }
 
+    // num_negate → unary_minus expression
+    if (ll.op == .num_negate) {
+        const args_slice = self.lir_store.getExprSpan(lir_args);
+        return self.lir_store.addExpr(.{ .unary_minus = .{
+            .expr = args_slice[0],
+            .result_layout = ret_layout,
+        } }, region);
+    }
+
+    // num_is_zero → comparison with 0
+    if (ll.op == .num_is_zero) {
+        const args_slice = self.lir_store.getExprSpan(lir_args);
+        const zero = try self.lir_store.addExpr(.{ .i64_literal = 0 }, region);
+        return self.lir_store.addExpr(.{ .binop = .{
+            .op = .eq,
+            .lhs = args_slice[0],
+            .rhs = zero,
+            .result_layout = ret_layout,
+        } }, region);
+    }
+
     const lir_op = mapLowLevel(ll.op) orelse {
         std.debug.panic("MirToLir: unmapped CIR low-level op: {s}", .{@tagName(ll.op)});
     };
@@ -698,13 +719,27 @@ fn lowerLowLevel(self: *Self, ll: anytype, mono_idx: Monotype.Idx, region: Regio
 
 fn lowLevelToBinop(op: CIR.Expr.LowLevel) ?LirExpr.BinOp {
     return switch (op) {
+        // Arithmetic
+        .num_plus => .add,
+        .num_minus => .sub,
+        .num_times => .mul,
+        .num_div_by => .div,
+        .num_div_trunc_by => .div_trunc,
+        .num_rem_by => .rem,
+        .num_mod_by => .mod,
+
+        // Bitwise shifts
+        .num_shift_left_by => .shl,
+        .num_shift_right_by => .shr,
+        .num_shift_right_zf_by => .shr_zf,
+
+        // Comparison
         .num_is_eq, .bool_is_eq => .eq,
         .num_is_gt => .gt,
         .num_is_gte => .gte,
         .num_is_lt => .lt,
         .num_is_lte => .lte,
-        .num_div_trunc_by => .div_trunc,
-        .num_rem_by => .rem,
+
         else => null,
     };
 }
@@ -1073,21 +1108,13 @@ fn mapLowLevel(cir_op: CIR.Expr.LowLevel) ?LirExpr.LowLevel {
         .list_drop_at => .list_drop_at,
         .list_sublist => .list_sublist,
 
-        // Numeric operations (CIR names differ from LIR names)
-        .num_plus => .num_add,
-        .num_minus => .num_sub,
-        .num_times => .num_mul,
-        .num_div_by => .num_div,
-        .num_negate => .num_neg,
+        // Numeric operations still routed through LIR LowLevel
+        // (num_plus/minus/times/div_by/mod_by/shifts/negate/is_zero are now handled
+        // by lowLevelToBinop or special cases in lowerLowLevel)
         .num_abs => .num_abs,
-        .num_mod_by => .num_mod,
         .num_from_numeral => .num_from_numeral,
         .num_from_str => .num_from_str,
-        .num_is_zero => .num_is_zero,
         .num_abs_diff => .num_abs_diff,
-        .num_shift_left_by => .num_shift_left_by,
-        .num_shift_right_by => .num_shift_right_by,
-        .num_shift_right_zf_by => .num_shift_right_zf_by,
 
         // Type conversions (same name in both CIR and LIR)
         .u8_to_i8_wrap => .u8_to_i8_wrap,
@@ -2321,4 +2348,268 @@ test "MIR lambda with heterogeneous captures (I64 + Str) lowers to closure with 
     try testing.expect(lir_expr == .closure);
     // Multiple captures → struct_captures representation
     try testing.expect(lir_expr.closure.representation == .struct_captures);
+}
+
+test "MIR for_loop lowers to LIR for_loop" {
+    const allocator = testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
+    const list_mono = try env.mir_store.monotype_store.addMonotype(allocator, .{ .list = .{ .elem = i64_mono } });
+    const unit_mono = env.mir_store.monotype_store.unit_idx;
+
+    // Build MIR: for elem in list { body }
+    // list expression: empty list of I64
+    const list_expr = try env.mir_store.addExpr(allocator, .{ .list = .{
+        .elems = MIR.ExprSpan.empty(),
+    } }, list_mono, Region.zero());
+
+    // elem pattern: wildcard
+    const elem_pat = try env.mir_store.addPattern(allocator, .{ .wildcard = {} }, i64_mono);
+
+    // body: integer literal 0 (just a placeholder body)
+    const body_expr = try env.mir_store.addExpr(allocator, .{ .int = .{
+        .value = .{ .bytes = @bitCast(@as(i128, 0)), .kind = .i128 },
+    } }, i64_mono, Region.zero());
+
+    // for_loop expression
+    const for_expr = try env.mir_store.addExpr(allocator, .{ .for_loop = .{
+        .list = list_expr,
+        .elem_pattern = elem_pat,
+        .body = body_expr,
+    } }, unit_mono, Region.zero());
+
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    defer translator.deinit();
+
+    const lir_id = try translator.lower(for_expr);
+    const lir_expr = env.lir_store.getExpr(lir_id);
+
+    try testing.expect(lir_expr == .for_loop);
+}
+
+test "MIR while_loop lowers to LIR while_loop" {
+    const allocator = testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const bool_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.bool)];
+    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
+    const unit_mono = env.mir_store.monotype_store.unit_idx;
+
+    // Build MIR: while cond { body }
+    // cond: a bool placeholder (int literal used as stand-in)
+    const cond_expr = try env.mir_store.addExpr(allocator, .{ .int = .{
+        .value = .{ .bytes = @bitCast(@as(i128, 1)), .kind = .i128 },
+    } }, bool_mono, Region.zero());
+
+    // body: integer literal
+    const body_expr = try env.mir_store.addExpr(allocator, .{ .int = .{
+        .value = .{ .bytes = @bitCast(@as(i128, 0)), .kind = .i128 },
+    } }, i64_mono, Region.zero());
+
+    // while_loop expression
+    const while_expr = try env.mir_store.addExpr(allocator, .{ .while_loop = .{
+        .cond = cond_expr,
+        .body = body_expr,
+    } }, unit_mono, Region.zero());
+
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    defer translator.deinit();
+
+    const lir_id = try translator.lower(while_expr);
+    const lir_expr = env.lir_store.getExpr(lir_id);
+
+    try testing.expect(lir_expr == .while_loop);
+}
+
+test "MIR dbg_expr lowers to LIR dbg" {
+    const allocator = testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
+
+    // Build MIR: dbg(42)
+    const inner_expr = try env.mir_store.addExpr(allocator, .{ .int = .{
+        .value = .{ .bytes = @bitCast(@as(i128, 42)), .kind = .i128 },
+    } }, i64_mono, Region.zero());
+
+    const dbg_expr = try env.mir_store.addExpr(allocator, .{ .dbg_expr = .{
+        .expr = inner_expr,
+    } }, i64_mono, Region.zero());
+
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    defer translator.deinit();
+
+    const lir_id = try translator.lower(dbg_expr);
+    const lir_expr = env.lir_store.getExpr(lir_id);
+
+    try testing.expect(lir_expr == .dbg);
+}
+
+test "MIR expect lowers to LIR expect" {
+    const allocator = testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const bool_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.bool)];
+    const unit_mono = env.mir_store.monotype_store.unit_idx;
+
+    // Build MIR: expect (true)
+    const cond_expr = try env.mir_store.addExpr(allocator, .{ .int = .{
+        .value = .{ .bytes = @bitCast(@as(i128, 1)), .kind = .i128 },
+    } }, bool_mono, Region.zero());
+
+    const expect_expr = try env.mir_store.addExpr(allocator, .{ .expect = .{
+        .body = cond_expr,
+    } }, unit_mono, Region.zero());
+
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    defer translator.deinit();
+
+    const lir_id = try translator.lower(expect_expr);
+    const lir_expr = env.lir_store.getExpr(lir_id);
+
+    try testing.expect(lir_expr == .expect);
+}
+
+test "MIR crash lowers to LIR crash" {
+    const allocator = testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const unit_mono = env.mir_store.monotype_store.unit_idx;
+
+    // Build MIR: crash "msg"
+    const crash_expr = try env.mir_store.addExpr(allocator, .{
+        .crash = StringLiteral.Idx.none,
+    }, unit_mono, Region.zero());
+
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    defer translator.deinit();
+
+    const lir_id = try translator.lower(crash_expr);
+    const lir_expr = env.lir_store.getExpr(lir_id);
+
+    try testing.expect(lir_expr == .crash);
+}
+
+test "MIR return_expr lowers to LIR early_return" {
+    const allocator = testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
+
+    // Build MIR: return 42
+    const inner_expr = try env.mir_store.addExpr(allocator, .{ .int = .{
+        .value = .{ .bytes = @bitCast(@as(i128, 42)), .kind = .i128 },
+    } }, i64_mono, Region.zero());
+
+    const return_expr = try env.mir_store.addExpr(allocator, .{ .return_expr = .{
+        .expr = inner_expr,
+    } }, i64_mono, Region.zero());
+
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    defer translator.deinit();
+
+    const lir_id = try translator.lower(return_expr);
+    const lir_expr = env.lir_store.getExpr(lir_id);
+
+    try testing.expect(lir_expr == .early_return);
+}
+
+test "MIR break_expr lowers to LIR break_expr" {
+    const allocator = testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const unit_mono = env.mir_store.monotype_store.unit_idx;
+
+    // Build MIR: break
+    const break_expr_id = try env.mir_store.addExpr(allocator, .{
+        .break_expr = {},
+    }, unit_mono, Region.zero());
+
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    defer translator.deinit();
+
+    const lir_id = try translator.lower(break_expr_id);
+    const lir_expr = env.lir_store.getExpr(lir_id);
+
+    try testing.expect(lir_expr == .break_expr);
+}
+
+test "MIR num_plus low-level lowers to LIR binop add" {
+    const allocator = testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
+
+    // Build MIR: run_low_level(.num_plus, [10, 20])
+    const arg0 = try env.mir_store.addExpr(allocator, .{ .int = .{
+        .value = .{ .bytes = @bitCast(@as(i128, 10)), .kind = .i128 },
+    } }, i64_mono, Region.zero());
+    const arg1 = try env.mir_store.addExpr(allocator, .{ .int = .{
+        .value = .{ .bytes = @bitCast(@as(i128, 20)), .kind = .i128 },
+    } }, i64_mono, Region.zero());
+
+    const args = try env.mir_store.addExprSpan(allocator, &.{ arg0, arg1 });
+
+    const ll_expr = try env.mir_store.addExpr(allocator, .{ .run_low_level = .{
+        .op = .num_plus,
+        .args = args,
+    } }, i64_mono, Region.zero());
+
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    defer translator.deinit();
+
+    const lir_id = try translator.lower(ll_expr);
+    const lir_expr = env.lir_store.getExpr(lir_id);
+
+    try testing.expect(lir_expr == .binop);
+    try testing.expect(lir_expr.binop.op == .add);
+}
+
+test "MIR large unsigned int (U64 max) lowers to LIR i128_literal" {
+    const allocator = testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const u64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.u64)];
+
+    // U64 max value = 18446744073709551615, which exceeds maxInt(i64)
+    // so it should lower to i128_literal, not i64_literal
+    const int_expr = try env.mir_store.addExpr(allocator, .{ .int = .{
+        .value = .{ .bytes = @bitCast(@as(u128, std.math.maxInt(u64))), .kind = .u128 },
+    } }, u64_mono, Region.zero());
+
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    defer translator.deinit();
+
+    const lir_id = try translator.lower(int_expr);
+    const lir_expr = env.lir_store.getExpr(lir_id);
+
+    try testing.expect(lir_expr == .i128_literal);
 }

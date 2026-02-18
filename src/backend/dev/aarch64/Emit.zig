@@ -635,6 +635,45 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.emit32(inst);
         }
 
+        /// LSLV dst, src, amount (shift left by register)
+        pub fn lslRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg, amount: GeneralReg) !void {
+            // LSLV <Xd>, <Xn>, <Xm>: sf=1 | 0b0011010110 | Rm | 0b001000 | Rn | Rd
+            const sf = width.sf();
+            const inst: u32 = (@as(u32, sf) << 31) |
+                (0b0011010110 << 21) |
+                (@as(u32, amount.enc()) << 16) |
+                (0b001000 << 10) |
+                (@as(u32, src.enc()) << 5) |
+                dst.enc();
+            try self.emit32(inst);
+        }
+
+        /// LSRV dst, src, amount (logical shift right by register)
+        pub fn lsrRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg, amount: GeneralReg) !void {
+            // LSRV <Xd>, <Xn>, <Xm>: sf=1 | 0b0011010110 | Rm | 0b001001 | Rn | Rd
+            const sf = width.sf();
+            const inst: u32 = (@as(u32, sf) << 31) |
+                (0b0011010110 << 21) |
+                (@as(u32, amount.enc()) << 16) |
+                (0b001001 << 10) |
+                (@as(u32, src.enc()) << 5) |
+                dst.enc();
+            try self.emit32(inst);
+        }
+
+        /// ASRV dst, src, amount (arithmetic shift right by register)
+        pub fn asrRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg, amount: GeneralReg) !void {
+            // ASRV <Xd>, <Xn>, <Xm>: sf=1 | 0b0011010110 | Rm | 0b001010 | Rn | Rd
+            const sf = width.sf();
+            const inst: u32 = (@as(u32, sf) << 31) |
+                (0b0011010110 << 21) |
+                (@as(u32, amount.enc()) << 16) |
+                (0b001010 << 10) |
+                (@as(u32, src.enc()) << 5) |
+                dst.enc();
+            try self.emit32(inst);
+        }
+
         // Control flow instructions
 
         /// RET (return to address in LR)

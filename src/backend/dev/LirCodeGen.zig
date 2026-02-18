@@ -4311,13 +4311,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try self.codegen.emitSDiv(.w64, result_reg, lhs_reg, rhs_reg);
                     }
                 },
-                .rem => {
+                .rem, .mod => {
+                    // For integers: rem and mod differ for negative dividends.
+                    // Roc's Num module uses unsigned types, so they're equivalent here.
                     if (is_unsigned) {
                         try self.codegen.emitUMod(.w64, result_reg, lhs_reg, rhs_reg);
                     } else {
                         try self.codegen.emitSMod(.w64, result_reg, lhs_reg, rhs_reg);
                     }
                 },
+                .shl => try self.emitShlReg(.w64, result_reg, lhs_reg, rhs_reg),
+                .shr => try self.emitAsrReg(.w64, result_reg, lhs_reg, rhs_reg),
+                .shr_zf => try self.emitLsrReg(.w64, result_reg, lhs_reg, rhs_reg),
                 // Comparison operations
                 .eq => {
                     try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, condEqual());
@@ -4546,8 +4551,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try self.callI128DivRem(lhs_parts, rhs_parts, result_low, result_high, is_unsigned, false);
                     }
                 },
-                .rem => {
-                    // 128-bit integer remainder: call builtin function
+                .rem, .mod => {
+                    // 128-bit integer remainder/modulo: call builtin function
                     try self.callI128DivRem(lhs_parts, rhs_parts, result_low, result_high, is_unsigned, true);
                 },
                 // Comparison operations for i128/Dec
@@ -8234,6 +8239,40 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             } else {
                 if (dst != src) try self.codegen.emit.movRegReg(width, dst, src);
                 try self.codegen.emit.sarRegImm8(width, dst, amount);
+            }
+        }
+
+        /// Shift left by register (wraps lslRegReg / shlRegCl)
+        fn emitShlReg(self: *Self, comptime width: anytype, dst: GeneralReg, src: GeneralReg, amount: GeneralReg) !void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                try self.codegen.emit.lslRegReg(width, dst, src, amount);
+            } else {
+                if (dst != src) try self.codegen.emit.movRegReg(width, dst, src);
+                // x86_64 shifts require amount in CL; move amount there if needed
+                if (amount != .RCX) try self.codegen.emit.movRegReg(.w64, .RCX, amount);
+                try self.codegen.emit.shlRegCl(width, dst);
+            }
+        }
+
+        /// Logical shift right by register (wraps lsrRegReg / shrRegCl)
+        fn emitLsrReg(self: *Self, comptime width: anytype, dst: GeneralReg, src: GeneralReg, amount: GeneralReg) !void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                try self.codegen.emit.lsrRegReg(width, dst, src, amount);
+            } else {
+                if (dst != src) try self.codegen.emit.movRegReg(width, dst, src);
+                if (amount != .RCX) try self.codegen.emit.movRegReg(.w64, .RCX, amount);
+                try self.codegen.emit.shrRegCl(width, dst);
+            }
+        }
+
+        /// Arithmetic shift right by register (wraps asrRegReg / sarRegCl)
+        fn emitAsrReg(self: *Self, comptime width: anytype, dst: GeneralReg, src: GeneralReg, amount: GeneralReg) !void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                try self.codegen.emit.asrRegReg(width, dst, src, amount);
+            } else {
+                if (dst != src) try self.codegen.emit.movRegReg(width, dst, src);
+                if (amount != .RCX) try self.codegen.emit.movRegReg(.w64, .RCX, amount);
+                try self.codegen.emit.sarRegCl(width, dst);
             }
         }
 
@@ -15945,6 +15984,143 @@ test "record equality uses layout-aware comparison" {
     defer codegen.deinit();
 
     const result = try codegen.generateCode(eq_expr, .bool, 1);
+    defer allocator.free(result.code);
+
+    try std.testing.expect(result.code.len > 0);
+}
+
+test "generate modulo" {
+    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
+        return error.SkipZigTest;
+    }
+
+    const allocator = std.testing.allocator;
+    var store = LirExprStore.init(allocator);
+    defer store.deinit();
+
+    // Create: 10 % 3
+    const lhs = try store.addExpr(.{ .i64_literal = 10 }, base.Region.zero());
+    const rhs = try store.addExpr(.{ .i64_literal = 3 }, base.Region.zero());
+    const expr_id = try store.addExpr(.{ .binop = .{
+        .op = .mod,
+        .lhs = lhs,
+        .rhs = rhs,
+        .result_layout = .i64,
+    } }, base.Region.zero());
+
+    var codegen = try HostLirCodeGen.init(allocator, &store, null, null);
+    defer codegen.deinit();
+
+    const result = try codegen.generateCode(expr_id, .i64, 1);
+    defer allocator.free(result.code);
+
+    try std.testing.expect(result.code.len > 0);
+}
+
+test "generate shift left" {
+    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
+        return error.SkipZigTest;
+    }
+
+    const allocator = std.testing.allocator;
+    var store = LirExprStore.init(allocator);
+    defer store.deinit();
+
+    // Create: 1 << 4
+    const lhs = try store.addExpr(.{ .i64_literal = 1 }, base.Region.zero());
+    const rhs = try store.addExpr(.{ .i64_literal = 4 }, base.Region.zero());
+    const expr_id = try store.addExpr(.{ .binop = .{
+        .op = .shl,
+        .lhs = lhs,
+        .rhs = rhs,
+        .result_layout = .i64,
+    } }, base.Region.zero());
+
+    var codegen = try HostLirCodeGen.init(allocator, &store, null, null);
+    defer codegen.deinit();
+
+    const result = try codegen.generateCode(expr_id, .i64, 1);
+    defer allocator.free(result.code);
+
+    try std.testing.expect(result.code.len > 0);
+}
+
+test "generate shift right" {
+    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
+        return error.SkipZigTest;
+    }
+
+    const allocator = std.testing.allocator;
+    var store = LirExprStore.init(allocator);
+    defer store.deinit();
+
+    // Create: 64 >> 2 (arithmetic shift right, sign-extending)
+    const lhs = try store.addExpr(.{ .i64_literal = 64 }, base.Region.zero());
+    const rhs = try store.addExpr(.{ .i64_literal = 2 }, base.Region.zero());
+    const expr_id = try store.addExpr(.{ .binop = .{
+        .op = .shr,
+        .lhs = lhs,
+        .rhs = rhs,
+        .result_layout = .i64,
+    } }, base.Region.zero());
+
+    var codegen = try HostLirCodeGen.init(allocator, &store, null, null);
+    defer codegen.deinit();
+
+    const result = try codegen.generateCode(expr_id, .i64, 1);
+    defer allocator.free(result.code);
+
+    try std.testing.expect(result.code.len > 0);
+}
+
+test "generate shift right zero-fill" {
+    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
+        return error.SkipZigTest;
+    }
+
+    const allocator = std.testing.allocator;
+    var store = LirExprStore.init(allocator);
+    defer store.deinit();
+
+    // Create: 64 >>> 2 (logical shift right, zero-filling)
+    const lhs = try store.addExpr(.{ .i64_literal = 64 }, base.Region.zero());
+    const rhs = try store.addExpr(.{ .i64_literal = 2 }, base.Region.zero());
+    const expr_id = try store.addExpr(.{ .binop = .{
+        .op = .shr_zf,
+        .lhs = lhs,
+        .rhs = rhs,
+        .result_layout = .i64,
+    } }, base.Region.zero());
+
+    var codegen = try HostLirCodeGen.init(allocator, &store, null, null);
+    defer codegen.deinit();
+
+    const result = try codegen.generateCode(expr_id, .i64, 1);
+    defer allocator.free(result.code);
+
+    try std.testing.expect(result.code.len > 0);
+}
+
+test "generate unary minus" {
+    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
+        return error.SkipZigTest;
+    }
+
+    const allocator = std.testing.allocator;
+    var store = LirExprStore.init(allocator);
+    defer store.deinit();
+
+    // Create: -42
+    const inner = try store.addExpr(.{ .i64_literal = 42 }, base.Region.zero());
+    const neg = try store.addExpr(.{ .unary_minus = .{
+        .expr = inner,
+        .result_layout = .i64,
+    } }, base.Region.zero());
+
+    var codegen = try HostLirCodeGen.init(allocator, &store, null, null);
+    defer codegen.deinit();
+
+    const result = try codegen.generateCode(neg, .i64, 1);
     defer allocator.free(result.code);
 
     try std.testing.expect(result.code.len > 0);

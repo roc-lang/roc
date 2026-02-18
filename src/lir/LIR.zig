@@ -666,6 +666,12 @@ pub const LirExpr = union(enum) {
         div,
         div_trunc, // Truncating division (integer division)
         rem, // Remainder (truncates toward zero, like C's %)
+        mod, // Modulo (result has sign of divisor, like Python's %)
+
+        // Bitwise shifts
+        shl, // Shift left
+        shr, // Arithmetic shift right (sign-extending)
+        shr_zf, // Logical shift right (zero-filling)
 
         // Comparison
         eq,
