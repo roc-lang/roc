@@ -9903,7 +9903,11 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
             // Store appropriate size - architecture specific
             if (comptime target.toCpuArch() == .aarch64) {
-                // aarch64 only has .w32 and .w64 for emitStoreStack, use direct emit for smaller sizes
+                // aarch64 only has .w32 and .w64 for emitStoreStack, use direct emit for smaller sizes.
+                // The offset >= 0 checks below are not defensive guards — they select the
+                // unsigned-immediate instruction encoding (STRB/STRH), which only accepts
+                // non-negative offsets. Negative offsets (valid because the stack grows down
+                // from FP) take the fallback path that computes the address in a register.
                 switch (disc_size) {
                     1 => {
                         // Use strb for 1-byte store
