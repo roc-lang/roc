@@ -794,7 +794,7 @@ pub const RcInsertPass = struct {
             final_body = try self.store.addExpr(.{ .block = .{
                 .stmts = stmts_span,
                 .final_expr = new_body,
-                .result_layout = fl.elem_layout,
+                .result_layout = .zst,
             } }, region);
         }
 
@@ -1889,4 +1889,100 @@ test "RC match guard: symbol used only in guard gets proper RC ops" {
     const rc = countRcOps(&env.lir_store, result);
     try std.testing.expectEqual(@as(u32, 0), rc.increfs);
     try std.testing.expectEqual(@as(u32, 1), rc.decrefs);
+}
+
+test "RC match guard+body: symbol used in both guard and body gets proper RC ops" {
+    // { s = "hello"; match cond is _ if s -> s, _ -> "world" }
+    // Branch 0: s used in guard (1) + body (1) = 2 uses => incref(1).
+    // Branch 1: 0 uses => decref.
+    // Global count = 1 => no incref at binding.
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const str_layout: LayoutIdx = .str;
+    const i64_layout: LayoutIdx = .i64;
+    const sym_s = makeSymbol(1);
+    const sym_cond = makeSymbol(2);
+
+    const cond_expr = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_cond, .layout_idx = i64_layout } }, Region.zero());
+    const guard_lookup_s = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
+    const body_lookup_s = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
+    const str_world = try env.lir_store.addExpr(.{ .str_literal = base.StringLiteral.Idx.none }, Region.zero());
+
+    const wild_pat1 = try env.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = i64_layout } }, Region.zero());
+    const wild_pat2 = try env.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = i64_layout } }, Region.zero());
+
+    const match_branches = try env.lir_store.addMatchBranches(&.{
+        .{ .pattern = wild_pat1, .guard = guard_lookup_s, .body = body_lookup_s },
+        .{ .pattern = wild_pat2, .guard = LirExprId.none, .body = str_world },
+    });
+
+    const match_expr = try env.lir_store.addExpr(.{ .match_expr = .{
+        .value = cond_expr,
+        .value_layout = i64_layout,
+        .branches = match_branches,
+        .result_layout = str_layout,
+    } }, Region.zero());
+
+    const str_lit = try env.lir_store.addExpr(.{ .str_literal = base.StringLiteral.Idx.none }, Region.zero());
+    const pat_s = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
+    const stmts = try env.lir_store.addStmts(&.{.{ .decl = .{ .pattern = pat_s, .expr = str_lit } }});
+
+    const block_expr = try env.lir_store.addExpr(.{ .block = .{
+        .stmts = stmts,
+        .final_expr = match_expr,
+        .result_layout = str_layout,
+    } }, Region.zero());
+
+    var pass = RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    defer pass.deinit();
+
+    const result = try pass.insertRcOps(block_expr);
+
+    // Branch 0: 2 uses (guard + body) => incref(1). Branch 1: 0 uses => decref.
+    const rc = countRcOps(&env.lir_store, result);
+    try std.testing.expectEqual(@as(u32, 1), rc.increfs);
+    try std.testing.expectEqual(@as(u32, 1), rc.decrefs);
+}
+
+test "RC for_loop: wrapper block has unit result layout, not elem layout" {
+    // for list |elem| { 42 }  where elem is str but body produces i64
+    // The RC wrapper block around the body should have .zst (unit) result layout,
+    // not elem_layout (str).
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const str_layout: LayoutIdx = .str;
+    const sym_elem = makeSymbol(1);
+    const sym_list = makeSymbol(2);
+
+    const int_lit = try env.lir_store.addExpr(.{ .i64_literal = 42 }, Region.zero());
+
+    const list_expr = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_list, .layout_idx = str_layout } }, Region.zero());
+    const pat_elem = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_elem, .layout_idx = str_layout } }, Region.zero());
+    const for_expr = try env.lir_store.addExpr(.{ .for_loop = .{
+        .list_expr = list_expr,
+        .elem_layout = str_layout,
+        .elem_pattern = pat_elem,
+        .body = int_lit,
+    } }, Region.zero());
+
+    var pass = RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    defer pass.deinit();
+
+    const result = try pass.insertRcOps(for_expr);
+    const result_expr = env.lir_store.getExpr(result);
+
+    // The for_loop body should be wrapped in a block (RC ops added for unused elem)
+    try std.testing.expect(result_expr == .for_loop);
+    const wrapper_body = env.lir_store.getExpr(result_expr.for_loop.body);
+    try std.testing.expect(wrapper_body == .block);
+    // Wrapper block result layout should be unit (.zst), not elem_layout (.str)
+    try std.testing.expectEqual(LayoutIdx.zst, wrapper_body.block.result_layout);
 }

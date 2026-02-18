@@ -167,6 +167,7 @@ pub const RcInsertPass = struct {
                     try self.registerPatternSymbolInto(branch.pattern, target);
                     var local = std.AutoHashMap(u64, u32).init(self.allocator);
                     defer local.deinit();
+                    try self.countUsesInto(branch.guard, &local);
                     try self.countUsesInto(branch.body, &local);
                     var it = local.keyIterator();
                     while (it.next()) |key| try symbols_in_any_branch.put(key.*, {});
@@ -618,6 +619,7 @@ pub const RcInsertPass = struct {
 
         for (branches) |branch| {
             var local = try self.countUsesLocal(branch.body);
+            try self.countUsesInto(branch.guard, &local);
             var it = local.keyIterator();
             while (it.next()) |key| {
                 const k = key.*;
@@ -635,10 +637,11 @@ pub const RcInsertPass = struct {
 
         for (branches, 0..) |branch, i| {
             const processed_body = try self.processExpr(branch.body);
+            const processed_guard = try self.processExpr(branch.guard);
             const new_body = try self.wrapBranchWithRcOps(processed_body, &branch_use_maps.items[i], &symbols_in_any_branch, result_layout, region);
             try new_branches.append(self.allocator, .{
                 .pattern = branch.pattern,
-                .guard = branch.guard,
+                .guard = processed_guard,
                 .body = new_body,
             });
         }
@@ -767,7 +770,7 @@ pub const RcInsertPass = struct {
             final_body = try self.store.addExpr(.{ .block = .{
                 .stmts = stmts_span,
                 .final_expr = new_body,
-                .result_layout = fl.elem_layout,
+                .result_layout = .zst,
             } }, region);
         }
 
