@@ -50,6 +50,18 @@ pub const RcInsertPass = struct {
     /// Tracks layout for each symbol (for generating incref/decref with correct layout).
     symbol_layouts: std.AutoHashMap(u64, LayoutIdx),
 
+    /// Tracks live RC symbols across blocks for early_return cleanup.
+    live_rc_symbols: std.ArrayList(LiveRcSymbol),
+
+    /// Base index into live_rc_symbols for the current function scope.
+    /// early_return only cleans up symbols from early_return_scope_base onward.
+    early_return_scope_base: usize,
+
+    const LiveRcSymbol = struct {
+        symbol: Symbol,
+        layout_idx: LayoutIdx,
+    };
+
     pub fn init(allocator: Allocator, store: *LirExprStore, layout_store: *const layout_mod.Store) RcInsertPass {
         return .{
             .allocator = allocator,
@@ -57,12 +69,15 @@ pub const RcInsertPass = struct {
             .layout_store = layout_store,
             .symbol_use_counts = std.AutoHashMap(u64, u32).init(allocator),
             .symbol_layouts = std.AutoHashMap(u64, LayoutIdx).init(allocator),
+            .live_rc_symbols = std.ArrayList(LiveRcSymbol).empty,
+            .early_return_scope_base = 0,
         };
     }
 
     pub fn deinit(self: *RcInsertPass) void {
         self.symbol_use_counts.deinit();
         self.symbol_layouts.deinit();
+        self.live_rc_symbols.deinit(self.allocator);
     }
 
     /// Main entry point: insert RC operations into a LirExpr tree.
@@ -444,6 +459,7 @@ pub const RcInsertPass = struct {
             .for_loop => |fl| self.processForLoop(fl, region, expr_id),
             .while_loop => |wl| self.processWhileLoop(wl, region, expr_id),
             .discriminant_switch => |ds| self.processDiscriminantSwitch(ds, region),
+            .early_return => |ret| self.processEarlyReturn(ret, region, expr_id),
             // For all other expressions, return as-is.
             // RC operations are inserted at block boundaries, not inside
             // individual expressions.
@@ -465,7 +481,6 @@ pub const RcInsertPass = struct {
             .tuple_access,
             .zero_arg_tag,
             .tag,
-            .early_return,
             .break_expr,
             .binop,
             .unary_minus,
@@ -500,6 +515,10 @@ pub const RcInsertPass = struct {
         region: Region,
     ) Allocator.Error!LirExprId {
         const stmts = self.store.getStmts(stmts_span);
+
+        // Save live_rc_symbols depth so nested blocks restore on exit.
+        const saved_live_len = self.live_rc_symbols.items.len;
+        defer self.live_rc_symbols.shrinkRetainingCapacity(saved_live_len);
 
         // Use a local buffer to avoid reentrancy issues — processExpr may
         // recurse into another processBlock (e.g. lambda/loop bodies).
@@ -542,6 +561,12 @@ pub const RcInsertPass = struct {
                 switch (pat) {
                     .bind => |bind| {
                         if (!bind.symbol.isNone() and self.layoutNeedsRc(bind.layout_idx)) {
+                            // Track as live for early_return cleanup
+                            try self.live_rc_symbols.append(self.allocator, .{
+                                .symbol = bind.symbol,
+                                .layout_idx = bind.layout_idx,
+                            });
+
                             const key = @as(u64, @bitCast(bind.symbol));
                             const use_count = self.symbol_use_counts.get(key) orelse 0;
 
@@ -788,6 +813,15 @@ pub const RcInsertPass = struct {
     /// 1 reference per parameter. We recurse into the body and emit RC ops
     /// for lambda parameters based on body-local use counts.
     fn processLambda(self: *RcInsertPass, lam: anytype, region: Region, expr_id: LirExprId) Allocator.Error!LirExprId {
+        // Lambda is a new function scope — save and reset early_return tracking.
+        const saved_scope_base = self.early_return_scope_base;
+        const saved_live_len = self.live_rc_symbols.items.len;
+        self.early_return_scope_base = self.live_rc_symbols.items.len;
+        defer {
+            self.early_return_scope_base = saved_scope_base;
+            self.live_rc_symbols.shrinkRetainingCapacity(saved_live_len);
+        }
+
         const new_body = try self.processExpr(lam.body);
 
         // Count uses locally within the lambda body
@@ -925,6 +959,56 @@ pub const RcInsertPass = struct {
             } }, region);
         }
         return expr_id;
+    }
+
+    /// Process an early_return expression.
+    /// Emits cleanup decrefs for all live RC symbols in enclosing blocks
+    /// (from early_return_scope_base onward) that are NOT consumed by the
+    /// return value expression itself.
+    fn processEarlyReturn(self: *RcInsertPass, ret: anytype, region: Region, expr_id: LirExprId) Allocator.Error!LirExprId {
+        // Recurse into the return value expression
+        const new_expr = try self.processExpr(ret.expr);
+
+        // Find which symbols the return expression consumes
+        var ret_uses = try self.countUsesLocal(ret.expr);
+        defer ret_uses.deinit();
+
+        // Collect cleanup decrefs for live RC symbols not consumed by the return
+        var cleanup_stmts = std.ArrayList(LirStmt).empty;
+        defer cleanup_stmts.deinit(self.allocator);
+
+        const live_syms = self.live_rc_symbols.items[self.early_return_scope_base..];
+        for (live_syms) |live| {
+            const key = @as(u64, @bitCast(live.symbol));
+            if (ret_uses.get(key) != null) continue; // consumed by return expr
+            try self.emitDecrefInto(live.symbol, live.layout_idx, region, &cleanup_stmts);
+        }
+
+        if (cleanup_stmts.items.len == 0 and new_expr == ret.expr) return expr_id;
+
+        // Build the actual early_return node (possibly with updated expr)
+        const early_ret_id = try self.store.addExpr(.{ .early_return = .{
+            .expr = new_expr,
+            .ret_layout = ret.ret_layout,
+        } }, region);
+
+        if (cleanup_stmts.items.len == 0) return early_ret_id;
+
+        // Wrap: block { decref(a); decref(b); early_return(new_expr) }
+        const wildcard = try self.store.addPattern(.{ .wildcard = .{ .layout_idx = .zst } }, region);
+        try cleanup_stmts.append(self.allocator, .{ .decl = .{
+            .pattern = wildcard,
+            .expr = early_ret_id,
+        } });
+
+        const stmts_span = try self.store.addStmts(cleanup_stmts.items);
+        // The block's final_expr is never reached (early_return diverges),
+        // but we need a valid expr — use the early_return itself.
+        return self.store.addExpr(.{ .block = .{
+            .stmts = stmts_span,
+            .final_expr = early_ret_id,
+            .result_layout = ret.ret_layout,
+        } }, region);
     }
 
     /// Collect all symbols bound by a pattern into a set.
