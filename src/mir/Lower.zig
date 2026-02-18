@@ -1286,6 +1286,7 @@ fn ensureMethodLowered(self: *Self, symbol: MIR.Symbol) Allocator.Error!void {
             else => {},
         }
     }
+    unreachable; // Method must exist — type checking should have caught this
 }
 
 /// Lower an external definition by symbol, caching the result.
