@@ -538,20 +538,24 @@ pub const Store = struct {
     }
 
     /// Create a tuple layout representing the sequential layout of closure captures.
-    /// Captures are stored sequentially with no alignment padding between them.
+    /// Captures are stored with alignment padding between them, like tuple fields.
     pub fn putCaptureStruct(self: *Self, capture_layout_idxs: []const Idx) std.mem.Allocator.Error!Idx {
         var temp_fields = std.ArrayList(TupleField).empty;
         defer temp_fields.deinit(self.allocator);
 
-        var total_size: u32 = 0;
         var max_alignment: usize = 1;
+        var current_offset: u32 = 0;
         for (capture_layout_idxs, 0..) |cap_idx, i| {
             try temp_fields.append(self.allocator, .{ .index = @intCast(i), .layout = cap_idx });
             const cap_layout = self.getLayout(cap_idx);
             const cap_sa = self.layoutSizeAlign(cap_layout);
-            total_size += cap_sa.size;
-            max_alignment = @max(max_alignment, cap_sa.alignment.toByteUnits());
+            const field_alignment = cap_sa.alignment.toByteUnits();
+            max_alignment = @max(max_alignment, field_alignment);
+            current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_alignment))));
+            current_offset += cap_sa.size;
         }
+
+        const total_size = @as(u32, @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(max_alignment)))));
 
         const fields_start = self.tuple_fields.items.len;
         for (temp_fields.items) |field| {
@@ -572,14 +576,16 @@ pub const Store = struct {
         var max_payload_size: u32 = 0;
         var max_alignment: usize = 8; // At least 8 for the tag
         for (variants) |capture_idxs| {
-            var variant_size: u32 = 0;
+            var current_offset: u32 = 0;
             for (capture_idxs) |cap_idx| {
                 const cap_layout = self.getLayout(cap_idx);
                 const cap_sa = self.layoutSizeAlign(cap_layout);
-                variant_size += cap_sa.size;
-                max_alignment = @max(max_alignment, cap_sa.alignment.toByteUnits());
+                const field_alignment = cap_sa.alignment.toByteUnits();
+                max_alignment = @max(max_alignment, field_alignment);
+                current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_alignment))));
+                current_offset += cap_sa.size;
             }
-            max_payload_size = @max(max_payload_size, variant_size);
+            max_payload_size = @max(max_payload_size, current_offset);
         }
 
         // Total size = 8 (tag) + max_payload_size
