@@ -31,6 +31,8 @@ const hash_bytes = 32;
 /// So we need 44 characters.
 pub const base58_hash_bytes = 44;
 
+/// Encodes a 256-bit hash into a base58 string, written to `dest`.
+/// Returns the populated slice of `dest` (the encoding is right-aligned).
 pub fn encode(src: [hash_bytes]u8, dest: *[base58_hash_bytes]u8) []u8 {
     var value: u256 = std.mem.readInt(u256, &src, .big);
     var write_idx: usize = base58_hash_bytes;
@@ -49,6 +51,8 @@ pub fn encode(src: [hash_bytes]u8, dest: *[base58_hash_bytes]u8) []u8 {
     return dest[write_idx..];
 }
 
+/// Decodes a base58-encoded string back into a 256-bit hash.
+/// Returns `InvalidBase58` if the input contains invalid characters or overflows.
 pub fn decode(src: []const u8) error{InvalidBase58}![hash_bytes]u8 {
     if (src.len > base58_hash_bytes) return error.InvalidBase58;
 
