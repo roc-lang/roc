@@ -64,9 +64,7 @@ pub const BindingInfo = struct {
     region: Region,
 };
 
-// ============================================================================
 // Pattern Extraction Functions
-// ============================================================================
 
 /// Extract the identifier from a pattern, handling .assign and .as cases.
 /// Returns null for patterns that don't directly bind an identifier
@@ -91,9 +89,7 @@ pub fn extractIdentFromPatternRecursive(store: *const NodeStore, pattern_idx: CI
     };
 }
 
-// ============================================================================
 // Definition Search Functions
-// ============================================================================
 
 /// Find a definition by name, searching through all_defs and all_statements.
 /// Returns information about the first matching definition found.
@@ -237,9 +233,7 @@ pub fn findDefinitionsWithPrefix(
     return results;
 }
 
-// ============================================================================
 // Module Lookup Functions
-// ============================================================================
 
 /// Find a module by name in the build environment's schedulers.
 /// Returns null if the module is not found or the build environment is null.
@@ -290,9 +284,7 @@ pub fn findModuleByNameWithBuiltinCheck(
     return findModuleByName(build_env, module_name);
 }
 
-// ============================================================================
 // Type Variable Functions
-// ============================================================================
 
 /// Get the type variable for a pattern from the type store.
 /// This converts the pattern index to a type variable using ModuleEnv.varFrom.
@@ -305,9 +297,7 @@ pub fn getTypeVarForExpr(expr_idx: CIR.Expr.Idx) TypeVar {
     return ModuleEnv.varFrom(expr_idx);
 }
 
-// ============================================================================
 // Statement Parts Extraction
-// ============================================================================
 
 /// Extract the common parts from a statement (pattern, expression(s)).
 /// This consolidates the repeated switch logic found throughout the LSP codebase.
@@ -403,9 +393,7 @@ pub fn getStatementParts(stmt: CIR.Statement) StatementParts {
     };
 }
 
-// ============================================================================
 // Binding Search Functions
-// ============================================================================
 
 /// Find a binding by name that is in scope at the given offset.
 /// This searches through statements to find bindings that are defined before the offset.
@@ -459,9 +447,7 @@ pub fn findBindingByName(module_env: *ModuleEnv, name: []const u8, offset: u32) 
     return null;
 }
 
-// ============================================================================
 // Iterator Helpers
-// ============================================================================
 
 /// Iterator over all definitions in a module (from both all_defs and all_statements).
 pub const DefinitionIterator = struct {
@@ -528,9 +514,7 @@ pub fn iterateDefinitions(module_env: *ModuleEnv) DefinitionIterator {
     return DefinitionIterator.init(module_env);
 }
 
-// ============================================================================
 // Tests
-// ============================================================================
 
 test "getStatementParts returns correct parts for s_break" {
     // This is a compile-time test to verify the switch handles all cases

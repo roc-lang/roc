@@ -21,9 +21,7 @@ fn testIdent(idx: u29) Ident.Idx {
     };
 }
 
-// ============================================================================
 // Unit tests for Binding and ScopeMap data structures
-// ============================================================================
 
 test "ScopeMap init and deinit" {
     const allocator = std.testing.allocator;

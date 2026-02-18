@@ -31,7 +31,6 @@ pub const LambdaLifter = @import("LambdaLifter.zig");
 /// Lambda Set Inference - coordinates cross-module closure handling
 pub const LambdaSetInference = @import("LambdaSetInference.zig");
 
-
 /// Re-export AutoImportedType for callers
 pub const AutoImportedType = Can.AutoImportedType;
 

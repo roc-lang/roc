@@ -20,9 +20,7 @@ fn platformPath(allocator: std.mem.Allocator) ![]u8 {
     return path;
 }
 
-// =========================================================================
 // Test Harness
-// =========================================================================
 
 /// Shared setup for syntax checker tests. Manages allocator, SyntaxChecker,
 /// temporary directory, platform path, and file URI — eliminating the
@@ -122,9 +120,7 @@ const TestHarness = struct {
     }
 };
 
-// =========================================================================
 // Syntax Checker Tests
-// =========================================================================
 
 test "syntax checker skips rebuild when content unchanged" {
     var h = try TestHarness.init();
@@ -271,9 +267,7 @@ test "getDocumentSymbols returns symbols for valid app file" {
     try std.testing.expect(found_helper);
 }
 
-// =========================================================================
 // Completion Context Detection Tests
-// =========================================================================
 
 test "completion context detects after_record_dot for lowercase identifier" {
     const source = "main = my_var.";
@@ -326,9 +320,7 @@ test "completion context detects after_colon for type annotation" {
     }
 }
 
-// =========================================================================
 // Completion Tests
-// =========================================================================
 
 test "getCompletionsAtPosition returns basic completions" {
     var h = try TestHarness.init();
@@ -392,9 +384,9 @@ test "record field completion works for modules" {
 }
 
 test "record field completion in sub module" {
-    //==== DISABLED TEST UNTILL IMPLEMENTED====
+    // DISABLED TEST UNTILL IMPLEMENTED
     return;
-    //==== DISABLED TEST UNTILL IMPLEMENTED====
+    // DISABLED TEST UNTILL IMPLEMENTED
     // var h = try TestHarness.init();
     // defer h.deinit();
 
@@ -678,9 +670,7 @@ test "static dispatch completion for chained call" {
     try TestHarness.expectHasLabels(items, &.{"step"});
 }
 
-// =========================================================================
 // Doc Comment Tests
-// =========================================================================
 
 test "completion includes doc comments from source" {
     std.debug.print("===== DOC COMMENTS TEST=====", .{});
@@ -745,9 +735,7 @@ test "completion includes doc comments from source" {
         return error.TestUnexpectedResult;
     }
 }
-// =========================================================================
 // Hover Documentation Tests
-// =========================================================================
 
 test "hover shows documentation for function definition" {
     var h = try TestHarness.init();

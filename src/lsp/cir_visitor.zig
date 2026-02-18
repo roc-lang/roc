@@ -637,9 +637,7 @@ pub fn CirVisitor(comptime Context: type) type {
     };
 }
 
-// ============================================================================
 // Helper Functions
-// ============================================================================
 
 /// Check if a region contains a given byte offset.
 /// Returns true if start <= offset < end.
@@ -672,9 +670,7 @@ pub fn getTypeAnnoRegion(store: *const NodeStore, anno_idx: CIR.TypeAnno.Idx) Re
     return store.getTypeAnnoRegion(anno_idx);
 }
 
-// ============================================================================
 // Tests
-// ============================================================================
 
 test "CirVisitor basic initialization" {
     const TestContext = struct {

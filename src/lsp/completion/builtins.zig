@@ -49,9 +49,7 @@ pub fn isBuiltinType(type_name: []const u8) bool {
     return false;
 }
 
-// ============================================================================
 // Tests
-// ============================================================================
 
 test "isBuiltinType recognizes collection types" {
     try std.testing.expect(isBuiltinType("Str"));

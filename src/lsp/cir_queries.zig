@@ -23,9 +23,7 @@ const base = @import("base");
 const Region = base.Region;
 const Ident = base.Ident;
 
-// ============================================================================
 // Result Types
-// ============================================================================
 
 /// Result of finding a type at an offset.
 pub const TypeAtOffsetResult = struct {
@@ -53,9 +51,7 @@ pub const LookupResult = struct {
     region: Region,
 };
 
-// ============================================================================
 // Helper Functions
-// ============================================================================
 
 /// Check if a region contains a given byte offset.
 /// Returns true if start <= offset <= end.
@@ -101,9 +97,7 @@ pub fn regionToRange(module_env: *const ModuleEnv, region: Region) ?LspRange {
     };
 }
 
-// ============================================================================
 // Query Context Types
-// ============================================================================
 
 /// Context for finding the type at a specific offset.
 /// Tracks the narrowest (smallest) expression or pattern containing the target offset.
@@ -382,9 +376,7 @@ const FindExprEndingAtContext = struct {
     }
 };
 
-// ============================================================================
 // Main Query Functions
-// ============================================================================
 
 /// Find the type of the narrowest expression or pattern containing the target offset.
 ///
@@ -614,9 +606,7 @@ pub fn findExprEndingAt(module_env: *ModuleEnv, offset: u32) ?TypeAtOffsetResult
     return ctx.result;
 }
 
-// ============================================================================
 // Tests
-// ============================================================================
 
 test "regionContainsOffset basic" {
     const region = Region{

@@ -107,9 +107,7 @@ pub const CompletionBuilder = struct {
         self.freeOwnedOptionalFields(item);
     }
 
-    // =========================================================================
     // Module Name Completions
-    // =========================================================================
 
     /// Add module name completions from all loaded packages/modules in BuildEnv.
     pub fn addModuleNameCompletionsFromEnv(self: *CompletionBuilder, env: *BuildEnv) !void {
@@ -157,9 +155,7 @@ pub const CompletionBuilder = struct {
         }
     }
 
-    // =========================================================================
     // Module Member Completions
-    // =========================================================================
 
     /// Add completions for members of a specific module (e.g., Str.concat).
     pub fn addModuleMemberCompletions(
@@ -339,9 +335,7 @@ pub const CompletionBuilder = struct {
         return added_any;
     }
 
-    // =========================================================================
     // Type Completions
-    // =========================================================================
 
     /// Add type completions for type annotation context.
     pub fn addTypeCompletions(self: *CompletionBuilder, module_env: *ModuleEnv) !void {
@@ -397,9 +391,7 @@ pub const CompletionBuilder = struct {
         }
     }
 
-    // =========================================================================
     // Local Completions
-    // =========================================================================
 
     /// Add local definition completions (variables, functions in scope).
     pub fn addLocalCompletions(self: *CompletionBuilder, module_env: *ModuleEnv, cursor_offset: u32) !void {
@@ -560,9 +552,7 @@ pub const CompletionBuilder = struct {
         }
     }
 
-    // =========================================================================
     // Record Field Completions
-    // =========================================================================
 
     /// Add record field completions for a record variable access (e.g., "myRecord.").
     pub fn addRecordFieldCompletions(
@@ -927,9 +917,7 @@ pub const CompletionBuilder = struct {
         return null;
     }
 
-    // =========================================================================
     // Method Completions
-    // =========================================================================
 
     /// Add method completions for static dispatch (e.g., "value.method()").
     pub fn addMethodCompletions(
@@ -1340,9 +1328,7 @@ pub const CompletionBuilder = struct {
         return null;
     }
 
-    // =========================================================================
     // Tag Union Completions
-    // =========================================================================
 
     /// Add tag completions for a nominal type (e.g., `Color.` → `Red`, `Green`, `Blue`).
     /// Entry point for `TypeName.` completion on nominal types.
@@ -1552,9 +1538,7 @@ pub const CompletionBuilder = struct {
     }
 };
 
-// =========================================================================
 // Helper Functions
-// =========================================================================
 
 /// Strip "Builtin." and "Num." prefixes for display (e.g. "Builtin.Str" → "Str", "Num.U64" → "U64").
 fn stripBuiltinPrefix(name: []const u8) []const u8 {
@@ -1664,9 +1648,7 @@ fn getStatementParts(stmt: CIR.Statement) StatementParts {
     };
 }
 
-// =========================================================================
 // Tests
-// =========================================================================
 
 test "stripModulePrefix" {
     const testing = std.testing;

@@ -159,9 +159,7 @@ fn skipBackwardsToNewline(source: []const u8, pos: u32) u32 {
     return i;
 }
 
-// =============================================================================
 // CIR-aware doc offset helpers
-// =============================================================================
 
 /// Compute the source offset where doc comments should be found for a Def.
 /// Prefers annotation region (doc comments precede type annotations),
@@ -199,9 +197,7 @@ pub fn extractDocForStatement(allocator: Allocator, source: []const u8, store: *
     return extractDocCommentBefore(allocator, source, docOffsetForStatement(store, stmt, stmt_idx));
 }
 
-// =============================================================================
 // Unit Tests
-// =============================================================================
 
 test "extractDocCommentBefore: single line doc comment" {
     const allocator = std.testing.allocator;

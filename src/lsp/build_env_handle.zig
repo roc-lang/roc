@@ -10,6 +10,7 @@ const compile = @import("compile");
 const Allocator = std.mem.Allocator;
 const BuildEnv = compile.BuildEnv;
 
+/// Reference-counted owner for a `BuildEnv` shared across LSP components.
 pub const BuildEnvHandle = struct {
     allocator: Allocator,
     env: BuildEnv,
