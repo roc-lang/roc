@@ -597,7 +597,7 @@ fn lowerRecordAccess(self: *Self, ra: anytype, mir_expr_id: MIR.ExprId, region: 
     const field_layout = try self.layoutFromMonotype(result_mono);
 
     // Find the field index from the monotype's field list
-    var field_idx: u16 = 0;
+    var field_idx: ?u16 = null;
     const monotype = self.mir_store.monotype_store.getMonotype(record_mono);
     switch (monotype) {
         .record => |r| {
@@ -625,7 +625,7 @@ fn lowerRecordAccess(self: *Self, ra: anytype, mir_expr_id: MIR.ExprId, region: 
         .record_expr = lir_record,
         .record_layout = record_layout,
         .field_layout = field_layout,
-        .field_idx = field_idx,
+        .field_idx = field_idx orelse unreachable,
         .field_name = ra.field_name,
     } }, region);
 }
