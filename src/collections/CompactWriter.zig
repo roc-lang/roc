@@ -5,6 +5,11 @@
 //! proper deserialization of the written data.
 
 const std = @import("std");
+const builtin = @import("builtin");
+
+// POSIX I/O only available on non-freestanding targets
+const is_freestanding = builtin.os.tag == .freestanding;
+const posix = if (is_freestanding) undefined else std.posix;
 
 const CompactWriter = @This();
 
@@ -12,14 +17,14 @@ const CompactWriter = @This();
 /// All serialized data must be aligned to this boundary to ensure proper
 /// memory access patterns and avoid alignment faults on architectures that
 /// require aligned memory access.
-pub const SERIALIZATION_ALIGNMENT = 16;
+pub const SERIALIZATION_ALIGNMENT = std.mem.Alignment.@"16";
 
 const ZEROS: [16]u8 = [_]u8{0} ** 16;
 
-iovecs: std.ArrayListUnmanaged(Iovec),
+iovecs: std.ArrayList(Iovec),
 total_bytes: usize,
 // Track all allocated memory so we can free it in deinit
-allocated_memory: std.ArrayListUnmanaged(AllocatedMemory),
+allocated_memory: std.ArrayList(AllocatedMemory),
 
 pub fn init() CompactWriter {
     return CompactWriter{
@@ -71,7 +76,7 @@ pub fn writeGather(
         if (valid_iovec_count == 0) break;
 
         // Create adjusted iovec array for partial writes
-        var adjusted_iovecs = try allocator.alloc(std.posix.iovec_const, valid_iovec_count);
+        var adjusted_iovecs = try allocator.alloc(posix.iovec_const, valid_iovec_count);
         defer allocator.free(adjusted_iovecs);
 
         // Copy remaining iovecs, adjusting first one for partial write and filtering out empty ones
@@ -101,7 +106,7 @@ pub fn writeGather(
         // Sanity check - we should have filled all slots
         std.debug.assert(adjusted_index == valid_iovec_count);
 
-        const n = try std.posix.pwritev(file.handle, adjusted_iovecs, bytes_written);
+        const n = try posix.pwritev(file.handle, adjusted_iovecs, bytes_written);
 
         if (n == 0) return error.UnexpectedEof;
 
@@ -141,14 +146,15 @@ pub fn appendAlloc(
 
     // When we deserialize, we align the bytes we're deserializing into to ALIGNMENT,
     // which means that we can't serialize anything with alignment higher than that.
-    std.debug.assert(alignment <= SERIALIZATION_ALIGNMENT);
+    std.debug.assert(alignment <= SERIALIZATION_ALIGNMENT.toByteUnits());
 
     // Pad up front to the alignment of T
     try self.padToAlignment(allocator, alignment);
 
-    // Allocate a single item of type T
-    const items = try allocator.alignedAlloc(T, alignment, 1);
+    // Allocate a single item of type T, zeroed for deterministic serialization.
+    const items = try allocator.alignedAlloc(T, std.mem.Alignment.fromByteUnits(alignment), 1);
     const answer = &items[0];
+    @memset(std.mem.asBytes(answer), 0);
 
     // Track the allocated memory for cleanup
     try self.allocated_memory.append(allocator, .{

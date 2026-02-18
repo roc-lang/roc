@@ -76,25 +76,25 @@ The unused variable is declared here:
 
 # TOKENS
 ~~~zig
-KwMatch(1:1-1:6),LowerIdent(1:7-1:14),OpenCurly(1:15-1:16),
-OpenSquare(2:5-2:6),CloseSquare(2:6-2:7),OpFatArrow(2:8-2:10),LowerIdent(2:11-2:14),
-OpenSquare(3:5-3:6),LowerIdent(3:6-3:11),Comma(3:11-3:12),DoubleDot(3:13-3:15),LowerIdent(3:15-3:19),CloseSquare(3:19-3:20),OpFatArrow(3:21-3:23),Int(3:24-3:25),
-CloseCurly(4:1-4:2),
-EndOfFile(5:1-5:1),
+KwMatch,LowerIdent,OpenCurly,
+OpenSquare,CloseSquare,OpFatArrow,LowerIdent,
+OpenSquare,LowerIdent,Comma,DoubleDot,LowerIdent,CloseSquare,OpFatArrow,Int,
+CloseCurly,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
 (e-match
-	(e-ident @1.7-1.14 (raw "numbers"))
+	(e-ident (raw "numbers"))
 	(branches
-		(branch @2.5-2.14
-			(p-list @2.5-2.7)
-			(e-ident @2.11-2.14 (raw "acc")))
-		(branch @3.5-3.25
-			(p-list @3.5-3.20
-				(p-ident @3.6-3.11 (raw "first"))
-				(p-list-rest @3.13-3.19 (name "rest")))
-			(e-int @3.24-3.25 (raw "0")))))
+		(branch
+			(p-list)
+			(e-ident (raw "acc")))
+		(branch
+			(p-list
+				(p-ident (raw "first"))
+				(p-list-rest (name "rest")))
+			(e-int (raw "0")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -105,30 +105,30 @@ match numbers {
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-match @1.1-4.2
-	(match @1.1-4.2
+(e-match
+	(match
 		(cond
 			(e-runtime-error (tag "ident_not_in_scope")))
 		(branches
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-list @2.5-2.7
+						(p-list
 							(patterns))))
 				(value
 					(e-runtime-error (tag "ident_not_in_scope"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-list @3.5-3.20
+						(p-list
 							(patterns
-								(p-assign @3.6-3.11 (ident "first")))
+								(p-assign (ident "first")))
 							(rest-at (index 1)
-								(p-assign @3.15-3.15 (ident "rest"))))))
+								(p-assign (ident "rest"))))))
 				(value
-					(e-num @3.24-3.25 (value "0")))))))
+					(e-num (value "0")))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-4.2 (type "Error"))
+(expr (type "Error"))
 ~~~

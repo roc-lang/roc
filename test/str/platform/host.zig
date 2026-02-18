@@ -18,7 +18,7 @@ const HostEnv = struct {
 };
 
 /// Roc allocation function
-fn rocAllocFn(roc_alloc: *RocAlloc, env: *anyopaque) callconv(.C) void {
+fn rocAllocFn(roc_alloc: *RocAlloc, env: *anyopaque) callconv(.c) void {
     const host: *HostEnv = @ptrCast(@alignCast(env));
     const allocator = host.arena.allocator();
 
@@ -33,21 +33,21 @@ fn rocAllocFn(roc_alloc: *RocAlloc, env: *anyopaque) callconv(.C) void {
 }
 
 /// Roc deallocation function
-fn rocDeallocFn(roc_dealloc: *RocDealloc, env: *anyopaque) callconv(.C) void {
+fn rocDeallocFn(roc_dealloc: *RocDealloc, env: *anyopaque) callconv(.c) void {
     _ = roc_dealloc;
     _ = env;
     // NoOp as our arena frees all memory at once
 }
 
 /// Roc reallocation function
-fn rocReallocFn(roc_realloc: *RocRealloc, env: *anyopaque) callconv(.C) void {
+fn rocReallocFn(roc_realloc: *RocRealloc, env: *anyopaque) callconv(.c) void {
     _ = roc_realloc;
     _ = env;
     @panic("Realloc not implemented in this example");
 }
 
 /// Roc debug function
-fn rocDbgFn(roc_dbg: *const RocDbg, env: *anyopaque) callconv(.C) void {
+fn rocDbgFn(roc_dbg: *const RocDbg, env: *anyopaque) callconv(.c) void {
     const host: *HostEnv = @ptrCast(@alignCast(env));
     const allocator = host.arena.allocator();
 
@@ -58,21 +58,22 @@ fn rocDbgFn(roc_dbg: *const RocDbg, env: *anyopaque) callconv(.C) void {
     };
     defer allocator.free(bytes);
 
-    std.io.getStdErr().writeAll(bytes) catch |err| {
+    std.fs.File.stderr().writeAll(bytes) catch |err| {
         std.log.err("Failed to write debug message to stderr: {s}", .{@errorName(err)});
         return;
     };
 }
 
 /// Roc expect failed function
-fn rocExpectFailedFn(roc_expect: *const RocExpectFailed, env: *anyopaque) callconv(.C) void {
+fn rocExpectFailedFn(roc_expect: *const RocExpectFailed, env: *anyopaque) callconv(.c) void {
     _ = env;
-    const message = roc_expect.utf8_bytes[0..roc_expect.len];
-    std.debug.print("ROC EXPECT FAILED: {s}\n", .{message});
+    const source_bytes = roc_expect.utf8_bytes[0..roc_expect.len];
+    const trimmed = std.mem.trim(u8, source_bytes, " \t\n\r");
+    std.debug.print("Expect failed: {s}\n", .{trimmed});
 }
 
 /// Roc crashed function
-fn rocCrashedFn(roc_crashed: *const RocCrashed, env: *anyopaque) callconv(.C) noreturn {
+fn rocCrashedFn(roc_crashed: *const RocCrashed, env: *anyopaque) callconv(.c) noreturn {
     _ = env;
     const message = roc_crashed.utf8_bytes[0..roc_crashed.len];
     @panic(message);
@@ -80,13 +81,13 @@ fn rocCrashedFn(roc_crashed: *const RocCrashed, env: *anyopaque) callconv(.C) no
 
 // External symbol provided by the Roc runtime object file
 // Follows RocCall ABI: ops, ret_ptr, then argument pointers
-extern fn roc__processString(ops: *RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.C) void;
+extern fn roc__process_string(ops: *RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
 
 // OS-specific entry point handling
 comptime {
     // Export main for all platforms
     @export(&main, .{ .name = "main" });
-    
+
     // Windows MinGW/MSVCRT compatibility: export __main stub
     if (@import("builtin").os.tag == .windows) {
         @export(&__main, .{ .name = "__main" });
@@ -95,14 +96,14 @@ comptime {
 
 // Windows MinGW/MSVCRT compatibility stub
 // The C runtime on Windows calls __main from main for constructor initialization
-fn __main() callconv(.C) void {}
+fn __main() callconv(.c) void {}
 
 // C compatible main for runtime
-fn main(argc: c_int, argv: [*][*:0]u8) callconv(.C) c_int {
+fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
     _ = argc;
     _ = argv;
     platform_main() catch |err| {
-        std.io.getStdErr().writer().print("HOST ERROR: {?}", .{err}) catch unreachable;
+        std.fs.File.stderr().deprecatedWriter().print("HOST ERROR: {s}", .{@errorName(err)}) catch unreachable;
         return 1;
     };
     return 0;
@@ -116,7 +117,7 @@ fn platform_main() !void {
     };
     defer host_env.arena.deinit(); // Clean up all allocations on exit
 
-    const stdout = std.io.getStdOut().writer();
+    const stdout = std.fs.File.stdout().deprecatedWriter();
 
     // Create the RocOps struct
     var roc_ops = RocOps{
@@ -127,7 +128,7 @@ fn platform_main() !void {
         .roc_dbg = rocDbgFn,
         .roc_expect_failed = rocExpectFailedFn,
         .roc_crashed = rocCrashedFn,
-        .host_fns = undefined, // No host functions for this simple example
+        .hosted_fns = .{ .count = 0, .fns = undefined }, // No host functions for this simple example
     };
 
     // Create the input string for the Roc function (if it's a function)
@@ -142,7 +143,7 @@ fn platform_main() !void {
 
     // Call the Roc entrypoint - pass argument pointer for functions, null for values
     var roc_str: RocStr = undefined;
-    roc__processString(&roc_ops, @as(*anyopaque, @ptrCast(&roc_str)), @as(*anyopaque, @ptrCast(&args)));
+    roc__process_string(&roc_ops, @as(*anyopaque, @ptrCast(&roc_str)), @as(*anyopaque, @ptrCast(&args)));
     defer roc_str.decref(&roc_ops);
 
     // Get the string as a slice and print it
@@ -155,5 +156,6 @@ fn platform_main() !void {
         try stdout.print("\n\x1b[32mSUCCESS\x1b[0m: Result contains expected substring!\n", .{});
     } else {
         try stdout.print("\n\x1b[31mFAIL\x1b[0m: Result does not contain expected substring!\n", .{});
+        return error.TestFailed;
     }
 }

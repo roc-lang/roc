@@ -38,15 +38,15 @@ modu
 
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:5),
-EndOfFile(2:1-2:1),
+LowerIdent,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-1.5
-	(type-module @1.1-1.5)
+(file
+	(type-module)
 	(statements
-		(s-malformed @1.1-1.5 (tag "statement_unexpected_token"))))
+		(s-malformed (tag "statement_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc

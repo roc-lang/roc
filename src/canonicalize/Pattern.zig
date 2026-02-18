@@ -16,20 +16,15 @@
 
 const std = @import("std");
 const base = @import("base");
-const types = @import("types");
 const builtins = @import("builtins");
-const collections = @import("collections");
 
 const ModuleEnv = @import("ModuleEnv.zig");
 const Diagnostic = @import("Diagnostic.zig");
 const CIR = @import("CIR.zig");
-const Region = base.Region;
 const StringLiteral = base.StringLiteral;
 const Ident = base.Ident;
 const DataSpan = base.DataSpan;
-const SExpr = base.SExpr;
 const SExprTree = base.SExprTree;
-const TypeVar = types.Var;
 const RocDec = builtins.dec.RocDec;
 
 /// A pattern, including possible problems (e.g. shadowing) so that
@@ -66,7 +61,7 @@ pub const Pattern = union(enum) {
     /// Used for pattern matching nominal types.
     ///
     /// ```roc
-    /// Result.Ok("success")       # Tags
+    /// Try.Ok("success")       # Tags
     /// Config.{ optimize : Bool}  # Records
     /// Point.(1.0, 2.0)           # Tuples
     /// Point.(1.0)                # Values
@@ -80,7 +75,7 @@ pub const Pattern = union(enum) {
     /// Used for pattern matching nominal types.
     ///
     /// ```roc
-    /// MyModule.Result.Ok("success")       # Tags
+    /// MyModule.Try.Ok("success")       # Tags
     /// MyModule.Config.{ optimize : Bool}  # Records
     /// MyModule.Point.(1.0, 2.0)           # Tuples
     /// MyModule.Point.(1.0)                # Values
@@ -231,7 +226,7 @@ pub const Pattern = union(enum) {
     },
 
     pub const Idx = enum(u32) { _ };
-    pub const Span = struct { span: base.DataSpan };
+    pub const Span = extern struct { span: base.DataSpan };
 
     /// Represents the destructuring of a single field within a record pattern.
     /// Each record destructure specifies how to extract a field from a record.
@@ -247,7 +242,7 @@ pub const Pattern = union(enum) {
         kind: Kind,
 
         pub const Idx = enum(u32) { _ };
-        pub const Span = struct { span: base.DataSpan };
+        pub const Span = extern struct { span: base.DataSpan };
 
         /// The kind of record field destructuring pattern.
         pub const Kind = union(enum) {
@@ -352,15 +347,19 @@ pub const Pattern = union(enum) {
                 try tree.pushStaticAtom("p-nominal-external");
                 try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
 
-                // Add module index
-                var buf: [32]u8 = undefined;
-                const module_idx_str = std.fmt.bufPrint(&buf, "{}", .{@intFromEnum(n.module_idx)}) catch unreachable;
-                try tree.pushStringPair("module-idx", module_idx_str);
-
-                // Add target node index
-                var buf2: [32]u8 = undefined;
-                const target_idx_str = std.fmt.bufPrint(&buf2, "{}", .{n.target_node_idx}) catch unreachable;
-                try tree.pushStringPair("target-node-idx", target_idx_str);
+                const module_idx_int = @intFromEnum(n.module_idx);
+                std.debug.assert(module_idx_int < ir.imports.imports.items.items.len);
+                const string_lit_idx = ir.imports.imports.items.items[module_idx_int];
+                const module_name = ir.common.strings.get(string_lit_idx);
+                // Special case: Builtin module is an implementation detail, print as (builtin)
+                if (std.mem.eql(u8, module_name, "Builtin")) {
+                    const field_begin = tree.beginNode();
+                    try tree.pushStaticAtom("builtin");
+                    const field_attrs = tree.beginNode();
+                    try tree.endNode(field_begin, field_attrs);
+                } else {
+                    try tree.pushStringPair("external-module", module_name);
+                }
 
                 const attrs = tree.beginNode();
                 try ir.store.getPattern(n.backing_pattern).pushToSExprTree(ir, tree, n.backing_pattern);
@@ -464,8 +463,8 @@ pub const Pattern = union(enum) {
                 try tree.pushStaticAtom("p-frac-f32");
                 try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
 
-                var value_buf: [40]u8 = undefined;
-                const value_str = std.fmt.bufPrint(&value_buf, "{}", .{p.value}) catch "fmt_error";
+                var value_buf: [400]u8 = undefined;
+                const value_str = builtins.compiler_rt_128.f32_to_str(&value_buf, p.value);
                 try tree.pushStringPair("value", value_str);
 
                 const attrs = tree.beginNode();
@@ -476,8 +475,8 @@ pub const Pattern = union(enum) {
                 try tree.pushStaticAtom("p-frac-f64");
                 try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
 
-                var value_buf: [40]u8 = undefined;
-                const value_str = std.fmt.bufPrint(&value_buf, "{}", .{p.value}) catch "fmt_error";
+                var value_buf: [400]u8 = undefined;
+                const value_str = builtins.compiler_rt_128.f64_to_str(&value_buf, p.value);
                 try tree.pushStringPair("value", value_str);
 
                 const attrs = tree.beginNode();

@@ -38,21 +38,21 @@ The unused variable is declared here:
 
 # TOKENS
 ~~~zig
-KwMatch(1:1-1:6),LowerIdent(1:7-1:13),OpenCurly(1:14-1:15),
-OpenCurly(2:5-2:6),LowerIdent(2:7-2:11),Comma(2:11-2:12),LowerIdent(2:13-2:16),CloseCurly(2:17-2:18),OpFatArrow(2:19-2:21),LowerIdent(2:22-2:26),
-CloseCurly(3:1-3:2),
-EndOfFile(4:1-4:1),
+KwMatch,LowerIdent,OpenCurly,
+OpenCurly,LowerIdent,Comma,LowerIdent,CloseCurly,OpFatArrow,LowerIdent,
+CloseCurly,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
 (e-match
-	(e-ident @1.7-1.13 (raw "person"))
+	(e-ident (raw "person"))
 	(branches
-		(branch @2.5-2.26
-			(p-record @2.5-2.18
-				(field @2.7-2.11 (name "name") (rest false))
-				(field @2.13-2.16 (name "age") (rest false)))
-			(e-ident @2.22-2.26 (raw "name")))))
+		(branch
+			(p-record
+				(field (name "name") (rest false))
+				(field (name "age") (rest false)))
+			(e-ident (raw "name")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -62,27 +62,27 @@ match person {
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-match @1.1-3.2
-	(match @1.1-3.2
+(e-match
+	(match
 		(cond
 			(e-runtime-error (tag "ident_not_in_scope")))
 		(branches
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-record-destructure @2.5-2.18
+						(p-record-destructure
 							(destructs
-								(record-destruct @2.7-2.11 (label "name") (ident "name")
+								(record-destruct (label "name") (ident "name")
 									(required
-										(p-assign @2.7-2.11 (ident "name"))))
-								(record-destruct @2.13-2.16 (label "age") (ident "age")
+										(p-assign (ident "name"))))
+								(record-destruct (label "age") (ident "age")
 									(required
-										(p-assign @2.13-2.16 (ident "age"))))))))
+										(p-assign (ident "age"))))))))
 				(value
-					(e-lookup-local @2.22-2.26
-						(p-assign @2.7-2.11 (ident "name"))))))))
+					(e-lookup-local
+						(p-assign (ident "name"))))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-3.2 (type "_a"))
+(expr (type "_a"))
 ~~~

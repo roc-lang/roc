@@ -11,38 +11,103 @@ some_fn(arg1)?
 	.record_field?
 ~~~
 # EXPECTED
-NOT IMPLEMENTED - :0:0:0:0
+UNDEFINED VARIABLE - record_access_multiline_formatting_1.md:1:1:1:8
+UNDEFINED VARIABLE - record_access_multiline_formatting_1.md:1:9:1:13
+TRY OPERATOR OUTSIDE FUNCTION - record_access_multiline_formatting_1.md:1:1:1:15
+TRY OPERATOR OUTSIDE FUNCTION - record_access_multiline_formatting_1.md:1:1:2:28
+TRY OPERATOR OUTSIDE FUNCTION - record_access_multiline_formatting_1.md:1:1:3:33
+TRY OPERATOR OUTSIDE FUNCTION - record_access_multiline_formatting_1.md:1:1:4:16
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize suffix_single_question expression
+**UNDEFINED VARIABLE**
+Nothing is named `some_fn` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+**record_access_multiline_formatting_1.md:1:1:1:8:**
+```roc
+some_fn(arg1)?
+```
+^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `arg1` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**record_access_multiline_formatting_1.md:1:9:1:13:**
+```roc
+some_fn(arg1)?
+```
+        ^^^^
+
+
+**TRY OPERATOR OUTSIDE FUNCTION**
+The `?` operator can only be used inside function bodies because it can cause an early return.
+
+**record_access_multiline_formatting_1.md:1:1:1:15:**
+```roc
+some_fn(arg1)?
+```
+^^^^^^^^^^^^^^
+
+
+**TRY OPERATOR OUTSIDE FUNCTION**
+The `?` operator can only be used inside function bodies because it can cause an early return.
+
+**record_access_multiline_formatting_1.md:1:1:2:28:**
+```roc
+some_fn(arg1)?
+	.static_dispatch_method()?
+```
+
+
+**TRY OPERATOR OUTSIDE FUNCTION**
+The `?` operator can only be used inside function bodies because it can cause an early return.
+
+**record_access_multiline_formatting_1.md:1:1:3:33:**
+```roc
+some_fn(arg1)?
+	.static_dispatch_method()?
+	.next_static_dispatch_method()?
+```
+
+
+**TRY OPERATOR OUTSIDE FUNCTION**
+The `?` operator can only be used inside function bodies because it can cause an early return.
+
+**record_access_multiline_formatting_1.md:1:1:4:16:**
+```roc
+some_fn(arg1)?
+	.static_dispatch_method()?
+	.next_static_dispatch_method()?
+	.record_field?
+```
+
 
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:8),NoSpaceOpenRound(1:8-1:9),LowerIdent(1:9-1:13),CloseRound(1:13-1:14),NoSpaceOpQuestion(1:14-1:15),
-DotLowerIdent(2:2-2:25),NoSpaceOpenRound(2:25-2:26),CloseRound(2:26-2:27),NoSpaceOpQuestion(2:27-2:28),
-DotLowerIdent(3:2-3:30),NoSpaceOpenRound(3:30-3:31),CloseRound(3:31-3:32),NoSpaceOpQuestion(3:32-3:33),
-DotLowerIdent(4:2-4:15),NoSpaceOpQuestion(4:15-4:16),
-EndOfFile(5:1-5:1),
+LowerIdent,NoSpaceOpenRound,LowerIdent,CloseRound,NoSpaceOpQuestion,
+DotLowerIdent,NoSpaceOpenRound,CloseRound,NoSpaceOpQuestion,
+DotLowerIdent,NoSpaceOpenRound,CloseRound,NoSpaceOpQuestion,
+DotLowerIdent,NoSpaceOpQuestion,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-field-access @1.1-4.16
-	(e-field-access @1.1-3.33
-		(e-field-access @1.1-2.28
-			(e-question-suffix @1.1-1.15
-				(e-apply @1.1-1.14
-					(e-ident @1.1-1.8 (raw "some_fn"))
-					(e-ident @1.9-1.13 (raw "arg1"))))
-			(e-question-suffix @2.2-2.28
-				(e-apply @2.2-2.27
-					(e-ident @2.2-2.25 (raw ".static_dispatch_method")))))
-		(e-question-suffix @3.2-3.33
-			(e-apply @3.2-3.32
-				(e-ident @3.2-3.30 (raw ".next_static_dispatch_method")))))
-	(e-question-suffix @4.2-4.16
-		(e-ident @4.2-4.15 (raw ".record_field"))))
+(e-question-suffix
+	(e-field-access
+		(e-question-suffix
+			(e-field-access
+				(e-question-suffix
+					(e-field-access
+						(e-question-suffix
+							(e-apply
+								(e-ident (raw "some_fn"))
+								(e-ident (raw "arg1"))))
+						(e-apply
+							(e-ident (raw ".static_dispatch_method")))))
+				(e-apply
+					(e-ident (raw ".next_static_dispatch_method")))))
+		(e-ident (raw ".record_field"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -50,15 +115,95 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-dot-access @1.1-4.16 (field "unknown")
-	(receiver
-		(e-dot-access @1.1-3.33 (field "unknown")
-			(receiver
-				(e-dot-access @1.1-2.28 (field "unknown")
-					(receiver
-						(e-runtime-error (tag "not_implemented"))))))))
+(e-match
+	(match
+		(cond
+			(e-dot-access (field "record_field")
+				(receiver
+					(e-match
+						(match
+							(cond
+								(e-dot-access (field "next_static_dispatch_method")
+									(receiver
+										(e-match
+											(match
+												(cond
+													(e-dot-access (field "static_dispatch_method")
+														(receiver
+															(e-match
+																(match
+																	(cond
+																		(e-call
+																			(e-runtime-error (tag "ident_not_in_scope"))
+																			(e-runtime-error (tag "ident_not_in_scope"))))
+																	(branches
+																		(branch
+																			(patterns
+																				(pattern (degenerate false)
+																					(p-nominal-external (builtin)
+																						(p-applied-tag))))
+																			(value
+																				(e-lookup-local
+																					(p-assign (ident "#ok")))))
+																		(branch
+																			(patterns
+																				(pattern (degenerate false)
+																					(p-nominal-external (builtin)
+																						(p-applied-tag))))
+																			(value
+																				(e-runtime-error (tag "return_outside_fn"))))))))
+														(args)))
+												(branches
+													(branch
+														(patterns
+															(pattern (degenerate false)
+																(p-nominal-external (builtin)
+																	(p-applied-tag))))
+														(value
+															(e-lookup-local
+																(p-assign (ident "#ok")))))
+													(branch
+														(patterns
+															(pattern (degenerate false)
+																(p-nominal-external (builtin)
+																	(p-applied-tag))))
+														(value
+															(e-runtime-error (tag "return_outside_fn"))))))))
+									(args)))
+							(branches
+								(branch
+									(patterns
+										(pattern (degenerate false)
+											(p-nominal-external (builtin)
+												(p-applied-tag))))
+									(value
+										(e-lookup-local
+											(p-assign (ident "#ok")))))
+								(branch
+									(patterns
+										(pattern (degenerate false)
+											(p-nominal-external (builtin)
+												(p-applied-tag))))
+									(value
+										(e-runtime-error (tag "return_outside_fn"))))))))))
+		(branches
+			(branch
+				(patterns
+					(pattern (degenerate false)
+						(p-nominal-external (builtin)
+							(p-applied-tag))))
+				(value
+					(e-lookup-local
+						(p-assign (ident "#ok")))))
+			(branch
+				(patterns
+					(pattern (degenerate false)
+						(p-nominal-external (builtin)
+							(p-applied-tag))))
+				(value
+					(e-runtime-error (tag "return_outside_fn")))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-4.16 (type "_a"))
+(expr (type "Error"))
 ~~~

@@ -35,18 +35,17 @@ This is an unexpected parsing error. Please check your syntax.
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:7-1:8),CloseCurly(1:8-1:9),OpenCurly(1:9-1:10),Int(1:10-1:11),Int(1:17-1:18),CloseRound(1:18-1:19),NoSpaceOpenRound(1:19-1:20),Int(1:20-1:21),CloseCurly(1:21-1:22),
-EndOfFile(2:1-2:1),
+KwModule,OpenSquare,CloseCurly,OpenCurly,Int,Int,CloseRound,NoSpaceOpenRound,Int,CloseCurly,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-1.22
-	(malformed-header @1.1-1.1 (tag "header_expected_close_square"))
+(file
+	(malformed-header (tag "header_expected_close_square"))
 	(statements))
 ~~~
 # FORMATTED
 ~~~roc
-
 ~~~
 # CANONICALIZE
 ~~~clojure

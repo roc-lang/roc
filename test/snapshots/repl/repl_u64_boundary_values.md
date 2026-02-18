@@ -1,0 +1,19 @@
+# META
+~~~ini
+description=u64 values at boundaries to verify unsigned handling
+type=repl
+~~~
+# SOURCE
+~~~roc
+» 9223372036854775807.U64
+» 9223372036854775808.U64
+» 18446744073709551615.U64
+~~~
+# OUTPUT
+9223372036854775807
+---
+9223372036854775808
+---
+18446744073709551615
+# PROBLEMS
+NIL

@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Boolean values (True/False) should not display type annotations in REPL
+description=The two structural tags that unify with Bool (True and False) should not display type annotations in REPL
 type=repl
 ~~~
 # SOURCE

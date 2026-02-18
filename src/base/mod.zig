@@ -11,17 +11,22 @@ pub const parallel = @import("parallel.zig");
 pub const SmallStringInterner = @import("SmallStringInterner.zig");
 
 pub const safe_memory = @import("safe_memory.zig");
+pub const stack_overflow = @import("stack_overflow.zig");
 
 pub const target = @import("target.zig");
-pub const DataSpan = @import("DataSpan.zig");
+pub const DataSpan = @import("DataSpan.zig").DataSpan;
 pub const PackedDataSpan = @import("PackedDataSpan.zig").PackedDataSpan;
 pub const FunctionArgs = @import("PackedDataSpan.zig").FunctionArgs;
 pub const SmallCollections = @import("PackedDataSpan.zig").SmallCollections;
 
 pub const CommonEnv = @import("CommonEnv.zig");
+pub const source_utils = @import("source_utils.zig");
+pub const module_path = @import("module_path.zig");
+pub const url = @import("url.zig");
 
 test {
     _ = @import("Ident.zig");
+    _ = @import("module_path.zig");
 }
 
 /// Whether a function calls itself.
@@ -46,14 +51,14 @@ pub const CalledVia = enum {
     string_interpolation,
     /// This call is the result of desugaring a map2-based Record Builder field. e.g.
     /// ```roc
-    /// { Result.parallel <-
+    /// { Try.parallel <-
     ///     foo: get("a"),
     ///     bar: get("b"),
     /// }
     /// ```
     /// is transformed into
     /// ```roc
-    /// Result.parallel(get("a"), get("b"), (|foo, bar | { foo, bar }))
+    /// Try.parallel(get("a"), get("b"), (|foo, bar | { foo, bar }))
     /// ```
     record_builder,
 };
@@ -92,9 +97,58 @@ pub const FracLiteral = union(enum) {
 };
 
 /// An integer or fractional number literal.
-pub const NumLiteral = union(enum) {
+pub const Numeral = union(enum) {
     Int: IntLiteral,
     Frac: FracLiteral,
+};
+
+/// The core allocators for the lifetime of a roc program.
+///
+/// This structure should be used to pass allocators to most functions in Roc.
+/// Data structures should anchor to a generic allocator instead (alloc: Allocator).
+/// It is up to the instanciator of the data structure to pick what it will use.
+/// Generally speaking though, data structures can realloc and will use the gpa.
+///
+/// IMPORTANT: After initialization, Allocators must always be passed by pointer (*Allocators),
+/// never by value. Passing by value will invalidate the arena allocator pointer!
+pub const Allocators = struct {
+    /// The gpa is the general purpose allocator. Anything allocated with the gpa must be freed.
+    /// the gpa should generally be used for large allocations and things that might get reallocated.
+    /// It is best to avoid allocating small or short lived things with the gpa.
+    gpa: std.mem.Allocator,
+
+    /// The arena is an arena allocator that is around for the entire roc compilation.
+    /// The arena should be used for small and miscellaneous allocations.
+    /// Things allocated in arena are expected to never be freed individually.
+    ///
+    /// IMPORTANT: This field contains a pointer to arena_impl. The struct must not be
+    /// moved after initialization, or this pointer will be invalidated.
+    arena: std.mem.Allocator,
+
+    /// The underlying arena allocator implementation (stored to enable deinit)
+    arena_impl: std.heap.ArenaAllocator,
+
+    // TODO: consider if we want to add scratch. It would be an arena reset between each compilation phase.
+    // scratch: ?std.mem.Allocator,
+
+    /// Initialize the Allocators in-place with a general purpose allocator.
+    ///
+    /// IMPORTANT: This struct must be initialized in its final memory location.
+    /// After calling initInPlace(), the struct must only be passed by pointer (*Allocators),
+    /// never by value, or the arena allocator pointer will be invalidated.
+    pub fn initInPlace(self: *Allocators, gpa: std.mem.Allocator) void {
+        self.* = .{
+            .gpa = gpa,
+            .arena = undefined,
+            .arena_impl = std.heap.ArenaAllocator.init(gpa),
+        };
+        self.arena = self.arena_impl.allocator();
+    }
+
+    /// Deinitialize the arena allocator.
+    pub fn deinit(self: *Allocators) void {
+        self.arena_impl.deinit();
+    }
 };
 
 test "base tests" {
@@ -109,6 +163,9 @@ test "base tests" {
     std.testing.refAllDecls(@import("Scratch.zig"));
     std.testing.refAllDecls(@import("SExprTree.zig"));
     std.testing.refAllDecls(@import("SmallStringInterner.zig"));
+    std.testing.refAllDecls(@import("source_utils.zig"));
+    std.testing.refAllDecls(@import("stack_overflow.zig"));
     std.testing.refAllDecls(@import("StringLiteral.zig"));
     std.testing.refAllDecls(@import("target.zig"));
+    std.testing.refAllDecls(@import("url.zig"));
 }

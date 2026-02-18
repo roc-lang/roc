@@ -1,10 +1,17 @@
 //! Parallel processing utilities and thread management for the Roc compiler.
 //!
 //! (Currently only used in the snapshot tool)
+//!
+//! For wasm32-freestanding: Threading is not available, so multi-threaded
+//! processing falls back to single-threaded execution.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
-const Thread = std.Thread;
+
+// Threading is not available on freestanding targets
+const is_freestanding = builtin.os.tag == .freestanding;
+const Thread = if (is_freestanding) void else std.Thread;
 
 /// Atomic type for thread-safe usize operations
 pub const AtomicUsize = std.atomic.Value(usize);
@@ -90,7 +97,10 @@ pub fn process(
         return;
     }
 
-    if (options.max_threads == 1) {
+    // For freestanding targets, always use single-threaded processing
+    const effective_max_threads = if (is_freestanding) 1 else options.max_threads;
+
+    if (effective_max_threads == 1) {
         // Process everything in main thread
         var index = AtomicUsize.init(0);
         const ctx = WorkerContext(T){
@@ -103,18 +113,23 @@ pub fn process(
         };
         workerThread(T, ctx);
     } else {
+        // Multi-threaded path (only available on non-freestanding targets)
+        if (comptime is_freestanding) {
+            unreachable; // Should not reach here due to effective_max_threads check above
+        }
+
         const thread_count = @min(
-            if (options.max_threads == 0) std.Thread.getCpuCount() catch 1 else options.max_threads,
+            if (effective_max_threads == 0) std.Thread.getCpuCount() catch 1 else effective_max_threads,
             work_item_count,
         );
 
         var index = AtomicUsize.init(0);
         const fixed_stack_thread_count: usize = 16;
         var threads: [fixed_stack_thread_count]Thread = undefined;
-        var extra_threads: std.ArrayList(Thread) = undefined;
+        var extra_threads: std.array_list.Managed(Thread) = undefined;
 
         if (thread_count > fixed_stack_thread_count) {
-            extra_threads = std.ArrayList(Thread).init(allocator);
+            extra_threads = std.array_list.Managed(Thread).init(allocator);
         }
 
         // Start worker threads

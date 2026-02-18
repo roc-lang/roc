@@ -7,88 +7,188 @@ type=file
 ~~~roc
 app [main!] { pf: platform "../basic-cli/main.roc" }
 
-outer : a -> a
-outer = |x| {
-    inner : b -> b
-    inner = |y| y
+test_scoped : a, b -> a
+test_scoped = |a, b| {
+		# Beacuse we introduce `a` at an outer rank and `f` references `a`,
+		# `f` is _not_ generalized
+    f : a -> a
+    f = |z| z
 
-    inner(x)
+		# Because this as no annotation, it is generalized
+    g = |z| z
+
+		# No err because we correctly provide `a` as the arg
+		result : a
+		result = f(a)
+
+		# Err because we incorrectly provide `b` as the arg
+		_result2 : b
+		_result2 = f(b)
+
+		# No err because `f` is generalized
+		_result3 : a
+		_result3 = g(a)
+
+		# No err because `f` is generalized
+		_result4 : b
+		_result4 = g(b)
+
+		result
 }
 
 main! = |_| {}
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - type_local_scope_vars.md:19:14:19:14
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+The first argument being passed to this function has the wrong type:
+**type_local_scope_vars.md:19:14:**
+```roc
+		_result2 = f(b)
+```
+               ^
+
+This argument has the type:
+
+    b
+
+But `f` needs the first argument to be:
+
+    a
+
 # TOKENS
 ~~~zig
-KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),
-LowerIdent(3:1-3:6),OpColon(3:7-3:8),LowerIdent(3:9-3:10),OpArrow(3:11-3:13),LowerIdent(3:14-3:15),
-LowerIdent(4:1-4:6),OpAssign(4:7-4:8),OpBar(4:9-4:10),LowerIdent(4:10-4:11),OpBar(4:11-4:12),OpenCurly(4:13-4:14),
-LowerIdent(5:5-5:10),OpColon(5:11-5:12),LowerIdent(5:13-5:14),OpArrow(5:15-5:17),LowerIdent(5:18-5:19),
-LowerIdent(6:5-6:10),OpAssign(6:11-6:12),OpBar(6:13-6:14),LowerIdent(6:14-6:15),OpBar(6:15-6:16),LowerIdent(6:17-6:18),
-LowerIdent(8:5-8:10),NoSpaceOpenRound(8:10-8:11),LowerIdent(8:11-8:12),CloseRound(8:12-8:13),
-CloseCurly(9:1-9:2),
-LowerIdent(11:1-11:6),OpAssign(11:7-11:8),OpBar(11:9-11:10),Underscore(11:10-11:11),OpBar(11:11-11:12),OpenCurly(11:13-11:14),CloseCurly(11:14-11:15),
-EndOfFile(12:1-12:1),
+KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
+LowerIdent,OpColon,LowerIdent,Comma,LowerIdent,OpArrow,LowerIdent,
+LowerIdent,OpAssign,OpBar,LowerIdent,Comma,LowerIdent,OpBar,OpenCurly,
+LowerIdent,OpColon,LowerIdent,OpArrow,LowerIdent,
+LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,LowerIdent,
+LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,LowerIdent,
+LowerIdent,OpColon,LowerIdent,
+LowerIdent,OpAssign,LowerIdent,NoSpaceOpenRound,LowerIdent,CloseRound,
+NamedUnderscore,OpColon,LowerIdent,
+NamedUnderscore,OpAssign,LowerIdent,NoSpaceOpenRound,LowerIdent,CloseRound,
+NamedUnderscore,OpColon,LowerIdent,
+NamedUnderscore,OpAssign,LowerIdent,NoSpaceOpenRound,LowerIdent,CloseRound,
+NamedUnderscore,OpColon,LowerIdent,
+NamedUnderscore,OpAssign,LowerIdent,NoSpaceOpenRound,LowerIdent,CloseRound,
+LowerIdent,
+CloseCurly,
+LowerIdent,OpAssign,OpBar,Underscore,OpBar,OpenCurly,CloseCurly,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-11.15
-	(app @1.1-1.53
-		(provides @1.5-1.12
-			(exposed-lower-ident @1.6-1.11
+(file
+	(app
+		(provides
+			(exposed-lower-ident
 				(text "main!")))
-		(record-field @1.15-1.51 (name "pf")
-			(e-string @1.28-1.51
-				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
-		(packages @1.13-1.53
-			(record-field @1.15-1.51 (name "pf")
-				(e-string @1.28-1.51
-					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
+		(record-field (name "pf")
+			(e-string
+				(e-string-part (raw "../basic-cli/main.roc"))))
+		(packages
+			(record-field (name "pf")
+				(e-string
+					(e-string-part (raw "../basic-cli/main.roc"))))))
 	(statements
-		(s-type-anno @3.1-3.15 (name "outer")
-			(ty-fn @3.9-3.15
-				(ty-var @3.9-3.10 (raw "a"))
-				(ty-var @3.14-3.15 (raw "a"))))
-		(s-decl @4.1-9.2
-			(p-ident @4.1-4.6 (raw "outer"))
-			(e-lambda @4.9-9.2
+		(s-type-anno (name "test_scoped")
+			(ty-fn
+				(ty-var (raw "a"))
+				(ty-var (raw "b"))
+				(ty-var (raw "a"))))
+		(s-decl
+			(p-ident (raw "test_scoped"))
+			(e-lambda
 				(args
-					(p-ident @4.10-4.11 (raw "x")))
-				(e-block @4.13-9.2
+					(p-ident (raw "a"))
+					(p-ident (raw "b")))
+				(e-block
 					(statements
-						(s-type-anno @5.5-5.19 (name "inner")
-							(ty-fn @5.13-5.19
-								(ty-var @5.13-5.14 (raw "b"))
-								(ty-var @5.18-5.19 (raw "b"))))
-						(s-decl @6.5-6.18
-							(p-ident @6.5-6.10 (raw "inner"))
-							(e-lambda @6.13-6.18
+						(s-type-anno (name "f")
+							(ty-fn
+								(ty-var (raw "a"))
+								(ty-var (raw "a"))))
+						(s-decl
+							(p-ident (raw "f"))
+							(e-lambda
 								(args
-									(p-ident @6.14-6.15 (raw "y")))
-								(e-ident @6.17-6.18 (raw "y"))))
-						(e-apply @8.5-8.13
-							(e-ident @8.5-8.10 (raw "inner"))
-							(e-ident @8.11-8.12 (raw "x")))))))
-		(s-decl @11.1-11.15
-			(p-ident @11.1-11.6 (raw "main!"))
-			(e-lambda @11.9-11.15
+									(p-ident (raw "z")))
+								(e-ident (raw "z"))))
+						(s-decl
+							(p-ident (raw "g"))
+							(e-lambda
+								(args
+									(p-ident (raw "z")))
+								(e-ident (raw "z"))))
+						(s-type-anno (name "result")
+							(ty-var (raw "a")))
+						(s-decl
+							(p-ident (raw "result"))
+							(e-apply
+								(e-ident (raw "f"))
+								(e-ident (raw "a"))))
+						(s-type-anno (name "_result2")
+							(ty-var (raw "b")))
+						(s-decl
+							(p-ident (raw "_result2"))
+							(e-apply
+								(e-ident (raw "f"))
+								(e-ident (raw "b"))))
+						(s-type-anno (name "_result3")
+							(ty-var (raw "a")))
+						(s-decl
+							(p-ident (raw "_result3"))
+							(e-apply
+								(e-ident (raw "g"))
+								(e-ident (raw "a"))))
+						(s-type-anno (name "_result4")
+							(ty-var (raw "b")))
+						(s-decl
+							(p-ident (raw "_result4"))
+							(e-apply
+								(e-ident (raw "g"))
+								(e-ident (raw "b"))))
+						(e-ident (raw "result"))))))
+		(s-decl
+			(p-ident (raw "main!"))
+			(e-lambda
 				(args
 					(p-underscore))
-				(e-record @11.13-11.15)))))
+				(e-record)))))
 ~~~
 # FORMATTED
 ~~~roc
 app [main!] { pf: platform "../basic-cli/main.roc" }
 
-outer : a -> a
-outer = |x| {
-	inner : b -> b
-	inner = |y| y
+test_scoped : a, b -> a
+test_scoped = |a, b| {
+	# Beacuse we introduce `a` at an outer rank and `f` references `a`,
+	# `f` is _not_ generalized
+	f : a -> a
+	f = |z| z
 
-	inner(x)
+	# Because this as no annotation, it is generalized
+	g = |z| z
+
+	# No err because we correctly provide `a` as the arg
+	result : a
+	result = f(a)
+
+	# Err because we incorrectly provide `b` as the arg
+	_result2 : b
+	_result2 = f(b)
+
+	# No err because `f` is generalized
+	_result3 : a
+	_result3 = g(a)
+
+	# No err because `f` is generalized
+	_result4 : b
+	_result4 = g(b)
+
+	result
 }
 
 main! = |_| {}
@@ -97,42 +197,75 @@ main! = |_| {}
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @4.1-4.6 (ident "outer"))
-		(e-lambda @4.9-9.2
+		(p-assign (ident "test_scoped"))
+		(e-lambda
 			(args
-				(p-assign @4.10-4.11 (ident "x")))
-			(e-block @4.13-9.2
-				(s-let @6.5-6.18
-					(p-assign @6.5-6.10 (ident "inner"))
-					(e-lambda @6.13-6.18
+				(p-assign (ident "a"))
+				(p-assign (ident "b")))
+			(e-block
+				(s-let
+					(p-assign (ident "f"))
+					(e-lambda
 						(args
-							(p-assign @6.14-6.15 (ident "y")))
-						(e-lookup-local @6.17-6.18
-							(p-assign @6.14-6.15 (ident "y")))))
-				(e-call @8.5-8.13
-					(e-lookup-local @8.5-8.10
-						(p-assign @6.5-6.10 (ident "inner")))
-					(e-lookup-local @8.11-8.12
-						(p-assign @4.10-4.11 (ident "x"))))))
-		(annotation @4.1-4.6
-			(declared-type
-				(ty-fn @3.9-3.15 (effectful false)
-					(ty-rigid-var @3.9-3.10 (name "a"))
-					(ty-rigid-var-lookup (ty-rigid-var @3.9-3.10 (name "a")))))))
+							(p-assign (ident "z")))
+						(e-lookup-local
+							(p-assign (ident "z")))))
+				(s-let
+					(p-assign (ident "g"))
+					(e-lambda
+						(args
+							(p-assign (ident "z")))
+						(e-lookup-local
+							(p-assign (ident "z")))))
+				(s-let
+					(p-assign (ident "result"))
+					(e-call
+						(e-lookup-local
+							(p-assign (ident "f")))
+						(e-lookup-local
+							(p-assign (ident "a")))))
+				(s-let
+					(p-assign (ident "_result2"))
+					(e-call
+						(e-lookup-local
+							(p-assign (ident "f")))
+						(e-lookup-local
+							(p-assign (ident "b")))))
+				(s-let
+					(p-assign (ident "_result3"))
+					(e-call
+						(e-lookup-local
+							(p-assign (ident "g")))
+						(e-lookup-local
+							(p-assign (ident "a")))))
+				(s-let
+					(p-assign (ident "_result4"))
+					(e-call
+						(e-lookup-local
+							(p-assign (ident "g")))
+						(e-lookup-local
+							(p-assign (ident "b")))))
+				(e-lookup-local
+					(p-assign (ident "result")))))
+		(annotation
+			(ty-fn (effectful false)
+				(ty-rigid-var (name "a"))
+				(ty-rigid-var (name "b"))
+				(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))
 	(d-let
-		(p-assign @11.1-11.6 (ident "main!"))
-		(e-lambda @11.9-11.15
+		(p-assign (ident "main!"))
+		(e-lambda
 			(args
-				(p-underscore @11.10-11.11))
-			(e-empty_record @11.13-11.15))))
+				(p-underscore))
+			(e-empty_record))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.6 (type "a -> a"))
-		(patt @11.1-11.6 (type "_arg -> {}")))
+		(patt (type "a, b -> a"))
+		(patt (type "_arg -> {}")))
 	(expressions
-		(expr @4.9-9.2 (type "a -> a"))
-		(expr @11.9-11.15 (type "_arg -> {}"))))
+		(expr (type "a, b -> a"))
+		(expr (type "_arg -> {}"))))
 ~~~

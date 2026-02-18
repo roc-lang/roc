@@ -9,7 +9,7 @@
 - [**faq**: frequently asked questions](https://www.roc-lang.org/faq)
 - [**group chat**](https://roc.zulipchat.com) for help, questions and discussions
 
-If you'd like to contribute, [get started here](CONTRIBUTING.md). Don't hesitate to ask for help on our [group chat](https://roc.zulipchat.com), we're friendly!
+If you'd like to contribute, [get started here](CONTRIBUTING/README.md). Don't hesitate to ask for help on our [group chat](https://roc.zulipchat.com), we're friendly!
 
 ## Sponsors
 

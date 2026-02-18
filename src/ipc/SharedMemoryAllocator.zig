@@ -30,7 +30,6 @@
 //! low-level platform operations are abstracted in `src/ipc/platform.zig`.
 
 const std = @import("std");
-const builtin = @import("builtin");
 const platform = @import("platform.zig");
 const coordination = @import("coordination.zig");
 
@@ -77,6 +76,22 @@ pub fn create(size: usize, page_size: usize) !SharedMemoryAllocator {
     // Map the memory
     const base_ptr = try platform.mapMemory(handle, aligned_size, platform.SHARED_MEMORY_BASE_ADDR);
     errdefer platform.unmapMemory(base_ptr, aligned_size);
+
+    // On Windows with SEC_RESERVE, we must commit pages before accessing them.
+    // Commit the first page for the header before we write to it.
+    if (comptime platform.is_windows) {
+        const commit_result = platform.windows.VirtualAlloc(
+            base_ptr,
+            @sizeOf(Header),
+            platform.windows.MEM_COMMIT,
+            platform.windows.PAGE_READWRITE,
+        );
+        if (commit_result == null) {
+            platform.unmapMemory(base_ptr, aligned_size);
+            platform.closeHandle(handle, true);
+            return error.OutOfMemory;
+        }
+    }
 
     const result = SharedMemoryAllocator{
         .handle = handle,
@@ -217,8 +232,7 @@ pub fn allocator(self: *SharedMemoryAllocator) std.mem.Allocator {
     };
 }
 
-fn alloc(ctx: *anyopaque, len: usize, ptr_align: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
-    _ = ret_addr;
+fn alloc(ctx: *anyopaque, len: usize, ptr_align: std.mem.Alignment, _: usize) ?[*]u8 {
     const self: *SharedMemoryAllocator = @ptrCast(@alignCast(ctx));
 
     const alignment = @as(usize, 1) << @intFromEnum(ptr_align);
@@ -242,40 +256,114 @@ fn alloc(ctx: *anyopaque, len: usize, ptr_align: std.mem.Alignment, ret_addr: us
         ) == null) {
             // Success! We claimed this region
             const ptr = self.base_ptr + aligned_offset;
+
+            // On Windows, pages are reserved but not committed (due to SEC_RESERVE).
+            // We must commit pages before they can be accessed.
+            if (comptime platform.is_windows) {
+                // Commit the pages for this allocation. VirtualAlloc with MEM_COMMIT
+                // on already-reserved pages commits them without requiring a new reservation.
+                // We commit only the pages needed for this allocation.
+                const commit_result = platform.windows.VirtualAlloc(
+                    @ptrCast(ptr),
+                    len,
+                    platform.windows.MEM_COMMIT,
+                    platform.windows.PAGE_READWRITE,
+                );
+                if (commit_result == null) {
+                    // Failed to commit memory - this shouldn't happen normally
+                    // but could occur if the system is truly out of memory
+                    return null;
+                }
+            }
+
             return @ptrCast(ptr);
         }
         // CAS failed, another thread allocated - retry with new offset
     }
 }
 
-fn resize(ctx: *anyopaque, buf: []u8, buf_align: std.mem.Alignment, new_len: usize, ret_addr: usize) bool {
-    _ = ctx;
-    _ = buf_align;
-    _ = ret_addr;
+fn resize(ctx: *anyopaque, buf: []u8, alignment: std.mem.Alignment, new_len: usize, _: usize) bool {
+    const self: *SharedMemoryAllocator = @ptrCast(@alignCast(ctx));
+    const buf_ptr = @intFromPtr(buf.ptr);
+    const base = @intFromPtr(self.base_ptr);
 
-    // Simple bump allocator doesn't support resize
-    // Could be implemented by checking if this is the last allocation
-    return new_len <= buf.len;
+    // Check if this is the last allocation by seeing if buf ends at the current offset
+    const buf_end = buf_ptr + buf.len;
+    const current_offset = self.offset.load(.monotonic);
+    const current_end = base + current_offset;
+
+    if (buf_end == current_end) {
+        // This is the last allocation, we can resize in place
+        if (new_len <= buf.len) {
+            // Shrinking - just update the offset
+            const shrink_amount = buf.len - new_len;
+            _ = self.offset.fetchSub(shrink_amount, .monotonic);
+            return true;
+        } else {
+            // Growing - check if we have room
+            const grow_amount = new_len - buf.len;
+            const new_end_offset = current_offset + grow_amount;
+            if (new_end_offset <= self.total_size) {
+                // We have room, extend in place using compare-and-swap
+                while (true) {
+                    const old_offset = self.offset.load(.monotonic);
+                    const old_end = base + old_offset;
+                    if (buf_end != old_end) {
+                        // Another allocation happened, can't resize in place
+                        return false;
+                    }
+                    if (self.offset.cmpxchgWeak(
+                        old_offset,
+                        old_offset + grow_amount,
+                        .monotonic,
+                        .monotonic,
+                    ) == null) {
+                        // On Windows, commit the additional pages for the growth
+                        if (comptime platform.is_windows) {
+                            const grow_ptr = self.base_ptr + old_offset;
+                            const commit_result = platform.windows.VirtualAlloc(
+                                @ptrCast(grow_ptr),
+                                grow_amount,
+                                platform.windows.MEM_COMMIT,
+                                platform.windows.PAGE_READWRITE,
+                            );
+                            if (commit_result == null) {
+                                // Failed to commit - rollback the offset change
+                                _ = self.offset.fetchSub(grow_amount, .monotonic);
+                                return false;
+                            }
+                        }
+                        return true;
+                    }
+                    // CAS failed, retry
+                }
+            }
+        }
+    }
+
+    // Shrinking is always safe for any allocation
+    if (new_len <= buf.len) {
+        // For non-last allocations, just report success for shrinking
+        // The extra space becomes wasted, but that's unavoidable
+        _ = alignment; // Suppress unused warning
+        return true;
+    }
+
+    // Can't grow a non-last allocation
+    return false;
 }
 
-fn free(ctx: *anyopaque, buf: []u8, buf_align: std.mem.Alignment, ret_addr: usize) void {
-    _ = ctx;
-    _ = buf;
-    _ = buf_align;
-    _ = ret_addr;
-
+fn free(_: *anyopaque, _: []u8, _: std.mem.Alignment, _: usize) void {
     // Simple bump allocator doesn't support free
     // Memory is only freed when the entire region is unmapped
 }
 
-fn remap(ctx: *anyopaque, old_mem: []u8, old_align: std.mem.Alignment, new_size: usize, ret_addr: usize) ?[*]u8 {
-    _ = ctx;
-    _ = old_mem;
-    _ = old_align;
-    _ = new_size;
-    _ = ret_addr;
-
-    // Simple bump allocator doesn't support remapping
+fn remap(ctx: *anyopaque, buf: []u8, alignment: std.mem.Alignment, new_len: usize, return_address: usize) ?[*]u8 {
+    // Try to resize in place first
+    if (resize(ctx, buf, alignment, new_len, return_address)) {
+        return buf.ptr;
+    }
+    // Can't remap - caller will allocate new, copy, and free (which is a no-op)
     return null;
 }
 
@@ -362,7 +450,6 @@ test "shared memory allocator cross-process" {
     const testing = std.testing;
 
     // Skip on CI or if not supported
-    if (builtin.os.tag == .wasi) return error.SkipZigTest;
 
     // Parent: Create and write data
     {

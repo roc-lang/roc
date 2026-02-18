@@ -1,7 +1,6 @@
 //! A S-expression tree representation
 
 const std = @import("std");
-const testing = std.testing;
 const RegionInfo = @import("RegionInfo.zig");
 
 const SExprTree = @This();
@@ -20,6 +19,12 @@ pub const Color = enum {
     punctuation,
 };
 
+/// Controls whether line/column information is included in output
+pub const LineColMode = enum {
+    skip_linecol,
+    include_linecol,
+};
+
 /// Helper function to escape HTML characters
 fn escapeHtmlChar(writer: anytype, char: u8) !void {
     switch (char) {
@@ -33,57 +38,53 @@ fn escapeHtmlChar(writer: anytype, char: u8) !void {
 }
 
 /// Plain text writer implementation
-const PlainTextSExprWriter = struct {
-    writer: std.io.AnyWriter,
+fn PlainTextSExprWriter(comptime WriterType: type) type {
+    return struct {
+        writer: WriterType,
 
-    pub fn print(self: *@This(), comptime fmt: []const u8, args: anytype) !void {
-        try self.writer.print(fmt, args);
-    }
-
-    pub fn setColor(self: *@This(), color: Color) !void {
-        _ = self;
-        _ = color;
-        // No-op for plain text
-    }
-
-    pub fn beginSourceRange(self: *@This(), start_byte: u32, end_byte: u32) !void {
-        _ = self;
-        _ = start_byte;
-        _ = end_byte;
-        // No-op for plain text
-    }
-
-    pub fn endSourceRange(self: *@This()) !void {
-        _ = self;
-        // No-op for plain text
-    }
-
-    pub fn writeIndent(self: *@This(), tabs: usize) !void {
-        for (0..tabs) |_| {
-            try self.writer.writeAll("\t");
+        pub fn print(self: *@This(), comptime fmt: []const u8, args: anytype) !void {
+            try self.writer.print(fmt, args);
         }
-    }
-};
+
+        pub fn setColor(_: *@This(), _: Color) !void {
+            // No-op for plain text
+        }
+
+        pub fn beginSourceRange(_: *@This(), _: u32, _: u32) !void {
+            // No-op for plain text
+        }
+
+        pub fn endSourceRange(_: *@This()) !void {
+            // No-op for plain text
+        }
+
+        pub fn writeIndent(self: *@This(), tabs: usize) !void {
+            for (0..tabs) |_| {
+                try self.writer.writeAll("\t");
+            }
+        }
+    };
+}
 
 /// HTML writer implementation with syntax highlighting
 const HtmlSExprWriter = struct {
-    writer: std.io.AnyWriter,
+    writer: *std.Io.Writer,
     current_color: Color = .default,
     color_active: bool = false,
-    scratch_buffer: std.ArrayList(u8),
+    scratch_buffer: std.array_list.Managed(u8),
 
-    pub fn init(writer: std.io.AnyWriter) HtmlSExprWriter {
+    pub fn init(writer: *std.Io.Writer) HtmlSExprWriter {
         return HtmlSExprWriter{
             .writer = writer,
             .current_color = .default,
             .color_active = false,
-            .scratch_buffer = std.ArrayList(u8).init(std.heap.page_allocator),
+            .scratch_buffer = std.array_list.Managed(u8).init(std.heap.page_allocator),
         };
     }
 
     pub fn print(self: *@This(), comptime fmt: []const u8, args: anytype) !void {
         self.scratch_buffer.clearRetainingCapacity();
-        try std.fmt.format(self.scratch_buffer.writer(), fmt, args);
+        try self.scratch_buffer.print(fmt, args);
 
         for (self.scratch_buffer.items) |char| {
             try escapeHtmlChar(self.writer, char);
@@ -144,37 +145,37 @@ const Node = union(enum) {
     BytesRange: struct { begin: u32, end: u32, region: RegionInfo },
 };
 
-children: std.ArrayListUnmanaged(Node),
-data: std.ArrayListUnmanaged(u8),
-stack: std.ArrayListUnmanaged(Node),
+children: std.array_list.Managed(Node),
+data: std.array_list.Managed(u8),
+stack: std.array_list.Managed(Node),
 allocator: std.mem.Allocator,
 
 pub fn init(allocator: std.mem.Allocator) SExprTree {
     return SExprTree{
-        .children = .{},
-        .data = .{},
-        .stack = .{},
+        .children = std.array_list.Managed(Node).init(allocator),
+        .data = std.array_list.Managed(u8).init(allocator),
+        .stack = std.array_list.Managed(Node).init(allocator),
         .allocator = allocator,
     };
 }
 
 pub fn deinit(self: *SExprTree) void {
-    self.children.deinit(self.allocator);
-    self.data.deinit(self.allocator);
-    self.stack.deinit(self.allocator);
+    self.children.deinit();
+    self.data.deinit();
+    self.stack.deinit();
 }
 
 /// Push a static atom (e.g. node name) onto the stack
 pub fn pushStaticAtom(self: *SExprTree, value: []const u8) std.mem.Allocator.Error!void {
-    try self.stack.append(self.allocator, Node{ .StaticAtom = value });
+    try self.stack.append(Node{ .StaticAtom = value });
 }
 
 /// Push a string (copied into data buffer) onto the stack
 pub fn pushString(self: *SExprTree, value: []const u8) std.mem.Allocator.Error!void {
     const begin: u32 = @intCast(self.data.items.len);
-    try self.data.appendSlice(self.allocator, value);
+    try self.data.appendSlice(value);
     const end: u32 = @intCast(self.data.items.len);
-    try self.stack.append(self.allocator, Node{ .String = .{ .begin = begin, .end = end } });
+    try self.stack.append(Node{ .String = .{ .begin = begin, .end = end } });
 }
 
 /// Push a string key-value pair onto the stack
@@ -189,9 +190,9 @@ pub fn pushStringPair(self: *SExprTree, key: []const u8, value: []const u8) std.
 /// Push a dynamic atom (copied into data buffer) onto the stack
 pub fn pushDynamicAtom(self: *SExprTree, value: []const u8) std.mem.Allocator.Error!void {
     const begin: u32 = @intCast(self.data.items.len);
-    try self.data.appendSlice(self.allocator, value);
+    try self.data.appendSlice(value);
     const end: u32 = @intCast(self.data.items.len);
-    try self.stack.append(self.allocator, Node{ .DynamicAtom = .{ .begin = begin, .end = end } });
+    try self.stack.append(Node{ .DynamicAtom = .{ .begin = begin, .end = end } });
 }
 
 /// Push a dynamic atom key-value pair onto the stack
@@ -205,7 +206,7 @@ pub fn pushDynamicAtomPair(self: *SExprTree, key: []const u8, value: []const u8)
 
 /// Push a boolean node onto the stack
 pub fn pushBool(self: *SExprTree, value: bool) std.mem.Allocator.Error!void {
-    try self.stack.append(self.allocator, Node{ .Boolean = value });
+    try self.stack.append(Node{ .Boolean = value });
 }
 
 /// Push a boolean key-value pair onto the stack
@@ -219,12 +220,12 @@ pub fn pushBoolPair(self: *SExprTree, key: []const u8, value: bool) std.mem.Allo
 
 /// Push a NodeIdx node onto the stack
 pub fn pushNodeIdx(self: *SExprTree, idx: u32) std.mem.Allocator.Error!void {
-    try self.stack.append(self.allocator, Node{ .NodeIdx = idx });
+    try self.stack.append(Node{ .NodeIdx = idx });
 }
 
 /// Push a BytesRange node onto the stack
 pub fn pushBytesRange(self: *SExprTree, begin: u32, end: u32, region: RegionInfo) std.mem.Allocator.Error!void {
-    try self.stack.append(self.allocator, Node{ .BytesRange = .{ .begin = begin, .end = end, .region = region } });
+    try self.stack.append(Node{ .BytesRange = .{ .begin = begin, .end = end, .region = region } });
 }
 
 /// Begin a new node, returning a marker for the current stack position
@@ -244,18 +245,18 @@ pub fn endNode(self: *SExprTree, begin: NodeBegin, attrsMarker: NodeBegin) std.m
 
     const children_begin: u32 = @intCast(self.children.items.len);
     for (self.stack.items[start_idx..total]) |node| {
-        try self.children.append(self.allocator, node);
+        try self.children.append(node);
     }
     const children_end: u32 = @intCast(self.children.items.len);
     const attrs_end = children_begin + (attrs_end_idx - start_idx);
 
     // Remove items from stack
     self.stack.shrinkRetainingCapacity(start_idx);
-    try self.stack.append(self.allocator, Node{ .List = .{ .begin = children_begin, .attrs_marker = attrs_end, .end = children_end } });
+    try self.stack.append(Node{ .List = .{ .begin = children_begin, .attrs_marker = attrs_end, .end = children_end } });
 }
 
 /// Internal method that writes the node using a writer implementation
-fn toStringImpl(self: *const SExprTree, node: Node, writer_impl: anytype, indent: usize) !void {
+fn toStringImpl(self: *const SExprTree, node: Node, writer_impl: anytype, indent: usize, linecol_mode: LineColMode) !void {
     switch (node) {
         .StaticAtom => |s| {
             try writer_impl.setColor(.node_name);
@@ -290,7 +291,6 @@ fn toStringImpl(self: *const SExprTree, node: Node, writer_impl: anytype, indent
         },
         .BytesRange => |range| {
             try writer_impl.beginSourceRange(range.begin, range.end);
-            // try writer_impl.print("@{d}-{d}", .{ range.begin, range.end });
             try writer_impl.print("@{d}.{d}-{d}.{d}", .{
                 // add one to display numbers instead of index
                 range.region.start_line_idx + 1,
@@ -307,20 +307,36 @@ fn toStringImpl(self: *const SExprTree, node: Node, writer_impl: anytype, indent
 
             var first = true;
             for (range.begin..range.attrs_marker) |i| {
+                const child = self.children.items[i];
+
+                // Skip BytesRange nodes when linecol_mode is .skip_linecol
+                // Note we do this check here to prevent trailing whitespace in the output
+                if (child == .BytesRange and linecol_mode == .skip_linecol) {
+                    continue;
+                }
+
                 if (!first) {
                     try writer_impl.print(" ", .{});
                 }
                 first = false;
-                try self.toStringImpl(self.children.items[i], writer_impl, indent + 1);
+                try self.toStringImpl(child, writer_impl, indent + 1, linecol_mode);
             }
 
             for (range.attrs_marker..range.end) |i| {
+                const child = self.children.items[i];
+
+                // Skip BytesRange nodes when linecol_mode is .skip_linecol
+                // Note we do this check here to prevent extra newlines in the output
+                if (child == .BytesRange and linecol_mode == .skip_linecol) {
+                    continue;
+                }
+
                 if (!first) {
                     try writer_impl.print("\n", .{});
                     try writer_impl.writeIndent(indent + 1);
                 }
                 first = false;
-                try self.toStringImpl(self.children.items[i], writer_impl, indent + 1);
+                try self.toStringImpl(child, writer_impl, indent + 1, linecol_mode);
             }
 
             try writer_impl.setColor(.punctuation);
@@ -331,24 +347,24 @@ fn toStringImpl(self: *const SExprTree, node: Node, writer_impl: anytype, indent
 }
 
 /// Pretty-print the root node (top of stack) to the writer
-pub fn printTree(self: *const SExprTree, writer: anytype) !void {
+pub fn printTree(self: *const SExprTree, writer: anytype, linecol_mode: LineColMode) !void {
     if (self.stack.items.len == 0) return;
-    var plain_writer = PlainTextSExprWriter{ .writer = writer.any() };
-    try self.toStringImpl(self.stack.items[self.stack.items.len - 1], &plain_writer, 0);
+    var plain_writer = PlainTextSExprWriter(@TypeOf(writer.any())){ .writer = writer.any() };
+    try self.toStringImpl(self.stack.items[self.stack.items.len - 1], &plain_writer, 0, linecol_mode);
 }
 
 /// Render this SExprTree to a writer with pleasing indentation.
-pub fn toStringPretty(self: *const SExprTree, writer: std.io.AnyWriter) !void {
+pub fn toStringPretty(self: *const SExprTree, writer: anytype, linecol_mode: LineColMode) !void {
     if (self.stack.items.len == 0) return;
-    var plain_writer = PlainTextSExprWriter{ .writer = writer };
-    try self.toStringImpl(self.stack.items[self.stack.items.len - 1], &plain_writer, 0);
+    var plain_writer = PlainTextSExprWriter(@TypeOf(writer)){ .writer = writer };
+    try self.toStringImpl(self.stack.items[self.stack.items.len - 1], &plain_writer, 0, linecol_mode);
 }
 
 /// Render this SExprTree to HTML with syntax highlighting.
-pub fn toHtml(self: *const SExprTree, writer: std.io.AnyWriter) !void {
+pub fn toHtml(self: *const SExprTree, writer: *std.Io.Writer, linecol_mode: LineColMode) !void {
     if (self.stack.items.len == 0) return;
     var html_writer = HtmlSExprWriter.init(writer);
-    try self.toStringImpl(self.stack.items[self.stack.items.len - 1], &html_writer, 0);
+    try self.toStringImpl(self.stack.items[self.stack.items.len - 1], &html_writer, 0, linecol_mode);
     html_writer.deinit() catch {
         return error.ErrFinalizingHTMLWriter;
     };

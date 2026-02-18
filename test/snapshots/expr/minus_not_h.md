@@ -23,12 +23,12 @@ Expressions can be identifiers, literals, function calls, or operators.
 
 # TOKENS
 ~~~zig
-OpBinaryMinus(1:1-1:2),OpBang(1:2-1:3),LowerIdent(1:3-1:4),
-EndOfFile(2:1-2:1),
+OpBinaryMinus,OpBang,LowerIdent,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-malformed @1.1-1.2 (reason "expr_unexpected_token"))
+(e-malformed (reason "expr_unexpected_token"))
 ~~~
 # FORMATTED
 ~~~roc

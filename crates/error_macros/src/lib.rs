@@ -111,7 +111,8 @@ pub fn error_and_exit(args: fmt::Arguments) -> ! {
 pub const INTERNAL_ERROR_MESSAGE: &str = concat!(
     "An internal compiler expectation was broken.\n",
     "This is definitely a compiler bug.\n",
-    "Please file an issue here: <https://github.com/roc-lang/roc/issues/new/choose>\n",
+    "Note: this compiler is deprecated, we are unlikely to prioritize an issue with it.\n",
+    "Our new compiler is coming along nicely, it will be announced at <https://roc.zulipchat.com/#narrow/channel/397893-announcements> when it is ready to completely replace this one.\n",
 );
 
 /// `internal_error!` should be used whenever a compiler invariant is broken.

@@ -11,7 +11,7 @@
 
 const std = @import("std");
 const testing = std.testing;
-const DataSpan = @import("DataSpan.zig");
+const DataSpan = @import("DataSpan.zig").DataSpan;
 
 /// Configurable packed DataSpan with customizable bit allocation
 pub fn PackedDataSpan(comptime start_bits: u6, comptime length_bits: u6) type {

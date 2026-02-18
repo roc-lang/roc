@@ -7,7 +7,7 @@ type=repl
 ~~~roc
 » (|s| s)("Test")
 » (|x| x)(42)
-» (|x| !x)(True)
+» (|x| !x)(Bool.True)
 ~~~
 # OUTPUT
 "Test"

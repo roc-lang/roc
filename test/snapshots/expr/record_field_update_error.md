@@ -13,6 +13,7 @@ UNEXPECTED TOKEN IN TYPE ANNOTATION - record_field_update_error.md:1:17:1:19
 UNDEFINED VARIABLE - record_field_update_error.md:1:3:1:9
 UNRECOGNIZED SYNTAX - record_field_update_error.md:1:10:1:11
 MALFORMED TYPE - record_field_update_error.md:1:17:1:19
+UNUSED VARIABLE - record_field_update_error.md:1:12:1:19
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **&** is not expected in an expression.
@@ -68,19 +69,31 @@ This type annotation is malformed or contains invalid syntax.
                 ^^
 
 
+**UNUSED VARIABLE**
+Variable `age` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_age` to suppress this warning.
+The unused variable is declared here:
+**record_field_update_error.md:1:12:1:19:**
+```roc
+{ person & age: 31 }
+```
+           ^^^^^^^
+
+
 # TOKENS
 ~~~zig
-OpenCurly(1:1-1:2),LowerIdent(1:3-1:9),OpAmpersand(1:10-1:11),LowerIdent(1:12-1:15),OpColon(1:15-1:16),Int(1:17-1:19),CloseCurly(1:20-1:21),
-EndOfFile(2:1-2:1),
+OpenCurly,LowerIdent,OpAmpersand,LowerIdent,OpColon,Int,CloseCurly,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-block @1.1-1.21
+(e-block
 	(statements
-		(e-ident @1.3-1.9 (raw "person"))
-		(e-malformed @1.10-1.11 (reason "expr_unexpected_token"))
-		(s-type-anno @1.12-1.19 (name "age")
-			(ty-malformed @1.17-1.19 (tag "ty_anno_unexpected_token")))))
+		(e-ident (raw "person"))
+		(e-malformed (reason "expr_unexpected_token"))
+		(s-type-anno (name "age")
+			(ty-malformed (tag "ty_anno_unexpected_token")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -91,14 +104,17 @@ EndOfFile(2:1-2:1),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-block @1.1-1.21
-	(s-expr @1.3-1.9
+(e-block
+	(s-expr
 		(e-runtime-error (tag "ident_not_in_scope")))
-	(s-expr @1.10-1.11
+	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(e-empty_record @1.1-1.21))
+	(s-let
+		(p-assign (ident "age"))
+		(e-anno-only))
+	(e-empty_record))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.21 (type "{}"))
+(expr (type "{}"))
 ~~~

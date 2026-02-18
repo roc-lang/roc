@@ -92,6 +92,15 @@ pub const Tag = enum {
     /// * lhs - node index for loop initializing expression
     /// * rhs - node index for loop body expression
     @"for",
+    /// A while statement
+    /// * main_token - node index for condition expression
+    /// * lhs - node index for condition expression
+    /// * rhs - node index for loop body expression
+    @"while",
+    /// A break statement
+    /// * lhs - ignored
+    /// * rhs - ignored
+    @"break",
     /// An early return statement
     /// * lhs - node index for expr
     /// * rhs - ignored
@@ -122,8 +131,17 @@ pub const Tag = enum {
     /// * extra_data format (if has_where == 1): [where node index, [type_arg node index]{num_type_args}, type_term node_index]
     /// * extra_data format (if has_where == 0): [[type_arg node index]{num_type_args}, type_term node_index]
     type_decl_nominal,
+    /// A Type declaration for opaque types
+    /// Example: `Color :: { red : U8, green: U8, blue: U8 }`
+    /// Example: `Color :: [Red, Green, Blue]`
+    /// * main_token - upper_ident for type ident
+    /// * lhs - describes extra_data: struct(packed){ num_type_args: u31, has_where: u1 }
+    /// * rhs - extra_data index
+    /// * extra_data format (if has_where == 1): [where node index, [type_arg node index]{num_type_args}, type_term node_index]
+    /// * extra_data format (if has_where == 0): [[type_arg node index]{num_type_args}, type_term node_index]
+    type_decl_opaque,
     /// A Type annotation
-    /// Example: `main! : List Str => Result {} _`
+    /// Example: `main! : List Str => Try {} _`
     /// Example: `colors : List Color`
     /// Example: `color : { red : U8, green: U8, blue: U8 }`
     /// * main_token - lower_ident token index
@@ -231,6 +249,10 @@ pub const Tag = enum {
     /// * lhs - LHS DESCRIPTION
     /// * rhs - RHS DESCRIPTION
     ident_patt,
+    /// Mutable variable binding in pattern
+    /// Example: `var $x` in `|var $x, y|`
+    /// * main_token - the identifier token
+    var_ident_patt,
     /// DESCRIPTION
     /// Example: EXAMPLE
     /// * lhs - LHS DESCRIPTION
@@ -310,6 +332,16 @@ pub const Tag = enum {
     /// * lhs - LHS DESCRIPTION
     /// * rhs - RHS DESCRIPTION
     frac,
+    /// An integer with explicit type annotation: 123.U64
+    /// * main_token - Token index of the integer literal
+    /// * lhs - Token index of the type (e.g., .U64)
+    /// * rhs - Unused
+    typed_int,
+    /// A fractional with explicit type annotation: 3.14.Dec
+    /// * main_token - Token index of the fractional literal
+    /// * lhs - Token index of the type (e.g., .Dec)
+    /// * rhs - Unused
+    typed_frac,
     /// A character literal enclosed in single quotes
     /// Example: 'a'
     /// * main_token - Token index containing the character
@@ -377,6 +409,10 @@ pub const Tag = enum {
     /// * lhs - LHS DESCRIPTION
     /// * rhs - RHS DESCRIPTION
     field_access,
+    /// Tuple element access: tuple.0, tuple.1, etc.
+    /// * lhs - node index of tuple expression
+    /// * main_token - the element index token (NoSpaceDotInt or DotInt)
+    tuple_access,
     /// DESCRIPTION
     /// Example: EXAMPLE
     /// * lhs - LHS DESCRIPTION
@@ -402,6 +438,11 @@ pub const Tag = enum {
     /// * lhs - node index of expr
     /// * rhs - RHS DESCRIPTION
     if_then_else,
+    /// If-statement (no else branch) - statement form of if, returns unit type
+    /// Example: if Bool.true {}
+    /// * lhs - node index of condition expr
+    /// * rhs - node index of then branch expr
+    if_without_else,
     /// DESCRIPTION
     /// Example: EXAMPLE
     /// * lhs - start index of extra_data
@@ -424,6 +465,11 @@ pub const Tag = enum {
     /// * lhs - first statement node
     /// * rhs - number of statements
     block,
+    /// A for expression (for loop used as an expression, evaluates to {})
+    /// * main_token - node index for pattern for loop variable
+    /// * lhs - node index for loop initializing expression
+    /// * rhs - node index for loop body expression
+    for_expr,
     /// DESCRIPTION
     /// Example: EXAMPLE
     /// * lhs - LHS DESCRIPTION
@@ -451,6 +497,44 @@ pub const Tag = enum {
 
     /// Collection of type annotations
     collection_ty_anno,
+
+    // Target section nodes
+
+    /// A targets section in a platform header
+    /// * main_token - files string token (or 0 if no files directive)
+    /// * lhs - exe TargetLinkType index (or 0 if none)
+    /// * rhs - reserved for future (static_lib, shared_lib)
+    targets_section,
+
+    /// A target link type section (exe, static_lib, shared_lib)
+    /// * lhs - start of entries span
+    /// * rhs - length of entries span
+    target_link_type,
+
+    /// A single target entry: x64musl: ["crt1.o", "host.o", app]
+    /// * main_token - target name identifier token
+    /// * lhs - start of files span
+    /// * rhs - length of files span
+    target_entry,
+
+    /// A string literal file in a target list: "crt1.o"
+    /// * main_token - string token
+    target_file_string,
+
+    /// A special identifier in a target list: app, win_gui
+    /// * main_token - identifier token
+    target_file_ident,
+
+    /// A for-clause type alias: Model : model
+    /// * main_token - alias name token (UpperIdent)
+    /// * lhs - rigid name token index
+    for_clause_type_alias,
+
+    /// A requires entry: [Model : model] for main : () -> { ... }
+    /// * main_token - entrypoint name token
+    /// * lhs - start of type_aliases span
+    /// * rhs - packed: type_aliases len (16 bits) + type_anno idx (16 bits)
+    requires_entry,
 };
 
 /// Unstructured information about a Node.  These

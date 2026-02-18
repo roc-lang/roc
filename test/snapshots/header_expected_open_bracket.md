@@ -23,18 +23,17 @@ This is an unexpected parsing error. Please check your syntax.
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),
-EndOfFile(2:1-2:1),
+KwModule,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-1.7
-	(malformed-header @1.1-1.1 (tag "header_expected_open_square"))
+(file
+	(malformed-header (tag "header_expected_open_square"))
 	(statements))
 ~~~
 # FORMATTED
 ~~~roc
-
 ~~~
 # CANONICALIZE
 ~~~clojure

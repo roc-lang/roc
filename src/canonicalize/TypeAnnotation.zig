@@ -4,24 +4,14 @@
 
 const std = @import("std");
 const base = @import("base");
-const types = @import("types");
-const builtins = @import("builtins");
-const collections = @import("collections");
 
 const ModuleEnv = @import("ModuleEnv.zig");
 const CIR = @import("CIR.zig");
 const Diagnostic = @import("Diagnostic.zig");
-const Region = base.Region;
-const StringLiteral = base.StringLiteral;
 const Ident = base.Ident;
 const DataSpan = base.DataSpan;
-const SExpr = base.SExpr;
 const SExprTree = base.SExprTree;
-const TypeVar = types.Var;
-const Expr = CIR.Expr;
 const Statement = CIR.Statement;
-const IntValue = CIR.IntValue;
-const RocDec = builtins.RocDec;
 
 /// Canonical representation of type annotations in Roc.
 ///
@@ -96,8 +86,13 @@ pub const TypeAnno = union(enum) {
         diagnostic: CIR.Diagnostic.Idx, // The error that occurred
     },
 
-    pub const Idx = enum(u32) { _ };
-    pub const Span = struct { span: DataSpan };
+    pub const Idx = enum(u32) {
+        /// Placeholder value indicating the anno hasn't been set yet.
+        /// Used during forward reference resolution.
+        placeholder = 0,
+        _,
+    };
+    pub const Span = extern struct { span: DataSpan };
 
     pub fn pushToSExprTree(self: *const @This(), ir: *const ModuleEnv, tree: *SExprTree, type_anno_idx: TypeAnno.Idx) std.mem.Allocator.Error!void {
         switch (self.*) {
@@ -122,21 +117,26 @@ pub const TypeAnno = union(enum) {
                         try tree.endNode(field_begin, field_attrs);
                     },
                     .external => |external| {
-                        const ext_begin = tree.beginNode();
-                        try tree.pushStaticAtom("external");
-
-                        // Add module index
-                        var buf: [32]u8 = undefined;
-                        const module_idx_str = std.fmt.bufPrint(&buf, "{}", .{@intFromEnum(external.module_idx)}) catch unreachable;
-                        try tree.pushStringPair("module-idx", module_idx_str);
-
-                        // Add target node index
-                        var buf2: [32]u8 = undefined;
-                        const target_idx_str = std.fmt.bufPrint(&buf2, "{}", .{external.target_node_idx}) catch unreachable;
-                        try tree.pushStringPair("target-node-idx", target_idx_str);
-
-                        const field_attrs = tree.beginNode();
-                        try tree.endNode(ext_begin, field_attrs);
+                        const module_idx_int = @intFromEnum(external.module_idx);
+                        std.debug.assert(module_idx_int < ir.imports.imports.items.items.len);
+                        const string_lit_idx = ir.imports.imports.items.items[module_idx_int];
+                        const module_name = ir.common.strings.get(string_lit_idx);
+                        // Special case: Builtin module is an implementation detail, print as (builtin)
+                        if (std.mem.eql(u8, module_name, "Builtin")) {
+                            const field_begin = tree.beginNode();
+                            try tree.pushStaticAtom("builtin");
+                            const field_attrs = tree.beginNode();
+                            try tree.endNode(field_begin, field_attrs);
+                        } else {
+                            try tree.pushStringPair("external-module", module_name);
+                        }
+                    },
+                    .pending => |pending| {
+                        const module_idx_int = @intFromEnum(pending.module_idx);
+                        std.debug.assert(module_idx_int < ir.imports.imports.items.items.len);
+                        const string_lit_idx = ir.imports.imports.items.items[module_idx_int];
+                        const module_name = ir.common.strings.get(string_lit_idx);
+                        try tree.pushStringPair("pending-module", module_name);
                     },
                 }
 
@@ -193,21 +193,26 @@ pub const TypeAnno = union(enum) {
                         try tree.endNode(field_begin, field_attrs);
                     },
                     .external => |external| {
-                        const ext_begin = tree.beginNode();
-                        try tree.pushStaticAtom("external");
-
-                        // Add module index
-                        var buf: [32]u8 = undefined;
-                        const module_idx_str = std.fmt.bufPrint(&buf, "{}", .{@intFromEnum(external.module_idx)}) catch unreachable;
-                        try tree.pushStringPair("module-idx", module_idx_str);
-
-                        // Add target node index
-                        var buf2: [32]u8 = undefined;
-                        const target_idx_str = std.fmt.bufPrint(&buf2, "{}", .{external.target_node_idx}) catch unreachable;
-                        try tree.pushStringPair("target-node-idx", target_idx_str);
-
-                        const field_attrs = tree.beginNode();
-                        try tree.endNode(ext_begin, field_attrs);
+                        const module_idx_int = @intFromEnum(external.module_idx);
+                        std.debug.assert(module_idx_int < ir.imports.imports.items.items.len);
+                        const string_lit_idx = ir.imports.imports.items.items[module_idx_int];
+                        const module_name = ir.common.strings.get(string_lit_idx);
+                        // Special case: Builtin module is an implementation detail, print as (builtin)
+                        if (std.mem.eql(u8, module_name, "Builtin")) {
+                            const field_begin = tree.beginNode();
+                            try tree.pushStaticAtom("builtin");
+                            const field_attrs = tree.beginNode();
+                            try tree.endNode(field_begin, field_attrs);
+                        } else {
+                            try tree.pushStringPair("external-module", module_name);
+                        }
+                    },
+                    .pending => |pending| {
+                        const module_idx_int = @intFromEnum(pending.module_idx);
+                        std.debug.assert(module_idx_int < ir.imports.imports.items.items.len);
+                        const string_lit_idx = ir.imports.imports.items.items[module_idx_int];
+                        const module_name = ir.common.strings.get(string_lit_idx);
+                        try tree.pushStringPair("pending-module", module_name);
                     },
                 }
 
@@ -329,7 +334,7 @@ pub const TypeAnno = union(enum) {
         ty: TypeAnno.Idx,
 
         pub const Idx = enum(u32) { _ };
-        pub const Span = struct { span: DataSpan };
+        pub const Span = extern struct { span: DataSpan };
     };
 
     /// Either a locally declare type, or an external type
@@ -341,6 +346,11 @@ pub const TypeAnno = union(enum) {
         external: struct {
             module_idx: CIR.Import.Idx,
             target_node_idx: u16,
+        },
+        /// Pending external lookup - deferred until dependencies are canonicalized
+        pending: struct {
+            module_idx: CIR.Import.Idx,
+            type_name: Ident.Idx,
         },
 
         // Just the tag of this union enum
@@ -364,6 +374,7 @@ pub const TypeAnno = union(enum) {
     /// A record in a type annotation
     pub const Record = struct {
         fields: RecordField.Span, // The field definitions
+        ext: ?TypeAnno.Idx, // Optional extension variable for open records
     };
 
     /// A tag union in a type annotation
@@ -379,12 +390,9 @@ pub const TypeAnno = union(enum) {
 
     /// A builtin type
     pub const Builtin = enum {
-        str,
         list,
         box,
         num,
-        frac,
-        int,
         u8,
         u16,
         u32,
@@ -402,12 +410,9 @@ pub const TypeAnno = union(enum) {
         /// Convert a builtin type to it's name
         pub fn toBytes(self: @This()) []const u8 {
             switch (self) {
-                .str => return "Str",
                 .list => return "List",
                 .box => return "Box",
                 .num => return "Num",
-                .frac => return "Frac",
-                .int => return "Int",
                 .u8 => return "U8",
                 .u16 => return "U16",
                 .u32 => return "U32",
@@ -426,11 +431,9 @@ pub const TypeAnno = union(enum) {
 
         /// Convert a type name string to the corresponding builtin type
         pub fn fromBytes(bytes: []const u8) ?@This() {
-            if (std.mem.eql(u8, bytes, "Str")) return .str;
             if (std.mem.eql(u8, bytes, "List")) return .list;
+            if (std.mem.eql(u8, bytes, "Box")) return .box;
             if (std.mem.eql(u8, bytes, "Num")) return .num;
-            if (std.mem.eql(u8, bytes, "Frac")) return .frac;
-            if (std.mem.eql(u8, bytes, "Int")) return .int;
             if (std.mem.eql(u8, bytes, "U8")) return .u8;
             if (std.mem.eql(u8, bytes, "U16")) return .u16;
             if (std.mem.eql(u8, bytes, "U32")) return .u32;
@@ -445,6 +448,28 @@ pub const TypeAnno = union(enum) {
             if (std.mem.eql(u8, bytes, "F64")) return .f64;
             if (std.mem.eql(u8, bytes, "Dec")) return .dec;
             return null;
+        }
+
+        /// Check if an identifier index matches any builtin type name.
+        /// This is more efficient than fromBytes() as it compares indices directly.
+        pub fn isBuiltinTypeIdent(ident: base.Ident.Idx, idents: anytype) bool {
+            return ident == idents.list or
+                ident == idents.box or
+                ident == idents.str or
+                ident == idents.num or
+                ident == idents.u8 or
+                ident == idents.u16 or
+                ident == idents.u32 or
+                ident == idents.u64 or
+                ident == idents.u128 or
+                ident == idents.i8 or
+                ident == idents.i16 or
+                ident == idents.i32 or
+                ident == idents.i64 or
+                ident == idents.i128 or
+                ident == idents.f32 or
+                ident == idents.f64 or
+                ident == idents.dec;
         }
     };
 };

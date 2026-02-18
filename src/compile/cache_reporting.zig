@@ -10,10 +10,7 @@ const reporting = @import("reporting");
 const Allocator = std.mem.Allocator;
 const CacheStats = @import("cache_config.zig").CacheStats;
 const Report = reporting.Report;
-const Document = reporting.Document;
-const Severity = reporting.Severity;
 const RenderTarget = reporting.RenderTarget;
-const ReportingConfig = reporting.ReportingConfig;
 
 /// Data size unit for formatting
 pub const DataSizeUnit = enum {
@@ -42,7 +39,7 @@ pub const Stats = struct {
         return @as(f64, @floatFromInt(self.hits)) / @as(f64, @floatFromInt(total));
     }
 
-    pub fn print(self: *const Stats, writer: std.io.AnyWriter) !void {
+    pub fn print(self: *const Stats, writer: *std.Io.Writer) !void {
         try writer.print("Cache Stats:\n", .{});
         try writer.print("  Hits: {d}\n", .{self.hits});
         try writer.print("  Misses: {d}\n", .{self.misses});

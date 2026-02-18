@@ -2,19 +2,24 @@
 //! This module contains type definitions and utilities used across the canonicalization IR.
 
 const std = @import("std");
+const builtin = @import("builtin");
+const build_options = @import("build_options");
 const types_mod = @import("types");
 const collections = @import("collections");
 const base = @import("base");
 const reporting = @import("reporting");
 const builtins = @import("builtins");
 
+// Module tracing flag - enabled via `zig build -Dtrace-modules`
+// On native platforms, uses std.debug.print. On WASM, tracing in CIR is disabled
+// since we don't have roc_ops here (tracing is enabled in the interpreter/shim instead).
+const trace_modules = if (builtin.cpu.arch == .wasm32) false else if (@hasDecl(build_options, "trace_modules")) build_options.trace_modules else false;
+
 const CompactWriter = collections.CompactWriter;
 const Ident = base.Ident;
 const StringLiteral = base.StringLiteral;
-const RegionInfo = base.RegionInfo;
 const Region = base.Region;
 const SExprTree = base.SExprTree;
-const SExpr = base.SExpr;
 const TypeVar = types_mod.Var;
 
 // Re-export these from other modules for convenience
@@ -26,12 +31,88 @@ pub const Statement = @import("Statement.zig").Statement;
 pub const TypeAnno = @import("TypeAnnotation.zig").TypeAnno;
 pub const Diagnostic = @import("Diagnostic.zig").Diagnostic;
 
+/// Indices of builtin type declarations within the Builtin module.
+/// Loaded once at startup from builtin_indices.bin (generated at build time).
+/// Contains both statement indices (positions within Builtin.bin) and ident indices
+/// (interned identifiers for comparison without string lookups).
+pub const BuiltinIndices = struct {
+    // Statement indices - positions within the Builtin module
+    bool_type: Statement.Idx,
+    try_type: Statement.Idx,
+    dict_type: Statement.Idx,
+    set_type: Statement.Idx,
+    str_type: Statement.Idx,
+    list_type: Statement.Idx,
+    box_type: Statement.Idx,
+    utf8_problem_type: Statement.Idx,
+    u8_type: Statement.Idx,
+    i8_type: Statement.Idx,
+    u16_type: Statement.Idx,
+    i16_type: Statement.Idx,
+    u32_type: Statement.Idx,
+    i32_type: Statement.Idx,
+    u64_type: Statement.Idx,
+    i64_type: Statement.Idx,
+    u128_type: Statement.Idx,
+    i128_type: Statement.Idx,
+    dec_type: Statement.Idx,
+    f32_type: Statement.Idx,
+    f64_type: Statement.Idx,
+    numeral_type: Statement.Idx,
+
+    // Ident indices - simple unqualified names (e.g., "Bool", "U8")
+    bool_ident: Ident.Idx,
+    try_ident: Ident.Idx,
+    dict_ident: Ident.Idx,
+    set_ident: Ident.Idx,
+    str_ident: Ident.Idx,
+    list_ident: Ident.Idx,
+    box_ident: Ident.Idx,
+    utf8_problem_ident: Ident.Idx,
+    u8_ident: Ident.Idx,
+    i8_ident: Ident.Idx,
+    u16_ident: Ident.Idx,
+    i16_ident: Ident.Idx,
+    u32_ident: Ident.Idx,
+    i32_ident: Ident.Idx,
+    u64_ident: Ident.Idx,
+    i64_ident: Ident.Idx,
+    u128_ident: Ident.Idx,
+    i128_ident: Ident.Idx,
+    dec_ident: Ident.Idx,
+    f32_ident: Ident.Idx,
+    f64_ident: Ident.Idx,
+    numeral_ident: Ident.Idx,
+    // Tag idents for Try type
+    ok_ident: Ident.Idx,
+    err_ident: Ident.Idx,
+
+    /// Convert a nominal type's ident to a NumKind, if it's a builtin numeric type.
+    /// This allows direct ident comparison instead of string comparison for type identification.
+    pub fn numKindFromIdent(self: BuiltinIndices, ident: Ident.Idx) ?NumKind {
+        if (ident == self.u8_ident) return .u8;
+        if (ident == self.i8_ident) return .i8;
+        if (ident == self.u16_ident) return .u16;
+        if (ident == self.i16_ident) return .i16;
+        if (ident == self.u32_ident) return .u32;
+        if (ident == self.i32_ident) return .i32;
+        if (ident == self.u64_ident) return .u64;
+        if (ident == self.i64_ident) return .i64;
+        if (ident == self.u128_ident) return .u128;
+        if (ident == self.i128_ident) return .i128;
+        if (ident == self.f32_ident) return .f32;
+        if (ident == self.f64_ident) return .f64;
+        if (ident == self.dec_ident) return .dec;
+        return null;
+    }
+};
+
 // Type definitions for module compilation
 
 /// Represents a definition (binding of a pattern to an expression) in the CIR
 pub const Def = struct {
     pub const Idx = enum(u32) { _ };
-    pub const Span = struct { span: base.DataSpan };
+    pub const Span = extern struct { span: base.DataSpan };
 
     pattern: Pattern.Idx,
     expr: Expr.Idx,
@@ -76,7 +157,37 @@ pub const Def = struct {
 
         const attrs = tree.beginNode();
 
-        try cir.store.getPattern(self.pattern).pushToSExprTree(cir, tree, self.pattern);
+        // Safety check: verify pattern index points to actual pattern node
+        // This prevents crashes from cross-module node index issues
+        const pattern_node_idx: @TypeOf(cir.store.nodes).Idx = @enumFromInt(@intFromEnum(self.pattern));
+        const pattern_node = cir.store.nodes.get(pattern_node_idx);
+        const is_valid_pattern = switch (pattern_node.tag) {
+            .pattern_identifier,
+            .pattern_as,
+            .pattern_applied_tag,
+            .pattern_nominal,
+            .pattern_nominal_external,
+            .pattern_record_destructure,
+            .pattern_list,
+            .pattern_tuple,
+            .pattern_num_literal,
+            .pattern_dec_literal,
+            .pattern_f32_literal,
+            .pattern_f64_literal,
+            .pattern_small_dec_literal,
+            .pattern_str_literal,
+            .pattern_underscore,
+            => true,
+            else => false,
+        };
+
+        if (is_valid_pattern) {
+            try cir.store.getPattern(self.pattern).pushToSExprTree(cir, tree, self.pattern);
+        } else {
+            // Pattern index is invalid - output placeholder to avoid crash
+            try tree.pushStaticAtom("invalid-pattern");
+        }
+
         try cir.store.getExpr(self.expr).pushToSExprTree(cir, tree, self.expr);
 
         if (self.annotation) |annotation_idx| {
@@ -87,12 +198,16 @@ pub const Def = struct {
     }
 };
 
-/// Represents a type header (e.g., 'Maybe a' or 'Result err ok') in type annotations
+/// Represents a type header (e.g., 'Maybe a' or 'Try err ok') in type annotations
 pub const TypeHeader = struct {
     pub const Idx = enum(u32) { _ };
-    pub const Span = struct { start: u32, len: u32 };
+    pub const Span = extern struct { start: u32, len: u32 };
 
+    /// The fully qualified name for lookups (e.g., "Builtin.Bool" or "MyModule.Foo.Bar")
     name: base.Ident.Idx,
+    /// The name relative to the module, without the module prefix (e.g., "Bool" or "Foo.Bar").
+    /// This is what should be used for NominalType.ident to avoid redundancy with origin_module.
+    relative_name: base.Ident.Idx,
     args: TypeAnno.Span,
 
     pub fn pushToSExprTree(self: *const TypeHeader, cir: anytype, tree: anytype, idx: TypeHeader.Idx) !void {
@@ -126,27 +241,25 @@ pub const TypeHeader = struct {
 /// Represents a where clause constraint in type definitions
 pub const WhereClause = union(enum) {
     pub const Idx = enum(u32) { _ };
-    pub const Span = struct { span: base.DataSpan };
+    pub const Span = extern struct { span: base.DataSpan };
 
-    mod_method: struct {
-        var_name: base.Ident.Idx,
+    w_method: struct {
+        var_: TypeAnno.Idx,
         method_name: base.Ident.Idx,
         args: TypeAnno.Span,
-        ret_anno: TypeAnno.Idx,
-        external_decl: ExternalDecl.Idx,
+        ret: TypeAnno.Idx,
     },
-    mod_alias: struct {
-        var_name: base.Ident.Idx,
+    w_alias: struct {
+        var_: TypeAnno.Idx,
         alias_name: base.Ident.Idx,
-        external_decl: ExternalDecl.Idx,
     },
-    malformed: struct {
+    w_malformed: struct {
         diagnostic: Diagnostic.Idx,
     },
 
     pub fn pushToSExprTree(self: *const WhereClause, cir: anytype, tree: anytype, idx: WhereClause.Idx) !void {
         switch (self.*) {
-            .mod_method => |method| {
+            .w_method => |method| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("method");
 
@@ -156,11 +269,10 @@ pub const WhereClause = union(enum) {
                 try cir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
                 // Add module-of and ident information
-                const var_name_str = cir.getIdent(method.var_name);
-                try tree.pushStringPair("module-of", var_name_str);
+                try cir.store.getTypeAnno(method.var_).pushToSExprTree(cir, tree, method.var_);
 
                 const method_name_str = cir.getIdent(method.method_name);
-                try tree.pushStringPair("ident", method_name_str);
+                try tree.pushStringPair("name", method_name_str);
 
                 const attrs = tree.beginNode();
 
@@ -174,10 +286,10 @@ pub const WhereClause = union(enum) {
                 try tree.endNode(args_begin, args_attrs);
 
                 // Add actual return type
-                try cir.store.getTypeAnno(method.ret_anno).pushToSExprTree(cir, tree, method.ret_anno);
+                try cir.store.getTypeAnno(method.ret).pushToSExprTree(cir, tree, method.ret);
                 try tree.endNode(begin, attrs);
             },
-            .mod_alias => |alias| {
+            .w_alias => |alias| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("alias");
 
@@ -186,16 +298,15 @@ pub const WhereClause = union(enum) {
                 const region = cir.store.getRegionAt(node_idx);
                 try cir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
-                const var_name_str = cir.getIdent(alias.var_name);
-                try tree.pushStringPair("module-of", var_name_str);
+                try cir.store.getTypeAnno(alias.var_).pushToSExprTree(cir, tree, alias.var_);
 
                 const alias_name_str = cir.getIdent(alias.alias_name);
-                try tree.pushStringPair("ident", alias_name_str);
+                try tree.pushStringPair("name", alias_name_str);
 
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
-            .malformed => |malformed| {
+            .w_malformed => {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("malformed");
 
@@ -204,7 +315,6 @@ pub const WhereClause = union(enum) {
                 const region = cir.store.getRegionAt(node_idx);
                 try cir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
-                _ = malformed;
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
@@ -216,25 +326,35 @@ pub const WhereClause = union(enum) {
 pub const Annotation = struct {
     pub const Idx = enum(u32) { _ };
 
-    type_anno: TypeAnno.Idx,
-    signature: TypeVar,
+    anno: TypeAnno.Idx,
+    where: ?WhereClause.Span,
 
-    pub fn pushToSExprTree(self: *const Annotation, cir: anytype, tree: anytype, idx: Annotation.Idx) !void {
+    pub fn pushToSExprTree(self: *const @This(), env: anytype, tree: *SExprTree, idx: Annotation.Idx) !void {
+        const annotation = self.*;
+
         const begin = tree.beginNode();
         try tree.pushStaticAtom("annotation");
-
-        // Get the region for this Annotation
-        const node_idx: Node.Idx = @enumFromInt(@intFromEnum(idx));
-        const region = cir.store.getRegionAt(node_idx);
-        try cir.appendRegionInfoToSExprTreeFromRegion(tree, region);
-
         const attrs = tree.beginNode();
 
-        const type_anno_begin = tree.beginNode();
-        try tree.pushStaticAtom("declared-type");
-        const type_anno_attrs = tree.beginNode();
-        try cir.store.getTypeAnno(self.type_anno).pushToSExprTree(cir, tree, self.type_anno);
-        try tree.endNode(type_anno_begin, type_anno_attrs);
+        // Get the region for this Annotation
+        const region = env.store.getAnnotationRegion(idx);
+        try env.appendRegionInfoToSExprTreeFromRegion(tree, region);
+
+        // Append annotation
+        try env.store.getTypeAnno(annotation.anno).pushToSExprTree(env, tree, self.anno);
+
+        // Append where clause
+        if (annotation.where) |where_span| {
+            const where_begin = tree.beginNode();
+            try tree.pushStaticAtom("where");
+            const where_attrs = tree.beginNode();
+            const where_clauses = env.store.sliceWhereClauses(where_span);
+            for (where_clauses) |clause_idx| {
+                const clause = env.store.getWhereClause(clause_idx);
+                try clause.pushToSExprTree(env, tree, clause_idx);
+            }
+            try tree.endNode(where_begin, where_attrs);
+        }
 
         try tree.endNode(begin, attrs);
     }
@@ -243,7 +363,7 @@ pub const Annotation = struct {
 /// Represents an item exposed by a module's interface
 pub const ExposedItem = struct {
     pub const Idx = enum(u32) { _ };
-    pub const Span = struct { span: base.DataSpan };
+    pub const Span = extern struct { span: base.DataSpan };
 
     name: base.Ident.Idx,
     alias: ?base.Ident.Idx,
@@ -268,19 +388,12 @@ pub const ExposedItem = struct {
     }
 };
 
-/// Represents a field in a record pattern for pattern matching
-pub const PatternRecordField = struct {
-    pub const Idx = enum(u32) { _ };
-    pub const Span = struct { start: u32, len: u32 };
-};
-
 /// Represents an arbitrary precision smallish decimal value
 pub const SmallDecValue = struct {
     numerator: i16,
     denominator_power_of_ten: u8,
 
     /// Convert a small dec to f64 (use for size comparisons)
-    /// TODO: Review, claude generated
     pub fn toF64(self: @This()) f64 {
         const numerator_f64 = @as(f64, @floatFromInt(self.numerator));
         const divisor = std.math.pow(f64, 10, @as(f64, @floatFromInt(self.denominator_power_of_ten)));
@@ -288,12 +401,17 @@ pub const SmallDecValue = struct {
     }
 
     /// Calculate the int requirements of a SmallDecValue
-    pub fn toFracRequirements(self: SmallDecValue) types_mod.Num.FracRequirements {
+    pub fn toFracRequirements(self: SmallDecValue) types_mod.FracRequirements {
         const f64_val = self.toF64();
-        return types_mod.Num.FracRequirements{
+        return types_mod.FracRequirements{
             .fits_in_f32 = fitsInF32(f64_val),
             .fits_in_dec = fitsInDec(f64_val),
         };
+    }
+
+    /// Convert to RocDec representation (i128 scaled by 10^18)
+    pub fn toRocDec(self: SmallDecValue) RocDec {
+        return RocDec.fromFraction(self.numerator, self.denominator_power_of_ten);
     }
 
     test "SmallDecValue.toF64 - basic cases" {
@@ -387,21 +505,23 @@ pub const IntValue = struct {
     }
 
     pub fn bufPrint(self: IntValue, buf: []u8) ![]u8 {
+        const i128h = builtins.compiler_rt_128;
         switch (self.kind) {
             .i128 => {
                 const val: i128 = @bitCast(self.bytes);
-                return std.fmt.bufPrint(buf, "{d}", .{val});
+                const result = i128h.i128_to_str(buf, val);
+                return buf[result.start..buf.len];
             },
             .u128 => {
                 const val: u128 = @bitCast(self.bytes);
-                return std.fmt.bufPrint(buf, "{d}", .{val});
+                const result = i128h.u128_to_str(buf, val);
+                return buf[result.start..buf.len];
             },
         }
     }
 
     /// Calculate the int requirements of an IntValue
-    /// TODO: Review, claude generated
-    pub fn toIntRequirements(self: IntValue) types_mod.Num.IntRequirements {
+    pub fn toIntRequirements(self: IntValue) types_mod.IntRequirements {
         var is_negated = false;
         var u128_val: u128 = undefined;
 
@@ -435,8 +555,8 @@ pub const IntValue = struct {
         // For minimum signed values, subtract 1 from the magnitude
         // This makes the bit calculation work correctly with the "n-1 bits for magnitude" rule
         const adjusted_val = if (is_minimum_signed) u128_val - 1 else u128_val;
-        const bits_needed = types_mod.Num.Int.BitsNeeded.fromValue(adjusted_val);
-        return types_mod.Num.IntRequirements{
+        const bits_needed = types_mod.Int.BitsNeeded.fromValue(adjusted_val);
+        return types_mod.IntRequirements{
             .sign_needed = is_negated and u128_val != 0, // -0 doesn't need a sign
             .bits_needed = bits_needed.toBits(),
             .is_minimum_signed = is_minimum_signed,
@@ -444,18 +564,16 @@ pub const IntValue = struct {
     }
 
     /// Calculate the frac requirements of an IntValue
-    /// TODO: Review, claude generated
-    /// Calculate the frac requirements of an IntValue
-    pub fn toFracRequirements(self: IntValue) types_mod.Num.FracRequirements {
+    pub fn toFracRequirements(self: IntValue) types_mod.FracRequirements {
         // Convert to f64 for checking
         const f64_val: f64 = switch (self.kind) {
-            .i128 => @floatFromInt(@as(i128, @bitCast(self.bytes))),
+            .i128 => builtins.compiler_rt_128.i128_to_f64(@as(i128, @bitCast(self.bytes))),
             .u128 => blk: {
                 const val = @as(u128, @bitCast(self.bytes));
                 if (val > @as(u128, 1) << 64) {
                     break :blk std.math.inf(f64);
                 }
-                break :blk @floatFromInt(val);
+                break :blk builtins.compiler_rt_128.u128_to_f64(val);
             },
         };
 
@@ -474,7 +592,7 @@ pub const IntValue = struct {
 
         const fits_in_dec = fitsInDec(f64_val);
 
-        return types_mod.Num.FracRequirements{
+        return types_mod.FracRequirements{
             .fits_in_f32 = fits_in_f32,
             .fits_in_dec = fits_in_dec,
         };
@@ -505,6 +623,118 @@ pub const NumKind = enum {
     dec,
 };
 
+/// Base-256 digit storage for Numeral values.
+/// Used to construct Roc Numeral values during compile-time evaluation.
+///
+/// Numeral in Roc stores:
+/// - is_negative: Bool (whether there was a minus sign)
+/// - digits_before_pt: List(U8) (base-256 digits before decimal point)
+/// - digits_after_pt: List(U8) (base-256 digits after decimal point)
+///
+/// Example: "356.517" becomes:
+/// - is_negative = false
+/// - digits_before_pt = [1, 100] (because 356 = 1*256 + 100)
+/// - digits_after_pt = [2, 5] (because 517 = 2*256 + 5)
+pub const NumeralDigits = struct {
+    /// Index into the shared digit byte array in ModuleEnv
+    digits_start: u32,
+    /// Number of bytes for digits_before_pt
+    before_pt_len: u16,
+    /// Number of bytes for digits_after_pt
+    after_pt_len: u16,
+    /// Whether the literal had a minus sign
+    is_negative: bool,
+
+    /// Get the total length of stored digits
+    pub fn totalLen(self: NumeralDigits) u32 {
+        return @as(u32, self.before_pt_len) + @as(u32, self.after_pt_len);
+    }
+
+    /// Extract digits_before_pt from the shared byte array
+    pub fn getDigitsBeforePt(self: NumeralDigits, digit_bytes: []const u8) []const u8 {
+        return digit_bytes[self.digits_start..][0..self.before_pt_len];
+    }
+
+    /// Extract digits_after_pt from the shared byte array
+    pub fn getDigitsAfterPt(self: NumeralDigits, digit_bytes: []const u8) []const u8 {
+        const after_start = self.digits_start + self.before_pt_len;
+        return digit_bytes[after_start..][0..self.after_pt_len];
+    }
+
+    /// Format the base-256 encoded numeral back to a human-readable decimal string.
+    /// Writes to the provided buffer and returns a slice of the written content.
+    /// Buffer should be at least 128 bytes to handle most numbers.
+    pub fn formatDecimal(self: NumeralDigits, digit_bytes: []const u8, buf: []u8) []const u8 {
+        return formatBase256ToDecimal(
+            self.is_negative,
+            self.getDigitsBeforePt(digit_bytes),
+            self.getDigitsAfterPt(digit_bytes),
+            buf,
+        );
+    }
+};
+
+/// Format base-256 encoded digits to a human-readable decimal string.
+/// This is useful for error messages where we need to show the user what number
+/// was invalid (e.g., "The number 999999999 is not a valid U8").
+///
+/// Parameters:
+/// - is_negative: whether the number had a minus sign
+/// - digits_before_pt: base-256 encoded integer part
+/// - digits_after_pt: base-256 encoded fractional part
+/// - buf: output buffer (should be at least 128 bytes)
+///
+/// Returns a slice of buf containing the formatted decimal string.
+pub fn formatBase256ToDecimal(
+    is_negative: bool,
+    digits_before_pt: []const u8,
+    digits_after_pt: []const u8,
+    buf: []u8,
+) []const u8 {
+    var writer = std.io.fixedBufferStream(buf);
+    const w = writer.writer();
+
+    // Write sign if negative
+    if (is_negative) w.writeAll("-") catch {};
+
+    // Convert base-256 integer part to decimal
+    var value: u128 = 0;
+    for (digits_before_pt) |digit| {
+        value = value * 256 + digit;
+    }
+    var int_buf: [40]u8 = undefined;
+    w.writeAll(builtins.compiler_rt_128.u128_to_str(&int_buf, value).str) catch {};
+
+    // Format fractional part if present and non-zero
+    if (digits_after_pt.len > 0) {
+        var has_nonzero = false;
+        for (digits_after_pt) |d| {
+            if (d != 0) {
+                has_nonzero = true;
+                break;
+            }
+        }
+        if (has_nonzero) {
+            w.writeAll(".") catch {};
+            // Convert base-256 fractional digits to decimal
+            var frac: f64 = 0;
+            var frac_mult: f64 = 1.0 / 256.0;
+            for (digits_after_pt) |digit| {
+                frac += @as(f64, @floatFromInt(digit)) * frac_mult;
+                frac_mult /= 256.0;
+            }
+            // Print fractional part (removing leading "0.")
+            var frac_buf: [400]u8 = undefined;
+            const frac_str = builtins.compiler_rt_128.f64_to_str(&frac_buf, frac);
+            if (frac_str.len > 2 and std.mem.startsWith(u8, frac_str, "0.")) {
+                w.writeAll(frac_str[2..]) catch {};
+            }
+        }
+    }
+
+    return buf[0..writer.pos];
+}
+
 // RocDec type definition (for missing export)
 // Must match the structure of builtins.RocDec
 pub const RocDec = builtins.dec.RocDec;
@@ -517,19 +747,37 @@ pub fn toI128(self: RocDec) i128 {
 /// Creates a RocDec from an f64 value, returns null if conversion fails
 pub fn fromF64(f: f64) ?RocDec {
     // Simple conversion - the real implementation is in builtins/dec.zig
-    const scaled = @as(i128, @intFromFloat(f * 1_000_000_000_000_000_000.0));
+    const scaled = builtins.compiler_rt_128.f64_to_i128(f * 1_000_000_000_000_000_000.0);
     return RocDec{ .num = scaled };
 }
 
 /// Represents an import statement in a module
 pub const Import = struct {
-    pub const Idx = enum(u32) { _ };
+    pub const Idx = enum(u32) {
+        first = 0,
+        _,
+    };
+
+    pub const ResolvedModuleIdx = enum(u32) {
+        none = std.math.maxInt(u32),
+        _,
+
+        pub fn isNone(self: ResolvedModuleIdx) bool {
+            return self == .none;
+        }
+    };
 
     pub const Store = struct {
         /// Map from interned string idx to Import.Idx for deduplication
         map: std.AutoHashMapUnmanaged(base.StringLiteral.Idx, Import.Idx) = .{},
         /// List of interned string IDs indexed by Import.Idx
         imports: collections.SafeList(base.StringLiteral.Idx) = .{},
+        /// List of interned ident IDs indexed by Import.Idx (parallel to imports)
+        /// Used for efficient index-based lookups instead of string comparison
+        import_idents: collections.SafeList(base.Ident.Idx) = .{},
+        /// Resolved module indices, parallel to imports list
+        /// Each entry is either a valid module index or unresolved
+        resolved_modules: collections.SafeList(ResolvedModuleIdx) = .{},
 
         pub fn init() Store {
             return .{};
@@ -538,16 +786,44 @@ pub const Import = struct {
         pub fn deinit(self: *Store, allocator: std.mem.Allocator) void {
             self.map.deinit(allocator);
             self.imports.deinit(allocator);
+            self.import_idents.deinit(allocator);
+            self.resolved_modules.deinit(allocator);
+        }
+
+        /// Deinit only the hash map, not the SafeLists.
+        /// Used for cached modules where the SafeLists point into the cache buffer
+        /// but the map was heap-allocated during deserialization.
+        pub fn deinitMapOnly(self: *Store, allocator: std.mem.Allocator) void {
+            self.map.deinit(allocator);
         }
 
         /// Get or create an Import.Idx for the given module name.
         /// The module name is first checked against existing imports by comparing strings.
+        /// New imports are initially unresolved (unresolved).
+        /// If ident_idx is provided, it will be stored for index-based lookups.
         pub fn getOrPut(self: *Store, allocator: std.mem.Allocator, strings: *base.StringLiteral.Store, module_name: []const u8) !Import.Idx {
+            return self.getOrPutWithIdent(allocator, strings, module_name, null);
+        }
+
+        /// Get or create an Import.Idx for the given module name, with an associated ident.
+        /// The module name is first checked against existing imports by comparing strings.
+        /// New imports are initially unresolved (unresolved).
+        /// If ident_idx is provided, it will be stored for index-based lookups.
+        pub fn getOrPutWithIdent(self: *Store, allocator: std.mem.Allocator, strings: *base.StringLiteral.Store, module_name: []const u8, ident_idx: ?base.Ident.Idx) !Import.Idx {
             // First check if we already have this module name by comparing strings
             for (self.imports.items.items, 0..) |existing_string_idx, i| {
                 const existing_name = strings.get(existing_string_idx);
                 if (std.mem.eql(u8, existing_name, module_name)) {
                     // Found existing import with same name
+                    // Update ident if provided and not already set
+                    if (ident_idx) |ident| {
+                        if (i < self.import_idents.len()) {
+                            const current = self.import_idents.items.items[i];
+                            if (current.isNone()) {
+                                self.import_idents.items.items[i] = ident;
+                            }
+                        }
+                    }
                     return @as(Import.Idx, @enumFromInt(i));
                 }
             }
@@ -556,11 +832,81 @@ pub const Import = struct {
             const string_idx = try strings.insert(allocator, module_name);
             const idx = @as(Import.Idx, @enumFromInt(self.imports.len()));
 
-            // Add to both the list and the map
+            // Add to both the list and the map, with unresolved module initially
             _ = try self.imports.append(allocator, string_idx);
+            _ = try self.import_idents.append(allocator, ident_idx orelse base.Ident.Idx.NONE);
+            _ = try self.resolved_modules.append(allocator, ResolvedModuleIdx.none);
             try self.map.put(allocator, string_idx, idx);
 
             return idx;
+        }
+
+        /// Get the ident index for an import, or null if not set
+        pub fn getIdentIdx(self: *const Store, import_idx: Import.Idx) ?base.Ident.Idx {
+            const idx = @intFromEnum(import_idx);
+            if (idx >= self.import_idents.len()) return null;
+            const ident = self.import_idents.items.items[idx];
+            if (ident.isNone()) return null;
+            return ident;
+        }
+
+        /// Get the resolved module index for an import, or null if unresolved
+        pub fn getResolvedModule(self: *const Store, import_idx: Import.Idx) ?u32 {
+            const idx = @intFromEnum(import_idx);
+            if (idx >= self.resolved_modules.len()) return null;
+            const resolved = self.resolved_modules.items.items[idx];
+            if (resolved.isNone()) return null;
+            return @intFromEnum(resolved);
+        }
+
+        /// Set the resolved module index for an import
+        pub fn setResolvedModule(self: *Store, import_idx: Import.Idx, module_idx: u32) void {
+            const idx = @intFromEnum(import_idx);
+            if (idx < self.resolved_modules.len()) {
+                self.resolved_modules.items.items[idx] = @enumFromInt(module_idx);
+            }
+        }
+
+        /// Resolve all imports by matching import names to module names in the provided array.
+        /// This sets the resolved_modules index for each import that matches a module.
+        ///
+        /// Parameters:
+        /// - env: The module environment containing the string store for import names
+        /// - available_modules: Array of module environments to match against
+        ///
+        /// For each import, this finds the module in available_modules whose module_name
+        /// matches the import name and sets the resolved index accordingly.
+        ///
+        /// For package-qualified imports like "pf.Stdout", this also tries to match the
+        /// base module name ("Stdout") if the full qualified name doesn't match.
+        pub fn resolveImports(self: *Store, env: anytype, available_modules: []const *const @import("ModuleEnv.zig")) void {
+            const import_count: usize = @intCast(self.imports.len());
+            for (0..import_count) |i| {
+                const import_idx: Import.Idx = @enumFromInt(i);
+                const str_idx = self.imports.items.items[i];
+                const import_name = env.common.getString(str_idx);
+
+                // For package-qualified imports like "pf.Stdout", extract the base module name
+                const base_name = if (std.mem.lastIndexOf(u8, import_name, ".")) |dot_pos|
+                    import_name[dot_pos + 1 ..]
+                else
+                    import_name;
+
+                // Find matching module in available_modules by comparing module names
+                for (available_modules, 0..) |module_env, module_idx| {
+                    // Try exact match first, then base name match for package-qualified imports
+                    if (std.mem.eql(u8, module_env.module_name, import_name) or
+                        std.mem.eql(u8, module_env.module_name, base_name))
+                    {
+                        self.setResolvedModule(import_idx, @intCast(module_idx));
+
+                        if (comptime trace_modules) {
+                            std.debug.print("[TRACE-MODULES] resolveImports: \"{s}\" -> module_idx={d} (matched \"{s}\")\n", .{ import_name, module_idx, module_env.module_name });
+                        }
+                        break;
+                    }
+                }
+            }
         }
 
         /// Serialize this Store to the given CompactWriter. The resulting Store
@@ -579,6 +925,8 @@ pub const Import = struct {
             offset_self.* = .{
                 .map = .{}, // Map will be empty after deserialization (only used for deduplication during insertion)
                 .imports = (try self.imports.serialize(allocator, writer)).*,
+                .import_idents = (try self.import_idents.serialize(allocator, writer)).*,
+                .resolved_modules = (try self.resolved_modules.serialize(allocator, writer)).*,
             };
 
             return @constCast(offset_self);
@@ -587,12 +935,18 @@ pub const Import = struct {
         /// Add the given offset to the memory addresses of all pointers in `self`.
         pub fn relocate(self: *Store, offset: isize) void {
             self.imports.relocate(offset);
+            self.import_idents.relocate(offset);
+            self.resolved_modules.relocate(offset);
         }
 
-        pub const Serialized = struct {
+        /// Uses extern struct to guarantee consistent field layout across optimization levels.
+        pub const Serialized = extern struct {
             // Placeholder to match Store size - not serialized
-            map: std.AutoHashMapUnmanaged(base.StringLiteral.Idx, Import.Idx) = .{},
+            // Reserve space for hashmap (3 pointers for unmanaged hashmap internals)
+            map: [3]u64,
             imports: collections.SafeList(base.StringLiteral.Idx).Serialized,
+            import_idents: collections.SafeList(base.Ident.Idx).Serialized,
+            resolved_modules: collections.SafeList(Import.ResolvedModuleIdx).Serialized,
 
             /// Serialize a Store into this Serialized struct, appending data to the writer
             pub fn serialize(
@@ -603,22 +957,31 @@ pub const Import = struct {
             ) std.mem.Allocator.Error!void {
                 // Serialize the imports SafeList
                 try self.imports.serialize(&store.imports, allocator, writer);
+                // Serialize the import_idents SafeList
+                try self.import_idents.serialize(&store.import_idents, allocator, writer);
+                // Serialize the resolved_modules SafeList
+                try self.resolved_modules.serialize(&store.resolved_modules, allocator, writer);
+
+                // Set map to all zeros; the space needs to be here,
+                // but the map will be rebuilt during deserialization.
+                self.map = .{ 0, 0, 0 };
                 // Note: The map is not serialized as it's only used for deduplication during insertion
             }
 
-            /// Deserialize this Serialized struct into a Store
-            pub fn deserialize(self: *Serialized, offset: i64, allocator: std.mem.Allocator) *Store {
-                // Overwrite ourself with the deserialized version, and return our pointer after casting it to Store.
-                const store = @as(*Store, @ptrFromInt(@intFromPtr(self)));
-
-                store.* = .{
+            /// Deserialize into a Store value (no in-place modification of cache buffer).
+            /// The base parameter is the base address of the serialized buffer in memory.
+            /// Note: The map is freshly allocated and populated from the deserialized imports.
+            pub fn deserializeInto(self: *const Serialized, base_addr: usize, allocator: std.mem.Allocator) std.mem.Allocator.Error!Store {
+                var store = Store{
                     .map = .{}, // Will be repopulated below
-                    .imports = self.imports.deserialize(offset).*,
+                    .imports = self.imports.deserializeInto(base_addr),
+                    .import_idents = self.import_idents.deserializeInto(base_addr),
+                    .resolved_modules = self.resolved_modules.deserializeInto(base_addr),
                 };
 
                 // Pre-allocate the exact capacity needed for the map
                 const import_count = store.imports.items.items.len;
-                store.map.ensureTotalCapacity(allocator, @intCast(import_count)) catch unreachable;
+                try store.map.ensureTotalCapacity(allocator, @intCast(import_count));
 
                 // Repopulate the map - we know there's enough capacity since we
                 // are deserializing from a Serialized struct
@@ -636,7 +999,7 @@ pub const Import = struct {
 /// Represents a field in a record expression
 pub const RecordField = struct {
     pub const Idx = enum(u32) { _ };
-    pub const Span = struct { span: base.DataSpan };
+    pub const Span = extern struct { span: base.DataSpan };
 
     name: base.Ident.Idx,
     value: Expr.Idx,
@@ -667,7 +1030,7 @@ pub const ExternalDecl = struct {
     region: Region,
 
     pub const Idx = enum(u32) { _ };
-    pub const Span = struct { span: base.DataSpan };
+    pub const Span = extern struct { span: base.DataSpan };
     /// A safe list of external declarations
     pub const SafeList = collections.SafeList(ExternalDecl);
 
@@ -729,7 +1092,6 @@ pub fn isCastable(comptime T: type) bool {
         TypeAnno.RecordField.Idx,
         ExposedItem.Idx,
         Expr.Match.BranchPattern.Idx,
-        PatternRecordField.Idx,
         Node.Idx,
         TypeVar,
         => true,

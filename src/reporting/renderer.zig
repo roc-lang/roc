@@ -2,7 +2,6 @@
 //! output formats without the complexity of vtables or interfaces.
 
 const std = @import("std");
-const collections = @import("collections");
 
 const source_region = @import("source_region.zig");
 const Allocator = std.mem.Allocator;
@@ -42,7 +41,7 @@ pub const RenderTarget = enum {
 };
 
 /// Render a report to the specified target format.
-pub fn renderReport(report: *const Report, writer: anytype, target: RenderTarget) !void {
+pub fn renderReport(report: *const Report, writer: *std.Io.Writer, target: RenderTarget) !void {
     // Create appropriate config based on render target
     const config = switch (target) {
         .color_terminal => ReportingConfig.initColorTerminal(),
@@ -61,7 +60,7 @@ pub fn renderReport(report: *const Report, writer: anytype, target: RenderTarget
 }
 
 /// Render a report to terminal with color support.
-pub fn renderReportToTerminal(report: *const Report, writer: anytype, palette: ColorPalette, config: ReportingConfig) !void {
+pub fn renderReportToTerminal(report: *const Report, writer: *std.Io.Writer, palette: ColorPalette, config: ReportingConfig) !void {
     // Render title with appropriate severity styling
     const title_color = switch (report.severity) {
         .info => palette.info,
@@ -97,7 +96,7 @@ pub fn renderReportToTerminal(report: *const Report, writer: anytype, palette: C
 }
 
 /// Render a report to plain text.
-pub fn renderReportToMarkdown(report: *const Report, writer: anytype, config: ReportingConfig) !void {
+pub fn renderReportToMarkdown(report: *const Report, writer: *std.Io.Writer, config: ReportingConfig) !void {
     try writer.writeAll("**");
     try writer.writeAll(report.title);
     try writer.writeAll("**\n");
@@ -106,7 +105,7 @@ pub fn renderReportToMarkdown(report: *const Report, writer: anytype, config: Re
 }
 
 /// Render a report to HTML.
-pub fn renderReportToHtml(report: *const Report, writer: anytype, config: ReportingConfig) !void {
+pub fn renderReportToHtml(report: *const Report, writer: *std.Io.Writer, config: ReportingConfig) !void {
     const title_class = switch (report.severity) {
         .info => "info",
         .fatal => "error",
@@ -124,7 +123,7 @@ pub fn renderReportToHtml(report: *const Report, writer: anytype, config: Report
 }
 
 /// Render a report for language server protocol.
-pub fn renderReportToLsp(report: *const Report, writer: anytype, config: ReportingConfig) !void {
+pub fn renderReportToLsp(report: *const Report, writer: *std.Io.Writer, config: ReportingConfig) !void {
     // LSP typically wants plain text without formatting
     try writer.writeAll(report.title);
     try writer.writeAll("\n\n");
@@ -132,7 +131,7 @@ pub fn renderReportToLsp(report: *const Report, writer: anytype, config: Reporti
 }
 
 /// Render a document to the specified target format.
-pub fn renderDocument(document: *const Document, writer: anytype, target: RenderTarget) std.mem.Allocator.Error!void {
+pub fn renderDocument(document: *const Document, writer: *std.Io.Writer, target: RenderTarget) std.mem.Allocator.Error!void {
     // Create appropriate config based on render target
     const config = switch (target) {
         .color_terminal => ReportingConfig.initColorTerminal(),
@@ -153,8 +152,8 @@ pub fn renderDocument(document: *const Document, writer: anytype, target: Render
 }
 
 /// Render a document to terminal with color support.
-pub fn renderDocumentToTerminal(document: *const Document, writer: anytype, palette: ColorPalette, config: ReportingConfig) !void {
-    var annotation_stack = std.ArrayList(Annotation).init(document.allocator);
+pub fn renderDocumentToTerminal(document: *const Document, writer: *std.Io.Writer, palette: ColorPalette, config: ReportingConfig) !void {
+    var annotation_stack = std.array_list.Managed(Annotation).init(document.allocator);
     defer annotation_stack.deinit();
 
     for (document.elements.items) |element| {
@@ -163,15 +162,15 @@ pub fn renderDocumentToTerminal(document: *const Document, writer: anytype, pale
 }
 
 /// Render a document to plain text.
-pub fn renderDocumentToMarkdown(document: *const Document, writer: anytype, config: ReportingConfig) !void {
+pub fn renderDocumentToMarkdown(document: *const Document, writer: *std.Io.Writer, config: ReportingConfig) !void {
     for (document.elements.items) |element| {
         try renderElementToMarkdown(element, writer, config);
     }
 }
 
 /// Render a document to HTML.
-pub fn renderDocumentToHtml(document: *const Document, writer: anytype, config: ReportingConfig) !void {
-    var annotation_stack = std.ArrayList(Annotation).init(document.allocator);
+pub fn renderDocumentToHtml(document: *const Document, writer: *std.Io.Writer, config: ReportingConfig) !void {
+    var annotation_stack = std.array_list.Managed(Annotation).init(document.allocator);
     defer annotation_stack.deinit();
 
     for (document.elements.items) |element| {
@@ -180,7 +179,7 @@ pub fn renderDocumentToHtml(document: *const Document, writer: anytype, config: 
 }
 
 /// Render a document for language server protocol.
-pub fn renderDocumentToLsp(document: *const Document, writer: anytype, config: ReportingConfig) !void {
+pub fn renderDocumentToLsp(document: *const Document, writer: *std.Io.Writer, config: ReportingConfig) !void {
     for (document.elements.items) |element| {
         try renderElementToLsp(element, writer, config);
     }
@@ -188,7 +187,7 @@ pub fn renderDocumentToLsp(document: *const Document, writer: anytype, config: R
 
 // Terminal rendering functions
 
-fn renderElementToTerminal(element: DocumentElement, writer: anytype, palette: ColorPalette, annotation_stack: *std.ArrayList(Annotation), config: ReportingConfig) !void {
+fn renderElementToTerminal(element: DocumentElement, writer: *std.Io.Writer, palette: ColorPalette, annotation_stack: *std.array_list.Managed(Annotation), config: ReportingConfig) !void {
     switch (element) {
         .text => |text| try writer.writeAll(text),
         .annotated => |annotated| {
@@ -298,8 +297,8 @@ fn renderElementToTerminal(element: DocumentElement, writer: anytype, palette: C
                     try writer.writeAll(" │ ");
                     try writer.writeAll(palette.reset);
 
-                    // Print spaces up to the start column
-                    try source_region.printSpaces(writer, region.start_column - 1);
+                    // Print leading whitespace, preserving tabs from the source line
+                    try source_region.printLeadingWhitespace(writer, line, region.start_column);
 
                     // Print the underline
                     try writer.writeAll(color);
@@ -370,9 +369,15 @@ fn renderElementToTerminal(element: DocumentElement, writer: anytype, palette: C
                     var col_position: u32 = 1;
                     for (data.underline_regions) |underline| {
                         if (underline.start_line == line_num and underline.start_line == underline.end_line) {
-                            // Print spaces up to the start column
+                            // Print whitespace up to the start column
                             if (underline.start_column > col_position) {
-                                try source_region.printSpaces(writer, underline.start_column - col_position);
+                                if (col_position == 1) {
+                                    // First underline: preserve tabs from source
+                                    try source_region.printLeadingWhitespace(writer, line, underline.start_column);
+                                } else {
+                                    // Subsequent underlines: just use spaces
+                                    try source_region.printSpaces(writer, underline.start_column - col_position);
+                                }
                             }
 
                             // Print the underline
@@ -439,7 +444,7 @@ fn getAnnotationColor(annotation: Annotation, palette: ColorPalette) []const u8 
 
 // Plain text rendering functions
 
-fn renderElementToMarkdown(element: DocumentElement, writer: anytype, config: ReportingConfig) !void {
+fn renderElementToMarkdown(element: DocumentElement, writer: *std.Io.Writer, config: ReportingConfig) !void {
     switch (element) {
         .text => |text| try writer.writeAll(text),
         .annotated => |annotated| {
@@ -653,7 +658,7 @@ fn renderElementToMarkdown(element: DocumentElement, writer: anytype, config: Re
 
 // HTML rendering functions
 
-fn renderElementToHtml(element: DocumentElement, writer: anytype, annotation_stack: *std.ArrayList(Annotation), config: ReportingConfig) !void {
+fn renderElementToHtml(element: DocumentElement, writer: *std.Io.Writer, annotation_stack: *std.array_list.Managed(Annotation), config: ReportingConfig) !void {
     switch (element) {
         .text => |text| try writeEscapedHtml(writer, text),
         .annotated => |annotated| {
@@ -769,7 +774,7 @@ fn getAnnotationHtmlClass(annotation: Annotation) []const u8 {
     return annotation.semanticName();
 }
 
-fn writeEscapedHtml(writer: anytype, text: []const u8) !void {
+fn writeEscapedHtml(writer: *std.Io.Writer, text: []const u8) !void {
     for (text) |char| {
         switch (char) {
             '<' => try writer.writeAll("&lt;"),
@@ -784,7 +789,7 @@ fn writeEscapedHtml(writer: anytype, text: []const u8) !void {
 
 // LSP rendering functions
 
-fn renderElementToLsp(element: DocumentElement, writer: anytype, config: ReportingConfig) !void {
+fn renderElementToLsp(element: DocumentElement, writer: *std.Io.Writer, config: ReportingConfig) !void {
     switch (element) {
         .text => |text| try writer.writeAll(text),
         .annotated => |annotated| try writer.writeAll(annotated.content),
@@ -865,13 +870,13 @@ test "render report to markdown" {
 
     try report.document.addText("This is a test error message.");
 
-    var buffer = std.ArrayList(u8).init(testing.allocator);
-    defer buffer.deinit();
+    var writer = std.Io.Writer.Allocating.init(testing.allocator);
+    defer writer.deinit();
 
-    try renderReportToMarkdown(&report, buffer.writer(), ReportingConfig.initMarkdown());
+    try renderReportToMarkdown(&report, &writer.writer, ReportingConfig.initMarkdown());
 
-    try testing.expect(std.mem.indexOf(u8, buffer.items, "**TEST ERROR**") != null);
-    try testing.expect(std.mem.indexOf(u8, buffer.items, "This is a test error message.") != null);
+    try testing.expect(std.mem.indexOf(u8, writer.written(), "**TEST ERROR**") != null);
+    try testing.expect(std.mem.indexOf(u8, writer.written(), "This is a test error message.") != null);
 }
 
 test "render document with annotations to markdown" {
@@ -882,12 +887,12 @@ test "render document with annotations to markdown" {
     try doc.addAnnotated("world", .emphasized);
     try doc.addText("!");
 
-    var buffer = std.ArrayList(u8).init(testing.allocator);
-    defer buffer.deinit();
+    var writer = std.Io.Writer.Allocating.init(testing.allocator);
+    defer writer.deinit();
 
-    try renderDocumentToMarkdown(&doc, buffer.writer(), ReportingConfig.initMarkdown());
+    try renderDocumentToMarkdown(&doc, &writer.writer, ReportingConfig.initMarkdown());
 
-    try testing.expectEqualStrings("Hello **world**!", buffer.items);
+    try testing.expectEqualStrings("Hello **world**!", writer.written());
 }
 
 test "render HTML escaping" {
@@ -896,13 +901,13 @@ test "render HTML escaping" {
 
     try doc.addText("<script>alert('test')</script>");
 
-    var buffer = std.ArrayList(u8).init(testing.allocator);
-    defer buffer.deinit();
+    var writer = std.Io.Writer.Allocating.init(testing.allocator);
+    defer writer.deinit();
 
-    try renderDocumentToHtml(&doc, buffer.writer(), ReportingConfig.initHtml());
+    try renderDocumentToHtml(&doc, &writer.writer, ReportingConfig.initHtml());
 
-    try testing.expect(std.mem.indexOf(u8, buffer.items, "&lt;script&gt;") != null);
-    try testing.expect(std.mem.indexOf(u8, buffer.items, "<script>") == null);
+    try testing.expect(std.mem.indexOf(u8, writer.written(), "&lt;script&gt;") != null);
+    try testing.expect(std.mem.indexOf(u8, writer.written(), "<script>") == null);
 }
 
 test "render indentation and spacing" {
@@ -914,12 +919,12 @@ test "render indentation and spacing" {
     try doc.addSpace(3);
     try doc.addText("spaced");
 
-    var buffer = std.ArrayList(u8).init(testing.allocator);
-    defer buffer.deinit();
+    var writer = std.Io.Writer.Allocating.init(testing.allocator);
+    defer writer.deinit();
 
-    try renderDocumentToMarkdown(&doc, buffer.writer(), ReportingConfig.initMarkdown());
+    try renderDocumentToMarkdown(&doc, &writer.writer, ReportingConfig.initMarkdown());
 
-    try testing.expectEqualStrings("        indented   spaced", buffer.items);
+    try testing.expectEqualStrings("        indented   spaced", writer.written());
 }
 
 test "render horizontal rule" {
@@ -928,10 +933,10 @@ test "render horizontal rule" {
 
     try doc.addHorizontalRule(5);
 
-    var buffer = std.ArrayList(u8).init(testing.allocator);
-    defer buffer.deinit();
+    var writer = std.Io.Writer.Allocating.init(testing.allocator);
+    defer writer.deinit();
 
-    try renderDocumentToMarkdown(&doc, buffer.writer(), ReportingConfig.initMarkdown());
+    try renderDocumentToMarkdown(&doc, &writer.writer, ReportingConfig.initMarkdown());
 
-    try testing.expectEqualStrings("\n---\n", buffer.items);
+    try testing.expectEqualStrings("\n---\n", writer.written());
 }

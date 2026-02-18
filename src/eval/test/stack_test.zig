@@ -4,8 +4,11 @@ const collections = @import("collections");
 const Stack = @import("../stack.zig").Stack;
 const StackOverflow = @import("../stack.zig").StackOverflow;
 
+// Use page_allocator for interpreter tests (doesn't track leaks)
+const test_allocator = std.heap.page_allocator;
+
 test "Stack.initCapacity and deinit" {
-    var stack = try Stack.initCapacity(std.testing.allocator, 1024);
+    var stack = try Stack.initCapacity(test_allocator, 1024);
     defer stack.deinit();
 
     try std.testing.expectEqual(@as(u32, 1024), stack.capacity);
@@ -14,13 +17,13 @@ test "Stack.initCapacity and deinit" {
 }
 
 test "Stack.alloca basic allocation" {
-    var stack = try Stack.initCapacity(std.testing.allocator, 1024);
+    var stack = try Stack.initCapacity(test_allocator, 1024);
     defer stack.deinit();
 
-    const ptr1 = try stack.alloca(10, @enumFromInt(0));
+    const ptr1 = try stack.alloca(10, .@"1");
     try std.testing.expectEqual(@as(u32, 10), stack.used);
 
-    const ptr2 = try stack.alloca(20, @enumFromInt(0));
+    const ptr2 = try stack.alloca(20, .@"1");
     try std.testing.expectEqual(@as(u32, 30), stack.used);
 
     // The pointers should be different
@@ -29,7 +32,7 @@ test "Stack.alloca basic allocation" {
 }
 
 test "Stack.alloca with alignment" {
-    var stack = try Stack.initCapacity(std.testing.allocator, 4096);
+    var stack = try Stack.initCapacity(test_allocator, 4096);
     defer stack.deinit();
 
     // Test alignments from 1 to 16
@@ -42,7 +45,7 @@ test "Stack.alloca with alignment" {
 
         // Create initial misalignment
         if (misalign > 0) {
-            _ = try stack.alloca(@intCast(misalign), @enumFromInt(0));
+            _ = try stack.alloca(@intCast(misalign), .@"1");
         }
 
         // Test each alignment with the current misalignment
@@ -70,7 +73,7 @@ test "Stack.alloca with alignment" {
     stack.used = 0;
     for (alignments) |alignment| {
         // Create some misalignment
-        _ = try stack.alloca(3, @enumFromInt(0));
+        _ = try stack.alloca(3, .@"1");
 
         const before_used = stack.used;
         const ptr = try stack.alloca(alignment * 2, @enumFromInt(std.math.log2_int(u32, alignment)));
@@ -84,53 +87,53 @@ test "Stack.alloca with alignment" {
 }
 
 test "Stack.alloca overflow" {
-    var stack = try Stack.initCapacity(std.testing.allocator, 100);
+    var stack = try Stack.initCapacity(test_allocator, 100);
     defer stack.deinit();
 
     // This should succeed
-    _ = try stack.alloca(50, @enumFromInt(0));
+    _ = try stack.alloca(50, .@"1");
 
     // This should fail (would total 150 bytes)
-    try std.testing.expectError(StackOverflow.StackOverflow, stack.alloca(100, @enumFromInt(0)));
+    try std.testing.expectError(StackOverflow.StackOverflow, stack.alloca(100, .@"1"));
 
     // Stack should still be in valid state
     try std.testing.expectEqual(@as(u32, 50), stack.used);
 }
 
 test "Stack.restore" {
-    var stack = try Stack.initCapacity(std.testing.allocator, 1024);
+    var stack = try Stack.initCapacity(test_allocator, 1024);
     defer stack.deinit();
 
     const checkpoint = stack.next();
-    _ = try stack.alloca(100, @enumFromInt(0));
+    _ = try stack.alloca(100, .@"1");
     try std.testing.expectEqual(@as(u32, 100), stack.used);
 
     stack.restore(checkpoint);
     try std.testing.expectEqual(@as(u32, 0), stack.used);
 
     // Allocate again after restore
-    const ptr1 = try stack.alloca(50, @enumFromInt(0));
+    const ptr1 = try stack.alloca(50, .@"1");
     try std.testing.expectEqual(@intFromPtr(checkpoint), @intFromPtr(ptr1));
 }
 
 test "Stack.isEmpty" {
-    var stack = try Stack.initCapacity(std.testing.allocator, 100);
+    var stack = try Stack.initCapacity(test_allocator, 100);
     defer stack.deinit();
 
     try std.testing.expect(stack.isEmpty());
     try std.testing.expectEqual(@as(u32, 100), stack.available());
 
-    _ = try stack.alloca(30, @enumFromInt(0));
+    _ = try stack.alloca(30, .@"1");
     try std.testing.expect(!stack.isEmpty());
     try std.testing.expectEqual(@as(u32, 70), stack.available());
 }
 
 test "Stack zero-size allocation" {
-    var stack = try Stack.initCapacity(std.testing.allocator, 100);
+    var stack = try Stack.initCapacity(test_allocator, 100);
     defer stack.deinit();
 
-    const ptr1 = try stack.alloca(0, @enumFromInt(0));
-    const ptr2 = try stack.alloca(0, @enumFromInt(0));
+    const ptr1 = try stack.alloca(0, .@"1");
+    const ptr2 = try stack.alloca(0, .@"1");
 
     // Zero-size allocations should return the same pointer
     try std.testing.expectEqual(@intFromPtr(ptr1), @intFromPtr(ptr2));
@@ -138,7 +141,7 @@ test "Stack zero-size allocation" {
 }
 
 test "Stack memory is aligned to max_roc_alignment" {
-    var stack = try Stack.initCapacity(std.testing.allocator, 1024);
+    var stack = try Stack.initCapacity(test_allocator, 1024);
     defer stack.deinit();
 
     // Check that the start pointer is aligned to max_roc_alignment
@@ -147,8 +150,8 @@ test "Stack memory is aligned to max_roc_alignment" {
     try std.testing.expectEqual(@as(usize, 0), start_addr % max_alignment_value);
 
     // Also verify after some allocations
-    _ = try stack.alloca(100, @enumFromInt(0));
-    _ = try stack.alloca(200, @enumFromInt(0));
+    _ = try stack.alloca(100, .@"1");
+    _ = try stack.alloca(200, .@"1");
 
     // The start pointer should still be aligned
     try std.testing.expectEqual(@as(usize, 0), start_addr % max_alignment_value);

@@ -7,7 +7,6 @@
 
 const std = @import("std");
 const base = @import("base");
-const collections = @import("collections");
 
 const Allocator = std.mem.Allocator;
 const ReportingConfig = @import("config.zig").ReportingConfig;
@@ -234,12 +233,12 @@ pub const DocumentElement = union(enum) {
 
 /// A document composed of structured elements that can be rendered.
 pub const Document = struct {
-    elements: std.ArrayList(DocumentElement),
+    elements: std.array_list.Managed(DocumentElement),
     allocator: Allocator,
 
     pub fn init(allocator: Allocator) Document {
         return Document{
-            .elements = std.ArrayList(DocumentElement).init(allocator),
+            .elements = std.array_list.Managed(DocumentElement).init(allocator),
             .allocator = allocator,
         };
     }
@@ -256,10 +255,14 @@ pub const Document = struct {
                 .vertical_stack => |stack| self.allocator.free(stack),
                 .horizontal_concat => |concat| self.allocator.free(concat),
                 .source_code_multi_region => |multi| self.allocator.free(multi.regions),
-                .source_code_region => |region| self.allocator.free(region.line_text),
+                .source_code_region => |region| {
+                    self.allocator.free(region.line_text);
+                    if (region.filename) |f| self.allocator.free(f);
+                },
                 .source_code_with_underlines => |underlines| {
                     self.allocator.free(underlines.underline_regions);
                     self.allocator.free(underlines.display_region.line_text);
+                    if (underlines.display_region.filename) |f| self.allocator.free(f);
                 },
                 else => {},
             }
@@ -327,6 +330,51 @@ pub const Document = struct {
         try self.elements.append(.{ .reflowing_text = owned_text });
     }
 
+    /// Add reflowing text with backtick-delimited inline code support.
+    /// Text between backticks (`) will be rendered as inline code.
+    /// Example: "Use `when` for pattern matching" will render "when" as code.
+    pub fn addReflowingTextWithBackticks(self: *Document, text: []const u8) std.mem.Allocator.Error!void {
+        if (text.len == 0) return;
+
+        var i: usize = 0;
+        var last_pos: usize = 0;
+        var in_backticks = false;
+        var backtick_start: usize = 0;
+
+        while (i < text.len) {
+            if (text[i] == '`') {
+                if (in_backticks) {
+                    // Closing backtick - add the code content
+                    const code_content = text[backtick_start..i];
+                    if (code_content.len > 0) {
+                        try self.addInlineCode(code_content);
+                    }
+                    last_pos = i + 1;
+                    in_backticks = false;
+                } else {
+                    // Opening backtick - add any preceding text
+                    if (i > last_pos) {
+                        const regular_text = text[last_pos..i];
+                        if (regular_text.len > 0) {
+                            try self.addReflowingText(regular_text);
+                        }
+                    }
+                    backtick_start = i + 1;
+                    in_backticks = true;
+                }
+            }
+            i += 1;
+        }
+
+        // Add any remaining text after the last backtick
+        if (last_pos < text.len) {
+            const remaining_text = text[last_pos..];
+            if (remaining_text.len > 0) {
+                try self.addReflowingText(remaining_text);
+            }
+        }
+    }
+
     /// Add a source code display with multiple underlines.
     pub fn addSourceCodeWithUnderlines(
         self: *Document,
@@ -334,9 +382,24 @@ pub const Document = struct {
         underline_regions: []const UnderlineRegion,
     ) std.mem.Allocator.Error!void {
         const owned_regions = try self.allocator.dupe(UnderlineRegion, underline_regions);
+
+        // Copy the filename to ensure lifetime safety (same as addSourceRegion)
+        const owned_filename: ?[]const u8 = if (display_region.filename) |f|
+            try self.allocator.dupe(u8, f)
+        else
+            null;
+
         try self.elements.append(.{
             .source_code_with_underlines = .{
-                .display_region = display_region,
+                .display_region = .{
+                    .line_text = display_region.line_text,
+                    .start_line = display_region.start_line,
+                    .start_column = display_region.start_column,
+                    .end_line = display_region.end_line,
+                    .end_column = display_region.end_column,
+                    .region_annotation = display_region.region_annotation,
+                    .filename = owned_filename,
+                },
                 .underline_regions = owned_regions,
             },
         });
@@ -487,6 +550,12 @@ pub const Document = struct {
         const line_text_slice = region_info.calculateLineText(source, line_starts);
         const owned_line_text = try self.allocator.dupe(u8, line_text_slice);
 
+        // Copy the filename to ensure lifetime safety
+        const owned_filename: ?[]const u8 = if (filename) |f|
+            try self.allocator.dupe(u8, f)
+        else
+            null;
+
         try self.elements.append(.{
             .source_code_region = .{
                 .line_text = owned_line_text,
@@ -495,7 +564,7 @@ pub const Document = struct {
                 .end_line = region_info.end_line_idx + 1,
                 .end_column = region_info.end_col_idx + 1,
                 .region_annotation = annotation,
-                .filename = filename,
+                .filename = owned_filename,
             },
         });
     }
@@ -698,21 +767,21 @@ test "Document string memory safety" {
     defer document.deinit();
 
     // Create temporary strings that would be freed in real usage
-    var temp_text = std.ArrayList(u8).init(gpa);
-    defer temp_text.deinit();
-    try temp_text.appendSlice("This is test text");
+    var temp_text = std.ArrayList(u8).empty;
+    defer temp_text.deinit(gpa);
+    try temp_text.appendSlice(gpa, "This is test text");
 
-    var temp_annotated = std.ArrayList(u8).init(gpa);
-    defer temp_annotated.deinit();
-    try temp_annotated.appendSlice("This is annotated");
+    var temp_annotated = std.ArrayList(u8).empty;
+    defer temp_annotated.deinit(gpa);
+    try temp_annotated.appendSlice(gpa, "This is annotated");
 
     // Add text and annotated content (should be copied)
     try document.addText(temp_text.items);
     try document.addAnnotated(temp_annotated.items, .emphasized);
 
     // Clear the temporary strings to simulate memory being freed
-    temp_text.clearAndFree();
-    temp_annotated.clearAndFree();
+    temp_text.clearAndFree(gpa);
+    temp_annotated.clearAndFree(gpa);
 
     // Verify we can still access the document content
     try std.testing.expect(document.elements.items.len == 2);
@@ -725,4 +794,53 @@ test "Document string memory safety" {
     try std.testing.expect(second_element == .annotated);
     try std.testing.expectEqualStrings("This is annotated", second_element.annotated.content);
     try std.testing.expect(second_element.annotated.annotation == .emphasized);
+}
+
+test "Document addReflowingTextWithBackticks - simple case" {
+    const gpa = std.testing.allocator;
+    var document = Document.init(gpa);
+    defer document.deinit();
+
+    try document.addReflowingTextWithBackticks("Use `when` for pattern matching.");
+
+    // Should have 3 elements: "Use ", inline code "when", " for pattern matching."
+    try std.testing.expectEqual(@as(usize, 3), document.elements.items.len);
+
+    try std.testing.expect(document.elements.items[0] == .reflowing_text);
+    try std.testing.expectEqualStrings("Use ", document.elements.items[0].reflowing_text);
+
+    try std.testing.expect(document.elements.items[1] == .annotated);
+    try std.testing.expectEqualStrings("when", document.elements.items[1].annotated.content);
+    try std.testing.expect(document.elements.items[1].annotated.annotation == .inline_code);
+
+    try std.testing.expect(document.elements.items[2] == .reflowing_text);
+    try std.testing.expectEqualStrings(" for pattern matching.", document.elements.items[2].reflowing_text);
+}
+
+test "Document addReflowingTextWithBackticks - multiple inline code" {
+    const gpa = std.testing.allocator;
+    var document = Document.init(gpa);
+    defer document.deinit();
+
+    try document.addReflowingTextWithBackticks("Roc uses `and` instead of `&&`.");
+
+    // Should have 5 elements
+    try std.testing.expectEqual(@as(usize, 5), document.elements.items.len);
+
+    try std.testing.expectEqualStrings("Roc uses ", document.elements.items[0].reflowing_text);
+    try std.testing.expectEqualStrings("and", document.elements.items[1].annotated.content);
+    try std.testing.expectEqualStrings(" instead of ", document.elements.items[2].reflowing_text);
+    try std.testing.expectEqualStrings("&&", document.elements.items[3].annotated.content);
+    try std.testing.expectEqualStrings(".", document.elements.items[4].reflowing_text);
+}
+
+test "Document addReflowingTextWithBackticks - no backticks" {
+    const gpa = std.testing.allocator;
+    var document = Document.init(gpa);
+    defer document.deinit();
+
+    try document.addReflowingTextWithBackticks("Plain text without code.");
+
+    try std.testing.expectEqual(@as(usize, 1), document.elements.items.len);
+    try std.testing.expectEqualStrings("Plain text without code.", document.elements.items[0].reflowing_text);
 }

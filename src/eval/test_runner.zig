@@ -6,7 +6,11 @@ const std = @import("std");
 const base = @import("base");
 const builtins = @import("builtins");
 const can = @import("can");
+const types = @import("types");
+const import_mapping_mod = types.import_mapping;
+const reporting = @import("reporting");
 const Interpreter = @import("interpreter.zig").Interpreter;
+const roc_target = @import("roc_target");
 const eval_mod = @import("mod.zig");
 
 const RocOps = builtins.host_abi.RocOps;
@@ -23,26 +27,28 @@ const CIR = can.CIR;
 const EvalError = Interpreter.Error;
 const CrashContext = eval_mod.CrashContext;
 const CrashState = eval_mod.CrashState;
+const BuiltinTypes = eval_mod.BuiltinTypes;
 
-fn testRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.C) void {
+fn testRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.c) void {
     const test_env: *TestRunner = @ptrCast(@alignCast(env));
     const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(alloc_args.alignment)));
     const size_storage_bytes = @max(alloc_args.alignment, @alignOf(usize));
     const total_size = alloc_args.length + size_storage_bytes;
     const result = test_env.allocator.rawAlloc(total_size, align_enum, @returnAddress());
     const base_ptr = result orelse {
-        std.debug.panic("Out of memory during testRocAlloc", .{});
+        @panic("Out of memory during testRocAlloc");
     };
     const size_ptr: *usize = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes - @sizeOf(usize));
     size_ptr.* = total_size;
     alloc_args.answer = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes);
 }
 
-fn testRocDealloc(dealloc_args: *RocDealloc, env: *anyopaque) callconv(.C) void {
+fn testRocDealloc(dealloc_args: *RocDealloc, env: *anyopaque) callconv(.c) void {
     const test_env: *TestRunner = @ptrCast(@alignCast(env));
     const size_storage_bytes = @max(dealloc_args.alignment, @alignOf(usize));
     const size_ptr: *const usize = @ptrFromInt(@intFromPtr(dealloc_args.ptr) - @sizeOf(usize));
     const total_size = size_ptr.*;
+
     const base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(dealloc_args.ptr) - size_storage_bytes);
     const log2_align = std.math.log2_int(u32, @intCast(dealloc_args.alignment));
     const align_enum: std.mem.Alignment = @enumFromInt(log2_align);
@@ -50,7 +56,7 @@ fn testRocDealloc(dealloc_args: *RocDealloc, env: *anyopaque) callconv(.C) void 
     test_env.allocator.rawFree(slice, align_enum, @returnAddress());
 }
 
-fn testRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.C) void {
+fn testRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) void {
     const test_env: *TestRunner = @ptrCast(@alignCast(env));
     const size_storage_bytes = @max(realloc_args.alignment, @alignOf(usize));
     const old_size_ptr: *const usize = @ptrFromInt(@intFromPtr(realloc_args.answer) - @sizeOf(usize));
@@ -59,30 +65,36 @@ fn testRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.C) void 
     const new_total_size = realloc_args.new_length + size_storage_bytes;
     const old_slice = @as([*]u8, @ptrCast(old_base_ptr))[0..old_total_size];
     const new_slice = test_env.allocator.realloc(old_slice, new_total_size) catch {
-        std.debug.panic("Out of memory during testRocRealloc", .{});
+        @panic("Out of memory during testRocRealloc");
     };
     const new_size_ptr: *usize = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes - @sizeOf(usize));
     new_size_ptr.* = new_total_size;
     realloc_args.answer = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes);
 }
 
-fn testRocDbg(dbg_args: *const RocDbg, env: *anyopaque) callconv(.C) void {
-    _ = dbg_args;
-    _ = env;
+fn testRocDbg(_: *const RocDbg, _: *anyopaque) callconv(.c) void {
     @panic("testRocDbg not implemented yet");
 }
 
-fn testRocExpectFailed(expect_args: *const RocExpectFailed, env: *anyopaque) callconv(.C) void {
-    _ = expect_args;
-    _ = env;
-    @panic("testRocExpectFailed not implemented yet");
+fn testRocExpectFailed(expect_args: *const RocExpectFailed, env: *anyopaque) callconv(.c) void {
+    const test_env: *TestRunner = @ptrCast(@alignCast(env));
+    const source_bytes = expect_args.utf8_bytes[0..expect_args.len];
+    const trimmed = std.mem.trim(u8, source_bytes, " \t\n\r");
+    // Format and record the message
+    const formatted = std.fmt.allocPrint(test_env.allocator, "Expect failed: {s}", .{trimmed}) catch {
+        @panic("failed to allocate expect failure message for test runner");
+    };
+    test_env.crash.recordCrash(formatted) catch {
+        test_env.allocator.free(formatted);
+        @panic("failed to record expect failure for test runner");
+    };
 }
 
-fn testRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.C) void {
+fn testRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.c) void {
     const test_env: *TestRunner = @ptrCast(@alignCast(env));
     const msg_slice = crashed_args.utf8_bytes[0..crashed_args.len];
-    test_env.crash.recordCrash(msg_slice) catch |err| {
-        std.debug.panic("failed to record crash message for test runner: {}", .{err});
+    test_env.crash.recordCrash(msg_slice) catch {
+        @panic("failed to record crash message for test runner");
     };
 }
 
@@ -92,10 +104,32 @@ const Evaluation = enum {
     not_a_bool,
 };
 
-// Track test results
-const TestResult = struct {
+/// Categorizes the type of test failure
+pub const FailureType = enum {
+    /// expect evaluated to false
+    simple_failure,
+    /// interpreter error during evaluation
+    eval_error,
+    /// expression didn't return a bool
+    not_bool,
+};
+
+/// Detailed information about a test failure
+pub const FailureInfo = union(FailureType) {
+    /// No additional info needed
+    simple_failure,
+    /// The specific interpreter error
+    eval_error: EvalError,
+    /// No additional info needed
+    not_bool,
+};
+
+/// The result of evaluating a single top-level `expect` expression.
+pub const TestResult = struct {
     passed: bool,
     region: base.Region,
+    failure_info: ?FailureInfo = null,
+    // Legacy error message for HTML report compatibility
     error_msg: ?[]const u8 = null,
 };
 
@@ -111,19 +145,23 @@ pub const TestRunner = struct {
     interpreter: Interpreter,
     crash: CrashContext,
     roc_ops: ?RocOps,
-    test_results: std.ArrayList(TestResult),
+    test_results: std.array_list.Managed(TestResult),
 
     pub fn init(
         allocator: std.mem.Allocator,
         cir: *ModuleEnv,
+        builtin_types_param: BuiltinTypes,
+        other_modules: []const *const can.ModuleEnv,
+        builtin_module_env: ?*const can.ModuleEnv,
+        import_mapping: *const import_mapping_mod.ImportMapping,
     ) !TestRunner {
         return TestRunner{
             .allocator = allocator,
             .env = cir,
-            .interpreter = try Interpreter.init(allocator, cir),
+            .interpreter = try Interpreter.init(allocator, cir, builtin_types_param, builtin_module_env, other_modules, import_mapping, null, null, roc_target.RocTarget.detectNative()),
             .crash = CrashContext.init(allocator),
             .roc_ops = null,
-            .test_results = std.ArrayList(TestResult).init(allocator),
+            .test_results = std.array_list.Managed(TestResult).init(allocator),
         };
     }
 
@@ -143,7 +181,7 @@ pub const TestRunner = struct {
                 .roc_dbg = testRocDbg,
                 .roc_expect_failed = testRocExpectFailed,
                 .roc_crashed = testRocCrashed,
-                .host_fns = undefined, // Not used in tests
+                .hosted_fns = .{ .count = 0, .fns = undefined }, // Not used in tests
             };
         }
         self.crash.reset();
@@ -156,12 +194,18 @@ pub const TestRunner = struct {
 
     /// Evaluates a single expect expression, returning whether it passed, failed or did not evaluate to a boolean.
     pub fn eval(self: *TestRunner, expr_idx: CIR.Expr.Idx) EvalError!Evaluation {
+        // Reset interpreter's env to the test module's env before each test.
+        // This ensures we're always reading from the correct module's NodeStore,
+        // even if a previous evaluation switched to a different module's env
+        // and didn't properly restore it.
+        self.interpreter.env = self.env;
+
         const ops = self.get_ops();
-        const result = try self.interpreter.evalMinimal(expr_idx, ops);
+        const result = try self.interpreter.eval(expr_idx, ops);
         const layout_cache = &self.interpreter.runtime_layout_store;
         defer result.decref(layout_cache, ops);
 
-        if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .bool) {
+        if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int and result.layout.data.scalar.data.int == .u8) {
             const is_true = result.asBool();
             return if (is_true) Evaluation.passed else Evaluation.failed;
         }
@@ -185,18 +229,32 @@ pub const TestRunner = struct {
                 const result = self.eval(stmt.s_expect.body) catch |err| {
                     failed += 1;
                     const error_msg = try std.fmt.allocPrint(self.allocator, "Test evaluation failed: {}", .{err});
-                    try self.test_results.append(.{ .region = region, .passed = false, .error_msg = error_msg });
+                    try self.test_results.append(.{
+                        .region = region,
+                        .passed = false,
+                        .failure_info = .{ .eval_error = err },
+                        .error_msg = error_msg,
+                    });
                     continue;
                 };
                 switch (result) {
                     .not_a_bool => {
                         failed += 1;
                         const error_msg = try std.fmt.allocPrint(self.allocator, "Test did not evaluate to a boolean", .{});
-                        try self.test_results.append(.{ .region = region, .passed = false, .error_msg = error_msg });
+                        try self.test_results.append(.{
+                            .region = region,
+                            .passed = false,
+                            .failure_info = .not_bool,
+                            .error_msg = error_msg,
+                        });
                     },
                     .failed => {
                         failed += 1;
-                        try self.test_results.append(.{ .region = region, .passed = false });
+                        try self.test_results.append(.{
+                            .region = region,
+                            .passed = false,
+                            .failure_info = .simple_failure,
+                        });
                     },
                     .passed => {
                         passed += 1;
@@ -212,8 +270,126 @@ pub const TestRunner = struct {
         };
     }
 
+    /// Create a Report for a failed test.
+    /// Caller is responsible for calling report.deinit().
+    pub fn createReport(self: *const TestRunner, test_result: TestResult, filename: []const u8) !reporting.Report {
+        std.debug.assert(!test_result.passed); // Only call for failed tests
+
+        const failure_info = test_result.failure_info orelse {
+            // Fallback for legacy tests without failure_info
+            var report = reporting.Report.init(self.allocator, "TEST FAILURE", .runtime_error);
+            errdefer report.deinit();
+            try report.document.addText("This expect failed but no failure information is available.");
+            return report;
+        };
+
+        switch (failure_info) {
+            .simple_failure => {
+                var report = reporting.Report.init(self.allocator, "TEST FAILURE", .runtime_error);
+                errdefer report.deinit();
+
+                try report.document.addText("This ");
+                try report.document.addAnnotated("expect", .keyword);
+                try report.document.addText(" failed:");
+                try report.document.addLineBreak();
+
+                // Show the source code with highlighting
+                const region_info = self.env.calcRegionInfo(test_result.region);
+                try report.document.addSourceRegion(
+                    region_info,
+                    .error_highlight,
+                    filename,
+                    self.env.common.source,
+                    self.env.getLineStarts(),
+                );
+                try report.document.addLineBreak();
+
+                try report.document.addText("The expression evaluated to ");
+                try report.document.addAnnotated("False", .emphasized);
+                try report.document.addText(".");
+
+                return report;
+            },
+            .eval_error => |err| {
+                var report = reporting.Report.init(self.allocator, "TEST EVALUATION ERROR", .runtime_error);
+                errdefer report.deinit();
+
+                try report.document.addText("This ");
+                try report.document.addAnnotated("expect", .keyword);
+                try report.document.addText(" could not be evaluated:");
+                try report.document.addLineBreak();
+
+                // Show the source code with highlighting
+                const region_info = self.env.calcRegionInfo(test_result.region);
+                try report.document.addSourceRegion(
+                    region_info,
+                    .error_highlight,
+                    filename,
+                    self.env.common.source,
+                    self.env.getLineStarts(),
+                );
+                try report.document.addLineBreak();
+
+                // Show the error type
+                const error_name = @errorName(err);
+                try report.document.addText("Error: ");
+                try report.document.addAnnotated(error_name, .error_highlight);
+                try report.document.addLineBreak();
+                try report.document.addLineBreak();
+
+                // Add helpful explanation based on error type
+                const explanation = switch (err) {
+                    error.TypeMismatch => "The test expression has incompatible types and cannot be evaluated.",
+                    error.DivisionByZero => "The test expression attempts to divide by zero.",
+                    error.ZeroSizedType => "The test expression results in a zero-sized type.",
+                    else => "This usually indicates a bug in the test itself.",
+                };
+                try report.document.addText(explanation);
+
+                return report;
+            },
+            .not_bool => {
+                var report = reporting.Report.init(self.allocator, "EXPECT TYPE ERROR", .runtime_error);
+                errdefer report.deinit();
+
+                try report.document.addText("This ");
+                try report.document.addAnnotated("expect", .keyword);
+                try report.document.addText(" expression must evaluate to a ");
+                try report.document.addAnnotated("Bool", .type_variable);
+                try report.document.addText(":");
+                try report.document.addLineBreak();
+
+                // Show the source code with highlighting
+                const region_info = self.env.calcRegionInfo(test_result.region);
+                try report.document.addSourceRegion(
+                    region_info,
+                    .error_highlight,
+                    filename,
+                    self.env.common.source,
+                    self.env.getLineStarts(),
+                );
+                try report.document.addLineBreak();
+
+                try report.document.addText("The expression did not evaluate to a ");
+                try report.document.addAnnotated("Bool", .type_variable);
+                try report.document.addText(" value.");
+                try report.document.addLineBreak();
+                try report.document.addLineBreak();
+                try report.document.addText("Every ");
+                try report.document.addAnnotated("expect", .keyword);
+                try report.document.addText(" must have a boolean expression\u{2014}either ");
+                try report.document.addAnnotated("True", .tag_name);
+                try report.document.addText(" or ");
+                try report.document.addAnnotated("False", .tag_name);
+                try report.document.addText(".");
+
+                return report;
+            },
+        }
+    }
+
     /// Write a html report of the test results to the given writer.
-    pub fn write_html_report(self: *const TestRunner, writer: std.io.AnyWriter) !void {
+    pub fn write_html_report(self: *const TestRunner, writer: *std.Io.Writer) !void {
         if (self.test_results.items.len > 0) {
             try writer.writeAll("<div class=\"test-results\">\n");
             for (self.test_results.items) |result| {

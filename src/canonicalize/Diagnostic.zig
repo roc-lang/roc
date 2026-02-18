@@ -7,7 +7,6 @@ const reporting = @import("reporting");
 const Region = base.Region;
 const Ident = base.Ident;
 const StringLiteral = base.StringLiteral;
-const Document = reporting.Document;
 const Report = reporting.Report;
 
 const Allocator = std.mem.Allocator;
@@ -30,9 +29,6 @@ pub const Diagnostic = union(enum) {
     invalid_num_literal: struct {
         region: Region,
     },
-    invalid_single_quote: struct {
-        region: Region,
-    },
     empty_tuple: struct {
         region: Region,
     },
@@ -42,6 +38,16 @@ pub const Diagnostic = union(enum) {
     },
     ident_not_in_scope: struct {
         ident: Ident.Idx,
+        region: Region,
+    },
+    /// A non-function value is defined in terms of itself, which would cause an infinite loop.
+    /// For example: `a = a` or `a = [a, b]`. Only functions can reference themselves (for recursion).
+    self_referential_definition: struct {
+        ident: Ident.Idx,
+        region: Region,
+    },
+    qualified_ident_does_not_exist: struct {
+        ident: Ident.Idx, // The full qualified identifier (e.g., "Stdout.line!")
         region: Region,
     },
     invalid_top_level_statement: struct {
@@ -73,6 +79,9 @@ pub const Diagnostic = union(enum) {
         region: Region,
     },
     if_else_not_canonicalized: struct {
+        region: Region,
+    },
+    if_expr_without_else: struct {
         region: Region,
     },
     malformed_type_annotation: struct {
@@ -114,8 +123,27 @@ pub const Diagnostic = union(enum) {
         type_name: Ident.Idx,
         region: Region,
     },
+    type_from_missing_module: struct {
+        module_name: Ident.Idx,
+        type_name: Ident.Idx,
+        region: Region,
+    },
     module_not_imported: struct {
         module_name: Ident.Idx,
+        region: Region,
+    },
+    nested_type_not_found: struct {
+        parent_name: Ident.Idx,
+        nested_name: Ident.Idx,
+        region: Region,
+    },
+    nested_value_not_found: struct {
+        parent_name: Ident.Idx,
+        nested_name: Ident.Idx,
+        region: Region,
+    },
+    record_builder_map2_not_found: struct {
+        type_name: Ident.Idx,
         region: Region,
     },
     too_many_exports: struct {
@@ -138,6 +166,10 @@ pub const Diagnostic = union(enum) {
         region: Region,
     },
     type_module_missing_matching_type: struct {
+        module_name: Ident.Idx,
+        region: Region,
+    },
+    type_module_has_alias_not_nominal: struct {
         module_name: Ident.Idx,
         region: Region,
     },
@@ -226,14 +258,45 @@ pub const Diagnostic = union(enum) {
         suggested_name: Ident.Idx,
         region: Region,
     },
-    type_var_ending_in_underscore: struct {
+    type_var_starting_with_dollar: struct {
         name: Ident.Idx,
         suggested_name: Ident.Idx,
         region: Region,
     },
+    break_outside_loop: struct {
+        region: Region,
+    },
+    return_outside_fn: struct {
+        region: Region,
+        context: ReturnContext,
+
+        pub const ReturnContext = enum(u8) {
+            /// Explicit `return` statement
+            return_statement,
+            /// Return as final expression in a block
+            return_expr,
+            /// `?` suffix operator (try operator)
+            try_suffix,
+        };
+    },
+    /// Two or more type aliases form a cycle where each references another.
+    /// This is not allowed because type aliases are transparent synonyms.
+    /// Use nominal types (:=) for recursive types.
+    mutually_recursive_type_aliases: struct {
+        name: Ident.Idx,
+        other_name: Ident.Idx,
+        region: Region,
+        other_region: Region,
+    },
+    /// A number literal uses the deprecated suffix syntax (e.g., 123u64 instead of 123.U64)
+    deprecated_number_suffix: struct {
+        suffix: StringLiteral.Idx,
+        suggested: StringLiteral.Idx,
+        region: Region,
+    },
 
     pub const Idx = enum(u32) { _ };
-    pub const Span = struct { span: base.DataSpan };
+    pub const Span = extern struct { span: base.DataSpan };
 
     /// Helper to extract the region from any diagnostic variant
     pub fn toRegion(self: Diagnostic) Region {
@@ -244,6 +307,8 @@ pub const Diagnostic = union(enum) {
             .invalid_num_literal => |d| d.region,
             .ident_already_in_scope => |d| d.region,
             .ident_not_in_scope => |d| d.region,
+            .self_referential_definition => |d| d.region,
+            .qualified_ident_does_not_exist => |d| d.region,
             .invalid_top_level_statement => |d| d.region,
             .expr_not_canonicalized => |d| d.region,
             .invalid_string_interpolation => |d| d.region,
@@ -264,7 +329,10 @@ pub const Diagnostic = union(enum) {
             .module_not_found => |d| d.region,
             .value_not_exposed => |d| d.region,
             .type_not_exposed => |d| d.region,
+            .type_from_missing_module => |d| d.region,
             .module_not_imported => |d| d.region,
+            .nested_type_not_found => |d| d.region,
+            .nested_value_not_found => |d| d.region,
             .too_many_exports => |d| d.region,
             .undeclared_type => |d| d.region,
             .undeclared_type_var => |d| d.region,
@@ -291,8 +359,12 @@ pub const Diagnostic = union(enum) {
             .f64_pattern_literal => |d| d.region,
             .unused_type_var_name => |d| d.region,
             .type_var_marked_unused => |d| d.region,
-            .type_var_ending_in_underscore => |d| d.region,
+            .type_var_starting_with_dollar => |d| d.region,
             .underscore_in_type_declaration => |d| d.region,
+            .break_outside_loop => |d| d.region,
+            .return_outside_fn => |d| d.region,
+            .mutually_recursive_type_aliases => |d| d.region,
+            .deprecated_number_suffix => |d| d.region,
         };
     }
 
@@ -336,7 +408,7 @@ pub const Diagnostic = union(enum) {
     }
 
     /// Build a report for "invalid number literal" diagnostic
-    pub fn buildInvalidNumLiteralReport(
+    pub fn buildInvalidNumeralReport(
         allocator: Allocator,
         region_info: base.RegionInfo,
         literal_text: []const u8,
@@ -445,7 +517,6 @@ pub const Diagnostic = union(enum) {
         allocator: Allocator,
         ident_name: []const u8,
         region_info: base.RegionInfo,
-        original_region_info: base.RegionInfo,
         filename: []const u8,
         source: []const u8,
         line_starts: []const u32,
@@ -466,10 +537,6 @@ pub const Diagnostic = union(enum) {
             source,
             line_starts,
         );
-
-        // we don't need to display the original region info
-        // as this header is in a single location
-        _ = original_region_info;
 
         try report.document.addReflowingText("You can remove the duplicate entry to fix this warning.");
 
@@ -496,6 +563,71 @@ pub const Diagnostic = union(enum) {
         try report.document.addReflowingText(" or ");
         try report.document.addKeyword("exposing");
         try report.document.addReflowingText(" missing up-top?");
+
+        // Check for common misspellings and add a tip if found
+        if (reporting.CommonMisspellings.getIdentifierTip(ident_name)) |tip| {
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addText("Tip: ");
+            try report.document.addReflowingTextWithBackticks(tip);
+        }
+
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        const owned_filename = try report.addOwnedString(filename);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            owned_filename,
+            source,
+            line_starts,
+        );
+        return report;
+    }
+
+    /// Build a report for "self-referential assignment" diagnostic
+    pub fn buildSelfReferentialDefinitionReport(
+        allocator: Allocator,
+        ident_name: []const u8,
+        region_info: base.RegionInfo,
+        filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
+    ) !Report {
+        var report = Report.init(allocator, "INVALID ASSIGNMENT TO ITSELF", .runtime_error);
+        const owned_ident = try report.addOwnedString(ident_name);
+        try report.document.addReflowingText("The value ");
+        try report.document.addUnqualifiedSymbol(owned_ident);
+        try report.document.addReflowingText(" is assigned to itself, which would cause an infinite loop at runtime.");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("Only functions can reference themselves (for recursion). For non-function values, the right-hand side must be fully computable without referring to the value being assigned.");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        const owned_filename = try report.addOwnedString(filename);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            owned_filename,
+            source,
+            line_starts,
+        );
+        return report;
+    }
+
+    /// Build a report for "qualified ident does not exist" diagnostic
+    pub fn buildQualifiedIdentDoesNotExistReport(
+        allocator: Allocator,
+        ident_name: []const u8,
+        region_info: base.RegionInfo,
+        filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
+    ) !Report {
+        var report = Report.init(allocator, "DOES NOT EXIST", .runtime_error);
+        const owned_ident = try report.addOwnedString(ident_name);
+        try report.document.addUnqualifiedSymbol(owned_ident);
+        try report.document.addReflowingText(" does not exist.");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
         const owned_filename = try report.addOwnedString(filename);
@@ -858,9 +990,19 @@ pub const Diagnostic = union(enum) {
     ) !Report {
         var report = Report.init(allocator, "UNDECLARED TYPE", .runtime_error);
         const owned_type_name = try report.addOwnedString(type_name);
-        try report.document.addReflowingText("The type ");
-        try report.document.addType(owned_type_name);
-        try report.document.addReflowingText(" is not declared in this scope.");
+
+        // Check if this looks like a qualified type (contains dots)
+        const has_dots = std.mem.indexOfScalar(u8, type_name, '.') != null;
+
+        if (has_dots) {
+            try report.document.addReflowingText("Cannot resolve qualified type ");
+            try report.document.addType(owned_type_name);
+            try report.document.addReflowingText(".");
+        } else {
+            try report.document.addReflowingText("The type ");
+            try report.document.addType(owned_type_name);
+            try report.document.addReflowingText(" is not declared in this scope.");
+        }
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
@@ -1380,13 +1522,32 @@ pub const Diagnostic = union(enum) {
 
         const owned_module = try report.addOwnedString(module_name);
         const owned_type = try report.addOwnedString(type_name);
-        try report.document.addReflowingText("The ");
-        try report.document.addModuleName(owned_module);
-        try report.document.addReflowingText(" module does not expose anything named ");
-        try report.document.addType(owned_type);
-        try report.document.addReflowingText(".");
-        try report.document.addLineBreak();
-        try report.document.addReflowingText("Make sure the module exports this type, or use a type that is exposed.");
+
+        // Check if trying to access a type with the same name as the module (e.g., Try.Try)
+        const is_same_name = std.mem.eql(u8, module_name, type_name);
+
+        if (is_same_name) {
+            // Special message for Try.Try, Color.Color, etc.
+            const qualified_name = try std.fmt.allocPrint(allocator, "{s}.{s}", .{ module_name, type_name });
+            defer allocator.free(qualified_name);
+            const owned_qualified = try report.addOwnedString(qualified_name);
+
+            try report.document.addReflowingText("There is no ");
+            try report.document.addType(owned_qualified);
+            try report.document.addReflowingText(" type.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+        } else {
+            // Standard message for other cases (e.g., Color.RGB where Color is a nominal type)
+            const qualified_name = try std.fmt.allocPrint(allocator, "{s}.{s}", .{ module_name, type_name });
+            defer allocator.free(qualified_name);
+            const owned_qualified = try report.addOwnedString(qualified_name);
+
+            try report.document.addType(owned_qualified);
+            try report.document.addReflowingText(" does not exist.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+        }
 
         const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
@@ -1396,6 +1557,21 @@ pub const Diagnostic = union(enum) {
             source,
             line_starts,
         );
+
+        // Add tip at the end
+        try report.document.addLineBreak();
+        if (is_same_name) {
+            try report.document.addReflowingText("There is a ");
+            try report.document.addModuleName(owned_module);
+            try report.document.addReflowingText(" module, but it does not have a ");
+            try report.document.addType(owned_type);
+            try report.document.addReflowingText(" type nested inside it.");
+        } else {
+            try report.document.addType(owned_module);
+            try report.document.addReflowingText(" is a valid type, but it does not have an associated ");
+            try report.document.addType(owned_type);
+            try report.document.addReflowingText(".");
+        }
 
         return report;
     }
@@ -1618,6 +1794,44 @@ pub const Diagnostic = union(enum) {
         try report.document.addReflowingText("Underscores in type annotations mean \"I don't care about this type\", which doesn't make sense when declaring a type. ");
         try report.document.addReflowingText("If you need a placeholder type variable, use a named type variable like ");
         try report.document.addInlineCode("a");
+        try report.document.addReflowingText(" instead.");
+
+        return report;
+    }
+
+    /// Build a report for "deprecated number suffix" diagnostic
+    pub fn buildDeprecatedNumberSuffixReport(
+        allocator: Allocator,
+        suffix: []const u8,
+        suggested: []const u8,
+        region_info: base.RegionInfo,
+        filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
+    ) !Report {
+        var report = Report.init(allocator, "DEPRECATED NUMBER SUFFIX", .runtime_error);
+
+        const owned_suffix = try report.addOwnedString(suffix);
+        const owned_suggested = try report.addOwnedString(suggested);
+
+        try report.document.addReflowingText("This number literal uses a deprecated suffix syntax:");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        const owned_filename = try report.addOwnedString(filename);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            owned_filename,
+            source,
+            line_starts,
+        );
+
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("The ");
+        try report.document.addInlineCode(owned_suffix);
+        try report.document.addReflowingText(" suffix is no longer supported. Use ");
+        try report.document.addInlineCode(owned_suggested);
         try report.document.addReflowingText(" instead.");
 
         return report;

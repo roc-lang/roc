@@ -46,11 +46,7 @@ pub fn isEmpty(self: Self) bool {
 }
 
 /// Write the debug format of a region to a writer.
-pub fn format(self: *const Self, comptime fmt: []const u8, _: std.fmt.FormatOptions, writer: std.io.AnyWriter) !void {
-    if (fmt.len != 0) {
-        std.fmt.invalidFmtError(fmt, self);
-    }
-
+pub fn format(self: *const Self, writer: *std.Io.Writer) std.Io.Writer.Error!void {
     try writer.print("@{}-{}", .{ self.start.offset, self.end.offset });
 }
 

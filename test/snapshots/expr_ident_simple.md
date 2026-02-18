@@ -23,12 +23,12 @@ foo
 
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:4),
-EndOfFile(2:1-2:1),
+LowerIdent,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-ident @1.1-1.4 (raw "foo"))
+(e-ident (raw "foo"))
 ~~~
 # FORMATTED
 ~~~roc
@@ -40,5 +40,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.4 (type "Error"))
+(expr (type "Error"))
 ~~~

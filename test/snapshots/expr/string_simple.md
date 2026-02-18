@@ -13,13 +13,13 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-StringStart(1:1-1:2),StringPart(1:2-1:13),StringEnd(1:13-1:14),
-EndOfFile(2:1-2:1),
+StringStart,StringPart,StringEnd,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-string @1.1-1.14
-	(e-string-part @1.2-1.13 (raw "hello world")))
+(e-string
+	(e-string-part (raw "hello world")))
 ~~~
 # FORMATTED
 ~~~roc
@@ -27,10 +27,10 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-string @1.1-1.14
-	(e-literal @1.2-1.13 (string "hello world")))
+(e-string
+	(e-literal (string "hello world")))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.14 (type "Str"))
+(expr (type "Str"))
 ~~~

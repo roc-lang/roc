@@ -16,12 +16,14 @@ UNEXPECTED TOKEN IN TYPE ANNOTATION - record_builder.md:2:8:2:9
 UNEXPECTED TOKEN IN EXPRESSION - record_builder.md:2:9:2:10
 UNEXPECTED TOKEN IN TYPE ANNOTATION - record_builder.md:3:8:3:9
 UNEXPECTED TOKEN IN EXPRESSION - record_builder.md:3:9:3:10
-UNDEFINED VARIABLE - record_builder.md:1:3:1:14
+DOES NOT EXIST - record_builder.md:1:3:1:14
 UNRECOGNIZED SYNTAX - record_builder.md:1:15:1:17
 MALFORMED TYPE - record_builder.md:2:8:2:9
 UNRECOGNIZED SYNTAX - record_builder.md:2:9:2:10
 MALFORMED TYPE - record_builder.md:3:8:3:9
 UNRECOGNIZED SYNTAX - record_builder.md:3:9:3:10
+UNUSED VARIABLE - record_builder.md:2:5:2:9
+UNUSED VARIABLE - record_builder.md:3:5:3:9
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **<-** is not expected in an expression.
@@ -78,9 +80,8 @@ Expressions can be identifiers, literals, function calls, or operators.
         ^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `baz` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**DOES NOT EXIST**
+`Foo.Bar.baz` does not exist.
 
 **record_builder.md:1:3:1:14:**
 ```roc
@@ -142,26 +143,50 @@ I don't recognize this syntax.
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
+**UNUSED VARIABLE**
+Variable `x` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
+The unused variable is declared here:
+**record_builder.md:2:5:2:9:**
+```roc
+    x: 5,
+```
+    ^^^^
+
+
+**UNUSED VARIABLE**
+Variable `y` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_y` to suppress this warning.
+The unused variable is declared here:
+**record_builder.md:3:5:3:9:**
+```roc
+    y: 0,
+```
+    ^^^^
+
+
 # TOKENS
 ~~~zig
-OpenCurly(1:1-1:2),UpperIdent(1:3-1:6),NoSpaceDotUpperIdent(1:6-1:10),NoSpaceDotLowerIdent(1:10-1:14),OpBackArrow(1:15-1:17),
-LowerIdent(2:5-2:6),OpColon(2:6-2:7),Int(2:8-2:9),Comma(2:9-2:10),
-LowerIdent(3:5-3:6),OpColon(3:6-3:7),Int(3:8-3:9),Comma(3:9-3:10),
-CloseCurly(4:1-4:2),
-EndOfFile(5:1-5:1),
+OpenCurly,UpperIdent,NoSpaceDotUpperIdent,NoSpaceDotLowerIdent,OpBackArrow,
+LowerIdent,OpColon,Int,Comma,
+LowerIdent,OpColon,Int,Comma,
+CloseCurly,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-block @1.1-4.2
+(e-block
 	(statements
-		(e-ident @1.3-1.14 (raw "Foo.Bar.baz"))
-		(e-malformed @1.15-1.17 (reason "expr_unexpected_token"))
-		(s-type-anno @2.5-2.9 (name "x")
-			(ty-malformed @2.8-2.9 (tag "ty_anno_unexpected_token")))
-		(e-malformed @2.9-2.10 (reason "expr_unexpected_token"))
-		(s-type-anno @3.5-3.9 (name "y")
-			(ty-malformed @3.8-3.9 (tag "ty_anno_unexpected_token")))
-		(e-malformed @3.9-3.10 (reason "expr_unexpected_token"))))
+		(e-ident (raw "Foo.Bar.baz"))
+		(e-malformed (reason "expr_unexpected_token"))
+		(s-type-anno (name "x")
+			(ty-malformed (tag "ty_anno_unexpected_token")))
+		(e-malformed (reason "expr_unexpected_token"))
+		(s-type-anno (name "y")
+			(ty-malformed (tag "ty_anno_unexpected_token")))
+		(e-malformed (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -176,16 +201,22 @@ EndOfFile(5:1-5:1),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-block @1.1-4.2
-	(s-expr @1.3-1.14
-		(e-runtime-error (tag "ident_not_in_scope")))
-	(s-expr @1.15-1.17
+(e-block
+	(s-expr
+		(e-runtime-error (tag "qualified_ident_does_not_exist")))
+	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-expr @2.9-2.10
+	(s-let
+		(p-assign (ident "x"))
+		(e-anno-only))
+	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
+	(s-let
+		(p-assign (ident "y"))
+		(e-anno-only))
 	(e-runtime-error (tag "expr_not_canonicalized")))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-4.2 (type "Error"))
+(expr (type "Error"))
 ~~~

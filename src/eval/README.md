@@ -35,7 +35,7 @@ contributor can navigate the code without prior context.
 2. **Initialization** – `Interpreter.init` translates the initial module types
    into the runtime store, ensures the slot cache is sized appropriately, and
    sets up the auxiliary state (stack, binding list, poly cache).
-3. **Minimal evaluation** – `evalMinimal` drives evaluation by calling
+3. **Minimal evaluation** – `eval` drives evaluation by calling
    `evalExprMinimal`. The interpreter pattern-matches on canonical expression
    tags (records, tuples, pattern matches, binops, calls, etc.), evaluates
    children recursively, and produces a `StackValue` annotated with layout.
@@ -53,7 +53,7 @@ contributor can navigate the code without prior context.
    record messages; the interpreter keeps no internal crash state.
 
 All RocOps interactions (alloc, dealloc, crash, expect) happen through the
-`RocOps` pointer passed into `evalMinimal`. This keeps host integrations (REPL,
+`RocOps` pointer passed into `eval`. This keeps host integrations (REPL,
 snapshot tool, CLI) consistent.
 
 ## Rendering
@@ -94,6 +94,52 @@ in:
 - **Interpreter shim** (`src/interpreter_shim/main.zig`) provides a C-callable
   entry point that deserializes a `ModuleEnv`, constructs an interpreter, and
   returns rendered output.
+
+## Debugging
+
+The interpreter supports a compile-time tracing flag that enables detailed
+evaluation output. To build with tracing enabled:
+
+```bash
+zig build -Dtrace-eval=true
+```
+
+This flag is automatically enabled in Debug builds (`-Doptimize=Debug`). When
+enabled, the interpreter outputs detailed information about evaluation steps,
+which is useful for debugging issues in the interpreter or understanding how
+expressions are evaluated.
+
+For snapshot testing with tracing, use the `--trace-eval` flag:
+
+```bash
+./zig-out/bin/snapshot --trace-eval path/to/snapshot.md
+```
+
+Note: `--trace-eval` only works with REPL-type snapshots (`type=repl`).
+
+### Refcount Tracing
+
+For debugging memory management issues, use the `-Dtrace-refcount` flag:
+
+```bash
+zig build -Dtrace-refcount=true
+```
+
+When enabled, this outputs detailed refcount operations to stderr:
+
+```
+[REFCOUNT] DECREF str ptr=0x1234 len=5 cap=32
+[REFCOUNT] DECREF list ptr=0x5678 len=3 elems_rc=1 unique=1
+[REFCOUNT] INCREF str ptr=0x1234 len=5 cap=32
+```
+
+This is useful for:
+- Debugging segfaults in list/string operations
+- Verifying correct refcounting in new builtins
+- Understanding memory lifecycle during evaluation
+
+Unlike `-Dtrace-eval`, this flag defaults to `false` even in Debug builds due to
+the volume of output it produces.
 
 ## Tips for Contributors
 

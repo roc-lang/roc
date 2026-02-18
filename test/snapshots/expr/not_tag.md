@@ -8,34 +8,32 @@ type=expr
 !(C(2))
 ~~~
 # EXPECTED
-TYPE MISMATCH - not_tag.md:1:3:1:7
+MISSING METHOD - not_tag.md:1:1:1:8
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**not_tag.md:1:3:1:7:**
+**MISSING METHOD**
+This **not** method is being called on a value whose type doesn't have that method:
+**not_tag.md:1:1:1:8:**
 ```roc
 !(C(2))
 ```
-  ^^^^
+^^^^^^^
 
-It has the type:
-    _[C(Num(_size))]_others_
+The value's type, which does not have a method named**not**, is:
 
-But I expected it to be:
-    _Bool_
+    [C(a), ..] where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
 
 # TOKENS
 ~~~zig
-OpBang(1:1-1:2),NoSpaceOpenRound(1:2-1:3),UpperIdent(1:3-1:4),NoSpaceOpenRound(1:4-1:5),Int(1:5-1:6),CloseRound(1:6-1:7),CloseRound(1:7-1:8),
-EndOfFile(2:1-2:1),
+OpBang,NoSpaceOpenRound,UpperIdent,NoSpaceOpenRound,Int,CloseRound,CloseRound,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
 (unary "!"
-	(e-tuple @1.2-1.8
-		(e-apply @1.3-1.7
-			(e-tag @1.3-1.4 (raw "C"))
-			(e-int @1.5-1.6 (raw "2")))))
+	(e-tuple
+		(e-apply
+			(e-tag (raw "C"))
+			(e-int (raw "2")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -43,12 +41,12 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-unary-not @1.1-1.8
-	(e-tag @1.3-1.7 (name "C")
+(e-unary-not
+	(e-tag (name "C")
 		(args
-			(e-num @1.5-1.6 (value "2")))))
+			(e-num (value "2")))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.8 (type "Error"))
+(expr (type "Error"))
 ~~~

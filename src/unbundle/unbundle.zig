@@ -1,23 +1,20 @@
-//! Unbundle compressed tar archives using Zig's standard library
+//! Unbundle compressed tar archives
 //!
-//! This module provides unbundling functionality that works on all platforms
-//! including WebAssembly, by using Zig's std.compress.zstd instead of
-//! the C zstd library.
+//! This module provides functionality to extract .tar.zst archives created
+//! by `roc bundle`, with hash verification for integrity checking.
 
 const builtin = @import("builtin");
 const std = @import("std");
 const base58 = @import("base58");
+const zstd = std.compress.zstd;
 
 // Constants
 const TAR_EXTENSION = ".tar.zst";
 const STREAM_BUFFER_SIZE: usize = 64 * 1024; // 64KB buffer for streaming operations
-
-/// Size of the decompression window buffer for zstd.
-/// 8MB (2^23 bytes) is the default and recommended size for zstd decompression.
-/// This matches zstd's default maximum window size, allowing us to decompress
-/// any standard zstd stream. Smaller buffers would fail on streams compressed
-/// with larger window sizes.
-const ZSTD_WINDOW_BUFFER_SIZE: usize = 1 << 23; // 8MB
+// Buffer size for stdlib zstd decompressor: window_len + block_size_max for tar extraction
+const DECOMPRESS_BUFFER_SIZE: usize = zstd.default_window_len + zstd.block_size_max;
+// Max path bytes - use 4096 on WASM/freestanding, std.fs.max_path_bytes elsewhere
+const MAX_PATH_BYTES: usize = if (builtin.os.tag == .freestanding) 4096 else std.fs.max_path_bytes;
 
 /// Errors that can occur during the unbundle operation.
 pub const UnbundleError = error{
@@ -36,6 +33,9 @@ pub const UnbundleError = error{
     DictionaryIdFlagUnsupported,
     MalformedBlock,
     MalformedFrame,
+    WriteFailed,
+    ReadFailed,
+    EndOfStream,
 } || std.mem.Allocator.Error;
 
 /// Context for error reporting during unbundle operations
@@ -64,8 +64,8 @@ pub const ExtractWriter = struct {
     vtable: *const VTable,
 
     pub const VTable = struct {
-        createFile: *const fn (ptr: *anyopaque, path: []const u8) CreateFileError!std.io.AnyWriter,
-        finishFile: *const fn (ptr: *anyopaque, writer: std.io.AnyWriter) void,
+        createFile: *const fn (ptr: *anyopaque, path: []const u8) CreateFileError!*std.Io.Writer,
+        finishFile: *const fn (ptr: *anyopaque) void,
         makeDir: *const fn (ptr: *anyopaque, path: []const u8) MakeDirError!void,
     };
 
@@ -78,12 +78,12 @@ pub const ExtractWriter = struct {
         DirectoryCreateFailed,
     };
 
-    pub fn createFile(self: ExtractWriter, path: []const u8) CreateFileError!std.io.AnyWriter {
+    pub fn createFile(self: ExtractWriter, path: []const u8) CreateFileError!*std.Io.Writer {
         return self.vtable.createFile(self.ptr, path);
     }
 
-    pub fn finishFile(self: ExtractWriter, writer: std.io.AnyWriter) void {
-        return self.vtable.finishFile(self.ptr, writer);
+    pub fn finishFile(self: ExtractWriter) void {
+        return self.vtable.finishFile(self.ptr);
     }
 
     pub fn makeDir(self: ExtractWriter, path: []const u8) MakeDirError!void {
@@ -95,20 +95,26 @@ pub const ExtractWriter = struct {
 pub const DirExtractWriter = struct {
     dir: std.fs.Dir,
     allocator: std.mem.Allocator,
-    open_files: std.ArrayList(std.fs.File),
+    open_files: std.array_list.Managed(FileWriterEntry),
+
+    const FileWriterEntry = struct {
+        file: std.fs.File,
+        buffer: [4096]u8,
+        writer: std.fs.File.Writer,
+    };
 
     pub fn init(dir: std.fs.Dir, allocator: std.mem.Allocator) DirExtractWriter {
         return .{
             .dir = dir,
             .allocator = allocator,
-            .open_files = std.ArrayList(std.fs.File).init(allocator),
+            .open_files = std.array_list.Managed(FileWriterEntry).init(allocator),
         };
     }
 
     pub fn deinit(self: *DirExtractWriter) void {
         // Close any remaining open files
-        for (self.open_files.items) |*file| {
-            file.close();
+        for (self.open_files.items) |*entry| {
+            entry.file.close();
         }
         self.open_files.deinit();
     }
@@ -126,7 +132,7 @@ pub const DirExtractWriter = struct {
         .makeDir = makeDir,
     };
 
-    fn createFile(ptr: *anyopaque, path: []const u8) ExtractWriter.CreateFileError!std.io.AnyWriter {
+    fn createFile(ptr: *anyopaque, path: []const u8) ExtractWriter.CreateFileError!*std.Io.Writer {
         const self: *DirExtractWriter = @ptrCast(@alignCast(ptr));
 
         // Ensure parent directories exist
@@ -135,28 +141,35 @@ pub const DirExtractWriter = struct {
         }
 
         const file = self.dir.createFile(path, .{}) catch return error.FileCreateFailed;
-        self.open_files.append(file) catch {
+
+        // Append entry first to get stable memory in the array list.
+        // We must initialize the writer AFTER appending, because the writer
+        // stores a pointer to the buffer, and if we initialized it on a stack
+        // variable before copying into the array, the pointer would be stale.
+        self.open_files.append(.{
+            .file = file,
+            .buffer = undefined,
+            .writer = undefined,
+        }) catch {
             file.close();
             return error.OutOfMemory;
         };
 
-        return .{
-            .context = @ptrCast(&self.open_files.items[self.open_files.items.len - 1]),
-            .writeFn = fileWrite,
-        };
+        // Now initialize the writer with the buffer in the array (stable memory)
+        const entry = &self.open_files.items[self.open_files.items.len - 1];
+        entry.writer = file.writer(&entry.buffer);
+
+        return &entry.writer.interface;
     }
 
-    fn fileWrite(context: *const anyopaque, bytes: []const u8) anyerror!usize {
-        const file: *std.fs.File = @ptrCast(@alignCast(@constCast(context)));
-        return file.write(bytes);
-    }
-
-    fn finishFile(ptr: *anyopaque, _: std.io.AnyWriter) void {
+    fn finishFile(ptr: *anyopaque) void {
         const self: *DirExtractWriter = @ptrCast(@alignCast(ptr));
         // Close and remove the last file
         if (self.open_files.items.len > 0) {
             const last_idx = self.open_files.items.len - 1;
-            self.open_files.items[last_idx].close();
+            // Flush before closing
+            self.open_files.items[last_idx].writer.interface.flush() catch {};
+            self.open_files.items[last_idx].file.close();
             _ = self.open_files.orderedRemove(last_idx);
         }
     }
@@ -170,15 +183,16 @@ pub const DirExtractWriter = struct {
 /// Buffer-based extract writer for in-memory extraction
 pub const BufferExtractWriter = struct {
     allocator: std.mem.Allocator,
-    files: std.StringHashMap(std.ArrayList(u8)),
-    directories: std.ArrayList([]u8),
-    current_file: ?*std.ArrayList(u8) = null,
+    files: std.StringHashMap(std.array_list.Managed(u8)),
+    directories: std.array_list.Managed([]u8),
+    current_file_writer: ?std.Io.Writer.Allocating = null,
+    current_file_path: ?[]const u8 = null,
 
     pub fn init(allocator: std.mem.Allocator) BufferExtractWriter {
         return .{
             .allocator = allocator,
-            .files = std.StringHashMap(std.ArrayList(u8)).init(allocator),
-            .directories = std.ArrayList([]u8).init(allocator),
+            .files = std.StringHashMap(std.array_list.Managed(u8)).init(allocator),
+            .directories = std.array_list.Managed([]u8).init(allocator),
         };
     }
 
@@ -209,36 +223,36 @@ pub const BufferExtractWriter = struct {
         .makeDir = makeDir,
     };
 
-    fn createFile(ptr: *anyopaque, path: []const u8) ExtractWriter.CreateFileError!std.io.AnyWriter {
+    fn createFile(ptr: *anyopaque, path: []const u8) ExtractWriter.CreateFileError!*std.Io.Writer {
         const self: *BufferExtractWriter = @ptrCast(@alignCast(ptr));
 
         const key = self.allocator.dupe(u8, path) catch return error.OutOfMemory;
-        errdefer self.allocator.free(key);
+        self.current_file_path = key;
 
-        const result = self.files.getOrPut(key) catch return error.OutOfMemory;
-        if (result.found_existing) {
-            self.allocator.free(key);
-            result.value_ptr.clearRetainingCapacity();
-        } else {
-            result.value_ptr.* = std.ArrayList(u8).init(self.allocator);
-        }
+        // Create allocating writer
+        self.current_file_writer = std.Io.Writer.Allocating.init(self.allocator);
 
-        self.current_file = result.value_ptr;
-        return .{
-            .context = @ptrCast(result.value_ptr),
-            .writeFn = arrayListWrite,
-        };
+        return &self.current_file_writer.?.writer;
     }
 
-    fn arrayListWrite(context: *const anyopaque, bytes: []const u8) anyerror!usize {
-        const list: *std.ArrayList(u8) = @ptrCast(@alignCast(@constCast(context)));
-        try list.appendSlice(bytes);
-        return bytes.len;
-    }
-
-    fn finishFile(ptr: *anyopaque, _: std.io.AnyWriter) void {
+    fn finishFile(ptr: *anyopaque) void {
         const self: *BufferExtractWriter = @ptrCast(@alignCast(ptr));
-        self.current_file = null;
+        if (self.current_file_writer) |*writer| {
+            if (self.current_file_path) |path| {
+                // Convert writer contents to Managed ArrayList
+                const unmanaged_list = writer.toArrayList();
+                var managed_list = std.array_list.Managed(u8).fromOwnedSlice(self.allocator, unmanaged_list.items);
+                self.files.put(path, managed_list) catch {
+                    // If put fails, clean up
+                    managed_list.deinit();
+                    self.allocator.free(path);
+                };
+                self.current_file_path = null;
+            } else {
+                writer.deinit();
+            }
+            self.current_file_writer = null;
+        }
     }
 
     fn makeDir(ptr: *anyopaque, path: []const u8) ExtractWriter.MakeDirError!void {
@@ -380,29 +394,147 @@ pub fn pathHasUnbundleErr(path: []const u8) ?PathValidationError {
     return null;
 }
 
-/// Generic hashing reader that works with any reader type
-fn HashingReader(comptime ReaderType: type) type {
-    return struct {
-        child_reader: ReaderType,
-        hasher: *std.crypto.hash.Blake3,
+/// A reader wrapper that hashes all data as it passes through
+const HashingReader = struct {
+    inner: *std.Io.Reader,
+    hasher: *std.crypto.hash.Blake3,
+    interface: std.Io.Reader,
 
-        const Self = @This();
-        pub const Error = ReaderType.Error;
-        pub const Reader = std.io.Reader(*Self, Error, read);
+    const Self = @This();
 
-        pub fn read(self: *Self, buffer: []u8) Error!usize {
-            const n = try self.child_reader.read(buffer);
-            if (n > 0) {
-                self.hasher.update(buffer[0..n]);
-            }
-            return n;
-        }
+    pub fn init(inner: *std.Io.Reader, hasher: *std.crypto.hash.Blake3, buffer: []u8) Self {
+        var result = Self{
+            .inner = inner,
+            .hasher = hasher,
+            .interface = undefined,
+        };
+        result.interface = .{
+            .vtable = &vtable,
+            .buffer = buffer,
+            .seek = 0,
+            .end = 0,
+        };
+        return result;
+    }
 
-        pub fn reader(self: *Self) Reader {
-            return .{ .context = self };
-        }
+    const vtable: std.Io.Reader.VTable = .{
+        .stream = stream,
     };
-}
+
+    fn stream(r: *std.Io.Reader, w: *std.Io.Writer, limit: std.Io.Limit) std.Io.Reader.StreamError!usize {
+        const self: *Self = @alignCast(@fieldParentPtr("interface", r));
+
+        // Read from inner reader into the writer's buffer
+        const out_buf = limit.slice(try w.writableSliceGreedy(1));
+        var vec: [1][]u8 = .{out_buf};
+        const bytes_read = self.inner.readVec(&vec) catch |err| switch (err) {
+            error.EndOfStream => return error.EndOfStream,
+            error.ReadFailed => return error.ReadFailed,
+        };
+
+        if (bytes_read > 0) {
+            // Hash the compressed data as it passes through
+            self.hasher.update(out_buf[0..bytes_read]);
+            w.advance(bytes_read);
+        }
+        return bytes_read;
+    }
+};
+
+/// A reader that decompresses zstd data and verifies hash incrementally
+/// Uses Zig's stdlib zstd for WASM compatibility
+/// Note: Must be heap-allocated to avoid self-referential pointer invalidation
+const DecompressingHashReader = struct {
+    allocator: std.mem.Allocator,
+    hasher: std.crypto.hash.Blake3,
+    expected_hash: [32]u8,
+    hash_verified: bool,
+    hashing_reader: HashingReader,
+    decompressor: zstd.Decompress,
+    hashing_buffer: []u8,
+    decompressor_buffer: []u8,
+
+    const Self = @This();
+
+    /// Create a heap-allocated DecompressingHashReader.
+    /// The caller must call deinit() to free resources.
+    pub fn create(
+        allocator: std.mem.Allocator,
+        input_reader: *std.Io.Reader,
+        expected_hash: [32]u8,
+    ) !*Self {
+        // Allocate the struct itself on the heap so pointers remain stable
+        const self = try allocator.create(Self);
+        errdefer allocator.destroy(self);
+
+        // Allocate buffer for hashing reader
+        const hashing_buffer = try allocator.alloc(u8, STREAM_BUFFER_SIZE);
+        errdefer allocator.free(hashing_buffer);
+
+        // Allocate buffer for decompressor (needs window_len + block_size_max for tar)
+        const decompressor_buffer = try allocator.alloc(u8, DECOMPRESS_BUFFER_SIZE);
+        errdefer allocator.free(decompressor_buffer);
+
+        self.* = Self{
+            .allocator = allocator,
+            .hasher = std.crypto.hash.Blake3.init(.{}),
+            .expected_hash = expected_hash,
+            .hash_verified = false,
+            .hashing_reader = undefined,
+            .decompressor = undefined,
+            .hashing_buffer = hashing_buffer,
+            .decompressor_buffer = decompressor_buffer,
+        };
+
+        // Create hashing wrapper around input reader
+        // Now safe because self is heap-allocated and won't move
+        self.hashing_reader = HashingReader.init(input_reader, &self.hasher, hashing_buffer);
+
+        // Create decompressor reading from hashing reader
+        self.decompressor = zstd.Decompress.init(
+            &self.hashing_reader.interface,
+            decompressor_buffer,
+            .{},
+        );
+
+        return self;
+    }
+
+    pub fn deinit(self: *Self) void {
+        self.allocator.free(self.hashing_buffer);
+        self.allocator.free(self.decompressor_buffer);
+        self.allocator.destroy(self);
+    }
+
+    /// Get the reader interface for tar extraction
+    pub fn reader(self: *Self) *std.Io.Reader {
+        return &self.decompressor.reader;
+    }
+
+    /// Verify that the hash matches. This should be called after reading is complete.
+    pub fn verifyComplete(self: *Self) !void {
+        // Drain remaining compressed data through the hashing reader
+        // This ensures all compressed bytes are hashed even if tar didn't need them
+        while (true) {
+            // Try to read more compressed data through the decompressor
+            var discard_buf: [4096]u8 = undefined;
+            const bytes_read = self.decompressor.reader.readSliceShort(&discard_buf) catch {
+                // ReadFailed indicates stream is done or error occurred
+                break;
+            };
+            if (bytes_read == 0) break;
+        }
+
+        if (!self.hash_verified) {
+            var actual_hash: [32]u8 = undefined;
+            self.hasher.final(&actual_hash);
+            if (!std.mem.eql(u8, &actual_hash, &self.expected_hash)) {
+                return error.HashMismatch;
+            }
+            self.hash_verified = true;
+        }
+    }
+};
 
 /// Unbundle a compressed tar archive, streaming from input_reader to extract_writer.
 ///
@@ -410,29 +542,24 @@ fn HashingReader(comptime ReaderType: type) type {
 /// unbundling and network-based downloading.
 /// If an InvalidPath error is returned, error_context will contain details about the invalid path.
 pub fn unbundleStream(
-    input_reader: anytype,
+    allocator: std.mem.Allocator,
+    input_reader: *std.Io.Reader,
     extract_writer: ExtractWriter,
     expected_hash: *const [32]u8,
     error_context: ?*ErrorContext,
 ) UnbundleError!void {
-    var hasher = std.crypto.hash.Blake3.init(.{});
-    const ReaderType = @TypeOf(input_reader);
-    const HashingReaderType = HashingReader(ReaderType);
-
-    var hashing_reader = HashingReaderType{
-        .child_reader = input_reader,
-        .hasher = &hasher,
+    const decompress_reader = DecompressingHashReader.create(
+        allocator,
+        input_reader,
+        expected_hash.*,
+    ) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
     };
+    defer decompress_reader.deinit();
 
-    var window_buffer: [ZSTD_WINDOW_BUFFER_SIZE]u8 = undefined;
-    var zstd_stream = std.compress.zstd.decompressor(hashing_reader.reader(), .{
-        .window_buffer = &window_buffer,
-    });
-    const decompressed_reader = zstd_stream.reader();
-
-    var file_name_buffer: [std.fs.max_path_bytes]u8 = undefined;
-    var link_name_buffer: [std.fs.max_path_bytes]u8 = undefined;
-    var tar_iterator = std.tar.iterator(decompressed_reader, .{
+    var file_name_buffer: [MAX_PATH_BYTES]u8 = undefined;
+    var link_name_buffer: [MAX_PATH_BYTES]u8 = undefined;
+    var tar_iterator = std.tar.Iterator.init(decompress_reader.reader(), .{
         .file_name_buffer = &file_name_buffer,
         .link_name_buffer = &link_name_buffer,
     });
@@ -463,17 +590,10 @@ pub fn unbundleStream(
             },
             .file => {
                 const file_writer = try extract_writer.createFile(file_path);
-                defer extract_writer.finishFile(file_writer);
+                defer extract_writer.finishFile();
 
-                var buffer: [STREAM_BUFFER_SIZE]u8 = undefined;
-                var bytes_remaining = entry.size;
-                while (bytes_remaining > 0) {
-                    const to_read = @min(buffer.len, bytes_remaining);
-                    const bytes_read = entry.reader().readAll(buffer[0..to_read]) catch return error.UnexpectedEndOfStream;
-                    if (bytes_read == 0) return error.UnexpectedEndOfStream;
-                    file_writer.writeAll(buffer[0..bytes_read]) catch return error.FileWriteFailed;
-                    bytes_remaining -= bytes_read;
-                }
+                try tar_iterator.streamRemaining(entry, file_writer);
+                try file_writer.flush();
 
                 data_extracted = true;
             },
@@ -507,25 +627,15 @@ pub fn unbundleStream(
                 }
 
                 // TODO: Add symlink support to ExtractWriter interface
-                var buffer: [STREAM_BUFFER_SIZE]u8 = undefined;
-                var bytes_remaining = entry.size;
-                while (bytes_remaining > 0) {
-                    const to_read = @min(buffer.len, bytes_remaining);
-                    const bytes_read = entry.reader().readAll(buffer[0..to_read]) catch return error.UnexpectedEndOfStream;
-                    bytes_remaining -= bytes_read;
-                }
-
                 data_extracted = true;
             },
         }
     }
 
-    var actual_hash: [32]u8 = undefined;
-    hasher.final(&actual_hash);
-
-    if (!std.mem.eql(u8, &actual_hash, expected_hash)) {
-        return error.HashMismatch;
-    }
+    // Verify hash after all data is read
+    decompress_reader.verifyComplete() catch |err| switch (err) {
+        error.HashMismatch => return error.HashMismatch,
+    };
 
     if (!data_extracted) {
         return error.NoDataExtracted;
@@ -550,7 +660,7 @@ pub fn validateBase58Hash(base58_str: []const u8) !?[32]u8 {
 /// If an InvalidPath error is returned, error_context will contain details about the invalid path.
 pub fn unbundle(
     allocator: std.mem.Allocator,
-    input_reader: anytype,
+    input_reader: *std.Io.Reader,
     extract_dir: std.fs.Dir,
     filename: []const u8,
     error_context: ?*ErrorContext,
@@ -565,5 +675,5 @@ pub fn unbundle(
 
     var dir_writer = DirExtractWriter.init(extract_dir, allocator);
     defer dir_writer.deinit();
-    return unbundleStream(input_reader, dir_writer.extractWriter(), &expected_hash, error_context);
+    return unbundleStream(allocator, input_reader, dir_writer.extractWriter(), &expected_hash, error_context);
 }

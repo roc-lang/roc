@@ -22,13 +22,13 @@ crash 42
 
 # TOKENS
 ~~~zig
-KwCrash(1:1-1:6),Int(1:7-1:9),
-EndOfFile(2:1-2:1),
+KwCrash,Int,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(s-crash @1.1-1.9
-	(e-int @1.7-1.9 (raw "42")))
+(s-crash
+	(e-int (raw "42")))
 ~~~
 # FORMATTED
 ~~~roc

@@ -8,42 +8,62 @@ type=expr
 [[1, "hello"], [2, 3]]
 ~~~
 # EXPECTED
-INCOMPATIBLE LIST ELEMENTS - can_nested_heterogeneous_lists.md:1:3:1:3
+TYPE MISMATCH - can_nested_heterogeneous_lists.md:1:3:1:4
+TYPE MISMATCH - can_nested_heterogeneous_lists.md:1:20:1:21
 # PROBLEMS
-**INCOMPATIBLE LIST ELEMENTS**
-The two elements in this list have incompatible types:
-**can_nested_heterogeneous_lists.md:1:3:**
+**TYPE MISMATCH**
+This number is being used where a non-number type is needed:
+**can_nested_heterogeneous_lists.md:1:3:1:4:**
 ```roc
 [[1, "hello"], [2, 3]]
 ```
-  ^  ^^^^^^^
+  ^
 
-The first element has this type:
-    _Num(_size)_
+The type was determined to be non-numeric here:
+**can_nested_heterogeneous_lists.md:1:6:1:13:**
+```roc
+[[1, "hello"], [2, 3]]
+```
+     ^^^^^^^
 
-However, the second element has this type:
-    _Str_
+Other code expects this to have the type:
 
-All elements in a list must have compatible types.
+    Str
 
-Note: You can wrap each element in a tag to make them compatible.
-To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
+**TYPE MISMATCH**
+This number is being used where a non-number type is needed:
+**can_nested_heterogeneous_lists.md:1:20:1:21:**
+```roc
+[[1, "hello"], [2, 3]]
+```
+                   ^
+
+The type was determined to be non-numeric here:
+**can_nested_heterogeneous_lists.md:1:17:1:18:**
+```roc
+[[1, "hello"], [2, 3]]
+```
+                ^
+
+Other code expects this to have the type:
+
+    Str
 
 # TOKENS
 ~~~zig
-OpenSquare(1:1-1:2),OpenSquare(1:2-1:3),Int(1:3-1:4),Comma(1:4-1:5),StringStart(1:6-1:7),StringPart(1:7-1:12),StringEnd(1:12-1:13),CloseSquare(1:13-1:14),Comma(1:14-1:15),OpenSquare(1:16-1:17),Int(1:17-1:18),Comma(1:18-1:19),Int(1:20-1:21),CloseSquare(1:21-1:22),CloseSquare(1:22-1:23),
-EndOfFile(2:1-2:1),
+OpenSquare,OpenSquare,Int,Comma,StringStart,StringPart,StringEnd,CloseSquare,Comma,OpenSquare,Int,Comma,Int,CloseSquare,CloseSquare,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-list @1.1-1.23
-	(e-list @1.2-1.14
-		(e-int @1.3-1.4 (raw "1"))
-		(e-string @1.6-1.13
-			(e-string-part @1.7-1.12 (raw "hello"))))
-	(e-list @1.16-1.22
-		(e-int @1.17-1.18 (raw "2"))
-		(e-int @1.20-1.21 (raw "3"))))
+(e-list
+	(e-list
+		(e-int (raw "1"))
+		(e-string
+			(e-string-part (raw "hello"))))
+	(e-list
+		(e-int (raw "2"))
+		(e-int (raw "3"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -51,19 +71,19 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-list @1.1-1.23
+(e-list
 	(elems
-		(e-list @1.2-1.14
+		(e-list
 			(elems
-				(e-num @1.3-1.4 (value "1"))
-				(e-string @1.6-1.13
-					(e-literal @1.7-1.12 (string "hello")))))
-		(e-list @1.16-1.22
+				(e-num (value "1"))
+				(e-string
+					(e-literal (string "hello")))))
+		(e-list
 			(elems
-				(e-num @1.17-1.18 (value "2"))
-				(e-num @1.20-1.21 (value "3"))))))
+				(e-num (value "2"))
+				(e-num (value "3"))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.23 (type "List(List(Error))"))
+(expr (type "List(List(Str))"))
 ~~~

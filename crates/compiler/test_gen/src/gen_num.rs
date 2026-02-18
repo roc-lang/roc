@@ -1941,6 +1941,33 @@ fn pow_int_overflow() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn atan() {
     assert_evals_to!("Num.atan 10f64", 1.4711276743037347, f64);
+    assert_evals_to!(
+        "Num.atan 1dec",
+        RocDec::from_str("0.78539816339744832").unwrap(),
+        RocDec
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn asin() {
+    assert_evals_to!("Num.asin 0.5f64", std::f64::consts::FRAC_PI_6, f64);
+    assert_evals_to!(
+        "Num.asin 0.5dec",
+        RocDec::from_str("0.523598775598298944").unwrap(),
+        RocDec
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn acos() {
+    assert_evals_to!("Num.acos 0.5f64", std::f64::consts::FRAC_PI_3, f64);
+    assert_evals_to!(
+        "Num.acos 0.5dec",
+        RocDec::from_str("1.047197551196597888").unwrap(),
+        RocDec
+    );
 }
 
 #[test]

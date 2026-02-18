@@ -15,6 +15,7 @@ type=expr
 }
 ~~~
 # EXPECTED
+STRAY DOLLAR SIGN - record_different_fields_error.md:6:10:6:11
 UNEXPECTED TOKEN IN TYPE ANNOTATION - record_different_fields_error.md:2:20:2:21
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:2:21:2:39
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:2:39:2:40
@@ -27,7 +28,6 @@ UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:4:15:4:16
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:4:25:4:26
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:5:15:5:16
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:5:24:5:25
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:6:10:6:11
 UNEXPECTED TOKEN IN TYPE ANNOTATION - record_different_fields_error.md:6:20:6:21
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:6:21:6:27
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:6:27:6:28
@@ -49,8 +49,6 @@ UNDEFINED VARIABLE - record_different_fields_error.md:5:5:5:10
 UNDEFINED VARIABLE - record_different_fields_error.md:5:11:5:15
 UNRECOGNIZED SYNTAX - record_different_fields_error.md:5:15:5:16
 UNRECOGNIZED SYNTAX - record_different_fields_error.md:5:24:5:25
-UNDEFINED VARIABLE - record_different_fields_error.md:6:5:6:10
-UNRECOGNIZED SYNTAX - record_different_fields_error.md:6:10:6:11
 MALFORMED TYPE - record_different_fields_error.md:6:20:6:21
 UNRECOGNIZED SYNTAX - record_different_fields_error.md:6:21:6:27
 UNRECOGNIZED SYNTAX - record_different_fields_error.md:6:27:6:28
@@ -59,7 +57,23 @@ UNDEFINED VARIABLE - record_different_fields_error.md:7:5:7:10
 UNRECOGNIZED SYNTAX - record_different_fields_error.md:7:10:7:17
 UNRECOGNIZED SYNTAX - record_different_fields_error.md:7:17:7:18
 UNRECOGNIZED SYNTAX - record_different_fields_error.md:7:30:7:31
+UNUSED VARIABLE - record_different_fields_error.md:3:5:3:14
+UNUSED VARIABLE - record_different_fields_error.md:6:5:6:21
+TYPE MISMATCH - record_different_fields_error.md:4:5:4:15
+TYPE MISMATCH - record_different_fields_error.md:4:17:4:25
+TYPE MISMATCH - record_different_fields_error.md:5:17:5:24
+TYPE MISMATCH - record_different_fields_error.md:7:19:7:30
 # PROBLEMS
+**STRAY DOLLAR SIGN**
+Dollar sign ($) is only allowed at the very beginning of a name, not in the middle or at the end.
+
+**record_different_fields_error.md:6:10:6:11:**
+```roc
+    field$special: "dollar",
+```
+         ^
+
+
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
 The token **"** is not expected in a type annotation.
 Type annotations should contain types like _Str_, _Num a_, or _List U64_.
@@ -190,17 +204,6 @@ Expressions can be identifiers, literals, function calls, or operators.
     kebab-case: "kebab",
 ```
                        ^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **$** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-**record_different_fields_error.md:6:10:6:11:**
-```roc
-    field$special: "dollar",
-```
-         ^
 
 
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
@@ -432,28 +435,6 @@ I don't recognize this syntax.
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
-**UNDEFINED VARIABLE**
-Nothing is named `field` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**record_different_fields_error.md:6:5:6:10:**
-```roc
-    field$special: "dollar",
-```
-    ^^^^^
-
-
-**UNRECOGNIZED SYNTAX**
-I don't recognize this syntax.
-
-**record_different_fields_error.md:6:10:6:11:**
-```roc
-    field$special: "dollar",
-```
-         ^
-
-This might be a syntax error, an unsupported language feature, or a typo.
-
 **MALFORMED TYPE**
 This type annotation is malformed or contains invalid syntax.
 
@@ -541,57 +522,139 @@ I don't recognize this syntax.
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
+**UNUSED VARIABLE**
+Variable `field_` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_field_` to suppress this warning.
+The unused variable is declared here:
+**record_different_fields_error.md:3:5:3:14:**
+```roc
+    field_: "trailing underscore",
+```
+    ^^^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable `field$special` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_field$special` to suppress this warning.
+The unused variable is declared here:
+**record_different_fields_error.md:6:5:6:21:**
+```roc
+    field$special: "dollar",
+```
+    ^^^^^^^^^^^^^^^^
+
+
+**TYPE MISMATCH**
+This expression produces a value, but it's not being used:
+**record_different_fields_error.md:4:5:4:15:**
+```roc
+    PascalCase: "pascal",
+```
+    ^^^^^^^^^^
+
+It has the type:
+
+    [PascalCase, ..]
+
+Since this expression is used as a statement, it must evaluate to `{}`.
+If you don't need the value, you can ignore it with `_ =`.
+
+**TYPE MISMATCH**
+This expression produces a value, but it's not being used:
+**record_different_fields_error.md:4:17:4:25:**
+```roc
+    PascalCase: "pascal",
+```
+                ^^^^^^^^
+
+It has the type:
+
+    Str
+
+Since this expression is used as a statement, it must evaluate to `{}`.
+If you don't need the value, you can ignore it with `_ =`.
+
+**TYPE MISMATCH**
+This expression produces a value, but it's not being used:
+**record_different_fields_error.md:5:17:5:24:**
+```roc
+    kebab-case: "kebab",
+```
+                ^^^^^^^
+
+It has the type:
+
+    Str
+
+Since this expression is used as a statement, it must evaluate to `{}`.
+If you don't need the value, you can ignore it with `_ =`.
+
+**TYPE MISMATCH**
+This expression produces a value, but it's not being used:
+**record_different_fields_error.md:7:19:7:30:**
+```roc
+    field@symbol: "at symbol",
+```
+                  ^^^^^^^^^^^
+
+It has the type:
+
+    Str
+
+Since this expression is used as a statement, it must evaluate to `{}`.
+If you don't need the value, you can ignore it with `_ =`.
+
 # TOKENS
 ~~~zig
-OpenCurly(1:1-1:2),
-NamedUnderscore(2:5-2:18),OpColon(2:18-2:19),StringStart(2:20-2:21),StringPart(2:21-2:39),StringEnd(2:39-2:40),Comma(2:40-2:41),
-LowerIdent(3:5-3:11),OpColon(3:11-3:12),StringStart(3:13-3:14),StringPart(3:14-3:33),StringEnd(3:33-3:34),Comma(3:34-3:35),
-UpperIdent(4:5-4:15),OpColon(4:15-4:16),StringStart(4:17-4:18),StringPart(4:18-4:24),StringEnd(4:24-4:25),Comma(4:25-4:26),
-LowerIdent(5:5-5:10),OpUnaryMinus(5:10-5:11),LowerIdent(5:11-5:15),OpColon(5:15-5:16),StringStart(5:17-5:18),StringPart(5:18-5:23),StringEnd(5:23-5:24),Comma(5:24-5:25),
-LowerIdent(6:5-6:10),MalformedUnknownToken(6:10-6:11),LowerIdent(6:11-6:18),OpColon(6:18-6:19),StringStart(6:20-6:21),StringPart(6:21-6:27),StringEnd(6:27-6:28),Comma(6:28-6:29),
-LowerIdent(7:5-7:10),OpaqueName(7:10-7:17),OpColon(7:17-7:18),StringStart(7:19-7:20),StringPart(7:20-7:29),StringEnd(7:29-7:30),Comma(7:30-7:31),
-CloseCurly(8:1-8:2),
-EndOfFile(9:1-9:1),
+OpenCurly,
+NamedUnderscore,OpColon,StringStart,StringPart,StringEnd,Comma,
+LowerIdent,OpColon,StringStart,StringPart,StringEnd,Comma,
+UpperIdent,OpColon,StringStart,StringPart,StringEnd,Comma,
+LowerIdent,OpUnaryMinus,LowerIdent,OpColon,StringStart,StringPart,StringEnd,Comma,
+LowerIdent,OpColon,StringStart,StringPart,StringEnd,Comma,
+LowerIdent,OpaqueName,OpColon,StringStart,StringPart,StringEnd,Comma,
+CloseCurly,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-block @1.1-8.2
+(e-block
 	(statements
-		(s-type-anno @2.5-2.21 (name "_privateField")
-			(ty-malformed @2.20-2.21 (tag "ty_anno_unexpected_token")))
-		(e-malformed @2.21-2.39 (reason "expr_unexpected_token"))
-		(e-malformed @2.39-2.40 (reason "expr_unexpected_token"))
-		(e-malformed @2.40-2.41 (reason "expr_unexpected_token"))
-		(s-type-anno @3.5-3.14 (name "field_")
-			(ty-malformed @3.13-3.14 (tag "ty_anno_unexpected_token")))
-		(e-malformed @3.14-3.33 (reason "expr_unexpected_token"))
-		(e-malformed @3.33-3.34 (reason "expr_unexpected_token"))
-		(e-malformed @3.34-3.35 (reason "expr_unexpected_token"))
-		(e-tag @4.5-4.15 (raw "PascalCase"))
-		(e-malformed @4.15-4.16 (reason "expr_unexpected_token"))
-		(e-string @4.17-4.25
-			(e-string-part @4.18-4.24 (raw "pascal")))
-		(e-malformed @4.25-4.26 (reason "expr_unexpected_token"))
-		(e-ident @5.5-5.10 (raw "kebab"))
+		(s-type-anno (name "_privateField")
+			(ty-malformed (tag "ty_anno_unexpected_token")))
+		(e-malformed (reason "expr_unexpected_token"))
+		(e-malformed (reason "expr_unexpected_token"))
+		(e-malformed (reason "expr_unexpected_token"))
+		(s-type-anno (name "field_")
+			(ty-malformed (tag "ty_anno_unexpected_token")))
+		(e-malformed (reason "expr_unexpected_token"))
+		(e-malformed (reason "expr_unexpected_token"))
+		(e-malformed (reason "expr_unexpected_token"))
+		(e-tag (raw "PascalCase"))
+		(e-malformed (reason "expr_unexpected_token"))
+		(e-string
+			(e-string-part (raw "pascal")))
+		(e-malformed (reason "expr_unexpected_token"))
+		(e-ident (raw "kebab"))
 		(unary "-"
-			(e-ident @5.11-5.15 (raw "case")))
-		(e-malformed @5.15-5.16 (reason "expr_unexpected_token"))
-		(e-string @5.17-5.24
-			(e-string-part @5.18-5.23 (raw "kebab")))
-		(e-malformed @5.24-5.25 (reason "expr_unexpected_token"))
-		(e-ident @6.5-6.10 (raw "field"))
-		(e-malformed @6.10-6.11 (reason "expr_unexpected_token"))
-		(s-type-anno @6.11-6.21 (name "special")
-			(ty-malformed @6.20-6.21 (tag "ty_anno_unexpected_token")))
-		(e-malformed @6.21-6.27 (reason "expr_unexpected_token"))
-		(e-malformed @6.27-6.28 (reason "expr_unexpected_token"))
-		(e-malformed @6.28-6.29 (reason "expr_unexpected_token"))
-		(e-ident @7.5-7.10 (raw "field"))
-		(e-malformed @7.10-7.17 (reason "expr_unexpected_token"))
-		(e-malformed @7.17-7.18 (reason "expr_unexpected_token"))
-		(e-string @7.19-7.30
-			(e-string-part @7.20-7.29 (raw "at symbol")))
-		(e-malformed @7.30-7.31 (reason "expr_unexpected_token"))))
+			(e-ident (raw "case")))
+		(e-malformed (reason "expr_unexpected_token"))
+		(e-string
+			(e-string-part (raw "kebab")))
+		(e-malformed (reason "expr_unexpected_token"))
+		(s-type-anno (name "field$special")
+			(ty-malformed (tag "ty_anno_unexpected_token")))
+		(e-malformed (reason "expr_unexpected_token"))
+		(e-malformed (reason "expr_unexpected_token"))
+		(e-malformed (reason "expr_unexpected_token"))
+		(e-ident (raw "field"))
+		(e-malformed (reason "expr_unexpected_token"))
+		(e-malformed (reason "expr_unexpected_token"))
+		(e-string
+			(e-string-part (raw "at symbol")))
+		(e-malformed (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -607,8 +670,7 @@ EndOfFile(9:1-9:1),
 	-case
 		"kebab"
 	
-	field
-		special : 
+	field$special : 
 			
 	field
 			"at symbol"
@@ -617,62 +679,67 @@ EndOfFile(9:1-9:1),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-block @1.1-8.2
-	(s-expr @2.21-2.39
+(e-block
+	(s-let
+		(p-assign (ident "_privateField"))
+		(e-anno-only))
+	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-expr @2.39-2.40
+	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-expr @2.40-2.41
+	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-expr @3.14-3.33
+	(s-let
+		(p-assign (ident "field_"))
+		(e-anno-only))
+	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-expr @3.33-3.34
+	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-expr @3.34-3.35
+	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-expr @4.5-4.15
-		(e-tag @4.5-4.15 (name "PascalCase")))
-	(s-expr @4.15-4.16
+	(s-expr
+		(e-tag (name "PascalCase")))
+	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-expr @4.17-4.25
-		(e-string @4.17-4.25
-			(e-literal @4.18-4.24 (string "pascal"))))
-	(s-expr @4.25-4.26
+	(s-expr
+		(e-string
+			(e-literal (string "pascal"))))
+	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-expr @5.5-5.10
+	(s-expr
 		(e-runtime-error (tag "ident_not_in_scope")))
-	(s-expr @5.10-5.15
-		(e-unary-minus @5.10-5.15
+	(s-expr
+		(e-unary-minus
 			(e-runtime-error (tag "ident_not_in_scope"))))
-	(s-expr @5.15-5.16
+	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-expr @5.17-5.24
-		(e-string @5.17-5.24
-			(e-literal @5.18-5.23 (string "kebab"))))
-	(s-expr @5.24-5.25
+	(s-expr
+		(e-string
+			(e-literal (string "kebab"))))
+	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-expr @6.5-6.10
+	(s-let
+		(p-assign (ident "field$special"))
+		(e-anno-only))
+	(s-expr
+		(e-runtime-error (tag "expr_not_canonicalized")))
+	(s-expr
+		(e-runtime-error (tag "expr_not_canonicalized")))
+	(s-expr
+		(e-runtime-error (tag "expr_not_canonicalized")))
+	(s-expr
 		(e-runtime-error (tag "ident_not_in_scope")))
-	(s-expr @6.10-6.11
+	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-expr @6.21-6.27
+	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-expr @6.27-6.28
-		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-expr @6.28-6.29
-		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-expr @7.5-7.10
-		(e-runtime-error (tag "ident_not_in_scope")))
-	(s-expr @7.10-7.17
-		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-expr @7.17-7.18
-		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-expr @7.19-7.30
-		(e-string @7.19-7.30
-			(e-literal @7.20-7.29 (string "at symbol"))))
+	(s-expr
+		(e-string
+			(e-literal (string "at symbol"))))
 	(e-runtime-error (tag "expr_not_canonicalized")))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-8.2 (type "Error"))
+(expr (type "Error"))
 ~~~

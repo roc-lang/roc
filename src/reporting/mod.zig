@@ -2,6 +2,7 @@
 
 pub const Report = @import("report.zig").Report;
 pub const Document = @import("document.zig").Document;
+pub const CommonMisspellings = @import("common_misspellings.zig").CommonMisspellings;
 pub const DocumentElement = @import("document.zig").DocumentElement;
 pub const Annotation = @import("document.zig").Annotation;
 pub const SourceCodeDisplayRegion = @import("document.zig").SourceCodeDisplayRegion;
@@ -33,3 +34,8 @@ pub const validateUtf8 = @import("config.zig").validateUtf8;
 pub const truncateUtf8 = @import("config.zig").truncateUtf8;
 pub const formatUtf8 = @import("config.zig").formatUtf8;
 pub const formatUtf8Bounded = @import("config.zig").formatUtf8Bounded;
+
+test {
+    const std = @import("std");
+    std.testing.refAllDecls(@import("test.zig"));
+}

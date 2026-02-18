@@ -2,7 +2,6 @@
 //! and also provide an alternative implementation for WASM (webREPL, playground).
 
 const std = @import("std");
-const collections = @import("collections");
 
 const Allocator = std.mem.Allocator;
 
@@ -96,7 +95,7 @@ pub const FileInfo = struct {
 pub const Dir = struct {
     dir: std.fs.Dir,
 
-    const openOptions = std.fs.Dir.OpenDirOptions{
+    const openOptions = std.fs.Dir.OpenOptions{
         .access_sub_paths = true,
         .iterate = true,
         // packages should have no symlinks, so don't follow them for better security!
@@ -128,8 +127,8 @@ pub const Dir = struct {
 
     /// Canonicalize the given filepath relative to this dir's path.
     pub fn canonicalize(dir: *Dir, filename: []const u8, allocator: Allocator) CanonicalizeError![]const u8 {
-        if (comptime @import("builtin").target.os.tag == .wasi) {
-            // WASI doesn't support realpath, so we'll just resolve the path
+        if (comptime @import("builtin").target.os.tag == .freestanding) {
+            // Freestanding doesn't support realpath, so we'll just resolve the path
             // without following symlinks
             return std.fs.path.resolve(allocator, &.{filename}) catch |err| {
                 switch (err) {
@@ -155,14 +154,14 @@ pub const Dir = struct {
     /// Find all filepaths in this directory recursively.
     ///
     /// The text of the relative paths are stored in the `string_arena`
-    /// and the slices over said paths are returned in an `ArrayListUnmanaged`
+    /// and the slices over said paths are returned in an `ArrayList`
     /// that must be `deinit`ed by the caller.
     pub fn findAllFilesRecursively(
         dir: *Dir,
         gpa: std.mem.Allocator,
         string_arena: *std.heap.ArenaAllocator,
-    ) !std.ArrayListUnmanaged([]const u8) {
-        var files = std.ArrayListUnmanaged([]const u8){};
+    ) !std.ArrayList([]const u8) {
+        var files = std.ArrayList([]const u8){};
         errdefer files.deinit(gpa);
 
         var walker = try dir.dir.walk(gpa);
@@ -202,7 +201,7 @@ fn readFileDefault(relative_path: []const u8, allocator: std.mem.Allocator) Read
     const file = try std.fs.cwd().openFile(relative_path, .{});
     defer file.close();
 
-    const contents = try file.reader().readAllAlloc(allocator, max_file_size);
+    const contents = try file.readToEndAlloc(allocator, max_file_size);
 
     return contents;
 }
@@ -213,7 +212,7 @@ fn readFileIntoDefault(path: []const u8, buffer: []u8) ReadError!usize {
     const file = try std.fs.cwd().openFile(path, .{});
     defer file.close();
 
-    return try file.reader().readAll(buffer);
+    return try file.readAll(buffer);
 }
 
 fn openDirDefault(absolute_path: []const u8) OpenError!Dir {
@@ -236,8 +235,8 @@ fn baseNameDefault(absolute_path: []const u8) ?[]const u8 {
 }
 
 fn canonicalizeDefault(root_relative_path: []const u8, allocator: Allocator) CanonicalizeError![]const u8 {
-    if (comptime @import("builtin").target.os.tag == .wasi) {
-        // WASI doesn't support realpath, so we'll just resolve the path
+    if (comptime @import("builtin").target.os.tag == .freestanding) {
+        // Freestanding doesn't support realpath, so we'll just resolve the path
         // without following symlinks
         return std.fs.path.resolve(allocator, &.{root_relative_path}) catch |err| {
             return switch (err) {
@@ -288,58 +287,43 @@ fn writeFileDefault(path: []const u8, contents: []const u8) WriteError!void {
 
 // Testing implementations that fail tests if called
 
-fn fileExistsTesting(absolute_path: []const u8) OpenError!bool {
-    _ = absolute_path;
+fn fileExistsTesting(_: []const u8) OpenError!bool {
     @panic("fileExists should not be called in this test");
 }
 
-fn readFileTesting(relative_path: []const u8, allocator: Allocator) ReadError![]const u8 {
-    _ = relative_path;
-    _ = allocator;
+fn readFileTesting(_: []const u8, _: Allocator) ReadError![]const u8 {
     @panic("readFile should not be called in this test");
 }
 
-fn readFileIntoTesting(path: []const u8, buffer: []u8) ReadError!usize {
-    _ = path;
-    _ = buffer;
+fn readFileIntoTesting(_: []const u8, _: []u8) ReadError!usize {
     @panic("readFileInto should not be called in this test");
 }
 
-fn writeFileTesting(path: []const u8, contents: []const u8) WriteError!void {
-    _ = path;
-    _ = contents;
+fn writeFileTesting(_: []const u8, _: []const u8) WriteError!void {
     @panic("writeFile should not be called in this test");
 }
 
-fn openDirTesting(absolute_path: []const u8) OpenError!Dir {
-    _ = absolute_path;
+fn openDirTesting(_: []const u8) OpenError!Dir {
     @panic("openDir should not be called in this test");
 }
 
-fn dirNameTesting(absolute_path: []const u8) ?[]const u8 {
-    _ = absolute_path;
+fn dirNameTesting(_: []const u8) ?[]const u8 {
     @panic("dirName should not be called in this test");
 }
 
-fn baseNameTesting(absolute_path: []const u8) ?[]const u8 {
-    _ = absolute_path;
+fn baseNameTesting(_: []const u8) ?[]const u8 {
     @panic("baseName should not be called in this test");
 }
 
-fn canonicalizeTesting(root_relative_path: []const u8, allocator: Allocator) CanonicalizeError![]const u8 {
-    _ = root_relative_path;
-    _ = allocator;
+fn canonicalizeTesting(_: []const u8, _: Allocator) CanonicalizeError![]const u8 {
     @panic("canonicalize should not be called in this test");
 }
 
-fn makePathTesting(path: []const u8) MakePathError!void {
-    _ = path;
+fn makePathTesting(_: []const u8) MakePathError!void {
     @panic("makePath should not be called in this test");
 }
 
-fn renameTesting(old_path: []const u8, new_path: []const u8) RenameError!void {
-    _ = old_path;
-    _ = new_path;
+fn renameTesting(_: []const u8, _: []const u8) RenameError!void {
     @panic("rename should not be called in this test");
 }
 

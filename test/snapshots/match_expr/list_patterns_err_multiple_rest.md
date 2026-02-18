@@ -42,21 +42,21 @@ The unused variable is declared here:
 
 # TOKENS
 ~~~zig
-KwMatch(1:1-1:6),LowerIdent(1:7-1:14),OpenCurly(1:15-1:16),
-OpenSquare(2:5-2:6),DoubleDot(2:6-2:8),Comma(2:8-2:9),LowerIdent(2:10-2:16),Comma(2:16-2:17),DoubleDot(2:18-2:20),CloseSquare(2:20-2:21),OpFatArrow(2:22-2:24),TripleDot(2:25-2:28),
-CloseCurly(3:1-3:2),
-EndOfFile(4:1-4:1),
+KwMatch,LowerIdent,OpenCurly,
+OpenSquare,DoubleDot,Comma,LowerIdent,Comma,DoubleDot,CloseSquare,OpFatArrow,TripleDot,
+CloseCurly,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
 (e-match
-	(e-ident @1.7-1.14 (raw "numbers"))
+	(e-ident (raw "numbers"))
 	(branches
-		(branch @2.5-2.28
-			(p-list @2.5-2.21
-				(p-list-rest @2.6-2.8)
-				(p-ident @2.10-2.16 (raw "middle"))
-				(p-list-rest @2.18-2.20))
+		(branch
+			(p-list
+				(p-list-rest)
+				(p-ident (raw "middle"))
+				(p-list-rest))
 			(e-ellipsis))))
 ~~~
 # FORMATTED
@@ -67,22 +67,22 @@ match numbers {
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-match @1.1-3.2
-	(match @1.1-3.2
+(e-match
+	(match
 		(cond
 			(e-runtime-error (tag "ident_not_in_scope")))
 		(branches
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-list @2.5-2.21
+						(p-list
 							(patterns
-								(p-assign @2.10-2.16 (ident "middle")))
+								(p-assign (ident "middle")))
 							(rest-at (index 0)))))
 				(value
-					(e-not-implemented @1.1-1.1))))))
+					(e-not-implemented))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-3.2 (type "_a"))
+(expr (type "_a"))
 ~~~

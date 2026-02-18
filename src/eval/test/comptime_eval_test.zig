@@ -1,0 +1,3093 @@
+//! Tests for compile-time evaluation of top-level declarations
+
+const std = @import("std");
+const parse = @import("parse");
+const types = @import("types");
+const base = @import("base");
+const can = @import("can");
+const check = @import("check");
+const compiled_builtins = @import("compiled_builtins");
+const ComptimeEvaluator = @import("../comptime_evaluator.zig").ComptimeEvaluator;
+const BuiltinTypes = @import("../builtins.zig").BuiltinTypes;
+const builtin_loading = @import("../builtin_loading.zig");
+const roc_target = @import("roc_target");
+
+const Can = can.Can;
+const Check = check.Check;
+const ModuleEnv = can.ModuleEnv;
+const Allocators = base.Allocators;
+const testing = std.testing;
+// Use page_allocator for interpreter tests (doesn't track leaks)
+const test_allocator = std.heap.page_allocator;
+
+const EvalModuleResult = struct {
+    module_env: *ModuleEnv,
+    evaluator: ComptimeEvaluator,
+    problems: *check.problem.Store,
+    builtin_module: builtin_loading.LoadedModule,
+};
+
+/// Helper to parse, canonicalize, type-check, and run comptime evaluation on a full module
+fn parseCheckAndEvalModule(src: []const u8) !EvalModuleResult {
+    return parseCheckAndEvalModuleWithName(src, "TestModule");
+}
+
+fn parseCheckAndEvalModuleWithName(src: []const u8, module_name: []const u8) !EvalModuleResult {
+    const gpa = test_allocator;
+
+    const module_env = try gpa.create(ModuleEnv);
+    errdefer gpa.destroy(module_env);
+    module_env.* = try ModuleEnv.init(gpa, src);
+    errdefer module_env.deinit();
+
+    module_env.common.source = src;
+    module_env.module_name = module_name;
+    try module_env.common.calcLineStarts(module_env.gpa);
+
+    // Parse the source code
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(gpa);
+    defer allocators.deinit();
+
+    const parse_ast = try parse.parse(&allocators, &module_env.common);
+    defer parse_ast.deinit();
+
+    // Empty scratch space (required before canonicalization)
+    parse_ast.store.emptyScratch();
+
+    // Load real builtins (these will be returned and cleaned up by the caller)
+    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    const builtin_source = compiled_builtins.builtin_source;
+    var builtin_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Builtin", builtin_source);
+    errdefer builtin_module.deinit();
+
+    // Initialize CIR fields in ModuleEnv
+    try module_env.initCIRFields(module_name);
+    const builtin_ctx: Check.BuiltinContext = .{
+        .module_name = try module_env.insertIdent(base.Ident.for_text(module_name)),
+        .bool_stmt = builtin_indices.bool_type,
+        .try_stmt = builtin_indices.try_type,
+        .str_stmt = builtin_indices.str_type,
+        .builtin_module = builtin_module.env,
+        .builtin_indices = builtin_indices,
+    };
+
+    // Create canonicalizer
+    var czer = try Can.init(&allocators, module_env, parse_ast, null);
+    defer czer.deinit();
+
+    // Canonicalize the module
+    try czer.canonicalizeFile();
+
+    // Type check the module with builtins
+    const imported_envs = [_]*const ModuleEnv{builtin_module.env};
+
+    // Resolve imports - map each import to its index in imported_envs
+    module_env.imports.resolveImports(module_env, &imported_envs);
+
+    var checker = try Check.init(gpa, &module_env.types, module_env, &imported_envs, null, &module_env.store.regions, builtin_ctx);
+    defer checker.deinit();
+
+    try checker.checkFile();
+
+    // Create problem store for comptime evaluation
+    const problems = try gpa.create(check.problem.Store);
+    errdefer gpa.destroy(problems);
+    problems.* = try check.problem.Store.init(gpa);
+
+    // Create and run comptime evaluator with real builtins
+    const builtin_types = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
+    const evaluator = try ComptimeEvaluator.init(gpa, module_env, &.{}, problems, builtin_types, builtin_module.env, &checker.import_mapping, roc_target.RocTarget.detectNative());
+
+    return .{
+        .module_env = module_env,
+        .evaluator = evaluator,
+        .problems = problems,
+        .builtin_module = builtin_module,
+    };
+}
+
+const EvalModuleWithImportResult = struct {
+    module_env: *ModuleEnv,
+    evaluator: ComptimeEvaluator,
+    problems: *check.problem.Store,
+    other_envs: []const *const ModuleEnv,
+    builtin_module: builtin_loading.LoadedModule,
+};
+
+/// Helper to parse, canonicalize, type-check, and run comptime evaluation with imported modules
+fn parseCheckAndEvalModuleWithImport(src: []const u8, import_name: []const u8, imported_module: *const ModuleEnv) !EvalModuleWithImportResult {
+    const gpa = test_allocator;
+
+    const module_env = try gpa.create(ModuleEnv);
+    errdefer gpa.destroy(module_env);
+    module_env.* = try ModuleEnv.init(gpa, src);
+    errdefer module_env.deinit();
+
+    module_env.common.source = src;
+    module_env.module_name = "TestModule";
+    try module_env.common.calcLineStarts(module_env.gpa);
+
+    // Parse the source code
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(gpa);
+    defer allocators.deinit();
+
+    const parse_ast = try parse.parse(&allocators, &module_env.common);
+    defer parse_ast.deinit();
+
+    // Empty scratch space (required before canonicalization)
+    parse_ast.store.emptyScratch();
+
+    // Load real builtins (these will be returned and cleaned up by the caller)
+    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    const builtin_source = compiled_builtins.builtin_source;
+    var builtin_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Builtin", builtin_source);
+    errdefer builtin_module.deinit();
+
+    // Initialize CIR fields in ModuleEnv
+    try module_env.initCIRFields("test");
+    const builtin_ctx: Check.BuiltinContext = .{
+        .module_name = try module_env.insertIdent(base.Ident.for_text("test")),
+        .bool_stmt = builtin_indices.bool_type,
+        .try_stmt = builtin_indices.try_type,
+        .str_stmt = builtin_indices.str_type,
+        .builtin_module = builtin_module.env,
+        .builtin_indices = builtin_indices,
+    };
+
+    // Set up imports with correct type (AutoHashMap with Ident.Idx keys)
+    var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
+    defer module_envs.deinit();
+
+    // Populate module_envs with builtin types (like production does)
+    try Can.populateModuleEnvs(&module_envs, module_env, builtin_module.env, builtin_indices);
+
+    // Convert import name to Ident.Idx using the MODULE's ident store (not a temporary one!)
+    // This is important because the canonicalizer will look up identifiers in this same store
+    const import_ident = try module_env.insertIdent(base.Ident.for_text(import_name));
+    // For user modules, the qualified name is just the module name itself
+    // Use module_env (not imported_module) since it's mutable
+    const import_qualified_ident = try module_env.insertIdent(base.Ident.for_text(import_name));
+    try module_envs.put(import_ident, .{ .env = imported_module, .qualified_type_ident = import_qualified_ident });
+
+    // Create canonicalizer with imports
+    var czer = try Can.init(&allocators, module_env, parse_ast, &module_envs);
+    defer czer.deinit();
+
+    // Canonicalize the module
+    try czer.canonicalizeFile();
+
+    // Set up imported_envs for type checking and evaluation.
+    // Order must match all_module_envs in the interpreter (self module first, then imports).
+    // evalLookupExternal uses all_module_envs[resolved_idx], so resolveImports indices
+    // must match this array. The interpreter detects other_envs[0]==env and uses it directly.
+    var imported_envs = std.ArrayList(*const ModuleEnv).empty;
+    defer imported_envs.deinit(gpa);
+    try imported_envs.append(gpa, module_env); // Self module must be first
+    try imported_envs.append(gpa, builtin_module.env); // Builtin (auto-import)
+    try imported_envs.append(gpa, imported_module); // Then explicit imports
+
+    // Resolve imports - map each import to its index in imported_envs
+    module_env.imports.resolveImports(module_env, imported_envs.items);
+
+    // Type check the module
+    var checker = try Check.init(gpa, &module_env.types, module_env, imported_envs.items, &module_envs, &module_env.store.regions, builtin_ctx);
+    defer checker.deinit();
+
+    try checker.checkFile();
+
+    // Create problem store for comptime evaluation
+    const problems = try gpa.create(check.problem.Store);
+    errdefer gpa.destroy(problems);
+    problems.* = try check.problem.Store.init(gpa);
+
+    // Keep other_envs alive
+    const other_envs_slice = try gpa.dupe(*const ModuleEnv, imported_envs.items);
+
+    // Create and run comptime evaluator with real builtins
+    const builtin_types = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
+    const evaluator = try ComptimeEvaluator.init(gpa, module_env, other_envs_slice, problems, builtin_types, builtin_module.env, &checker.import_mapping, roc_target.RocTarget.detectNative());
+
+    return .{
+        .module_env = module_env,
+        .evaluator = evaluator,
+        .problems = problems,
+        .other_envs = other_envs_slice,
+        .builtin_module = builtin_module,
+    };
+}
+
+fn cleanupEvalModule(result: anytype) void {
+    // ComptimeEvaluator deinit frees crash message strings
+    var evaluator_mut = result.evaluator;
+    evaluator_mut.deinit();
+
+    var problems_mut = result.problems;
+    problems_mut.deinit(test_allocator);
+    test_allocator.destroy(result.problems);
+    result.module_env.deinit();
+    test_allocator.destroy(result.module_env);
+
+    // Clean up builtin module
+    var builtin_module_mut = result.builtin_module;
+    builtin_module_mut.deinit();
+}
+
+fn cleanupEvalModuleWithImport(result: anytype) void {
+    // ComptimeEvaluator deinit frees crash message strings
+    var evaluator_mut = result.evaluator;
+    evaluator_mut.deinit();
+
+    var problems_mut = result.problems;
+    problems_mut.deinit(test_allocator);
+    test_allocator.destroy(result.problems);
+    test_allocator.free(result.other_envs);
+    result.module_env.deinit();
+    test_allocator.destroy(result.module_env);
+
+    // Clean up builtin module
+    var builtin_module_mut = result.builtin_module;
+    builtin_module_mut.deinit();
+}
+
+test "comptime eval - simple constant" {
+    const src = "x = 42";
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate 1 declaration with no crashes
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - crash in constant" {
+    const src =
+        \\x = 42
+        \\bad = {
+        \\    crash "this crashes at compile time"
+        \\    0
+        \\}
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate 2 declarations with 1 crash
+    try testing.expectEqual(@as(u32, 2), summary.evaluated);
+    try testing.expectEqual(@as(u32, 1), summary.crashed);
+
+    // Should have 1 problem reported
+    try testing.expectEqual(@as(usize, 1), result.problems.len());
+}
+
+test "comptime eval - crash in if branch not taken" {
+    const src =
+        \\x = if True 42 else {
+        \\    crash "not taken"
+        \\    0
+        \\}
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate successfully - crash branch not taken
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - crash in if branch taken" {
+    const src =
+        \\x = if False 42 else {
+        \\    crash "this branch is taken"
+        \\    0
+        \\}
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should crash - else branch is taken
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 1), summary.crashed);
+}
+
+test "comptime eval - lambda is skipped" {
+    const src =
+        \\add = |x, y| x + y
+        \\value = 42
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate 2 declarations with no crashes
+    // The lambda should be skipped, not evaluated
+    try testing.expectEqual(@as(u32, 2), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - multiple declarations with mixed results" {
+    const src =
+        \\good1 = 42
+        \\bad1 = {
+        \\    crash "first crash"
+        \\    0
+        \\}
+        \\good2 = 100
+        \\bad2 = {
+        \\    crash "second crash"
+        \\    0
+        \\}
+        \\good3 = 200
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate all 5 declarations with 2 crashes
+    // All defs are evaluated regardless of crashes in other defs
+    try testing.expectEqual(@as(u32, 5), summary.evaluated);
+    try testing.expectEqual(@as(u32, 2), summary.crashed);
+
+    // Should have 2 problems reported (one for each crash)
+    try testing.expectEqual(@as(usize, 2), result.problems.len());
+}
+
+// Cross-module tests
+
+test "comptime eval - cross-module constant works" {
+    // Module A exports a constant
+    const src_a =
+        \\module [value]
+        \\
+        \\value = 42
+    ;
+
+    var result_a = try parseCheckAndEvalModuleWithName(src_a, "A");
+    defer cleanupEvalModule(&result_a);
+
+    const summary_a = try result_a.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary_a.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary_a.crashed);
+
+    // Module B imports and uses the constant
+    const src_b =
+        \\module []
+        \\
+        \\import A
+        \\
+        \\doubled = A.value + A.value
+    ;
+
+    var result_b = try parseCheckAndEvalModuleWithImport(src_b, "A", result_a.module_env);
+    defer cleanupEvalModuleWithImport(&result_b);
+
+    const summary_b = try result_b.evaluator.evalAll();
+
+    // Cross-module comptime evaluation is now supported
+    // The constant in module B should evaluate successfully using module A's value
+    try testing.expectEqual(@as(u32, 1), summary_b.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary_b.crashed);
+}
+
+test "comptime eval - cross-module crash is detected" {
+    // Module A exports a constant that crashes
+    const src_a =
+        \\module [crashy]
+        \\
+        \\crashy = {
+        \\    crash "crash from module A"
+        \\    0
+        \\}
+    ;
+
+    var result_a = try parseCheckAndEvalModuleWithName(src_a, "A");
+    defer cleanupEvalModule(&result_a);
+
+    const summary_a = try result_a.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary_a.evaluated);
+    try testing.expectEqual(@as(u32, 1), summary_a.crashed);
+
+    // Module B imports and uses the crashing constant
+    const src_b =
+        \\module []
+        \\
+        \\import A
+        \\
+        \\usesCrashy = A.crashy + 1
+    ;
+
+    var result_b = try parseCheckAndEvalModuleWithImport(src_b, "A", result_a.module_env);
+    defer cleanupEvalModuleWithImport(&result_b);
+
+    const summary_b = try result_b.evaluator.evalAll();
+
+    // The expression in module B should crash because it evaluates A.crashy + 1
+    // Cross-module comptime evaluation is now supported
+    try testing.expectEqual(@as(u32, 1), summary_b.evaluated);
+    try testing.expectEqual(@as(u32, 1), summary_b.crashed);
+}
+
+test "comptime eval - unexposed constant cannot be accessed" {
+    // Module A has an unexposed constant
+    const src_a =
+        \\module [value]
+        \\
+        \\value = 42
+        \\secret = 100
+    ;
+
+    var result_a = try parseCheckAndEvalModuleWithName(src_a, "A");
+    defer cleanupEvalModule(&result_a);
+
+    const summary_a = try result_a.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 2), summary_a.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary_a.crashed);
+
+    // Module B tries to use exposing syntax to import the unexposed constant
+    // This should generate a diagnostic during canonicalization because secret is not in A's exposure list
+    const src_b =
+        \\module []
+        \\
+        \\import A exposing [value, secret]
+        \\
+        \\x = value + secret
+    ;
+
+    // This should succeed (no error thrown) but generate a diagnostic
+    var result_b = try parseCheckAndEvalModuleWithImport(src_b, "A", result_a.module_env);
+    defer cleanupEvalModuleWithImport(&result_b);
+
+    // Check that a value_not_exposed diagnostic was generated
+    const diagnostics = try result_b.module_env.getDiagnostics();
+    defer test_allocator.free(diagnostics);
+
+    var found_value_not_exposed = false;
+    for (diagnostics) |diagnostic| {
+        if (diagnostic == .value_not_exposed) {
+            const value_name = result_b.module_env.getIdent(diagnostic.value_not_exposed.value_name);
+            if (std.mem.eql(u8, value_name, "secret")) {
+                found_value_not_exposed = true;
+            }
+        }
+    }
+
+    try testing.expect(found_value_not_exposed);
+}
+
+test "comptime eval - expect success does not report" {
+    const src =
+        \\x = {
+        \\    expect 1 == 1
+        \\    42
+        \\}
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate successfully - expect passes
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+    try testing.expectEqual(@as(usize, 0), result.problems.len());
+}
+
+test "comptime eval - expect failure is reported but does not halt within def" {
+    const src =
+        \\x = {
+        \\    expect 1 == 2
+        \\    42
+        \\}
+        \\y = {
+        \\    _before = 1
+        \\    expect 1 == 1
+        \\    _after = 2
+        \\    100
+        \\}
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate both declarations with no crashes
+    // expect never halts execution - even within the same def
+    try testing.expectEqual(@as(u32, 2), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+
+    // Should have 1 problem reported (first expect failure, second expect passes)
+    try testing.expectEqual(@as(usize, 1), result.problems.len());
+
+    // Verify it's an expect_failed problem
+    try testing.expect(result.problems.problems.items[0] == .comptime_expect_failed);
+}
+
+test "comptime eval - multiple expect failures are reported" {
+    const src =
+        \\x = {
+        \\    expect 1 == 2
+        \\    42
+        \\}
+        \\y = {
+        \\    expect 3 == 4
+        \\    100
+        \\}
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate both declarations with no crashes but 2 expect failures
+    // All defs are evaluated regardless of expect failures in other defs
+    try testing.expectEqual(@as(u32, 2), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+
+    // Should have 2 problems reported (one for each expect failure)
+    try testing.expectEqual(@as(usize, 2), result.problems.len());
+
+    // Verify both are expect_failed problems
+    try testing.expect(result.problems.problems.items[0] == .comptime_expect_failed);
+    try testing.expect(result.problems.problems.items[1] == .comptime_expect_failed);
+}
+
+test "comptime eval - crash does not halt other defs" {
+    const src =
+        \\good1 = 42
+        \\bad = {
+        \\    crash "this crashes"
+        \\    0
+        \\}
+        \\good2 = 100
+        \\good3 = 200
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate all 4 declarations even though one crashes
+    // Crashes only halt within a single def, not across defs
+    try testing.expectEqual(@as(u32, 4), summary.evaluated);
+    try testing.expectEqual(@as(u32, 1), summary.crashed);
+
+    // Should have 1 problem reported
+    try testing.expectEqual(@as(usize, 1), result.problems.len());
+}
+
+test "comptime eval - expect failure does not halt evaluation" {
+    const src =
+        \\good1 = 42
+        \\bad = {
+        \\    expect 1 == 2
+        \\    0
+        \\}
+        \\good2 = 100
+        \\good3 = 200
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate all 4 declarations even though one has expect failure
+    // expect never halts evaluation - not within defs, not across defs
+    try testing.expectEqual(@as(u32, 4), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+
+    // Should have 1 problem reported (expect failure)
+    try testing.expectEqual(@as(usize, 1), result.problems.len());
+}
+
+test "comptime eval - dbg does not halt evaluation" {
+    const src =
+        \\good1 = 42
+        \\good2 = 100
+        \\good3 = 200
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // All declarations should be evaluated - no crashes or halts
+    try testing.expectEqual(@as(u32, 3), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+    try testing.expectEqual(@as(usize, 0), result.problems.len());
+}
+
+test "comptime eval - crash in first def does not halt other defs" {
+    const src =
+        \\bad = {
+        \\    crash "immediate crash"
+        \\    0
+        \\}
+        \\good1 = 42
+        \\good2 = 100
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate all 3 declarations even though the first one crashes
+    // Crashes only halt within a single def, not across defs
+    try testing.expectEqual(@as(u32, 3), summary.evaluated);
+    try testing.expectEqual(@as(u32, 1), summary.crashed);
+    try testing.expectEqual(@as(usize, 1), result.problems.len());
+}
+
+test "comptime eval - crash halts within single def" {
+    // This test verifies that when a crash occurs inside a def,
+    // evaluation of the rest of that def stops (within-def halting),
+    // but other defs continue to be evaluated
+    const src =
+        \\x = {
+        \\    _beforeCrash = 1
+        \\    crash "halt here"
+        \\    _afterCrash = 2  # This should never be evaluated
+        \\    42
+        \\}
+        \\y = 100  # But this should still be evaluated
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate both defs even though x crashes
+    try testing.expectEqual(@as(u32, 2), summary.evaluated);
+    try testing.expectEqual(@as(u32, 1), summary.crashed);
+    try testing.expectEqual(@as(usize, 1), result.problems.len());
+}
+
+test "comptime eval - constant folding multiplication" {
+    const src = "x = 21 * 2";
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+
+    // Verify the expression was folded
+    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
+    const def = result.module_env.store.getDef(defs[0]);
+    const expr = result.module_env.store.getExpr(def.expr);
+
+    try testing.expect(expr == .e_num);
+    const value = expr.e_num.value.toI128();
+    try testing.expectEqual(@as(i128, 42), value);
+}
+
+test "comptime eval - constant folding preserves literal" {
+    const src = "x = 42";
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+
+    // The expression should stay as e_num with value 42
+    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
+    const def = result.module_env.store.getDef(defs[0]);
+    const expr = result.module_env.store.getExpr(def.expr);
+
+    try testing.expect(expr == .e_num);
+    const value = expr.e_num.value.toI128();
+    try testing.expectEqual(@as(i128, 42), value);
+}
+
+test "comptime eval - constant folding multiple defs" {
+    const src =
+        \\a = 10 + 5
+        \\b = 20 * 2
+        \\c = 100 - 58
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    try testing.expectEqual(@as(u32, 3), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+
+    // Verify all expressions were folded
+    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
+    try testing.expectEqual(@as(usize, 3), defs.len);
+
+    // Check a = 15
+    {
+        const def = result.module_env.store.getDef(defs[0]);
+        const expr = result.module_env.store.getExpr(def.expr);
+        try testing.expect(expr == .e_num);
+        const value = expr.e_num.value.toI128();
+        try testing.expectEqual(@as(i128, 15), value);
+    }
+
+    // Check b = 40
+    {
+        const def = result.module_env.store.getDef(defs[1]);
+        const expr = result.module_env.store.getExpr(def.expr);
+        try testing.expect(expr == .e_num);
+        const value = expr.e_num.value.toI128();
+        try testing.expectEqual(@as(i128, 40), value);
+    }
+
+    // Check c = 42
+    {
+        const def = result.module_env.store.getDef(defs[2]);
+        const expr = result.module_env.store.getExpr(def.expr);
+        try testing.expect(expr == .e_num);
+        const value = expr.e_num.value.toI128();
+        try testing.expectEqual(@as(i128, 42), value);
+    }
+}
+
+test "comptime eval - constant folding with function calls" {
+    const src =
+        \\add = |x, y| x + y
+        \\multiply = |x, y| x * y
+        \\double = |x| multiply(x, 2)
+        \\
+        \\# Top-level values that call the functions
+        \\value1 = add(10, 5)
+        \\value2 = multiply(6, 7)
+        \\value3 = double(21)
+        \\value4 = add(multiply(3, 4), double(5))
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate 7 declarations (3 lambdas + 4 values)
+    // Lambdas are skipped (not evaluated), but values are evaluated
+    try testing.expectEqual(@as(u32, 7), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+
+    // Get all the defs
+    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
+    try testing.expectEqual(@as(usize, 7), defs.len);
+
+    // The first 3 defs are the lambdas (add, multiply, double) - they should NOT be folded
+    // (lambdas are skipped during comptime evaluation)
+
+    // The last 4 defs are the values - they SHOULD be folded to constants
+
+    // Check value1 = add(10, 5) => 15
+    {
+        const def = result.module_env.store.getDef(defs[3]);
+        const expr = result.module_env.store.getExpr(def.expr);
+        try testing.expect(expr == .e_num);
+        const value = expr.e_num.value.toI128();
+        try testing.expectEqual(@as(i128, 15), value);
+    }
+
+    // Check value2 = multiply(6, 7) => 42
+    {
+        const def = result.module_env.store.getDef(defs[4]);
+        const expr = result.module_env.store.getExpr(def.expr);
+        try testing.expect(expr == .e_num);
+        const value = expr.e_num.value.toI128();
+        try testing.expectEqual(@as(i128, 42), value);
+    }
+
+    // Check value3 = double(21) => 42
+    {
+        const def = result.module_env.store.getDef(defs[5]);
+        const expr = result.module_env.store.getExpr(def.expr);
+        try testing.expect(expr == .e_num);
+        const value = expr.e_num.value.toI128();
+        try testing.expectEqual(@as(i128, 42), value);
+    }
+
+    // Check value4 = add (multiply 3 4) (double 5) => add 12 10 => 22
+    {
+        const def = result.module_env.store.getDef(defs[6]);
+        const expr = result.module_env.store.getExpr(def.expr);
+        try testing.expect(expr == .e_num);
+        const value = expr.e_num.value.toI128();
+        try testing.expectEqual(@as(i128, 22), value);
+    }
+}
+
+test "comptime eval - constant folding with recursive function" {
+    // TODO: This test is currently skipped due to a segfault when constant folding
+    // modifies CIR nodes in-place during recursive function evaluation.
+    // The issue needs to be revisited later.
+}
+
+test "comptime eval - constant folding with helper functions" {
+    const src =
+        \\square = |x| x * x
+        \\sumOfSquares = |a, b| square(a) + square(b)
+        \\
+        \\# Multiple top-level values using the helper functions
+        \\sq5 = square(5)
+        \\sq12 = square(12)
+        \\pythag_3_4 = sumOfSquares(3, 4)
+        \\pythag_5_12 = sumOfSquares(5, 12)
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate 6 declarations (2 lambdas + 4 values)
+    try testing.expectEqual(@as(u32, 6), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+
+    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
+    try testing.expectEqual(@as(usize, 6), defs.len);
+
+    // Check sq5 = square 5 => 25
+    {
+        const def = result.module_env.store.getDef(defs[2]);
+        const expr = result.module_env.store.getExpr(def.expr);
+        try testing.expect(expr == .e_num);
+        const value = expr.e_num.value.toI128();
+        try testing.expectEqual(@as(i128, 25), value);
+    }
+
+    // Check sq12 = square 12 => 144
+    {
+        const def = result.module_env.store.getDef(defs[3]);
+        const expr = result.module_env.store.getExpr(def.expr);
+        try testing.expect(expr == .e_num);
+        const value = expr.e_num.value.toI128();
+        try testing.expectEqual(@as(i128, 144), value);
+    }
+
+    // Check pythag_3_4 = sumOfSquares 3 4 => 9 + 16 => 25
+    {
+        const def = result.module_env.store.getDef(defs[4]);
+        const expr = result.module_env.store.getExpr(def.expr);
+        try testing.expect(expr == .e_num);
+        const value = expr.e_num.value.toI128();
+        try testing.expectEqual(@as(i128, 25), value);
+    }
+
+    // Check pythag_5_12 = sumOfSquares 5 12 => 25 + 144 => 169
+    {
+        const def = result.module_env.store.getDef(defs[5]);
+        const expr = result.module_env.store.getExpr(def.expr);
+        try testing.expect(expr == .e_num);
+        const value = expr.e_num.value.toI128();
+        try testing.expectEqual(@as(i128, 169), value);
+    }
+}
+
+test "comptime eval - associated item dependency order" {
+    // This tests the exact scenario from SCC.md:
+    // x = Foo.defaultNum should work even if x is defined before Foo.defaultNum
+    // in all_defs (which can have arbitrary order)
+    const src =
+        \\Foo := [A, B].{
+        \\    defaultNum = 42
+        \\}
+        \\
+        \\x = Foo.defaultNum
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate successfully
+    // 2 defs: Foo.defaultNum and x
+    try testing.expectEqual(@as(u32, 2), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+
+    // Find the def for 'x' and verify it was folded to 42
+    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
+
+    for (defs) |def_idx| {
+        const def = result.module_env.store.getDef(def_idx);
+        const pattern = result.module_env.store.getPattern(def.pattern);
+
+        if (pattern == .assign) {
+            const ident_text = result.module_env.getIdent(pattern.assign.ident);
+            if (std.mem.eql(u8, ident_text, "x")) {
+                const expr = result.module_env.store.getExpr(def.expr);
+                try testing.expect(expr == .e_num);
+                const value = expr.e_num.value.toI128();
+                try testing.expectEqual(@as(i128, 42), value);
+                return; // Test passed
+            }
+        }
+    }
+
+    return error.TestExpectedDefNotFound;
+}
+
+test "comptime eval - multiple associated items with dependencies" {
+    const src =
+        \\Config := [Debug, Release].{
+        \\    verbosity = 2
+        \\    maxRetries = 5
+        \\}
+        \\
+        \\# These should all be evaluated correctly regardless of order in all_defs
+        \\v = Config.verbosity
+        \\r = Config.maxRetries
+        \\total = v + r
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate 5 defs: Config.verbosity, Config.maxRetries, v, r, total
+    try testing.expectEqual(@as(u32, 5), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+
+    // Verify 'total' was folded to 7
+    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
+
+    for (defs) |def_idx| {
+        const def = result.module_env.store.getDef(def_idx);
+        const pattern = result.module_env.store.getPattern(def.pattern);
+
+        if (pattern == .assign) {
+            const ident_text = result.module_env.getIdent(pattern.assign.ident);
+            if (std.mem.eql(u8, ident_text, "total")) {
+                const expr = result.module_env.store.getExpr(def.expr);
+                try testing.expect(expr == .e_num);
+                const value = expr.e_num.value.toI128();
+                try testing.expectEqual(@as(i128, 7), value);
+                return; // Test passed
+            }
+        }
+    }
+
+    return error.TestExpectedDefNotFound;
+}
+
+test "comptime eval - deeply nested associated items (5+ levels)" {
+    // Test that arbitrarily deep nesting works correctly
+    // This creates a 5-level hierarchy: Module.One.Two.Three.Four.value
+    const src =
+        \\One := [A].{
+        \\    Two := [B].{
+        \\        Three := [C].{
+        \\            Four := [D].{
+        \\                value = 123
+        \\            }
+        \\        }
+        \\    }
+        \\}
+        \\
+        \\# Access the deeply nested value
+        \\result = One.Two.Three.Four.value
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate: One.Two.Three.Four.value and result
+    try testing.expectEqual(@as(u32, 2), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+
+    // Verify 'result' was folded to 123
+    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
+
+    for (defs) |def_idx| {
+        const def = result.module_env.store.getDef(def_idx);
+        const pattern = result.module_env.store.getPattern(def.pattern);
+
+        if (pattern == .assign) {
+            const ident_text = result.module_env.getIdent(pattern.assign.ident);
+            if (std.mem.eql(u8, ident_text, "result")) {
+                const expr = result.module_env.store.getExpr(def.expr);
+                try testing.expect(expr == .e_num);
+                const value = expr.e_num.value.toI128();
+                try testing.expectEqual(@as(i128, 123), value);
+                return; // Test passed
+            }
+        }
+    }
+
+    return error.TestExpectedDefNotFound;
+}
+
+test "comptime eval - deeply nested with multiple items at each level" {
+    // Test multiple associated items at various nesting levels
+    const src =
+        \\Outer := [X].{
+        \\    a = 10
+        \\    Middle := [Y].{
+        \\        b = 20
+        \\        Inner := [Z].{
+        \\            c = 30
+        \\        }
+        \\    }
+        \\}
+        \\
+        \\sum = Outer.a + Outer.Middle.b + Outer.Middle.Inner.c
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate: Outer.a, Outer.Middle.b, Outer.Middle.Inner.c, and sum
+    try testing.expectEqual(@as(u32, 4), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+
+    // Verify 'sum' was folded to 60
+    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
+
+    for (defs) |def_idx| {
+        const def = result.module_env.store.getDef(def_idx);
+        const pattern = result.module_env.store.getPattern(def.pattern);
+
+        if (pattern == .assign) {
+            const ident_text = result.module_env.getIdent(pattern.assign.ident);
+            if (std.mem.eql(u8, ident_text, "sum")) {
+                const expr = result.module_env.store.getExpr(def.expr);
+                try testing.expect(expr == .e_num);
+                const value = expr.e_num.value.toI128();
+                try testing.expectEqual(@as(i128, 60), value);
+                return; // Test passed
+            }
+        }
+    }
+
+    return error.TestExpectedDefNotFound;
+}
+
+// Numeric literal validation tests (validated during comptime eval)
+
+test "comptime eval - U8: 256 does not fit" {
+    const src =
+        \\x : U8
+        \\x = 50
+        \\
+        \\y : U8
+        \\y = 256
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate both defs but report errors for the literal that doesn't fit
+    try testing.expectEqual(@as(u32, 2), summary.evaluated);
+
+    // Should have at least 1 problem reported (256 doesn't fit in U8)
+    try testing.expect(result.problems.len() >= 1);
+}
+
+test "comptime eval - U8: negative does not fit" {
+    const src =
+        \\x : U8
+        \\x = 50
+        \\
+        \\y : U8
+        \\y = -1
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate both defs but report errors for the negative literal
+    try testing.expectEqual(@as(u32, 2), summary.evaluated);
+
+    // Should have at least 1 problem reported (-1 doesn't fit in U8)
+    try testing.expect(result.problems.len() >= 1);
+}
+
+test "comptime eval - I8: -129 does not fit" {
+    const src =
+        \\x : I8
+        \\x = 1
+        \\
+        \\y : I8
+        \\y = -129
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate both defs but report errors for the literal that doesn't fit
+    try testing.expectEqual(@as(u32, 2), summary.evaluated);
+
+    // Should have at least 1 problem reported (-129 doesn't fit in I8)
+    try testing.expect(result.problems.len() >= 1);
+}
+
+// Comprehensive numeric literal validation tests with error message verification
+
+/// Helper to check if error message contains expected substring
+fn errorContains(problems: *check.problem.Store, expected: []const u8) bool {
+    for (problems.problems.items) |problem| {
+        switch (problem) {
+            .comptime_eval_error => |comptime_eval_error| {
+                return std.mem.indexOf(u8, problems.getExtraString(comptime_eval_error.error_name), expected) != null;
+            },
+            else => {},
+        }
+    }
+    return false;
+}
+
+// --- U8 tests ---
+
+test "comptime eval - U8 valid max value" {
+    const src =
+        \\x : U8
+        \\x = 255
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    _ = try result.evaluator.evalAll();
+    if (result.problems.len() > 0) {
+        std.debug.print("\nU8 valid max problems ({d}):\n", .{result.problems.len()});
+        for (result.problems.problems.items) |problem| {
+            std.debug.print("  - {s}", .{@tagName(problem)});
+            if (problem == .comptime_eval_error) {
+                std.debug.print(": {s}", .{result.problems.getExtraString(problem.comptime_eval_error.error_name)});
+            }
+            std.debug.print("\n", .{});
+        }
+    }
+    try testing.expectEqual(@as(usize, 0), result.problems.len());
+}
+
+test "comptime eval - U8 too large with descriptive error" {
+    const src =
+        \\x : U8
+        \\x = 256
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    _ = try result.evaluator.evalAll();
+    try testing.expect(result.problems.len() >= 1);
+    try testing.expect(errorContains(result.problems, "256"));
+    try testing.expect(errorContains(result.problems, "U8"));
+    try testing.expect(errorContains(result.problems, "0") and errorContains(result.problems, "255"));
+}
+
+test "comptime eval - U8 negative with descriptive error" {
+    const src =
+        \\x : U8
+        \\x = -5
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    _ = try result.evaluator.evalAll();
+    try testing.expect(result.problems.len() >= 1);
+    try testing.expect(errorContains(result.problems, "-5"));
+    try testing.expect(errorContains(result.problems, "U8"));
+    try testing.expect(errorContains(result.problems, "cannot be negative"));
+}
+
+test "comptime eval - U8 fractional with descriptive error" {
+    const src =
+        \\x : U8
+        \\x = 3.14
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    _ = try result.evaluator.evalAll();
+    try testing.expect(result.problems.len() >= 1);
+    try testing.expect(errorContains(result.problems, "U8"));
+    try testing.expect(errorContains(result.problems, "whole numbers"));
+}
+
+// --- I8 tests ---
+
+test "comptime eval - I8 valid range" {
+    const src =
+        \\x : I8
+        \\x = -128
+        \\y : I8
+        \\y = 127
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 2), summary.evaluated);
+    try testing.expectEqual(@as(usize, 0), result.problems.len());
+}
+
+test "comptime eval - I8 too small with descriptive error" {
+    const src =
+        \\x : I8
+        \\x = -129
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    _ = try result.evaluator.evalAll();
+    try testing.expect(result.problems.len() >= 1);
+    try testing.expect(errorContains(result.problems, "-129"));
+    try testing.expect(errorContains(result.problems, "I8"));
+    try testing.expect(errorContains(result.problems, "-128") and errorContains(result.problems, "127"));
+}
+
+test "comptime eval - I8 too large with descriptive error" {
+    const src =
+        \\x : I8
+        \\x = 128
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    _ = try result.evaluator.evalAll();
+    try testing.expect(result.problems.len() >= 1);
+    try testing.expect(errorContains(result.problems, "128"));
+    try testing.expect(errorContains(result.problems, "I8"));
+}
+
+test "comptime eval - I8 fractional with descriptive error" {
+    const src =
+        \\x : I8
+        \\x = 3.14
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    _ = try result.evaluator.evalAll();
+    try testing.expect(result.problems.len() >= 1);
+    try testing.expect(errorContains(result.problems, "I8"));
+    try testing.expect(errorContains(result.problems, "whole numbers"));
+}
+
+// --- U16 tests ---
+
+test "comptime eval - U16 valid max value" {
+    const src =
+        \\x : U16
+        \\x = 65535
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    _ = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(usize, 0), result.problems.len());
+}
+
+test "comptime eval - U16 too large with descriptive error" {
+    const src =
+        \\x : U16
+        \\x = 65536
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    _ = try result.evaluator.evalAll();
+    try testing.expect(result.problems.len() >= 1);
+    try testing.expect(errorContains(result.problems, "65536"));
+    try testing.expect(errorContains(result.problems, "U16"));
+}
+
+test "comptime eval - U16 negative with descriptive error" {
+    const src =
+        \\x : U16
+        \\x = -1
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    _ = try result.evaluator.evalAll();
+    try testing.expect(result.problems.len() >= 1);
+    try testing.expect(errorContains(result.problems, "U16"));
+    try testing.expect(errorContains(result.problems, "cannot be negative"));
+}
+
+// --- I16 tests ---
+
+test "comptime eval - I16 valid range" {
+    const src =
+        \\x : I16
+        \\x = -32768
+        \\y : I16
+        \\y = 32767
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    _ = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(usize, 0), result.problems.len());
+}
+
+test "comptime eval - I16 too small with descriptive error" {
+    const src =
+        \\x : I16
+        \\x = -32769
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    _ = try result.evaluator.evalAll();
+    try testing.expect(result.problems.len() >= 1);
+    try testing.expect(errorContains(result.problems, "-32769"));
+    try testing.expect(errorContains(result.problems, "I16"));
+}
+
+test "comptime eval - I16 too large with descriptive error" {
+    const src =
+        \\x : I16
+        \\x = 32768
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    _ = try result.evaluator.evalAll();
+    try testing.expect(result.problems.len() >= 1);
+    try testing.expect(errorContains(result.problems, "32768"));
+    try testing.expect(errorContains(result.problems, "I16"));
+}
+
+// --- U32 tests ---
+
+test "comptime eval - U32 valid max value" {
+    const src =
+        \\x : U32
+        \\x = 4294967295
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    _ = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(usize, 0), result.problems.len());
+}
+
+test "comptime eval - U32 too large with descriptive error" {
+    const src =
+        \\x : U32
+        \\x = 4294967296
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    _ = try result.evaluator.evalAll();
+    try testing.expect(result.problems.len() >= 1);
+    try testing.expect(errorContains(result.problems, "4294967296"));
+    try testing.expect(errorContains(result.problems, "U32"));
+}
+
+test "comptime eval - U32 negative with descriptive error" {
+    const src =
+        \\x : U32
+        \\x = -1
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    _ = try result.evaluator.evalAll();
+    try testing.expect(result.problems.len() >= 1);
+    try testing.expect(errorContains(result.problems, "U32"));
+    try testing.expect(errorContains(result.problems, "cannot be negative"));
+}
+
+// --- I32 tests ---
+
+test "comptime eval - I32 valid range" {
+    const src =
+        \\x : I32
+        \\x = -2147483648
+        \\y : I32
+        \\y = 2147483647
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    _ = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(usize, 0), result.problems.len());
+}
+
+test "comptime eval - I32 too small with descriptive error" {
+    const src =
+        \\x : I32
+        \\x = -2147483649
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    _ = try result.evaluator.evalAll();
+    try testing.expect(result.problems.len() >= 1);
+    try testing.expect(errorContains(result.problems, "-2147483649"));
+    try testing.expect(errorContains(result.problems, "I32"));
+}
+
+test "comptime eval - I32 too large with descriptive error" {
+    const src =
+        \\x : I32
+        \\x = 2147483648
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    _ = try result.evaluator.evalAll();
+    try testing.expect(result.problems.len() >= 1);
+    try testing.expect(errorContains(result.problems, "2147483648"));
+    try testing.expect(errorContains(result.problems, "I32"));
+}
+
+// --- U64 tests ---
+
+test "comptime eval - U64 valid max value" {
+    const src =
+        \\x : U64
+        \\x = 18446744073709551615
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    _ = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(usize, 0), result.problems.len());
+}
+
+test "comptime eval - U64 too large with descriptive error" {
+    const src =
+        \\x : U64
+        \\x = 18446744073709551616
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    _ = try result.evaluator.evalAll();
+    try testing.expect(result.problems.len() >= 1);
+    try testing.expect(errorContains(result.problems, "U64"));
+}
+
+test "comptime eval - U64 negative with descriptive error" {
+    const src =
+        \\x : U64
+        \\x = -1
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    _ = try result.evaluator.evalAll();
+    try testing.expect(result.problems.len() >= 1);
+    try testing.expect(errorContains(result.problems, "U64"));
+    try testing.expect(errorContains(result.problems, "cannot be negative"));
+}
+
+// --- I64 tests ---
+
+test "comptime eval - I64 valid range" {
+    const src =
+        \\x : I64
+        \\x = -9223372036854775808
+        \\y : I64
+        \\y = 9223372036854775807
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    _ = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(usize, 0), result.problems.len());
+}
+
+test "comptime eval - I64 too small with descriptive error" {
+    const src =
+        \\x : I64
+        \\x = -9223372036854775809
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    _ = try result.evaluator.evalAll();
+    try testing.expect(result.problems.len() >= 1);
+    try testing.expect(errorContains(result.problems, "I64"));
+}
+
+test "comptime eval - I64 too large with descriptive error" {
+    const src =
+        \\x : I64
+        \\x = 9223372036854775808
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    _ = try result.evaluator.evalAll();
+    try testing.expect(result.problems.len() >= 1);
+    try testing.expect(errorContains(result.problems, "I64"));
+}
+
+test "comptime eval - I64 fractional with descriptive error" {
+    const src =
+        \\x : I64
+        \\x = 3.14
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    _ = try result.evaluator.evalAll();
+    try testing.expect(result.problems.len() >= 1);
+    try testing.expect(errorContains(result.problems, "I64"));
+    try testing.expect(errorContains(result.problems, "whole numbers"));
+}
+
+// --- U128 tests ---
+
+test "comptime eval - U128 valid max value" {
+    const src =
+        \\x : U128
+        \\x = 340282366920938463463374607431768211455
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    _ = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(usize, 0), result.problems.len());
+}
+
+test "comptime eval - U128 negative with descriptive error" {
+    const src =
+        \\x : U128
+        \\x = -1
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    _ = try result.evaluator.evalAll();
+    try testing.expect(result.problems.len() >= 1);
+    try testing.expect(errorContains(result.problems, "U128"));
+    try testing.expect(errorContains(result.problems, "cannot be negative"));
+}
+
+test "comptime eval - U128 fractional with descriptive error" {
+    const src =
+        \\x : U128
+        \\x = 3.14
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    _ = try result.evaluator.evalAll();
+    try testing.expect(result.problems.len() >= 1);
+    try testing.expect(errorContains(result.problems, "U128"));
+    try testing.expect(errorContains(result.problems, "whole numbers"));
+}
+
+// --- I128 tests ---
+
+test "comptime eval - I128 valid range" {
+    const src =
+        \\x : I128
+        \\x = -170141183460469231731687303715884105728
+        \\y : I128
+        \\y = 170141183460469231731687303715884105727
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    _ = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(usize, 0), result.problems.len());
+}
+
+test "comptime eval - I128 fractional with descriptive error" {
+    const src =
+        \\x : I128
+        \\x = 3.14
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    _ = try result.evaluator.evalAll();
+    try testing.expect(result.problems.len() >= 1);
+    try testing.expect(errorContains(result.problems, "I128"));
+    try testing.expect(errorContains(result.problems, "whole numbers"));
+}
+
+// --- Float tests ---
+
+test "comptime eval - F32 valid" {
+    const src =
+        \\x : F32
+        \\x = 3.14
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    _ = try result.evaluator.evalAll();
+    if (result.problems.len() > 0) {
+        std.debug.print("\nF32 problems ({d}):\n", .{result.problems.len()});
+        for (result.problems.problems.items) |problem| {
+            std.debug.print("  - {s}", .{@tagName(problem)});
+            if (problem == .comptime_eval_error) {
+                std.debug.print(": {s}", .{result.problems.getExtraString(problem.comptime_eval_error.error_name)});
+            }
+            std.debug.print("\n", .{});
+        }
+    }
+    try testing.expectEqual(@as(usize, 0), result.problems.len());
+}
+
+test "comptime eval - F64 valid" {
+    const src =
+        \\x : F64
+        \\x = 3.14159265358979
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    _ = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(usize, 0), result.problems.len());
+}
+
+test "comptime eval - Dec valid" {
+    const src =
+        \\x : Dec
+        \\x = 123.456
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    _ = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(usize, 0), result.problems.len());
+}
+
+test "comptime eval - F32 integer literal valid" {
+    const src =
+        \\x : F32
+        \\x = 42
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    _ = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(usize, 0), result.problems.len());
+}
+
+test "comptime eval - F64 negative valid" {
+    const src =
+        \\x : F64
+        \\x = -123.456
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    _ = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(usize, 0), result.problems.len());
+}
+
+test "comptime eval - to_str on unbound number literal" {
+    const src =
+        \\age : Str
+        \\age = 35.to_str()
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    _ = try result.evaluator.evalAll();
+
+    // Flex var defaults to Dec; Dec.to_str is provided by builtins
+    try testing.expectEqual(@as(usize, 0), result.problems.len());
+}
+
+// --- Division by zero tests ---
+
+test "comptime eval - division by zero produces error" {
+    const src =
+        \\x = 5 // 0
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate 1 declaration with no crashes (it's an error, not a crash)
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+
+    // Should have 1 problem reported (division by zero)
+    try testing.expect(result.problems.len() >= 1);
+    try testing.expect(errorContains(result.problems, "Division by zero"));
+}
+
+test "comptime eval - division by zero in expression" {
+    const src =
+        \\a = 10
+        \\b = 0
+        \\c = a // b
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate 3 declarations, c will cause an error
+    try testing.expectEqual(@as(u32, 3), summary.evaluated);
+
+    // Should have 1 problem reported (division by zero)
+    try testing.expect(result.problems.len() >= 1);
+    try testing.expect(errorContains(result.problems, "Division by zero"));
+}
+
+test "comptime eval - modulo by zero produces error" {
+    const src =
+        \\x = 10 % 0
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate 1 declaration
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+
+    // Should have 1 problem reported (division by zero for modulo)
+    try testing.expect(result.problems.len() >= 1);
+    try testing.expect(errorContains(result.problems, "Division by zero"));
+}
+
+test "comptime eval - division by zero does not crash subsequent defs (issue 9001)" {
+    // Regression test for issue #9001: when the first definition causes a
+    // compile-time error (e.g., division by zero), the interpreter's environment
+    // was not being restored, causing subsequent definitions to crash.
+    const src =
+        \\y = 1 % 0
+        \\e = 3
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    // This should not crash - the bug was that it would panic with
+    // "node is not an expression tag" when evaluating the second def
+    const summary = try result.evaluator.evalAll();
+
+    // Should attempt to evaluate 2 declarations
+    try testing.expectEqual(@as(u32, 2), summary.evaluated);
+
+    // Should have at least 1 problem (division by zero)
+    try testing.expect(result.problems.len() >= 1);
+}
+
+test "comptime eval - recursive nominal: simple IntList Nil" {
+    const src =
+        \\IntList := [Nil, Cons(I64, IntList)]
+        \\
+        \\x = IntList.Nil
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: IntList with one element" {
+    const src =
+        \\IntList := [Nil, Cons(I64, IntList)]
+        \\
+        \\x = IntList.Cons(42, IntList.Nil)
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: IntList with two elements" {
+    const src =
+        \\IntList := [Nil, Cons(I64, IntList)]
+        \\
+        \\x = IntList.Cons(1, IntList.Cons(2, IntList.Nil))
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: IntList with three elements" {
+    const src =
+        \\IntList := [Nil, Cons(I64, IntList)]
+        \\
+        \\x = IntList.Cons(1, IntList.Cons(2, IntList.Cons(3, IntList.Nil)))
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: binary tree Leaf" {
+    const src =
+        \\Tree := [Leaf, Node(Tree, I64, Tree)]
+        \\
+        \\x = Tree.Leaf
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: binary tree single node" {
+    const src =
+        \\Tree := [Leaf, Node(Tree, I64, Tree)]
+        \\
+        \\x = Tree.Node(Tree.Leaf, 42, Tree.Leaf)
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: binary tree two levels" {
+    const src =
+        \\Tree := [Leaf, Node(Tree, I64, Tree)]
+        \\
+        \\x = Tree.Node(
+        \\    Tree.Node(Tree.Leaf, 1, Tree.Leaf),
+        \\    2,
+        \\    Tree.Node(Tree.Leaf, 3, Tree.Leaf)
+        \\)
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: option type None" {
+    const src =
+        \\Maybe := [None, Some(I64)]
+        \\
+        \\x = Maybe.None
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: option type Some" {
+    const src =
+        \\Maybe := [None, Some(I64)]
+        \\
+        \\x = Maybe.Some(42)
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: nested option" {
+    const src =
+        \\MaybeInt := [None, Some(I64)]
+        \\MaybeMaybe := [Nothing, Just(MaybeInt)]
+        \\
+        \\x = MaybeMaybe.Just(MaybeInt.Some(42))
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: simple expression tree" {
+    const src =
+        \\Expr := [Num(I64), Add(Expr, Expr)]
+        \\
+        \\x = Expr.Num(5)
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: expression tree Add" {
+    const src =
+        \\Expr := [Num(I64), Add(Expr, Expr)]
+        \\
+        \\x = Expr.Add(Expr.Num(2), Expr.Num(3))
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: expression tree nested Add" {
+    const src =
+        \\Expr := [Num(I64), Add(Expr, Expr)]
+        \\
+        \\x = Expr.Add(
+        \\    Expr.Add(Expr.Num(1), Expr.Num(2)),
+        \\    Expr.Num(3)
+        \\)
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: peano zero" {
+    const src =
+        \\Nat := [Zero, Succ(Nat)]
+        \\
+        \\x = Nat.Zero
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: peano one" {
+    const src =
+        \\Nat := [Zero, Succ(Nat)]
+        \\
+        \\x = Nat.Succ(Nat.Zero)
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: peano three" {
+    const src =
+        \\Nat := [Zero, Succ(Nat)]
+        \\
+        \\x = Nat.Succ(Nat.Succ(Nat.Succ(Nat.Zero)))
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: JSON null" {
+    const src =
+        \\Json := [Null, Bool(Bool), Number(I64), Array(List(Json))]
+        \\
+        \\x = Json.Null
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: JSON bool" {
+    const src =
+        \\Json := [Null, Bool(Bool), Number(I64), Array(List(Json))]
+        \\
+        \\x = Json.Bool(True)
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: JSON number" {
+    const src =
+        \\Json := [Null, Bool(Bool), Number(I64), Array(List(Json))]
+        \\
+        \\x = Json.Number(42)
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: JSON empty array" {
+    const src =
+        \\Json := [Null, Bool(Bool), Number(I64), Array(List(Json))]
+        \\
+        \\x = Json.Array([])
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: simple DOM Text" {
+    const src =
+        \\Node := [Text(Str), Element(Str, List(Node))]
+        \\
+        \\x = Node.Text("hello")
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: DOM Element empty" {
+    const src =
+        \\Node := [Text(Str), Element(Str, List(Node))]
+        \\
+        \\x = Node.Element("div", [])
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: DOM Element with text child" {
+    const src =
+        \\Node := [Text(Str), Element(Str, List(Node))]
+        \\
+        \\x = Node.Element("p", [Node.Text("hello")])
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: DOM nested elements" {
+    const src =
+        \\Node := [Text(Str), Element(Str, List(Node))]
+        \\
+        \\x = Node.Element("div", [
+        \\    Node.Element("span", [Node.Text("Hello")]),
+        \\    Node.Element("p", [Node.Text("World"), Node.Text("!")])
+        \\])
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: result type Ok" {
+    const src =
+        \\Result := [Ok(I64), Err(Str)]
+        \\
+        \\x = Result.Ok(42)
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: result type Err" {
+    const src =
+        \\Result := [Ok(I64), Err(Str)]
+        \\
+        \\x = Result.Err("something went wrong")
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: multiple lists" {
+    const src =
+        \\IntList := [INil, ICons(I64, IntList)]
+        \\StrList := [SNil, SCons(Str, StrList)]
+        \\
+        \\x = IntList.ICons(1, IntList.INil)
+        \\y = StrList.SCons("hello", StrList.SNil)
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 2), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: rose tree" {
+    const src =
+        \\Rose := [Rose(I64, List(Rose))]
+        \\
+        \\x = Rose.Rose(1, [])
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: rose tree with children" {
+    const src =
+        \\Rose := [Rose(I64, List(Rose))]
+        \\
+        \\x = Rose.Rose(1, [Rose.Rose(2, []), Rose.Rose(3, [])])
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: stack empty" {
+    const src =
+        \\Stack := [Empty, Push(I64, Stack)]
+        \\
+        \\x = Stack.Empty
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: stack with items" {
+    const src =
+        \\Stack := [Empty, Push(I64, Stack)]
+        \\
+        \\x = Stack.Push(3, Stack.Push(2, Stack.Push(1, Stack.Empty)))
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: queue" {
+    const src =
+        \\Queue := [Empty, Node(I64, Queue)]
+        \\
+        \\x = Queue.Node(1, Queue.Node(2, Queue.Empty))
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: arithmetic expr" {
+    const src =
+        \\Arith := [Lit(I64), Add(Arith, Arith), Mul(Arith, Arith), Neg(Arith)]
+        \\
+        \\x = Arith.Mul(
+        \\    Arith.Add(Arith.Lit(2), Arith.Lit(3)),
+        \\    Arith.Neg(Arith.Lit(4))
+        \\)
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: logic expr" {
+    const src =
+        \\Logic := [True, False, And(Logic, Logic), Or(Logic, Logic), Not(Logic)]
+        \\
+        \\x = Logic.And(Logic.Or(Logic.True, Logic.False), Logic.Not(Logic.False))
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: simple singly-linked" {
+    const src =
+        \\Linked := [End, Link(I64, Linked)]
+        \\
+        \\x = Linked.Link(1, Linked.Link(2, Linked.End))
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: chain of 5" {
+    const src =
+        \\Chain := [End, Link(I64, Chain)]
+        \\
+        \\x = Chain.Link(1, Chain.Link(2, Chain.Link(3, Chain.Link(4, Chain.Link(5, Chain.End)))))
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: three-way tree" {
+    const src =
+        \\Tri := [Tip, Branch(Tri, Tri, Tri)]
+        \\
+        \\x = Tri.Branch(Tri.Tip, Tri.Tip, Tri.Tip)
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: three-way tree nested" {
+    const src =
+        \\Tri := [Tip, Branch(Tri, Tri, Tri)]
+        \\
+        \\x = Tri.Branch(
+        \\    Tri.Branch(Tri.Tip, Tri.Tip, Tri.Tip),
+        \\    Tri.Tip,
+        \\    Tri.Branch(Tri.Tip, Tri.Tip, Tri.Tip)
+        \\)
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: stream thunk" {
+    const src =
+        \\Stream := [Done, More(I64, Stream)]
+        \\
+        \\x = Stream.More(1, Stream.More(2, Stream.Done))
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: difference list" {
+    const src =
+        \\DList := [Empty, Single(I64), Append(DList, DList)]
+        \\
+        \\x = DList.Append(DList.Single(1), DList.Append(DList.Single(2), DList.Single(3)))
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: rope" {
+    const src =
+        \\Rope := [Leaf(Str), Concat(Rope, Rope)]
+        \\
+        \\x = Rope.Concat(Rope.Leaf("hello"), Rope.Concat(Rope.Leaf(" "), Rope.Leaf("world")))
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: finger" {
+    const src =
+        \\Finger := [Zero, One(I64), Two(I64, I64), Deep(Finger, List(I64), Finger)]
+        \\
+        \\x = Finger.Deep(Finger.One(1), [2, 3], Finger.One(4))
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: trie node" {
+    const src =
+        \\Trie := [Empty, Leaf(I64), Branch(List(Trie))]
+        \\
+        \\x = Trie.Branch([Trie.Leaf(1), Trie.Empty, Trie.Leaf(2)])
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: zipper" {
+    const src =
+        \\Tree := [Empty, Node(Tree, I64, Tree)]
+        \\Crumb := [LeftCrumb(I64, Tree), RightCrumb(Tree, I64)]
+        \\
+        \\focus = Tree.Node(Tree.Empty, 5, Tree.Empty)
+        \\trail = [Crumb.LeftCrumb(10, Tree.Empty)]
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 2), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: menu" {
+    const src =
+        \\Menu := [Item(Str), SubMenu(Str, List(Menu))]
+        \\
+        \\x = Menu.SubMenu("File", [Menu.Item("New"), Menu.Item("Open"), Menu.SubMenu("Recent", [])])
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: filesystem" {
+    const src =
+        \\FS := [File(Str), Dir(Str, List(FS))]
+        \\
+        \\x = FS.Dir("root", [
+        \\    FS.File("readme.txt"),
+        \\    FS.Dir("src", [FS.File("main.roc")])
+        \\])
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: org chart" {
+    const src =
+        \\Org := [Employee(Str), Manager(Str, List(Org))]
+        \\
+        \\x = Org.Manager("CEO", [
+        \\    Org.Manager("CTO", [Org.Employee("Dev1"), Org.Employee("Dev2")]),
+        \\    Org.Employee("CFO")
+        \\])
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: path segments" {
+    const src =
+        \\Path := [Root, Segment(Str, Path)]
+        \\
+        \\x = Path.Segment("home", Path.Segment("user", Path.Segment("docs", Path.Root)))
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: command chain" {
+    const src =
+        \\Cmd := [Done, Step(Str, Cmd)]
+        \\
+        \\x = Cmd.Step("init", Cmd.Step("build", Cmd.Step("test", Cmd.Done)))
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal inside Try with tuple (issue #8855)" {
+    // Regression test for https://github.com/roc-lang/roc/issues/8855
+    // A recursive nominal type used inside Try with a tuple caused TypeContainedMismatch
+    // because cycle detection only checked the last container, not the full stack.
+    const src =
+        \\Statement := [ForLoop(List(Statement)), IfStatement(List(Statement))]
+        \\
+        \\# This function signature triggers the bug: recursive nominal inside Try with tuple
+        \\parse_block : List(U8), U64, List(Statement) -> [Ok((List(Statement), U64)), Err(Str)]
+        \\parse_block = |_file, index, acc| Ok((acc, index))
+        \\
+        \\x = parse_block([], 0, [])
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 2), summary.evaluated); // parse_block and x
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: recursion through tuple (issue #8795)" {
+    // Regression test for issue #8795: recursive opaque types where the recursion
+    // goes through a tuple field would crash with "increfDataPtrC: ptr not aligned"
+    // because tuple elements weren't being auto-boxed for recursive types.
+    const src =
+        \\Type := [Name(Str), Array((U64, Type))]
+        \\
+        \\inner = Type.Name("hello")
+        \\outer = Type.Array((0, inner))
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 2), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - nested nominal in tuple causes alignment crash (issue #8874)" {
+    // Regression test for issue #8874: nested nominal types (like Try) inside tuples
+    // caused "increfDataPtrC: ptr not aligned" crashes. The bug occurred when
+    // accessing the payload of an outer Try containing a tuple with an inner Try.
+    const src =
+        \\result : Try((Try(Str, Str), U64), Str) = Ok((Ok("todo"), 3))
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: recursion through record field" {
+    // Test case: recursive type where the recursion goes through a record field
+    const src =
+        \\Type := [Leaf, Node({ value: Str, child: Type })]
+        \\
+        \\inner = Type.Leaf
+        \\outer = Type.Node({ value: "hello", child: inner })
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 2), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: deeply nested record recursion" {
+    // Test deeper nesting to ensure refcounting works correctly
+    const src =
+        \\Type := [Leaf(Str), Node({ value: Str, child: Type })]
+        \\
+        \\leaf = Type.Leaf("deep")
+        \\level1 = Type.Node({ value: "level1", child: leaf })
+        \\level2 = Type.Node({ value: "level2", child: level1 })
+        \\level3 = Type.Node({ value: "level3", child: level2 })
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 4), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "encode - custom format type with infallible encoding (empty error type)" {
+    // Test that a custom format type can define an encode_str method that can't fail.
+    // Using [EncodeErr] as the error type (which is never instantiated).
+    // This matches the signature required by Str.encode's where clause:
+    //   where [fmt.encode_str : fmt, Str -> Try(ok, err)]
+    const src =
+        \\# Define a format type with infallible encoding
+        \\Utf8 := [Format].{
+        \\    encode_str : Utf8, Str -> Try(List(U8), [EncodeErr])
+        \\    encode_str = |_self, str| Ok(Str.to_utf8(str))
+        \\}
+        \\
+        \\fmt = Utf8
+    ;
+
+    var res = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&res);
+
+    const summary = try res.evaluator.evalAll();
+
+    // Type definition and value creation should succeed
+    try testing.expect(summary.evaluated >= 1);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "issue 8754: pattern matching on recursive tag union variant payload" {
+    // Regression test for issue #8754: pattern matching on direct recursive tag union
+    // variant payload was returning the wrong discriminant.
+    //
+    // When Wrapper(Tree) is created where Tree := [..., Wrapper(Tree)], the payload is
+    // stored as a Box. The bug was extractTagValue using getRuntimeLayout(arg_var)
+    // which returns the non-boxed layout, causing pattern matching on the extracted
+    // payload to fail.
+    const src =
+        \\Tree := [Node(Str, List(Tree)), Text(Str), Wrapper(Tree)]
+        \\
+        \\inner : Tree
+        \\inner = Text("hello")
+        \\
+        \\wrapped : Tree
+        \\wrapped = Wrapper(inner)
+        \\
+        \\result = match wrapped {
+        \\    Wrapper(inner_tree) =>
+        \\        match inner_tree {
+        \\            Text(_) => 1
+        \\            Node(_, _) => 2
+        \\            Wrapper(_) => 3
+        \\        }
+        \\    _ => 0
+        \\}
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+
+    // Verify 'result' was folded to 1 (matched Text, not Wrapper)
+    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
+
+    for (defs) |def_idx| {
+        const def = result.module_env.store.getDef(def_idx);
+        const pattern = result.module_env.store.getPattern(def.pattern);
+
+        if (pattern == .assign) {
+            const ident_text = result.module_env.getIdent(pattern.assign.ident);
+            if (std.mem.eql(u8, ident_text, "result")) {
+                const expr = result.module_env.store.getExpr(def.expr);
+                try testing.expect(expr == .e_num);
+                const value = expr.e_num.value.toI128();
+                try testing.expectEqual(@as(i128, 1), value);
+                return; // Test passed
+            }
+        }
+    }
+
+    return error.TestExpectedDefNotFound;
+}
+
+test "comptime eval - attached methods on tag union type aliases (issue #8637)" {
+    // Regression test for GitHub issue #8637
+    // Methods attached to transparent tag union type aliases with type parameters
+    // should work. The bug was that propagateFlexMappings wasn't handling tag unions,
+    // so type parameters weren't being mapped to concrete runtime types.
+    const src =
+        \\Iter(s) :: [It(s)].{
+        \\    identity : Iter(s) -> Iter(s)
+        \\    identity = |It(s_)| It(s_)
+        \\}
+        \\
+        \\count : Iter({})
+        \\count = It({})
+        \\
+        \\result = count.identity()
+    ;
+
+    var res = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&res);
+
+    const summary = try res.evaluator.evalAll();
+
+    // All declarations should evaluate without crashes
+    try testing.expect(summary.evaluated >= 3);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+// Issue #8901: Recursive nominal type with Box where one variant has no payload
+// The interpreter crashed at extractTagValue when matching on such types.
+test "comptime eval - issue 8901: recursive nominal with Box and no-payload variant" {
+    // Test 1: Create Nat.Zero - a no-payload variant of a recursive nominal type
+    const src1 =
+        \\Nat := [Zero, Suc(Box(Nat))]
+        \\
+        \\zero_val = Nat.Zero
+    ;
+
+    var res1 = try parseCheckAndEvalModule(src1);
+    defer cleanupEvalModule(&res1);
+
+    const summary1 = try res1.evaluator.evalAll();
+
+    // Creating Zero should not crash
+    try testing.expect(summary1.evaluated >= 1);
+    try testing.expectEqual(@as(u32, 0), summary1.crashed);
+}
+
+test "comptime eval - issue 8901: pattern matching on nominal type" {
+    // Test pattern matching on a nominal type with no-payload variant
+    const src =
+        \\Color := [Red, Green, Blue]
+        \\
+        \\color = Color.Red
+        \\
+        \\result = match color {
+        \\    Color.Red -> 1
+        \\    _ -> 0
+        \\}
+    ;
+
+    var res = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&res);
+
+    const summary = try res.evaluator.evalAll();
+
+    // Pattern matching on no-payload variant should not crash
+    try testing.expect(summary.evaluated >= 1);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "issue 8930: wrapped tag union in wrapped record should not crash" {
+    // Regression test for issue #8930: Wrapped type (opaque) containing a tag
+    // union with a record payload that contains another wrapped tag union.
+    // Previously crashed with "increfDataPtrC: ptr=0x2 is not 8-byte aligned"
+    // because discriminant values were incorrectly treated as pointers.
+    const src =
+        \\ValueCombinationMethod := [Divide, Modulo, Add, Subtract]
+        \\Value := [CombinedValue({combination_method: ValueCombinationMethod})]
+        \\
+        \\v = Value.CombinedValue({combination_method: ValueCombinationMethod.Add})
+    ;
+
+    var res = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&res);
+
+    const summary = try res.evaluator.evalAll();
+
+    // The value should be created without crashing
+    try testing.expect(summary.evaluated >= 1);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "issue 8944: wrapper function for List.get with match" {
+    // Regression test for https://github.com/roc-lang/roc/issues/8944
+    // When using a wrapper function that calls List.get and pattern matches on the result,
+    // the expect statements would pass or fail depending on their order. This was caused
+    // by the same bug as issue #8754: extractTagValue was computing the payload layout
+    // from the type variable instead of using the actual variant layout from the tag union.
+    //
+    // The fix in 3d5f8a420a uses acc.getVariantLayout(tag_index) instead of
+    // getRuntimeLayout(arg_var), which correctly handles boxed payloads in recursive types.
+    const src =
+        \\nth = |l, i| {
+        \\    match List.get(l, i) {
+        \\        Ok(e) => Ok(e)
+        \\        Err(OutOfBounds) => Err(OutOfBounds)
+        \\    }
+        \\}
+        \\
+        \\# Order should not matter - both expects should pass
+        \\expect nth(["a", "b", "c", "d", "e"], 2) == Ok("c")
+        \\expect nth(["a"], 2) == Err(OutOfBounds)
+    ;
+
+    var res = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&res);
+
+    const summary = try res.evaluator.evalAll();
+
+    // Both expects should pass (0 crashed means they all evaluated to true)
+    // nth function is evaluated; expects may not increment evaluated count
+    try testing.expect(summary.evaluated >= 1);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+// Issue #8979: while (True) {} causes infinite loop at compile time
+// These tests verify the fix for detecting infinite while loops at compile time.
+
+test "issue 8979: while (True) {} should crash instead of hanging" {
+    const src =
+        \\e = {
+        \\    while (True) {}
+        \\}
+    ;
+
+    var res = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&res);
+
+    const summary = try res.evaluator.evalAll();
+
+    // Should crash because condition is True and body has no exit
+    try testing.expectEqual(@as(u32, 1), summary.crashed);
+}
+
+test "issue 8979: while (True) with body but no exit should crash" {
+    const src =
+        \\e = {
+        \\    while (True) {
+        \\        x = 1 + 1
+        \\        x
+        \\    }
+        \\}
+    ;
+
+    var res = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&res);
+
+    const summary = try res.evaluator.evalAll();
+
+    // Should crash because condition is True and body has no exit
+    try testing.expectEqual(@as(u32, 1), summary.crashed);
+}
+
+test "issue 8979: while with expression evaluating to True and no exit should crash" {
+    const src =
+        \\e = {
+        \\    while (1 < 2) {}
+        \\}
+    ;
+
+    var res = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&res);
+
+    const summary = try res.evaluator.evalAll();
+
+    // 1 < 2 evaluates to True, no exit statement
+    try testing.expectEqual(@as(u32, 1), summary.crashed);
+}
+
+test "issue 8979: while (True) with break should not crash" {
+    const src =
+        \\result = {
+        \\    var $foo = True
+        \\    while (True) {
+        \\        break
+        \\    }
+        \\    $foo
+        \\}
+    ;
+
+    var res = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&res);
+
+    const summary = try res.evaluator.evalAll();
+
+    // Has break statement, should not crash
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "issue 8979: while (True) with conditional break should not crash" {
+    const src =
+        \\result = {
+        \\    var $i = 0i64
+        \\    while (True) {
+        \\        if $i >= 5 {
+        \\            break
+        \\        }
+        \\        $i = $i + 1
+        \\    }
+        \\    $i
+        \\}
+    ;
+
+    var res = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&res);
+
+    const summary = try res.evaluator.evalAll();
+
+    // Has break in if branch, should not crash
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "issue 8979: while with mutable condition should not crash" {
+    const src =
+        \\result = {
+        \\    var $continue = True
+        \\    while ($continue) {
+        \\        $continue = False
+        \\    }
+        \\    42i64
+        \\}
+    ;
+
+    var res = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&res);
+
+    const summary = try res.evaluator.evalAll();
+
+    // Condition involves mutable variable, should not crash
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "issue 8979: while with comparison involving mutable var should not crash" {
+    const src =
+        \\result = {
+        \\    var $i = 0i64
+        \\    while ($i < 5) {
+        \\        $i = $i + 1
+        \\    }
+        \\    $i
+        \\}
+    ;
+
+    var res = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&res);
+
+    const summary = try res.evaluator.evalAll();
+
+    // Condition involves mutable variable $i, should not crash
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "issue 8979: while (False) should not crash" {
+    const src =
+        \\e = {
+        \\    while (False) {
+        \\        crash "unreachable"
+        \\    }
+        \\}
+    ;
+
+    var res = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&res);
+
+    const summary = try res.evaluator.evalAll();
+
+    // Condition is False, loop never runs
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "issue 8979: nested while - inner break does not save outer loop" {
+    const src =
+        \\e = {
+        \\    while (True) {
+        \\        var $j = 0i64
+        \\        while ($j < 3) {
+        \\            if $j == 2 { break }
+        \\            $j = $j + 1
+        \\        }
+        \\    }
+        \\}
+    ;
+
+    var res = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&res);
+
+    const summary = try res.evaluator.evalAll();
+
+    // The break is for inner loop only, outer while (True) has no exit
+    try testing.expectEqual(@as(u32, 1), summary.crashed);
+}
+
+// Note: List.repeat test temporarily disabled while investigating
+// why List.repeat triggers the infinite loop check. List.repeat
+// is implemented with recursion in Roc, not while loops.

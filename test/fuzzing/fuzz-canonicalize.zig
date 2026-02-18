@@ -38,7 +38,7 @@
 
 const std = @import("std");
 const compile = @import("compile");
-const reporting = @import("reporting");
+const roc_target = @import("roc_target");
 
 const BuildEnv = compile.BuildEnv;
 
@@ -78,13 +78,13 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
     const abs_path = tmp_dir.dir.realpath(tmp_file_path, &path_buf) catch return;
 
     // Process the input through BuildEnv
-    var build_env = BuildEnv.init(gpa, .single_threaded, 1);
+    // Panic on OOM so AFL++ knows it's a resource issue, not a bug in the fuzzed code
+    var build_env = BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative()) catch @panic("OOM during BuildEnv init");
     defer build_env.deinit();
 
     build_env.build(abs_path) catch |err| {
         switch (err) {
             error.OutOfMemory => @panic("OOM"),
-            error.NoSpaceLeft => @panic("No Space Left"),
             error.TooNested => {
                 // This comes from the parser, so don't treat it as a canonicalize error
                 return;

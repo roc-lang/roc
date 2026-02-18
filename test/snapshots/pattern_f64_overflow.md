@@ -90,40 +90,40 @@ The unused variable is declared here:
 
 # TOKENS
 ~~~zig
-KwMatch(1:1-1:6),LowerIdent(1:7-1:8),OpenCurly(1:9-1:10),
-Float(2:5-2:10),OpFatArrow(2:11-2:13),StringStart(2:14-2:15),StringPart(2:15-2:32),StringEnd(2:32-2:33),
-Float(3:5-3:10),OpFatArrow(3:11-3:13),StringStart(3:14-3:15),StringPart(3:15-3:32),StringEnd(3:32-3:33),
-Float(4:5-4:27),OpFatArrow(4:28-4:30),StringStart(4:31-4:32),StringPart(4:32-4:44),StringEnd(4:44-4:45),
-Float(5:5-5:8),OpFatArrow(5:9-5:11),StringStart(5:12-5:13),StringPart(5:13-5:17),StringEnd(5:17-5:18),
-LowerIdent(6:5-6:10),OpFatArrow(6:11-6:13),StringStart(6:14-6:15),StringPart(6:15-6:20),StringEnd(6:20-6:21),
-CloseCurly(7:1-7:2),
-EndOfFile(8:1-8:1),
+KwMatch,LowerIdent,OpenCurly,
+Float,OpFatArrow,StringStart,StringPart,StringEnd,
+Float,OpFatArrow,StringStart,StringPart,StringEnd,
+Float,OpFatArrow,StringStart,StringPart,StringEnd,
+Float,OpFatArrow,StringStart,StringPart,StringEnd,
+LowerIdent,OpFatArrow,StringStart,StringPart,StringEnd,
+CloseCurly,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
 (e-match
-	(e-ident @1.7-1.8 (raw "x"))
+	(e-ident (raw "x"))
 	(branches
-		(branch @2.5-2.33
-			(p-frac @2.5-2.10 (raw "1e100"))
-			(e-string @2.14-2.33
-				(e-string-part @2.15-2.32 (raw "very large number"))))
-		(branch @3.5-3.33
-			(p-frac @3.5-3.10 (raw "1e-40"))
-			(e-string @3.14-3.33
-				(e-string-part @3.15-3.32 (raw "very small number"))))
-		(branch @4.5-4.45
-			(p-frac @4.5-4.27 (raw "1.7976931348623157e308"))
-			(e-string @4.31-4.45
-				(e-string-part @4.32-4.44 (raw "near f64 max"))))
-		(branch @5.5-5.18
-			(p-frac @5.5-5.8 (raw "0.0"))
-			(e-string @5.12-5.18
-				(e-string-part @5.13-5.17 (raw "zero"))))
-		(branch @6.5-6.21
-			(p-ident @6.5-6.10 (raw "value"))
-			(e-string @6.14-6.21
-				(e-string-part @6.15-6.20 (raw "other"))))))
+		(branch
+			(p-frac (raw "1e100"))
+			(e-string
+				(e-string-part (raw "very large number"))))
+		(branch
+			(p-frac (raw "1e-40"))
+			(e-string
+				(e-string-part (raw "very small number"))))
+		(branch
+			(p-frac (raw "1.7976931348623157e308"))
+			(e-string
+				(e-string-part (raw "near f64 max"))))
+		(branch
+			(p-frac (raw "0.0"))
+			(e-string
+				(e-string-part (raw "zero"))))
+		(branch
+			(p-ident (raw "value"))
+			(e-string
+				(e-string-part (raw "other"))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -137,48 +137,48 @@ match x {
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-match @1.1-7.2
-	(match @1.1-7.2
+(e-match
+	(match
 		(cond
 			(e-runtime-error (tag "ident_not_in_scope")))
 		(branches
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @2.5-2.10 (tag "f64_pattern_literal"))))
+						(p-runtime-error (tag "f64_pattern_literal"))))
 				(value
-					(e-string @2.14-2.33
-						(e-literal @2.15-2.32 (string "very large number")))))
+					(e-string
+						(e-literal (string "very large number")))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @3.5-3.10 (tag "f64_pattern_literal"))))
+						(p-runtime-error (tag "f64_pattern_literal"))))
 				(value
-					(e-string @3.14-3.33
-						(e-literal @3.15-3.32 (string "very small number")))))
+					(e-string
+						(e-literal (string "very small number")))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error @4.5-4.27 (tag "f64_pattern_literal"))))
+						(p-runtime-error (tag "f64_pattern_literal"))))
 				(value
-					(e-string @4.31-4.45
-						(e-literal @4.32-4.44 (string "near f64 max")))))
+					(e-string
+						(e-literal (string "near f64 max")))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-small-dec @5.5-5.8)))
+						(p-small-dec)))
 				(value
-					(e-string @5.12-5.18
-						(e-literal @5.13-5.17 (string "zero")))))
+					(e-string
+						(e-literal (string "zero")))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-assign @6.5-6.10 (ident "value"))))
+						(p-assign (ident "value"))))
 				(value
-					(e-string @6.14-6.21
-						(e-literal @6.15-6.20 (string "other"))))))))
+					(e-string
+						(e-literal (string "other"))))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-7.2 (type "Str"))
+(expr (type "Str"))
 ~~~

@@ -77,20 +77,20 @@ Add a main! function like:
 
 # TOKENS
 ~~~zig
-MalformedNumberNoDigits(1:1-1:3),NoSpaceDotInt(1:3-1:5),
-MalformedNumberNoDigits(2:1-2:6),
-MalformedNumberBadSuffix(3:1-3:5),
-EndOfFile(4:1-4:1),
+MalformedNumberNoDigits,NoSpaceDotInt,
+MalformedNumberNoDigits,
+MalformedNumberBadSuffix,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-3.5
-	(type-module @1.1-1.3)
+(file
+	(type-module)
 	(statements
-		(s-malformed @1.1-1.3 (tag "statement_unexpected_token"))
-		(s-malformed @1.3-1.5 (tag "statement_unexpected_token"))
-		(s-malformed @2.1-2.6 (tag "statement_unexpected_token"))
-		(s-malformed @3.1-3.5 (tag "statement_unexpected_token"))))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc

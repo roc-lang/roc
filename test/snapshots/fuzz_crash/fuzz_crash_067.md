@@ -25,24 +25,24 @@ f = || {
 
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:2),OpAssign(1:3-1:4),OpBar(1:5-1:6),OpBar(1:6-1:7),OpenCurly(1:8-1:9),
-KwCrash(2:5-2:10),Int(2:11-2:12),
-CloseCurly(3:1-3:2),
-EndOfFile(4:1-4:1),
+LowerIdent,OpAssign,OpBar,OpBar,OpenCurly,
+KwCrash,Int,
+CloseCurly,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-3.2
-	(type-module @1.1-1.2)
+(file
+	(type-module)
 	(statements
-		(s-decl @1.1-3.2
-			(p-ident @1.1-1.2 (raw "f"))
-			(e-lambda @1.5-3.2
+		(s-decl
+			(p-ident (raw "f"))
+			(e-lambda
 				(args)
-				(e-block @1.8-3.2
+				(e-block
 					(statements
-						(s-crash @2.5-2.12
-							(e-int @2.11-2.12 (raw "1")))))))))
+						(s-crash
+							(e-int (raw "1")))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -54,17 +54,17 @@ f = || {
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @1.1-1.2 (ident "f"))
-		(e-lambda @1.5-3.2
+		(p-assign (ident "f"))
+		(e-lambda
 			(args)
-			(e-block @1.8-3.2
+			(e-block
 				(e-runtime-error (tag "crash_expects_string"))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @1.1-1.2 (type "({}) -> Error")))
+		(patt (type "({}) -> Error")))
 	(expressions
-		(expr @1.5-3.2 (type "({}) -> Error"))))
+		(expr (type "({}) -> Error"))))
 ~~~

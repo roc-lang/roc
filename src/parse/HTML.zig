@@ -6,10 +6,9 @@ const base = @import("base");
 const AST = @import("AST.zig");
 const RegionInfo = base.RegionInfo;
 const CommonEnv = base.CommonEnv;
-const Token = @import("tokenize.zig").Token;
 
 /// Generate an interactive source range span for the playground
-fn writeSourceRangeSpan(writer: anytype, region: base.Region, source: []const u8, line_starts: []const u32) !void {
+fn writeSourceRangeSpan(writer: *std.io.Writer, region: base.Region, source: []const u8, line_starts: []const u32) !void {
     const region_info = base.RegionInfo.position(source, line_starts, region.start.offset, region.end.offset) catch {
         try writer.print("<span class=\"source-range\" data-start-byte=\"{d}\" data-end-byte=\"{d}\">@{d}-{d}</span>", .{ region.start.offset, region.end.offset, region.start.offset, region.end.offset });
         return;
@@ -18,7 +17,7 @@ fn writeSourceRangeSpan(writer: anytype, region: base.Region, source: []const u8
 }
 
 /// Generate an HTML representation of the tokens in the AST
-pub fn tokensToHtml(ast: *const AST, env: *const CommonEnv, writer: anytype) !void {
+pub fn tokensToHtml(ast: *const AST, env: *const CommonEnv, writer: *std.io.Writer) !void {
     try writer.writeAll("<div class=\"token-list\">");
 
     const token_tags = ast.tokens.tokens.items(.tag);
@@ -73,4 +72,112 @@ pub fn tokensToHtml(ast: *const AST, env: *const CommonEnv, writer: anytype) !vo
         try writer.writeAll("</span>");
     }
     try writer.writeAll("</div>");
+}
+
+const testing = std.testing;
+const tokenize = @import("tokenize.zig");
+const NodeStore = @import("NodeStore.zig");
+
+test "tokensToHtml generates valid HTML" {
+    const gpa = testing.allocator;
+
+    // Create a simple source to tokenize
+    const source = "foo = 42";
+
+    // Create environment
+    var env = try base.CommonEnv.init(gpa, source);
+    try env.calcLineStarts(gpa);
+    defer env.deinit(gpa);
+
+    // Tokenize
+    var messages: [128]tokenize.Diagnostic = undefined;
+    const msg_slice = messages[0..];
+    var tokenizer = try tokenize.Tokenizer.init(&env, gpa, source, msg_slice);
+    try tokenizer.tokenize(gpa);
+    var result = tokenizer.finishAndDeinit();
+    defer result.tokens.deinit(gpa);
+
+    // Create a minimal AST with just the tokens
+    var store = try NodeStore.initCapacity(gpa, 16);
+    defer store.deinit();
+
+    var tokenize_diagnostics = std.ArrayList(tokenize.Diagnostic).empty;
+    var parse_diagnostics = std.ArrayList(AST.Diagnostic).empty;
+    defer tokenize_diagnostics.deinit(gpa);
+    defer parse_diagnostics.deinit(gpa);
+
+    var ast = AST{
+        .gpa = gpa,
+        .env = &env,
+        .tokens = result.tokens,
+        .store = store,
+        .root_node_idx = 0,
+        .tokenize_diagnostics = tokenize_diagnostics,
+        .parse_diagnostics = parse_diagnostics,
+    };
+
+    // Generate HTML
+    var output_writer: std.Io.Writer.Allocating = .init(gpa);
+    defer output_writer.deinit();
+
+    try tokensToHtml(&ast, &env, &output_writer.writer);
+
+    // Verify the output contains expected HTML elements
+    const html = output_writer.written();
+    try testing.expect(std.mem.indexOf(u8, html, "<div class=\"token-list\">") != null);
+    try testing.expect(std.mem.indexOf(u8, html, "</div>") != null);
+    try testing.expect(std.mem.indexOf(u8, html, "LowerIdent") != null); // "foo" token
+    try testing.expect(std.mem.indexOf(u8, html, "Int") != null); // "42" token
+}
+
+test "tokensToHtml handles position errors gracefully" {
+    const gpa = testing.allocator;
+
+    // Create a simple source to tokenize
+    const source = "foo = 42";
+
+    // Create environment but don't calculate line starts (to trigger error path)
+    var env = try base.CommonEnv.init(gpa, source);
+    // Deliberately NOT calling env.calcLineStarts(gpa) to trigger the error path
+    defer env.deinit(gpa);
+
+    // Tokenize
+    var messages: [128]tokenize.Diagnostic = undefined;
+    const msg_slice = messages[0..];
+    var tokenizer = try tokenize.Tokenizer.init(&env, gpa, source, msg_slice);
+    try tokenizer.tokenize(gpa);
+    var result = tokenizer.finishAndDeinit();
+    defer result.tokens.deinit(gpa);
+
+    // Create a minimal AST with just the tokens
+    var store = try NodeStore.initCapacity(gpa, 16);
+    defer store.deinit();
+
+    var tokenize_diagnostics = std.ArrayList(tokenize.Diagnostic).empty;
+    var parse_diagnostics = std.ArrayList(AST.Diagnostic).empty;
+    defer tokenize_diagnostics.deinit(gpa);
+    defer parse_diagnostics.deinit(gpa);
+
+    var ast = AST{
+        .gpa = gpa,
+        .env = &env,
+        .tokens = result.tokens,
+        .store = store,
+        .root_node_idx = 0,
+        .tokenize_diagnostics = tokenize_diagnostics,
+        .parse_diagnostics = parse_diagnostics,
+    };
+
+    // Generate HTML - should still work even with position errors
+    var output_writer: std.Io.Writer.Allocating = .init(gpa);
+    defer output_writer.deinit();
+
+    try tokensToHtml(&ast, &env, &output_writer.writer);
+
+    // Verify the output contains expected HTML elements (fallback format)
+    const html = output_writer.written();
+    try testing.expect(std.mem.indexOf(u8, html, "<div class=\"token-list\">") != null);
+    try testing.expect(std.mem.indexOf(u8, html, "</div>") != null);
+    // Should use the fallback format with just byte offsets
+    try testing.expect(std.mem.indexOf(u8, html, "data-start-byte=") != null);
 }

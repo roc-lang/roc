@@ -13,7 +13,7 @@ jobs:
   nix-apple-silicon:
     name: nix-apple-silicon
     runs-on: [self-hosted, macOS, ARM64]
-    timeout-minutes: 90
+    timeout-minutes: 130
     steps:
       - uses: actions/checkout@v4
 

@@ -23,16 +23,16 @@ person.address.street
 
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:7),NoSpaceDotLowerIdent(1:7-1:15),NoSpaceDotLowerIdent(1:15-1:22),
-EndOfFile(2:1-2:1),
+LowerIdent,NoSpaceDotLowerIdent,NoSpaceDotLowerIdent,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-field-access @1.1-1.22
-	(e-field-access @1.1-1.15
-		(e-ident @1.1-1.7 (raw "person"))
-		(e-ident @1.7-1.15 (raw "address")))
-	(e-ident @1.15-1.22 (raw "street")))
+(e-field-access
+	(e-field-access
+		(e-ident (raw "person"))
+		(e-ident (raw "address")))
+	(e-ident (raw "street")))
 ~~~
 # FORMATTED
 ~~~roc
@@ -40,13 +40,13 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-dot-access @1.1-1.22 (field "street")
+(e-dot-access (field "street")
 	(receiver
-		(e-dot-access @1.1-1.15 (field "address")
+		(e-dot-access (field "address")
 			(receiver
 				(e-runtime-error (tag "ident_not_in_scope"))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.22 (type "_a"))
+(expr (type "_a"))
 ~~~

@@ -8,12 +8,10 @@
 const std = @import("std");
 const base = @import("base");
 const tracy = @import("tracy");
-const collections = @import("collections");
 
 const AST = @import("AST.zig");
 const Node = @import("Node.zig");
 const NodeStore = @import("NodeStore.zig");
-const NodeList = AST.NodeList;
 const TokenizedBuffer = tokenize.TokenizedBuffer;
 const Token = tokenize.Token;
 const TokenIdx = Token.Idx;
@@ -29,8 +27,8 @@ gpa: std.mem.Allocator,
 pos: TokenIdx,
 tok_buf: TokenizedBuffer,
 store: NodeStore,
-scratch_nodes: std.ArrayListUnmanaged(Node.Idx),
-diagnostics: std.ArrayListUnmanaged(AST.Diagnostic),
+scratch_nodes: std.ArrayList(Node.Idx),
+diagnostics: std.ArrayList(AST.Diagnostic),
 cached_malformed_node: ?Node.Idx,
 nesting_counter: u8,
 
@@ -57,21 +55,6 @@ pub fn deinit(parser: *Parser) void {
 
     // diagnostics will be kept and passed to the following compiler stage
     // to be deinitialized by the caller when no longer required
-}
-
-const TestError = error{TestError};
-
-fn test_parser(source: []const u8, run: fn (parser: Parser) TestError!void) TestError!void {
-    const messages = [128]tokenize.Diagnostic;
-    const tokenizer = tokenize.Tokenizer.init(source, messages[0..], std.testing.allocator);
-    tokenizer.tokenize();
-    const tok_result = tokenizer.finalize_and_deinit();
-    defer tok_result.tokens.deinit();
-    const parser = Parser.init(std.testing.allocator, tok_result.tokens);
-    defer parser.store.deinit();
-    defer parser.scratch_nodes.deinit();
-    defer parser.diagnostics.deinit();
-    try run(parser);
 }
 
 /// helper to advance the parser by one token
@@ -116,6 +99,74 @@ pub fn peekN(self: *Parser, n: u32) Token.Tag {
         return .EndOfFile;
     }
     return self.tok_buf.tokens.items(.tag)[next];
+}
+
+/// Check if the token at the given position is a var identifier (starts with '$')
+fn isVarIdent(self: *Parser, token: Token.Idx) bool {
+    if (self.tok_buf.resolveIdentifier(token)) |ident| {
+        return ident.attributes.reassignable;
+    }
+    return false;
+}
+
+/// Check if the current position looks like a type declaration with a valid type following.
+/// This peeks ahead without consuming tokens to determine if we have:
+/// - `Name :` followed by a valid type start token
+/// - `Name :=` followed by a valid type start token
+/// - `Name ::` followed by a valid type start token
+/// - `Name(a, b) :` etc. (with parenthesized type params)
+///
+/// The key insight is that after the `:` (or `:=` or `::`), we must see a token that
+/// can start a type annotation. If we see a string literal or other expression token,
+/// this is NOT a type declaration - it's likely a malformed expression.
+fn looksLikeTypeDecl(self: *Parser) bool {
+    std.debug.assert(self.peek() == .UpperIdent);
+
+    var lookahead: u32 = 1;
+    const next_tok = self.peekN(lookahead);
+
+    // Check for parenthesized type params: Name(a, b) :
+    if (next_tok == .OpenRound or next_tok == .NoSpaceOpenRound) {
+        // Skip to matching close paren, counting nesting
+        lookahead += 1;
+        var depth: u32 = 1;
+        while (depth > 0) {
+            const tok = self.peekN(lookahead);
+            switch (tok) {
+                .OpenRound, .NoSpaceOpenRound => depth += 1,
+                .CloseRound => depth -= 1,
+                .EndOfFile => return false,
+                else => {},
+            }
+            lookahead += 1;
+        }
+    }
+    // Note: We do NOT support the old `Name a b :` syntax with space-separated type params.
+    // Only `Name(a, b) :` with parenthesized type params is supported.
+
+    // Now check for : or := or ::
+    const op_tok = self.peekN(lookahead);
+    if (op_tok != .OpColon and op_tok != .OpColonEqual and op_tok != .OpDoubleColon) {
+        return false;
+    }
+    lookahead += 1;
+
+    // Check if what follows is a valid type annotation start
+    const after_colon = self.peekN(lookahead);
+    return switch (after_colon) {
+        // Valid type annotation starts
+        .UpperIdent, // Type name: Str, List, etc.
+        .LowerIdent, // Type variable: a, b, etc.
+        .OpenRound, // Tuple or grouping: (a, b)
+        .NoSpaceOpenRound, // Tuple or grouping without space
+        .OpenSquare, // Tag union: [Ok(a), Err(e)]
+        .OpenCurly, // Record type: { name: Str }
+        .Underscore, // Wildcard type: _
+        .NamedUnderscore, // Named wildcard: _foo
+        => true,
+        // NOT valid type starts - this is probably a malformed expression
+        else => false,
+    };
 }
 
 const StackError = error{TooNested};
@@ -197,7 +248,7 @@ pub fn parseFile(self: *Parser) Error!void {
 
     self.store.emptyScratch();
     try self.store.addFile(.{
-        .header = @as(AST.Header.Idx, @enumFromInt(0)),
+        .header = undefined, // overwritten below after parseHeader()
         .statements = AST.Statement.Span{ .span = base.DataSpan.empty() },
         .region = AST.TokenizedRegion.empty(),
     });
@@ -235,24 +286,6 @@ fn parseCollectionSpan(self: *Parser, comptime T: type, end_token: Token.Tag, sc
     self.expect(end_token) catch {
         return error.ExpectedNotFound;
     };
-}
-
-/// Utility to see where a the current position is within the buffer of tokens
-fn debugToken(self: *Parser, window: usize) void {
-    const current = self.pos;
-    const start = if (window > current) 0 else current - window;
-    const end = std.math.clamp(current + window, current, self.tok_buf.tokens.len);
-    const tags = self.tok_buf.tokens.items(.tag);
-    const tok_extra = self.tok_buf.tokens.items(.extra);
-    for (start..end) |i| {
-        const tag = tags[i];
-        var extra: []u8 = "";
-        if (tag == .LowerIdent or tag == .UpperIdent) {
-            const e = tok_extra[i];
-            extra = self.tok_buf.env.getIdent(e.interned);
-        }
-        std.debug.print("{s}{d}: {s} \"{s}\"\n", .{ if (i == current) "-->" else "   ", i, @tagName(tag), extra });
-    }
 }
 
 /// Parses a module header using the following grammar:
@@ -295,7 +328,7 @@ pub fn parseHeader(self: *Parser) Error!AST.Header.Idx {
 /// e.g:
 /// ```roc
 /// platform
-///     requires {} { main! : List(Str) => {} }
+///     requires { main! : List(Str) => {} }
 ///     exposes []
 ///     packages { foo: "../foo.roc" }
 ///     imports []
@@ -339,8 +372,10 @@ pub fn parsePlatformHeader(self: *Parser) Error!AST.Header.Idx {
             self.pos,
         );
     };
-    // Get requires rigids
-    const rigids_start = self.pos;
+
+    // Parse requires entries with for-clause syntax:
+    // requires { [Model : model] for main : () -> { init : ... } }
+    const requires_start = self.pos;
     self.expect(.OpenCurly) catch {
         return try self.pushMalformed(
             AST.Header.Idx,
@@ -348,74 +383,172 @@ pub fn parsePlatformHeader(self: *Parser) Error!AST.Header.Idx {
             self.pos,
         );
     };
-    const rigids_top = self.store.scratchExposedItemTop();
-    self.parseCollectionSpan(
-        AST.ExposedItem.Idx,
-        .CloseCurly,
-        NodeStore.addScratchExposedItem,
-        Parser.parseExposedItem,
-    ) catch |err| {
-        switch (err) {
-            error.ExpectedNotFound => {
-                self.store.clearScratchExposedItemsFrom(rigids_top);
-                return try self.pushMalformed(
-                    AST.Header.Idx,
-                    .expected_requires_rigids_close_curly,
-                    rigids_start,
-                );
-            },
-            error.OutOfMemory => return error.OutOfMemory,
-            error.TooNested => return error.TooNested,
-        }
-    };
-    const rigids_span = try self.store.exposedItemSpanFrom(rigids_top);
-    const rigids = try self.store.addCollection(
-        .collection_exposed,
-        .{
-            .span = rigids_span.span,
-            .region = .{
-                .start = rigids_start,
-                .end = self.pos,
-            },
-        },
-    );
 
-    // Get requires signatures
-    const signatures_start = self.pos;
-    self.expect(.OpenCurly) catch {
-        return try self.pushMalformed(
-            AST.Header.Idx,
-            .expected_requires_signatures_open_curly,
-            self.pos,
-        );
-    };
-    const signatures_top = self.store.scratchAnnoRecordFieldTop();
-    self.parseCollectionSpan(
-        AST.AnnoRecordField.Idx,
-        .CloseCurly,
-        NodeStore.addScratchAnnoRecordField,
-        Parser.parseAnnoRecordField,
-    ) catch |err| {
-        switch (err) {
-            error.ExpectedNotFound => {
+    const requires_entries_top = self.store.scratchRequiresEntryTop();
+
+    // Handle backward compatibility: `requires {} { ... }` (legacy syntax)
+    // If we see CloseCurly followed by OpenCurly, skip the empty rigids block
+    // and parse from the second curly block
+    var already_consumed_close_curly = false;
+    if (self.peek() == .CloseCurly) {
+        self.advance(); // consume first '}'
+        if (self.peek() == .OpenCurly) {
+            self.advance(); // consume second '{'
+            // Continue parsing entries from the second curly block
+        } else {
+            // Empty requires {} with no second block - we already consumed the close curly
+            already_consumed_close_curly = true;
+        }
+    }
+
+    // Parse requires entries (comma-separated)
+    // Supported syntaxes:
+    // 1. Simple: requires { main : Type } - no type aliases
+    // 2. With aliases: requires { [Model : model] for main : Type }
+    while (!already_consumed_close_curly and self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
+        const entry_start = self.pos;
+
+        const type_aliases_top = self.store.scratchForClauseTypeAliasTop();
+
+        // Check if we have type aliases (starts with '[')
+        if (self.peek() == .OpenSquare) {
+            self.advance(); // consume '['
+
+            // Parse type alias mappings: [Model : model, Foo : foo]
+            while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
+                const alias_start = self.pos;
+
+                // Expect UpperIdent for alias name (e.g., "Model")
+                if (self.peek() != .UpperIdent) {
+                    self.store.clearScratchForClauseTypeAliasesFrom(type_aliases_top);
+                    self.store.clearScratchRequiresEntriesFrom(requires_entries_top);
+                    return try self.pushMalformed(
+                        AST.Header.Idx,
+                        .expected_for_clause_alias_name,
+                        self.pos,
+                    );
+                }
+                const alias_name = self.pos;
+                self.advance();
+
+                // Expect colon
+                self.expect(.OpColon) catch {
+                    self.store.clearScratchForClauseTypeAliasesFrom(type_aliases_top);
+                    self.store.clearScratchRequiresEntriesFrom(requires_entries_top);
+                    return try self.pushMalformed(
+                        AST.Header.Idx,
+                        .expected_for_clause_colon,
+                        self.pos,
+                    );
+                };
+
+                // Expect LowerIdent for rigid name (e.g., "model")
+                if (self.peek() != .LowerIdent) {
+                    self.store.clearScratchForClauseTypeAliasesFrom(type_aliases_top);
+                    self.store.clearScratchRequiresEntriesFrom(requires_entries_top);
+                    return try self.pushMalformed(
+                        AST.Header.Idx,
+                        .expected_for_clause_rigid_name,
+                        self.pos,
+                    );
+                }
+                const rigid_name = self.pos;
+                self.advance();
+
+                const alias_idx = try self.store.addForClauseTypeAlias(.{
+                    .alias_name = alias_name,
+                    .rigid_name = rigid_name,
+                    .region = .{ .start = alias_start, .end = self.pos },
+                });
+                try self.store.addScratchForClauseTypeAlias(alias_idx);
+
+                // Check for comma (more aliases) or close square
+                if (self.peek() == .Comma) {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+
+            self.expect(.CloseSquare) catch {
+                self.store.clearScratchForClauseTypeAliasesFrom(type_aliases_top);
+                self.store.clearScratchRequiresEntriesFrom(requires_entries_top);
                 return try self.pushMalformed(
                     AST.Header.Idx,
-                    .expected_requires_signatures_close_curly,
-                    signatures_start,
+                    .expected_for_clause_close_square,
+                    self.pos,
                 );
-            },
-            error.OutOfMemory => return error.OutOfMemory,
-            error.TooNested => return error.TooNested,
+            };
+
+            // Expect "for" keyword after type aliases
+            self.expect(.KwFor) catch {
+                self.store.clearScratchForClauseTypeAliasesFrom(type_aliases_top);
+                self.store.clearScratchRequiresEntriesFrom(requires_entries_top);
+                return try self.pushMalformed(
+                    AST.Header.Idx,
+                    .expected_for_keyword,
+                    self.pos,
+                );
+            };
         }
-    };
-    const signatures_span = try self.store.annoRecordFieldSpanFrom(signatures_top);
-    const signatures = try self.store.addTypeAnno(.{ .record = .{
-        .fields = signatures_span,
-        .region = .{
-            .start = signatures_start,
-            .end = self.pos,
-        },
-    } });
+        // No type aliases - just parse entrypoint directly
+
+        const type_aliases_span = try self.store.forClauseTypeAliasSpanFrom(type_aliases_top);
+
+        // Expect entrypoint name (LowerIdent, e.g., "main")
+        if (self.peek() != .LowerIdent) {
+            self.store.clearScratchRequiresEntriesFrom(requires_entries_top);
+            return try self.pushMalformed(
+                AST.Header.Idx,
+                .expected_for_clause_entrypoint_name,
+                self.pos,
+            );
+        }
+        const entrypoint_name = self.pos;
+        self.advance();
+
+        // Expect colon before type annotation
+        self.expect(.OpColon) catch {
+            self.store.clearScratchRequiresEntriesFrom(requires_entries_top);
+            return try self.pushMalformed(
+                AST.Header.Idx,
+                .expected_for_clause_type_colon,
+                self.pos,
+            );
+        };
+
+        // Parse the type annotation
+        // Use .not_looking_for_args to properly handle function types like `I64, I64 -> I64`
+        const type_anno = try self.parseTypeAnno(.not_looking_for_args);
+
+        const entry_idx = try self.store.addRequiresEntry(.{
+            .type_aliases = type_aliases_span,
+            .entrypoint_name = entrypoint_name,
+            .type_anno = type_anno,
+            .region = .{ .start = entry_start, .end = self.pos },
+        });
+        try self.store.addScratchRequiresEntry(entry_idx);
+
+        // Check for comma (more entries) or close curly
+        if (self.peek() == .Comma) {
+            self.advance();
+        } else {
+            break;
+        }
+    }
+
+    if (!already_consumed_close_curly) {
+        self.expect(.CloseCurly) catch {
+            self.store.clearScratchRequiresEntriesFrom(requires_entries_top);
+            return try self.pushMalformed(
+                AST.Header.Idx,
+                .expected_requires_signatures_close_curly,
+                requires_start,
+            );
+        };
+    }
+
+    const requires_entries = try self.store.requiresEntrySpanFrom(requires_entries_top);
 
     // Get exposes
     self.expect(.KwExposes) catch {
@@ -466,7 +599,7 @@ pub fn parsePlatformHeader(self: *Parser) Error!AST.Header.Idx {
     self.expect(.KwPackages) catch {
         return try self.pushMalformed(
             AST.Header.Idx,
-            .expected_imports,
+            .expected_packages,
             self.pos,
         );
     };
@@ -552,13 +685,20 @@ pub fn parsePlatformHeader(self: *Parser) Error!AST.Header.Idx {
         },
     );
 
+    // Parse optional targets section
+    var targets: ?AST.TargetsSection.Idx = null;
+    if (self.peek() == .KwTargets) {
+        self.advance(); // Advance past 'targets'
+        targets = try self.parseTargetsSection();
+    }
+
     return self.store.addHeader(.{ .platform = .{
         .name = name,
-        .requires_rigids = rigids,
-        .requires_signatures = signatures,
+        .requires_entries = requires_entries,
         .exposes = exposes,
         .packages = packages,
         .provides = provides,
+        .targets = targets,
         .region = .{ .start = start, .end = self.pos },
     } });
 }
@@ -930,6 +1070,216 @@ pub fn parseExposedItem(self: *Parser) Error!AST.ExposedItem.Idx {
     }
 }
 
+/// Parses a single file item in a target list: "crt1.o" or app
+pub fn parseTargetFile(self: *Parser) Error!AST.TargetFile.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    const start = self.pos;
+    switch (self.peek()) {
+        .StringStart => {
+            // Parse string literal: "crt1.o"
+            self.advance(); // Advance past StringStart
+            // Capture StringPart token (the actual content)
+            var content_tok = start;
+            if (self.peek() == .StringPart) {
+                content_tok = self.pos;
+                self.advance(); // Advance past StringPart
+            }
+            // Skip any remaining parts until StringEnd
+            while (self.peek() != .StringEnd and self.peek() != .EndOfFile) {
+                self.advance();
+            }
+            if (self.peek() == .EndOfFile) {
+                return try self.pushMalformed(AST.TargetFile.Idx, .expected_target_file_string_end, start);
+            }
+            self.advance(); // Advance past StringEnd
+            return try self.store.addTargetFile(.{ .string_literal = content_tok });
+        },
+        .LowerIdent => {
+            // Parse special identifier: win_gui or other lower idents
+            self.advance(); // Advance past LowerIdent
+            return try self.store.addTargetFile(.{ .special_ident = start });
+        },
+        .KwApp => {
+            // Parse 'app' keyword as special identifier
+            self.advance(); // Advance past KwApp
+            return try self.store.addTargetFile(.{ .special_ident = start });
+        },
+        else => {
+            return try self.pushMalformed(AST.TargetFile.Idx, .expected_target_file, start);
+        },
+    }
+}
+
+/// Parses a single target entry: x64musl: ["crt1.o", "host.o", app]
+pub fn parseTargetEntry(self: *Parser) Error!AST.TargetEntry.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    const start = self.pos;
+
+    // Expect target name (lower identifier)
+    if (self.peek() != .LowerIdent) {
+        return try self.pushMalformed(AST.TargetEntry.Idx, .expected_target_name, start);
+    }
+    const target_name = self.pos;
+    self.advance(); // Advance past target name
+
+    // Expect colon
+    self.expect(.OpColon) catch {
+        return try self.pushMalformed(AST.TargetEntry.Idx, .expected_target_colon, start);
+    };
+
+    // Expect open square bracket
+    self.expect(.OpenSquare) catch {
+        return try self.pushMalformed(AST.TargetEntry.Idx, .expected_target_files_open_square, start);
+    };
+
+    // Parse file list
+    const files_top = self.store.scratchTargetFileTop();
+    self.parseCollectionSpan(AST.TargetFile.Idx, .CloseSquare, NodeStore.addScratchTargetFile, Parser.parseTargetFile) catch |err| {
+        switch (err) {
+            error.ExpectedNotFound => {
+                self.store.clearScratchTargetFilesFrom(files_top);
+                return try self.pushMalformed(AST.TargetEntry.Idx, .expected_target_files_close_square, start);
+            },
+            error.OutOfMemory => return error.OutOfMemory,
+            error.TooNested => return error.TooNested,
+        }
+    };
+    const files_span = try self.store.targetFileSpanFrom(files_top);
+
+    return try self.store.addTargetEntry(.{
+        .target = target_name,
+        .files = files_span,
+        .region = .{ .start = start, .end = self.pos },
+    });
+}
+
+/// Parses a target link type section: exe: { x64musl: [...], ... }
+pub fn parseTargetLinkType(self: *Parser) Error!AST.TargetLinkType.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    const start = self.pos;
+
+    // Expect open curly brace
+    self.expect(.OpenCurly) catch {
+        return try self.pushMalformed(AST.TargetLinkType.Idx, .expected_target_link_open_curly, start);
+    };
+
+    // Parse target entries
+    const entries_top = self.store.scratchTargetEntryTop();
+    self.parseCollectionSpan(AST.TargetEntry.Idx, .CloseCurly, NodeStore.addScratchTargetEntry, Parser.parseTargetEntry) catch |err| {
+        switch (err) {
+            error.ExpectedNotFound => {
+                self.store.clearScratchTargetEntriesFrom(entries_top);
+                return try self.pushMalformed(AST.TargetLinkType.Idx, .expected_target_link_close_curly, start);
+            },
+            error.OutOfMemory => return error.OutOfMemory,
+            error.TooNested => return error.TooNested,
+        }
+    };
+    const entries_span = try self.store.targetEntrySpanFrom(entries_top);
+
+    return try self.store.addTargetLinkType(.{
+        .entries = entries_span,
+        .region = .{ .start = start, .end = self.pos },
+    });
+}
+
+/// Parses a targets section: targets: { files: "targets/", exe: { ... } }
+pub fn parseTargetsSection(self: *Parser) Error!AST.TargetsSection.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    const start = self.pos;
+
+    // Expect colon after 'targets'
+    self.expect(.OpColon) catch {
+        return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_colon, start);
+    };
+
+    // Expect open curly brace
+    self.expect(.OpenCurly) catch {
+        return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_open_curly, start);
+    };
+
+    var files_path: ?TokenIdx = null;
+    var exe: ?AST.TargetLinkType.Idx = null;
+    var static_lib: ?AST.TargetLinkType.Idx = null;
+
+    // Parse fields until closing curly brace
+    while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
+        // Expect field name (lower identifier)
+        if (self.peek() != .LowerIdent) {
+            return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_field_name, start);
+        }
+
+        const field_name_tok = self.pos; // Capture field name token before advancing
+        self.advance(); // Advance past field name
+
+        // Expect colon
+        self.expect(.OpColon) catch {
+            return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_field_colon, start);
+        };
+
+        // Determine field type by what follows
+        switch (self.peek()) {
+            .StringStart => {
+                // Parse files path: "targets/"
+                self.advance(); // Advance past StringStart
+                // Capture StringPart token (the actual content)
+                if (self.peek() == .StringPart) {
+                    files_path = self.pos;
+                    self.advance(); // Advance past StringPart
+                }
+                // Skip any remaining parts until StringEnd
+                while (self.peek() != .StringEnd and self.peek() != .EndOfFile) {
+                    self.advance();
+                }
+                if (self.peek() == .StringEnd) {
+                    self.advance(); // Advance past StringEnd
+                }
+            },
+            .OpenCurly => {
+                // Parse link type section (exe, static_lib, shared_lib)
+                const parsed_link_type = try self.parseTargetLinkType();
+                // Get field name from source using token region
+                const region = self.tok_buf.resolve(field_name_tok);
+                const field_name = self.tok_buf.env.source[@intCast(region.start.offset)..@intCast(region.end.offset)];
+                if (std.mem.eql(u8, field_name, "exe")) {
+                    exe = parsed_link_type;
+                } else if (std.mem.eql(u8, field_name, "static_lib")) {
+                    static_lib = parsed_link_type;
+                }
+                // Unknown fields are ignored (shared_lib to be added later)
+            },
+            else => {
+                return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_field_name, start);
+            },
+        }
+
+        // Consume optional comma
+        if (self.peek() == .Comma) {
+            self.advance();
+        }
+    }
+
+    // Expect closing curly brace
+    self.expect(.CloseCurly) catch {
+        return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_close_curly, start);
+    };
+
+    return try self.store.addTargetsSection(.{
+        .files_path = files_path,
+        .exe = exe,
+        .static_lib = static_lib,
+        .region = .{ .start = start, .end = self.pos },
+    });
+}
+
 const StatementType = enum { top_level, in_body, in_associated_block };
 
 /// Parse a top level roc statement
@@ -977,48 +1327,87 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
             }
             if ((qualifier == null and self.peek() == .UpperIdent) or (qualifier != null and (self.peek() == .NoSpaceDotUpperIdent or self.peek() == .DotUpperIdent))) {
                 var exposes = AST.ExposedItem.Span{ .span = base.DataSpan.empty() };
+                var nested_import = false;
+
+                // Parse all uppercase segments: first.Second.Third...
+                // We track the first token (module_name_tok) and last token (last_upper_tok).
+                var last_upper_tok: TokenIdx = self.pos;
                 const module_name_tok = self.pos;
-                // Handle 'as' clause if present
-                if (self.peekNext() == .KwAs) {
-                    self.advance(); // Advance past UpperIdent
-                    self.advance(); // Advance past KwAs
-                    alias_tok = self.pos;
-                    self.expect(.UpperIdent) catch {
-                        const malformed = try self.pushMalformed(AST.Statement.Idx, .expected_upper_name_after_import_as, start);
-                        return malformed;
-                    };
-                } else {
-                    self.advance(); // Advance past identifier
+                self.advance(); // Advance past first UpperIdent
+
+                // Keep consuming additional .UpperIdent segments
+                while (self.peek() == .NoSpaceDotUpperIdent or self.peek() == .DotUpperIdent) {
+                    last_upper_tok = self.pos;
+                    self.advance();
                 }
 
-                // Handle 'exposing' clause if present (can occur with or without 'as')
-                if (self.peek() == .KwExposing) {
-                    self.advance(); // Advance past KwExposing
-                    self.expect(.OpenSquare) catch {
-                        return try self.pushMalformed(AST.Statement.Idx, .import_exposing_no_open, start);
-                    };
+                // If we have multiple uppercase segments and no explicit 'as' or 'exposing',
+                // auto-expose the final segment
+                const has_explicit_clause = self.peek() == .KwAs or self.peek() == .KwExposing;
+                const has_multiple_segments = last_upper_tok != module_name_tok;
+                if (has_multiple_segments and !has_explicit_clause) {
+                    // Auto-expose pattern: import json.Parser.Config
+                    // Module is everything before the last segment, last segment is auto-exposed
+                    // module_name_tok stays as the first uppercase token; the formatter will
+                    // iterate through consecutive uppercase tokens and stop before the exposed token.
+                    const final_segment_tok = last_upper_tok;
+                    nested_import = true;
+
+                    // Create exposed item for the final segment
                     const scratch_top = self.store.scratchExposedItemTop();
-                    self.parseCollectionSpan(AST.ExposedItem.Idx, .CloseSquare, NodeStore.addScratchExposedItem, Parser.parseExposedItem) catch |err| {
-                        switch (err) {
-                            error.ExpectedNotFound => {
-                                while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
-                                    self.advance();
-                                }
-                                self.expect(.CloseSquare) catch {};
-                                self.store.clearScratchExposedItemsFrom(scratch_top);
-                                return try self.pushMalformed(AST.Statement.Idx, .import_exposing_no_close, start);
-                            },
-                            error.OutOfMemory => return error.OutOfMemory,
-                            error.TooNested => return error.TooNested,
-                        }
-                    };
+                    const exposed_item = try self.store.addExposedItem(.{ .upper_ident = .{
+                        .region = .{ .start = final_segment_tok, .end = final_segment_tok },
+                        .ident = final_segment_tok,
+                        .as = null,
+                    } });
+                    try self.store.addScratchExposedItem(exposed_item);
                     exposes = try self.store.exposedItemSpanFrom(scratch_top);
+                } else {
+                    // Normal import with explicit 'as' or 'exposing' clause
+                    // module_name_tok stays as the first uppercase token; the formatter will
+                    // iterate through consecutive uppercase tokens to output the full path.
+
+                    // Handle 'as' clause if present
+                    if (self.peek() == .KwAs) {
+                        self.advance(); // Advance past KwAs
+                        alias_tok = self.pos;
+                        self.expect(.UpperIdent) catch {
+                            const malformed = try self.pushMalformed(AST.Statement.Idx, .expected_upper_name_after_import_as, start);
+                            return malformed;
+                        };
+                    }
+
+                    // Handle 'exposing' clause if present (can occur with or without 'as')
+                    if (self.peek() == .KwExposing) {
+                        self.advance(); // Advance past KwExposing
+                        self.expect(.OpenSquare) catch {
+                            return try self.pushMalformed(AST.Statement.Idx, .import_exposing_no_open, start);
+                        };
+                        const scratch_top = self.store.scratchExposedItemTop();
+                        self.parseCollectionSpan(AST.ExposedItem.Idx, .CloseSquare, NodeStore.addScratchExposedItem, Parser.parseExposedItem) catch |err| {
+                            switch (err) {
+                                error.ExpectedNotFound => {
+                                    while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
+                                        self.advance();
+                                    }
+                                    self.expect(.CloseSquare) catch {};
+                                    self.store.clearScratchExposedItemsFrom(scratch_top);
+                                    return try self.pushMalformed(AST.Statement.Idx, .import_exposing_no_close, start);
+                                },
+                                error.OutOfMemory => return error.OutOfMemory,
+                                error.TooNested => return error.TooNested,
+                            }
+                        };
+                        exposes = try self.store.exposedItemSpanFrom(scratch_top);
+                    }
                 }
+
                 const statement_idx = try self.store.addStatement(.{ .import = .{
                     .module_name_tok = module_name_tok,
                     .qualifier_tok = qualifier,
                     .alias_tok = alias_tok,
                     .exposes = exposes,
+                    .nested_import = nested_import,
                     .region = .{ .start = start, .end = self.pos },
                 } });
                 return statement_idx;
@@ -1048,6 +1437,19 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                 .region = .{ .start = start, .end = self.pos },
                 .patt = patt,
                 .expr = expr,
+                .body = body,
+            } });
+
+            return statement_idx;
+        },
+        .KwWhile => {
+            const start = self.pos;
+            self.advance();
+            const cond = try self.parseExpr();
+            const body = try self.parseExpr();
+            const statement_idx = try self.store.addStatement(.{ .@"while" = .{
+                .region = .{ .start = start, .end = self.pos },
+                .cond = cond,
                 .body = body,
             } });
 
@@ -1094,6 +1496,20 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
             }
             const name = self.pos;
             self.advance();
+            // Check if this is a type annotation (var $foo : Type) or assignment (var $foo = expr)
+            if (self.peek() == .OpColon) {
+                // Type annotation: var $foo : Type
+                self.advance(); // Advance past OpColon
+                const anno = try self.parseTypeAnno(.not_looking_for_args);
+                const statement_idx = try self.store.addStatement(.{ .type_anno = .{
+                    .anno = anno,
+                    .name = name,
+                    .where = try self.parseWhereConstraint(),
+                    .is_var = true,
+                    .region = .{ .start = start, .end = self.pos },
+                } });
+                return statement_idx;
+            }
             self.expect(.OpAssign) catch {
                 return try self.pushMalformed(AST.Statement.Idx, .var_expected_equals, self.pos);
             };
@@ -1103,6 +1519,15 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                 .body = body,
                 .region = .{ .start = start, .end = self.pos },
             } });
+            return statement_idx;
+        },
+        .KwBreak => {
+            const start = self.pos;
+            self.advance();
+            const statement_idx = try self.store.addStatement(.{ .@"break" = .{
+                .region = .{ .start = start, .end = self.pos },
+            } });
+
             return statement_idx;
         },
         .LowerIdent => {
@@ -1122,6 +1547,10 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                 } });
                 return statement_idx;
             } else if (self.peekNext() == .OpColon) {
+                // Check if this is a var identifier (starts with $) - those require "var" keyword
+                if (self.isVarIdent(start)) {
+                    return try self.pushMalformed(AST.Statement.Idx, .var_type_anno_needs_var_keyword, start);
+                }
                 self.advance(); // Advance past LowerIdent
                 self.advance(); // Advance past OpColon
                 const anno = try self.parseTypeAnno(.not_looking_for_args);
@@ -1129,6 +1558,7 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                     .anno = anno,
                     .name = start,
                     .where = try self.parseWhereConstraint(),
+                    .is_var = false,
                     .region = .{ .start = start, .end = self.pos },
                 } });
                 return statement_idx;
@@ -1160,6 +1590,7 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                     .anno = anno,
                     .name = start,
                     .where = try self.parseWhereConstraint(),
+                    .is_var = false,
                     .region = .{ .start = start, .end = self.pos },
                 } });
                 return statement_idx;
@@ -1170,13 +1601,23 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
         // Type Annotation (e.g. `Foo a : (a,a)`)
         .UpperIdent => {
             const start = self.pos;
-            if (statementType == .top_level or statementType == .in_associated_block) {
+            // Support type declarations in top-level, associated blocks, and body contexts.
+            // For body contexts, we use looksLikeTypeDecl() to disambiguate from tag
+            // constructors in malformed expressions (e.g., `Tag: "value"` in a record).
+            const is_type_decl_context = statementType == .top_level or
+                statementType == .in_associated_block or
+                (statementType == .in_body and self.looksLikeTypeDecl());
+            if (is_type_decl_context) {
                 const header = try self.parseTypeHeader();
-                if (self.peek() != .OpColon and self.peek() != .OpColonEqual) {
+                if (self.peek() != .OpColon and self.peek() != .OpColonEqual and self.peek() != .OpDoubleColon) {
                     // Point to the unexpected token (e.g., "U8" in "List U8")
                     return try self.pushMalformed(AST.Statement.Idx, .expected_colon_after_type_annotation, self.pos);
                 }
-                const kind: AST.TypeDeclKind = if (self.peek() == .OpColonEqual) .nominal else .alias;
+                const kind: AST.TypeDeclKind = switch (self.peek()) {
+                    .OpColonEqual => .nominal,
+                    .OpDoubleColon => .@"opaque",
+                    else => .alias,
+                };
                 self.advance();
                 const anno = try self.parseTypeAnno(.not_looking_for_args);
                 const where_clause = try self.parseWhereConstraint();
@@ -1293,67 +1734,66 @@ fn parseWhereConstraint(self: *Parser) Error!?AST.Collection.Idx {
         return null;
     };
 
-    const where_end = self.pos; // Position right after the where keyword
+    // Expect opening bracket [
+    self.expect(.OpenSquare) catch {
+        const diagnostic_region = AST.TokenizedRegion{ .start = where_start, .end = self.pos };
+        try self.diagnostics.append(self.gpa, .{
+            .tag = .where_expected_open_bracket,
+            .region = diagnostic_region,
+        });
+        const malformed_clause = try self.store.addMalformed(AST.WhereClause.Idx, .where_expected_open_bracket, diagnostic_region);
+        const where_clauses_top = self.store.scratchWhereClauseTop();
+        try self.store.addScratchWhereClause(malformed_clause);
+        const where_clauses = try self.store.whereClauseSpanFrom(where_clauses_top);
+        const coll_id = try self.store.addCollection(.collection_where_clause, .{
+            .region = .{ .start = where_start, .end = self.pos },
+            .span = where_clauses.span,
+        });
+        return coll_id;
+    };
+
     const where_clauses_top = self.store.scratchWhereClauseTop();
-    while (self.peek() != .Comma and self.peek() != .EndOfFile) {
-        const curr = self.peek();
-        const next = self.peekNext();
 
-        // Check if we've reached the start of a new statement (e.g., "broken_fn2 : a -> b" or "process = ...")
-        // This indicates we should stop parsing where clauses
-        if (curr == .LowerIdent and (next == .OpColon or next == .OpAssign)) {
-            break;
-        }
-
-        const valid_lookahead = curr == .KwModule or (curr == .LowerIdent and (next == .NoSpaceDotLowerIdent or next == .DotLowerIdent or next == .NoSpaceDotUpperIdent or next == .DotUpperIdent));
-        if (!valid_lookahead) {
-            // Check if we have a malformed constraint that starts with a type variable
-            if (curr == .LowerIdent) {
-                // Try to parse as a malformed where clause to provide better error messages
-                const clause = try self.parseWhereClause();
-                try self.store.addScratchWhereClause(clause);
-                if (self.peek() != .Comma) {
-                    break;
-                }
-                self.advance();
-                continue;
-            }
-            break;
-        }
+    // Parse comma-separated where clauses until we hit ]
+    while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
         const clause = try self.parseWhereClause();
         try self.store.addScratchWhereClause(clause);
-        if (self.peek() != .Comma) {
+
+        if (self.peek() == .Comma) {
+            self.advance();
+        } else if (self.peek() != .CloseSquare) {
+            // Expected comma or closing bracket
             break;
         }
-        self.advance();
     }
+
     const where_clauses = try self.store.whereClauseSpanFrom(where_clauses_top);
 
     // Check if the where clause is empty
     if (where_clauses.span.len == 0) {
-        // Create diagnostic region pointing to the where keyword
-        const diagnostic_region = AST.TokenizedRegion{ .start = where_start, .end = where_end };
-
-        // Create AST region for the malformed node
-        const ast_region = AST.TokenizedRegion{ .start = where_start, .end = where_end };
-
-        // Add the diagnostic
+        const diagnostic_region = AST.TokenizedRegion{ .start = where_start, .end = self.pos };
         try self.diagnostics.append(self.gpa, .{
             .tag = .where_expected_constraints,
             .region = diagnostic_region,
         });
-
-        // Create the malformed where clause node
-        const malformed_clause = try self.store.addMalformed(AST.WhereClause.Idx, .where_expected_constraints, ast_region);
-
+        const malformed_clause = try self.store.addMalformed(AST.WhereClause.Idx, .where_expected_constraints, diagnostic_region);
         try self.store.addScratchWhereClause(malformed_clause);
         const updated_where_clauses = try self.store.whereClauseSpanFrom(where_clauses_top);
         const coll_id = try self.store.addCollection(.collection_where_clause, .{
-            .region = .{ .start = where_start, .end = where_end },
+            .region = .{ .start = where_start, .end = self.pos },
             .span = updated_where_clauses.span,
         });
         return coll_id;
     }
+
+    // Expect closing bracket ]
+    self.expect(.CloseSquare) catch {
+        const diagnostic_region = AST.TokenizedRegion{ .start = where_start, .end = self.pos };
+        try self.diagnostics.append(self.gpa, .{
+            .tag = .where_expected_close_bracket,
+            .region = diagnostic_region,
+        });
+    };
 
     const coll_id = try self.store.addCollection(.collection_where_clause, .{
         .region = .{ .start = where_start, .end = self.pos },
@@ -1388,6 +1828,19 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) Error!AST.Pattern
                 self.advance();
                 pattern = try self.store.addPattern(.{ .ident = .{
                     .ident_tok = start,
+                    .region = .{ .start = start, .end = self.pos },
+                } });
+            },
+            .KwVar => {
+                // Mutable variable binding in pattern, e.g., `var $x`
+                self.advance();
+                if (self.peek() != .LowerIdent) {
+                    return try self.pushMalformed(AST.Pattern.Idx, .var_must_have_ident, self.pos);
+                }
+                const ident_tok = self.pos;
+                self.advance();
+                pattern = try self.store.addPattern(.{ .var_ident = .{
+                    .ident_tok = ident_tok,
                     .region = .{ .start = start, .end = self.pos },
                 } });
             },
@@ -1847,22 +2300,45 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
         .Int => {
             self.advance();
 
-            // Disallow dot suffixes after Int
-            if (self.peek() == .NoSpaceDotInt or self.peek() == .NoSpaceDotLowerIdent or self.peek() == .DotLowerIdent) {
+            // Disallow NoSpaceDotInt after Int (ambiguous with decimal literals like 35.123)
+            // But allow NoSpaceDotLowerIdent for method calls like 35.to_str()
+            if (self.peek() == .NoSpaceDotInt) {
                 return try self.pushMalformed(AST.Expr.Idx, .expr_dot_suffix_not_allowed, self.pos);
             }
 
-            expr = try self.store.addExpr(.{ .int = .{
-                .token = start,
-                .region = .{ .start = start, .end = self.pos },
-            } });
+            // Check for typed integer syntax: 123.U64
+            if (self.peek() == .NoSpaceDotUpperIdent) {
+                const type_token = self.pos;
+                self.advance();
+                expr = try self.store.addExpr(.{ .typed_int = .{
+                    .token = start,
+                    .type_token = type_token,
+                    .region = .{ .start = start, .end = self.pos },
+                } });
+            } else {
+                expr = try self.store.addExpr(.{ .int = .{
+                    .token = start,
+                    .region = .{ .start = start, .end = self.pos },
+                } });
+            }
         },
         .Float => {
             self.advance();
-            expr = try self.store.addExpr(.{ .frac = .{
-                .token = start,
-                .region = .{ .start = start, .end = self.pos },
-            } });
+            // Check for typed fractional syntax: 3.14.Dec
+            if (self.peek() == .NoSpaceDotUpperIdent) {
+                const type_token = self.pos;
+                self.advance();
+                expr = try self.store.addExpr(.{ .typed_frac = .{
+                    .token = start,
+                    .type_token = type_token,
+                    .region = .{ .start = start, .end = self.pos },
+                } });
+            } else {
+                expr = try self.store.addExpr(.{ .frac = .{
+                    .token = start,
+                    .region = .{ .start = start, .end = self.pos },
+                } });
+            }
         },
         .SingleQuote => {
             self.advance();
@@ -2007,9 +2483,6 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
                             },
                         }
                         lookahead_pos += 1;
-
-                        // Limit lookahead to prevent infinite loops
-                        if (lookahead_pos > saved_pos + 100) break;
                     }
                 }
 
@@ -2055,17 +2528,22 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
             const condition = try self.parseExpr();
             const then = try self.parseExpr();
             if (self.peek() != .KwElse) {
-                // Point to the if keyword for missing else error
-                return try self.pushMalformed(AST.Expr.Idx, .no_else, start);
+                // Statement form: if without else
+                expr = try self.store.addExpr(.{ .if_without_else = .{
+                    .region = .{ .start = start, .end = self.pos },
+                    .condition = condition,
+                    .then = then,
+                } });
+            } else {
+                self.advance();
+                const else_idx = try self.parseExpr();
+                expr = try self.store.addExpr(.{ .if_then_else = .{
+                    .region = .{ .start = start, .end = self.pos },
+                    .condition = condition,
+                    .then = then,
+                    .@"else" = else_idx,
+                } });
             }
-            self.advance();
-            const else_idx = try self.parseExpr();
-            expr = try self.store.addExpr(.{ .if_then_else = .{
-                .region = .{ .start = start, .end = self.pos },
-                .condition = condition,
-                .then = then,
-                .@"else" = else_idx,
-            } });
         },
         .KwMatch => {
             self.advance();
@@ -2082,6 +2560,9 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
                 }
             }
             const branches = try self.store.matchBranchSpanFrom(scratch_top);
+            if (branches.span.len == 0) {
+                return try self.pushMalformed(AST.Expr.Idx, .match_has_no_branches, start);
+            }
             if (self.peek() != .CloseCurly) {
                 return try self.pushMalformed(AST.Expr.Idx, .expected_close_curly_at_end_of_match, self.pos);
             }
@@ -2098,6 +2579,21 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
             expr = try self.store.addExpr(.{ .dbg = .{
                 .region = .{ .start = start, .end = self.pos },
                 .expr = e,
+            } });
+        },
+        .KwFor => {
+            self.advance();
+            const patt = try self.parsePattern(.alternatives_forbidden);
+            self.expect(.KwIn) catch {
+                return try self.pushMalformed(AST.Expr.Idx, .for_expected_in, self.pos);
+            };
+            const list_expr = try self.parseExpr();
+            const body = try self.parseExpr();
+            expr = try self.store.addExpr(.{ .for_expr = .{
+                .region = .{ .start = start, .end = self.pos },
+                .patt = patt,
+                .expr = list_expr,
+                .body = body,
             } });
         },
         .TripleDot => {
@@ -2128,6 +2624,10 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
                 .region = .{ .start = start, .end = self.pos },
             } });
         },
+        .KwReturn => {
+            // Return keyword found in expression context (outside a function/block)
+            return try self.pushMalformed(AST.Expr.Idx, .return_outside_function, start);
+        },
         else => {
             return try self.pushMalformed(AST.Expr.Idx, .expr_unexpected_token, start);
         },
@@ -2135,37 +2635,49 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
     if (expr) |e| {
         var expression = try self.parseExprSuffix(start, e);
 
-        while (self.peek() == .NoSpaceDotInt or self.peek() == .NoSpaceDotLowerIdent or self.peek() == .DotLowerIdent or self.peek() == .OpArrow) {
+        while (self.peek() == .NoSpaceDotInt or self.peek() == .DotInt or self.peek() == .NoSpaceDotLowerIdent or self.peek() == .DotLowerIdent or self.peek() == .OpArrow) {
             const tok = self.peek();
-            if (tok == .NoSpaceDotInt) {
-                return try self.pushMalformed(AST.Expr.Idx, .expr_no_space_dot_int, self.pos);
+            if (tok == .NoSpaceDotInt or tok == .DotInt) {
+                // Tuple element access: tuple.0, tuple.1, etc.
+                const elem_token = self.pos;
+                self.advance();
+                expression = try self.store.addExpr(.{ .tuple_access = .{
+                    .expr = expression,
+                    .elem_token = elem_token,
+                    .region = .{ .start = start, .end = self.pos },
+                } });
             } else if (self.peek() == .OpArrow) {
                 const s = self.pos;
                 self.advance();
-                if (self.peek() == .LowerIdent) {
-                    const empty_qualifiers = try self.store.tokenSpanFrom(self.store.scratchTokenTop());
-                    const ident = try self.store.addExpr(.{ .ident = .{
-                        .region = .{ .start = self.pos, .end = self.pos },
-                        .token = self.pos,
-                        .qualifiers = empty_qualifiers,
-                    } });
-                    self.advance();
-                    const ident_suffixed = try self.parseExprSuffix(s, ident);
-                    expression = try self.store.addExpr(.{ .local_dispatch = .{
-                        .region = .{ .start = start, .end = self.pos },
-                        .operator = s,
-                        .left = expression,
-                        .right = ident_suffixed,
-                    } });
-                } else if (self.peek() == .UpperIdent) { // UpperIdent - should be a tag
-                    const empty_qualifiers = try self.store.tokenSpanFrom(self.store.scratchTokenTop());
-                    const tag = try self.store.addExpr(.{ .tag = .{
-                        .region = .{ .start = self.pos, .end = self.pos },
-                        .token = self.pos,
-                        .qualifiers = empty_qualifiers,
-                    } });
-                    self.advance();
-                    const ident_suffixed = try self.parseExprSuffix(s, tag);
+                const first_token_tag = self.peek();
+                if (first_token_tag == .LowerIdent or first_token_tag == .UpperIdent) {
+                    const ident_start = self.pos;
+                    const qual_result = try self.parseQualificationChain();
+                    // Use final token as end position to avoid newline tokens
+                    self.pos = qual_result.final_token + 1;
+
+                    // Determine if final token is a tag (UpperIdent or ends with NoSpaceDotUpperIdent)
+                    // For unqualified names, check the original token; for qualified names, use is_upper
+                    const is_tag = if (qual_result.qualifiers.span.len == 0)
+                        first_token_tag == .UpperIdent
+                    else
+                        qual_result.is_upper;
+
+                    const expr_node = if (is_tag)
+                        try self.store.addExpr(.{ .tag = .{
+                            .region = .{ .start = ident_start, .end = self.pos },
+                            .token = qual_result.final_token,
+                            .qualifiers = qual_result.qualifiers,
+                        } })
+                    else
+                        try self.store.addExpr(.{ .ident = .{
+                            .region = .{ .start = ident_start, .end = self.pos },
+                            .token = qual_result.final_token,
+                            .qualifiers = qual_result.qualifiers,
+                        } });
+
+                    // Only parse function applications on the right side, not ? suffix
+                    const ident_suffixed = try self.parseExprApplicationSuffix(s, expr_node);
                     expression = try self.store.addExpr(.{ .local_dispatch = .{
                         .region = .{ .start = start, .end = self.pos },
                         .operator = s,
@@ -2184,12 +2696,24 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
                     .token = s,
                     .qualifiers = empty_qualifiers,
                 } });
-                const ident_suffixed = try self.parseExprSuffix(s, ident);
+                // Only parse function applications on the right side, not ? suffix
+                const ident_suffixed = try self.parseExprApplicationSuffix(s, ident);
                 expression = try self.store.addExpr(.{ .field_access = .{
                     .region = .{ .start = start, .end = self.pos },
                     .operator = start,
                     .left = expression,
                     .right = ident_suffixed,
+                } });
+            }
+
+            // Handle ? suffix on the entire field access / local dispatch expression.
+            // This ensures `a.b()?` is parsed as `(a.b())?` rather than `a.(b()?)`.
+            while (self.peek() == .NoSpaceOpQuestion) {
+                self.advance();
+                expression = try self.store.addExpr(.{ .suffix_single_question = .{
+                    .expr = expression,
+                    .operator = start,
+                    .region = .{ .start = start, .end = self.pos },
                 } });
             }
         }
@@ -2215,7 +2739,7 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
     return try self.store.addMalformed(AST.Expr.Idx, .expr_unexpected_token, .{ .start = start, .end = self.pos });
 }
 
-/// todo
+/// Parse suffix operators (function application and question mark) on an expression.
 fn parseExprSuffix(self: *Parser, start: u32, e: AST.Expr.Idx) Error!AST.Expr.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -2263,6 +2787,41 @@ fn parseExprSuffix(self: *Parser, start: u32, e: AST.Expr.Idx) Error!AST.Expr.Id
             // No more suffixes to parse
             break;
         }
+    }
+    return expression;
+}
+
+/// Parse only function application suffixes (not question mark).
+/// Used for the right side of field access where ? should apply to the whole expression.
+fn parseExprApplicationSuffix(self: *Parser, start: u32, e: AST.Expr.Idx) Error!AST.Expr.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    var expression = e;
+
+    // Only handle function applications, not question marks
+    while (self.peek() == .NoSpaceOpenRound) {
+        self.advance();
+        const scratch_top = self.store.scratchExprTop();
+        self.parseCollectionSpan(AST.Expr.Idx, .CloseRound, NodeStore.addScratchExpr, parseExpr) catch |err| {
+            switch (err) {
+                error.ExpectedNotFound => {
+                    self.store.clearScratchExprsFrom(scratch_top);
+                    return try self.pushMalformed(AST.Expr.Idx, .expected_expr_apply_close_round, start);
+                },
+                error.OutOfMemory => return error.OutOfMemory,
+                error.TooNested => return error.TooNested,
+            }
+        };
+        const args = try self.store.exprSpanFrom(scratch_top);
+
+        expression = try self.store.addExpr(.{
+            .apply = .{
+                .args = args,
+                .@"fn" = expression,
+                .region = .{ .start = start, .end = self.pos },
+            },
+        });
     }
     return expression;
 }
@@ -2598,15 +3157,18 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAn
             self.advance(); // Advance past OpenRound
             const after_round = self.pos;
             const scratch_top = self.store.scratchTypeAnnoTop();
+            var saw_comma = false;
             while (self.peek() != .CloseRound and self.peek() != .OpArrow and self.peek() != .OpFatArrow and self.peek() != .EndOfFile) {
                 // Looking for args here so that we don't capture an un-parenthesized fn's args
                 try self.store.addScratchTypeAnno(try self.parseTypeAnno(.looking_for_args));
                 if (self.peek() != .Comma) {
                     break;
                 }
+                saw_comma = true;
                 self.advance(); // Advance past Comma
             }
             if (self.peek() == .OpArrow or self.peek() == .OpFatArrow) {
+                // Arrow inside parens: (a, b -> c)
                 // use the scratch for the args for the func, advance, get the ret and set this to be a fn
                 // since it's a function, as long as we find the CloseRound we can just return here.
                 const args = try self.store.typeAnnoSpanFrom(scratch_top);
@@ -2628,6 +3190,22 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAn
                     .anno = function,
                     .region = .{ .start = start, .end = self.pos },
                 } });
+            } else if (self.peek() == .CloseRound and (self.peekNext() == .OpArrow or self.peekNext() == .OpFatArrow) and self.store.scratchTypeAnnoTop() == scratch_top) {
+                // Empty parens followed by arrow: () => {} or () -> {}
+                // This handles zero-arg functions where the arrow comes after empty parens.
+                // We only enter this branch when the tuple is empty (scratch_top unchanged).
+                self.advance(); // Advance past CloseRound
+                const args = try self.store.typeAnnoSpanFrom(scratch_top);
+                const effectful = self.peek() == .OpFatArrow;
+                self.advance(); // Advance past arrow
+                const ret = try self.parseTypeAnno(.looking_for_args);
+                const function = try self.store.addTypeAnno(.{ .@"fn" = .{
+                    .args = args,
+                    .ret = ret,
+                    .effectful = effectful,
+                    .region = .{ .start = after_round, .end = self.pos },
+                } });
+                anno = function;
             } else {
                 if (self.peek() != .CloseRound) {
                     self.store.clearScratchTypeAnnosFrom(scratch_top);
@@ -2635,42 +3213,102 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAn
                 }
                 self.advance(); // Advance past CloseRound
                 const annos = try self.store.typeAnnoSpanFrom(scratch_top);
-                anno = try self.store.addTypeAnno(.{ .tuple = .{
-                    .region = .{ .start = start, .end = self.pos },
-                    .annos = annos,
-                } });
+                // Single element without comma is parenthesized type, not tuple
+                // e.g., (Str) is parens, (Str,) is 1-element tuple
+                if (annos.span.len == 1 and !saw_comma) {
+                    anno = try self.store.addTypeAnno(.{ .parens = .{
+                        .anno = self.store.typeAnnoSlice(annos)[0],
+                        .region = .{ .start = start, .end = self.pos },
+                    } });
+                } else {
+                    anno = try self.store.addTypeAnno(.{ .tuple = .{
+                        .region = .{ .start = start, .end = self.pos },
+                        .annos = annos,
+                    } });
+                }
             }
         },
         .OpenCurly => {
             self.advance(); // Advance past OpenCurly
             const scratch_top = self.store.scratchAnnoRecordFieldTop();
-            self.parseCollectionSpan(AST.AnnoRecordField.Idx, .CloseCurly, NodeStore.addScratchAnnoRecordField, parseAnnoRecordField) catch |err| {
-                switch (err) {
-                    error.ExpectedNotFound => {
-                        self.store.clearScratchAnnoRecordFieldsFrom(scratch_top);
-                        return try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_close_curly_or_comma, self.pos);
-                    },
-                    error.OutOfMemory => return error.OutOfMemory,
-                    error.TooNested => return error.TooNested,
+            var ext_anno: ?AST.TypeAnno.Idx = null;
+
+            // Parse record fields, with support for record extension
+            while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
+                if (self.peek() == .DoubleDot) {
+                    // Handle record extension: { field: Type, ..ext } or { field: Type, .. }
+                    const double_dot_start = self.pos;
+                    self.advance(); // consume DoubleDot
+
+                    if (self.peek() == .LowerIdent) {
+                        // Parse the extension type variable
+                        ext_anno = try self.parseTypeAnno(.looking_for_args);
+                    } else {
+                        // Anonymous extension (just ..) - create an underscore type annotation
+                        ext_anno = try self.store.addTypeAnno(.{ .underscore = .{
+                            .region = .{ .start = double_dot_start, .end = self.pos },
+                        } });
+                    }
+                    // Break out since .. must be the last element
+                    self.expect(.Comma) catch {};
+                    break;
+                } else {
+                    // Regular record field
+                    try NodeStore.addScratchAnnoRecordField(&self.store, try parseAnnoRecordField(self));
+                    self.expect(.Comma) catch {
+                        break;
+                    };
                 }
+            }
+            self.expect(.CloseCurly) catch {
+                self.store.clearScratchAnnoRecordFieldsFrom(scratch_top);
+                return try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_close_curly_or_comma, self.pos);
             };
             const fields = try self.store.annoRecordFieldSpanFrom(scratch_top);
             anno = try self.store.addTypeAnno(.{ .record = .{
                 .region = .{ .start = start, .end = self.pos },
                 .fields = fields,
+                .ext = ext_anno,
             } });
         },
         .OpenSquare => {
             self.advance(); // Advance past OpenSquare
             const scratch_top = self.store.scratchTypeAnnoTop();
-            self.parseCollectionSpan(AST.TypeAnno.Idx, .CloseSquare, NodeStore.addScratchTypeAnno, parseTypeAnnoInCollection) catch {
+            var ext: AST.TypeAnno.TagUnionExt = .closed;
+
+            // Parse tag union elements, with support for open union extension
+            while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
+                if (self.peek() == .DoubleDot) {
+                    // Handle open tag union extension: [Tag, ..ext] or [Tag, .._ext] or [Tag, ..]
+                    const double_dot_pos = self.pos;
+                    self.advance(); // consume DoubleDot
+
+                    if (self.peek() == .LowerIdent or self.peek() == .NamedUnderscore) {
+                        // Parse the named extension type variable
+                        ext = .{ .named = try self.parseTypeAnno(.looking_for_args) };
+                    } else {
+                        // Anonymous extension (just ..) - store the DoubleDot token position
+                        ext = .{ .open = double_dot_pos };
+                    }
+                    // Break out since .. must be the last element
+                    self.expect(.Comma) catch {};
+                    break;
+                } else {
+                    // Regular tag in the union
+                    try NodeStore.addScratchTypeAnno(&self.store, try parseTypeAnnoInCollection(self));
+                    self.expect(.Comma) catch {
+                        break;
+                    };
+                }
+            }
+            self.expect(.CloseSquare) catch {
                 self.store.clearScratchTypeAnnosFrom(scratch_top);
                 return try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_close_square_or_comma, self.pos);
             };
             const tags = try self.store.typeAnnoSpanFrom(scratch_top);
             anno = try self.store.addTypeAnno(.{ .tag_union = .{
                 .region = .{ .start = start, .end = self.pos },
-                .open_anno = null,
+                .ext = ext,
                 .tags = tags,
             } });
         },
@@ -2693,9 +3331,13 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAn
         const next_is_not_lower_ident = next_tok != .LowerIdent;
         const not_followed_by_colon = two_away_tok != .OpColon;
         const two_away_is_arrow = two_away_tok == .OpArrow or two_away_tok == .OpFatArrow;
-        if ((looking_for_args == .not_looking_for_args) and
+        // Don't treat comma as function argument separator if followed by:
+        // - CloseCurly (end of record)
+        // - DoubleDot (record extension like { field: Type, ..ext })
+        // - CloseSquare (where clause)
+        if (looking_for_args == .not_looking_for_args and
             (curr_is_arrow or
-                (curr == .Comma and (next_is_not_lower_ident or not_followed_by_colon or two_away_is_arrow) and next_tok != .CloseCurly)))
+                (curr == .Comma and (next_is_not_lower_ident or not_followed_by_colon or two_away_is_arrow) and next_tok != .CloseCurly and next_tok != .DoubleDot and next_tok != .CloseSquare)))
         {
             const scratch_top = self.store.scratchTypeAnnoTop();
             try self.store.addScratchTypeAnno(an);
@@ -2764,164 +3406,94 @@ pub fn parseAnnoRecordField(self: *Parser) Error!AST.AnnoRecordField.Idx {
 
 /// Parse a where clause
 ///
-/// e.g. `a.hash(hasher) -> hasher`
-/// e.g. `hasher.Hasher`
-/// e.g. `module(a).decode(List(U8)) -> a`
+/// e.g. `a.hash : a -> U64`
+/// e.g. `a.Hasher : Type`
 pub fn parseWhereClause(self: *Parser) Error!AST.WhereClause.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     const start = self.pos;
-    if (self.peek() == .KwModule) {
-        // Parsing a mod_method clause
-        self.advance();
-        self.expect(.NoSpaceOpenRound) catch {
-            return try self.pushMalformed(
-                AST.WhereClause.Idx,
-                .where_expected_mod_open,
-                start,
-            );
-        };
-        const var_tok = self.pos;
-        self.expect(.LowerIdent) catch {
-            return try self.pushMalformed(
-                AST.WhereClause.Idx,
-                .where_expected_var,
-                start,
-            );
-        };
-        self.expect(.CloseRound) catch {
-            return try self.pushMalformed(
-                AST.WhereClause.Idx,
-                .where_expected_mod_close,
-                start,
-            );
-        };
-        const name_tok = self.pos;
-        if (self.peek() != .NoSpaceDotLowerIdent and self.peek() != .DotLowerIdent and self.peek() != .NoSpaceDotUpperIdent and self.peek() != .DotUpperIdent) {
-            return try self.pushMalformed(
-                AST.WhereClause.Idx,
-                .where_expected_method_or_alias_name,
-                start,
-            );
-        }
-        self.advance();
 
-        // Check if this is a type alias (uppercase identifier)
-        const current_token_tag = self.tok_buf.tokens.items(.tag)[name_tok];
-        if (current_token_tag == .NoSpaceDotUpperIdent or current_token_tag == .DotUpperIdent) {
-            // Type alias case: module(a).TypeAlias
-            return try self.store.addWhereClause(.{ .mod_alias = .{
-                .region = .{ .start = start, .end = self.pos },
-                .name_tok = name_tok,
-                .var_tok = var_tok,
-            } });
-        }
-
-        if (self.peek() == .OpColon) {
-            // Handle type annotation syntax: module(a).method : type
-            self.advance(); // advance past colon
-            const args_start = self.pos;
-            const method_type_anno = try self.parseTypeAnno(.not_looking_for_args);
-            const method_type = self.store.getTypeAnno(method_type_anno);
-
-            // Check if the type annotation is a function type
-            if (method_type == .@"fn") {
-                // Function type: extract args and return type
-                const fn_type = method_type.@"fn";
-                const args = try self.store.addCollection(
-                    .collection_ty_anno,
-                    .{
-                        .region = .{ .start = args_start, .end = self.pos },
-                        .span = fn_type.args.span,
-                    },
-                );
-                return try self.store.addWhereClause(.{ .mod_method = .{
-                    .region = .{ .start = start, .end = self.pos },
-                    .name_tok = name_tok,
-                    .var_tok = var_tok,
-                    .args = args,
-                    .ret_anno = fn_type.ret,
-                } });
-            } else {
-                // Non-function type: treat as zero-argument method
-                const empty_args = try self.store.addCollection(
-                    .collection_ty_anno,
-                    .{
-                        .region = .{ .start = args_start, .end = self.pos },
-                        .span = base.DataSpan.empty(),
-                    },
-                );
-                return try self.store.addWhereClause(.{ .mod_method = .{
-                    .region = .{ .start = start, .end = self.pos },
-                    .name_tok = name_tok,
-                    .var_tok = var_tok,
-                    .args = empty_args,
-                    .ret_anno = method_type_anno,
-                } });
-            }
-        } else if (self.peek() == .OpArrow) {
-            // Handle case where user forgot the colon: module(a).method -> Type
-            return try self.pushMalformed(
-                AST.WhereClause.Idx,
-                .where_expected_colon,
-                start,
-            );
-        } else {
-            // Handle method call syntax: module(a).method(args) -> ret
-            const arg_start = self.pos;
-            self.expect(.NoSpaceOpenRound) catch {
-                return try self.pushMalformed(
-                    AST.WhereClause.Idx,
-                    .where_expected_arg_open,
-                    start,
-                );
-            };
-            const ty_anno_top = self.store.scratchTypeAnnoTop();
-            self.parseCollectionSpan(
-                AST.TypeAnno.Idx,
-                .CloseRound,
-                NodeStore.addScratchTypeAnno,
-                Parser.parseTypeAnnoInCollection,
-            ) catch {
-                self.store.clearScratchTypeAnnosFrom(ty_anno_top);
-                return try self.pushMalformed(
-                    AST.WhereClause.Idx,
-                    .where_expected_arg_close,
-                    start,
-                );
-            };
-            const arg_span = try self.store.typeAnnoSpanFrom(ty_anno_top);
-            const args = try self.store.addCollection(
-                .collection_ty_anno,
-                .{
-                    .region = .{ .start = arg_start, .end = self.pos },
-                    .span = arg_span.span,
-                },
-            );
-            self.expect(.OpArrow) catch {
-                return try self.pushMalformed(
-                    AST.WhereClause.Idx,
-                    .where_expected_method_arrow,
-                    start,
-                );
-            };
-            const ret_ty_anno = try self.parseTypeAnnoInCollection();
-            return try self.store.addWhereClause(.{ .mod_method = .{
-                .region = .{ .start = start, .end = self.pos },
-                .name_tok = name_tok,
-                .var_tok = var_tok,
-                .args = args,
-                .ret_anno = ret_ty_anno,
-            } });
-        }
-    } else {
-        // Only module(a).method syntax is supported
+    // Expect lower identifier (type variable)
+    const var_tok = self.pos;
+    self.expect(.LowerIdent) catch {
         return try self.pushMalformed(
             AST.WhereClause.Idx,
-            .where_expected_module,
+            .where_expected_var,
             start,
         );
+    };
+
+    // Expect dot followed by method/alias name
+    const name_tok = self.pos;
+    if (self.peek() != .NoSpaceDotLowerIdent and self.peek() != .DotLowerIdent and self.peek() != .NoSpaceDotUpperIdent and self.peek() != .DotUpperIdent) {
+        return try self.pushMalformed(
+            AST.WhereClause.Idx,
+            .where_expected_method_or_alias_name,
+            start,
+        );
+    }
+    self.advance();
+
+    // Check if this is a type alias (uppercase identifier)
+    const current_token_tag = self.tok_buf.tokens.items(.tag)[name_tok];
+    if (current_token_tag == .NoSpaceDotUpperIdent or current_token_tag == .DotUpperIdent) {
+        // Type alias case: a.TypeAlias
+        return try self.store.addWhereClause(.{ .mod_alias = .{
+            .region = .{ .start = start, .end = self.pos },
+            .name_tok = name_tok,
+            .var_tok = var_tok,
+        } });
+    }
+
+    // Expect colon
+    self.expect(.OpColon) catch {
+        return try self.pushMalformed(
+            AST.WhereClause.Idx,
+            .where_expected_colon,
+            start,
+        );
+    };
+
+    // Parse type annotation
+    const args_start = self.pos;
+    const method_type_anno = try self.parseTypeAnno(.not_looking_for_args);
+    const method_type = self.store.getTypeAnno(method_type_anno);
+
+    // Check if the type annotation is a function type
+    if (method_type == .@"fn") {
+        // Function type: extract args and return type
+        const fn_type = method_type.@"fn";
+        const args = try self.store.addCollection(
+            .collection_ty_anno,
+            .{
+                .region = .{ .start = args_start, .end = self.pos },
+                .span = fn_type.args.span,
+            },
+        );
+        return try self.store.addWhereClause(.{ .mod_method = .{
+            .region = .{ .start = start, .end = self.pos },
+            .name_tok = name_tok,
+            .var_tok = var_tok,
+            .args = args,
+            .ret_anno = fn_type.ret,
+        } });
+    } else {
+        // Non-function type: treat as zero-argument method
+        const empty_args = try self.store.addCollection(
+            .collection_ty_anno,
+            .{
+                .region = .{ .start = args_start, .end = self.pos },
+                .span = base.DataSpan.empty(),
+            },
+        );
+        return try self.store.addWhereClause(.{ .mod_method = .{
+            .region = .{ .start = start, .end = self.pos },
+            .name_tok = name_tok,
+            .var_tok = var_tok,
+            .args = empty_args,
+            .ret_anno = method_type_anno,
+        } });
     }
 }
 
@@ -3022,6 +3594,35 @@ pub fn parseRecord(self: *Parser, start: u32) Error!AST.Expr.Idx {
         }
     };
     const fields = try self.store.recordFieldSpanFrom(scratch_top);
+
+    // Check for record builder suffix: { ... }.TypeName
+    if (self.peek() == .NoSpaceDotUpperIdent) {
+        const suffix_start = self.pos;
+        var final_token = self.pos;
+        self.advance();
+
+        // Parse any additional qualifiers (e.g., .Foo.Bar.Baz)
+        const token_scratch_top = self.store.scratchTokenTop();
+        while (self.peek() == .NoSpaceDotUpperIdent) {
+            try self.store.addScratchToken(final_token);
+            final_token = self.pos;
+            self.advance();
+        }
+        const qualifiers = try self.store.tokenSpanFrom(token_scratch_top);
+
+        const mapper = try self.store.addExpr(.{ .tag = .{
+            .region = .{ .start = suffix_start, .end = self.pos },
+            .token = final_token,
+            .qualifiers = qualifiers,
+        } });
+
+        return try self.store.addExpr(.{ .record_builder = .{
+            .mapper = mapper,
+            .fields = fields,
+            .region = .{ .start = start, .end = self.pos },
+        } });
+    }
+
     return try self.store.addExpr(.{ .record = .{
         .fields = fields,
         .ext = null,
@@ -3039,7 +3640,7 @@ fn getTokenBP(tok: Token.Tag) ?BinOpBp {
         .OpSlash => .{ .left = 28, .right = 29 }, // 29 LEFT
         .OpDoubleSlash => .{ .left = 26, .right = 27 }, // 27 LEFT
         .OpPercent => .{ .left = 24, .right = 25 }, // 25 LEFT
-        .OpPlus => .{ .left = 22, .right = 23 }, // 23 LEFT
+        .OpPlus => .{ .left = 20, .right = 21 }, // 21 LEFT
         .OpBinaryMinus => .{ .left = 20, .right = 21 }, // 21 LEFT
         .OpDoubleQuestion => .{ .left = 18, .right = 19 }, // 19 LEFT
         .OpQuestion => .{ .left = 16, .right = 17 }, // 17 LEFT

@@ -2,16 +2,15 @@
 
 const std = @import("std");
 const base = @import("base");
-const parse = @import("parse");
 
 const CIR = @import("../CIR.zig");
 const Can = @import("../Can.zig");
 const ModuleEnv = @import("../ModuleEnv.zig");
-const Ident = base.Ident;
-const Region = base.Region;
 const Scope = @import("../Scope.zig");
+const Ident = base.Ident;
 const Pattern = CIR.Pattern;
 const TypeAnno = CIR.TypeAnno;
+const Allocators = base.Allocators;
 
 /// Context helper for Scope tests
 const ScopeTestContext = struct {
@@ -23,10 +22,14 @@ const ScopeTestContext = struct {
         // heap allocate ModuleEnv for testing
         const module_env = try gpa.create(ModuleEnv);
         module_env.* = try ModuleEnv.init(gpa, "");
-        try module_env.initCIRFields(gpa, "test");
+        try module_env.initCIRFields("test");
+
+        var allocators: Allocators = undefined;
+        allocators.initInPlace(gpa);
+        defer allocators.deinit();
 
         return ScopeTestContext{
-            .self = try Can.init(module_env, undefined, null, .{}),
+            .self = try Can.init(&allocators, module_env, undefined, null),
             .module_env = module_env,
             .gpa = gpa,
         };
@@ -185,13 +188,13 @@ test "var reassignment within same function" {
     const declare_result = ctx.self.scopeIntroduceInternal(gpa, .ident, count_ident, pattern1, true, true);
     try std.testing.expectEqual(Scope.IntroduceResult{ .success = {} }, declare_result);
 
-    // Reassign var (not a declaration)
+    // Reassign var (not a declaration) - returns the existing pattern for reuse
     const reassign_result = ctx.self.scopeIntroduceInternal(gpa, .ident, count_ident, pattern2, true, false);
-    try std.testing.expectEqual(Scope.IntroduceResult{ .success = {} }, reassign_result);
+    try std.testing.expectEqual(Scope.IntroduceResult{ .var_reassignment_ok = pattern1 }, reassign_result);
 
-    // Should resolve to the reassigned value
+    // Should still resolve to original pattern (var reassignment reuses existing pattern)
     const lookup_result = ctx.self.scopeLookup(.ident, count_ident);
-    try std.testing.expectEqual(Scope.LookupResult{ .found = pattern2 }, lookup_result);
+    try std.testing.expectEqual(Scope.LookupResult{ .found = pattern1 }, lookup_result);
 }
 
 test "var reassignment across function boundary fails" {

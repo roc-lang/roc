@@ -1067,27 +1067,36 @@ trait Backend<'a> {
             LowLevel::NumAddChecked => {
                 self.build_num_add_checked(sym, &args[0], &args[1], &arg_layouts[0], ret_layout)
             }
-            LowLevel::NumAcos => self.build_fn_call(
-                sym,
-                bitcode::NUM_ACOS[FloatWidth::F64].to_string(),
-                args,
-                arg_layouts,
-                ret_layout,
-            ),
-            LowLevel::NumAsin => self.build_fn_call(
-                sym,
-                bitcode::NUM_ASIN[FloatWidth::F64].to_string(),
-                args,
-                arg_layouts,
-                ret_layout,
-            ),
-            LowLevel::NumAtan => self.build_fn_call(
-                sym,
-                bitcode::NUM_ATAN[FloatWidth::F64].to_string(),
-                args,
-                arg_layouts,
-                ret_layout,
-            ),
+            LowLevel::NumAcos => {
+                let intrinsic = match arg_layouts[0] {
+                    Layout::F64 => &bitcode::NUM_ACOS[FloatWidth::F64],
+                    Layout::F32 => &bitcode::NUM_ACOS[FloatWidth::F32],
+                    Layout::DEC => bitcode::DEC_ACOS,
+                    _ => unreachable!("invalid layout for acos"),
+                };
+
+                self.build_fn_call(sym, intrinsic.to_string(), args, arg_layouts, ret_layout)
+            }
+            LowLevel::NumAsin => {
+                let intrinsic = match arg_layouts[0] {
+                    Layout::F64 => &bitcode::NUM_ASIN[FloatWidth::F64],
+                    Layout::F32 => &bitcode::NUM_ASIN[FloatWidth::F32],
+                    Layout::DEC => bitcode::DEC_ASIN,
+                    _ => unreachable!("invalid layout for asin"),
+                };
+
+                self.build_fn_call(sym, intrinsic.to_string(), args, arg_layouts, ret_layout)
+            }
+            LowLevel::NumAtan => {
+                let intrinsic = match arg_layouts[0] {
+                    Layout::F64 => &bitcode::NUM_ATAN[FloatWidth::F64],
+                    Layout::F32 => &bitcode::NUM_ATAN[FloatWidth::F32],
+                    Layout::DEC => bitcode::DEC_ATAN,
+                    _ => unreachable!("invalid layout for atan"),
+                };
+
+                self.build_fn_call(sym, intrinsic.to_string(), args, arg_layouts, ret_layout)
+            }
             LowLevel::NumMul => self.build_num_mul(sym, &args[0], &args[1], ret_layout),
             LowLevel::NumMulWrap => self.build_num_mul_wrap(sym, &args[0], &args[1], ret_layout),
             LowLevel::NumMulSaturated => {

@@ -9,7 +9,7 @@ type=snippet
 }
 ~~~
 # EXPECTED
-UNCLOSED STRING - :0:0:0:0
+UNCLOSED STRING - fuzz_crash_060.md:1:2:1:3
 PARSE ERROR - fuzz_crash_060.md:1:1:1:2
 PARSE ERROR - fuzz_crash_060.md:1:2:1:3
 PARSE ERROR - fuzz_crash_060.md:1:3:1:3
@@ -19,6 +19,7 @@ PARSE ERROR - fuzz_crash_060.md:2:1:2:2
 **UNCLOSED STRING**
 This string is missing a closing quote.
 
+**fuzz_crash_060.md:1:2:1:3:**
 ```roc
 0"
 ```
@@ -82,20 +83,20 @@ This is an unexpected parsing error. Please check your syntax.
 
 # TOKENS
 ~~~zig
-Int(1:1-1:2),StringStart(1:2-1:3),StringPart(1:3-1:3),StringEnd(1:3-1:3),
-CloseCurly(2:1-2:2),
-EndOfFile(3:1-3:1),
+Int,StringStart,StringPart,StringEnd,
+CloseCurly,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-2.2
-	(type-module @1.1-1.2)
+(file
+	(type-module)
 	(statements
-		(s-malformed @1.1-1.2 (tag "statement_unexpected_token"))
-		(s-malformed @1.2-1.3 (tag "statement_unexpected_token"))
-		(s-malformed @1.3-1.3 (tag "statement_unexpected_token"))
-		(s-malformed @1.3-1.3 (tag "statement_unexpected_token"))
-		(s-malformed @2.1-2.2 (tag "statement_unexpected_token"))))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc

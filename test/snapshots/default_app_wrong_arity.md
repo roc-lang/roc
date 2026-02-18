@@ -42,25 +42,25 @@ main! = |arg1, arg2| {
 
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:6),OpAssign(1:7-1:8),OpBar(1:9-1:10),LowerIdent(1:10-1:14),Comma(1:14-1:15),LowerIdent(1:16-1:20),OpBar(1:20-1:21),OpenCurly(1:22-1:23),
-LowerIdent(2:5-2:9),
-CloseCurly(3:1-3:2),
-EndOfFile(4:1-4:1),
+LowerIdent,OpAssign,OpBar,LowerIdent,Comma,LowerIdent,OpBar,OpenCurly,
+LowerIdent,
+CloseCurly,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-3.2
-	(type-module @1.1-1.6)
+(file
+	(type-module)
 	(statements
-		(s-decl @1.1-3.2
-			(p-ident @1.1-1.6 (raw "main!"))
-			(e-lambda @1.9-3.2
+		(s-decl
+			(p-ident (raw "main!"))
+			(e-lambda
 				(args
-					(p-ident @1.10-1.14 (raw "arg1"))
-					(p-ident @1.16-1.20 (raw "arg2")))
-				(e-block @1.22-3.2
+					(p-ident (raw "arg1"))
+					(p-ident (raw "arg2")))
+				(e-block
 					(statements
-						(e-ident @2.5-2.9 (raw "arg1"))))))))
+						(e-ident (raw "arg1"))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -72,20 +72,20 @@ main! = |arg1, arg2| {
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @1.1-1.6 (ident "main!"))
-		(e-lambda @1.9-3.2
+		(p-assign (ident "main!"))
+		(e-lambda
 			(args
-				(p-assign @1.10-1.14 (ident "arg1"))
-				(p-assign @1.16-1.20 (ident "arg2")))
-			(e-block @1.22-3.2
-				(e-lookup-local @2.5-2.9
-					(p-assign @1.10-1.14 (ident "arg1")))))))
+				(p-assign (ident "arg1"))
+				(p-assign (ident "arg2")))
+			(e-block
+				(e-lookup-local
+					(p-assign (ident "arg1")))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @1.1-1.6 (type "a, _arg -> a")))
+		(patt (type "a, _arg -> a")))
 	(expressions
-		(expr @1.9-3.2 (type "a, _arg -> a"))))
+		(expr (type "a, _arg -> a"))))
 ~~~

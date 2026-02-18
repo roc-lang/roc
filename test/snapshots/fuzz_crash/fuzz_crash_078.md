@@ -23,15 +23,15 @@ This is an unexpected parsing error. Please check your syntax.
 
 # TOKENS
 ~~~zig
-KwImport(1:1-1:7),
-EndOfFile(2:1-2:1),
+KwImport,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-1.7
-	(type-module @1.1-1.7)
+(file
+	(type-module)
 	(statements
-		(s-malformed @1.1-1.7 (tag "incomplete_import"))))
+		(s-malformed (tag "incomplete_import"))))
 ~~~
 # FORMATTED
 ~~~roc

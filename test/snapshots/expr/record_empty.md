@@ -13,12 +13,12 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-OpenCurly(1:1-1:2),CloseCurly(1:2-1:3),
-EndOfFile(2:1-2:1),
+OpenCurly,CloseCurly,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-record @1.1-1.3)
+(e-record)
 ~~~
 # FORMATTED
 ~~~roc
@@ -26,9 +26,9 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-empty_record @1.1-1.3)
+(e-empty_record)
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.3 (type "{}"))
+(expr (type "{}"))
 ~~~

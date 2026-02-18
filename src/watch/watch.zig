@@ -39,10 +39,6 @@ const FSEventStreamContext = extern struct {
     copyDescription: ?*const anyopaque,
 };
 
-// Check if we're compiling for native macOS (not cross-compiling)
-// We use a weak linkage approach to handle cross-compilation
-const is_native_macos = builtin.os.tag == .macos;
-
 // Only declare real externs when we're actually using them
 const macos_externs = if (use_real_fsevents) struct {
     // Mark functions as weak so they're optional during cross-compilation
@@ -55,7 +51,7 @@ const macos_externs = if (use_real_fsevents) struct {
             eventPaths: *anyopaque,
             eventFlags: [*]const FSEventStreamEventFlags,
             eventIds: [*]const FSEventStreamEventId,
-        ) callconv(.C) void,
+        ) callconv(.c) void,
         context: ?*FSEventStreamContext,
         pathsToWatch: CFArrayRef,
         sinceWhen: FSEventStreamEventId,
@@ -106,67 +102,45 @@ const macos_externs = if (use_real_fsevents) struct {
 // Stub implementations for cross-compilation
 const macos_stubs = struct {
     fn FSEventStreamCreate(
-        allocator: CFAllocatorRef,
-        callback: *const fn (
+        _: CFAllocatorRef,
+        _: *const fn (
             streamRef: FSEventStreamRef,
             clientCallBackInfo: ?*anyopaque,
             numEvents: usize,
             eventPaths: *anyopaque,
             eventFlags: [*]const FSEventStreamEventFlags,
             eventIds: [*]const FSEventStreamEventId,
-        ) callconv(.C) void,
-        context: ?*FSEventStreamContext,
-        pathsToWatch: CFArrayRef,
-        sinceWhen: FSEventStreamEventId,
-        latency: CFAbsoluteTime,
-        flags: FSEventStreamCreateFlags,
+        ) callconv(.c) void,
+        _: ?*FSEventStreamContext,
+        _: CFArrayRef,
+        _: FSEventStreamEventId,
+        _: CFAbsoluteTime,
+        _: FSEventStreamCreateFlags,
     ) ?FSEventStreamRef {
-        _ = allocator;
-        _ = callback;
-        _ = context;
-        _ = pathsToWatch;
-        _ = sinceWhen;
-        _ = latency;
-        _ = flags;
         return null;
     }
 
     fn FSEventStreamScheduleWithRunLoop(
-        streamRef: FSEventStreamRef,
-        runLoop: CFRunLoopRef,
-        runLoopMode: CFStringRef,
-    ) void {
-        _ = streamRef;
-        _ = runLoop;
-        _ = runLoopMode;
-    }
+        _: FSEventStreamRef,
+        _: CFRunLoopRef,
+        _: CFStringRef,
+    ) void {}
 
-    fn FSEventStreamStart(streamRef: FSEventStreamRef) bool {
-        _ = streamRef;
+    fn FSEventStreamStart(_: FSEventStreamRef) bool {
         return false;
     }
 
-    fn FSEventStreamStop(streamRef: FSEventStreamRef) void {
-        _ = streamRef;
-    }
+    fn FSEventStreamStop(_: FSEventStreamRef) void {}
 
     fn FSEventStreamUnscheduleFromRunLoop(
-        streamRef: FSEventStreamRef,
-        runLoop: CFRunLoopRef,
-        runLoopMode: CFStringRef,
-    ) void {
-        _ = streamRef;
-        _ = runLoop;
-        _ = runLoopMode;
-    }
+        _: FSEventStreamRef,
+        _: CFRunLoopRef,
+        _: CFStringRef,
+    ) void {}
 
-    fn FSEventStreamInvalidate(streamRef: FSEventStreamRef) void {
-        _ = streamRef;
-    }
+    fn FSEventStreamInvalidate(_: FSEventStreamRef) void {}
 
-    fn FSEventStreamRelease(streamRef: FSEventStreamRef) void {
-        _ = streamRef;
-    }
+    fn FSEventStreamRelease(_: FSEventStreamRef) void {}
 
     fn CFRunLoopGetCurrent() CFRunLoopRef {
         return @ptrFromInt(1);
@@ -174,44 +148,30 @@ const macos_stubs = struct {
 
     fn CFRunLoopRun() void {}
 
-    fn CFRunLoopRunInMode(mode: CFStringRef, seconds: CFAbsoluteTime, returnAfterSourceHandled: bool) i32 {
-        _ = mode;
-        _ = seconds;
-        _ = returnAfterSourceHandled;
+    fn CFRunLoopRunInMode(_: CFStringRef, _: CFAbsoluteTime, _: bool) i32 {
         return 0;
     }
 
-    fn CFRunLoopStop(rl: CFRunLoopRef) void {
-        _ = rl;
-    }
+    fn CFRunLoopStop(_: CFRunLoopRef) void {}
 
     fn CFArrayCreate(
-        allocator: CFAllocatorRef,
-        values: [*]const ?*const anyopaque,
-        numValues: CFIndex,
-        callBacks: ?*const anyopaque,
+        _: CFAllocatorRef,
+        _: [*]const ?*const anyopaque,
+        _: CFIndex,
+        _: ?*const anyopaque,
     ) ?CFArrayRef {
-        _ = allocator;
-        _ = values;
-        _ = numValues;
-        _ = callBacks;
         return null;
     }
 
     fn CFStringCreateWithCString(
-        alloc: CFAllocatorRef,
-        cStr: [*:0]const u8,
-        encoding: u32,
+        _: CFAllocatorRef,
+        _: [*:0]const u8,
+        _: u32,
     ) ?CFStringRef {
-        _ = alloc;
-        _ = cStr;
-        _ = encoding;
         return null;
     }
 
-    fn CFRelease(cf: ?*anyopaque) void {
-        _ = cf;
-    }
+    fn CFRelease(_: ?*anyopaque) void {}
 
     const kCFRunLoopDefaultMode: CFStringRef = @ptrFromInt(1);
 };
@@ -272,7 +232,7 @@ pub const Watcher = struct {
 
     const LinuxData = struct {
         inotify_fd: i32,
-        watch_descriptors: std.ArrayList(WatchDescriptor),
+        watch_descriptors: std.array_list.Managed(WatchDescriptor),
         path_cache: std.StringHashMap([]const u8),
 
         const WatchDescriptor = struct {
@@ -282,8 +242,8 @@ pub const Watcher = struct {
     };
 
     const WindowsData = struct {
-        handles: std.ArrayList(std.os.windows.HANDLE),
-        overlapped_data: std.ArrayList(OverlappedData),
+        handles: std.array_list.Managed(std.os.windows.HANDLE),
+        overlapped_data: std.array_list.Managed(OverlappedData),
         stop_event: ?std.os.windows.HANDLE,
 
         const OverlappedData = struct {
@@ -319,12 +279,12 @@ pub const Watcher = struct {
                 },
                 .linux => LinuxData{
                     .inotify_fd = -1,
-                    .watch_descriptors = std.ArrayList(LinuxData.WatchDescriptor).init(allocator),
+                    .watch_descriptors = std.array_list.Managed(LinuxData.WatchDescriptor).init(allocator),
                     .path_cache = std.StringHashMap([]const u8).init(allocator),
                 },
                 .windows => WindowsData{
-                    .handles = std.ArrayList(std.os.windows.HANDLE).init(allocator),
-                    .overlapped_data = std.ArrayList(WindowsData.OverlappedData).init(allocator),
+                    .handles = std.array_list.Managed(std.os.windows.HANDLE).init(allocator),
+                    .overlapped_data = std.array_list.Managed(WindowsData.OverlappedData).init(allocator),
                     .stop_event = null,
                 },
                 else => unreachable,
@@ -570,17 +530,13 @@ pub const Watcher = struct {
     }
 
     fn fsEventsCallback(
-        streamRef: FSEventStreamRef,
+        _: FSEventStreamRef,
         clientCallBackInfo: ?*anyopaque,
         numEvents: usize,
         eventPaths: *anyopaque,
-        eventFlags: [*]const FSEventStreamEventFlags,
-        eventIds: [*]const FSEventStreamEventId,
-    ) callconv(.C) void {
-        _ = streamRef;
-        _ = eventFlags;
-        _ = eventIds;
-
+        _: [*]const FSEventStreamEventFlags,
+        _: [*]const FSEventStreamEventId,
+    ) callconv(.c) void {
         if (clientCallBackInfo == null) return;
 
         const self: *Watcher = @ptrCast(@alignCast(clientCallBackInfo.?));
@@ -638,10 +594,12 @@ pub const Watcher = struct {
 
             if (poll_result == 0) continue;
 
-            const bytes_read = std.posix.read(self.impl.inotify_fd, &buffer) catch |err| {
-                if (err == error.WouldBlock) continue;
-                std.log.err("Read error: {}", .{err});
-                continue;
+            const bytes_read = std.posix.read(self.impl.inotify_fd, &buffer) catch |err| switch (err) {
+                error.WouldBlock => continue,
+                else => {
+                    std.log.err("Read error: {}", .{err});
+                    continue;
+                },
             };
 
             self.processLinuxEvents(buffer[0..bytes_read]);
@@ -896,7 +854,7 @@ pub const Watcher = struct {
 
         // Allocate buffer for ReadDirectoryChangesW
         const buffer_size = 4096;
-        const buffer = try self.allocator.alignedAlloc(u8, @alignOf(std.os.windows.FILE_NOTIFY_INFORMATION), buffer_size);
+        const buffer = try self.allocator.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(@alignOf(std.os.windows.FILE_NOTIFY_INFORMATION)), buffer_size);
 
         // Create overlapped data
         var overlapped_data = WindowsData.OverlappedData{
@@ -1041,7 +999,7 @@ pub const Watcher = struct {
     }
 };
 
-// ===== TESTS =====
+// TESTS
 
 fn waitForEvents(event_count: *std.atomic.Value(u32), expected: u32, max_wait_ms: u32) !void {
     // When using stubs, don't wait for events since they won't be generated
@@ -1130,8 +1088,7 @@ test "recursive directory watching" {
     };
 
     const callback = struct {
-        fn cb(event: WatchEvent) void {
-            _ = event;
+        fn cb(_: WatchEvent) void {
             _ = global.event_count.fetchAdd(1, .seq_cst);
         }
     }.cb;
@@ -1167,8 +1124,7 @@ test "multiple directories watching" {
     };
 
     const callback = struct {
-        fn cb(event: WatchEvent) void {
-            _ = event;
+        fn cb(_: WatchEvent) void {
             _ = global.event_count.fetchAdd(1, .seq_cst);
         }
     }.cb;
@@ -1205,8 +1161,7 @@ test "file modification detection" {
     };
 
     const callback = struct {
-        fn cb(event: WatchEvent) void {
-            _ = event;
+        fn cb(_: WatchEvent) void {
             _ = global.event_count.fetchAdd(1, .seq_cst);
         }
     }.cb;
@@ -1238,8 +1193,7 @@ test "rapid file creation" {
     };
 
     const callback = struct {
-        fn cb(event: WatchEvent) void {
-            _ = event;
+        fn cb(_: WatchEvent) void {
             _ = global.event_count.fetchAdd(1, .seq_cst);
         }
     }.cb;
@@ -1284,8 +1238,7 @@ test "directory creation and file addition" {
     };
 
     const callback = struct {
-        fn cb(event: WatchEvent) void {
-            _ = event;
+        fn cb(_: WatchEvent) void {
             _ = global.event_count.fetchAdd(1, .seq_cst);
         }
     }.cb;
@@ -1325,8 +1278,7 @@ test "start stop restart" {
     };
 
     const callback = struct {
-        fn cb(event: WatchEvent) void {
-            _ = event;
+        fn cb(_: WatchEvent) void {
             _ = global.event_count.fetchAdd(1, .seq_cst);
         }
     }.cb;
@@ -1368,18 +1320,17 @@ test "thread safety" {
     const global = struct {
         var event_count: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
         var mutex: std.Thread.Mutex = .{};
-        var events: std.ArrayList([]const u8) = undefined;
+        var events: std.ArrayList([]const u8) = .empty;
     };
 
-    global.events = std.ArrayList([]const u8).init(allocator);
-    defer global.events.deinit();
+    defer global.events.deinit(allocator);
 
     const callback = struct {
         fn cb(event: WatchEvent) void {
             _ = global.event_count.fetchAdd(1, .seq_cst);
             global.mutex.lock();
             defer global.mutex.unlock();
-            global.events.append(allocator.dupe(u8, event.path) catch return) catch return;
+            global.events.append(allocator, allocator.dupe(u8, event.path) catch return) catch return;
         }
     }.cb;
 
@@ -1443,8 +1394,7 @@ test "file rename detection" {
     };
 
     const callback = struct {
-        fn cb(event: WatchEvent) void {
-            _ = event;
+        fn cb(_: WatchEvent) void {
             _ = global.event_count.fetchAdd(1, .seq_cst);
         }
     }.cb;
@@ -1527,7 +1477,7 @@ test "windows long path handling" {
     const long_dir_name = "very_long_directory_name_that_helps_test_path_length_handling";
 
     // Build the nested path
-    var path_components = std.ArrayList([]const u8).init(allocator);
+    var path_components = std.array_list.Managed([]const u8).init(allocator);
     defer {
         for (path_components.items) |component| {
             allocator.free(component);
@@ -1541,14 +1491,14 @@ test "windows long path handling" {
     }
 
     // Create the nested directories
-    var current_path = std.ArrayList(u8).init(allocator);
-    defer current_path.deinit();
+    var current_path = std.ArrayList(u8).empty;
+    defer current_path.deinit(allocator);
 
     for (path_components.items) |component| {
         if (current_path.items.len > 0) {
-            try current_path.append(std.fs.path.sep);
+            try current_path.append(allocator, std.fs.path.sep);
         }
-        try current_path.appendSlice(component);
+        try current_path.appendSlice(allocator, component);
         try temp_dir.dir.makePath(current_path.items);
     }
 
@@ -1561,8 +1511,7 @@ test "windows long path handling" {
     };
 
     const callback = struct {
-        fn cb(event: WatchEvent) void {
-            _ = event;
+        fn cb(_: WatchEvent) void {
             _ = global.event_count.fetchAdd(1, .seq_cst);
         }
     }.cb;

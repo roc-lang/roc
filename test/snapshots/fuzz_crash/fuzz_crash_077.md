@@ -13,27 +13,27 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-KwPackage(1:1-1:8),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),OpenCurly(1:10-1:11),LowerIdent(1:11-1:12),OpColon(1:12-1:13),OpenCurly(1:13-1:14),OpenCurly(1:14-1:15),LowerIdent(1:15-1:16),OpColon(1:16-1:17),OpBar(1:17-1:18),OpBar(1:18-1:19),OpenCurly(1:19-1:20),Int(1:20-1:21),CloseCurly(1:21-1:22),OpArrow(1:22-1:24),UpperIdent(1:24-1:25),CloseCurly(1:25-1:26),CloseCurly(1:26-1:27),CloseCurly(1:27-1:28),
-EndOfFile(2:1-2:1),
+KwPackage,OpenSquare,CloseSquare,OpenCurly,LowerIdent,OpColon,OpenCurly,OpenCurly,LowerIdent,OpColon,OpBar,OpBar,OpenCurly,Int,CloseCurly,OpArrow,UpperIdent,CloseCurly,CloseCurly,CloseCurly,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-1.28
-	(package @1.1-1.28
-		(exposes @1.8-1.10)
-		(packages @1.10-1.28
-			(record-field @1.11-1.27 (name "d")
-				(e-block @1.13-1.27
+(file
+	(package
+		(exposes)
+		(packages
+			(record-field (name "d")
+				(e-block
 					(statements
-						(e-record @1.14-1.26
+						(e-record
 							(field (field "d")
-								(e-lambda @1.17-1.25
+								(e-lambda
 									(args)
-									(e-local-dispatch @1.19-1.25
-										(e-block @1.19-1.22
+									(e-local-dispatch
+										(e-block
 											(statements
-												(e-int @1.20-1.21 (raw "0"))))
-										(e-tag @1.24-1.24 (raw "R")))))))))))
+												(e-int (raw "0"))))
+										(e-tag (raw "R")))))))))))
 	(statements))
 ~~~
 # FORMATTED

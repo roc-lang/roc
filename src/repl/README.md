@@ -1,4 +1,4 @@
-## REPL (Read-Eval-Print Loop)
+# REPL (Read-Eval-Print Loop)
 
 The REPL provides an interactive environment for evaluating Roc expressions and building up state through assignments. It maintains a cumulative compilation context that allows expressions to reference previously defined variables.
 
@@ -61,7 +61,6 @@ assigned `x`
 » x + y
 7
 ```
->>>>>>> repl-eval
 
 ## Validation and Testing
 

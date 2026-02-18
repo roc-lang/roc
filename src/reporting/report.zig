@@ -11,9 +11,7 @@ const base = @import("base");
 const Allocator = std.mem.Allocator;
 const Severity = @import("severity.zig").Severity;
 const Document = @import("document.zig").Document;
-const Annotation = @import("document.zig").Annotation;
 const RenderTarget = @import("renderer.zig").RenderTarget;
-const ReportingConfig = @import("config.zig").ReportingConfig;
 const RegionInfo = base.RegionInfo;
 const renderReport = @import("renderer.zig").renderReport;
 const validateUtf8 = @import("config.zig").validateUtf8;
@@ -28,7 +26,7 @@ pub const Report = struct {
     severity: Severity,
     document: Document,
     allocator: Allocator,
-    owned_strings: std.ArrayList([]const u8),
+    owned_strings: std.array_list.Managed([]const u8),
 
     pub fn init(allocator: Allocator, title: []const u8, severity: Severity) Report {
         return Report{
@@ -36,7 +34,7 @@ pub const Report = struct {
             .severity = severity,
             .document = Document.init(allocator),
             .allocator = allocator,
-            .owned_strings = std.ArrayList([]const u8).init(allocator),
+            .owned_strings = std.array_list.Managed([]const u8).init(allocator),
         };
     }
 
@@ -57,7 +55,7 @@ pub const Report = struct {
     }
 
     /// Render the report to the specified writer and target format.
-    pub fn render(self: *const Report, writer: anytype, target: RenderTarget) !void {
+    pub fn render(self: *const Report, writer: *std.Io.Writer, target: RenderTarget) !void {
         try renderReport(self, writer, target);
     }
 
@@ -211,6 +209,14 @@ pub const Report = struct {
                         .start_col_idx = region_data.start_column,
                         .end_line_idx = region_data.end_line,
                         .end_col_idx = region_data.end_column,
+                    };
+                },
+                .source_code_with_underlines => |underlines_data| {
+                    return RegionInfo{
+                        .start_line_idx = underlines_data.display_region.start_line,
+                        .start_col_idx = underlines_data.display_region.start_column,
+                        .end_line_idx = underlines_data.display_region.end_line,
+                        .end_col_idx = underlines_data.display_region.end_column,
                     };
                 },
                 else => {},

@@ -1,5 +1,6 @@
 [files]
 extend-exclude = [
+    ".git/",
     "design/language/Abilities.md",
     "src/snapshots/fuzz_crash",
     "crates/vendor/",
@@ -10,12 +11,24 @@ extend-exclude = [
     "crates/compiler/checkmate/www/package-lock.json",
     "src/build/zig_llvm.h",
     "test/snapshots/",
+    "build.zig.zon",
+    "src/cli/darwin/",
+    "src/backend/llvm/",
+    "src/backend/dev/object/",
 ]
 
 [default]
 extend-ignore-identifiers-re = [".*_SME_.*"]
+extend-ignore-re = [
+    # Ignore the line after `# spellchecker:ignore-next-line`:
+    "(#|//)\\s*spellchecker:ignore-next-line\\n.*",
+    # Ignore blocks between `# spellchecker:off` and `# spellchecker:on`
+    "(?s)(#|//)\\s*spellchecker:off.*?\\n\\s*(#|//)\\s*spellchecker:on",
+]
 
 [default.extend-words]
-HSA = "HSA"
 typ = "typ"
 ba = "ba"
+sigfault = "sigfault"
+nd = "nd"
+SEH = "SEH"

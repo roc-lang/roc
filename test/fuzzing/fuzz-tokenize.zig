@@ -8,8 +8,6 @@
 //! Other afl commands also available in `./zig-out/AFLplusplus/bin`
 
 const std = @import("std");
-const base = @import("base");
-const collections = @import("collections");
 const parse = @import("parse");
 
 /// Hook for AFL++ to initialize the fuzz test environment.

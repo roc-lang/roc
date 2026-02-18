@@ -17,28 +17,28 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-KwMatch(1:1-1:6),TripleDot(1:7-1:10),OpenCurly(1:11-1:12),
-OpenSquare(2:2-2:3),SingleQuote(2:3-2:6),CloseSquare(2:6-2:7),OpFatArrow(2:8-2:10),TripleDot(2:11-2:14),
-OpenSquare(3:2-3:3),SingleQuote(3:3-3:6),Comma(3:6-3:7),SingleQuote(3:8-3:11),CloseSquare(3:11-3:12),OpFatArrow(3:13-3:15),TripleDot(3:16-3:19),
-Underscore(4:2-4:3),OpFatArrow(4:4-4:6),TripleDot(4:7-4:10),
-CloseCurly(5:1-5:2),
-EndOfFile(6:1-6:1),
+KwMatch,TripleDot,OpenCurly,
+OpenSquare,SingleQuote,CloseSquare,OpFatArrow,TripleDot,
+OpenSquare,SingleQuote,Comma,SingleQuote,CloseSquare,OpFatArrow,TripleDot,
+Underscore,OpFatArrow,TripleDot,
+CloseCurly,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
 (e-match
 	(e-ellipsis)
 	(branches
-		(branch @2.2-2.14
-			(p-list @2.2-2.7
-				(p-single-quote @2.3-2.6 (raw "'#'")))
+		(branch
+			(p-list
+				(p-single-quote (raw "'#'")))
 			(e-ellipsis))
-		(branch @3.2-3.19
-			(p-list @3.2-3.12
-				(p-single-quote @3.3-3.6 (raw "'a'"))
-				(p-single-quote @3.8-3.11 (raw "'b'")))
+		(branch
+			(p-list
+				(p-single-quote (raw "'a'"))
+				(p-single-quote (raw "'b'")))
 			(e-ellipsis))
-		(branch @4.2-4.10
+		(branch
 			(p-underscore)
 			(e-ellipsis))))
 ~~~
@@ -48,36 +48,36 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-match @1.1-5.2
-	(match @1.1-5.2
+(e-match
+	(match
 		(cond
-			(e-not-implemented @1.1-1.1))
+			(e-not-implemented))
 		(branches
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-list @2.2-2.7
+						(p-list
 							(patterns
-								(p-num @2.3-2.6 (value "35"))))))
+								(p-num (value "35"))))))
 				(value
-					(e-not-implemented @1.1-1.1)))
+					(e-not-implemented)))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-list @3.2-3.12
+						(p-list
 							(patterns
-								(p-num @3.3-3.6 (value "97"))
-								(p-num @3.8-3.11 (value "98"))))))
+								(p-num (value "97"))
+								(p-num (value "98"))))))
 				(value
-					(e-not-implemented @1.1-1.1)))
+					(e-not-implemented)))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-underscore @4.2-4.3)))
+						(p-underscore)))
 				(value
-					(e-not-implemented @1.1-1.1))))))
+					(e-not-implemented))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-5.2 (type "_a"))
+(expr (type "_a"))
 ~~~

@@ -5,15 +5,12 @@
 //! different phases of compilation.
 
 const std = @import("std");
-const builtin = @import("builtin");
 const collections = @import("collections");
-const serialization = @import("serialization");
 
 const Ident = @import("Ident.zig");
 const StringLiteral = @import("StringLiteral.zig");
 const RegionInfo = @import("RegionInfo.zig");
 const Region = @import("Region.zig");
-const SExprTree = @import("SExprTree.zig");
 const SafeList = collections.SafeList;
 const ExposedItems = collections.ExposedItems;
 const CompactWriter = collections.CompactWriter;
@@ -21,7 +18,6 @@ const CompactWriter = collections.CompactWriter;
 const CommonEnv = @This();
 
 idents: Ident.Store,
-// ident_ids_for_slicing: SafeList(Ident.Idx),
 strings: StringLiteral.Store,
 /// The items (a combination of types and values) that this module exposes
 exposed_items: ExposedItems,
@@ -47,6 +43,7 @@ pub fn deinit(self: *CommonEnv, gpa: std.mem.Allocator) void {
     self.strings.deinit(gpa);
     self.exposed_items.deinit(gpa);
     self.line_starts.deinit(gpa);
+    // NOTE: Caller owns source and is responsible for freeing it.
 }
 
 /// Add the given offset to the memory addresses of all pointers in `self`.
@@ -56,7 +53,15 @@ pub fn relocate(self: *CommonEnv, offset: isize) void {
     self.strings.relocate(offset);
     self.exposed_items.relocate(offset);
     self.line_starts.relocate(offset);
-    // Note: source is not relocated - it should be set manually
+    // Relocate source slice pointer if it is non-empty.
+    // The underlying bytes live in the same allocation as the rest of the
+    // module data (e.g. shared memory used by the interpreter), so we can
+    // adjust the pointer by the same offset.
+    if (self.source.len > 0) {
+        const old_ptr = @intFromPtr(self.source.ptr);
+        const new_ptr = @as(isize, @intCast(old_ptr)) + offset;
+        self.source.ptr = @ptrFromInt(@as(usize, @intCast(new_ptr)));
+    }
 }
 
 /// Serialize this CommonEnv to the given CompactWriter.
@@ -83,20 +88,14 @@ pub fn serialize(
     return @constCast(offset_self);
 }
 
-/// Freezes the identifier and string interners, preventing further modifications.
-/// This is used to ensure thread safety when sharing the environment across threads.
-pub fn freezeInterners(self: *CommonEnv) void {
-    self.idents.freeze();
-    self.strings.freeze();
-}
-
-/// Serialized representation of ModuleEnv
-pub const Serialized = struct {
+/// Serialized representation of CommonEnv
+/// Uses extern struct to guarantee consistent field layout across optimization levels.
+pub const Serialized = extern struct {
     idents: Ident.Store.Serialized,
     strings: StringLiteral.Store.Serialized,
     exposed_items: ExposedItems.Serialized,
     line_starts: SafeList(u32).Serialized,
-    source: []const u8, // Serialized as zeros, provided during deserialization
+    source: [2]u64, // Reserve space for slice (ptr + len), provided during deserialization
 
     /// Serialize a ModuleEnv into this Serialized struct, appending data to the writer
     pub fn serialize(
@@ -105,37 +104,31 @@ pub const Serialized = struct {
         allocator: std.mem.Allocator,
         writer: *CompactWriter,
     ) !void {
-        self.source = ""; // Empty slice
-
         // Serialize each component using its Serialized struct
         try self.idents.serialize(&env.idents, allocator, writer);
         try self.strings.serialize(&env.strings, allocator, writer);
         try self.exposed_items.serialize(&env.exposed_items, allocator, writer);
         try self.line_starts.serialize(&env.line_starts, allocator, writer);
+
+        // Set source to all zeros; the space needs to be here,
+        // but the value will be set separately during deserialization.
+        self.source = .{ 0, 0 };
     }
 
-    /// Deserialize a CommonEnv from the buffer, updating the CommonEnv in place
-    pub fn deserialize(
-        self: *Serialized,
-        offset: i64,
+    /// Deserialize into a CommonEnv value (no in-place modification of cache buffer).
+    /// The base_addr parameter is the base address of the serialized buffer in memory.
+    pub fn deserializeInto(
+        self: *const Serialized,
+        base_addr: usize,
         source: []const u8,
-    ) *CommonEnv {
-        // CommonEnv.Serialized should be at least as big as CommonEnv
-        std.debug.assert(@sizeOf(Serialized) >= @sizeOf(CommonEnv));
-
-        // Overwrite ourself with the deserialized version, and return our pointer after casting it to CommonEnv.
-        const env = @as(*CommonEnv, @ptrFromInt(@intFromPtr(self)));
-
-        env.* = CommonEnv{
-            .idents = self.idents.deserialize(offset).*,
-            // .ident_ids_for_slicing = self.ident_ids_for_slicing.deserialize(offset).*,
-            .strings = self.strings.deserialize(offset).*,
-            .exposed_items = self.exposed_items.deserialize(offset).*,
-            .line_starts = self.line_starts.deserialize(offset).*,
+    ) CommonEnv {
+        return CommonEnv{
+            .idents = self.idents.deserializeInto(base_addr),
+            .strings = self.strings.deserializeInto(base_addr),
+            .exposed_items = self.exposed_items.deserializeInto(base_addr),
+            .line_starts = self.line_starts.deserializeInto(base_addr),
             .source = source,
         };
-
-        return env;
     }
 };
 
@@ -325,7 +318,7 @@ test "CommonEnv.Serialized roundtrip" {
 
     // The Serialized struct is at the beginning of the buffer
     const deserialized_ptr = @as(*CommonEnv.Serialized, @ptrCast(@alignCast(buffer.ptr)));
-    const env = deserialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), source);
+    const env = deserialized_ptr.deserializeInto(@intFromPtr(buffer.ptr), source);
 
     // Verify the data was preserved
     try testing.expectEqualStrings("hello", env.getIdent(hello_idx));
@@ -375,7 +368,7 @@ test "CommonEnv.Serialized roundtrip with empty data" {
 
     // The Serialized struct is at the beginning of the buffer
     const deserialized_ptr = @as(*CommonEnv.Serialized, @ptrCast(@alignCast(buffer.ptr)));
-    const env = deserialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), source);
+    const env = deserialized_ptr.deserializeInto(@intFromPtr(buffer.ptr), source);
 
     // Verify empty state is preserved
     try testing.expectEqual(@as(u32, 0), env.idents.interner.entry_count);
@@ -389,7 +382,7 @@ test "CommonEnv.Serialized roundtrip with large data" {
     const gpa = testing.allocator;
 
     // Create a larger source with many lines
-    var source_builder = std.ArrayList(u8).init(gpa);
+    var source_builder = std.array_list.Managed(u8).init(gpa);
     defer source_builder.deinit();
 
     for (0..100) |i| {
@@ -402,11 +395,11 @@ test "CommonEnv.Serialized roundtrip with large data" {
     defer original.deinit(gpa);
 
     // Add many identifiers
-    var ident_indices = std.ArrayList(Ident.Idx).init(gpa);
+    var ident_indices = std.array_list.Managed(Ident.Idx).init(gpa);
     defer ident_indices.deinit();
 
     for (0..50) |i| {
-        var ident_name = std.ArrayList(u8).init(gpa);
+        var ident_name = std.array_list.Managed(u8).init(gpa);
         defer ident_name.deinit();
         try ident_name.writer().print("ident_{}", .{i});
         const idx = try original.insertIdent(gpa, Ident.for_text(ident_name.items));
@@ -414,11 +407,11 @@ test "CommonEnv.Serialized roundtrip with large data" {
     }
 
     // Add many strings and track their indices
-    var string_indices = std.ArrayList(StringLiteral.Idx).init(gpa);
+    var string_indices = std.array_list.Managed(StringLiteral.Idx).init(gpa);
     defer string_indices.deinit();
 
     for (0..25) |i| {
-        var string_content = std.ArrayList(u8).init(gpa);
+        var string_content = std.array_list.Managed(u8).init(gpa);
         defer string_content.deinit();
         try string_content.writer().print("string_literal_{}", .{i});
         const idx = try original.insertString(gpa, string_content.items);
@@ -458,7 +451,7 @@ test "CommonEnv.Serialized roundtrip with large data" {
 
     // The Serialized struct is at the beginning of the buffer
     const deserialized_ptr = @as(*CommonEnv.Serialized, @ptrCast(@alignCast(buffer.ptr)));
-    const env = deserialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), source);
+    const env = deserialized_ptr.deserializeInto(@intFromPtr(buffer.ptr), source);
 
     // Verify large data was preserved
     try testing.expectEqual(@as(u32, 50), env.idents.interner.entry_count);
@@ -535,7 +528,7 @@ test "CommonEnv.Serialized roundtrip with special characters" {
 
     // The Serialized struct is at the beginning of the buffer
     const deserialized_ptr = @as(*CommonEnv.Serialized, @ptrCast(@alignCast(buffer.ptr)));
-    const env = deserialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), source);
+    const env = deserialized_ptr.deserializeInto(@intFromPtr(buffer.ptr), source);
 
     // Verify special characters were preserved
     try testing.expectEqualStrings("café", env.getIdent(unicode_idx));

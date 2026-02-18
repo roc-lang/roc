@@ -8,7 +8,7 @@ type=file
 = "te
 ~~~
 # EXPECTED
-UNCLOSED STRING - :0:0:0:0
+UNCLOSED STRING - fuzz_crash_003.md:1:3:1:6
 PARSE ERROR - fuzz_crash_003.md:1:1:1:2
 PARSE ERROR - fuzz_crash_003.md:1:3:1:4
 PARSE ERROR - fuzz_crash_003.md:1:4:1:6
@@ -18,6 +18,7 @@ MISSING MAIN! FUNCTION - fuzz_crash_003.md:1:1:1:6
 **UNCLOSED STRING**
 This string is missing a closing quote.
 
+**fuzz_crash_003.md:1:3:1:6:**
 ```roc
 = "te
 ```
@@ -84,18 +85,18 @@ Add a main! function like:
 
 # TOKENS
 ~~~zig
-OpAssign(1:1-1:2),StringStart(1:3-1:4),StringPart(1:4-1:6),StringEnd(1:6-1:6),
-EndOfFile(2:1-2:1),
+OpAssign,StringStart,StringPart,StringEnd,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-1.6
-	(type-module @1.1-1.2)
+(file
+	(type-module)
 	(statements
-		(s-malformed @1.1-1.2 (tag "statement_unexpected_token"))
-		(s-malformed @1.3-1.4 (tag "statement_unexpected_token"))
-		(s-malformed @1.4-1.6 (tag "statement_unexpected_token"))
-		(s-malformed @1.6-1.6 (tag "statement_unexpected_token"))))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc

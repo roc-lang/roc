@@ -143,7 +143,7 @@ test "BufferExtractWriter - basic functionality" {
     // Create a file
     const file_writer = try writer.extractWriter().createFile("test.txt");
     try file_writer.writeAll("Hello, World!");
-    writer.extractWriter().finishFile(file_writer);
+    writer.extractWriter().finishFile();
 
     // Create a directory (should be no-op for buffer writer)
     try writer.extractWriter().makeDir("test_dir");
@@ -151,7 +151,7 @@ test "BufferExtractWriter - basic functionality" {
     // Create another file in a subdirectory
     const file_writer2 = try writer.extractWriter().createFile("subdir/test2.txt");
     try file_writer2.writeAll("Second file");
-    writer.extractWriter().finishFile(file_writer2);
+    writer.extractWriter().finishFile();
 
     // Verify files were stored
     try testing.expectEqual(@as(usize, 2), writer.files.count());
@@ -185,7 +185,7 @@ test "DirExtractWriter - basic functionality" {
     // Create a file
     const file_writer = try writer.extractWriter().createFile("test.txt");
     try file_writer.writeAll("Test content");
-    writer.extractWriter().finishFile(file_writer);
+    writer.extractWriter().finishFile();
 
     // Verify file was created
     const content = try tmp.dir.readFileAlloc(testing.allocator, "test.txt", 1024);
@@ -195,7 +195,7 @@ test "DirExtractWriter - basic functionality" {
     // Create a file in a subdirectory (should create parent dirs)
     const file_writer2 = try writer.extractWriter().createFile("deep/nested/file.txt");
     try file_writer2.writeAll("Nested content");
-    writer.extractWriter().finishFile(file_writer2);
+    writer.extractWriter().finishFile();
 
     // Verify nested file was created
     const nested_content = try tmp.dir.readFileAlloc(testing.allocator, "deep/nested/file.txt", 1024);
@@ -206,24 +206,20 @@ test "DirExtractWriter - basic functionality" {
 test "unbundle filename validation" {
     // Use a dummy reader and directory that won't actually be used
     const dummy_data = "";
-    var stream = std.io.fixedBufferStream(dummy_data);
+    var stream_reader = std.Io.Reader.fixed(dummy_data);
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
 
     // Test with invalid filename (no .tar.zst extension)
-    try testing.expectError(error.InvalidFilename, unbundle.unbundle(testing.allocator, stream.reader(), tmp.dir, "invalid.txt", null));
+    try testing.expectError(error.InvalidFilename, unbundle.unbundle(testing.allocator, &stream_reader, tmp.dir, "invalid.txt", null));
 
-    // Reset stream position
-    stream.pos = 0;
+    // Test with invalid base58 hash (create a new reader)
+    var stream_reader2 = std.Io.Reader.fixed(dummy_data);
+    try testing.expectError(error.InvalidFilename, unbundle.unbundle(testing.allocator, &stream_reader2, tmp.dir, "not-valid-base58!@#.tar.zst", null));
 
-    // Test with invalid base58 hash
-    try testing.expectError(error.InvalidFilename, unbundle.unbundle(testing.allocator, stream.reader(), tmp.dir, "not-valid-base58!@#.tar.zst", null));
-
-    // Reset stream position
-    stream.pos = 0;
-
-    // Test with empty hash
-    try testing.expectError(error.InvalidFilename, unbundle.unbundle(testing.allocator, stream.reader(), tmp.dir, ".tar.zst", null));
+    // Test with empty hash (create a new reader)
+    var stream_reader3 = std.Io.Reader.fixed(dummy_data);
+    try testing.expectError(error.InvalidFilename, unbundle.unbundle(testing.allocator, &stream_reader3, tmp.dir, ".tar.zst", null));
 }
 
 test "pathHasUnbundleErr - long paths" {
@@ -308,12 +304,12 @@ test "BufferExtractWriter - overwrite existing file" {
     // Create a file with initial content
     const file_writer1 = try writer.extractWriter().createFile("test.txt");
     try file_writer1.writeAll("Initial content");
-    writer.extractWriter().finishFile(file_writer1);
+    writer.extractWriter().finishFile();
 
     // Overwrite the same file
     const file_writer2 = try writer.extractWriter().createFile("test.txt");
     try file_writer2.writeAll("New content");
-    writer.extractWriter().finishFile(file_writer2);
+    writer.extractWriter().finishFile();
 
     // Verify it was overwritten
     const file = writer.files.get("test.txt");
@@ -331,7 +327,7 @@ test "DirExtractWriter - nested directory creation" {
     // Create a file in a deeply nested path
     const file_writer = try writer.extractWriter().createFile("a/b/c/d/e/file.txt");
     try file_writer.writeAll("Nested content");
-    writer.extractWriter().finishFile(file_writer);
+    writer.extractWriter().finishFile();
 
     // Verify the file was created
     const content = try tmp.dir.readFileAlloc(testing.allocator, "a/b/c/d/e/file.txt", 1024);
@@ -352,4 +348,23 @@ test "ErrorContext population" {
     } else {
         try testing.expect(false); // Should have failed
     }
+}
+
+const download = @import("download.zig");
+
+test "downloadAndExtract with unreachable URL returns error without crash" {
+    // Regression test: downloading from an unreachable URL should return an error,
+    // not crash due to double-close of file handle.
+    var allocator: std.mem.Allocator = testing.allocator;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    // Port 1 on localhost will fail to connect, triggering error handling path
+    const result = download.downloadAndExtract(
+        &allocator,
+        "https://127.0.0.1:1/6jk5DfVBwdRs9C5PwuFbvxNvFKAGcu5FHtK2cWsmqfSV.tar.zst",
+        tmp.dir,
+    );
+
+    try testing.expectError(download.DownloadError.HttpError, result);
 }

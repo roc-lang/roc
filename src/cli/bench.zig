@@ -1,19 +1,31 @@
 //! Benchmarking utility for the Roc compiler, exposed as --z-* arguments in the main binary.
 
 const std = @import("std");
-const base = @import("base");
-const collections = @import("collections");
 const parse = @import("parse");
 const can = @import("can");
+const base = @import("base");
 
 const tracy = @import("tracy");
-const fmt = @import("fmt");
+const builtin = @import("builtin");
 
 const tokenize = parse.tokenize;
 const ModuleEnv = can.ModuleEnv;
-const CommonEnv = base.CommonEnv;
+const Allocators = base.Allocators;
 
 const Allocator = std.mem.Allocator;
+
+const is_windows = builtin.target.os.tag == .windows;
+
+var stderr_file_writer: std.fs.File.Writer = .{
+    .interface = std.fs.File.Writer.initInterface(&.{}),
+    .file = if (is_windows) undefined else std.fs.File.stderr(),
+    .mode = .streaming,
+};
+
+fn stderrWriter() *std.Io.Writer {
+    if (is_windows) stderr_file_writer.file = std.fs.File.stderr();
+    return &stderr_file_writer.interface;
+}
 
 const RocFile = struct {
     path: []const u8,
@@ -40,7 +52,7 @@ fn benchParseOrTokenize(comptime is_parse: bool, gpa: Allocator, path: []const u
     std.debug.print("Benchmarking {s} on '{s}'\n", .{ operation_name, path });
 
     // Find all .roc files (from file or directory)
-    var roc_files = std.ArrayList(RocFile).init(gpa);
+    var roc_files = std.array_list.Managed(RocFile).init(gpa);
     defer {
         for (roc_files.items) |roc_file| {
             gpa.free(roc_file.path);
@@ -64,6 +76,9 @@ fn benchParseOrTokenize(comptime is_parse: bool, gpa: Allocator, path: []const u
     std.debug.print("Total: {} bytes, {} lines\n", .{ metrics.total_bytes, metrics.total_lines });
 
     // Create a module environment for tokenization (reused for tokenizer, created per-iteration for parser)
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+
     var env: ?ModuleEnv = if (!is_parse) try ModuleEnv.init(gpa, "") else null;
     defer if (env) |*e| e.deinit();
 
@@ -88,12 +103,19 @@ fn benchParseOrTokenize(comptime is_parse: bool, gpa: Allocator, path: []const u
                 // ModuleEnv takes ownership of the source code, so we need to dupe it each iteration
                 const source_copy = try gpa.dupe(u8, roc_file.content);
 
+                var parse_arena = std.heap.ArenaAllocator.init(gpa);
+
                 var parse_env = try ModuleEnv.init(gpa, source_copy);
 
-                var ir = try parse.parse(&parse_env.common, gpa);
+                var allocators: Allocators = undefined;
+                allocators.initInPlace(gpa);
+                defer allocators.deinit();
+
+                const ir = try parse.parse(&allocators, &parse_env.common);
                 iteration_tokens += ir.tokens.tokens.len;
-                ir.deinit(gpa);
+                ir.deinit();
                 parse_env.deinit();
+                parse_arena.deinit();
             } else {
                 // Tokenize mode
                 var messages: [128]tokenize.Diagnostic = undefined;
@@ -101,7 +123,7 @@ fn benchParseOrTokenize(comptime is_parse: bool, gpa: Allocator, path: []const u
 
                 var tokenizer = try tokenize.Tokenizer.init(&env.?.common, gpa, roc_file.content, msg_slice);
                 try tokenizer.tokenize(gpa);
-                var result = tokenizer.finishAndDeinit(gpa);
+                var result = tokenizer.finishAndDeinit();
                 iteration_tokens += result.tokens.tokens.len;
                 result.tokens.deinit(gpa);
             }
@@ -140,7 +162,7 @@ pub fn benchTokenizer(gpa: Allocator, path: []const u8) !void {
     try benchParseOrTokenize(false, gpa, path);
 }
 
-fn collectRocFiles(gpa: Allocator, path: []const u8, roc_files: *std.ArrayList(RocFile)) !void {
+fn collectRocFiles(gpa: Allocator, path: []const u8, roc_files: *std.array_list.Managed(RocFile)) !void {
     // Check if path is a file or directory
     const stat = std.fs.cwd().statFile(path) catch |err| {
         fatal("Failed to access '{s}': {}", .{ path, err });
@@ -163,7 +185,7 @@ fn collectRocFiles(gpa: Allocator, path: []const u8, roc_files: *std.ArrayList(R
     }
 }
 
-fn addRocFile(gpa: Allocator, file_path: []const u8, roc_files: *std.ArrayList(RocFile)) !void {
+fn addRocFile(gpa: Allocator, file_path: []const u8, roc_files: *std.array_list.Managed(RocFile)) !void {
     const file = std.fs.cwd().openFile(file_path, .{}) catch |err| {
         std.debug.print("Warning: Failed to open file '{s}': {}\n", .{ file_path, err });
         return;
@@ -185,7 +207,7 @@ fn addRocFile(gpa: Allocator, file_path: []const u8, roc_files: *std.ArrayList(R
     });
 }
 
-fn findRocFiles(gpa: Allocator, dir_path: []const u8, roc_files: *std.ArrayList(RocFile)) !void {
+fn findRocFiles(gpa: Allocator, dir_path: []const u8, roc_files: *std.array_list.Managed(RocFile)) !void {
     var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch |err| {
         fatal("Failed to open directory '{s}': {}", .{ dir_path, err });
     };
@@ -281,7 +303,7 @@ fn printBenchmarkResults(benchmark_name: []const u8, results: BenchmarkResults) 
 
 /// Log a fatal error and exit the process with a non-zero code.
 pub fn fatal(comptime format: []const u8, args: anytype) noreturn {
-    std.io.getStdErr().writer().print(format, args) catch unreachable;
+    stderrWriter().print(format, args) catch unreachable;
     if (tracy.enable) {
         tracy.waitForShutdown() catch unreachable;
     }

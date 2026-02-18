@@ -6,21 +6,16 @@ const testing = std.testing;
 
 const Allocator = std.mem.Allocator;
 const Document = @import("document.zig").Document;
-const DocumentBuilder = @import("document.zig").DocumentBuilder;
-const Annotation = @import("document.zig").Annotation;
-const DocumentElement = @import("document.zig").DocumentElement;
-const SourceRegion = @import("document.zig").SourceRegion;
 const Report = @import("report.zig").Report;
-const Severity = @import("severity.zig").Severity;
-const ReportingConfig = @import("config.zig").ReportingConfig;
 const ColorPalette = @import("style.zig").ColorPalette;
+const reporting = @import("mod.zig");
 
 // Test cases for canonicalize error reports
 
 test "SYNTAX_PROBLEM report along with all four render types" {
     const gpa = testing.allocator;
-    var buffer = std.ArrayList(u8).init(gpa);
-    defer buffer.deinit();
+    var writer = std.Io.Writer.Allocating.init(gpa);
+    defer writer.deinit();
 
     // Create a Report
     var r = Report.init(gpa, "SYNTAX PROBLEM", .runtime_error);
@@ -32,7 +27,7 @@ test "SYNTAX_PROBLEM report along with all four render types" {
     try testing.expect(!r.document.isEmpty());
 
     // Markdown
-    try reporting.renderReportToMarkdown(&r, buffer.writer(), @import("config.zig").ReportingConfig.initMarkdown());
+    try reporting.renderReportToMarkdown(&r, &writer.writer, @import("config.zig").ReportingConfig.initMarkdown());
 
     const expected =
         \\**SYNTAX PROBLEM**
@@ -47,12 +42,12 @@ test "SYNTAX_PROBLEM report along with all four render types" {
         \\
     ;
 
-    try expectMultilineEqual(expected, buffer.items);
+    try expectMultilineEqual(expected, writer.written());
 
     // HTML
-    buffer.clearRetainingCapacity();
+    writer.clearRetainingCapacity();
 
-    try reporting.renderReportToHtml(&r, buffer.writer(), @import("config.zig").ReportingConfig.initHtml());
+    try reporting.renderReportToHtml(&r, &writer.writer, @import("config.zig").ReportingConfig.initHtml());
 
     const expected_html =
         \\<div class="report error">
@@ -64,12 +59,12 @@ test "SYNTAX_PROBLEM report along with all four render types" {
         \\
     ;
 
-    try expectMultilineEqual(expected_html, buffer.items);
+    try expectMultilineEqual(expected_html, writer.written());
 
     // Language Server Protocol
-    buffer.clearRetainingCapacity();
+    writer.clearRetainingCapacity();
 
-    try reporting.renderReportToLsp(&r, buffer.writer(), @import("config.zig").ReportingConfig.initLsp());
+    try reporting.renderReportToLsp(&r, &writer.writer, @import("config.zig").ReportingConfig.initLsp());
 
     const expected_lsp =
         \\SYNTAX PROBLEM
@@ -79,12 +74,12 @@ test "SYNTAX_PROBLEM report along with all four render types" {
         \\
     ;
 
-    try expectMultilineEqual(expected_lsp, buffer.items);
+    try expectMultilineEqual(expected_lsp, writer.written());
 
     // Terminal (TTY)
-    buffer.clearRetainingCapacity();
+    writer.clearRetainingCapacity();
 
-    try reporting.renderReportToTerminal(&r, buffer.writer(), ColorPalette.ANSI, @import("config.zig").ReportingConfig.initColorTerminal());
+    try reporting.renderReportToTerminal(&r, &writer.writer, ColorPalette.ANSI, @import("config.zig").ReportingConfig.initColorTerminal());
 
     // let's forget about comparing with ansi escape codes present... doesn't seem worth the effort.
     // we'll have to QA the old fashioned way.

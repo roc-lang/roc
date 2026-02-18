@@ -30,16 +30,29 @@ pub const TupleFieldLayout = @import("layout.zig").TupleFieldLayout;
 pub const TupleLayout = @import("layout.zig").TupleLayout;
 pub const TupleIdx = @import("layout.zig").TupleIdx;
 pub const TupleData = @import("layout.zig").TupleData;
+pub const TagUnionLayout = @import("layout.zig").TagUnionLayout;
+pub const TagUnionIdx = @import("layout.zig").TagUnionIdx;
+pub const TagUnionData = @import("layout.zig").TagUnionData;
+pub const TagUnionVariant = @import("layout.zig").TagUnionVariant;
 pub const ClosureLayout = @import("layout.zig").ClosureLayout;
 pub const RocAlignment = @import("layout.zig").RocAlignment;
 pub const SizeAlign = @import("layout.zig").SizeAlign;
 
+// Re-export Info types
+pub const ListInfo = @import("layout.zig").ListInfo;
+pub const BoxInfo = @import("layout.zig").BoxInfo;
+pub const RecordInfo = @import("layout.zig").RecordInfo;
+pub const TupleInfo = @import("layout.zig").TupleInfo;
+pub const TagUnionInfo = @import("layout.zig").TagUnionInfo;
+pub const ScalarInfo = @import("layout.zig").ScalarInfo;
+
 // Re-export store functionality
 pub const Store = @import("store.zig").Store;
-pub const LayoutError = @import("store.zig").LayoutError;
+pub const ModuleVarKey = @import("store.zig").ModuleVarKey;
 
 // Re-export work queue functionality
 pub const Work = @import("work.zig").Work;
+pub const work = @import("work.zig");
 
 test "layout tests" {
     std.testing.refAllDecls(@This());

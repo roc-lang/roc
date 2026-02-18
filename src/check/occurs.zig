@@ -1,18 +1,15 @@
 //! Checks whether a type variable is recursively defined.
 //!
 //! This module implements an "occurs check" to detect:
-//! - structurally infinite types (e.g., `a = List a`)
+//! - structurally infinite types (e.g., `a = List(a)`)
 //! - recursion through unnamed constructs (anonymous recursion)
 //! - recursion through named nominal types (permitted in Roc under some rules)
 //!
 //! The main entrypoint is `occurs()`. It analyzes the type graph rooted at a variable
 //! and reports whether the structure is recursive, and if so, what kind of recursion.
 //!
-//! The traversal uses a shared `Scratch` value to track visited nodes, recursion
-//! chains, and to temporarily mark variables during analysis. This is reset between runs.
-//!
-//! The check only mutates the `Mark` field of descriptors in `Store`, and all marks
-//! are reset before returning. Other descriptor state remains unchanged.
+//! The traversal uses a shared `Scratch` value to track visited nodes and recursion
+//! chains. This is reset between runs. The check does not mutate the `Store`.
 
 const std = @import("std");
 const base = @import("base");
@@ -24,11 +21,8 @@ const MkSafeList = collections.SafeList;
 const Store = types.Store;
 const DescStoreIdx = types.DescStoreIdx;
 const ResolvedVarDesc = types.ResolvedVarDesc;
-const Desc = types.Descriptor;
 const Content = types.Content;
-const Mark = types.Mark;
 const Var = types.Var;
-const NominalType = types.NominalType;
 const TagUnion = types.TagUnion;
 const Tag = types.Tag;
 
@@ -51,14 +45,7 @@ pub const Result = enum {
 /// If the result is `recursive_nominal`, you can use `scratch.err_chain_nominal_vars`
 /// to check what nominal vars were encountered
 ///
-/// This function accepts a mutable reference to `Store`, but guarantees that it
-/// _only_ modifies a variable's `Mark`. Before returning, all visited nodes'
-/// `Mark`s will be reset to `none`.
-///
-/// TODO: See if there's a way to represent this ^ in the type system? If we
-/// switch the types_store descriptors to use a multi list (which we should do
-/// anyway), maybe we can only pass in only a mutable ref to the backing `Mark`s
-/// array?
+/// This function does not modify the `Store`.
 pub fn occurs(types_store: *Store, scratch: *Scratch, var_: Var) std.mem.Allocator.Error!Result {
     scratch.reset();
 
@@ -92,11 +79,6 @@ pub fn occurs(types_store: *Store, scratch: *Scratch, var_: Var) std.mem.Allocat
         },
     };
 
-    // Reset the marks for all visited nodes
-    for (scratch.visited.items.items[0..]) |visited_desc_idx| {
-        types_store.setDescMark(visited_desc_idx, Mark.none);
-    }
-
     return result;
 }
 
@@ -120,9 +102,6 @@ const CheckOccurs = struct {
     /// Init CheckOccurs
     ///
     /// Note that this struct does not own any of it's fields
-    ///
-    /// This function accepts a mutable reference to `Store`, and _must_ only
-    /// modify a var's `Mark`
     fn init(types_store: *Store, scratch: *Scratch) Self {
         return .{ .types_store = types_store, .scratch = scratch };
     }
@@ -135,11 +114,12 @@ const CheckOccurs = struct {
     /// which can be queried after the run.
     fn occurs(self: *Self, var_: Var, ctx: Context) Error!void {
         const root = self.types_store.resolveVar(var_);
+        const root_var = root.var_;
 
-        if (root.desc.mark == .visited) {
+        if (self.scratch.hasVisited(root.desc_idx)) {
             // If we've already visited this var and not errored, then it's not recursive
             return;
-        } else if (self.scratch.hasSeenVar(root.var_)) {
+        } else if (self.scratch.hasSeenVar(root_var)) {
             // Recursion point! We've already seen this var during traversal.
             if (ctx.recursion_allowed and ctx.seen_nominal) {
                 // If recursion is allowed (we've passed through a Box, List or
@@ -156,25 +136,14 @@ const CheckOccurs = struct {
                 return error.InfiniteType;
             }
         } else {
-            self.scratch.appendSeen(var_) catch return Error.AllocatorError;
+            self.scratch.appendSeen(root_var) catch return Error.AllocatorError;
             switch (root.desc.content) {
                 .structure => |flat_type| {
                     switch (flat_type) {
-                        .str => {},
-                        .box => |sub_var| {
-                            try self.occursSubVar(root, sub_var, ctx.allowRecursion());
-                        },
-                        .list => |sub_var| {
-                            try self.occursSubVar(root, sub_var, ctx.allowRecursion());
-                        },
-                        .list_unbound => {
-                            // list_unbound has no sub-variables to check
-                        },
                         .tuple => |tuple| {
                             const elems = self.types_store.sliceVars(tuple.elems);
                             try self.occursSubVars(root, elems, ctx);
                         },
-                        .num => {},
                         .nominal_type => |nominal_type| {
                             // Check all argument vars using iterator
                             var arg_iter = self.types_store.iterNominalArgs(nominal_type);
@@ -230,14 +199,16 @@ const CheckOccurs = struct {
                     const backing_var = self.types_store.getAliasBackingVar(alias);
                     try self.occursSubVar(root, backing_var, ctx);
                 },
-                .flex => {},
+                .flex => |_| {
+                    // Flex variables are not checked for cycles - they are allowed to have
+                    // self-referential constraints. Only structural content is checked.
+                },
                 .rigid => {},
                 .err => {},
             }
             self.scratch.popSeen();
 
             self.scratch.appendVisited(root.desc_idx) catch return Error.AllocatorError;
-            self.types_store.setDescMark(root.desc_idx, Mark.visited);
         }
     }
 
@@ -304,9 +275,12 @@ pub const Scratch = struct {
     visited: MkSafeList(DescStoreIdx),
 
     pub fn init(gpa: std.mem.Allocator) std.mem.Allocator.Error!Self {
-        // TODO: eventually use herusitics here to determine sensible defaults
-        // Rust compiler inits with 1024 capacity. But that feels like a lot.
-        // Typical recursion cases should only be a few layers deep?
+        // Initial capacities are conservative estimates. Lists grow dynamically as needed.
+        // Rust compiler uses 1024, but that's likely overkill for typical Roc code.
+        // These values handle common cases:
+        // - seen/err_chain: 32 - typical type depth is much shallower
+        // - visited: 64 - covers most type traversals without reallocation
+        // Future optimization: profile real codebases to tune these values.
         return .{
             .gpa = gpa,
             .seen = try Var.SafeList.initCapacity(gpa, 32),
@@ -333,6 +307,13 @@ pub const Scratch = struct {
     fn hasSeenVar(self: *const Self, var_: Var) bool {
         for (self.seen.items.items) |seen_var| {
             if (seen_var == var_) return true;
+        }
+        return false;
+    }
+
+    fn hasVisited(self: *const Self, desc_idx: DescStoreIdx) bool {
+        for (self.visited.items.items) |visited_idx| {
+            if (visited_idx == desc_idx) return true;
         }
         return false;
     }
@@ -375,35 +356,13 @@ test "occurs: no recurcion (v = Str)" {
     var scratch = try Scratch.init(gpa);
     defer scratch.deinit();
 
-    const str_var = try types_store.freshFromContent(Content{ .structure = .str });
+    const str_var = try types_store.freshFromContent(Content{ .structure = .empty_record });
 
     const result = occurs(&types_store, &scratch, str_var);
     try std.testing.expectEqual(.not_recursive, result);
 }
 
-test "occurs: direct recursion (v = List v)" {
-    const gpa = std.testing.allocator;
-    var types_store = try Store.init(gpa);
-    defer types_store.deinit();
-
-    var scratch = try Scratch.init(gpa);
-    defer scratch.deinit();
-
-    const list_var = try types_store.fresh();
-    const list_content = Content{
-        .structure = .{ .list = list_var },
-    };
-    try types_store.setRootVarContent(list_var, list_content);
-
-    const result = occurs(&types_store, &scratch, list_var);
-    try std.testing.expectEqual(.recursive_anonymous, result);
-
-    const err_chain = scratch.errChainSlice();
-    try std.testing.expectEqual(1, err_chain.len);
-    try std.testing.expectEqual(list_var, err_chain[0]);
-}
-
-test "occurs: indirect recursion (v1 = Box v2, v2 = List v1)" {
+test "occurs: no recursion through two levels (v1 = Box(v2), v2 = Str)" {
     const gpa = std.testing.allocator;
     var types_store = try Store.init(gpa);
     defer types_store.deinit();
@@ -414,31 +373,16 @@ test "occurs: indirect recursion (v1 = Box v2, v2 = List v1)" {
     const v1 = try types_store.fresh();
     const v2 = try types_store.fresh();
 
-    try types_store.setRootVarContent(v1, Content{ .structure = .{ .box = v2 } });
-    try types_store.setRootVarContent(v2, Content{ .structure = .{ .list = v1 } });
-
-    const result = occurs(&types_store, &scratch, v1);
-    try std.testing.expectEqual(.recursive_anonymous, result);
-
-    const err_chain = scratch.errChainSlice();
-    try std.testing.expectEqual(2, err_chain.len);
-    try std.testing.expectEqual(v2, err_chain[0]);
-    try std.testing.expectEqual(v1, err_chain[1]);
-}
-
-test "occurs: no recursion through two levels (v1 = Box v2, v2 = Str)" {
-    const gpa = std.testing.allocator;
-    var types_store = try Store.init(gpa);
-    defer types_store.deinit();
-
-    var scratch = try Scratch.init(gpa);
-    defer scratch.deinit();
-
-    const v1 = try types_store.fresh();
-    const v2 = try types_store.fresh();
-
-    try types_store.setRootVarContent(v1, Content{ .structure = .{ .box = v2 } });
-    try types_store.setRootVarContent(v2, Content{ .structure = .str });
+    // Create a nominal Box type wrapping v2
+    const backing_var = try types_store.freshFromContent(Content{ .structure = .empty_record });
+    try types_store.setVarContent(v1, try types_store.mkNominal(
+        undefined,
+        backing_var,
+        &.{v2},
+        Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 },
+        false,
+    ));
+    try types_store.setRootVarContent(v2, Content{ .structure = .empty_record });
 
     const result = occurs(&types_store, &scratch, v1);
     try std.testing.expectEqual(.not_recursive, result);
@@ -453,7 +397,7 @@ test "occurs: tuple recursion (v = Tuple(v, Str))" {
     defer scratch.deinit();
 
     const v = try types_store.fresh();
-    const str_var = try types_store.freshFromContent(Content{ .structure = .str });
+    const str_var = try types_store.freshFromContent(Content{ .structure = .empty_record });
 
     const elems_range = try types_store.appendVars(&[_]Var{ v, str_var });
     const tuple = types.Tuple{ .elems = elems_range };
@@ -476,7 +420,7 @@ test "occurs: tuple not recursive (v = Tuple(Str, Str))" {
     var scratch = try Scratch.init(gpa);
     defer scratch.deinit();
 
-    const str_var = try types_store.freshFromContent(Content{ .structure = .str });
+    const str_var = try types_store.freshFromContent(Content{ .structure = .empty_record });
 
     const elems_range = try types_store.appendVars(&[_]Var{ str_var, str_var });
     const tuple = types.Tuple{ .elems = elems_range };
@@ -505,6 +449,7 @@ test "occurs: recursive alias (v = Alias(List v))" {
         types.TypeIdent{ .ident_idx = undefined },
         backing_var,
         &.{arg},
+        Ident.Idx.NONE,
     ));
 
     const result = occurs(&types_store, &scratch, v);
@@ -524,13 +469,14 @@ test "occurs: alias with no recursion (v = Alias Str)" {
     defer scratch.deinit();
 
     const alias_var = try types_store.fresh();
-    const backing_var = try types_store.freshFromContent(Content{ .structure = .str });
-    const arg_var = try types_store.freshFromContent(Content{ .structure = .str });
+    const backing_var = try types_store.freshFromContent(Content{ .structure = .empty_record });
+    const arg_var = try types_store.freshFromContent(Content{ .structure = .empty_record });
 
     try types_store.setRootVarContent(alias_var, try types_store.mkAlias(
         types.TypeIdent{ .ident_idx = undefined },
         backing_var,
         &.{arg_var},
+        Ident.Idx.NONE,
     ));
 
     const result = occurs(&types_store, &scratch, alias_var);
@@ -566,10 +512,6 @@ test "occurs: recursive tag union (v = [ Cons(elem, v), Nil ]" {
     const err_chain = scratch.errChainSlice();
     try std.testing.expectEqual(1, err_chain.len);
     try std.testing.expectEqual(linked_list, err_chain[0]);
-
-    for (scratch.visited.items.items[0..]) |visited_desc_idx| {
-        try std.testing.expectEqual(Mark.none, types_store.getDesc(visited_desc_idx).mark);
-    }
 }
 test "occurs: nested recursive tag union (v = [ Cons(elem, Box(v)) ] )" {
     const gpa = std.testing.allocator;
@@ -582,9 +524,16 @@ test "occurs: nested recursive tag union (v = [ Cons(elem, Box(v)) ] )" {
     const linked_list = try types_store.fresh();
     const elem = try types_store.fresh();
 
-    // Wrap the recursive var in a Box to simulate nesting
+    // Wrap the recursive var in a nominal Box to simulate nesting
     const boxed_linked_list = try types_store.fresh();
-    try types_store.setRootVarContent(boxed_linked_list, .{ .structure = .{ .box = linked_list } });
+    const box_backing_var = try types_store.freshFromContent(.{ .structure = .empty_record });
+    try types_store.setVarContent(boxed_linked_list, try types_store.mkNominal(
+        undefined,
+        box_backing_var,
+        &.{linked_list},
+        Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 },
+        false,
+    ));
 
     // Build tag args: (elem, Box(linked_list))
     const cons_tag_args = try types_store.appendVars(&[_]Var{ elem, boxed_linked_list });
@@ -605,10 +554,6 @@ test "occurs: nested recursive tag union (v = [ Cons(elem, Box(v)) ] )" {
     try std.testing.expect(err_chain.len == 2);
     try std.testing.expectEqual(err_chain[0], boxed_linked_list);
     try std.testing.expectEqual(err_chain[1], linked_list);
-
-    for (scratch.visited.items.items[0..]) |visited_desc_idx| {
-        try std.testing.expectEqual(Mark.none, types_store.getDesc(visited_desc_idx).mark);
-    }
 }
 
 test "occurs: recursive tag union (v = List: [ Cons(Elem, List), Nil ])" {
@@ -633,6 +578,7 @@ test "occurs: recursive tag union (v = List: [ Cons(Elem, List), Nil ])" {
         backing_var,
         &.{},
         Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 },
+        false,
     ));
 
     // assert that starting from the nominal type, it works
@@ -649,10 +595,6 @@ test "occurs: recursive tag union (v = List: [ Cons(Elem, List), Nil ])" {
     try std.testing.expectEqual(1, err_chain_nominal1.len);
     try std.testing.expectEqual(nominal_type, err_chain_nominal1[0]);
 
-    for (scratch.visited.items.items[0..]) |visited_desc_idx| {
-        try std.testing.expectEqual(Mark.none, types_store.getDesc(visited_desc_idx).mark);
-    }
-
     // assert that starting from the the tag union, it works
 
     const result2 = occurs(&types_store, &scratch, backing_var);
@@ -666,10 +608,6 @@ test "occurs: recursive tag union (v = List: [ Cons(Elem, List), Nil ])" {
     const err_chain_nominal2 = scratch.errChainNominalVarsSlice();
     try std.testing.expectEqual(1, err_chain_nominal2.len);
     try std.testing.expectEqual(nominal_type, err_chain_nominal2[0]);
-
-    for (scratch.visited.items.items[0..]) |visited_desc_idx| {
-        try std.testing.expectEqual(Mark.none, types_store.getDesc(visited_desc_idx).mark);
-    }
 }
 
 test "occurs: recursive tag union with multiple nominals (TypeA := TypeB, TypeB := [ Cons(Elem, TypeA), Nil ])" {
@@ -698,6 +636,7 @@ test "occurs: recursive tag union with multiple nominals (TypeA := TypeB, TypeB 
         type_b_backing,
         &.{},
         Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 },
+        false,
     ));
 
     // Set up TypeA = Type B
@@ -706,6 +645,7 @@ test "occurs: recursive tag union with multiple nominals (TypeA := TypeB, TypeB 
         type_b_nominal,
         &.{},
         Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 },
+        false,
     ));
 
     // assert that starting from the `TypeA` nominal, it works
@@ -723,10 +663,6 @@ test "occurs: recursive tag union with multiple nominals (TypeA := TypeB, TypeB 
     try std.testing.expectEqual(type_b_nominal, err_chain_nominal1[0]);
     try std.testing.expectEqual(type_a_nominal, err_chain_nominal1[1]);
 
-    for (scratch.visited.items.items[0..]) |visited_desc_idx| {
-        try std.testing.expectEqual(Mark.none, types_store.getDesc(visited_desc_idx).mark);
-    }
-
     // assert that starting from the `TypeB` nominal, it works
 
     const result2 = occurs(&types_store, &scratch, type_b_nominal);
@@ -743,10 +679,6 @@ test "occurs: recursive tag union with multiple nominals (TypeA := TypeB, TypeB 
     try std.testing.expectEqual(type_a_nominal, err_chain_nominal2[0]);
     try std.testing.expectEqual(type_b_nominal, err_chain_nominal2[1]);
 
-    for (scratch.visited.items.items[0..]) |visited_desc_idx| {
-        try std.testing.expectEqual(Mark.none, types_store.getDesc(visited_desc_idx).mark);
-    }
-
     // assert that starting from the the tag union, it works
 
     const result3 = occurs(&types_store, &scratch, type_b_backing);
@@ -762,8 +694,4 @@ test "occurs: recursive tag union with multiple nominals (TypeA := TypeB, TypeB 
     try std.testing.expectEqual(2, err_chain_nominal3.len);
     try std.testing.expectEqual(type_b_nominal, err_chain_nominal3[0]);
     try std.testing.expectEqual(type_a_nominal, err_chain_nominal3[1]);
-
-    for (scratch.visited.items.items[0..]) |visited_desc_idx| {
-        try std.testing.expectEqual(Mark.none, types_store.getDesc(visited_desc_idx).mark);
-    }
 }

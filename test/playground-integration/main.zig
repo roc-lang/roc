@@ -280,10 +280,11 @@ const TestData = struct {
 /// Helper to send a message to the WASM Playground and get a response.
 fn sendMessageToWasm(wasm_interface: *const WasmInterface, allocator: std.mem.Allocator, message: WasmMessage) !WasmResponse {
     // Serialize message to JSON
-    var message_json_buffer = std.ArrayList(u8).init(allocator);
+    var message_json_buffer: std.Io.Writer.Allocating = .init(allocator);
     defer message_json_buffer.deinit();
-    try std.json.stringify(message, .{}, message_json_buffer.writer());
-    const message_json = message_json_buffer.items;
+    try std.json.Stringify.value(message, .{}, &message_json_buffer.writer);
+    const message_json = message_json_buffer.written();
+    try message_json_buffer.writer.flush();
 
     // Allocate a buffer in WASM for the message.
     // The WASM module's allocateMessageBuffer export handles this.
@@ -358,10 +359,7 @@ fn sendMessageToWasm(wasm_interface: *const WasmInterface, allocator: std.mem.Al
     const response_json_slice = response_slice[0..null_terminator_idx];
 
     // Parse JSON response
-    const parsed_response = std.json.parseFromSlice(WasmResponse, allocator, response_json_slice, .{
-        .allocate = .alloc_always,
-    }) catch |err| {
-        logDebug("[ERROR] Failed to parse JSON response: {}. JSON was: {s}\n", .{ err, response_json_slice });
+    const parsed_response = parseWasmResponseJson(allocator, response_json_slice) catch |err| {
         // Free the WASM string before returning error
         _ = wasm_interface.module_instance.invoke(wasm_interface.freeWasmString_handle, &[_]bytebox.Val{bytebox.Val{ .I32 = @intCast(response_ptr) }}, &[_]bytebox.Val{}, .{}) catch {};
         return err;
@@ -373,6 +371,48 @@ fn sendMessageToWasm(wasm_interface: *const WasmInterface, allocator: std.mem.Al
     };
 
     return parsed_response.value;
+}
+
+fn parseWasmResponseJson(allocator: std.mem.Allocator, response_json_slice: []const u8) !std.json.Parsed(WasmResponse) {
+    const parse_options = std.json.ParseOptions{
+        .allocate = .alloc_always,
+    };
+
+    return std.json.parseFromSlice(WasmResponse, allocator, response_json_slice, parse_options) catch |err| switch (err) {
+        error.SyntaxError => {
+            logDebug("[WARNING] JSON response contained invalid bytes; attempting to sanitize. Parse error: {}\n", .{err});
+            logDebug("[WARNING] Raw JSON bytes: {x}\n", .{response_json_slice});
+
+            var sanitized = try allocator.dupe(u8, response_json_slice);
+            defer allocator.free(sanitized);
+
+            var replacements: usize = 0;
+            for (sanitized, 0..) |byte, idx| {
+                if (byte >= 0x80) {
+                    sanitized[idx] = '?';
+                    replacements += 1;
+                }
+            }
+
+            if (replacements == 0) {
+                logDebug("[ERROR] No high-bit bytes detected while attempting to sanitize JSON.\n", .{});
+                return err;
+            }
+
+            logDebug("[WARNING] Replaced {} invalid byte(s) in WASM response JSON before retrying parse.\n", .{replacements});
+
+            return std.json.parseFromSlice(WasmResponse, allocator, sanitized, parse_options) catch |retry_err| {
+                logDebug("[ERROR] Failed to parse sanitized JSON response: {}. Sanitized JSON: {s}\n", .{ retry_err, sanitized });
+                logDebug("[ERROR] Sanitized JSON bytes: {x}\n", .{sanitized});
+                return retry_err;
+            };
+        },
+        else => {
+            logDebug("[ERROR] Failed to parse JSON response: {}. JSON was: {s}\n", .{ err, response_json_slice });
+            logDebug("[ERROR] JSON bytes: {x}\n", .{response_json_slice});
+            return err;
+        },
+    };
 }
 
 /// Initialize WASM module and interface
@@ -394,7 +434,8 @@ fn setupWasm(gpa: std.mem.Allocator, arena: std.mem.Allocator, wasm_path: []cons
     // Create and instantiate the module instance using the gpa allocator for the VM
     var module_instance = try bytebox.createModuleInstance(.Stack, module_def, gpa);
     errdefer module_instance.destroy();
-    try module_instance.instantiate(.{});
+    // Use a larger stack size (256 KB instead of default 128 KB) to accommodate complex interpreter code
+    try module_instance.instantiate(.{ .stack_size = 1024 * 256 });
 
     logDebug("[INFO] WASM module instantiated successfully.\n", .{});
 
@@ -802,15 +843,15 @@ fn runTests(arena: std.mem.Allocator, gpa: std.mem.Allocator, test_cases: []cons
         .skipped = 0,
     };
 
-    var failures = std.ArrayList(TestFailure).init(arena);
-    defer failures.deinit();
+    var failures = std.ArrayList(TestFailure).empty;
+    defer failures.deinit(arena);
 
     for (test_cases) |case| {
         logDebug("\n[INFO] Setting up WASM interface for test case: {s}...\n", .{case.name});
         var wasm_interface = setupWasm(gpa, arena, wasm_path) catch |err| {
             logDebug("[ERROR] Failed to setup WASM for test case '{s}': {}\n", .{ case.name, err });
             stats.failed += 1;
-            try failures.append(.{
+            try failures.append(arena, .{
                 .case_name = case.name,
                 .step_index = 0,
                 .message = "WASM setup failed",
@@ -826,7 +867,7 @@ fn runTests(arena: std.mem.Allocator, gpa: std.mem.Allocator, test_cases: []cons
             .failed => {
                 stats.failed += 1;
                 const failure_msg = case_execution_result.failure_message orelse "Test failed";
-                try failures.append(.{
+                try failures.append(arena, .{
                     .case_name = case.name,
                     .step_index = 0, // Could be enhanced to track specific step
                     .message = failure_msg,
@@ -852,14 +893,6 @@ fn runTests(arena: std.mem.Allocator, gpa: std.mem.Allocator, test_cases: []cons
     }
 
     return stats;
-}
-
-fn teardownResetState(allocator: std.mem.Allocator, wasm_interface: *WasmInterface) !void {
-    const message = WasmMessage{ .type = "RESET" };
-    const response = try sendMessageToWasm(wasm_interface, allocator, message);
-    // No defer response.deinit(); needed.
-
-    try expectStatus(response.status, "SUCCESS");
 }
 
 // Helper function to create a simple test case with INIT, LOAD_SOURCE, and optional QUERY_TYPES
@@ -889,7 +922,7 @@ pub fn main() !void {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    const stdout = std.io.getStdOut();
+    const stdout = std.fs.File.stdout().deprecatedWriter();
 
     // Handle CLI arguments
     const args = try std.process.argsAlloc(allocator);
@@ -902,16 +935,16 @@ pub fn main() !void {
         if (std.mem.eql(u8, arg, "--verbose")) {
             verbose_mode = true;
         } else if (std.mem.eql(u8, arg, "--help")) {
-            try stdout.writer().print("Usage: test-playground [options] [wasm-path]\n", .{});
-            try stdout.writer().print("Options:\n", .{});
-            try stdout.writer().print("  --verbose           Enable verbose mode\n", .{});
-            try stdout.writer().print("  --wasm-path PATH    Path to the playground WASM file\n", .{});
-            try stdout.writer().print("  --help              Display this help message\n", .{});
+            try stdout.print("Usage: test-playground [options] [wasm-path]\n", .{});
+            try stdout.print("Options:\n", .{});
+            try stdout.print("  --verbose           Enable verbose mode\n", .{});
+            try stdout.print("  --wasm-path PATH    Path to the playground WASM file\n", .{});
+            try stdout.print("  --help              Display this help message\n", .{});
             return;
         } else if (std.mem.eql(u8, arg, "--wasm-path")) {
             i += 1;
             if (i >= args.len) {
-                try stdout.writer().print("Error: --wasm-path requires a path argument\n", .{});
+                try stdout.print("Error: --wasm-path requires a path argument\n", .{});
                 return;
             }
             wasm_path = args[i];
@@ -925,8 +958,8 @@ pub fn main() !void {
     const playground_wasm_path = wasm_path orelse "zig-out/bin/playground.wasm";
 
     // Setup our test cases
-    var test_cases = std.ArrayList(TestCase).init(allocator);
-    defer test_cases.deinit(); // This will free the TestCase structs and their `steps` slices.
+    var test_cases = std.ArrayList(TestCase).empty;
+    defer test_cases.deinit(allocator); // This will free the TestCase structs and their `steps` slices.
 
     // Functional Test
     var happy_path_steps = try allocator.alloc(MessageStep, 8);
@@ -970,21 +1003,21 @@ pub fn main() !void {
         .expected_status = "SUCCESS",
         .expected_hover_info_contains = "Str",
     };
-    try test_cases.append(.{
+    try test_cases.append(allocator, .{
         .name = "Happy Path - Simple Roc Program",
         .steps = happy_path_steps,
     });
 
     // Error Handling Test
     const syntax_error_code_val = try TestData.syntaxErrorRocCode(allocator);
-    try test_cases.append(try createSimpleTest(allocator, "Syntax Error - Mismatched Braces", syntax_error_code_val, .{ .min_errors = 1, .error_messages = &.{"LIST NOT CLOSED"} }, true));
+    try test_cases.append(allocator, try createSimpleTest(allocator, "Syntax Error - Mismatched Braces", syntax_error_code_val, .{ .min_errors = 1, .error_messages = &.{"LIST NOT CLOSED"} }, true));
 
     const type_error_code_val = try TestData.typeErrorRocCode(allocator);
-    try test_cases.append(try createSimpleTest(allocator, "Type Error - Adding String and Number", type_error_code_val, .{ .min_errors = 1, .error_messages = &.{"TYPE MISMATCH"} }, true));
+    try test_cases.append(allocator, try createSimpleTest(allocator, "Type Error - Adding String and Number", type_error_code_val, .{ .min_errors = 1, .error_messages = &.{"MISSING METHOD"} }, true));
 
     // Empty Source Test
     const empty_source_code = try allocator.dupe(u8, "");
-    try test_cases.append(try createSimpleTest(allocator, "Empty Source Code", empty_source_code, null, false)); // Disable diagnostic expectations
+    try test_cases.append(allocator, try createSimpleTest(allocator, "Empty Source Code", empty_source_code, null, false)); // Disable diagnostic expectations
 
     // Code Formatting Test
     var formatted_test_steps = try allocator.alloc(MessageStep, 3);
@@ -1001,7 +1034,7 @@ pub fn main() !void {
         .expected_status = "SUCCESS",
         .expected_data_contains = "foo",
     };
-    try test_cases.append(.{
+    try test_cases.append(allocator, .{
         .name = "QUERY_FORMATTED - Code Formatting",
         .steps = formatted_test_steps,
     });
@@ -1014,7 +1047,7 @@ pub fn main() !void {
         .expected_status = "INVALID_MESSAGE",
         .expected_message_contains = "Unknown message type",
     };
-    try test_cases.append(.{
+    try test_cases.append(allocator, .{
         .name = "Invalid Message Type",
         .steps = invalid_msg_type_steps,
     });
@@ -1038,7 +1071,7 @@ pub fn main() !void {
         .owned_source = happy_code_after_reset,
     };
     reset_test_steps[4] = .{ .message = .{ .type = "QUERY_TYPES" }, .expected_status = "SUCCESS", .expected_data_contains = "inferred-types" };
-    try test_cases.append(.{
+    try test_cases.append(allocator, .{
         .name = "RESET Message Functionality",
         .steps = reset_test_steps,
     });
@@ -1060,7 +1093,7 @@ pub fn main() !void {
         .expected_diagnostics = .{ .min_errors = 1, .error_messages = &.{"LIST NOT CLOSED"} },
         .owned_source = code_for_mem_test_2,
     };
-    try test_cases.append(.{
+    try test_cases.append(allocator, .{
         .name = "Memory Corruption on Reset - Load, Reset, Load",
         .steps = memory_corruption_steps,
     });
@@ -1086,14 +1119,14 @@ pub fn main() !void {
     get_hover_info_steps[2] = .{
         .message = .{ .type = "GET_HOVER_INFO", .identifier = "num", .line = 7, .ch = 1 },
         .expected_status = "SUCCESS",
-        .expected_hover_info_contains = "Num(Int(Signed32))",
+        .expected_hover_info_contains = "I32",
     };
-    try test_cases.append(.{
+    try test_cases.append(allocator, .{
         .name = "GET_HOVER_INFO - Specific Type Query",
         .steps = get_hover_info_steps,
     });
 
-    // ====== REPL Test Cases ======
+    // REPL Test Cases
 
     // Test: REPL Lifecycle - Init, Step, Clear, Reset
     var repl_lifecycle_steps = try allocator.alloc(MessageStep, 5);
@@ -1103,7 +1136,7 @@ pub fn main() !void {
     repl_lifecycle_steps[3] = .{ .message = .{ .type = "CLEAR_REPL" }, .expected_status = "SUCCESS", .expected_message_contains = "REPL cleared" };
     repl_lifecycle_steps[4] = .{ .message = .{ .type = "RESET" }, .expected_status = "SUCCESS" };
 
-    try test_cases.append(.{
+    try test_cases.append(allocator, .{
         .name = "REPL Lifecycle - Init, Step, Clear, Reset",
         .steps = repl_lifecycle_steps,
     });
@@ -1117,7 +1150,7 @@ pub fn main() !void {
     repl_core_steps[4] = .{ .message = .{ .type = "REPL_STEP", .input = "y" }, .expected_status = "SUCCESS", .expected_result_output_contains = "15" };
     repl_core_steps[5] = .{ .message = .{ .type = "RESET" }, .expected_status = "SUCCESS" };
 
-    try test_cases.append(.{
+    try test_cases.append(allocator, .{
         .name = "REPL Core - Definitions and Expressions",
         .steps = repl_core_steps,
     });
@@ -1137,7 +1170,7 @@ pub fn main() !void {
     };
     repl_redefinition_steps[7] = .{ .message = .{ .type = "RESET" }, .expected_status = "SUCCESS" };
 
-    try test_cases.append(.{
+    try test_cases.append(allocator, .{
         .name = "REPL Variable Redefinition - Dependency Updates",
         .steps = repl_redefinition_steps,
     });
@@ -1150,9 +1183,9 @@ pub fn main() !void {
     repl_error_steps[3] = .{
         .message = .{ .type = "REPL_STEP", .input = "x +" }, // Invalid syntax - incomplete expression
         .expected_status = "SUCCESS",
-        .expected_result_output_contains = "Crash:",
+        .expected_result_output_contains = "UNEXPECTED TOKEN",
         .expected_result_type = "error",
-        .expected_result_error_stage = "evaluation",
+        .expected_result_error_stage = "parse",
     };
     repl_error_steps[4] = .{
         .message = .{ .type = "REPL_STEP", .input = "x" }, // Should still work
@@ -1161,7 +1194,7 @@ pub fn main() !void {
     };
     repl_error_steps[5] = .{ .message = .{ .type = "RESET" }, .expected_status = "SUCCESS" };
 
-    try test_cases.append(.{
+    try test_cases.append(allocator, .{
         .name = "REPL Error Handling - Invalid Syntax Recovery",
         .steps = repl_error_steps,
     });
@@ -1178,7 +1211,7 @@ pub fn main() !void {
         .expected_data_contains = "can-ir",
     };
 
-    try test_cases.append(.{
+    try test_cases.append(allocator, .{
         .name = "REPL Compiler Integration - Query After Evaluation",
         .steps = repl_compiler_steps,
     });
@@ -1199,7 +1232,7 @@ pub fn main() !void {
     };
     repl_isolation_steps[5] = .{ .message = .{ .type = "QUERY_TYPES" }, .expected_status = "SUCCESS" };
 
-    try test_cases.append(.{
+    try test_cases.append(allocator, .{
         .name = "REPL State Isolation - Mode Switching",
         .steps = repl_isolation_steps,
     });

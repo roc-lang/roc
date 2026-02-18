@@ -106,7 +106,8 @@ pub const ExposedItems = struct {
     }
 
     /// Serialized representation of ExposedItems
-    pub const Serialized = struct {
+    /// Uses extern struct to guarantee consistent field layout across optimization levels.
+    pub const Serialized = extern struct {
         items: SortedArrayBuilder(IdentIdx, u16).Serialized,
 
         /// Serialize an ExposedItems into this Serialized struct, appending data to the writer
@@ -119,19 +120,12 @@ pub const ExposedItems = struct {
             try self.items.serialize(&exposed_items.items, allocator, writer);
         }
 
-        /// Deserialize this Serialized struct into an ExposedItems
-        pub fn deserialize(self: *Serialized, offset: i64) *ExposedItems {
-            // ExposedItems.Serialized should be at least as big as ExposedItems
-            std.debug.assert(@sizeOf(Serialized) >= @sizeOf(ExposedItems));
-
-            // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
-            const exposed_items = @as(*ExposedItems, @ptrFromInt(@intFromPtr(self)));
-
-            exposed_items.* = ExposedItems{
-                .items = self.items.deserialize(offset).*,
+        /// Deserialize into an ExposedItems value (no in-place modification of cache buffer).
+        /// The base_addr parameter is the base address of the serialized buffer in memory.
+        pub fn deserializeInto(self: *const Serialized, base_addr: usize) ExposedItems {
+            return ExposedItems{
+                .items = self.items.deserializeInto(base_addr),
             };
-
-            return exposed_items;
         }
     };
 
@@ -175,7 +169,7 @@ pub const ExposedItems = struct {
 
     /// Iterator for all exposed items
     pub const Iterator = struct {
-        // items: []const SortedArrayBuilder(IdentIdx, u16).Entry,
+        items: []const SortedArrayBuilder(IdentIdx, u16).Entry,
         index: usize,
 
         pub fn next(self: *Iterator) ?struct { ident_idx: IdentIdx, node_idx: u16 } {
@@ -261,7 +255,7 @@ test "ExposedItems empty CompactWriter roundtrip" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try allocator.alignedAlloc(u8, 16, @intCast(file_size));
+    const buffer = try allocator.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(file_size));
     defer allocator.free(buffer);
 
     _ = try file.read(buffer);
@@ -318,7 +312,7 @@ test "ExposedItems basic CompactWriter roundtrip" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try allocator.alignedAlloc(u8, @alignOf(ExposedItems.Serialized), @intCast(file_size));
+    const buffer = try allocator.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(@alignOf(ExposedItems.Serialized)), @intCast(file_size));
     defer allocator.free(buffer);
 
     _ = try file.read(buffer);
@@ -326,7 +320,7 @@ test "ExposedItems basic CompactWriter roundtrip" {
     // The serialized ExposedItems.Serialized struct is at the beginning of the buffer
     // (appendAlloc is called first in serialize)
     const serialized_ptr = @as(*ExposedItems.Serialized, @ptrCast(@alignCast(buffer.ptr)));
-    const deserialized = serialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
+    const deserialized = serialized_ptr.deserializeInto(@intFromPtr(buffer.ptr));
 
     // Verify the items are accessible
     try testing.expectEqual(@as(usize, 3), deserialized.count());
@@ -375,7 +369,7 @@ test "ExposedItems with duplicates CompactWriter roundtrip" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try allocator.alignedAlloc(u8, @alignOf(ExposedItems.Serialized), @intCast(file_size));
+    const buffer = try allocator.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(@alignOf(ExposedItems.Serialized)), @intCast(file_size));
     defer allocator.free(buffer);
 
     _ = try file.read(buffer);
@@ -383,7 +377,7 @@ test "ExposedItems with duplicates CompactWriter roundtrip" {
     // The serialized ExposedItems.Serialized struct is at the beginning of the buffer
     // (appendAlloc is called first in serialize)
     const serialized_ptr: *ExposedItems.Serialized = @ptrCast(@alignCast(buffer.ptr));
-    const deserialized = serialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
+    const deserialized = serialized_ptr.deserializeInto(@intFromPtr(buffer.ptr));
 
     // After deduplication, should have only 2 items
     try testing.expectEqual(@as(usize, 2), deserialized.count());
@@ -442,14 +436,14 @@ test "ExposedItems comprehensive CompactWriter roundtrip" {
     try file.seekTo(0);
     const file_size = try file.getEndPos();
     const serialized_align = @alignOf(ExposedItems);
-    const buffer = try allocator.alignedAlloc(u8, serialized_align, @intCast(file_size));
+    const buffer = try allocator.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(serialized_align), @intCast(file_size));
     defer allocator.free(buffer);
 
     _ = try file.read(buffer);
 
     // Cast to Serialized type and deserialize
     const serialized_ptr: *ExposedItems.Serialized = @ptrCast(@alignCast(buffer.ptr));
-    const deserialized = serialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
+    const deserialized = serialized_ptr.deserializeInto(@intFromPtr(buffer.ptr));
 
     // Verify all items
     try testing.expectEqual(@as(usize, test_items.len), deserialized.count());
@@ -479,7 +473,7 @@ test "ExposedItems edge cases CompactWriter roundtrip" {
         _ = try writer.writeToBuffer(buffer);
 
         const serialized_ptr = @as(*ExposedItems.Serialized, @ptrCast(@alignCast(buffer.ptr)));
-        const deserialized = serialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
+        const deserialized = serialized_ptr.deserializeInto(@intFromPtr(buffer.ptr));
 
         try testing.expectEqual(@as(usize, 0), deserialized.count());
     }
@@ -510,13 +504,13 @@ test "ExposedItems edge cases CompactWriter roundtrip" {
         // Read back and verify
         try file.seekTo(0);
         const file_size = try file.getEndPos();
-        const buffer = try allocator.alignedAlloc(u8, @alignOf(ExposedItems.Serialized), @intCast(file_size));
+        const buffer = try allocator.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(@alignOf(ExposedItems.Serialized)), @intCast(file_size));
         defer allocator.free(buffer);
 
         _ = try file.read(buffer);
 
         const serialized_ptr = @as(*ExposedItems.Serialized, @ptrCast(@alignCast(buffer.ptr)));
-        const deserialized = serialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
+        const deserialized = serialized_ptr.deserializeInto(@intFromPtr(buffer.ptr));
 
         try testing.expectEqual(@as(usize, 1), deserialized.count());
         try testing.expectEqual(@as(?u16, 42), deserialized.getNodeIndexById(allocator, 100));

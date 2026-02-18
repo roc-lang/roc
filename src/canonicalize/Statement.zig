@@ -13,16 +13,13 @@
 
 const std = @import("std");
 const base = @import("base");
-const types = @import("types");
 
 const CIR = @import("CIR.zig");
 const ModuleEnv = @import("ModuleEnv.zig");
 
-const Region = base.Region;
 const StringLiteral = base.StringLiteral;
 const Ident = base.Ident;
 const DataSpan = base.DataSpan;
-const SExpr = base.SExpr;
 const SExprTree = base.SExprTree;
 const Pattern = CIR.Pattern;
 const Expr = CIR.Expr;
@@ -50,6 +47,7 @@ pub const Statement = union(enum) {
     s_var: struct {
         pattern_idx: Pattern.Idx,
         expr: Expr.Idx,
+        anno: ?Annotation.Idx,
     },
     /// Reassignment of a previously declared var
     ///
@@ -109,6 +107,28 @@ pub const Statement = union(enum) {
         expr: Expr.Idx,
         body: Expr.Idx,
     },
+    /// A block of code that will run repeatedly while a condition is true.
+    ///
+    /// Not valid at the top level of a module
+    ///
+    /// ```roc
+    /// while $count < 10 {
+    ///     print!($count.toStr())
+    ///     $count = $count + 1
+    /// }
+    /// ```
+    s_while: struct {
+        cond: Expr.Idx,
+        body: Expr.Idx,
+    },
+    /// A early break from the nearest enclosing loop.
+    ///
+    /// Not valid at the top level of a module
+    ///
+    /// ```roc
+    /// break
+    /// ```
+    s_break: struct {},
     /// A early return of the enclosing function.
     ///
     /// Not valid at the top level of a module
@@ -118,6 +138,8 @@ pub const Statement = union(enum) {
     /// ```
     s_return: struct {
         expr: Expr.Idx,
+        /// The lambda this return belongs to (for type unification).
+        lambda: Expr.Idx,
     },
     /// Brings in another module for use in the current module, optionally exposing only certain members of that module.
     ///
@@ -137,22 +159,48 @@ pub const Statement = union(enum) {
         header: CIR.TypeHeader.Idx,
         anno: CIR.TypeAnno.Idx,
     },
-    /// A nominal type declaration, e.g., `Foo := (U64, Str)`
+    /// A nominal type declaration, e.g., `Foo := (U64, Str)` or `Foo :: (U64, Str)`
     ///
     /// Only valid at the top level of a module
     s_nominal_decl: struct {
         header: CIR.TypeHeader.Idx,
         anno: CIR.TypeAnno.Idx,
+        /// True if declared with :: (opaque), false if declared with := (nominal)
+        is_opaque: bool,
     },
     /// A type annotation, declaring that the value referred to by an ident in the same scope should be a given type.
     ///
     /// ```roc
-    /// print! : Str => Result({}, [IOErr])
+    /// print! : Str => Try({}, [IOErr])
     /// ```
+    ///
+    /// Typically an annotation will be stored on the `Def` and will not be
+    /// in the tree independently. But if there is an annotation without a
+    /// corresponding we represent it with this node
     s_type_anno: struct {
         name: Ident.Idx,
         anno: CIR.TypeAnno.Idx,
         where: ?CIR.WhereClause.Span,
+    },
+
+    /// A type variable alias within a block - enables static dispatch on type vars.
+    /// This binds an uppercase name to a type variable from the enclosing function signature,
+    /// allowing method calls like `Thing.method(arg)` that dispatch based on what the type
+    /// variable resolves to at runtime.
+    ///
+    /// ```roc
+    /// foo : thing -> Str
+    /// foo = |arg|
+    ///     Thing : thing       # Type var alias - binds `Thing` to the type variable `thing`
+    ///     Thing.something(arg) # Static dispatch using the type var alias
+    /// ```
+    s_type_var_alias: struct {
+        /// The alias name (e.g., "Thing") - uppercase identifier
+        alias_name: Ident.Idx,
+        /// The type variable name (e.g., "thing") - the lowercase type var being aliased
+        type_var_name: Ident.Idx,
+        /// Reference to the type annotation index for the type variable (from the enclosing scope)
+        type_var_anno: CIR.TypeAnno.Idx,
     },
 
     s_runtime_error: struct {
@@ -160,7 +208,7 @@ pub const Statement = union(enum) {
     },
 
     pub const Idx = enum(u32) { _ };
-    pub const Span = struct { span: DataSpan };
+    pub const Span = extern struct { span: DataSpan };
 
     pub fn pushToSExprTree(self: *const @This(), env: *const ModuleEnv, tree: *SExprTree, stmt_idx: Statement.Idx) std.mem.Allocator.Error!void {
         switch (self.*) {
@@ -255,6 +303,24 @@ pub const Statement = union(enum) {
 
                 try tree.endNode(begin, attrs);
             },
+            .s_while => |s| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("s-while");
+                const region = env.store.getStatementRegion(stmt_idx);
+                try env.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const attrs = tree.beginNode();
+
+                try env.store.getExpr(s.cond).pushToSExprTree(env, tree, s.cond);
+                try env.store.getExpr(s.body).pushToSExprTree(env, tree, s.body);
+
+                try tree.endNode(begin, attrs);
+            },
+            .s_break => {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("s-break");
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
             .s_return => |s| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("s-return");
@@ -339,6 +405,19 @@ pub const Statement = union(enum) {
                     }
                     try tree.endNode(where_begin, where_attrs);
                 }
+
+                try tree.endNode(begin, attrs);
+            },
+            .s_type_var_alias => |s| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("s-type-var-alias");
+                const region = env.store.getStatementRegion(stmt_idx);
+                try env.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                try tree.pushStringPair("alias", env.getIdentText(s.alias_name));
+                try tree.pushStringPair("type-var", env.getIdentText(s.type_var_name));
+                const attrs = tree.beginNode();
+
+                try env.store.getTypeAnno(s.type_var_anno).pushToSExprTree(env, tree, s.type_var_anno);
 
                 try tree.endNode(begin, attrs);
             },

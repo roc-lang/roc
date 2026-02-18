@@ -110,32 +110,32 @@ This is an unexpected parsing error. Please check your syntax.
 
 # TOKENS
 ~~~zig
-KwApp(1:1-1:4),OpenSquare(1:4-1:5),CloseSquare(1:5-1:6),OpenCurly(1:6-1:7),LowerIdent(1:7-1:8),OpColon(1:8-1:9),KwPlatform(1:9-1:17),StringStart(1:17-1:18),StringPart(1:18-1:18),StringEnd(1:18-1:19),CloseCurly(1:19-1:20),OpenCurly(1:20-1:21),OpenCurly(1:21-1:22),Int(1:22-1:23),
-CloseCurly(2:1-2:2),CloseCurly(2:2-2:3),
-StringStart(4:1-4:2),StringPart(4:2-4:2),StringEnd(4:2-4:3),
-EndOfFile(5:1-5:1),
+KwApp,OpenSquare,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,OpenCurly,OpenCurly,Int,
+CloseCurly,CloseCurly,
+StringStart,StringPart,StringEnd,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-4.3
-	(app @1.1-1.20
-		(provides @1.4-1.6)
-		(record-field @1.7-1.19 (name "f")
-			(e-string @1.17-1.19
-				(e-string-part @1.18-1.18 (raw ""))))
-		(packages @1.6-1.20
-			(record-field @1.7-1.19 (name "f")
-				(e-string @1.17-1.19
-					(e-string-part @1.18-1.18 (raw ""))))))
+(file
+	(app
+		(provides)
+		(record-field (name "f")
+			(e-string
+				(e-string-part (raw ""))))
+		(packages
+			(record-field (name "f")
+				(e-string
+					(e-string-part (raw ""))))))
 	(statements
-		(s-malformed @1.20-1.21 (tag "statement_unexpected_token"))
-		(s-malformed @1.21-1.22 (tag "statement_unexpected_token"))
-		(s-malformed @1.22-1.23 (tag "statement_unexpected_token"))
-		(s-malformed @2.1-2.2 (tag "statement_unexpected_token"))
-		(s-malformed @2.2-2.3 (tag "statement_unexpected_token"))
-		(s-malformed @4.1-4.2 (tag "statement_unexpected_token"))
-		(s-malformed @4.2-4.2 (tag "statement_unexpected_token"))
-		(s-malformed @4.2-4.3 (tag "statement_unexpected_token"))))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc

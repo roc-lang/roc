@@ -1,18 +1,7 @@
 //! Integration tests for let-polymorphism that parse, canonicalize, and type-check
 //! actual code to ensure polymorphic values work correctly in practice.
 
-const std = @import("std");
-const base = @import("base");
-const parse = @import("parse");
-const can = @import("can");
-const Check = @import("../Check.zig");
 const TestEnv = @import("./TestEnv.zig");
-
-const Can = can.Can;
-const ModuleEnv = can.ModuleEnv;
-const CanonicalizedExpr = can.Can.CanonicalizedExpr;
-const testing = std.testing;
-const test_allocator = testing.allocator;
 
 test "direct polymorphic identity usage" {
     const source =
@@ -23,7 +12,12 @@ test "direct polymorphic identity usage" {
         \\    { a, b }
         \\}
     ;
-    try typeCheck(source, "{ a: Num(_size), b: Str }");
+    // The field 'a' has the same type as the dispatcher for from_numeral, so they should share the same name
+    // Note: 'c' is used because 'a' and 'b' are already identifiers in the code
+    try typeCheck(
+        source,
+        "{ a: Dec, b: Str }",
+    );
 }
 
 test "higher-order function with polymorphic identity" {
@@ -36,7 +30,10 @@ test "higher-order function with polymorphic identity" {
         \\    { a, b }
         \\}
     ;
-    try typeCheck(source, "{ a: Num(_size), b: Str }");
+    try typeCheck(
+        source,
+        "{ a: Dec, b: Str }",
+    );
 }
 
 test "let-polymorphism with function composition" {
@@ -45,12 +42,13 @@ test "let-polymorphism with function composition" {
         \\    compose = |f, g| |x| f(g(x))
         \\    double = |x| x * 2
         \\    add_one = |x| x + 1
-        \\    num_compose = compose(double, add_one)
-        \\    result1 = num_compose(5)
-        \\    { result1 }
+        \\    compose(double, add_one)
         \\}
     ;
-    try typeCheck(source, "Num(_size)");
+    try typeCheck(
+        source,
+        "a -> a where [a.plus : a, Dec -> a, a.times : a, Dec -> a]",
+    );
 }
 
 test "polymorphic empty list" {
@@ -62,50 +60,25 @@ test "polymorphic empty list" {
         \\    { empty, nums, strs }
         \\}
     ;
-    try typeCheck(source, "{ empty: List(_elem), nums: List(Num(_size)), strs: List(Str) }");
+    try typeCheck(
+        source,
+        "{ empty: List(_a), nums: List(Dec), strs: List(Str) }",
+    );
 }
 
 test "polymorphic cons function" {
-    // This test is skipped because these features are missing:
-    //   - Spread operator `..` in list literals [fails at parse stage - syntax not recognized]
-    // TODO: Enable when spread operator is implemented in the parser
-    if (true) return error.SkipZigTest;
-
     const source =
         \\{
-        \\    cons = |x, xs| [x, ..xs]
+        \\    cons = |x, xs| List.concat([x], xs)
         \\    list1 = cons(1, [2, 3])
         \\    list2 = cons("a", ["b", "c"])
         \\    { list1, list2 }
         \\}
     ;
-    try typeCheck(source, "TODO");
-}
-
-test "polymorphic map function" {
-    // This test is skipped because these features are missing:
-    //   - If-then-else expressions [fails at parse stage - syntax not recognized]
-    //   - Recursive function calls [would fail at canonicalize stage - self-references not resolved]
-    //   - List slicing `xs[1..]` [fails at parse stage - range syntax not recognized]
-    //   - Spread operator `[x, ..xs]` [fails at parse stage - syntax not recognized]
-    //   - List equality comparison `xs == []` [may fail at type-check stage]
-    // Note: List indexing `xs[0]` does parse and canonicalize but may have type issues
-    // TODO: Enable when conditional expressions, recursion, and list operations are implemented
-    if (true) return error.SkipZigTest;
-
-    const source =
-        \\{
-        \\    map = |f, xs|
-        \\        if xs == [] then
-        \\            []
-        \\        else
-        \\            [f(xs[0]), ..map(f, xs[1..])]
-        \\    double = |x| x * 2
-        \\    nums = map(double, [1, 2, 3])
-        \\    { nums }
-        \\}
-    ;
-    try typeCheck(source, "TODO");
+    try typeCheck(
+        source,
+        "{ list1: List(Dec), list2: List(Str) }",
+    );
 }
 
 test "polymorphic record constructor" {
@@ -113,12 +86,15 @@ test "polymorphic record constructor" {
         \\{
         \\    make_pair = |x, y| { first: x, second: y }
         \\    pair1 = make_pair(1, "a")
-        \\    pair2 = make_pair("hello", 42)
+        \\    pair2 = make_pair("b", 42)
         \\    pair3 = make_pair(True, False)
         \\    { pair1, pair2, pair3 }
         \\}
     ;
-    try typeCheck(source, "{ pair1: { first: Num(_size), second: Str }, pair2: { first: Str, second: Num(_size2) }, pair3: { first: Bool, second: Bool } }");
+    try typeCheck(
+        source,
+        "{ pair1: { first: Dec, second: Str }, pair2: { first: Str, second: Dec }, pair3: { first: [True, ..], second: [False, ..] } }",
+    );
 }
 
 test "polymorphic identity with various numeric types" {
@@ -127,11 +103,14 @@ test "polymorphic identity with various numeric types" {
         \\    id = |x| x
         \\    int_val = id(42)
         \\    float_val = id(3.14)
-        \\    bool_val = id(true)
+        \\    bool_val = id(True)
         \\    { int_val, float_val, bool_val }
         \\}
     ;
-    try typeCheck(source, "{ bool_val: Error, float_val: Num(Frac(_size)), int_val: Num(_size2) }");
+    try typeCheck(
+        source,
+        "{ bool_val: [True, ..], float_val: Dec, int_val: Dec }",
+    );
 }
 
 test "nested polymorphic data structures" {
@@ -144,7 +123,10 @@ test "nested polymorphic data structures" {
         \\    { box1, box2, nested }
         \\}
     ;
-    try typeCheck(source, "{ box1: { value: Num(_size) }, box2: { value: Str }, nested: { value: { value: Num(_size2) } } }");
+    try typeCheck(
+        source,
+        "{ box1: { value: Dec }, box2: { value: Str }, nested: { value: { value: Dec } } }",
+    );
 }
 
 test "polymorphic function in let binding" {
@@ -159,7 +141,10 @@ test "polymorphic function in let binding" {
         \\    result
         \\}
     ;
-    try typeCheck(source, "{ a: Num(_size), b: Str }");
+    try typeCheck(
+        source,
+        "{ a: Dec, b: Str }",
+    );
 }
 
 test "polymorphic swap function" {
@@ -173,34 +158,10 @@ test "polymorphic swap function" {
         \\    { swapped1, swapped2 }
         \\}
     ;
-    try typeCheck(source, "{ swapped1: { first: Str, second: Num(_size) }, swapped2: { first: Num(_size2), second: Bool } }");
-}
-
-test "polymorphic fold function" {
-    // This test is skipped because these features are missing:
-    //   - If-then-else expressions [fails at parse stage - syntax not recognized]
-    //   - Recursive function calls [would fail at canonicalize stage - self-references not resolved]
-    //   - List equality comparison `xs == []` [may fail at type-check stage]
-    //   - String concatenation operator `++` [fails at parse or canonicalize stage]
-    //   - List slicing `xs[1..]` [fails at parse stage - range syntax not recognized]
-    // Even if parsing succeeded, the canonicalizer doesn't support recursive
-    // let-bindings, and the type checker doesn't handle recursive polymorphic functions.
-    // TODO: Enable when conditional expressions, recursion, and list/string operations are implemented
-    if (true) return error.SkipZigTest;
-
-    const source =
-        \\{
-        \\    fold = |f, acc, xs|
-        \\        if xs == [] then
-        \\            acc
-        \\        else
-        \\            fold(f, f(acc, xs[0]), xs[1..])
-        \\    sum = fold(|a, b| a + b, 0, [1, 2, 3])
-        \\    concat = fold(|a, b| a ++ b, "", ["a", "b", "c"])
-        \\    { sum, concat }
-        \\}
-    ;
-    try typeCheck(source, "TODO");
+    try typeCheck(
+        source,
+        "{ swapped1: { first: Str, second: Dec }, swapped2: { first: Dec, second: [True, ..] } }",
+    );
 }
 
 test "polymorphic option type simulation" {
@@ -214,7 +175,10 @@ test "polymorphic option type simulation" {
         \\    { opt1, opt2, opt3 }
         \\}
     ;
-    try typeCheck(source, "{ opt1: { tag: Str, value: Num(_size) }, opt2: { tag: Str, value: Str }, opt3: { tag: Str } }");
+    try typeCheck(
+        source,
+        "{ opt1: { tag: Str, value: Dec }, opt2: { tag: Str, value: Str }, opt3: { tag: Str } }",
+    );
 }
 
 test "polymorphic const function" {
@@ -224,39 +188,14 @@ test "polymorphic const function" {
         \\    always5 = const(5)
         \\    alwaysHello = const("hello")
         \\    num = always5(99)
-        \\    str = alwaysHello(true)
+        \\    str = alwaysHello(True)
         \\    { num, str }
         \\}
     ;
-    try typeCheck(source, "{ num: Num(_size), str: Str }");
-}
-
-test "shadowing of polymorphic values" {
-    // This test is skipped because these features are missing:
-    //   - Type checking for nested block expressions that return values
-    //     [parses and canonicalizes successfully, fails at type-check stage]
-    // The inner block `{ id = ...; b = ...; b }` should return `b` as its value.
-    // The type checker fails to properly handle the combination of:
-    //   1. A nested block that shadows a polymorphic identifier
-    //   2. The block returning a value (the final `b` expression)
-    //   3. Continuing to use the original polymorphic `id` after the block
-    // TODO: Enable when nested block expressions with value returns are fully supported
-    if (true) return error.SkipZigTest;
-
-    const source =
-        \\{
-        \\    id = |x| x
-        \\    a = id(1)
-        \\    inner = {
-        \\        id = |x| x + 1  // shadows outer id, now monomorphic
-        \\        b = id(2)
-        \\        b
-        \\    }
-        \\    c = id("test")  // uses outer polymorphic id
-        \\    { a, inner, c }
-        \\}
-    ;
-    try typeCheck(source, "TODO");
+    try typeCheck(
+        source,
+        "{ num: Dec, str: Str }",
+    );
 }
 
 test "polymorphic pipe function" {
@@ -264,18 +203,21 @@ test "polymorphic pipe function" {
         \\{
         \\    pipe = |x, f| f(x)
         \\    double = |n| n * 2
-        \\    length = |s| 5 
+        \\    length = |_s| 5
         \\    num_result = pipe(21, double)
         \\    str_result = pipe("hello", length)
         \\    { num_result, str_result }
         \\}
     ;
-    try typeCheck(source, "{ num_result: Num(_size), str_result: Num(_size2) }");
+    try typeCheck(
+        source,
+        "{ num_result: Dec, str_result: Dec }",
+    );
 }
 
 /// A unified helper to run the full pipeline: parse, canonicalize, and type-check source code.
 fn typeCheck(comptime source_expr: []const u8, expected_type: []const u8) !void {
-    var test_env = try TestEnv.initExpr(source_expr);
+    var test_env = try TestEnv.initExpr("Test", source_expr);
     defer test_env.deinit();
     return test_env.assertLastDefType(expected_type);
 }

@@ -2,6 +2,7 @@
 //! (or http if the URL host is `localhost`, `127.0.0.1`, or `::1`)
 
 const std = @import("std");
+const base = @import("base");
 const builtin = @import("builtin");
 const bundle = @import("bundle.zig");
 
@@ -26,16 +27,7 @@ pub const DownloadError = error{
 /// Parse URL and validate it meets our security requirements.
 /// Returns the hash from the URL if valid.
 pub fn validateUrl(url: []const u8) DownloadError![]const u8 {
-    // Check for https:// prefix
-    if (std.mem.startsWith(u8, url, "https://")) {
-        // This is fine, extract hash from last segment
-    } else if (std.mem.startsWith(u8, url, "http://127.0.0.1:") or std.mem.startsWith(u8, url, "http://127.0.0.1/")) {
-        // This is allowed for local testing (IPv4 loopback)
-    } else if (std.mem.startsWith(u8, url, "http://[::1]:") or std.mem.startsWith(u8, url, "http://[::1]/")) {
-        // This is allowed for local testing (IPv6 loopback)
-    } else if (std.mem.startsWith(u8, url, "http://localhost:") or std.mem.startsWith(u8, url, "http://localhost/")) {
-        // This is allowed but will require verification that localhost resolves to loopback
-    } else {
+    if (!base.url.isSafeUrl(url)) {
         return error.InvalidUrl;
     }
 
@@ -160,26 +152,27 @@ pub fn download(
     }
 
     // Start the request with the potentially modified URI
-    var server_header_buffer: [SERVER_HEADER_BUFFER_SIZE]u8 = undefined;
-    var request = client.open(.GET, uri, .{
-        .server_header_buffer = &server_header_buffer,
+    var request = client.request(.GET, uri, .{
         .redirect_behavior = .unhandled,
         .extra_headers = extra_headers,
     }) catch return error.HttpError;
     defer request.deinit();
 
-    // Send the request
-    request.send() catch return error.HttpError;
-    request.finish() catch return error.HttpError;
-    request.wait() catch return error.HttpError;
+    // Send just the request head (no body)
+    request.sendBodiless() catch return error.HttpError;
+
+    // Receive headers into a temporary buffer
+    var head_buffer: [SERVER_HEADER_BUFFER_SIZE]u8 = undefined;
+    var response = request.receiveHead(&head_buffer) catch return error.HttpError;
 
     // Check response status
-    if (request.response.status != .ok) {
+    if (response.head.status != .ok) {
         return error.HttpError;
     }
 
-    // Get the response reader
-    const reader = request.reader();
+    // Prepare buffered reader for response body
+    var reader_buffer: [1024]u8 = undefined;
+    const reader = response.reader(&reader_buffer);
 
     // Stream directly to unbundleStream
     var dir_writer = bundle.DirExtractWriter.init(extract_dir);

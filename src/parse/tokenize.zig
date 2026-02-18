@@ -7,7 +7,6 @@
 
 const std = @import("std");
 const base = @import("base");
-const collections = @import("collections");
 const tracy = @import("tracy");
 
 const DataSpan = base.DataSpan;
@@ -46,14 +45,11 @@ pub const Token = struct {
         Float,
         StringStart, // the " that starts a string
         StringEnd, // the " that ends a string
-        MultilineStringStart, // the """ that starts a multiline string
+        MultilineStringStart, // the """ or \\ that starts a multiline string
         StringPart,
         MalformedStringPart, // malformed, but should be treated similar to a StringPart in the parser
         SingleQuote,
-        MalformedSingleQuoteUnclosed, // malformed, but should be treated similar to a SingleQuote in the parser
-        MalformedSingleQuoteEmpty, // malformed, but should be treated similar to a SingleQuote in the parser
-        MalformedSingleQuoteTooLong, // malformed, but should be treated similar to a SingleQuote in the parser
-        MalformedSingleQuoteInvalidEscapeSequence, // malformed, but should be treated similar to a SingleQuote in the parser
+        MalformedSingleQuote, // malformed, but should be treated similar to a SingleQuote in the parser
         Int,
         MalformedNumberBadSuffix, // malformed, but should be treated similar to an int in the parser
         MalformedNumberUnicodeSuffix, // malformed, but should be treated similar to an int in the parser
@@ -120,6 +116,7 @@ pub const Token = struct {
         OpLessThan,
         OpEquals,
         OpColonEqual,
+        OpDoubleColon,
         NoSpaceOpQuestion,
 
         Comma,
@@ -137,7 +134,6 @@ pub const Token = struct {
         KwAs,
         KwCrash,
         KwDbg,
-        KwDebug,
         KwElse,
         KwExpect,
         KwExposes,
@@ -160,48 +156,14 @@ pub const Token = struct {
         KwProvides,
         KwRequires,
         KwReturn,
+        KwTargets,
         KwVar,
         KwWhere,
+        KwWhile,
         KwWith,
+        KwBreak,
 
         MalformedUnknownToken,
-
-        /// Returns true if the node is a keyword.
-        pub fn isKeyword(tok: Tag) bool {
-            return switch (tok) {
-                .KwApp,
-                .KwAs,
-                .KwCrash,
-                .KwDbg,
-                .KwElse,
-                .KwExpect,
-                .KwExposes,
-                .KwExposing,
-                .KwFor,
-                .KwGenerates,
-                .KwHas,
-                .KwHosted,
-                .KwIf,
-                .KwImplements,
-                .KwImport,
-                .KwImports,
-                .KwIn,
-                .KwInterface,
-                .KwMatch,
-                .KwModule,
-                .KwPackage,
-                .KwPackages,
-                .KwPlatform,
-                .KwProvides,
-                .KwRequires,
-                .KwReturn,
-                .KwVar,
-                .KwWhere,
-                .KwWith,
-                => true,
-                else => false,
-            };
-        }
 
         /// Returns true if the node is malformed.
         pub fn isMalformed(tok: Tag) bool {
@@ -260,6 +222,7 @@ pub const Token = struct {
                 .OpLessThan,
                 .OpEquals,
                 .OpColonEqual,
+                .OpDoubleColon,
                 .NoSpaceOpQuestion,
                 .Comma,
                 .Dot,
@@ -274,7 +237,6 @@ pub const Token = struct {
                 .KwAs,
                 .KwCrash,
                 .KwDbg,
-                .KwDebug,
                 .KwElse,
                 .KwExpect,
                 .KwExposes,
@@ -297,9 +259,12 @@ pub const Token = struct {
                 .KwProvides,
                 .KwRequires,
                 .KwReturn,
+                .KwTargets,
                 .KwVar,
                 .KwWhere,
+                .KwWhile,
                 .KwWith,
+                .KwBreak,
                 => false,
 
                 .MalformedDotUnicodeIdent,
@@ -315,10 +280,7 @@ pub const Token = struct {
                 .MalformedOpaqueNameWithoutName,
                 .MalformedUnicodeIdent,
                 .MalformedUnknownToken,
-                .MalformedSingleQuoteUnclosed,
-                .MalformedSingleQuoteEmpty,
-                .MalformedSingleQuoteTooLong,
-                .MalformedSingleQuoteInvalidEscapeSequence,
+                .MalformedSingleQuote,
                 .MalformedStringPart,
                 => true,
             };
@@ -348,6 +310,49 @@ pub const Token = struct {
             return switch (tok) {
                 .LowerIdent,
                 .NamedUnderscore,
+                => true,
+                else => false,
+            };
+        }
+
+        /// Returns true if this token can end an expression, meaning a following
+        /// minus sign should be treated as a binary operator rather than unary.
+        /// For example, in `x-1`, the minus after `x` (LowerIdent) should be binary.
+        pub fn canEndExpression(tok: Tag) bool {
+            return switch (tok) {
+                // Identifiers can end expressions
+                .LowerIdent,
+                .UpperIdent,
+                .MalformedUnicodeIdent,
+                .NamedUnderscore,
+                .MalformedNamedUnderscoreUnicode,
+                .OpaqueName,
+                .MalformedOpaqueNameUnicode,
+                // Dot access can end expressions
+                .DotLowerIdent,
+                .DotUpperIdent,
+                .DotInt,
+                .NoSpaceDotLowerIdent,
+                .NoSpaceDotUpperIdent,
+                .NoSpaceDotInt,
+                .MalformedDotUnicodeIdent,
+                .MalformedNoSpaceDotUnicodeIdent,
+                // Numbers can end expressions
+                .Int,
+                .Float,
+                .MalformedNumberBadSuffix,
+                .MalformedNumberUnicodeSuffix,
+                .MalformedNumberNoDigits,
+                .MalformedNumberNoExponentDigits,
+                // Closing brackets can end expressions
+                .CloseRound,
+                .CloseSquare,
+                .CloseCurly,
+                .CloseStringInterpolation,
+                // String literals can end expressions
+                .StringEnd,
+                .SingleQuote,
+                .MalformedSingleQuote,
                 => true,
                 else => false,
             };
@@ -393,9 +398,12 @@ pub const Token = struct {
         .{ "provides", .KwProvides },
         .{ "requires", .KwRequires },
         .{ "return", .KwReturn },
+        .{ "targets", .KwTargets },
         .{ "var", .KwVar },
         .{ "where", .KwWhere },
+        .{ "while", .KwWhile },
         .{ "with", .KwWith },
+        .{ "break", .KwBreak },
     });
 
     pub const valid_number_suffixes = std.StaticStringMap(void).initComptime(.{
@@ -484,6 +492,10 @@ pub const Diagnostic = struct {
         UnclosedString,
         NonPrintableUnicodeInStrLiteral,
         InvalidUtf8InSource,
+        DollarInMiddleOfIdentifier,
+        SingleQuoteTooLong,
+        SingleQuoteEmpty,
+        SingleQuoteUnclosed,
     };
 };
 
@@ -642,12 +654,8 @@ pub const Cursor = struct {
                         continue;
                     },
                     '.' => {
-                        self.pos += 1;
-                        self.chompIntegerBase10() catch {}; // This is not an issue, have leading `0.`.
-                        tok = .Float;
-                        _ = self.chompExponent() catch {
-                            tok = .MalformedNumberNoExponentDigits;
-                        };
+                        self.pos -= 1; // Go back to the initial 0
+                        tok = self.chompNumberBase10();
                         tok = self.chompNumberSuffix(tok);
                         break;
                     },
@@ -686,7 +694,7 @@ pub const Cursor = struct {
     /// Returns either the original token hypothesis, or a malformed token tag.
     pub fn chompNumberSuffix(self: *Cursor, hypothesis: Token.Tag) Token.Tag {
         if (self.peek()) |c| {
-            const is_ident_char = (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '_' or c >= 0x80;
+            const is_ident_char = (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '_' or c == '$' or c >= 0x80;
             if (!is_ident_char) {
                 return hypothesis;
             }
@@ -823,9 +831,16 @@ pub const Cursor = struct {
     /// Returns whether the chomped identifier was valid - i.e. didn't contain any non-ascii characters.
     pub fn chompIdentGeneral(self: *Cursor) bool {
         var valid = true;
+        const start_pos = self.pos;
         while (self.pos < self.buf.len) {
             const c = self.buf[self.pos];
-            if ((c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '_' or c == '!') {
+            if ((c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '_' or c == '!' or c == '$') {
+                // Allow $ as a valid identifier character
+                if (c == '$' and self.pos > start_pos) {
+                    // But warn if it's not at the start (pos > start_pos means we've moved)
+                    // Use pushMessage to specify the exact location of the $ character
+                    self.pushMessage(.DollarInMiddleOfIdentifier, self.pos, self.pos + 1);
+                }
                 self.pos += 1;
             } else if (c >= 0x80) {
                 valid = false;
@@ -915,6 +930,16 @@ pub const Cursor = struct {
                         return error.InvalidUnicodeEscapeSequence;
                     }
                 }
+                const hex_code = self.buf[hex_start .. self.pos - 1];
+                const codepoint = std.fmt.parseInt(u21, hex_code, 16) catch {
+                    self.pushMessage(.InvalidUnicodeEscapeSequence, escape_start, self.pos);
+                    return error.InvalidUnicodeEscapeSequence;
+                };
+
+                if (!std.unicode.utf8ValidCodepoint(codepoint)) {
+                    self.pushMessage(.InvalidUnicodeEscapeSequence, escape_start, self.pos);
+                    return error.InvalidUnicodeEscapeSequence;
+                }
             },
             else => {
                 // Include the character after the backslash in the error region
@@ -932,7 +957,9 @@ pub const Cursor = struct {
             TooLong,
             Invalid,
         };
+
         std.debug.assert(self.peek() == '\'');
+        const start = self.pos;
 
         // Skip the initial quote.
         self.pos += 1;
@@ -950,7 +977,8 @@ pub const Cursor = struct {
             switch (state) {
                 .Empty => switch (c) {
                     '\'' => {
-                        return .MalformedSingleQuoteEmpty;
+                        self.pushMessage(.SingleQuoteEmpty, start, self.pos);
+                        return .MalformedSingleQuote;
                     },
                     '\\' => {
                         state = .Enough;
@@ -974,20 +1002,22 @@ pub const Cursor = struct {
                 },
                 .TooLong => switch (c) {
                     '\'' => {
-                        return .MalformedSingleQuoteTooLong;
+                        self.pushMessage(.SingleQuoteTooLong, start, self.pos);
+                        return .MalformedSingleQuote;
                     },
                     else => {},
                 },
                 .Invalid => switch (c) {
                     '\'' => {
-                        return .MalformedSingleQuoteInvalidEscapeSequence;
+                        return .MalformedSingleQuote;
                     },
                     else => {},
                 },
             }
         }
 
-        return .MalformedSingleQuoteUnclosed;
+        self.pushMessage(.SingleQuoteUnclosed, start, self.pos);
+        return .MalformedSingleQuote;
     }
 
     /// Chomps a UTF-8 codepoint and advances the cursor position.
@@ -1058,7 +1088,7 @@ const StringKind = enum {
 pub const Tokenizer = struct {
     cursor: Cursor,
     output: TokenizedBuffer,
-    string_interpolation_stack: std.ArrayListUnmanaged(StringKind),
+    string_interpolation_stack: std.array_list.Managed(StringKind),
     env: *CommonEnv,
 
     /// Creates a new Tokenizer.
@@ -1071,24 +1101,31 @@ pub const Tokenizer = struct {
         return Tokenizer{
             .cursor = cursor,
             .output = output,
-            .string_interpolation_stack = .{},
+            .string_interpolation_stack = std.array_list.Managed(StringKind).init(gpa),
             .env = env,
         };
     }
 
     pub fn deinit(self: *Tokenizer, gpa: std.mem.Allocator) void {
         self.output.deinit(gpa);
-        self.string_interpolation_stack.deinit(gpa);
+        self.string_interpolation_stack.deinit();
     }
 
-    pub fn finishAndDeinit(self: *Tokenizer, gpa: std.mem.Allocator) TokenOutput {
-        self.string_interpolation_stack.deinit(gpa);
+    pub fn finishAndDeinit(self: *Tokenizer) TokenOutput {
+        self.string_interpolation_stack.deinit();
         const actual_message_count = @min(self.cursor.message_count, self.cursor.messages.len);
         return .{
             .tokens = self.output,
             .messages = self.cursor.messages[0..actual_message_count],
             .extra_messages_dropped = self.cursor.message_count - actual_message_count,
         };
+    }
+
+    /// Returns the tag of the last token pushed, or null if no tokens have been pushed yet.
+    fn lastTokenTag(self: *const Tokenizer) ?Token.Tag {
+        const len = self.output.tokens.len;
+        if (len == 0) return null;
+        return self.output.tokens.items(.tag)[len - 1];
     }
 
     /// Pushes a token with the given tag, token offset, and extra.
@@ -1218,13 +1255,24 @@ pub const Tokenizer = struct {
                             self.cursor.pos += 1;
                             try self.pushTokenNormalHere(gpa, .OpBinaryMinus, start);
                         } else if (n >= '0' and n <= '9') {
-                            self.cursor.pos += 1;
-                            const tag = self.cursor.chompNumber();
-                            try self.pushTokenNormalHere(gpa, tag, start);
+                            // When there's no whitespace before the minus (sp == false) and
+                            // the previous token can end an expression, this is binary minus
+                            // followed by a number (e.g., x-1), not a negative number literal.
+                            // When there is whitespace before minus (sp == true), treat -N as
+                            // a negative literal (e.g., `if True -10 else x`).
+                            const prev_can_end_expr = if (self.lastTokenTag()) |prev| prev.canEndExpression() else false;
+                            if (!sp and prev_can_end_expr) {
+                                self.cursor.pos += 1;
+                                try self.pushTokenNormalHere(gpa, .OpBinaryMinus, start);
+                            } else {
+                                self.cursor.pos += 1;
+                                const tag = self.cursor.chompNumber();
+                                try self.pushTokenNormalHere(gpa, tag, start);
+                            }
                         } else {
                             self.cursor.pos += 1;
                             // Look at what follows the minus to determine if it's unary
-                            const tokenType: Token.Tag = if (self.canFollowUnaryMinus(n)) .OpUnaryMinus else .OpBinaryMinus;
+                            const tokenType: Token.Tag = if (canFollowUnaryMinus(n)) .OpUnaryMinus else .OpBinaryMinus;
                             try self.pushTokenNormalHere(gpa, tokenType, start);
                         }
                     } else {
@@ -1304,8 +1352,12 @@ pub const Tokenizer = struct {
 
                 // Backslash (\)
                 '\\' => {
-                    self.cursor.pos += 1;
-                    try self.pushTokenNormalHere(gpa, .OpBackslash, start);
+                    if (self.cursor.peekAt(1) == '\\') {
+                        try self.tokenizeMultilineStringLiteral(gpa);
+                    } else {
+                        self.cursor.pos += 1;
+                        try self.pushTokenNormalHere(gpa, .OpBackslash, start);
+                    }
                 },
 
                 // Percent (%)
@@ -1364,6 +1416,9 @@ pub const Tokenizer = struct {
                     if (self.cursor.peekAt(1) == '=') {
                         self.cursor.pos += 2;
                         try self.pushTokenNormalHere(gpa, .OpColonEqual, start);
+                    } else if (self.cursor.peekAt(1) == ':') {
+                        self.cursor.pos += 2;
+                        try self.pushTokenNormalHere(gpa, .OpDoubleColon, start);
                     } else {
                         self.cursor.pos += 1;
                         try self.pushTokenNormalHere(gpa, .OpColon, start);
@@ -1447,6 +1502,37 @@ pub const Tokenizer = struct {
                     }
                 },
 
+                '$' => {
+                    const next = self.cursor.peekAt(1);
+                    if (next) |n| {
+                        if (n >= 'a' and n <= 'z') {
+                            // Dollar sign followed by lowercase letter - reusable identifier
+                            var tag: Token.Tag = .LowerIdent;
+                            self.cursor.pos += 1;
+                            if (!self.cursor.chompIdentGeneral()) {
+                                tag = .MalformedUnicodeIdent;
+                            }
+                            try self.pushTokenInternedHere(gpa, tag, start, start);
+                        } else if (n >= 'A' and n <= 'Z') {
+                            // Dollar sign followed by uppercase letter - reusable identifier
+                            var tag: Token.Tag = .UpperIdent;
+                            self.cursor.pos += 1;
+                            if (!self.cursor.chompIdentGeneral()) {
+                                tag = .MalformedUnicodeIdent;
+                            }
+                            try self.pushTokenInternedHere(gpa, tag, start, start);
+                        } else {
+                            // Dollar sign not followed by a letter - invalid
+                            self.cursor.pos += 1;
+                            try self.pushTokenNormalHere(gpa, .MalformedUnknownToken, start);
+                        }
+                    } else {
+                        // Dollar sign at end of file
+                        self.cursor.pos += 1;
+                        try self.pushTokenNormalHere(gpa, .MalformedUnknownToken, start);
+                    }
+                },
+
                 // Numbers starting with 0-9
                 '0'...'9' => {
                     const tag = self.cursor.chompNumber();
@@ -1503,8 +1589,7 @@ pub const Tokenizer = struct {
     }
 
     /// Determines if a character can follow a unary minus (i.e., can start an expression)
-    fn canFollowUnaryMinus(self: *const Tokenizer, c: u8) bool {
-        _ = self;
+    fn canFollowUnaryMinus(c: u8) bool {
         return switch (c) {
             // Identifiers
             'a'...'z', 'A'...'Z', '_' => true,
@@ -1532,6 +1617,14 @@ pub const Tokenizer = struct {
         try self.tokenizeStringLikeLiteralBody(gpa, kind, start);
     }
 
+    pub fn tokenizeMultilineStringLiteral(self: *Tokenizer, gpa: std.mem.Allocator) std.mem.Allocator.Error!void {
+        const start = self.cursor.pos;
+        std.debug.assert(self.cursor.peek() == '\\' and self.cursor.peekAt(1) == '\\');
+        self.cursor.pos += 2;
+        try self.pushTokenNormalHere(gpa, .MultilineStringStart, start);
+        try self.tokenizeStringLikeLiteralBody(gpa, .multi_line, start);
+    }
+
     // Moving curly chars to constants because some editors hate them inline.
     const open_curly = '{';
     const close_curly = '}';
@@ -1546,7 +1639,7 @@ pub const Tokenizer = struct {
                 const dollar_start = self.cursor.pos;
                 self.cursor.pos += 2;
                 try self.pushTokenNormalHere(gpa, .OpenStringInterpolation, dollar_start);
-                try self.string_interpolation_stack.append(gpa, kind);
+                try self.string_interpolation_stack.append(kind);
                 return;
             } else if (c == '\n') {
                 try self.pushTokenNormalHere(gpa, string_part_tag, start);
@@ -1610,9 +1703,10 @@ pub fn checkTokenizerInvariants(gpa: std.mem.Allocator, input: []const u8, debug
     var messages: [32]Diagnostic = undefined;
     var tokenizer = try Tokenizer.init(&env, gpa, input, &messages);
     try tokenizer.tokenize(gpa);
-    var output = tokenizer.finishAndDeinit(gpa);
+    var output = tokenizer.finishAndDeinit();
     defer output.tokens.deinit(gpa);
 
+    // Debug output (excluded from coverage via --exclude-line=std.debug.print)
     if (debug) {
         std.debug.print("Original:\n==========\n{s}\n==========\n\n", .{input});
     }
@@ -1636,7 +1730,7 @@ pub fn checkTokenizerInvariants(gpa: std.mem.Allocator, input: []const u8, debug
         error.Unsupported => return,
         error.OutOfMemory => std.debug.panic("OOM", .{}),
     };
-    defer buf2.deinit(gpa);
+    defer buf2.deinit();
 
     if (debug) {
         std.debug.print("Intermediate:\n==========\n{s}\n==========\n\n", .{buf2.items});
@@ -1645,7 +1739,7 @@ pub fn checkTokenizerInvariants(gpa: std.mem.Allocator, input: []const u8, debug
     // Second tokenization.
     tokenizer = try Tokenizer.init(&env, gpa, buf2.items, &messages);
     try tokenizer.tokenize(gpa);
-    var output2 = tokenizer.finishAndDeinit(gpa);
+    var output2 = tokenizer.finishAndDeinit();
     defer output2.tokens.deinit(gpa);
 
     if (debug) {
@@ -1673,6 +1767,7 @@ pub fn checkTokenizerInvariants(gpa: std.mem.Allocator, input: []const u8, debug
         same = same and (length1 == length2);
     }
 
+    // Diagnostic output when tokens don't match (excluded from coverage via --exclude-line)
     if (!same) {
         var prefix_len: usize = 0;
         var suffix_len: usize = 0;
@@ -1715,10 +1810,10 @@ pub fn checkTokenizerInvariants(gpa: std.mem.Allocator, input: []const u8, debug
     }
 }
 
-fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std.mem.Allocator) !std.ArrayListUnmanaged(u8) {
+fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std.mem.Allocator) !std.array_list.Managed(u8) {
     // Create an arraylist to store the new buffer.
-    var buf2 = try std.ArrayListUnmanaged(u8).initCapacity(alloc, buf.len);
-    errdefer buf2.deinit(alloc);
+    var buf2 = try std.array_list.Managed(u8).initCapacity(alloc, buf.len);
+    errdefer buf2.deinit();
 
     // Dump back to buffer.
     // Here we are just printing in the simplest way possible.
@@ -1737,9 +1832,9 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
             // Leave tabs and newlines alone, they are special to roc.
             // Replace everything else with spaces.
             if (buf[i] != '\t' and buf[i] != '\r' and buf[i] != '\n' and buf[i] != '#') {
-                try buf2.append(alloc, ' ');
+                try buf2.append(' ');
             } else {
-                try buf2.append(alloc, buf[i]);
+                try buf2.append(buf[i]);
             }
         }
         if (token.tag == .EndOfFile) {
@@ -1755,455 +1850,485 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
 
             .Float => {
                 if (buf[region.start.offset] == '-') {
-                    try buf2.append(alloc, '-');
-                    try buf2.append(alloc, '0');
-                    try buf2.append(alloc, '.');
+                    try buf2.append('-');
+                    try buf2.append('0');
+                    try buf2.append('.');
                     for (3..length) |_| {
-                        try buf2.append(alloc, '1');
+                        try buf2.append('1');
                     }
                 } else {
-                    try buf2.append(alloc, '0');
-                    try buf2.append(alloc, '.');
+                    try buf2.append('0');
+                    try buf2.append('.');
                     for (2..length) |_| {
-                        try buf2.append(alloc, '1');
+                        try buf2.append('1');
                     }
                 }
             },
             .SingleQuote => {
                 if (length == 3) {
-                    try buf2.append(alloc, '\'');
-                    try buf2.append(alloc, 'A');
-                    try buf2.append(alloc, '\'');
+                    try buf2.append('\'');
+                    try buf2.append('A');
+                    try buf2.append('\'');
                 } else if (length == 4) {
                     if (buf[region.start.offset + 1] == '\\') {
-                        try buf2.append(alloc, '\'');
-                        try buf2.append(alloc, '\\');
-                        try buf2.append(alloc, '\\');
-                        try buf2.append(alloc, '\'');
+                        try buf2.append('\'');
+                        try buf2.append('\\');
+                        try buf2.append('\\');
+                        try buf2.append('\'');
                     } else {
-                        try buf2.append(alloc, '\'');
+                        try buf2.append('\'');
                         // Å
-                        try buf2.append(alloc, 0xC3);
-                        try buf2.append(alloc, 0x85);
-                        try buf2.append(alloc, '\'');
+                        try buf2.append(0xC3);
+                        try buf2.append(0x85);
+                        try buf2.append('\'');
                     }
                 } else if (length == 5) {
-                    try buf2.append(alloc, '\'');
+                    try buf2.append('\'');
                     // Ἀ
-                    try buf2.append(alloc, 0xE1);
-                    try buf2.append(alloc, 0xBC);
-                    try buf2.append(alloc, 0x88);
-                    try buf2.append(alloc, '\'');
+                    try buf2.append(0xE1);
+                    try buf2.append(0xBC);
+                    try buf2.append(0x88);
+                    try buf2.append('\'');
                 } else if (length == 6) {
-                    try buf2.append(alloc, '\'');
+                    try buf2.append('\'');
                     // 𐙝
-                    try buf2.append(alloc, 0xF0);
-                    try buf2.append(alloc, 0x90);
-                    try buf2.append(alloc, 0x99);
-                    try buf2.append(alloc, 0x9D);
-                    try buf2.append(alloc, '\'');
+                    try buf2.append(0xF0);
+                    try buf2.append(0x90);
+                    try buf2.append(0x99);
+                    try buf2.append(0x9D);
+                    try buf2.append('\'');
                 } else {
-                    try buf2.append(alloc, '\'');
-                    try buf2.append(alloc, '\\');
-                    try buf2.append(alloc, 'u');
-                    try buf2.append(alloc, '(');
+                    try buf2.append('\'');
+                    try buf2.append('\\');
+                    try buf2.append('u');
+                    try buf2.append('(');
                     for (6..length) |_| {
-                        try buf2.append(alloc, 'A');
+                        try buf2.append('0');
                     }
-                    try buf2.append(alloc, ')');
-                    try buf2.append(alloc, '\'');
+                    try buf2.append(')');
+                    try buf2.append('\'');
                 }
             },
             .StringStart, .StringEnd => {
-                try buf2.append(alloc, '"');
+                try buf2.append('"');
             },
             .MultilineStringStart => {
-                try buf2.append(alloc, '"');
-                try buf2.append(alloc, '"');
-                try buf2.append(alloc, '"');
+                if (length == 3 and buf[region.start.offset] == '"') {
+                    try buf2.append('"');
+                    try buf2.append('"');
+                    try buf2.append('"');
+                } else {
+                    try buf2.append('\\');
+                    try buf2.append('\\');
+                }
             },
             .StringPart => {
                 for (0..length) |_| {
-                    try buf2.append(alloc, '~');
+                    try buf2.append('~');
                 }
             },
             .OpenStringInterpolation => {
                 std.debug.assert(length == 2);
-                try buf2.append(alloc, '$');
-                try buf2.append(alloc, '{');
+                try buf2.append('$');
+                try buf2.append('{');
             },
             .CloseStringInterpolation => {
                 std.debug.assert(length == 1);
-                try buf2.append(alloc, '}');
+                try buf2.append('}');
             },
 
             .UpperIdent => {
-                try buf2.append(alloc, 'Z');
-                for (1..length) |_| {
-                    try buf2.append(alloc, 'z');
+                if (length > 0 and buf[region.start.offset] == '$') {
+                    try buf2.append('$');
+                    for (1..length) |_| {
+                        try buf2.append('Z');
+                    }
+                } else {
+                    try buf2.append('Z');
+                    for (1..length) |_| {
+                        try buf2.append('z');
+                    }
                 }
             },
             .LowerIdent => {
-                for (0..length) |_| {
-                    try buf2.append(alloc, 'z');
+                if (length > 0 and buf[region.start.offset] == '$') {
+                    try buf2.append('$');
+                    for (1..length) |_| {
+                        try buf2.append('z');
+                    }
+                } else {
+                    for (0..length) |_| {
+                        try buf2.append('z');
+                    }
                 }
             },
             .Underscore => {
                 std.debug.assert(length == 1);
-                try buf2.append(alloc, '_');
+                try buf2.append('_');
             },
             .DotInt => {
-                try buf2.append(alloc, '.');
+                try buf2.append('.');
                 for (1..length) |_| {
-                    try buf2.append(alloc, '1');
+                    try buf2.append('1');
                 }
             },
             .DotLowerIdent => {
-                try buf2.append(alloc, '.');
+                try buf2.append('.');
                 for (1..length) |_| {
-                    try buf2.append(alloc, 'z');
+                    try buf2.append('z');
                 }
             },
             .DotUpperIdent => {
-                try buf2.append(alloc, '.');
-                try buf2.append(alloc, 'Z');
+                try buf2.append('.');
+                try buf2.append('Z');
                 for (2..length) |_| {
-                    try buf2.append(alloc, 'z');
+                    try buf2.append('z');
                 }
             },
             .NoSpaceDotInt => {
-                try buf2.append(alloc, '.');
+                try buf2.append('.');
                 for (1..length) |_| {
-                    try buf2.append(alloc, '1');
+                    try buf2.append('1');
                 }
             },
             .NoSpaceDotLowerIdent => {
-                try buf2.append(alloc, '.');
+                try buf2.append('.');
                 for (1..length) |_| {
-                    try buf2.append(alloc, 'z');
+                    try buf2.append('z');
                 }
             },
             .NoSpaceDotUpperIdent => {
-                try buf2.append(alloc, '.');
-                try buf2.append(alloc, 'Z');
+                try buf2.append('.');
+                try buf2.append('Z');
                 for (2..length) |_| {
-                    try buf2.append(alloc, 'z');
+                    try buf2.append('z');
                 }
             },
             .NoSpaceOpenRound => {
-                try buf2.append(alloc, '(');
+                try buf2.append('(');
             },
 
             .NamedUnderscore => {
-                try buf2.append(alloc, '_');
+                try buf2.append('_');
                 for (1..length) |_| {
-                    try buf2.append(alloc, 'z');
+                    try buf2.append('z');
                 }
             },
             .OpaqueName => {
-                try buf2.append(alloc, '@');
+                try buf2.append('@');
                 for (1..length) |_| {
-                    try buf2.append(alloc, 'z');
+                    try buf2.append('z');
                 }
             },
             .Int => {
                 if (buf[region.start.offset] == '-') {
-                    try buf2.append(alloc, '-');
+                    try buf2.append('-');
                     if (length >= 4) {
-                        try buf2.append(alloc, '0');
-                        try buf2.append(alloc, 'x');
+                        try buf2.append('0');
+                        try buf2.append('x');
                         for (3..length) |_| {
-                            try buf2.append(alloc, '1');
+                            try buf2.append('1');
                         }
                     } else {
                         for (1..length) |_| {
-                            try buf2.append(alloc, '1');
+                            try buf2.append('1');
                         }
                     }
                 } else if (length >= 3) {
                     // To ensure this value when reprinted tokenizes as an int, add a base if the number is 3 or more characters.
-                    try buf2.append(alloc, '0');
-                    try buf2.append(alloc, 'x');
+                    try buf2.append('0');
+                    try buf2.append('x');
                     for (2..length) |_| {
-                        try buf2.append(alloc, '1');
+                        try buf2.append('1');
                     }
                 } else {
                     for (0..length) |_| {
-                        try buf2.append(alloc, '1');
+                        try buf2.append('1');
                     }
                 }
             },
 
             .OpenRound => {
                 std.debug.assert(length == 1);
-                try buf2.append(alloc, '(');
+                try buf2.append('(');
             },
             .CloseRound => {
                 std.debug.assert(length == 1);
-                try buf2.append(alloc, ')');
+                try buf2.append(')');
             },
             .OpenSquare => {
                 std.debug.assert(length == 1);
-                try buf2.append(alloc, '[');
+                try buf2.append('[');
             },
             .CloseSquare => {
                 std.debug.assert(length == 1);
-                try buf2.append(alloc, ']');
+                try buf2.append(']');
             },
             .OpenCurly => {
                 std.debug.assert(length == 1);
-                try buf2.append(alloc, '{');
+                try buf2.append('{');
             },
             .CloseCurly => {
                 std.debug.assert(length == 1);
-                try buf2.append(alloc, '}');
+                try buf2.append('}');
             },
 
             .OpPlus => {
                 std.debug.assert(length == 1);
-                try buf2.append(alloc, '+');
+                try buf2.append('+');
             },
             .OpStar => {
                 std.debug.assert(length == 1);
-                try buf2.append(alloc, '*');
+                try buf2.append('*');
             },
             .OpPizza => {
                 std.debug.assert(length == 2);
-                try buf2.append(alloc, '|');
-                try buf2.append(alloc, '>');
+                try buf2.append('|');
+                try buf2.append('>');
             },
             .OpAssign => {
                 std.debug.assert(length == 1);
-                try buf2.append(alloc, '=');
+                try buf2.append('=');
             },
             .OpBinaryMinus => {
                 std.debug.assert(length == 1);
-                try buf2.append(alloc, '-');
+                try buf2.append('-');
             },
             .OpUnaryMinus => {
                 std.debug.assert(length == 1);
-                try buf2.append(alloc, '-');
+                try buf2.append('-');
             },
             .OpNotEquals => {
                 std.debug.assert(length == 2);
-                try buf2.append(alloc, '!');
-                try buf2.append(alloc, '=');
+                try buf2.append('!');
+                try buf2.append('=');
             },
             .OpBang => {
                 std.debug.assert(length == 1);
-                try buf2.append(alloc, '!');
+                try buf2.append('!');
             },
             .OpAnd => {
                 std.debug.assert(length == 3);
-                try buf2.append(alloc, 'a');
-                try buf2.append(alloc, 'n');
-                try buf2.append(alloc, 'd');
+                try buf2.append('a');
+                try buf2.append('n');
+                try buf2.append('d');
             },
             .OpAmpersand => {
                 std.debug.assert(length == 1);
-                try buf2.append(alloc, '&');
+                try buf2.append('&');
             },
             .OpQuestion, .NoSpaceOpQuestion => {
                 std.debug.assert(length == 1);
-                try buf2.append(alloc, '?');
+                try buf2.append('?');
             },
             .OpDoubleQuestion => {
                 std.debug.assert(length == 2);
-                try buf2.append(alloc, '?');
-                try buf2.append(alloc, '?');
+                try buf2.append('?');
+                try buf2.append('?');
             },
             .OpOr => {
                 std.debug.assert(length == 2);
-                try buf2.append(alloc, 'o');
-                try buf2.append(alloc, 'r');
+                try buf2.append('o');
+                try buf2.append('r');
             },
             .OpBar => {
                 std.debug.assert(length == 1);
-                try buf2.append(alloc, '|');
+                try buf2.append('|');
             },
             .OpDoubleSlash => {
                 std.debug.assert(length == 2);
-                try buf2.append(alloc, '/');
-                try buf2.append(alloc, '/');
+                try buf2.append('/');
+                try buf2.append('/');
             },
             .OpSlash => {
                 std.debug.assert(length == 1);
-                try buf2.append(alloc, '/');
+                try buf2.append('/');
             },
             .OpPercent => {
                 std.debug.assert(length == 1);
-                try buf2.append(alloc, '%');
+                try buf2.append('%');
             },
             .OpCaret => {
                 std.debug.assert(length == 1);
-                try buf2.append(alloc, '^');
+                try buf2.append('^');
             },
             .OpGreaterThanOrEq => {
                 std.debug.assert(length == 2);
-                try buf2.append(alloc, '>');
-                try buf2.append(alloc, '=');
+                try buf2.append('>');
+                try buf2.append('=');
             },
             .OpGreaterThan => {
                 std.debug.assert(length == 1);
-                try buf2.append(alloc, '>');
+                try buf2.append('>');
             },
             .OpLessThanOrEq => {
                 std.debug.assert(length == 2);
-                try buf2.append(alloc, '<');
-                try buf2.append(alloc, '=');
+                try buf2.append('<');
+                try buf2.append('=');
             },
             .OpBackArrow => {
                 std.debug.assert(length == 2);
-                try buf2.append(alloc, '<');
-                try buf2.append(alloc, '-');
+                try buf2.append('<');
+                try buf2.append('-');
             },
             .OpLessThan => {
                 std.debug.assert(length == 1);
-                try buf2.append(alloc, '<');
+                try buf2.append('<');
             },
             .OpEquals => {
                 std.debug.assert(length == 2);
-                try buf2.append(alloc, '=');
-                try buf2.append(alloc, '=');
+                try buf2.append('=');
+                try buf2.append('=');
             },
             .OpColonEqual => {
                 std.debug.assert(length == 2);
-                try buf2.append(alloc, ':');
-                try buf2.append(alloc, '=');
+                try buf2.append(':');
+                try buf2.append('=');
+            },
+            .OpDoubleColon => {
+                std.debug.assert(length == 2);
+                try buf2.append(':');
+                try buf2.append(':');
             },
 
             .Comma => {
                 std.debug.assert(length == 1);
-                try buf2.append(alloc, ',');
+                try buf2.append(',');
             },
             .Dot => {
                 std.debug.assert(length == 1);
-                try buf2.append(alloc, '.');
+                try buf2.append('.');
             },
             .DoubleDot => {
                 std.debug.assert(length == 2);
-                try buf2.append(alloc, '.');
-                try buf2.append(alloc, '.');
+                try buf2.append('.');
+                try buf2.append('.');
             },
             .TripleDot => {
                 std.debug.assert(length == 3);
-                try buf2.append(alloc, '.');
-                try buf2.append(alloc, '.');
-                try buf2.append(alloc, '.');
+                try buf2.append('.');
+                try buf2.append('.');
+                try buf2.append('.');
             },
             .DotStar => {
                 std.debug.assert(length == 2);
-                try buf2.append(alloc, '.');
-                try buf2.append(alloc, '*');
+                try buf2.append('.');
+                try buf2.append('*');
             },
             .OpColon => {
                 std.debug.assert(length == 1);
-                try buf2.append(alloc, ':');
+                try buf2.append(':');
             },
             .OpArrow => {
                 std.debug.assert(length == 2);
-                try buf2.append(alloc, '-');
-                try buf2.append(alloc, '>');
+                try buf2.append('-');
+                try buf2.append('>');
             },
             .OpFatArrow => {
                 std.debug.assert(length == 2);
-                try buf2.append(alloc, '=');
-                try buf2.append(alloc, '>');
+                try buf2.append('=');
+                try buf2.append('>');
             },
             .OpBackslash => {
                 std.debug.assert(length == 1);
-                try buf2.append(alloc, '\\');
+                try buf2.append('\\');
             },
 
             .KwApp => {
-                try buf2.appendSlice(alloc, "app");
+                try buf2.appendSlice("app");
             },
             .KwAs => {
-                try buf2.appendSlice(alloc, "as");
+                try buf2.appendSlice("as");
             },
             .KwCrash => {
-                try buf2.appendSlice(alloc, "crash");
+                try buf2.appendSlice("crash");
             },
             .KwDbg => {
-                try buf2.appendSlice(alloc, "dbg");
-            },
-            .KwDebug => {
-                try buf2.appendSlice(alloc, "debug");
+                try buf2.appendSlice("dbg");
             },
             .KwElse => {
-                try buf2.appendSlice(alloc, "else");
+                try buf2.appendSlice("else");
             },
             .KwExpect => {
-                try buf2.appendSlice(alloc, "expect");
+                try buf2.appendSlice("expect");
             },
             .KwExposes => {
-                try buf2.appendSlice(alloc, "exposes");
+                try buf2.appendSlice("exposes");
             },
             .KwExposing => {
-                try buf2.appendSlice(alloc, "exposing");
+                try buf2.appendSlice("exposing");
             },
             .KwFor => {
-                try buf2.appendSlice(alloc, "for");
+                try buf2.appendSlice("for");
             },
             .KwGenerates => {
-                try buf2.appendSlice(alloc, "generates");
+                try buf2.appendSlice("generates");
             },
             .KwHas => {
-                try buf2.appendSlice(alloc, "has");
+                try buf2.appendSlice("has");
             },
             .KwHosted => {
-                try buf2.appendSlice(alloc, "hosted");
+                try buf2.appendSlice("hosted");
             },
             .KwIf => {
-                try buf2.appendSlice(alloc, "if");
+                try buf2.appendSlice("if");
             },
             .KwImplements => {
-                try buf2.appendSlice(alloc, "implements");
+                try buf2.appendSlice("implements");
             },
             .KwImport => {
-                try buf2.appendSlice(alloc, "import");
+                try buf2.appendSlice("import");
             },
             .KwImports => {
-                try buf2.appendSlice(alloc, "imports");
+                try buf2.appendSlice("imports");
             },
             .KwIn => {
-                try buf2.appendSlice(alloc, "in");
+                try buf2.appendSlice("in");
             },
             .KwInterface => {
-                try buf2.appendSlice(alloc, "interface");
+                try buf2.appendSlice("interface");
             },
             .KwModule => {
-                try buf2.appendSlice(alloc, "module");
+                try buf2.appendSlice("module");
             },
             .KwPackage => {
-                try buf2.appendSlice(alloc, "package");
+                try buf2.appendSlice("package");
             },
             .KwPackages => {
-                try buf2.appendSlice(alloc, "packages");
+                try buf2.appendSlice("packages");
             },
             .KwPlatform => {
-                try buf2.appendSlice(alloc, "platform");
+                try buf2.appendSlice("platform");
             },
             .KwProvides => {
-                try buf2.appendSlice(alloc, "provides");
+                try buf2.appendSlice("provides");
             },
             .KwRequires => {
-                try buf2.appendSlice(alloc, "requires");
+                try buf2.appendSlice("requires");
             },
             .KwReturn => {
-                try buf2.appendSlice(alloc, "return");
+                try buf2.appendSlice("return");
+            },
+            .KwTargets => {
+                try buf2.appendSlice("targets");
             },
             .KwVar => {
-                try buf2.appendSlice(alloc, "var");
+                try buf2.appendSlice("var");
             },
             .KwMatch => {
-                try buf2.appendSlice(alloc, "match");
+                try buf2.appendSlice("match");
             },
             .KwWhere => {
-                try buf2.appendSlice(alloc, "where");
+                try buf2.appendSlice("where");
+            },
+            .KwWhile => {
+                try buf2.appendSlice("while");
             },
             .KwWith => {
-                try buf2.appendSlice(alloc, "with");
+                try buf2.appendSlice("with");
+            },
+            .KwBreak => {
+                try buf2.appendSlice("break");
             },
 
             // If the input has malformed tokens, we don't want to assert anything about it (yet)
@@ -2220,10 +2345,7 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
             .MalformedNamedUnderscoreUnicode,
             .MalformedOpaqueNameUnicode,
             .MalformedOpaqueNameWithoutName,
-            .MalformedSingleQuoteEmpty,
-            .MalformedSingleQuoteTooLong,
-            .MalformedSingleQuoteUnclosed,
-            .MalformedSingleQuoteInvalidEscapeSequence,
+            .MalformedSingleQuote,
             .MalformedStringPart,
             => {
                 return error.Unsupported;
@@ -2298,6 +2420,51 @@ test "tokenizer" {
             .StringPart,
         },
     );
+
+    // Test new \\ multiline string syntax
+    try testTokenization(
+        gpa,
+        "\\\\hello",
+        &[_]Token.Tag{ .MultilineStringStart, .StringPart },
+    );
+    try testTokenization(
+        gpa,
+        "\\\\hello\n\\\\world",
+        &[_]Token.Tag{ .MultilineStringStart, .StringPart, .MultilineStringStart, .StringPart },
+    );
+    try testTokenization(
+        gpa,
+        "\\\\a${b}c",
+        &[_]Token.Tag{
+            .MultilineStringStart,
+            .StringPart,
+            .OpenStringInterpolation,
+            .LowerIdent,
+            .CloseStringInterpolation,
+            .StringPart,
+        },
+    );
+
+    // Test dollar sign prefix for reusable identifiers
+    try testTokenization(gpa, "$foo", &[_]Token.Tag{.LowerIdent});
+    try testTokenization(gpa, "$Foo", &[_]Token.Tag{.UpperIdent});
+    try testTokenization(gpa, "$foo123", &[_]Token.Tag{.LowerIdent});
+    try testTokenization(gpa, "$", &[_]Token.Tag{.MalformedUnknownToken});
+    try testTokenization(gpa, "$123", &[_]Token.Tag{ .MalformedUnknownToken, .Int });
+    try testTokenization(gpa, "$ ", &[_]Token.Tag{.MalformedUnknownToken});
+    try testTokenization(gpa, "$foo $bar", &[_]Token.Tag{ .LowerIdent, .LowerIdent });
+
+    // Carriage return handling
+    try testTokenization(gpa, "a\r\nb", &[_]Token.Tag{ .LowerIdent, .LowerIdent }); // Windows line ending
+    try testTokenization(gpa, "a\rb", &[_]Token.Tag{ .LowerIdent, .LowerIdent }); // Standalone CR (will emit diagnostic)
+
+    // Octal, binary, and hex numbers
+    try testTokenization(gpa, "0o755", &[_]Token.Tag{.Int}); // Octal
+    try testTokenization(gpa, "0O755", &[_]Token.Tag{.Int}); // Uppercase octal (will emit warning)
+    try testTokenization(gpa, "0b1010", &[_]Token.Tag{.Int}); // Binary
+    try testTokenization(gpa, "0B1010", &[_]Token.Tag{.Int}); // Uppercase binary (will emit warning)
+    try testTokenization(gpa, "0x1A", &[_]Token.Tag{.Int}); // Hex
+    try testTokenization(gpa, "0X1A", &[_]Token.Tag{.Int}); // Uppercase hex (will emit warning)
 }
 
 test "tokenizer with invalid UTF-8" {
@@ -2392,5 +2559,339 @@ test "non-printable characters in string literal" {
 
         const messages = tokenizer.cursor.messages[0..tokenizer.cursor.message_count];
         try std.testing.expect(messages.len == 0);
+    }
+}
+
+test "dollar sign in middle of identifier" {
+    const gpa = std.testing.allocator;
+
+    // Dollar sign in the middle of an identifier - foo$bar
+    {
+        const source = "foo$bar";
+        var diagnostics: [10]Diagnostic = undefined;
+
+        var env = try CommonEnv.init(gpa, try gpa.dupe(u8, ""));
+        defer env.deinit(gpa);
+
+        var tokenizer = try Tokenizer.init(&env, gpa, source, &diagnostics);
+        defer tokenizer.deinit(gpa);
+        try tokenizer.tokenize(gpa);
+
+        // Should have reported DollarInMiddleOfIdentifier
+        const messages = tokenizer.cursor.messages[0..tokenizer.cursor.message_count];
+        try std.testing.expect(messages.len > 0);
+        try std.testing.expectEqual(Diagnostic.Tag.DollarInMiddleOfIdentifier, messages[0].tag);
+
+        // Should tokenize as a valid LowerIdent (but with a warning)
+        const token_tags = tokenizer.output.tokens.items(.tag);
+        try std.testing.expect(token_tags.len >= 2); // At least the identifier and EOF
+        try std.testing.expectEqual(Token.Tag.LowerIdent, token_tags[0]);
+    }
+
+    // Dollar sign at the end of an identifier - foo$
+    {
+        const source = "foo$";
+        var diagnostics: [10]Diagnostic = undefined;
+
+        var env = try CommonEnv.init(gpa, try gpa.dupe(u8, ""));
+        defer env.deinit(gpa);
+
+        var tokenizer = try Tokenizer.init(&env, gpa, source, &diagnostics);
+        defer tokenizer.deinit(gpa);
+        try tokenizer.tokenize(gpa);
+
+        // Should have reported DollarInMiddleOfIdentifier
+        const messages = tokenizer.cursor.messages[0..tokenizer.cursor.message_count];
+        try std.testing.expect(messages.len > 0);
+        try std.testing.expectEqual(Diagnostic.Tag.DollarInMiddleOfIdentifier, messages[0].tag);
+    }
+
+    // Multiple dollar signs in identifier - foo$bar$baz
+    {
+        const source = "foo$bar$baz";
+        var diagnostics: [10]Diagnostic = undefined;
+
+        var env = try CommonEnv.init(gpa, try gpa.dupe(u8, ""));
+        defer env.deinit(gpa);
+
+        var tokenizer = try Tokenizer.init(&env, gpa, source, &diagnostics);
+        defer tokenizer.deinit(gpa);
+        try tokenizer.tokenize(gpa);
+
+        // Should have reported multiple DollarInMiddleOfIdentifier warnings
+        const messages = tokenizer.cursor.messages[0..tokenizer.cursor.message_count];
+        try std.testing.expect(messages.len >= 2);
+        try std.testing.expectEqual(Diagnostic.Tag.DollarInMiddleOfIdentifier, messages[0].tag);
+        try std.testing.expectEqual(Diagnostic.Tag.DollarInMiddleOfIdentifier, messages[1].tag);
+    }
+
+    // Dollar at the start is OK - no warning
+    {
+        const source = "$foo";
+        var diagnostics: [10]Diagnostic = undefined;
+
+        var env = try CommonEnv.init(gpa, try gpa.dupe(u8, ""));
+        defer env.deinit(gpa);
+
+        var tokenizer = try Tokenizer.init(&env, gpa, source, &diagnostics);
+        defer tokenizer.deinit(gpa);
+        try tokenizer.tokenize(gpa);
+
+        // Should NOT have any warnings
+        const messages = tokenizer.cursor.messages[0..tokenizer.cursor.message_count];
+        try std.testing.expect(messages.len == 0);
+
+        // Should tokenize as a valid LowerIdent
+        const token_tags = tokenizer.output.tokens.items(.tag);
+        try std.testing.expect(token_tags.len >= 2);
+        try std.testing.expectEqual(Token.Tag.LowerIdent, token_tags[0]);
+    }
+}
+
+test "tokenizer invariants with various token types" {
+    const gpa = std.testing.allocator;
+
+    // Test various token types that should pass invariant checks
+    // These are carefully chosen to NOT produce any diagnostic messages
+
+    // Float tokens
+    try checkTokenizerInvariants(gpa, "3.14", false);
+    try checkTokenizerInvariants(gpa, "-3.14", false);
+
+    // Single quote tokens (various lengths to cover different UTF-8 sizes)
+    try checkTokenizerInvariants(gpa, "'A'", false); // length 3: ASCII
+    try checkTokenizerInvariants(gpa, "'\\\\'", false); // length 4: escaped backslash
+    try checkTokenizerInvariants(gpa, "'Å'", false); // length 4: 2-byte UTF-8 (Latin Extended)
+    try checkTokenizerInvariants(gpa, "'Ἀ'", false); // length 5: 3-byte UTF-8 (Greek Extended)
+    try checkTokenizerInvariants(gpa, "'𐙝'", false); // length 6: 4-byte UTF-8 (Emoji-like)
+    try checkTokenizerInvariants(gpa, "'\\u(0041)'", false); // length >6: Unicode escape
+
+    // String tokens
+    try checkTokenizerInvariants(gpa, "\"hello\"", false);
+    try checkTokenizerInvariants(gpa, "\"a${b}c\"", false);
+
+    // Multiline strings
+    try checkTokenizerInvariants(gpa, "\"\"\"hello\"\"\"", false);
+    try checkTokenizerInvariants(gpa, "\\\\hello", false);
+
+    // Identifiers
+    try checkTokenizerInvariants(gpa, "$foo", false);
+    try checkTokenizerInvariants(gpa, "$Foo", false);
+    try checkTokenizerInvariants(gpa, "foo", false);
+    try checkTokenizerInvariants(gpa, "Foo", false);
+
+    // Keywords
+    try checkTokenizerInvariants(gpa, "if", false);
+    try checkTokenizerInvariants(gpa, "else", false);
+    try checkTokenizerInvariants(gpa, "match", false);
+
+    // Various operators
+    try checkTokenizerInvariants(gpa, "+", false);
+    try checkTokenizerInvariants(gpa, "-", false);
+    try checkTokenizerInvariants(gpa, "*", false);
+    try checkTokenizerInvariants(gpa, "=", false);
+    try checkTokenizerInvariants(gpa, "==", false);
+
+    // Underscore and named underscore
+    try checkTokenizerInvariants(gpa, "_", false);
+    try checkTokenizerInvariants(gpa, "_foo", false);
+
+    // Dot identifiers and dot int
+    try checkTokenizerInvariants(gpa, ".foo", false);
+    try checkTokenizerInvariants(gpa, ".Foo", false);
+    try checkTokenizerInvariants(gpa, ".1", false);
+
+    // No space dot tokens (after identifier)
+    try checkTokenizerInvariants(gpa, "x.foo", false);
+    try checkTokenizerInvariants(gpa, "x.Foo", false);
+    try checkTokenizerInvariants(gpa, "x.1", false);
+
+    // Opaque names
+    try checkTokenizerInvariants(gpa, "@Foo", false);
+
+    // Negative hex int
+    try checkTokenizerInvariants(gpa, "-0x1", false);
+    try checkTokenizerInvariants(gpa, "-0xABC", false);
+
+    // Positive hex int (various lengths)
+    try checkTokenizerInvariants(gpa, "0x1", false);
+    try checkTokenizerInvariants(gpa, "0xABCD", false);
+
+    // Exclamation mark and not equals
+    try checkTokenizerInvariants(gpa, "!", false);
+    try checkTokenizerInvariants(gpa, "!=", false);
+
+    // Binary minus vs unary minus context
+    try checkTokenizerInvariants(gpa, "a - b", false);
+    try checkTokenizerInvariants(gpa, "a-b", false);
+}
+
+test "additional operators" {
+    const gpa = std.testing.allocator;
+
+    // Pizza operator |>
+    try testTokenization(gpa, "|>", &[_]Token.Tag{.OpPizza});
+    try testTokenization(gpa, "a |> b", &[_]Token.Tag{ .LowerIdent, .OpPizza, .LowerIdent });
+
+    // Pipe operator |
+    try testTokenization(gpa, "|", &[_]Token.Tag{.OpBar});
+
+    // Percent operator %
+    try testTokenization(gpa, "%", &[_]Token.Tag{.OpPercent});
+    try testTokenization(gpa, "a % b", &[_]Token.Tag{ .LowerIdent, .OpPercent, .LowerIdent });
+
+    // Caret operator ^
+    try testTokenization(gpa, "^", &[_]Token.Tag{.OpCaret});
+    try testTokenization(gpa, "a ^ b", &[_]Token.Tag{ .LowerIdent, .OpCaret, .LowerIdent });
+
+    // Single backslash operator
+    try testTokenization(gpa, "\\", &[_]Token.Tag{.OpBackslash});
+
+    // Double slash //
+    try testTokenization(gpa, "//", &[_]Token.Tag{.OpDoubleSlash});
+    try testTokenization(gpa, "a // b", &[_]Token.Tag{ .LowerIdent, .OpDoubleSlash, .LowerIdent });
+
+    // Slash /
+    try testTokenization(gpa, "/", &[_]Token.Tag{.OpSlash});
+    try testTokenization(gpa, "a / b", &[_]Token.Tag{ .LowerIdent, .OpSlash, .LowerIdent });
+}
+
+test "malformed unicode identifiers" {
+    const gpa = std.testing.allocator;
+
+    // Dot followed by unicode character - malformed dot unicode ident
+    // Japanese character "日" = 0xE6 0x97 0xA5 in UTF-8
+    {
+        const source = ".日";
+        var diagnostics: [10]Diagnostic = undefined;
+
+        var env = try CommonEnv.init(gpa, try gpa.dupe(u8, ""));
+        defer env.deinit(gpa);
+
+        var tokenizer = try Tokenizer.init(&env, gpa, source, &diagnostics);
+        defer tokenizer.deinit(gpa);
+        try tokenizer.tokenize(gpa);
+
+        const token_tags = tokenizer.output.tokens.items(.tag);
+        try std.testing.expect(token_tags.len >= 2);
+        try std.testing.expectEqual(Token.Tag.MalformedDotUnicodeIdent, token_tags[0]);
+    }
+
+    // No-space dot followed by unicode character
+    {
+        const source = "foo.日本";
+        var diagnostics: [10]Diagnostic = undefined;
+
+        var env = try CommonEnv.init(gpa, try gpa.dupe(u8, ""));
+        defer env.deinit(gpa);
+
+        var tokenizer = try Tokenizer.init(&env, gpa, source, &diagnostics);
+        defer tokenizer.deinit(gpa);
+        try tokenizer.tokenize(gpa);
+
+        const token_tags = tokenizer.output.tokens.items(.tag);
+        // Should be LowerIdent followed by MalformedNoSpaceDotUnicodeIdent or similar
+        try std.testing.expect(token_tags.len >= 2);
+        try std.testing.expectEqual(Token.Tag.LowerIdent, token_tags[0]);
+    }
+
+    // Unicode character in lower identifier that starts with ASCII
+    {
+        const source = "foo日bar";
+        var diagnostics: [10]Diagnostic = undefined;
+
+        var env = try CommonEnv.init(gpa, try gpa.dupe(u8, ""));
+        defer env.deinit(gpa);
+
+        var tokenizer = try Tokenizer.init(&env, gpa, source, &diagnostics);
+        defer tokenizer.deinit(gpa);
+        try tokenizer.tokenize(gpa);
+
+        const token_tags = tokenizer.output.tokens.items(.tag);
+        try std.testing.expect(token_tags.len >= 1);
+        // Should tokenize as MalformedUnicodeIdent
+        try std.testing.expectEqual(Token.Tag.MalformedUnicodeIdent, token_tags[0]);
+    }
+}
+
+test "incomplete UTF-8 at end of input" {
+    const gpa = std.testing.allocator;
+
+    // Incomplete UTF-8 sequence at end of string literal
+    // 0xC3 is a 2-byte UTF-8 start byte, but we only have 1 byte
+    // The consumeNextCharToEof function will be called during string processing
+    {
+        const source = [_]u8{ '"', 'a', 0xC3 };
+        var diagnostics: [10]Diagnostic = undefined;
+
+        var env = try CommonEnv.init(gpa, try gpa.dupe(u8, ""));
+        defer env.deinit(gpa);
+
+        var tokenizer = try Tokenizer.init(&env, gpa, &source, &diagnostics);
+        defer tokenizer.deinit(gpa);
+        try tokenizer.tokenize(gpa);
+
+        // Should have InvalidUtf8InSource diagnostic
+        const messages = tokenizer.cursor.messages[0..tokenizer.cursor.message_count];
+        try std.testing.expect(messages.len > 0);
+        try std.testing.expectEqual(Diagnostic.Tag.InvalidUtf8InSource, messages[0].tag);
+    }
+}
+
+test "invalid unicode escape sequence in string" {
+    const gpa = std.testing.allocator;
+
+    // Invalid unicode escape - non-hex characters in \u(...)
+    {
+        const source = "\"\\u(GHIJ)\"";
+        var diagnostics: [10]Diagnostic = undefined;
+
+        var env = try CommonEnv.init(gpa, try gpa.dupe(u8, ""));
+        defer env.deinit(gpa);
+
+        var tokenizer = try Tokenizer.init(&env, gpa, source, &diagnostics);
+        defer tokenizer.deinit(gpa);
+        try tokenizer.tokenize(gpa);
+
+        // Should have InvalidUnicodeEscapeSequence diagnostic
+        const messages = tokenizer.cursor.messages[0..tokenizer.cursor.message_count];
+        try std.testing.expect(messages.len > 0);
+        try std.testing.expectEqual(Diagnostic.Tag.InvalidUnicodeEscapeSequence, messages[0].tag);
+    }
+
+    // Incomplete unicode escape - no closing paren
+    {
+        const source = "\"\\u(1234\"";
+        var diagnostics: [10]Diagnostic = undefined;
+
+        var env = try CommonEnv.init(gpa, try gpa.dupe(u8, ""));
+        defer env.deinit(gpa);
+
+        var tokenizer = try Tokenizer.init(&env, gpa, source, &diagnostics);
+        defer tokenizer.deinit(gpa);
+        try tokenizer.tokenize(gpa);
+
+        // Should have InvalidUnicodeEscapeSequence diagnostic
+        const messages = tokenizer.cursor.messages[0..tokenizer.cursor.message_count];
+        try std.testing.expect(messages.len > 0);
+        try std.testing.expectEqual(Diagnostic.Tag.InvalidUnicodeEscapeSequence, messages[0].tag);
+    }
+
+    // Empty unicode escape \u()
+    {
+        const source = "\"\\u()\"";
+        var diagnostics: [10]Diagnostic = undefined;
+
+        var env = try CommonEnv.init(gpa, try gpa.dupe(u8, ""));
+        defer env.deinit(gpa);
+
+        var tokenizer = try Tokenizer.init(&env, gpa, source, &diagnostics);
+        defer tokenizer.deinit(gpa);
+        try tokenizer.tokenize(gpa);
+
+        // Should have InvalidUnicodeEscapeSequence diagnostic
+        const messages = tokenizer.cursor.messages[0..tokenizer.cursor.message_count];
+        try std.testing.expect(messages.len > 0);
+        try std.testing.expectEqual(Diagnostic.Tag.InvalidUnicodeEscapeSequence, messages[0].tag);
     }
 }

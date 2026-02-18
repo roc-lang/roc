@@ -5,13 +5,9 @@
 //! compiler's canonical internal representation (CIR).
 
 const std = @import("std");
-const base = @import("base");
-const parse = @import("parse");
-const compile = @import("compile");
 const builtins = @import("builtins");
+const parse = @import("parse");
 
-const Can = @import("../Can.zig");
-const CIR = @import("../CIR.zig");
 const TestEnv = @import("TestEnv.zig").TestEnv;
 
 const RocDec = builtins.dec.RocDec;
@@ -30,9 +26,7 @@ test "fractional literal - basic decimal" {
             try testing.expectEqual(dec.value.numerator, 314);
             try testing.expectEqual(dec.value.denominator_power_of_ten, 2);
         },
-        .e_dec => |dec| {
-            _ = dec;
-        },
+        .e_dec => {},
         else => {
             std.debug.print("Unexpected expr type: {}\n", .{expr});
             try testing.expect(false); // Should be dec_small or frac_dec
@@ -54,9 +48,8 @@ test "fractional literal - scientific notation small" {
             // This is expected behavior when the value is too small for i16 representation
             try testing.expectEqual(dec.value.numerator, 0);
         },
-        .e_dec => |frac| {
+        .e_dec => {
             // RocDec stores the value in a special format
-            _ = frac;
         },
         .e_frac_f64 => |frac| {
             try testing.expectApproxEqAbs(frac.value, 1.23e-10, 1e-20);
@@ -229,7 +222,7 @@ test "fractional literal - scientific notation with capital E" {
         .e_dec => |frac| {
             try testing.expect(true); // 1e7 fits in Dec
             try testing.expect(true); // 2.5e10 is within f32 range
-            try testing.expectApproxEqAbs(@as(f64, @floatFromInt(frac.value.num)) / std.math.pow(f64, 10, 18), 2.5e10, 1e-5);
+            try testing.expectApproxEqAbs(builtins.compiler_rt_128.i128_to_f64(frac.value.num) / std.math.pow(f64, 10, 18), 2.5e10, 1e-5);
         },
         else => {
             try testing.expect(false); // Should be frac_dec
@@ -250,7 +243,7 @@ test "fractional literal - negative scientific notation" {
             try testing.expect(true); // 1e-7 fits in Dec
             // -1.5e-5 may not round-trip perfectly through f32
             // Let's just check the value is correct
-            try testing.expectApproxEqAbs(@as(f64, @floatFromInt(frac.value.num)) / std.math.pow(f64, 10, 18), -1.5e-5, 1e-10);
+            try testing.expectApproxEqAbs(builtins.compiler_rt_128.i128_to_f64(frac.value.num) / std.math.pow(f64, 10, 18), -1.5e-5, 1e-10);
         },
         else => {
             try testing.expect(false); // Should be frac_dec
@@ -355,7 +348,7 @@ test "negative zero preservation - uses f64" {
         .e_dec => |frac| {
             // If it went through Dec path, check if sign is preserved
             if (std.mem.eql(u8, "-0.0", "-0.0")) {
-                const f64_val = @as(f64, @floatFromInt(frac.value.num)) / std.math.pow(f64, 10, 18);
+                const f64_val = builtins.compiler_rt_128.i128_to_f64(frac.value.num) / std.math.pow(f64, 10, 18);
                 // Dec doesn't preserve negative zero, which is expected
                 try testing.expectEqual(f64_val, 0.0);
             }

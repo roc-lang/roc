@@ -9,6 +9,7 @@ nums : List U8
 ~~~
 # EXPECTED
 PARSE ERROR - type_annotation_missing_parens.md:2:1:2:1
+TOO FEW ARGS - type_annotation_missing_parens.md:1:8:1:12
 # PROBLEMS
 **PARSE ERROR**
 Type applications require parentheses around their type arguments.
@@ -23,7 +24,7 @@ Use:
 
 Other valid examples:
     `Dict(Str, Num)`
-    `Result(a, Str)`
+    `Try(a, Str)`
     `Maybe(List(U64))`
 
 **type_annotation_missing_parens.md:2:1:2:1:**
@@ -33,19 +34,28 @@ Other valid examples:
 ^
 
 
+**TOO FEW ARGS**
+The type _List_ expects 1 argument, but got 0 instead.
+**type_annotation_missing_parens.md:1:8:1:12:**
+```roc
+nums : List U8
+```
+       ^^^^
+
+
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:5),OpColon(1:6-1:7),UpperIdent(1:8-1:12),UpperIdent(1:13-1:15),
-EndOfFile(2:1-2:1),
+LowerIdent,OpColon,UpperIdent,UpperIdent,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-1.15
-	(type-module @1.1-1.5)
+(file
+	(type-module)
 	(statements
-		(s-type-anno @1.1-1.12 (name "nums")
-			(ty @1.8-1.12 (name "List")))
-		(s-malformed @1.1-1.1 (tag "expected_colon_after_type_annotation"))))
+		(s-type-anno (name "nums")
+			(ty (name "List")))
+		(s-malformed (tag "expected_colon_after_type_annotation"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -53,11 +63,18 @@ nums : List
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(can-ir
+	(d-let
+		(p-assign (ident "nums"))
+		(e-anno-only)
+		(annotation
+			(ty-lookup (name "List") (builtin)))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
-	(defs)
-	(expressions))
+	(defs
+		(patt (type "Error")))
+	(expressions
+		(expr (type "Error"))))
 ~~~

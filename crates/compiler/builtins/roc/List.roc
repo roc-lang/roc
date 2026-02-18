@@ -38,6 +38,7 @@ module [
     map3,
     map4,
     join_map,
+    join_map!,
     product,
     walk_with_index,
     walk_until,
@@ -1155,6 +1156,26 @@ max_help = |list, initial|
 join_map : List a, (a -> List b) -> List b
 join_map = |list, mapper|
     List.walk(list, [], |state, elem| List.concat(state, mapper(elem)))
+
+## Like [List.join_map], except the transformation function can have effects.
+##
+## ```
+## log_and_split! : List Str => Result (List Str) _
+## log_and_split! = |paths|
+##    List.join_map!(
+##        paths,
+##        |path|
+##            Result.map_ok(Stdout.line!(path), |_| Str.split_on(path, "/")),
+##    )
+## ```
+join_map! : List a, (a => Result (List b) err) => Result (List b) err
+join_map! = |list, mapper!|
+    List.walk_try!(
+        list,
+        [],
+        |state, elem|
+            Result.map_ok(mapper!(elem), |mapper_list| List.concat(state, mapper_list)),
+    )
 
 ## Returns the first element of the list satisfying a predicate function.
 ## If no satisfying element is found, an `Err NotFound` is returned.

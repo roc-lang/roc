@@ -15,8 +15,9 @@ if bool {
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - if_then_else_9.md:1:4:1:8
-INVALID IF CONDITION - if_then_else_9.md:3:11:3:11
-INCOMPATIBLE IF BRANCHES - if_then_else_9.md:1:1:1:1
+TYPE MISMATCH - if_then_else_9.md:3:11:3:13
+MISSING METHOD - if_then_else_9.md:2:2:2:3
+MISSING METHOD - if_then_else_9.md:6:2:6:3
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `bool` in this scope.
@@ -29,70 +30,68 @@ if bool {
    ^^^^
 
 
-**INVALID IF CONDITION**
-This `if` condition needs to be a _Bool_:
-**if_then_else_9.md:3:11:**
+**TYPE MISMATCH**
+This number is being used where a non-number type is needed:
+**if_then_else_9.md:3:11:3:13:**
 ```roc
 } else if 10 { # Comment after else open
 ```
           ^^
 
-Right now, it has the type:
-    _Num(_size)_
+Other code expects this to have the type:
 
-Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
+    Bool
 
-**INCOMPATIBLE IF BRANCHES**
-The type of the second branch of this `if` does not match the previous branches:
-**if_then_else_9.md:1:1:**
+**MISSING METHOD**
+This **from_numeral** method is being called on a value whose type doesn't have that method:
+**if_then_else_9.md:2:2:2:3:**
 ```roc
-if bool {
 	1
-} else if 10 { # Comment after else open
-	A
-} else { # Comment after else open
-	3
-}
 ```
- ^
+	^
 
-The second branch has this type:
-    _[A]_others_
+The value's type, which does not have a method named**from_numeral**, is:
 
-But the previous branch has this type:
-    _Num(_size)_
+    [A, ..]
 
-All branches in an `if` must have compatible types.
+**MISSING METHOD**
+This **from_numeral** method is being called on a value whose type doesn't have that method:
+**if_then_else_9.md:6:2:6:3:**
+```roc
+	3
+```
+	^
 
-Note: You can wrap branches in a tag to make them compatible.
-To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
+The value's type, which does not have a method named**from_numeral**, is:
+
+    [A, ..]
 
 # TOKENS
 ~~~zig
-KwIf(1:1-1:3),LowerIdent(1:4-1:8),OpenCurly(1:9-1:10),
-Int(2:2-2:3),
-CloseCurly(3:1-3:2),KwElse(3:3-3:7),KwIf(3:8-3:10),Int(3:11-3:13),OpenCurly(3:14-3:15),
-UpperIdent(4:2-4:3),
-CloseCurly(5:1-5:2),KwElse(5:3-5:7),OpenCurly(5:8-5:9),
-Int(6:2-6:3),
-CloseCurly(7:1-7:2),
-EndOfFile(8:1-8:1),
+KwIf,LowerIdent,OpenCurly,
+Int,
+CloseCurly,KwElse,KwIf,Int,OpenCurly,
+UpperIdent,
+CloseCurly,KwElse,OpenCurly,
+Int,
+CloseCurly,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-if-then-else @1.1-7.2
-	(e-ident @1.4-1.8 (raw "bool"))
-	(e-block @1.9-3.2
+(e-if-then-else
+	(e-ident (raw "bool"))
+	(e-block
 		(statements
-			(e-int @2.2-2.3 (raw "1"))))
-	(e-if-then-else @3.8-7.2
-		(e-int @3.11-3.13 (raw "10"))
-		(e-block @3.14-5.2
+			(e-int (raw "1"))))
+	(e-if-then-else
+		(e-int (raw "10"))
+		(e-block
 			(statements
-				(e-tag @4.2-4.3 (raw "A"))))
-		(e-block @5.8-7.2
+				(e-tag (raw "A"))))
+		(e-block
 			(statements
-				(e-int @6.2-6.3 (raw "3"))))))
+				(e-int (raw "3"))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -100,21 +99,21 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-if @1.1-7.2
+(e-if
 	(if-branches
 		(if-branch
 			(e-runtime-error (tag "ident_not_in_scope"))
-			(e-block @1.9-3.2
-				(e-num @2.2-2.3 (value "1"))))
+			(e-block
+				(e-num (value "1"))))
 		(if-branch
-			(e-num @3.11-3.13 (value "10"))
-			(e-block @3.14-5.2
-				(e-tag @4.2-4.3 (name "A")))))
+			(e-num (value "10"))
+			(e-block
+				(e-tag (name "A")))))
 	(if-else
-		(e-block @5.8-7.2
-			(e-num @6.2-6.3 (value "3")))))
+		(e-block
+			(e-num (value "3")))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-7.2 (type "Error"))
+(expr (type "[A, ..]"))
 ~~~

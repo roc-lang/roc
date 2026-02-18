@@ -32,7 +32,41 @@ pub fn printSpaces(writer: anytype, count: u32) !void {
     }
 }
 
-// ===== TESTS =====
+/// Print leading whitespace from source line, preserving tabs.
+/// Copies exact whitespace characters (tabs/spaces) from the line,
+/// and uses spaces for non-whitespace characters.
+/// This ensures underlines align correctly when the source contains tabs.
+///
+/// Parameters:
+/// - writer: The output writer
+/// - line: The source line text
+/// - target_column: The 1-based column to print up to (exclusive)
+pub fn printLeadingWhitespace(writer: anytype, line: []const u8, target_column: u32) !void {
+    if (target_column <= 1) return;
+
+    const chars_to_print = target_column - 1;
+    var i: u32 = 0;
+    while (i < chars_to_print) : (i += 1) {
+        if (i < line.len) {
+            const char = line[i];
+            if (char == '\t') {
+                // Preserve tabs exactly
+                try writer.writeAll("\t");
+            } else if (char == ' ') {
+                // Preserve spaces exactly
+                try writer.writeAll(" ");
+            } else {
+                // Non-whitespace: use a space to maintain width
+                try writer.writeAll(" ");
+            }
+        } else {
+            // Past end of line: use spaces
+            try writer.writeAll(" ");
+        }
+    }
+}
+
+// TESTS
 
 test "calculateLineNumberWidth" {
     try testing.expectEqual(@as(u32, 1), calculateLineNumberWidth(0));

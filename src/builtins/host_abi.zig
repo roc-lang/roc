@@ -9,6 +9,23 @@
 //! This design makes Roc's ABI very simple; the calling convention is just "Ops pointer,
 //! return pointer, args pointers".
 
+// Tracy is optional - when not available (e.g., standalone static library builds),
+// use a no-op stub to avoid compilation errors.
+const tracy = if (@hasDecl(@import("root"), "tracy_enabled"))
+    @import("tracy")
+else
+    struct {
+        pub const enable_allocation = false;
+        pub fn trace(_: anytype) TracyStub {
+            return .{};
+        }
+        pub fn allocName(_: ?[*]const u8, _: usize) void {}
+        pub fn freeName(_: ?[*]const u8, _: usize) void {}
+        const TracyStub = struct {
+            pub fn end(_: @This()) void {}
+        };
+    };
+
 /// todo: describe RocCall
 pub const RocCall = fn (
     /// Function pointers that the Roc program uses, e.g. alloc, dealloc, etc.
@@ -25,13 +42,26 @@ pub const RocCall = fn (
     ///
     /// For a zig host use an `extern struct` for well-defined in-memory layout matching the C ABI for the target
     *anyopaque,
-) callconv(.C) void;
+) callconv(.c) void;
 
 /// The operations (in the form of function pointers) that a running Roc program
 /// needs the host to provide.
 ///
 /// This is used in both calls from actual hosts as well as evaluation of constants
 /// inside the Roc compiler itself.
+/// Function pointer type for hosted functions provided by the platform.
+/// All hosted functions follow the RocCall ABI: (ops, ret_ptr, args_ptr).
+pub const HostedFn = *const fn (*RocOps, *anyopaque, *anyopaque) callconv(.c) void;
+
+/// Array of hosted function pointers provided by the platform.
+/// These are sorted alphabetically by function name during canonicalization.
+pub const HostedFunctions = extern struct {
+    count: u32,
+    fns: [*]HostedFn,
+};
+
+/// Operations that the host provides to Roc code, including memory management,
+/// panic handling, and platform-specific effects.
 pub const RocOps = extern struct {
     /// The host provides this pointer, and Roc passes it to each of the following
     /// function pointers as a second argument. This lets the host do things like use
@@ -39,25 +69,27 @@ pub const RocOps = extern struct {
     /// The pointer can be to absolutely anything the host likes, or null if unused.
     env: *anyopaque,
     /// Similar to  _aligned_malloc - https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/aligned-malloc
-    roc_alloc: *const fn (*RocAlloc, *anyopaque) callconv(.C) void,
+    roc_alloc: *const fn (*RocAlloc, *anyopaque) callconv(.c) void,
     /// Similar to  _aligned_free - https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/aligned-free
-    roc_dealloc: *const fn (*RocDealloc, *anyopaque) callconv(.C) void,
+    roc_dealloc: *const fn (*RocDealloc, *anyopaque) callconv(.c) void,
     /// Similar to  _aligned_realloc - https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/aligned-realloc
-    roc_realloc: *const fn (*RocRealloc, *anyopaque) callconv(.C) void,
+    roc_realloc: *const fn (*RocRealloc, *anyopaque) callconv(.c) void,
     /// Called when the Roc program has called `dbg` on something.
-    roc_dbg: *const fn (*const RocDbg, *anyopaque) callconv(.C) void,
+    roc_dbg: *const fn (*const RocDbg, *anyopaque) callconv(.c) void,
     /// Called when the Roc program has run an `expect` which failed.
-    roc_expect_failed: *const fn (*const RocExpectFailed, *anyopaque) callconv(.C) void,
+    roc_expect_failed: *const fn (*const RocExpectFailed, *anyopaque) callconv(.c) void,
     /// Called when the Roc program crashes, e.g. due to integer overflow.
     /// The host should handle this gracefully and stop execution of the Roc program.
-    roc_crashed: *const fn (*const RocCrashed, *anyopaque) callconv(.C) void,
-    /// At the end of this struct, the host must include all the functions
-    /// it wants to provide to the Roc program for the Roc program to call
-    /// (e.g. I/O operations and such).
-    host_fns: *anyopaque,
+    roc_crashed: *const fn (*const RocCrashed, *anyopaque) callconv(.c) void,
+    /// Hosted functions provided by the platform (sorted alphabetically by name).
+    /// These are effectful operations like I/O that the platform provides to Type Modules.
+    hosted_fns: HostedFunctions,
 
     /// Helper function to crash the Roc program, returns control to the host.
     pub fn crash(self: *RocOps, msg: []const u8) void {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
         const roc_crashed_args = RocCrashed{
             .utf8_bytes = @constCast(msg.ptr),
             .len = msg.len,
@@ -67,6 +99,9 @@ pub const RocOps = extern struct {
 
     /// Helper function to send debug output to the host.
     pub fn dbg(self: *RocOps, msg: []const u8) void {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
         const roc_dbg_args = RocDbg{
             .utf8_bytes = @constCast(msg.ptr),
             .len = msg.len,
@@ -75,16 +110,31 @@ pub const RocOps = extern struct {
     }
 
     pub fn alloc(self: *RocOps, alignment: usize, length: usize) *anyopaque {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
         var roc_alloc_args = RocAlloc{
             .alignment = alignment,
             .length = length,
             .answer = self.env,
         };
         self.roc_alloc(&roc_alloc_args, self.env);
+
+        if (tracy.enable_allocation) {
+            tracy.alloc(@ptrCast(roc_alloc_args.answer), length);
+        }
+
         return roc_alloc_args.answer;
     }
 
     pub fn dealloc(self: *RocOps, ptr: *anyopaque, alignment: usize) void {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
+        if (tracy.enable_allocation) {
+            tracy.free(@ptrCast(ptr));
+        }
+
         var roc_dealloc_args = RocDealloc{
             .alignment = alignment,
             .ptr = ptr,

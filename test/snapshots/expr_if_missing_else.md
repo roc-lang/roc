@@ -8,62 +8,70 @@ type=snippet
 foo = if tru 0
 ~~~
 # EXPECTED
-IF WITHOUT ELSE - expr_if_missing_else.md:1:7:1:9
-UNRECOGNIZED SYNTAX - expr_if_missing_else.md:1:7:1:15
+UNDEFINED VARIABLE - expr_if_missing_else.md:1:10:1:13
+MISSING METHOD - expr_if_missing_else.md:1:14:1:15
 # PROBLEMS
-**IF WITHOUT ELSE**
-This `if` is being used as an expression, but it doesn't have an `else`.
+**UNDEFINED VARIABLE**
+Nothing is named `tru` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-When `if` is used as an expression (to evaluate to a value), it must have an `else` branch to specify what value to use when the condition is `False`.
-
-**expr_if_missing_else.md:1:7:1:9:**
+**expr_if_missing_else.md:1:10:1:13:**
 ```roc
 foo = if tru 0
 ```
-      ^^
+         ^^^
 
 
-**UNRECOGNIZED SYNTAX**
-I don't recognize this syntax.
-
-**expr_if_missing_else.md:1:7:1:15:**
+**MISSING METHOD**
+This **from_numeral** method is being called on a value whose type doesn't have that method:
+**expr_if_missing_else.md:1:14:1:15:**
 ```roc
 foo = if tru 0
 ```
-      ^^^^^^^^
+             ^
 
-This might be a syntax error, an unsupported language feature, or a typo.
+The value's type, which does not have a method named**from_numeral**, is:
+
+    {}
 
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:4),OpAssign(1:5-1:6),KwIf(1:7-1:9),LowerIdent(1:10-1:13),Int(1:14-1:15),
-EndOfFile(2:1-2:1),
+LowerIdent,OpAssign,KwIf,LowerIdent,Int,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-1.15
-	(type-module @1.1-1.4)
+(file
+	(type-module)
 	(statements
-		(s-decl @1.1-1.15
-			(p-ident @1.1-1.4 (raw "foo"))
-			(e-malformed @1.7-1.15 (reason "no_else")))))
+		(s-decl
+			(p-ident (raw "foo"))
+			(e-if-without-else
+				(e-ident (raw "tru"))
+				(e-int (raw "0"))))))
 ~~~
 # FORMATTED
 ~~~roc
-foo = 
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @1.1-1.4 (ident "foo"))
-		(e-runtime-error (tag "expr_not_canonicalized"))))
+		(p-assign (ident "foo"))
+		(e-if
+			(if-branches
+				(if-branch
+					(e-runtime-error (tag "ident_not_in_scope"))
+					(e-num (value "0"))))
+			(if-else
+				(e-empty_record)))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @1.1-1.4 (type "Error")))
+		(patt (type "{}")))
 	(expressions
-		(expr @1.7-1.15 (type "Error"))))
+		(expr (type "{}"))))
 ~~~

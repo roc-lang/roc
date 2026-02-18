@@ -10,9 +10,11 @@ pub const is_windows = builtin.target.os.tag == .windows;
 /// Platform-specific handle type
 pub const Handle = if (is_windows) *anyopaque else std.posix.fd_t;
 
-/// Fixed base address for shared memory mapping on Windows to avoid ASLR issues
-/// Using 0x10000000 (256MB) which is typically available on Windows
-pub const SHARED_MEMORY_BASE_ADDR: ?*anyopaque = if (is_windows) @ptrFromInt(0x10000000) else null;
+/// Base address for shared memory mapping. Set to null to let the OS choose
+/// the best address, which allows for larger contiguous mappings. The
+/// interpreter_shim has pointer relocation logic that handles different base
+/// addresses between parent and child processes.
+pub const SHARED_MEMORY_BASE_ADDR: ?*anyopaque = null;
 
 /// Windows API declarations
 pub const windows = if (is_windows) struct {
@@ -67,6 +69,25 @@ pub const windows = if (is_windows) struct {
     pub const INVALID_HANDLE_VALUE = @as(HANDLE, @ptrFromInt(std.math.maxInt(usize)));
     pub const FALSE = 0;
 
+    // SEC_RESERVE: Reserve pages without committing them. Pages must be committed
+    // via VirtualAlloc before they can be accessed. This allows reserving large
+    // virtual address spaces (e.g., 2TB) without requiring immediate page file backing.
+    pub const SEC_RESERVE = 0x4000000;
+
+    // Memory allocation constants for VirtualAlloc
+    pub const MEM_COMMIT = 0x1000;
+    pub const MEM_RESERVE = 0x2000;
+
+    // VirtualAlloc: Commits reserved pages so they can be accessed.
+    // When used with MEM_COMMIT on a reserved region, it commits the pages
+    // without requiring a new reservation.
+    pub extern "kernel32" fn VirtualAlloc(
+        lpAddress: ?*anyopaque,
+        dwSize: SIZE_T,
+        flAllocationType: DWORD,
+        flProtect: DWORD,
+    ) ?*anyopaque;
+
     pub const SYSTEM_INFO = extern struct {
         wProcessorArchitecture: u16,
         wReserved: u16,
@@ -84,6 +105,8 @@ pub const windows = if (is_windows) struct {
 
 /// POSIX shared memory functions
 pub const posix = if (!is_windows) struct {
+    // Note: mmap returns MAP_FAILED ((void*)-1) on error, NOT NULL
+    // So we declare it as non-optional and check against MAP_FAILED
     pub extern "c" fn mmap(
         addr: ?*anyopaque,
         len: usize,
@@ -91,7 +114,7 @@ pub const posix = if (!is_windows) struct {
         flags: c_int,
         fd: c_int,
         offset: std.c.off_t,
-    ) ?*anyopaque;
+    ) *anyopaque;
 
     pub extern "c" fn munmap(addr: *anyopaque, len: usize) c_int;
     pub extern "c" fn close(fd: c_int) c_int;
@@ -101,6 +124,7 @@ pub const posix = if (!is_windows) struct {
     pub const PROT_READ = 0x01;
     pub const PROT_WRITE = 0x02;
     pub const MAP_SHARED = 0x0001;
+    pub const MAP_FAILED: *anyopaque = @ptrFromInt(@as(usize, @bitCast(@as(isize, -1))));
 } else struct {};
 
 /// Shared memory errors
@@ -157,10 +181,20 @@ pub fn createMapping(size: usize) SharedMemoryError!Handle {
                 0;
             const size_low: windows.DWORD = @intCast(size & 0xFFFFFFFF);
 
+            // Use SEC_RESERVE to only reserve virtual address space without committing
+            // physical memory or page file backing. This allows reserving very large
+            // address spaces (e.g., 2TB) without requiring that much RAM or page file.
+            //
+            // Pages must be committed via VirtualAlloc(MEM_COMMIT) before they can be
+            // accessed. The SharedMemoryAllocator handles this in its alloc function.
+            //
+            // Without SEC_RESERVE, CreateFileMapping with PAGE_READWRITE would require
+            // the full size to be backed by the page file immediately, which would fail
+            // on systems without enough page file space.
             const handle = windows.CreateFileMappingW(
                 windows.INVALID_HANDLE_VALUE,
                 null, // default security
-                windows.PAGE_READWRITE,
+                windows.PAGE_READWRITE | windows.SEC_RESERVE,
                 size_high, // high 32 bits
                 size_low, // low 32 bits
                 null, // anonymous mapping
@@ -189,26 +223,18 @@ pub fn createMapping(size: usize) SharedMemoryError!Handle {
         },
         .macos, .freebsd, .openbsd, .netbsd => {
             // Use shm_open with a random name
-            const random_name = std.fmt.allocPrint(
-                std.heap.page_allocator,
-                "/roc_shm_{}",
-                .{std.crypto.random.int(u64)},
-            ) catch {
+            const random_name = std.fmt.allocPrintSentinel(std.heap.page_allocator, "/roc_shm_{}", .{std.crypto.random.int(u64)}, 0) catch {
                 return error.OutOfMemory;
             };
             defer std.heap.page_allocator.free(random_name);
 
-            const shm_name = std.fmt.allocPrintZ(
-                std.heap.page_allocator,
-                "{s}",
-                .{random_name},
-            ) catch {
+            const shm_name = std.fmt.allocPrintSentinel(std.heap.page_allocator, "{s}", .{random_name}, 0) catch {
                 return error.OutOfMemory;
             };
             defer std.heap.page_allocator.free(shm_name);
-
+            const shm_name_null_terminated = shm_name[0.. :0];
             const fd = posix.shm_open(
-                shm_name.ptr,
+                shm_name_null_terminated,
                 @as(u32, @bitCast(std.posix.O{ .ACCMODE = .RDWR, .CREAT = true, .EXCL = true })),
                 0o600,
             );
@@ -218,7 +244,7 @@ pub fn createMapping(size: usize) SharedMemoryError!Handle {
             }
 
             // Immediately unlink so it gets cleaned up when all references are closed
-            _ = posix.shm_unlink(shm_name.ptr);
+            _ = posix.shm_unlink(shm_name_null_terminated);
 
             // Set the size of the shared memory
             std.posix.ftruncate(fd, size) catch {
@@ -254,13 +280,13 @@ pub fn openMapping(allocator: std.mem.Allocator, name: []const u8) SharedMemoryE
             return handle.?;
         },
         .macos, .freebsd, .openbsd, .netbsd => {
-            const shm_name = std.fmt.allocPrintZ(allocator, "/{s}", .{name}) catch {
+            const shm_name = std.fmt.allocPrint(allocator, "/{s}\x00", .{name}) catch {
                 return error.OutOfMemory;
             };
             defer allocator.free(shm_name);
-
+            const shm_name_null_terminated = shm_name[0 .. shm_name.len - 1 :0];
             const fd = posix.shm_open(
-                shm_name.ptr,
+                shm_name_null_terminated,
                 @as(u32, @bitCast(std.posix.O{ .ACCMODE = .RDWR })),
                 0,
             );
@@ -318,10 +344,13 @@ pub fn mapMemory(handle: Handle, size: usize, base_addr: ?*anyopaque) SharedMemo
                 posix.MAP_SHARED,
                 handle,
                 0,
-            ) orelse {
-                std.log.err("POSIX: Failed to map shared memory (size: {})", .{size});
+            );
+            // mmap returns MAP_FAILED ((void*)-1) on error, not NULL
+            if (ptr == posix.MAP_FAILED) {
+                const errno = std.c._errno().*;
+                std.log.err("POSIX: Failed to map shared memory (size: {}, fd: {}, errno: {})", .{ size, handle, errno });
                 return error.MmapFailed;
-            };
+            }
             return ptr;
         },
         else => return error.UnsupportedPlatform,

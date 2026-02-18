@@ -23,7 +23,7 @@ rgba = |r, g, b, a| {
     Color.RGBA(r, g, b, rounded)
 }
 
-hex : Str -> Result(Color, [InvalidHex(Str)])
+hex : Str -> Try(Color, [InvalidHex(Str)])
 hex = |str| {
 
     bytes = str.to_utf8()
@@ -57,7 +57,7 @@ expect rgb(124, 56, 245).to_str() == "rgb(124, 56, 245)"
 expect rgba(124, 56, 245, 255).to_str() == "rgba(124, 56, 245, 1.0)"
 expect hex("#ff00ff").map_ok(to_str) == Ok("#ff00ff")
 
-named : Str -> Result(Color, [UnknownColor(Str)])
+named : Str -> Try(Color, [UnknownColor(Str)])
 named = |str|
     if str.is_named_color()
         Ok(Color.Named(str))

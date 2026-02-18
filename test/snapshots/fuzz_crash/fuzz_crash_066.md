@@ -34,20 +34,20 @@ C:[0]
 
 # TOKENS
 ~~~zig
-UpperIdent(1:1-1:2),OpColon(1:2-1:3),OpenSquare(1:3-1:4),Int(1:4-1:5),CloseSquare(1:5-1:6),
-EndOfFile(2:1-2:1),
+UpperIdent,OpColon,OpenSquare,Int,CloseSquare,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-1.6
-	(type-module @1.1-1.2)
+(file
+	(type-module)
 	(statements
-		(s-type-decl @1.1-1.6
-			(header @1.1-1.2 (name "C")
+		(s-type-decl
+			(header (name "C")
 				(args))
-			(ty-tag-union @1.3-1.6
+			(ty-tag-union
 				(tags
-					(ty-malformed @1.4-1.5 (tag "ty_anno_unexpected_token")))))))
+					(ty-malformed (tag "ty_anno_unexpected_token")))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -56,17 +56,17 @@ C : []
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-alias-decl @1.1-1.6
-		(ty-header @1.1-1.2 (name "C"))
-		(ty-tag-union @1.3-1.6
-			(ty-malformed @1.4-1.5))))
+	(s-alias-decl
+		(ty-header (name "C"))
+		(ty-tag-union
+			(ty-malformed))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs)
 	(type_decls
-		(alias @1.1-1.6 (type "C")
-			(ty-header @1.1-1.2 (name "C"))))
+		(alias (type "C")
+			(ty-header (name "C"))))
 	(expressions))
 ~~~

@@ -23,13 +23,13 @@ Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig
-OpBang(1:1-1:2),LowerIdent(1:2-1:9),
-EndOfFile(2:1-2:1),
+OpBang,LowerIdent,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
 (unary "!"
-	(e-ident @1.2-1.9 (raw "isValid")))
+	(e-ident (raw "isValid")))
 ~~~
 # FORMATTED
 ~~~roc
@@ -37,10 +37,10 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-unary-not @1.1-1.9
+(e-unary-not
 	(e-runtime-error (tag "ident_not_in_scope")))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.9 (type "Error"))
+(expr (type "Error"))
 ~~~

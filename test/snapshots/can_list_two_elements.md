@@ -8,38 +8,38 @@ type=expr
 [1, "hello"]
 ~~~
 # EXPECTED
-INCOMPATIBLE LIST ELEMENTS - can_list_two_elements.md:1:2:1:2
+TYPE MISMATCH - can_list_two_elements.md:1:2:1:3
 # PROBLEMS
-**INCOMPATIBLE LIST ELEMENTS**
-The two elements in this list have incompatible types:
-**can_list_two_elements.md:1:2:**
+**TYPE MISMATCH**
+This number is being used where a non-number type is needed:
+**can_list_two_elements.md:1:2:1:3:**
 ```roc
 [1, "hello"]
 ```
- ^  ^^^^^^^
+ ^
 
-The first element has this type:
-    _Num(_size)_
+The type was determined to be non-numeric here:
+**can_list_two_elements.md:1:5:1:12:**
+```roc
+[1, "hello"]
+```
+    ^^^^^^^
 
-However, the second element has this type:
-    _Str_
+Other code expects this to have the type:
 
-All elements in a list must have compatible types.
-
-Note: You can wrap each element in a tag to make them compatible.
-To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
+    Str
 
 # TOKENS
 ~~~zig
-OpenSquare(1:1-1:2),Int(1:2-1:3),Comma(1:3-1:4),StringStart(1:5-1:6),StringPart(1:6-1:11),StringEnd(1:11-1:12),CloseSquare(1:12-1:13),
-EndOfFile(2:1-2:1),
+OpenSquare,Int,Comma,StringStart,StringPart,StringEnd,CloseSquare,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-list @1.1-1.13
-	(e-int @1.2-1.3 (raw "1"))
-	(e-string @1.5-1.12
-		(e-string-part @1.6-1.11 (raw "hello"))))
+(e-list
+	(e-int (raw "1"))
+	(e-string
+		(e-string-part (raw "hello"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -47,13 +47,13 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-list @1.1-1.13
+(e-list
 	(elems
-		(e-num @1.2-1.3 (value "1"))
-		(e-string @1.5-1.12
-			(e-literal @1.6-1.11 (string "hello")))))
+		(e-num (value "1"))
+		(e-string
+			(e-literal (string "hello")))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.13 (type "List(Error)"))
+(expr (type "List(Str)"))
 ~~~

@@ -23,19 +23,19 @@ add2 = x +      2
 
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:5),OpAssign(1:6-1:7),LowerIdent(1:8-1:9),OpPlus(1:10-1:11),Int(1:17-1:18),
-EndOfFile(2:1-2:1),
+LowerIdent,OpAssign,LowerIdent,OpPlus,Int,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-1.18
-	(type-module @1.1-1.5)
+(file
+	(type-module)
 	(statements
-		(s-decl @1.1-1.18
-			(p-ident @1.1-1.5 (raw "add2"))
-			(e-binop @1.8-1.18 (op "+")
-				(e-ident @1.8-1.9 (raw "x"))
-				(e-int @1.17-1.18 (raw "2"))))))
+		(s-decl
+			(p-ident (raw "add2"))
+			(e-binop (op "+")
+				(e-ident (raw "x"))
+				(e-int (raw "2"))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -45,16 +45,16 @@ add2 = x + 2
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @1.1-1.5 (ident "add2"))
-		(e-binop @1.8-1.18 (op "add")
+		(p-assign (ident "add2"))
+		(e-binop (op "add")
 			(e-runtime-error (tag "ident_not_in_scope"))
-			(e-num @1.17-1.18 (value "2")))))
+			(e-num (value "2")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @1.1-1.5 (type "Error")))
+		(patt (type "Error")))
 	(expressions
-		(expr @1.8-1.18 (type "Error"))))
+		(expr (type "Error"))))
 ~~~
