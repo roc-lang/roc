@@ -213,6 +213,22 @@ pub const RcInsertPass = struct {
             },
             .closure => |clo| {
                 try self.countUsesInto(clo.lambda, target);
+                // Each capture consumes a reference to the captured symbol.
+                const captures = self.store.getCaptures(clo.captures);
+                for (captures) |cap| {
+                    if (!cap.symbol.isNone()) {
+                        const key = @as(u64, @bitCast(cap.symbol));
+                        const gop = try target.getOrPut(key);
+                        if (gop.found_existing) {
+                            gop.value_ptr.* += 1;
+                        } else {
+                            gop.value_ptr.* = 1;
+                        }
+                        if (!self.symbol_layouts.contains(key)) {
+                            try self.symbol_layouts.put(key, cap.layout_idx);
+                        }
+                    }
+                }
             },
             .list => |list| {
                 const elems = self.store.getExprSpan(list.elems);
