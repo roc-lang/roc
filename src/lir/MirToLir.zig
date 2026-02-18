@@ -2114,3 +2114,110 @@ test "MIR hosted lambda lowers to LIR lambda wrapping hosted_call" {
     // The hosted_call index should be preserved
     try testing.expectEqual(@as(u32, 7), body_expr.hosted_call.index);
 }
+
+test "MIR block with decl_var and mutate_var lowers to LIR decl and mutate" {
+    const allocator = testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
+
+    // Build MIR: { var s = 1; s = 2; s }
+    const ident_s = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = true }, .idx = 1 };
+    const sym_s = Symbol{ .module_idx = 0, .ident_idx = ident_s };
+
+    const int_1 = try env.mir_store.addExpr(allocator, .{ .int = .{
+        .value = .{ .bytes = @bitCast(@as(i128, 1)), .kind = .i128 },
+    } }, i64_mono, Region.zero());
+
+    const int_2 = try env.mir_store.addExpr(allocator, .{ .int = .{
+        .value = .{ .bytes = @bitCast(@as(i128, 2)), .kind = .i128 },
+    } }, i64_mono, Region.zero());
+
+    const pat_s_decl = try env.mir_store.addPattern(allocator, .{ .bind = sym_s }, i64_mono);
+    const pat_s_mut = try env.mir_store.addPattern(allocator, .{ .bind = sym_s }, i64_mono);
+
+    const stmts = try env.mir_store.addStmts(allocator, &.{
+        .{ .decl_var = .{ .pattern = pat_s_decl, .expr = int_1 } },
+        .{ .mutate_var = .{ .pattern = pat_s_mut, .expr = int_2 } },
+    });
+
+    const lookup_s = try env.mir_store.addExpr(allocator, .{ .lookup = sym_s }, i64_mono, Region.zero());
+
+    const block_expr = try env.mir_store.addExpr(allocator, .{ .block = .{
+        .stmts = stmts,
+        .final_expr = lookup_s,
+    } }, i64_mono, Region.zero());
+
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    defer translator.deinit();
+
+    const lir_id = try translator.lower(block_expr);
+    const lir_expr = env.lir_store.getExpr(lir_id);
+    try testing.expect(lir_expr == .block);
+
+    // The block should have 2 statements
+    const lir_stmts = env.lir_store.getStmts(lir_expr.block.stmts);
+    try testing.expectEqual(@as(usize, 2), lir_stmts.len);
+
+    // First statement is .decl (from decl_var)
+    try testing.expect(lir_stmts[0] == .decl);
+    // Second statement is .mutate (from mutate_var)
+    try testing.expect(lir_stmts[1] == .mutate);
+
+    // Final expression is a lookup
+    const final = env.lir_store.getExpr(lir_expr.block.final_expr);
+    try testing.expect(final == .lookup);
+}
+
+test "MIR lambda with heterogeneous captures (I64 + Str) lowers to closure with struct_captures" {
+    const allocator = testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const i64_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.i64)];
+    const str_mono = env.mir_store.monotype_store.prim_idxs[@intFromEnum(Monotype.Prim.str)];
+
+    // Define captured symbols: x = 42 (I64), s = "hello" (Str)
+    const ident_x = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
+    const sym_x = Symbol{ .module_idx = 0, .ident_idx = ident_x };
+    const ident_s = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 2 };
+    const sym_s = Symbol{ .module_idx = 0, .ident_idx = ident_s };
+
+    const int_42 = try env.mir_store.addExpr(allocator, .{ .int = .{
+        .value = .{ .bytes = @bitCast(@as(i128, 42)), .kind = .i128 },
+    } }, i64_mono, Region.zero());
+    try env.mir_store.registerSymbolDef(allocator, sym_x, int_42);
+
+    const str_hello = try env.mir_store.addExpr(allocator, .{ .str = StringLiteral.Idx.none }, str_mono, Region.zero());
+    try env.mir_store.registerSymbolDef(allocator, sym_s, str_hello);
+
+    // Lambda body: just looks up x
+    const body_lookup = try env.mir_store.addExpr(allocator, .{ .lookup = sym_x }, i64_mono, Region.zero());
+
+    // Lambda with two heterogeneous captures: x (I64) and s (Str)
+    const captures = try env.mir_store.addCaptures(allocator, &.{
+        .{ .symbol = sym_x },
+        .{ .symbol = sym_s },
+    });
+    const lambda_expr = try env.mir_store.addExpr(allocator, .{ .lambda = .{
+        .params = MIR.PatternSpan.empty(),
+        .body = body_lookup,
+        .captures = captures,
+    } }, i64_mono, Region.zero());
+
+    var translator = Self.init(allocator, &env.mir_store, &env.lir_store, &env.layout_store);
+    defer translator.deinit();
+
+    const lir_id = try translator.lower(lambda_expr);
+    const lir_expr = env.lir_store.getExpr(lir_id);
+
+    // Should produce a closure
+    try testing.expect(lir_expr == .closure);
+    // Multiple captures → struct_captures representation
+    try testing.expect(lir_expr.closure.representation == .struct_captures);
+}

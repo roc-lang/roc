@@ -1790,3 +1790,40 @@ test "RC mutation: reassigning refcounted var emits decref before mutation" {
     }
     try std.testing.expect(found_decref_before_mutate);
 }
+
+test "RC for_loop: unused refcounted elem gets decref" {
+    // for list |elem| { 42 }  where elem is str-layout but unused in body
+    // elem never used => decref for the unused element
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const str_layout: LayoutIdx = .str;
+    const sym_elem = makeSymbol(1);
+    const sym_list = makeSymbol(2);
+
+    // Build for loop body: 42 (ignores elem entirely)
+    const int_lit = try env.lir_store.addExpr(.{ .i64_literal = 42 }, Region.zero());
+
+    // Build for loop
+    const list_expr = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_list, .layout_idx = str_layout } }, Region.zero());
+    const pat_elem = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_elem, .layout_idx = str_layout } }, Region.zero());
+    const for_expr = try env.lir_store.addExpr(.{ .for_loop = .{
+        .list_expr = list_expr,
+        .elem_layout = str_layout,
+        .elem_pattern = pat_elem,
+        .body = int_lit,
+    } }, Region.zero());
+
+    var pass = RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    defer pass.deinit();
+
+    const result = try pass.insertRcOps(for_expr);
+
+    // decref for unused str elem
+    const rc = countRcOps(&env.lir_store, result);
+    try std.testing.expect(rc.decrefs >= 1);
+    try std.testing.expectEqual(@as(u32, 0), rc.increfs);
+}

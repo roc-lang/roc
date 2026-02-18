@@ -335,3 +335,198 @@ test "TailRecursionPass initialization" {
     try std.testing.expect(!pass.found_tail_call);
     try std.testing.expect(pass.target_symbol.eql(symbol));
 }
+
+test "TailRecursionPass: tail call is transformed to jump" {
+    // Build: let result = f(arg) in ret result
+    // where f is the target symbol => should become a jump
+    const allocator = std.testing.allocator;
+    const base = @import("base");
+    const Region = base.Region;
+
+    var store = LirExprStore.init(allocator);
+    defer store.deinit();
+
+    const makeIdent = struct {
+        fn f(idx: u29) base.Ident.Idx {
+            return .{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = idx };
+        }
+    }.f;
+
+    const target_sym = Symbol{ .module_idx = 0, .ident_idx = makeIdent(1) };
+    const result_sym = Symbol{ .module_idx = 0, .ident_idx = makeIdent(2) };
+    const arg_sym = Symbol{ .module_idx = 0, .ident_idx = makeIdent(3) };
+    const join_id: JoinPointId = @enumFromInt(1);
+    const i64_layout = @import("layout").Idx.i64;
+
+    // Build: f(arg)
+    const fn_lookup = try store.addExpr(.{ .lookup = .{ .symbol = target_sym, .layout_idx = i64_layout } }, Region.zero());
+    const arg_lookup = try store.addExpr(.{ .lookup = .{ .symbol = arg_sym, .layout_idx = i64_layout } }, Region.zero());
+    const call_args = try store.addExprSpan(&.{arg_lookup});
+    const call_expr = try store.addExpr(.{ .call = .{
+        .fn_expr = fn_lookup,
+        .args = call_args,
+        .fn_layout = i64_layout,
+        .ret_layout = i64_layout,
+        .called_via = .apply,
+    } }, Region.zero());
+
+    // Build: ret result
+    const ret_lookup = try store.addExpr(.{ .lookup = .{ .symbol = result_sym, .layout_idx = i64_layout } }, Region.zero());
+    const ret_stmt = try store.addCFStmt(.{ .ret = .{ .value = ret_lookup } });
+
+    // Build: let result = f(arg) in ret result
+    const bind_pat = try store.addPattern(.{ .bind = .{ .symbol = result_sym, .layout_idx = i64_layout } }, Region.zero());
+    const let_stmt = try store.addCFStmt(.{ .let_stmt = .{
+        .pattern = bind_pat,
+        .value = call_expr,
+        .next = ret_stmt,
+    } });
+
+    var pass = TailRecursionPass.init(&store, target_sym, join_id, allocator);
+    const transformed = try pass.transformStmt(let_stmt);
+
+    // Should detect the tail call
+    try std.testing.expect(pass.found_tail_call);
+
+    // The result should be a jump to the join point
+    const result_stmt = store.getCFStmt(transformed);
+    try std.testing.expect(result_stmt == .jump);
+    try std.testing.expectEqual(join_id, result_stmt.jump.target);
+
+    // Jump args should match the original call args
+    const jump_args = store.getExprSpan(result_stmt.jump.args);
+    try std.testing.expectEqual(@as(usize, 1), jump_args.len);
+}
+
+test "TailRecursionPass: non-tail call is not transformed" {
+    // Build: let result = f(arg) in ret other_symbol
+    // result != other_symbol, so this is NOT a tail call
+    const allocator = std.testing.allocator;
+    const base = @import("base");
+    const Region = base.Region;
+
+    var store = LirExprStore.init(allocator);
+    defer store.deinit();
+
+    const makeIdent = struct {
+        fn f(idx: u29) base.Ident.Idx {
+            return .{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = idx };
+        }
+    }.f;
+
+    const target_sym = Symbol{ .module_idx = 0, .ident_idx = makeIdent(1) };
+    const result_sym = Symbol{ .module_idx = 0, .ident_idx = makeIdent(2) };
+    const other_sym = Symbol{ .module_idx = 0, .ident_idx = makeIdent(3) };
+    const arg_sym = Symbol{ .module_idx = 0, .ident_idx = makeIdent(4) };
+    const join_id: JoinPointId = @enumFromInt(1);
+    const i64_layout = @import("layout").Idx.i64;
+
+    // Build: f(arg)
+    const fn_lookup = try store.addExpr(.{ .lookup = .{ .symbol = target_sym, .layout_idx = i64_layout } }, Region.zero());
+    const arg_lookup = try store.addExpr(.{ .lookup = .{ .symbol = arg_sym, .layout_idx = i64_layout } }, Region.zero());
+    const call_args = try store.addExprSpan(&.{arg_lookup});
+    const call_expr = try store.addExpr(.{ .call = .{
+        .fn_expr = fn_lookup,
+        .args = call_args,
+        .fn_layout = i64_layout,
+        .ret_layout = i64_layout,
+        .called_via = .apply,
+    } }, Region.zero());
+
+    // Build: ret other_symbol (different from result)
+    const ret_lookup = try store.addExpr(.{ .lookup = .{ .symbol = other_sym, .layout_idx = i64_layout } }, Region.zero());
+    const ret_stmt = try store.addCFStmt(.{ .ret = .{ .value = ret_lookup } });
+
+    // Build: let result = f(arg) in ret other_symbol
+    const bind_pat = try store.addPattern(.{ .bind = .{ .symbol = result_sym, .layout_idx = i64_layout } }, Region.zero());
+    const let_stmt = try store.addCFStmt(.{ .let_stmt = .{
+        .pattern = bind_pat,
+        .value = call_expr,
+        .next = ret_stmt,
+    } });
+
+    var pass = TailRecursionPass.init(&store, target_sym, join_id, allocator);
+    const transformed = try pass.transformStmt(let_stmt);
+
+    // Should NOT detect a tail call
+    try std.testing.expect(!pass.found_tail_call);
+
+    // The statement should be unchanged
+    try std.testing.expectEqual(let_stmt, transformed);
+}
+
+test "makeTailRecursive: end-to-end transforms tail-recursive body" {
+    // Build a function body: let result = f(arg) in ret result
+    // makeTailRecursive should wrap it in join/jump
+    const allocator = std.testing.allocator;
+    const base = @import("base");
+    const Region = base.Region;
+    const layout = @import("layout");
+
+    var store = LirExprStore.init(allocator);
+    defer store.deinit();
+
+    const makeIdent = struct {
+        fn f(idx: u29) base.Ident.Idx {
+            return .{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = idx };
+        }
+    }.f;
+
+    const target_sym = Symbol{ .module_idx = 0, .ident_idx = makeIdent(1) };
+    const result_sym = Symbol{ .module_idx = 0, .ident_idx = makeIdent(2) };
+    const param_sym = Symbol{ .module_idx = 0, .ident_idx = makeIdent(3) };
+    const join_id: JoinPointId = @enumFromInt(1);
+    const i64_layout = layout.Idx.i64;
+
+    // Build function parameter
+    const param_pat = try store.addPattern(.{ .bind = .{ .symbol = param_sym, .layout_idx = i64_layout } }, Region.zero());
+    const params = try store.addPatternSpan(&.{param_pat});
+    const param_layouts = try store.addLayoutIdxSpan(&.{i64_layout});
+
+    // Build: f(param)
+    const fn_lookup = try store.addExpr(.{ .lookup = .{ .symbol = target_sym, .layout_idx = i64_layout } }, Region.zero());
+    const arg_lookup = try store.addExpr(.{ .lookup = .{ .symbol = param_sym, .layout_idx = i64_layout } }, Region.zero());
+    const call_args = try store.addExprSpan(&.{arg_lookup});
+    const call_expr = try store.addExpr(.{ .call = .{
+        .fn_expr = fn_lookup,
+        .args = call_args,
+        .fn_layout = i64_layout,
+        .ret_layout = i64_layout,
+        .called_via = .apply,
+    } }, Region.zero());
+
+    // Build: ret result
+    const ret_lookup = try store.addExpr(.{ .lookup = .{ .symbol = result_sym, .layout_idx = i64_layout } }, Region.zero());
+    const ret_stmt = try store.addCFStmt(.{ .ret = .{ .value = ret_lookup } });
+
+    // Build: let result = f(param) in ret result
+    const bind_pat = try store.addPattern(.{ .bind = .{ .symbol = result_sym, .layout_idx = i64_layout } }, Region.zero());
+    const body = try store.addCFStmt(.{ .let_stmt = .{
+        .pattern = bind_pat,
+        .value = call_expr,
+        .next = ret_stmt,
+    } });
+
+    // Run makeTailRecursive
+    const result = try makeTailRecursive(&store, target_sym, join_id, body, params, param_layouts, allocator);
+
+    // Should return non-null (tail call was found)
+    try std.testing.expect(result != null);
+
+    // The result should be a join statement
+    const join_stmt = store.getCFStmt(result.?);
+    try std.testing.expect(join_stmt == .join);
+    try std.testing.expectEqual(join_id, join_stmt.join.id);
+
+    // The join's body should contain the transformed statement (a jump)
+    const transformed_body = store.getCFStmt(join_stmt.join.body);
+    try std.testing.expect(transformed_body == .jump);
+    try std.testing.expectEqual(join_id, transformed_body.jump.target);
+
+    // The join's remainder should be an initial jump with the original param
+    const remainder = store.getCFStmt(join_stmt.join.remainder);
+    try std.testing.expect(remainder == .jump);
+    try std.testing.expectEqual(join_id, remainder.jump.target);
+    const initial_args = store.getExprSpan(remainder.jump.args);
+    try std.testing.expectEqual(@as(usize, 1), initial_args.len);
+}

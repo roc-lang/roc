@@ -932,3 +932,36 @@ test "cross-module: dot-access method call ensures method is lowered" {
     // The cross-module method body must have been lowered into the MIR store
     try testing.expect(env_b.mir_store.getSymbolDef(method_sym) != null);
 }
+
+// --- Gap #10: Recursive symbol monotype patching ---
+
+test "lowerExternalDef: mutually recursive defs get monotypes patched (not left as unit)" {
+    var env = try MirTestEnv.initModule("Test",
+        \\is_even : U64 -> Bool
+        \\is_even = |n| if n == 0 True else is_odd(n - 1)
+        \\
+        \\is_odd : U64 -> Bool
+        \\is_odd = |n| if n == 0 False else is_even(n - 1)
+    );
+    defer env.deinit();
+
+    // Lower both defs
+    const even_expr = try env.lowerNamedDef("is_even");
+    const odd_expr = try env.lowerNamedDef("is_odd");
+
+    // Both should lower successfully (not be runtime errors)
+    try testing.expect(env.mir_store.getExpr(even_expr) != .runtime_err_type);
+    try testing.expect(env.mir_store.getExpr(odd_expr) != .runtime_err_type);
+
+    // The monotypes should NOT be left as unit (the recursion placeholder default)
+    const even_type = env.mir_store.typeOf(even_expr);
+    const odd_type = env.mir_store.typeOf(odd_expr);
+    try testing.expect(even_type != env.mir_store.monotype_store.unit_idx);
+    try testing.expect(odd_type != env.mir_store.monotype_store.unit_idx);
+
+    // Both should resolve to func types (U64 -> Bool)
+    const even_mono = env.mir_store.monotype_store.getMonotype(even_type);
+    const odd_mono = env.mir_store.monotype_store.getMonotype(odd_type);
+    try testing.expect(even_mono == .func);
+    try testing.expect(odd_mono == .func);
+}

@@ -508,7 +508,7 @@ pub const Store = struct {
         }
 
         // Discriminant size from variant count
-        const discriminant_size: u8 = if (variant_layouts.len <= 256) 1 else if (variant_layouts.len <= 65536) 2 else 8;
+        const discriminant_size: u8 = if (variant_layouts.len <= 256) 1 else if (variant_layouts.len <= 65536) 2 else if (variant_layouts.len <= (1 << 32)) 4 else 8;
         const disc_align = TagUnionData.alignmentForDiscriminantSize(discriminant_size);
 
         // Canonical layout: payload at offset 0, discriminant after (aligned)
