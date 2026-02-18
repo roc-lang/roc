@@ -384,43 +384,40 @@ test "record field completion works for modules" {
 }
 
 test "record field completion in sub module" {
-    // DISABLED TEST UNTILL IMPLEMENTED
-    return;
-    // DISABLED TEST UNTILL IMPLEMENTED
-    // var h = try TestHarness.init();
-    // defer h.deinit();
+    var h = try TestHarness.init();
+    defer h.deinit();
 
-    // const clean = try h.formatSource(
-    //     \\app [main] {{ pf: platform "{s}" }}
-    //     \\
-    //     \\Basic := [Val(Str)].{{
-    //     \\  rec = {{ foo: "hello", bar: 42 }}
-    //     \\}}
-    //     \\
-    //     \\
-    // );
-    // defer h.allocator.free(clean);
+    const clean = try h.formatSource(
+        \\app [main] {{ pf: platform "{s}" }}
+        \\
+        \\Basic := [Val(Str)].{{
+        \\  rec = {{ foo: "hello", bar: 42 }}
+        \\}}
+        \\
+        \\
+    );
+    defer h.allocator.free(clean);
 
-    // try h.writeFile("record_completion.roc", clean);
-    // try h.check(clean);
+    try h.writeFile("record_completion.roc", clean);
+    try h.check(clean);
 
-    // const incomplete = try h.formatSource(
-    //     \\app [main] {{ pf: platform "{s}" }}
-    //     \\
-    //     \\Basic := [Val(Str)].{{
-    //     \\  rec = {{ foo: "hello", bar: 42 }}
-    //     \\}}
-    //     \\
-    //     \\main = Basic.rec.
-    //     \\
-    // );
-    // defer h.allocator.free(incomplete);
+    const incomplete = try h.formatSource(
+        \\app [main] {{ pf: platform "{s}" }}
+        \\
+        \\Basic := [Val(Str)].{{
+        \\  rec = {{ foo: "hello", bar: 42 }}
+        \\}}
+        \\
+        \\main = Basic.rec.
+        \\
+    );
+    defer h.allocator.free(incomplete);
 
-    // // Line 6: "get_foo = my_record." — character 20 is right after the dot
-    // const items = try h.getCompletions(incomplete, 6, 17);
-    // defer h.freeCompletions(items);
+    // Line 6: "get_foo = my_record." — character 20 is right after the dot
+    const items = try h.getCompletions(incomplete, 6, 17);
+    defer h.freeCompletions(items);
 
-    // try TestHarness.expectHasLabels(items, &.{ "foo", "bar" });
+    try TestHarness.expectHasLabels(items, &.{ "foo", "bar" });
 }
 
 test "record field completion works for nested nominal submodule" {
@@ -562,12 +559,12 @@ test "record field completion with partial field name" {
         \\my_record : MyRecord
         \\my_record = {{ foo: "hello", bar: 42 }}
         \\
-        \\get_foo = my_record.fo
+        \\get_foo = my_record.of
         \\
     );
     defer h.allocator.free(partial);
 
-    // Both fields returned — client-side filtering narrows to "fo" prefix
+    // Both fields returned — client-side filtering narrows to "of" prefix
     const items = try h.getCompletions(partial, 5, 23);
     defer h.freeCompletions(items);
 
