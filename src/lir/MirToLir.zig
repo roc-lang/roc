@@ -906,11 +906,55 @@ fn lowerPattern(self: *Self, mir_pat_id: MIR.PatternId) Allocator.Error!LirPatte
         },
         .record_destructure => |rd| blk: {
             const record_layout = try self.layoutFromMonotype(mono_idx);
-            const lir_fields = try self.lowerPatternSpan(self.mir_store.getPatternSpan(rd.destructs));
-            break :blk self.lir_store.addPattern(.{ .record = .{
-                .record_layout = record_layout,
-                .fields = lir_fields,
-            } }, region);
+
+            // MIR destructs are in alphabetical (field-name) order, but the layout
+            // store sorts fields by alignment. Reorder patterns to match layout order
+            // so codegen can use positional field indices.
+            const mir_patterns = self.mir_store.getPatternSpan(rd.destructs);
+            const mir_field_names = self.mir_store.getFieldNameSpan(rd.field_names);
+            const record_layout_val = self.layout_store.getLayout(record_layout);
+
+            if (record_layout_val.tag == .record) {
+                const record_data = self.layout_store.getRecordData(record_layout_val.data.record.idx);
+                const layout_fields = self.layout_store.record_fields.sliceRange(record_data.getFields());
+
+                // For each layout field (in alignment-sorted order), find the matching
+                // MIR pattern by field name and lower it
+                const save_len = self.scratch_lir_pattern_ids.items.len;
+                defer self.scratch_lir_pattern_ids.shrinkRetainingCapacity(save_len);
+
+                for (0..layout_fields.len) |li| {
+                    const layout_field_name = layout_fields.get(li).name;
+                    // Find the MIR pattern with this field name
+                    var found = false;
+                    for (mir_field_names, 0..) |mir_name, mi| {
+                        if (@as(u32, @bitCast(mir_name)) == @as(u32, @bitCast(layout_field_name))) {
+                            const lir_pat = try self.lowerPattern(mir_patterns[mi]);
+                            try self.scratch_lir_pattern_ids.append(self.allocator, lir_pat);
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found) {
+                        // Field exists in layout but not in destructure (wildcard)
+                        const lir_pat = try self.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = .zst } }, region);
+                        try self.scratch_lir_pattern_ids.append(self.allocator, lir_pat);
+                    }
+                }
+
+                const lir_fields = try self.lir_store.addPatternSpan(self.scratch_lir_pattern_ids.items[save_len..]);
+                break :blk self.lir_store.addPattern(.{ .record = .{
+                    .record_layout = record_layout,
+                    .fields = lir_fields,
+                } }, region);
+            } else {
+                // Non-record layout (e.g. ZST) — just lower patterns directly
+                const lir_fields = try self.lowerPatternSpan(mir_patterns);
+                break :blk self.lir_store.addPattern(.{ .record = .{
+                    .record_layout = record_layout,
+                    .fields = lir_fields,
+                } }, region);
+            }
         },
         .tuple_destructure => |td| blk: {
             const tuple_layout = try self.layoutFromMonotype(mono_idx);
