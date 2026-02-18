@@ -633,6 +633,15 @@ pub const RcInsertPass = struct {
     ) Allocator.Error!LirExprId {
         const branches = self.store.getIfBranches(branches_span);
 
+        // Collect symbols bound within branch bodies — these are local to their
+        // defining branch and must NOT get per-branch RC ops.
+        var body_bound = std.AutoHashMap(u64, void).init(self.allocator);
+        defer body_bound.deinit();
+        for (branches) |branch| {
+            try self.collectExprBoundSymbols(branch.body, &body_bound);
+        }
+        try self.collectExprBoundSymbols(final_else_id, &body_bound);
+
         // Collect per-branch local use counts and union of all refcounted symbols
         var branch_use_maps = std.ArrayList(std.AutoHashMap(u64, u32)).empty;
         defer {
@@ -647,6 +656,7 @@ pub const RcInsertPass = struct {
             var it = local.keyIterator();
             while (it.next()) |key| {
                 const k = key.*;
+                if (body_bound.contains(k)) continue;
                 if (self.symbol_layouts.get(k)) |lay| {
                     if (self.layoutNeedsRc(lay)) try symbols_in_any_branch.put(k, {});
                 }
@@ -660,6 +670,7 @@ pub const RcInsertPass = struct {
             var it = else_uses.keyIterator();
             while (it.next()) |key| {
                 const k = key.*;
+                if (body_bound.contains(k)) continue;
                 if (self.symbol_layouts.get(k)) |lay| {
                     if (self.layoutNeedsRc(lay)) try symbols_in_any_branch.put(k, {});
                 }
@@ -709,28 +720,54 @@ pub const RcInsertPass = struct {
             try self.collectPatternSymbols(branch.pattern, &pattern_bound);
         }
 
-        // Collect per-branch local use counts and union of all refcounted symbols
-        var branch_use_maps = std.ArrayList(std.AutoHashMap(u64, u32)).empty;
+        // Collect symbols bound within branch bodies — these are local to their
+        // defining branch and must NOT get per-branch RC ops.
+        var body_bound = std.AutoHashMap(u64, void).init(self.allocator);
+        defer body_bound.deinit();
+        for (branches) |branch| {
+            try self.collectExprBoundSymbols(branch.body, &body_bound);
+        }
+
+        // Collect per-branch body and guard use counts separately.
+        // Both contribute to symbols_in_any_branch (so unused branches decref),
+        // but body uses drive wrapBranchWithRcOps while guard uses get
+        // borrow-style increfs via wrapGuardWithIncref.
+        var body_use_maps = std.ArrayList(std.AutoHashMap(u64, u32)).empty;
         defer {
-            for (branch_use_maps.items) |*m| m.deinit();
-            branch_use_maps.deinit(self.allocator);
+            for (body_use_maps.items) |*m| m.deinit();
+            body_use_maps.deinit(self.allocator);
+        }
+        var guard_use_maps = std.ArrayList(std.AutoHashMap(u64, u32)).empty;
+        defer {
+            for (guard_use_maps.items) |*m| m.deinit();
+            guard_use_maps.deinit(self.allocator);
         }
         var symbols_in_any_branch = std.AutoHashMap(u64, void).init(self.allocator);
         defer symbols_in_any_branch.deinit();
 
         for (branches) |branch| {
-            var local = try self.countUsesLocal(branch.body);
-            try self.countUsesInto(branch.guard, &local);
-            var it = local.keyIterator();
+            var body_local = try self.countUsesLocal(branch.body);
+            var guard_local = try self.countUsesLocal(branch.guard);
+            // Both guard and body symbols contribute to symbols_in_any_branch
+            var it = body_local.keyIterator();
             while (it.next()) |key| {
                 const k = key.*;
-                // Skip pattern-bound symbols — they're local to their branch
+                if (pattern_bound.contains(k)) continue;
+                if (body_bound.contains(k)) continue;
+                if (self.symbol_layouts.get(k)) |lay| {
+                    if (self.layoutNeedsRc(lay)) try symbols_in_any_branch.put(k, {});
+                }
+            }
+            var it2 = guard_local.keyIterator();
+            while (it2.next()) |key| {
+                const k = key.*;
                 if (pattern_bound.contains(k)) continue;
                 if (self.symbol_layouts.get(k)) |lay| {
                     if (self.layoutNeedsRc(lay)) try symbols_in_any_branch.put(k, {});
                 }
             }
-            try branch_use_maps.append(self.allocator, local);
+            try body_use_maps.append(self.allocator, body_local);
+            try guard_use_maps.append(self.allocator, guard_local);
         }
 
         var new_branches = std.ArrayList(LirMatchBranch).empty;
@@ -739,10 +776,13 @@ pub const RcInsertPass = struct {
         for (branches, 0..) |branch, i| {
             const processed_body = try self.processExpr(branch.body);
             const processed_guard = try self.processExpr(branch.guard);
-            const new_body = try self.wrapBranchWithRcOps(processed_body, &branch_use_maps.items[i], &symbols_in_any_branch, result_layout, region);
+            // Body gets per-branch RC ops based on body-only uses
+            const new_body = try self.wrapBranchWithRcOps(processed_body, &body_use_maps.items[i], &symbols_in_any_branch, result_layout, region);
+            // Guard gets borrow-style increfs for symbols it uses
+            const new_guard = try self.wrapGuardWithIncref(processed_guard, &guard_use_maps.items[i], &pattern_bound, region);
             try new_branches.append(self.allocator, .{
                 .pattern = branch.pattern,
-                .guard = processed_guard,
+                .guard = new_guard,
                 .body = new_body,
             });
         }
@@ -1051,6 +1091,130 @@ pub const RcInsertPass = struct {
         }
     }
 
+    /// Collect all symbols bound by patterns within an expression tree.
+    /// Used to identify locally-defined symbols for branch-aware RC filtering.
+    fn collectExprBoundSymbols(self: *const RcInsertPass, expr_id: LirExprId, set: *std.AutoHashMap(u64, void)) Allocator.Error!void {
+        if (expr_id.isNone()) return;
+        const expr = self.store.getExpr(expr_id);
+        switch (expr) {
+            .block => |block| {
+                const stmts = self.store.getStmts(block.stmts);
+                for (stmts) |stmt| {
+                    const b = stmt.binding();
+                    try self.collectPatternSymbols(b.pattern, set);
+                    try self.collectExprBoundSymbols(b.expr, set);
+                }
+                try self.collectExprBoundSymbols(block.final_expr, set);
+            },
+            .if_then_else => |ite| {
+                const ibs = self.store.getIfBranches(ite.branches);
+                for (ibs) |branch| {
+                    try self.collectExprBoundSymbols(branch.cond, set);
+                    try self.collectExprBoundSymbols(branch.body, set);
+                }
+                try self.collectExprBoundSymbols(ite.final_else, set);
+            },
+            .match_expr => |w| {
+                try self.collectExprBoundSymbols(w.value, set);
+                const mbs = self.store.getMatchBranches(w.branches);
+                for (mbs) |branch| {
+                    try self.collectPatternSymbols(branch.pattern, set);
+                    try self.collectExprBoundSymbols(branch.guard, set);
+                    try self.collectExprBoundSymbols(branch.body, set);
+                }
+            },
+            .for_loop => |fl| {
+                try self.collectPatternSymbols(fl.elem_pattern, set);
+                try self.collectExprBoundSymbols(fl.list_expr, set);
+                try self.collectExprBoundSymbols(fl.body, set);
+            },
+            .while_loop => |wl| {
+                try self.collectExprBoundSymbols(wl.cond, set);
+                try self.collectExprBoundSymbols(wl.body, set);
+            },
+            .discriminant_switch => |ds| {
+                try self.collectExprBoundSymbols(ds.value, set);
+                const dbs = self.store.getExprSpan(ds.branches);
+                for (dbs) |br_id| try self.collectExprBoundSymbols(br_id, set);
+            },
+            .expect => |e| {
+                try self.collectExprBoundSymbols(e.cond, set);
+                try self.collectExprBoundSymbols(e.body, set);
+            },
+            // Expressions with sub-expressions but no pattern bindings
+            .call => |call| {
+                try self.collectExprBoundSymbols(call.fn_expr, set);
+                const args = self.store.getExprSpan(call.args);
+                for (args) |arg_id| try self.collectExprBoundSymbols(arg_id, set);
+            },
+            .list => |l| {
+                const elems = self.store.getExprSpan(l.elems);
+                for (elems) |elem_id| try self.collectExprBoundSymbols(elem_id, set);
+            },
+            .record => |rec| {
+                const fields = self.store.getExprSpan(rec.fields);
+                for (fields) |field_id| try self.collectExprBoundSymbols(field_id, set);
+            },
+            .tuple => |tup| {
+                const elems = self.store.getExprSpan(tup.elems);
+                for (elems) |elem_id| try self.collectExprBoundSymbols(elem_id, set);
+            },
+            .tag => |t| {
+                const args = self.store.getExprSpan(t.args);
+                for (args) |arg_id| try self.collectExprBoundSymbols(arg_id, set);
+            },
+            .field_access => |fa| try self.collectExprBoundSymbols(fa.record_expr, set),
+            .tuple_access => |ta| try self.collectExprBoundSymbols(ta.tuple_expr, set),
+            .binop => |b| {
+                try self.collectExprBoundSymbols(b.lhs, set);
+                try self.collectExprBoundSymbols(b.rhs, set);
+            },
+            .unary_minus => |u| try self.collectExprBoundSymbols(u.expr, set),
+            .unary_not => |u| try self.collectExprBoundSymbols(u.expr, set),
+            .nominal => |n| try self.collectExprBoundSymbols(n.backing_expr, set),
+            .early_return => |ret| try self.collectExprBoundSymbols(ret.expr, set),
+            .dbg => |d| try self.collectExprBoundSymbols(d.expr, set),
+            .low_level => |ll| {
+                const args = self.store.getExprSpan(ll.args);
+                for (args) |arg_id| try self.collectExprBoundSymbols(arg_id, set);
+            },
+            .hosted_call => |hc| {
+                const args = self.store.getExprSpan(hc.args);
+                for (args) |arg_id| try self.collectExprBoundSymbols(arg_id, set);
+            },
+            .str_concat => |span| {
+                const parts = self.store.getExprSpan(span);
+                for (parts) |part_id| try self.collectExprBoundSymbols(part_id, set);
+            },
+            .int_to_str => |its| try self.collectExprBoundSymbols(its.value, set),
+            .float_to_str => |fts| try self.collectExprBoundSymbols(fts.value, set),
+            .dec_to_str => |d| try self.collectExprBoundSymbols(d, set),
+            .str_escape_and_quote => |s| try self.collectExprBoundSymbols(s, set),
+            .tag_payload_access => |tpa| try self.collectExprBoundSymbols(tpa.value, set),
+            // Lambda/closure are separate scopes in LIR — don't recurse.
+            .lambda, .closure => {},
+            // Terminals and RC ops — no sub-expressions, no bindings
+            .lookup,
+            .i64_literal,
+            .i128_literal,
+            .f64_literal,
+            .f32_literal,
+            .dec_literal,
+            .str_literal,
+            .bool_literal,
+            .empty_list,
+            .empty_record,
+            .zero_arg_tag,
+            .break_expr,
+            .crash,
+            .runtime_error,
+            .incref,
+            .decref,
+            .free,
+            => {},
+        }
+    }
+
     /// Wrap a branch body with per-branch RC operations.
     /// Each branch inherits 1 reference per symbol from the enclosing scope.
     /// - local_count == 0: emit decref (release inherited ref)
@@ -1090,6 +1254,43 @@ pub const RcInsertPass = struct {
             .stmts = stmts_span,
             .final_expr = body,
             .result_layout = result_layout,
+        } }, region);
+    }
+
+    /// Wrap a match guard with borrow-style increfs.
+    /// Guard uses are "borrowed" — we incref(count) rather than incref(count-1)
+    /// to preserve the inherited ref for the body or fallthrough path.
+    fn wrapGuardWithIncref(
+        self: *RcInsertPass,
+        guard: LirExprId,
+        guard_uses: *const std.AutoHashMap(u64, u32),
+        pattern_bound: *const std.AutoHashMap(u64, void),
+        region: Region,
+    ) Allocator.Error!LirExprId {
+        if (guard.isNone()) return guard;
+
+        var rc_stmts = std.ArrayList(LirStmt).empty;
+        defer rc_stmts.deinit(self.allocator);
+
+        var it = guard_uses.iterator();
+        while (it.next()) |entry| {
+            const key = entry.key_ptr.*;
+            const count = entry.value_ptr.*;
+            if (count == 0) continue;
+            if (pattern_bound.contains(key)) continue;
+            const layout_idx = self.symbol_layouts.get(key) orelse continue;
+            if (!self.layoutNeedsRc(layout_idx)) continue;
+            const symbol: Symbol = @bitCast(key);
+            try self.emitIncrefInto(symbol, layout_idx, @intCast(count), region, &rc_stmts);
+        }
+
+        if (rc_stmts.items.len == 0) return guard;
+
+        const stmts_span = try self.store.addStmts(rc_stmts.items);
+        return self.store.addExpr(.{ .block = .{
+            .stmts = stmts_span,
+            .final_expr = guard,
+            .result_layout = .bool,
         } }, region);
     }
 
@@ -2024,8 +2225,9 @@ test "RC for_loop: unused refcounted elem gets decref" {
 test "RC match guard: symbol used only in guard gets proper RC ops" {
     // { s = "hello"; match cond is _ if s -> 1, _ -> 2 }
     // s is used in the guard of branch 0 but not in the body of either branch.
-    // Branch 0: guard uses s (1 use) => no extra action needed.
-    // Branch 1: 0 uses => decref.
+    // Guard gets borrow-style incref(1) so the inherited ref is preserved.
+    // Branch 0 body: 0 uses => decref (releases inherited ref).
+    // Branch 1 body: 0 uses => decref.
     const allocator = std.testing.allocator;
 
     var env = try testInit();
@@ -2072,10 +2274,10 @@ test "RC match guard: symbol used only in guard gets proper RC ops" {
 
     const result = try pass.insertRcOps(block_expr);
 
-    // s is used in one branch (via guard), unused in the other => decref in unused branch
+    // Guard incref(1) for s in branch 0, decref in both branch bodies
     const rc = countRcOps(&env.lir_store, result);
-    try std.testing.expectEqual(@as(u32, 0), rc.increfs);
-    try std.testing.expectEqual(@as(u32, 1), rc.decrefs);
+    try std.testing.expectEqual(@as(u32, 1), rc.increfs);
+    try std.testing.expectEqual(@as(u32, 2), rc.decrefs);
 }
 
 test "RC match guard+body: symbol used in both guard and body gets proper RC ops" {
