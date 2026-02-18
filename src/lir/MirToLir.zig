@@ -672,9 +672,21 @@ fn lowerLowLevel(self: *Self, ll: anytype, mono_idx: Monotype.Idx, region: Regio
         } }, region);
     }
 
+    // num_is_negative/num_is_positive → comparison with 0
+    if (ll.op == .num_is_negative or ll.op == .num_is_positive) {
+        const args_slice = self.lir_store.getExprSpan(lir_args);
+        const zero = try self.lir_store.addExpr(.{ .i64_literal = 0 }, region);
+        const cmp_op: LirExpr.BinOp = if (ll.op == .num_is_negative) .lt else .gt;
+        return self.lir_store.addExpr(.{ .binop = .{
+            .op = cmp_op,
+            .lhs = args_slice[0],
+            .rhs = zero,
+            .result_layout = ret_layout,
+        } }, region);
+    }
+
     const lir_op = mapLowLevel(ll.op) orelse {
-        // Unsupported low-level op → runtime error
-        return self.lir_store.addExpr(.runtime_error, region);
+        std.debug.panic("MirToLir: unmapped CIR low-level op: {s}", .{@tagName(ll.op)});
     };
 
     return self.lir_store.addExpr(.{ .low_level = .{
@@ -1264,7 +1276,24 @@ fn mapLowLevel(cir_op: CIR.Expr.LowLevel) ?LirExpr.LowLevel {
         .dec_to_f32_try_unsafe => .dec_to_f32_try_unsafe,
         .dec_to_f64 => .dec_to_f64,
 
-        // CIR ops that don't have a direct LIR equivalent
+        // Numeric to_str operations
+        .u8_to_str,
+        .i8_to_str,
+        .u16_to_str,
+        .i16_to_str,
+        .u32_to_str,
+        .i32_to_str,
+        .u64_to_str,
+        .i64_to_str,
+        .u128_to_str,
+        .i128_to_str,
+        .dec_to_str,
+        .f32_to_str,
+        .f64_to_str,
+        => .num_to_str,
+
+        // Ops handled before mapLowLevel (num_is_negative, num_is_positive)
+        // or truly unsupported ops
         else => null,
     };
 }
