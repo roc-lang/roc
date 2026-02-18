@@ -646,7 +646,7 @@ fn generateExpr(self: *Self, expr_id: MonoExprId) Allocator.Error!void {
                         .f32 => Op.f32_div,
                         .f64 => Op.f64_div,
                     },
-                    .mod => switch (vt) {
+                    .rem => switch (vt) {
                         .i32 => if (is_unsigned) Op.i32_rem_u else Op.i32_rem_s,
                         .i64 => if (is_unsigned) Op.i64_rem_u else Op.i64_rem_s,
                         .f32, .f64 => {
@@ -2582,6 +2582,13 @@ fn emitLoadBySize(self: *Self, disc_size: u8, offset: u16) Allocator.Error!void 
             WasmModule.leb128WriteU32(self.allocator, &self.body, 2) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, offset) catch return error.OutOfMemory;
         },
+        8 => {
+            self.body.append(self.allocator, Op.i64_load) catch return error.OutOfMemory;
+            WasmModule.leb128WriteU32(self.allocator, &self.body, 3) catch return error.OutOfMemory;
+            WasmModule.leb128WriteU32(self.allocator, &self.body, offset) catch return error.OutOfMemory;
+            // Wrap to i32 since callers use i32 locals for discriminant values
+            self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
+        },
         else => unreachable,
     }
 }
@@ -2653,8 +2660,8 @@ fn generateCompositeI128BinOp(self: *Self, lhs: MonoExprId, rhs: MonoExprId, op:
                 try self.emitI128HostBinOp(lhs_local, rhs_local, import_idx orelse unreachable);
             }
         },
-        .mod => {
-            // i128/u128 modulo via host function
+        .rem => {
+            // i128/u128 remainder via host function
             const is_signed = result_layout == .i128 or result_layout == .dec;
             const import_idx = if (is_signed) self.i128_mod_s_import else self.u128_mod_import;
             try self.emitI128HostBinOp(lhs_local, rhs_local, import_idx orelse unreachable);
