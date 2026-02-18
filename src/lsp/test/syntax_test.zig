@@ -431,6 +431,52 @@ test "record field completion in sub module" {
     // try TestHarness.expectHasLabels(items, &.{ "foo", "bar" });
 }
 
+test "record field completion works for nested nominal submodule" {
+    var h = try TestHarness.init();
+    defer h.deinit();
+
+    const clean = try h.formatSource(
+        \\app [main, test] {{ pf: platform "{s}" }}
+        \\
+        \\MyType := [MyTag(Str)].{{
+        \\    t = 10
+        \\    Sub := [SubTag].{{
+        \\        ta = 10
+        \\    }}
+        \\}}
+        \\
+        \\test = MyType.Sub.ta
+        \\main = "ok"
+        \\
+    );
+    defer h.allocator.free(clean);
+
+    try h.writeFile("nested_nominal_completion.roc", clean);
+    try h.check(clean);
+
+    const incomplete = try h.formatSource(
+        \\app [main, test] {{ pf: platform "{s}" }}
+        \\
+        \\MyType := [MyTag(Str)].{{
+        \\    t = 10
+        \\    Sub := [SubTag].{{
+        \\        ta = 10
+        \\    }}
+        \\}}
+        \\
+        \\test = MyType.Sub.
+        \\main = "ok"
+        \\
+    );
+    defer h.allocator.free(incomplete);
+
+    // Line 9: "test = MyType.Sub." — character 18 is right after the dot.
+    const items = try h.getCompletions(incomplete, 9, 18);
+    defer h.freeCompletions(items);
+
+    try TestHarness.expectHasLabels(items, &.{"ta"});
+}
+
 test "record field completion works" {
     var h = try TestHarness.init();
     defer h.deinit();

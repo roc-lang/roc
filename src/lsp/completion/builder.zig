@@ -284,6 +284,61 @@ pub const CompletionBuilder = struct {
         }
     }
 
+    /// Add completions for members under a qualified namespace chain.
+    ///
+    /// This handles nested nominal/module-like chains that are represented in
+    /// CIR as fully qualified identifiers, e.g. `pkg.MyType.Sub.ta` while the
+    /// cursor chain is `MyType.Sub.`.
+    pub fn addNamespaceMemberCompletions(
+        self: *CompletionBuilder,
+        module_env: *ModuleEnv,
+        namespace_chain: []const u8,
+    ) !bool {
+        var added_any = false;
+
+        // Top-level defs.
+        const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
+        for (defs_slice) |def_idx| {
+            const def = module_env.store.getDef(def_idx);
+            const ident_idx = module_lookup.extractIdentFromPattern(&module_env.store, def.pattern) orelse continue;
+            const full_name = module_env.getIdentText(ident_idx);
+            const label = namespaceMemberLabel(full_name, namespace_chain) orelse continue;
+            if (label.len == 0) continue;
+
+            const kind: u32 = if (std.ascii.isUpper(label[0]))
+                @intFromEnum(CompletionItemKind.class)
+            else
+                @intFromEnum(CompletionItemKind.field);
+
+            if (try self.addItem(.{ .label = label, .kind = kind, .detail = null })) {
+                added_any = true;
+            }
+        }
+
+        // Statement-bound defs (app-style declarations).
+        const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
+        for (statements_slice) |stmt_idx| {
+            const stmt = module_env.store.getStatement(stmt_idx);
+            const parts = getStatementParts(stmt);
+            const pattern_idx = parts.pattern orelse continue;
+            const ident_idx = module_lookup.extractIdentFromPattern(&module_env.store, pattern_idx) orelse continue;
+            const full_name = module_env.getIdentText(ident_idx);
+            const label = namespaceMemberLabel(full_name, namespace_chain) orelse continue;
+            if (label.len == 0) continue;
+
+            const kind: u32 = if (std.ascii.isUpper(label[0]))
+                @intFromEnum(CompletionItemKind.class)
+            else
+                @intFromEnum(CompletionItemKind.field);
+
+            if (try self.addItem(.{ .label = label, .kind = kind, .detail = null })) {
+                added_any = true;
+            }
+        }
+
+        return added_any;
+    }
+
     // =========================================================================
     // Type Completions
     // =========================================================================
@@ -1547,6 +1602,42 @@ fn lastSegment(name: []const u8) []const u8 {
     const dot_idx = std.mem.lastIndexOfScalar(u8, name, '.') orelse return name;
     if (dot_idx + 1 >= name.len) return name;
     return name[dot_idx + 1 ..];
+}
+
+/// Extract the immediate child label under `namespace_chain` from a full name.
+///
+/// Examples:
+/// - full: `MyType.Sub.ta`, chain: `MyType.Sub` => `ta`
+/// - full: `pkg.MyType.Sub.ta`, chain: `MyType.Sub` => `ta`
+fn namespaceMemberLabel(full_name: []const u8, namespace_chain: []const u8) ?[]const u8 {
+    if (namespace_chain.len == 0) return null;
+
+    // Direct match: `MyType.Sub.<member>`
+    if (std.mem.startsWith(u8, full_name, namespace_chain) and
+        full_name.len > namespace_chain.len and
+        full_name[namespace_chain.len] == '.')
+    {
+        const remainder = full_name[namespace_chain.len + 1 ..];
+        if (remainder.len == 0) return null;
+        return firstSegment(remainder);
+    }
+
+    // Qualified match: `<module>.MyType.Sub.<member>`
+    var i: usize = 0;
+    while (i < full_name.len) : (i += 1) {
+        if (full_name[i] != '.') continue;
+        const start = i + 1;
+        if (start >= full_name.len) break;
+        if (start + namespace_chain.len >= full_name.len) break;
+        if (!std.mem.eql(u8, full_name[start .. start + namespace_chain.len], namespace_chain)) continue;
+        if (full_name[start + namespace_chain.len] != '.') continue;
+
+        const remainder_start = start + namespace_chain.len + 1;
+        if (remainder_start >= full_name.len) return null;
+        return firstSegment(full_name[remainder_start..]);
+    }
+
+    return null;
 }
 
 /// Parts extracted from a statement for common processing.

@@ -2152,13 +2152,39 @@ pub const SyntaxChecker = struct {
             const member = nextChainSegment(access_chain, idx) orelse return null;
             idx = member.next;
 
-            const def_info = module_lookup.findDefinitionByName(resolved_env, member.segment) orelse return null;
+            // NOTE: Nested nominal/module members are often stored as qualified
+            // identifiers (e.g. `MyType.Sub`). Prefer exact lookup first, then
+            // try the qualified path and finally unqualified suffix matching.
+            const def_info = findDefinitionForNamespaceMember(
+                self.allocator,
+                resolved_env,
+                first.segment,
+                member.segment,
+            ) orelse return null;
             var type_var = ModuleEnv.varFrom(def_info.pattern_idx);
+            var namespace_prefix = std.ArrayList(u8).empty;
+            defer namespace_prefix.deinit(self.allocator);
+            namespace_prefix.appendSlice(self.allocator, first.segment) catch return null;
+            namespace_prefix.append(self.allocator, '.') catch return null;
+            namespace_prefix.appendSlice(self.allocator, member.segment) catch return null;
 
             while (nextChainSegment(access_chain, idx)) |segment| {
                 idx = segment.next;
+
+                // Prefer namespace/member traversal for uppercase segments before
+                // falling back to structural field traversal.
+                if (findDefinitionByQualifiedPrefix(self.allocator, resolved_env, namespace_prefix.items, segment.segment)) |next_def| {
+                    type_var = ModuleEnv.varFrom(next_def.pattern_idx);
+                    namespace_prefix.append(self.allocator, '.') catch return null;
+                    namespace_prefix.appendSlice(self.allocator, segment.segment) catch return null;
+                    continue;
+                }
+
                 const next_var = builder.getFieldTypeVarFromTypeVar(resolved_env, type_var, segment.segment) orelse return null;
                 type_var = next_var;
+
+                namespace_prefix.append(self.allocator, '.') catch return null;
+                namespace_prefix.appendSlice(self.allocator, segment.segment) catch return null;
             }
 
             return .{ .module_env = resolved_env, .type_var = type_var };
@@ -2172,6 +2198,40 @@ pub const SyntaxChecker = struct {
         }
 
         return .{ .module_env = module_env, .type_var = type_var };
+    }
+
+    /// Resolve a namespace member definition with progressively broader matching.
+    ///
+    /// This is tailored for completion on nested nominal/module namespaces where
+    /// definitions may be stored either as unqualified names (`Sub`) or as
+    /// qualified names (`MyType.Sub`).
+    fn findDefinitionForNamespaceMember(
+        allocator: Allocator,
+        module_env: *ModuleEnv,
+        namespace_prefix: []const u8,
+        member_name: []const u8,
+    ) ?module_lookup.DefinitionInfo {
+        if (module_lookup.findDefinitionByName(module_env, member_name)) |def_info| {
+            return def_info;
+        }
+
+        if (findDefinitionByQualifiedPrefix(allocator, module_env, namespace_prefix, member_name)) |def_info| {
+            return def_info;
+        }
+
+        return module_lookup.findDefinitionByUnqualifiedName(module_env, member_name);
+    }
+
+    /// Find a definition by building `prefix.member` and doing exact lookup.
+    fn findDefinitionByQualifiedPrefix(
+        allocator: Allocator,
+        module_env: *ModuleEnv,
+        prefix: []const u8,
+        member_name: []const u8,
+    ) ?module_lookup.DefinitionInfo {
+        const qualified = std.fmt.allocPrint(allocator, "{s}.{s}", .{ prefix, member_name }) catch return null;
+        defer allocator.free(qualified);
+        return module_lookup.findDefinitionByName(module_env, qualified);
     }
 
     /// Get the next segment in a dotted access chain.
@@ -2349,7 +2409,15 @@ pub const SyntaxChecker = struct {
                         try builder.addMethodsFromTypeVar(resolved.module_env, resolved.type_var);
                     }
 
-                    if (!chain_resolved) {
+                    // When the chain starts with an uppercase identifier and
+                    // type-based traversal fails, try namespace-style member
+                    // completion from qualified definition names.
+                    var namespace_resolved = false;
+                    if (!chain_resolved and record_access.access_chain.len > 0 and std.ascii.isUpper(record_access.access_chain[0])) {
+                        namespace_resolved = try builder.addNamespaceMemberCompletions(module_env, record_access.access_chain);
+                    }
+
+                    if (!chain_resolved and !namespace_resolved) {
                         const variable_name = lastChainSegment(record_access.access_chain);
                         const variable_start = record_access.member_start;
 
