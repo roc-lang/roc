@@ -4629,7 +4629,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try self.codegen.emitSDiv(.w64, result_reg, lhs_reg, rhs_reg);
                     }
                 },
-                .mod => {
+                .rem => {
                     if (is_unsigned) {
                         try self.codegen.emitUMod(.w64, result_reg, lhs_reg, rhs_reg);
                     } else {
@@ -4864,7 +4864,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try self.callI128DivRem(lhs_parts, rhs_parts, result_low, result_high, is_unsigned, false);
                     }
                 },
-                .mod => {
+                .rem => {
                     // 128-bit integer remainder: call builtin function
                     try self.callI128DivRem(lhs_parts, rhs_parts, result_low, result_high, is_unsigned, true);
                 },
@@ -9957,15 +9957,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .lambda_code, .closure_value => {
                     std.debug.panic("storeResultToSlot: cannot store lambda_code or closure_value directly - caller must call/dispatch and store the result", .{});
                 },
-                else => {
-                    // For other types, try a generic copy using slot_size
+                .stack_str => |off| {
                     var offset: u32 = 0;
                     while (offset < slot_size) : (offset += 8) {
-                        const src_off = switch (loc) {
-                            .stack_str => |off| off + @as(i32, @intCast(offset)),
-                            .list_stack => |ls_info| ls_info.struct_offset + @as(i32, @intCast(offset)),
-                            else => break,
-                        };
+                        const src_off = off + @as(i32, @intCast(offset));
                         if (comptime target.toCpuArch() == .aarch64) {
                             try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, src_off);
                             try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, slot + @as(i32, @intCast(offset)));
@@ -9975,6 +9970,20 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         }
                     }
                 },
+                .list_stack => |ls_info| {
+                    var offset: u32 = 0;
+                    while (offset < slot_size) : (offset += 8) {
+                        const src_off = ls_info.struct_offset + @as(i32, @intCast(offset));
+                        if (comptime target.toCpuArch() == .aarch64) {
+                            try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, src_off);
+                            try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, slot + @as(i32, @intCast(offset)));
+                        } else {
+                            try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, src_off);
+                            try self.codegen.emit.movMemReg(.w64, .RBP, slot + @as(i32, @intCast(offset)), temp_reg);
+                        }
+                    }
+                },
+                else => unreachable,
             }
             self.codegen.freeGeneral(temp_reg);
         }
