@@ -11001,7 +11001,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     return try self.dispatchEnumClosure(cv.stack_offset, repr.lambda_set, args_span, ret_layout);
                 },
                 .union_repr => |repr| {
-                    return try self.dispatchUnionClosure(cv.stack_offset, repr, args_span);
+                    return try self.dispatchUnionClosure(cv.stack_offset, repr, args_span, ret_layout);
                 },
                 .unwrapped_capture => {
                     // Single function - call with the captured value
@@ -11056,8 +11056,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const tag_reg = try self.allocTempGeneral();
             try self.codegen.emitLoadStack(.w64, tag_reg, tag_offset);
 
-            // Allocate result slot
-            const result_slot = self.codegen.allocStackSlot(8);
+            // Allocate result slot sized to the return layout
+            const result_size = self.getLayoutSize(ret_layout);
+            const result_slot = self.codegen.allocStackSlot(result_size);
 
             // Track end jumps for patching
             var end_jumps = std.ArrayList(usize).empty;
@@ -11102,6 +11103,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             union_offset: i32,
             repr: anytype,
             args_span: anytype,
+            ret_layout: layout.Idx,
         ) Allocator.Error!ValueLocation {
             const members = self.store.getLambdaSetMembers(repr.lambda_set);
 
@@ -11120,8 +11122,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const tag_reg = try self.allocTempGeneral();
             try self.codegen.emitLoadStack(.w64, tag_reg, union_offset);
 
-            // Allocate result slot
-            const result_slot = self.codegen.allocStackSlot(8);
+            // Allocate result slot sized to the return layout
+            const result_size = self.getLayoutSize(ret_layout);
+            const result_slot = self.codegen.allocStackSlot(result_size);
 
             // Track end jumps for patching
             var end_jumps = std.ArrayList(usize).empty;
