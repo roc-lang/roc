@@ -1142,6 +1142,30 @@ pub const CFSwitchBranchSpan = extern struct {
     }
 };
 
+/// A branch in a control flow match statement (pattern matching)
+pub const CFMatchBranch = struct {
+    /// The pattern to match against
+    pattern: MonoPatternId,
+    /// Optional guard expression (MonoExprId.none if no guard)
+    guard: MonoExprId,
+    /// The statement body for this branch
+    body: CFStmtId,
+};
+
+/// Span of control flow match branches
+pub const CFMatchBranchSpan = extern struct {
+    start: u32,
+    len: u16,
+
+    pub fn empty() CFMatchBranchSpan {
+        return .{ .start = 0, .len = 0 };
+    }
+
+    pub fn isEmpty(self: CFMatchBranchSpan) bool {
+        return self.len == 0;
+    }
+};
+
 /// Control Flow Statement IR - for tail recursion optimization
 /// This mirrors Roc's Stmt enum in ir.rs
 ///
@@ -1205,6 +1229,18 @@ pub const CFStmt = union(enum) {
         branches: CFSwitchBranchSpan,
         /// Default branch (if no match)
         default_branch: CFStmtId,
+        /// Layout of the result
+        ret_layout: layout.Idx,
+    },
+
+    /// Pattern match statement (for `when` expressions in tail position)
+    match_stmt: struct {
+        /// The value being matched
+        value: MonoExprId,
+        /// Layout of the value being matched
+        value_layout: layout.Idx,
+        /// Pattern match branches
+        branches: CFMatchBranchSpan,
         /// Layout of the result
         ret_layout: layout.Idx,
     },

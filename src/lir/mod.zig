@@ -74,6 +74,10 @@ pub const CFStmtId = LIR.CFStmtId;
 pub const CFSwitchBranch = LIR.CFSwitchBranch;
 /// Control flow switch branch span type
 pub const CFSwitchBranchSpan = LIR.CFSwitchBranchSpan;
+/// Control flow match branch type
+pub const CFMatchBranch = LIR.CFMatchBranch;
+/// Control flow match branch span type
+pub const CFMatchBranchSpan = LIR.CFMatchBranchSpan;
 /// Layout index span type
 pub const LayoutIdxSpan = LIR.LayoutIdxSpan;
 /// LIR procedure type

@@ -14972,6 +14972,10 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 .switch_stmt => |sw| {
                     try self.generateSwitchStmt(sw);
                 },
+
+                .match_stmt => |ms| {
+                    try self.generateMatchStmt(ms);
+                },
             }
         }
 
@@ -15308,6 +15312,482 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 for (end_patches.items) |patch| {
                     self.codegen.patchJump(patch, end_offset);
                 }
+            }
+        }
+
+        /// Generate code for a match statement (pattern matching in tail position).
+        /// Like generateMatch but each branch body is a CFStmt (handles its own ret/jump).
+        fn generateMatchStmt(self: *Self, ms: anytype) Allocator.Error!void {
+            // Evaluate the scrutinee
+            const value_loc = try self.generateExpr(ms.value);
+
+            const branches = self.store.getCFMatchBranches(ms.branches);
+            if (branches.len == 0) {
+                unreachable;
+            }
+
+            // Get layout info for tag unions
+            const ls = self.layout_store orelse unreachable;
+            const value_layout_val = ls.getLayout(ms.value_layout);
+            const tu_disc_offset: i32 = if (value_layout_val.tag == .tag_union) blk: {
+                const tu_data = ls.getTagUnionData(value_layout_val.data.tag_union.idx);
+                break :blk @intCast(tu_data.discriminant_offset);
+            } else 0;
+            const tu_total_size: u32 = if (value_layout_val.tag == .tag_union) blk: {
+                const tu_data = ls.getTagUnionData(value_layout_val.data.tag_union.idx);
+                break :blk tu_data.size;
+            } else 0;
+            const tu_disc_size: u8 = if (value_layout_val.tag == .tag_union) blk: {
+                const tu_data = ls.getTagUnionData(value_layout_val.data.tag_union.idx);
+                break :blk tu_data.discriminant_size;
+            } else 4;
+            const disc_use_w32 = (tu_disc_offset + 8 > @as(i32, @intCast(tu_total_size)));
+
+            // Collect jump targets for patching to end
+            var end_patches = std.ArrayList(usize).empty;
+            defer end_patches.deinit(self.allocator);
+
+            for (branches, 0..) |branch, i| {
+                const pattern = self.store.getPattern(branch.pattern);
+                const is_last_branch = (i == branches.len - 1);
+
+                switch (pattern) {
+                    .wildcard => {
+                        try self.generateStmt(branch.body);
+                        break;
+                    },
+                    .bind => |bind| {
+                        const symbol_key: u64 = @bitCast(bind.symbol);
+                        try self.symbol_locations.put(symbol_key, value_loc);
+                        try self.generateStmt(branch.body);
+                        break;
+                    },
+                    .int_literal => |int_lit| {
+                        const value_reg = try self.ensureInGeneralReg(value_loc);
+
+                        if (int_lit.value >= std.math.minInt(i32) and int_lit.value <= std.math.maxInt(i32)) {
+                            try self.emitCmpImm(value_reg, @intCast(int_lit.value));
+                        } else {
+                            const tmp_reg = try self.allocTempGeneral();
+                            try self.loadImm64(tmp_reg, @intCast(int_lit.value));
+                            try self.emitCmpRegReg(value_reg, tmp_reg);
+                            self.codegen.freeGeneral(tmp_reg);
+                        }
+
+                        var next_patch: ?usize = null;
+                        if (!is_last_branch) {
+                            next_patch = try self.emitJumpIfNotEqual();
+                        }
+
+                        try self.generateStmt(branch.body);
+
+                        if (!is_last_branch) {
+                            const end_patch = try self.codegen.emitJump();
+                            try end_patches.append(self.allocator, end_patch);
+
+                            if (next_patch) |patch| {
+                                self.codegen.patchJump(patch, self.codegen.currentOffset());
+                            }
+                        }
+                    },
+                    .str_literal => |str_lit_idx| {
+                        const lit_loc = try self.generateStrLiteral(str_lit_idx);
+                        const lit_off = try self.ensureOnStack(lit_loc, roc_str_size);
+                        const val_off = try self.ensureOnStack(value_loc, roc_str_size);
+
+                        const eq_loc = try self.callStr2ToScalar(val_off, lit_off, @intFromPtr(&wrapStrEqual), .str_equal);
+                        const eq_reg = try self.ensureInGeneralReg(eq_loc);
+
+                        try self.emitCmpImm(eq_reg, 0);
+                        self.codegen.freeGeneral(eq_reg);
+
+                        var next_patch: ?usize = null;
+                        if (!is_last_branch) {
+                            next_patch = try self.emitJumpIfEqual();
+                        }
+
+                        try self.generateStmt(branch.body);
+
+                        if (!is_last_branch) {
+                            const end_patch = try self.codegen.emitJump();
+                            try end_patches.append(self.allocator, end_patch);
+
+                            if (next_patch) |patch| {
+                                self.codegen.patchJump(patch, self.codegen.currentOffset());
+                            }
+                        }
+                    },
+                    .tag => |tag_pattern| {
+                        // Load discriminant based on value location
+                        const disc_reg = try self.allocTempGeneral();
+                        switch (value_loc) {
+                            .stack_str, .stack_i128 => |base_offset| {
+                                if (comptime target.toCpuArch() == .aarch64) {
+                                    const w = if (disc_use_w32) aarch64.RegisterWidth.w32 else aarch64.RegisterWidth.w64;
+                                    try self.codegen.emit.ldrRegMemSoff(w, disc_reg, .FP, base_offset + tu_disc_offset);
+                                } else {
+                                    const w = if (disc_use_w32) x86_64.RegisterWidth.w32 else x86_64.RegisterWidth.w64;
+                                    try self.codegen.emit.movRegMem(w, disc_reg, .RBP, base_offset + tu_disc_offset);
+                                }
+                            },
+                            .stack => |s| {
+                                const base_offset = s.offset;
+                                if (comptime target.toCpuArch() == .aarch64) {
+                                    const w = if (disc_use_w32) aarch64.RegisterWidth.w32 else aarch64.RegisterWidth.w64;
+                                    try self.codegen.emit.ldrRegMemSoff(w, disc_reg, .FP, base_offset + tu_disc_offset);
+                                } else {
+                                    const w = if (disc_use_w32) x86_64.RegisterWidth.w32 else x86_64.RegisterWidth.w64;
+                                    try self.codegen.emit.movRegMem(w, disc_reg, .RBP, base_offset + tu_disc_offset);
+                                }
+                            },
+                            .list_stack => |ls_info| {
+                                if (comptime target.toCpuArch() == .aarch64) {
+                                    const w = if (disc_use_w32) aarch64.RegisterWidth.w32 else aarch64.RegisterWidth.w64;
+                                    try self.codegen.emit.ldrRegMemSoff(w, disc_reg, .FP, ls_info.struct_offset + tu_disc_offset);
+                                } else {
+                                    const w = if (disc_use_w32) x86_64.RegisterWidth.w32 else x86_64.RegisterWidth.w64;
+                                    try self.codegen.emit.movRegMem(w, disc_reg, .RBP, ls_info.struct_offset + tu_disc_offset);
+                                }
+                            },
+                            .general_reg => |reg| {
+                                try self.emitMovRegReg(disc_reg, reg);
+                            },
+                            .immediate_i64 => |val| {
+                                try self.codegen.emitLoadImm(disc_reg, val);
+                            },
+                            else => {
+                                self.codegen.freeGeneral(disc_reg);
+                                unreachable;
+                            },
+                        }
+
+                        // Mask to actual discriminant size
+                        if (tu_disc_size < 4) {
+                            const mask: i32 = (@as(i32, 1) << @as(u5, @intCast(tu_disc_size * 8))) - 1;
+                            if (comptime target.toCpuArch() == .aarch64) {
+                                const mask_reg = try self.allocTempGeneral();
+                                try self.codegen.emitLoadImm(mask_reg, mask);
+                                try self.codegen.emit.andRegRegReg(.w32, disc_reg, disc_reg, mask_reg);
+                                self.codegen.freeGeneral(mask_reg);
+                            } else {
+                                try self.codegen.emit.andRegImm32(disc_reg, mask);
+                            }
+                        }
+
+                        try self.emitCmpImm(disc_reg, @intCast(tag_pattern.discriminant));
+                        self.codegen.freeGeneral(disc_reg);
+
+                        var next_patch: ?usize = null;
+                        if (!is_last_branch) {
+                            next_patch = try self.emitJumpIfNotEqual();
+                        }
+
+                        // Bind tag args if present
+                        const args = self.store.getPatternSpan(tag_pattern.args);
+                        if (args.len > 0) {
+                            const variant_payload_layout: ?layout.Idx = if (value_layout_val.tag == .tag_union) vl_blk: {
+                                const tu_data = ls.getTagUnionData(value_layout_val.data.tag_union.idx);
+                                const variants = ls.getTagUnionVariants(tu_data);
+                                if (tag_pattern.discriminant < variants.len) {
+                                    const variant = variants.get(tag_pattern.discriminant);
+                                    break :vl_blk variant.payload_layout;
+                                }
+                                break :vl_blk null;
+                            } else null;
+
+                            const payload_is_tuple = if (variant_payload_layout) |pl| blk_pt: {
+                                const pl_val = ls.getLayout(pl);
+                                break :blk_pt pl_val.tag == .tuple;
+                            } else false;
+
+                            for (args, 0..) |arg_pattern_id, arg_idx| {
+                                const arg_pattern = self.store.getPattern(arg_pattern_id);
+                                switch (arg_pattern) {
+                                    .bind => |arg_bind| {
+                                        const symbol_key: u64 = @bitCast(arg_bind.symbol);
+                                        switch (value_loc) {
+                                            .stack => |s| {
+                                                const base_offset = s.offset;
+                                                const arg_loc: ValueLocation = if (payload_is_tuple and variant_payload_layout != null) plblk: {
+                                                    const pl_val = ls.getLayout(variant_payload_layout.?);
+                                                    const elem_offset = ls.getTupleElementOffsetByOriginalIndex(pl_val.data.tuple.idx, @intCast(arg_idx));
+                                                    const elem_layout = ls.getTupleElementLayoutByOriginalIndex(pl_val.data.tuple.idx, @intCast(arg_idx));
+                                                    const arg_offset = base_offset + @as(i32, @intCast(elem_offset));
+                                                    break :plblk self.stackLocationForLayout(elem_layout, arg_offset);
+                                                } else if (variant_payload_layout) |pl| plblk: {
+                                                    const payload_offset = base_offset;
+                                                    if (pl == .i128 or pl == .u128 or pl == .dec) {
+                                                        break :plblk .{ .stack_i128 = payload_offset };
+                                                    } else if (pl == .str) {
+                                                        break :plblk .{ .stack_str = payload_offset };
+                                                    } else {
+                                                        const pl_val = ls.getLayout(pl);
+                                                        if (pl_val.tag == .list or pl_val.tag == .list_of_zst) {
+                                                            break :plblk .{ .list_stack = .{
+                                                                .struct_offset = payload_offset,
+                                                                .data_offset = 0,
+                                                                .num_elements = 0,
+                                                            } };
+                                                        }
+                                                        const pl_size = ls.layoutSizeAlign(pl_val).size;
+                                                        if (pl_size > 0 and pl_size < 8 and tu_disc_offset < 8) {
+                                                            const fresh_slot = self.codegen.allocStackSlot(8);
+                                                            const tmp_reg = try self.allocTempGeneral();
+                                                            try self.codegen.emitLoadImm(tmp_reg, 0);
+                                                            try self.codegen.emitStoreStack(.w64, fresh_slot, tmp_reg);
+                                                            if (pl_size <= 4) {
+                                                                try self.codegen.emitLoadStack(.w32, tmp_reg, payload_offset);
+                                                                if (pl_size < 4) {
+                                                                    const pl_mask: i64 = (@as(i64, 1) << @intCast(pl_size * 8)) - 1;
+                                                                    const mask_reg = try self.allocTempGeneral();
+                                                                    try self.codegen.emitLoadImm(mask_reg, pl_mask);
+                                                                    if (comptime target.toCpuArch() == .aarch64) {
+                                                                        try self.codegen.emit.andRegRegReg(.w64, tmp_reg, tmp_reg, mask_reg);
+                                                                    } else {
+                                                                        try self.codegen.emit.andRegReg(.w64, tmp_reg, mask_reg);
+                                                                    }
+                                                                    self.codegen.freeGeneral(mask_reg);
+                                                                }
+                                                            } else {
+                                                                try self.codegen.emitLoadStack(.w64, tmp_reg, payload_offset);
+                                                            }
+                                                            try self.codegen.emitStoreStack(.w64, fresh_slot, tmp_reg);
+                                                            self.codegen.freeGeneral(tmp_reg);
+                                                            break :plblk .{ .stack = .{ .offset = fresh_slot } };
+                                                        }
+                                                        break :plblk .{ .stack = .{ .offset = payload_offset } };
+                                                    }
+                                                } else .{ .stack = .{ .offset = base_offset + @as(i32, @intCast(arg_idx)) * 8 } };
+                                                try self.symbol_locations.put(symbol_key, arg_loc);
+                                            },
+                                            else => {
+                                                try self.symbol_locations.put(symbol_key, value_loc);
+                                            },
+                                        }
+                                    },
+                                    .wildcard => {},
+                                    .tag => |inner_tag| {
+                                        const inner_args = self.store.getPatternSpan(inner_tag.args);
+                                        for (inner_args) |inner_arg_id| {
+                                            const inner_arg = self.store.getPattern(inner_arg_id);
+                                            switch (inner_arg) {
+                                                .bind => |inner_bind| {
+                                                    const inner_key: u64 = @bitCast(inner_bind.symbol);
+                                                    const inner_loc: ValueLocation = if (variant_payload_layout) |pl| inner_blk: {
+                                                        const pl_val = ls.getLayout(pl);
+                                                        if (pl_val.tag == .tag_union) {
+                                                            break :inner_blk value_loc;
+                                                        }
+                                                        break :inner_blk value_loc;
+                                                    } else value_loc;
+                                                    try self.symbol_locations.put(inner_key, inner_loc);
+                                                },
+                                                .wildcard => {},
+                                                else => {},
+                                            }
+                                        }
+                                    },
+                                    else => unreachable,
+                                }
+                            }
+                        }
+
+                        try self.generateStmt(branch.body);
+
+                        if (!is_last_branch) {
+                            const end_patch = try self.codegen.emitJump();
+                            try end_patches.append(self.allocator, end_patch);
+
+                            if (next_patch) |patch| {
+                                self.codegen.patchJump(patch, self.codegen.currentOffset());
+                            }
+                        }
+                    },
+                    .list => |list_pattern| {
+                        const prefix_patterns = self.store.getPatternSpan(list_pattern.prefix);
+                        const is_exact_match = list_pattern.rest.isNone();
+
+                        const base_offset: i32 = switch (value_loc) {
+                            .stack => |s| s.offset,
+                            .stack_str => |off| off,
+                            .list_stack => |list_info| list_info.struct_offset,
+                            else => unreachable,
+                        };
+
+                        const len_reg = try self.allocTempGeneral();
+                        if (comptime target.toCpuArch() == .aarch64) {
+                            try self.codegen.emit.ldrRegMemSoff(.w64, len_reg, .FP, base_offset + 8);
+                        } else {
+                            try self.codegen.emit.movRegMem(.w64, len_reg, .RBP, base_offset + 8);
+                        }
+
+                        const expected_len = @as(i32, @intCast(prefix_patterns.len));
+                        try self.emitCmpImm(len_reg, expected_len);
+                        self.codegen.freeGeneral(len_reg);
+
+                        var next_patch: ?usize = null;
+                        if (!is_last_branch) {
+                            if (is_exact_match) {
+                                next_patch = try self.emitJumpIfNotEqual();
+                            } else {
+                                next_patch = try self.emitJumpIfLessThan();
+                            }
+                        }
+
+                        // Bind prefix elements
+                        const elem_layout = ls.getLayout(list_pattern.elem_layout);
+                        const elem_size_align = ls.layoutSizeAlign(elem_layout);
+                        const elem_size = elem_size_align.size;
+
+                        const list_ptr_reg = try self.allocTempGeneral();
+                        if (comptime target.toCpuArch() == .aarch64) {
+                            try self.codegen.emit.ldrRegMemSoff(.w64, list_ptr_reg, .FP, base_offset);
+                        } else {
+                            try self.codegen.emit.movRegMem(.w64, list_ptr_reg, .RBP, base_offset);
+                        }
+
+                        for (prefix_patterns, 0..) |elem_pattern_id, elem_idx| {
+                            const elem_offset_in_list = @as(i32, @intCast(elem_idx * elem_size));
+                            const elem_slot = self.codegen.allocStackSlot(@intCast(elem_size));
+                            const temp_reg = try self.allocTempGeneral();
+
+                            if (elem_size <= 8) {
+                                if (comptime target.toCpuArch() == .aarch64) {
+                                    try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, list_ptr_reg, elem_offset_in_list);
+                                    try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, elem_slot);
+                                } else {
+                                    try self.codegen.emit.movRegMem(.w64, temp_reg, list_ptr_reg, elem_offset_in_list);
+                                    try self.codegen.emit.movMemReg(.w64, .RBP, elem_slot, temp_reg);
+                                }
+                            } else {
+                                var copied: u32 = 0;
+                                while (copied < elem_size) : (copied += 8) {
+                                    const src_off = elem_offset_in_list + @as(i32, @intCast(copied));
+                                    const dst_off = elem_slot + @as(i32, @intCast(copied));
+                                    if (comptime target.toCpuArch() == .aarch64) {
+                                        try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, list_ptr_reg, src_off);
+                                        try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, dst_off);
+                                    } else {
+                                        try self.codegen.emit.movRegMem(.w64, temp_reg, list_ptr_reg, src_off);
+                                        try self.codegen.emit.movMemReg(.w64, .RBP, dst_off, temp_reg);
+                                    }
+                                }
+                            }
+
+                            self.codegen.freeGeneral(temp_reg);
+                            try self.bindPattern(elem_pattern_id, self.stackLocationForLayout(list_pattern.elem_layout, elem_slot));
+                        }
+
+                        // Handle rest pattern
+                        if (!list_pattern.rest.isNone()) {
+                            const rest_slot = self.codegen.allocStackSlot(roc_str_size);
+                            const prefix_count = @as(u32, @intCast(prefix_patterns.len));
+                            const prefix_byte_offset = prefix_count * @as(u32, @intCast(elem_size));
+
+                            const rest_ptr_reg = try self.allocTempGeneral();
+                            if (prefix_byte_offset == 0) {
+                                if (comptime target.toCpuArch() == .aarch64) {
+                                    try self.codegen.emit.movRegReg(.w64, rest_ptr_reg, list_ptr_reg);
+                                } else {
+                                    try self.codegen.emit.movRegReg(.w64, rest_ptr_reg, list_ptr_reg);
+                                }
+                            } else {
+                                if (comptime target.toCpuArch() == .aarch64) {
+                                    try self.codegen.emit.addRegRegImm12(.w64, rest_ptr_reg, list_ptr_reg, @intCast(prefix_byte_offset));
+                                } else {
+                                    try self.codegen.emit.movRegReg(.w64, rest_ptr_reg, list_ptr_reg);
+                                    try self.codegen.emit.addRegImm32(.w64, rest_ptr_reg, @intCast(prefix_byte_offset));
+                                }
+                            }
+
+                            if (comptime target.toCpuArch() == .aarch64) {
+                                try self.codegen.emit.strRegMemSoff(.w64, rest_ptr_reg, .FP, rest_slot);
+                            } else {
+                                try self.codegen.emit.movMemReg(.w64, .RBP, rest_slot, rest_ptr_reg);
+                            }
+                            self.codegen.freeGeneral(rest_ptr_reg);
+
+                            const rest_len_reg = try self.allocTempGeneral();
+                            if (comptime target.toCpuArch() == .aarch64) {
+                                try self.codegen.emit.ldrRegMemSoff(.w64, rest_len_reg, .FP, base_offset + 8);
+                            } else {
+                                try self.codegen.emit.movRegMem(.w64, rest_len_reg, .RBP, base_offset + 8);
+                            }
+
+                            if (prefix_count > 0) {
+                                if (comptime target.toCpuArch() == .aarch64) {
+                                    try self.codegen.emit.subRegRegImm12(.w64, rest_len_reg, rest_len_reg, @intCast(prefix_count));
+                                } else {
+                                    try self.codegen.emit.subRegImm32(.w64, rest_len_reg, @intCast(prefix_count));
+                                }
+                            }
+
+                            if (comptime target.toCpuArch() == .aarch64) {
+                                try self.codegen.emit.strRegMemSoff(.w64, rest_len_reg, .FP, rest_slot + 8);
+                            } else {
+                                try self.codegen.emit.movMemReg(.w64, .RBP, rest_slot + 8, rest_len_reg);
+                            }
+
+                            if (comptime target.toCpuArch() == .aarch64) {
+                                try self.codegen.emit.strRegMemSoff(.w64, rest_len_reg, .FP, rest_slot + 16);
+                            } else {
+                                try self.codegen.emit.movMemReg(.w64, .RBP, rest_slot + 16, rest_len_reg);
+                            }
+                            self.codegen.freeGeneral(rest_len_reg);
+
+                            try self.bindPattern(list_pattern.rest, .{ .list_stack = .{
+                                .struct_offset = rest_slot,
+                                .data_offset = 0,
+                                .num_elements = 0,
+                            } });
+                        }
+
+                        self.codegen.freeGeneral(list_ptr_reg);
+
+                        try self.generateStmt(branch.body);
+
+                        if (!is_last_branch) {
+                            const end_patch = try self.codegen.emitJump();
+                            try end_patches.append(self.allocator, end_patch);
+
+                            if (next_patch) |patch| {
+                                self.codegen.patchJump(patch, self.codegen.currentOffset());
+                            }
+                        }
+                    },
+                    .record => {
+                        const value_size = ls.layoutSizeAlign(value_layout_val).size;
+                        const stack_off = try self.ensureOnStack(value_loc, value_size);
+                        try self.bindPattern(branch.pattern, .{ .stack = .{ .offset = stack_off } });
+                        try self.generateStmt(branch.body);
+                        break;
+                    },
+                    .tuple => {
+                        const value_size = ls.layoutSizeAlign(value_layout_val).size;
+                        const stack_off = try self.ensureOnStack(value_loc, value_size);
+                        try self.bindPattern(branch.pattern, .{ .stack = .{ .offset = stack_off } });
+                        try self.generateStmt(branch.body);
+                        break;
+                    },
+                    .as_pattern => |as_pat| {
+                        const symbol_key: u64 = @bitCast(as_pat.symbol);
+                        try self.symbol_locations.put(symbol_key, value_loc);
+                        const value_size = ls.layoutSizeAlign(value_layout_val).size;
+                        const stack_off = try self.ensureOnStack(value_loc, value_size);
+                        try self.bindPattern(as_pat.inner, .{ .stack = .{ .offset = stack_off } });
+                        try self.generateStmt(branch.body);
+                        break;
+                    },
+                    else => {
+                        unreachable;
+                    },
+                }
+            }
+
+            // Patch all end jumps to here
+            const end_offset = self.codegen.currentOffset();
+            for (end_patches.items) |patch| {
+                self.codegen.patchJump(patch, end_offset);
             }
         }
 

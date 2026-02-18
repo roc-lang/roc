@@ -41,6 +41,8 @@ const CFStmt = ir.CFStmt;
 const CFStmtId = ir.CFStmtId;
 const CFSwitchBranch = ir.CFSwitchBranch;
 const CFSwitchBranchSpan = ir.CFSwitchBranchSpan;
+const CFMatchBranch = ir.CFMatchBranch;
+const CFMatchBranchSpan = ir.CFMatchBranchSpan;
 const LayoutIdxSpan = ir.LayoutIdxSpan;
 const LirProc = ir.LirProc;
 
@@ -83,6 +85,9 @@ cf_stmts: std.ArrayList(CFStmt),
 /// Control flow switch branches
 cf_switch_branches: std.ArrayList(CFSwitchBranch),
 
+/// Control flow match branches (pattern matching)
+cf_match_branches: std.ArrayList(CFMatchBranch),
+
 /// Complete procedures (for two-pass compilation)
 procs: std.ArrayList(LirProc),
 
@@ -112,6 +117,7 @@ pub fn init(allocator: Allocator) Self {
         .lambda_set_members = std.ArrayList(LambdaSetMember).empty,
         .cf_stmts = std.ArrayList(CFStmt).empty,
         .cf_switch_branches = std.ArrayList(CFSwitchBranch).empty,
+        .cf_match_branches = std.ArrayList(CFMatchBranch).empty,
         .procs = std.ArrayList(LirProc).empty,
         .symbol_defs = std.AutoHashMap(u64, LirExprId).init(allocator),
         .strings = base.StringLiteral.Store{},
@@ -144,6 +150,7 @@ pub fn deinit(self: *Self) void {
     self.lambda_set_members.deinit(self.allocator);
     self.cf_stmts.deinit(self.allocator);
     self.cf_switch_branches.deinit(self.allocator);
+    self.cf_match_branches.deinit(self.allocator);
     self.procs.deinit(self.allocator);
     self.symbol_defs.deinit();
     self.strings.deinit(self.allocator);
@@ -430,6 +437,27 @@ pub fn addCFSwitchBranches(self: *Self, branches: []const CFSwitchBranch) Alloca
 pub fn getCFSwitchBranches(self: *const Self, span: CFSwitchBranchSpan) []const CFSwitchBranch {
     if (span.len == 0) return &.{};
     return self.cf_switch_branches.items[span.start..][0..span.len];
+}
+
+/// Add control flow match branches and return a span
+pub fn addCFMatchBranches(self: *Self, branches: []const CFMatchBranch) Allocator.Error!CFMatchBranchSpan {
+    if (branches.len == 0) {
+        return CFMatchBranchSpan.empty();
+    }
+
+    const start = @as(u32, @intCast(self.cf_match_branches.items.len));
+    try self.cf_match_branches.appendSlice(self.allocator, branches);
+
+    return .{
+        .start = start,
+        .len = @intCast(branches.len),
+    };
+}
+
+/// Get control flow match branches from a span
+pub fn getCFMatchBranches(self: *const Self, span: CFMatchBranchSpan) []const CFMatchBranch {
+    if (span.len == 0) return &.{};
+    return self.cf_match_branches.items[span.start..][0..span.len];
 }
 
 /// Add a span of layout indices

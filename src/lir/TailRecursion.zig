@@ -50,6 +50,7 @@ const Symbol = ir.Symbol;
 const JoinPointId = ir.JoinPointId;
 const CFStmtId = ir.CFStmtId;
 const CFSwitchBranch = ir.CFSwitchBranch;
+const CFMatchBranch = ir.CFMatchBranch;
 const LayoutIdxSpan = ir.LayoutIdxSpan;
 
 const Allocator = std.mem.Allocator;
@@ -230,6 +231,37 @@ pub const TailRecursionPass = struct {
                 if (@intFromEnum(new_next) != @intFromEnum(e.next)) {
                     return try self.store.addCFStmt(.{
                         .expr_stmt = .{ .value = e.value, .next = new_next },
+                    });
+                }
+                return stmt_id;
+            },
+
+            .match_stmt => |ms| {
+                // Transform each branch body
+                var changed = false;
+                var new_branches = std.ArrayList(CFMatchBranch).empty;
+                defer new_branches.deinit(self.allocator);
+
+                const branches = self.store.getCFMatchBranches(ms.branches);
+                for (branches) |branch| {
+                    const new_body = try self.transformStmt(branch.body);
+                    if (@intFromEnum(new_body) != @intFromEnum(branch.body)) changed = true;
+                    try new_branches.append(self.allocator, .{
+                        .pattern = branch.pattern,
+                        .guard = branch.guard,
+                        .body = new_body,
+                    });
+                }
+
+                if (changed) {
+                    const branch_span = try self.store.addCFMatchBranches(new_branches.items);
+                    return try self.store.addCFStmt(.{
+                        .match_stmt = .{
+                            .value = ms.value,
+                            .value_layout = ms.value_layout,
+                            .branches = branch_span,
+                            .ret_layout = ms.ret_layout,
+                        },
                     });
                 }
                 return stmt_id;

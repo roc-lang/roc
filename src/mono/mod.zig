@@ -83,6 +83,10 @@ pub const CFStmtId = MonoIR.CFStmtId;
 pub const CFSwitchBranch = MonoIR.CFSwitchBranch;
 /// Control flow switch branch span type
 pub const CFSwitchBranchSpan = MonoIR.CFSwitchBranchSpan;
+/// Control flow match branch type
+pub const CFMatchBranch = MonoIR.CFMatchBranch;
+/// Control flow match branch span type
+pub const CFMatchBranchSpan = MonoIR.CFMatchBranchSpan;
 /// Layout index span type
 pub const LayoutIdxSpan = MonoIR.LayoutIdxSpan;
 /// Monomorphized procedure type
