@@ -231,9 +231,11 @@ const FindLookupContext = struct {
             return .skip_children;
         }
 
-        // Check if this expression is a lookup or relevant dot access
+        // Check if this expression is a lookup or relevant dot access.
+        // Include pending lookups so hover/definition can still resolve symbols
+        // before all external resolution passes complete.
         switch (expr) {
-            .e_lookup_local, .e_lookup_external => {
+            .e_lookup_local, .e_lookup_external, .e_lookup_pending => {
                 const size = regionSize(region);
                 if (size < ctx.best_size) {
                     ctx.best_size = size;

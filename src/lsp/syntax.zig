@@ -646,6 +646,36 @@ pub const SyntaxChecker = struct {
         range: LspRange,
     };
 
+    /// Returns true when a byte can be part of a Roc identifier token used for
+    /// hover symbol fallback resolution.
+    fn isSymbolByte(b: u8) bool {
+        return std.ascii.isAlphanumeric(b) or b == '_' or b == '.';
+    }
+
+    /// Extract the symbol token under (or immediately before) an offset.
+    ///
+    /// This is a resilient fallback for hover when CIR lookup queries miss the
+    /// exact identifier region (for example, when the cursor lands on a nearby
+    /// delimiter).
+    fn symbolAtOffset(source: []const u8, offset: u32) ?[]const u8 {
+        if (source.len == 0) return null;
+
+        var i: usize = @intCast(@min(offset, @as(u32, @intCast(source.len))));
+        if (i >= source.len or !isSymbolByte(source[i])) {
+            if (i == 0 or !isSymbolByte(source[i - 1])) return null;
+            i -= 1;
+        }
+
+        var start = i;
+        while (start > 0 and isSymbolByte(source[start - 1])) : (start -= 1) {}
+
+        var end = i + 1;
+        while (end < source.len and isSymbolByte(source[end])) : (end += 1) {}
+
+        if (end <= start) return null;
+        return source[start..end];
+    }
+
     /// Get type information at a specific position in a document.
     /// Returns the type as a formatted string, or null if no type info is available.
     pub fn getTypeAtPosition(
@@ -681,23 +711,118 @@ pub const SyntaxChecker = struct {
         // Find the expression at this position
         const result = cir_queries.findTypeAtOffset(module_env, target_offset) orelse return null;
 
+        // Prefer lookup expression semantics when hovering over identifiers in
+        // calls (e.g. `multiply(…)`): callers expect the callee's function type
+        // and docs, not the enclosing call expression's return type.
+        var lookup_expr_idx_opt = cir_queries.findLookupAtOffset(module_env, target_offset);
+        if (lookup_expr_idx_opt == null and result.region.start.offset != target_offset) {
+            lookup_expr_idx_opt = cir_queries.findLookupAtOffset(module_env, result.region.start.offset);
+        }
+
+        var hover_type_var = if (lookup_expr_idx_opt) |lookup_expr_idx|
+            ModuleEnv.varFrom(lookup_expr_idx)
+        else
+            result.type_var;
+
+        // Optional textual override for hover type rendering. When we can
+        // resolve an explicit annotation for a symbol, prefer that exact text.
+        var hover_type_text_opt: ?[]const u8 = null;
+
         // Format the type as a string
         var type_writer = try module_env.initTypeWriter();
         defer type_writer.deinit();
 
-        try type_writer.write(result.type_var, .one_line);
+        try type_writer.write(hover_type_var, .one_line);
         const type_str = type_writer.get();
 
-        // Extract documentation for the definition/pattern at this location
-        // Pass the target offset to resolve lookups to their definitions
-        const documentation = try self.findDocumentationForRegion(env, module_env, result.region, target_offset);
+        // Extract documentation for the definition/pattern at this location.
+        // When we already have a lookup expression, resolve directly to avoid
+        // region/offset ambiguity around delimiters.
+        var documentation = if (lookup_expr_idx_opt) |lookup_expr_idx|
+            self.resolveDocForLookup(env, module_env, lookup_expr_idx)
+        else
+            try self.findDocumentationForRegion(env, module_env, result.region, target_offset);
+
+        // Final fallback: reuse definition-resolution to recover the symbol at
+        // call sites where direct lookup queries can miss the identifier region.
+        // This keeps hover aligned with go-to-definition behavior.
+        if (documentation == null) {
+            if (self.findDefinitionAtOffset(module_env, target_offset, uri)) |def_loc| {
+                if (std.mem.eql(u8, def_loc.uri, uri)) {
+                    if (pos.positionToOffset(module_env, def_loc.range.start_line, def_loc.range.start_col)) |def_offset| {
+                        if (cir_queries.findPatternAtOffset(module_env, def_offset)) |pattern_idx| {
+                            hover_type_var = ModuleEnv.varFrom(pattern_idx);
+                            documentation = doc_comments.extractDocCommentBefore(
+                                self.allocator,
+                                module_env.common.source,
+                                module_env.store.getPatternRegion(pattern_idx).start.offset,
+                            ) catch null;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Text-token fallback: resolve symbol directly by source token under
+        // the cursor. This recovers hover on call identifiers even when CIR
+        // lookup matching is ambiguous for that exact offset.
+        if (symbolAtOffset(module_env.common.source, target_offset)) |symbol| {
+            if (module_lookup.findDefinitionByUnqualifiedName(module_env, symbol)) |def_info| {
+                hover_type_var = if (def_info.expr_idx) |expr_idx|
+                    ModuleEnv.varFrom(expr_idx)
+                else
+                    ModuleEnv.varFrom(def_info.pattern_idx);
+
+                if (module_lookup.findDefOwningPattern(module_env, def_info.pattern_idx)) |def| {
+                    if (def.annotation) |anno_idx| {
+                        const anno = module_env.store.getAnnotation(anno_idx);
+                        const anno_region = module_env.store.getTypeAnnoRegion(anno.anno);
+                        hover_type_text_opt = module_env.getSource(anno_region);
+                    }
+
+                    const extracted = doc_comments.extractDocForDef(
+                        self.allocator,
+                        module_env.common.source,
+                        &module_env.store,
+                        def,
+                    ) catch documentation;
+                    if (extracted != null) {
+                        if (documentation) |doc| self.allocator.free(doc);
+                        documentation = extracted;
+                    }
+                } else if (module_lookup.findStatementOwningPattern(module_env, def_info.pattern_idx)) |stmt_owner| {
+                    const extracted = doc_comments.extractDocForStatement(
+                        self.allocator,
+                        module_env.common.source,
+                        &module_env.store,
+                        stmt_owner.stmt,
+                        stmt_owner.idx,
+                    ) catch documentation;
+                    if (extracted != null) {
+                        if (documentation) |doc| self.allocator.free(doc);
+                        documentation = extracted;
+                    }
+                } else {
+                    const extracted = doc_comments.extractDocCommentBefore(
+                        self.allocator,
+                        module_env.common.source,
+                        module_env.store.getPatternRegion(def_info.pattern_idx).start.offset,
+                    ) catch documentation;
+                    if (extracted != null) {
+                        if (documentation) |doc| self.allocator.free(doc);
+                        documentation = extracted;
+                    }
+                }
+            }
+        }
         defer if (documentation) |doc| self.allocator.free(doc);
 
         // Create markdown-formatted output with type and optional documentation
+        const type_text = hover_type_text_opt orelse type_str;
         const markdown = if (documentation) |doc|
-            try std.fmt.allocPrint(self.allocator, "{s}\n\n```roc\n{s}\n```", .{ doc, type_str })
+            try std.fmt.allocPrint(self.allocator, "{s}\n\n```roc\n{s}\n```", .{ doc, type_text })
         else
-            try std.fmt.allocPrint(self.allocator, "```roc\n{s}\n```", .{type_str});
+            try std.fmt.allocPrint(self.allocator, "```roc\n{s}\n```", .{type_text});
 
         // Convert the region back to LSP positions
         const range = cir_queries.regionToRange(module_env, result.region);
@@ -719,6 +844,16 @@ pub const SyntaxChecker = struct {
         // If so, resolve it to the definition and extract docs from there
         if (cir_queries.findLookupAtOffset(module_env, target_offset)) |expr_idx| {
             if (self.resolveDocForLookup(env, module_env, expr_idx)) |doc| return doc;
+        }
+
+        // Hover positions can land on delimiters around the symbol (e.g. `(` in
+        // `foo(...)`) depending on UTF-16 cursor conversion. As a fallback, try
+        // the start of the selected type region as an anchor for lookup-based
+        // documentation resolution.
+        if (region.start.offset != target_offset) {
+            if (cir_queries.findLookupAtOffset(module_env, region.start.offset)) |expr_idx| {
+                if (self.resolveDocForLookup(env, module_env, expr_idx)) |doc| return doc;
+            }
         }
 
         // Not a lookup, or lookup resolution failed - fall back to region-based search
@@ -771,6 +906,15 @@ pub const SyntaxChecker = struct {
                 if (module_lookup.findStatementOwningPattern(module_env, lookup.pattern_idx)) |result| {
                     return doc_comments.extractDocForStatement(self.allocator, source, store, result.stmt, result.idx) catch null;
                 }
+
+                // Some local bindings are nested inside expressions (e.g. block
+                // locals) and are not owned by top-level defs/statements. Fall
+                // back to doc extraction directly from the bound pattern region.
+                return doc_comments.extractDocCommentBefore(
+                    self.allocator,
+                    source,
+                    store.getPatternRegion(lookup.pattern_idx).start.offset,
+                ) catch null;
             },
             .e_lookup_external => |lookup| {
                 // External lookup - parse "Module.function" and find docs in that module
@@ -784,22 +928,38 @@ pub const SyntaxChecker = struct {
                     }
                 }
             },
+            .e_lookup_pending => {
+                // Pending lookups can still be resolved for hover by symbol text.
+                const lookup_region = store.getExprRegion(expr_idx);
+                const region_text = module_env.getSource(lookup_region);
+
+                // Try local resolution first (covers local functions/values).
+                if (findDocInModule(self.allocator, module_env, region_text)) |doc| {
+                    return doc;
+                }
+
+                // If the pending lookup is qualified, try external module docs.
+                if (std.mem.indexOfScalar(u8, region_text, '.')) |dot_pos| {
+                    const module_name = region_text[0..dot_pos];
+                    const function_name = region_text[dot_pos + 1 ..];
+                    if (findExternalModuleEnv(env, module_name)) |external_env| {
+                        return findDocInModule(self.allocator, external_env, function_name);
+                    }
+                }
+            },
             .e_dot_access => |dot| {
                 // Method call - resolve receiver type to find the providing module
                 const field_name = module_env.getSource(dot.field_name_region);
                 const receiver_type_var = ModuleEnv.varFrom(dot.receiver);
-                const resolved = module_env.types.resolveVar(receiver_type_var);
+                if (resolveTypeIdentForMethodLookup(module_env, receiver_type_var)) |type_ident| {
+                    // Prefer local method docs first (e.g. static-dispatch methods
+                    // defined in the current module), then fall back to external
+                    // module lookup for builtin/qualified providers.
+                    if (findMethodDocForTypeAndName(self.allocator, module_env, type_ident, field_name)) |local_doc| {
+                        return local_doc;
+                    }
 
-                const type_name_opt: ?[]const u8 = switch (resolved.desc.content) {
-                    .alias => |alias| module_env.getIdentText(alias.ident.ident_idx),
-                    .structure => |flat_type| switch (flat_type) {
-                        .nominal_type => |nominal| module_env.getIdentText(nominal.ident.ident_idx),
-                        else => null,
-                    },
-                    else => null,
-                };
-
-                if (type_name_opt) |type_name| {
+                    const type_name = module_env.getIdentText(type_ident);
                     if (findExternalModuleEnv(env, type_name)) |external_env| {
                         const qualified_name = std.fmt.allocPrint(
                             self.allocator,
@@ -813,6 +973,46 @@ pub const SyntaxChecker = struct {
             },
             else => {},
         }
+        return null;
+    }
+
+    /// Resolve a nominal type identifier for method lookup from a receiver type var.
+    ///
+    /// This follows aliases/nominal wrappers so hover can map `value.method()` to
+    /// the `(type_ident, method_ident)` entries in `method_idents`.
+    fn resolveTypeIdentForMethodLookup(module_env: *ModuleEnv, type_var: types.Var) ?base.Ident.Idx {
+        const resolved = module_env.types.resolveVar(type_var);
+        switch (resolved.desc.content) {
+            // Aliases carry a nominal ident that can participate in
+            // method_idents lookup.
+            .alias => |alias| return @as(?base.Ident.Idx, alias.ident.ident_idx),
+            .structure => |flat_type| {
+                switch (flat_type) {
+                    .nominal_type => |nominal| return @as(?base.Ident.Idx, nominal.ident.ident_idx),
+                    else => return null,
+                }
+            },
+            else => return null,
+        }
+    }
+
+    /// Find local method documentation by `(type_ident, method_name)`.
+    fn findMethodDocForTypeAndName(
+        allocator: Allocator,
+        module_env: *ModuleEnv,
+        type_ident: base.Ident.Idx,
+        method_name: []const u8,
+    ) ?[]const u8 {
+        const entries = module_env.method_idents.entries.items;
+        for (entries) |entry| {
+            if (entry.key.type_ident != type_ident) continue;
+
+            const entry_method_name = module_env.getIdentText(entry.key.method_ident);
+            if (!std.mem.eql(u8, entry_method_name, method_name)) continue;
+
+            return findDocForQualifiedIdent(allocator, module_env, entry.value);
+        }
+
         return null;
     }
 
@@ -858,6 +1058,52 @@ pub const SyntaxChecker = struct {
                 store.getPatternRegion(def_info.pattern_idx).start.offset,
             ) catch null;
         }
+        return null;
+    }
+
+    /// Find documentation for a specific qualified identifier in a module.
+    fn findDocForQualifiedIdent(allocator: Allocator, module_env: *ModuleEnv, qualified_ident: base.Ident.Idx) ?[]const u8 {
+        const source = module_env.common.source;
+        const store = &module_env.store;
+
+        // Search defs first.
+        const defs_slice = store.sliceDefs(module_env.all_defs);
+        for (defs_slice) |def_idx| {
+            const def = store.getDef(def_idx);
+            const pattern = store.getPattern(def.pattern);
+
+            const ident_idx = switch (pattern) {
+                .assign => |p| p.ident,
+                .as => |p| p.ident,
+                else => continue,
+            };
+
+            if (ident_idx == qualified_ident) {
+                return doc_comments.extractDocForDef(allocator, source, store, def) catch null;
+            }
+        }
+
+        // Fall back to statements.
+        const statements_slice = store.sliceStatements(module_env.all_statements);
+        for (statements_slice) |stmt_idx| {
+            const stmt = store.getStatement(stmt_idx);
+            const pattern_idx = switch (stmt) {
+                .s_decl => |decl| decl.pattern,
+                else => continue,
+            };
+
+            const pattern = store.getPattern(pattern_idx);
+            const ident_idx = switch (pattern) {
+                .assign => |p| p.ident,
+                .as => |p| p.ident,
+                else => continue,
+            };
+
+            if (ident_idx == qualified_ident) {
+                return doc_comments.extractDocForStatement(allocator, source, store, stmt, stmt_idx) catch null;
+            }
+        }
+
         return null;
     }
 
@@ -1041,6 +1287,29 @@ pub const SyntaxChecker = struct {
                         return self.findModuleByName(module_name);
                     }
                     self.logDebug(.build, "[DEF] e_lookup_external: could not extract module name from '{s}'", .{region_text});
+                    return null;
+                },
+                .e_lookup_pending => {
+                    // Resolve pending lookup by source text. This keeps
+                    // go-to-definition/hover robust in partially-resolved states.
+                    const lookup_region = module_env.store.getExprRegion(expr_idx);
+                    const region_text = module_env.getSource(lookup_region);
+
+                    if (module_lookup.findDefinitionByUnqualifiedName(module_env, region_text)) |def_info| {
+                        const pattern_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(def_info.pattern_idx));
+                        const def_region = module_env.store.getRegionAt(pattern_node_idx);
+                        const range = cir_queries.regionToRange(module_env, def_region) orelse return null;
+                        return DefinitionResult{
+                            .uri = current_uri,
+                            .range = range,
+                        };
+                    }
+
+                    if (std.mem.indexOfScalar(u8, region_text, '.')) |dot_pos| {
+                        const module_name = region_text[0..dot_pos];
+                        return self.findModuleByName(module_name);
+                    }
+
                     return null;
                 },
                 .e_dot_access => |dot| {
@@ -2180,6 +2449,13 @@ pub const SyntaxChecker = struct {
                 }
                 try builder.addModuleNameCompletionsFromEnv(env);
             },
+        }
+
+        // Keep completion payloads bounded so request/response processing
+        // remains robust even when environments expose very large symbol sets.
+        const max_completion_items: usize = 512;
+        if (items.items.len > max_completion_items) {
+            items.items.len = max_completion_items;
         }
 
         return .{

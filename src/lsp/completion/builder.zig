@@ -63,12 +63,15 @@ pub const CompletionBuilder = struct {
             return false;
         }
 
-        try self.seen_labels.put(item.label, {});
-
         // Keep label lifetime simple and consistent: every retained completion
         // owns its label memory regardless of where it came from.
         const owned_label = try self.allocator.dupe(u8, item.label);
         errdefer self.allocator.free(owned_label);
+
+        // Store the dedupe key using stable owned memory. This avoids dangling
+        // map keys when callers pass transient labels (e.g. stack buffers).
+        try self.seen_labels.put(owned_label, {});
+        errdefer _ = self.seen_labels.remove(owned_label);
 
         var stored_item = item;
         stored_item.label = owned_label;

@@ -118,7 +118,9 @@ test "formatting handler formats simple expression" {
     defer allocator.free(combined);
 
     var reader_stream = std.io.fixedBufferStream(combined);
-    var writer_buffer: [16384]u8 = undefined;
+    // Module-member completion responses can exceed 16 KiB depending on
+    // builtin surface area and metadata included in items.
+    var writer_buffer: [65536]u8 = undefined;
     var writer_stream = std.io.fixedBufferStream(&writer_buffer);
 
     const ReaderType = @TypeOf(reader_stream.reader());
@@ -1884,7 +1886,8 @@ test "completion handler returns module members after dot" {
     defer allocator.free(combined);
 
     var reader_stream = std.io.fixedBufferStream(combined);
-    var writer_buffer: [16384]u8 = undefined;
+    // Module completions can be very large depending on builtins and docs.
+    var writer_buffer: [1024 * 1024]u8 = undefined;
     var writer_stream = std.io.fixedBufferStream(&writer_buffer);
 
     const ReaderType = @TypeOf(reader_stream.reader());

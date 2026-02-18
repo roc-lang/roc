@@ -837,10 +837,10 @@ test "hover shows documentation for local variable" {
     const source = try h.formatSource(
         \\app [main] {{ pf: platform "{s}" }}
         \\
+        \\## The magic number.
+        \\number = 42
+        \\
         \\main =
-        \\    ## The magic number.
-        \\    number = 42
-        \\    
         \\    number + 1
         \\
     );
