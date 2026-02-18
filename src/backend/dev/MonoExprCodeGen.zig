@@ -1377,11 +1377,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
                     // Length is at offset 8 in the list struct
                     const result_reg = try self.allocTempGeneral();
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.ldrRegMemSoff(.w64, result_reg, .FP, base_offset + 8);
-                    } else {
-                        try self.codegen.emit.movRegMem(.w64, result_reg, .RBP, base_offset + 8);
-                    }
+                    try self.emitLoad(.w64, result_reg, frame_ptr, base_offset + 8);
                     return .{ .general_reg = result_reg };
                 },
                 .list_is_empty => {
@@ -1405,11 +1401,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     {
                         // Length is at offset 8 - check if zero
                         const len_reg = try self.allocTempGeneral();
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emit.ldrRegMemSoff(.w64, len_reg, .FP, base_offset + 8);
-                        } else {
-                            try self.codegen.emit.movRegMem(.w64, len_reg, .RBP, base_offset + 8);
-                        }
+                        try self.emitLoad(.w64, len_reg, frame_ptr, base_offset + 8);
                         // Compare with 0
                         try self.emitCmpImm(len_reg, 0);
                         // Set result to 1 if equal (empty), 0 otherwise
@@ -1547,15 +1539,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             const slot = self.codegen.allocStackSlot(roc_str_size);
                             const temp = try self.allocTempGeneral();
                             try self.codegen.emitLoadImm(temp, 0);
-                            if (comptime target.toCpuArch() == .aarch64) {
-                                try self.codegen.emit.strRegMemSoff(.w64, temp, .FP, slot);
-                                try self.codegen.emit.strRegMemSoff(.w64, temp, .FP, slot + 8);
-                                try self.codegen.emit.strRegMemSoff(.w64, temp, .FP, slot + 16);
-                            } else {
-                                try self.codegen.emit.movMemReg(.w64, .RBP, slot, temp);
-                                try self.codegen.emit.movMemReg(.w64, .RBP, slot + 8, temp);
-                                try self.codegen.emit.movMemReg(.w64, .RBP, slot + 16, temp);
-                            }
+                            try self.emitStore(.w64, frame_ptr, slot, temp);
+                            try self.emitStore(.w64, frame_ptr, slot + 8, temp);
+                            try self.emitStore(.w64, frame_ptr, slot + 16, temp);
                             self.codegen.freeGeneral(temp);
                             break :blk slot;
                         },
@@ -1739,19 +1725,11 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             if (elem_size != 1) {
                                 const size_reg = try self.allocTempGeneral();
                                 try self.codegen.emitLoadImm(size_reg, elem_size);
-                                if (comptime target.toCpuArch() == .aarch64) {
-                                    try self.codegen.emit.mulRegRegReg(.w64, addr_reg, addr_reg, size_reg);
-                                } else {
-                                    try self.codegen.emit.imulRegReg(.w64, addr_reg, size_reg);
-                                }
+                                try self.emitMulRegs(.w64, addr_reg, addr_reg, size_reg);
                                 self.codegen.freeGeneral(size_reg);
                             }
 
-                            if (comptime target.toCpuArch() == .aarch64) {
-                                try self.codegen.emit.addRegRegReg(.w64, addr_reg, addr_reg, ptr_reg);
-                            } else {
-                                try self.codegen.emit.addRegReg(.w64, addr_reg, ptr_reg);
-                            }
+                            try self.emitAddRegs(.w64, addr_reg, addr_reg, ptr_reg);
                             self.codegen.freeGeneral(ptr_reg);
 
                             // Copy element into payload area of tag union (at result_slot + 0)
@@ -1793,20 +1771,12 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     if (elem_size != 1) {
                         const size_reg = try self.allocTempGeneral();
                         try self.codegen.emitLoadImm(size_reg, elem_size);
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emit.mulRegRegReg(.w64, addr_reg, addr_reg, size_reg);
-                        } else {
-                            try self.codegen.emit.imulRegReg(.w64, addr_reg, size_reg);
-                        }
+                        try self.emitMulRegs(.w64, addr_reg, addr_reg, size_reg);
                         self.codegen.freeGeneral(size_reg);
                     }
 
                     // Add base pointer
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.addRegRegReg(.w64, addr_reg, addr_reg, ptr_reg);
-                    } else {
-                        try self.codegen.emit.addRegReg(.w64, addr_reg, ptr_reg);
-                    }
+                    try self.emitAddRegs(.w64, addr_reg, addr_reg, ptr_reg);
                     self.codegen.freeGeneral(ptr_reg);
 
                     // Load element to stack slot
@@ -1814,13 +1784,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     const temp_reg = try self.allocTempGeneral();
 
                     if (elem_size <= 8) {
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, addr_reg, 0);
-                            try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, elem_slot);
-                        } else {
-                            try self.codegen.emit.movRegMem(.w64, temp_reg, addr_reg, 0);
-                            try self.codegen.emit.movMemReg(.w64, .RBP, elem_slot, temp_reg);
-                        }
+                        try self.emitLoad(.w64, temp_reg, addr_reg, 0);
+                        try self.emitStore(.w64, frame_ptr, elem_slot, temp_reg);
                     } else {
                         // For larger elements, copy in 8-byte chunks
                         try self.copyChunked(temp_reg, addr_reg, 0, frame_ptr, elem_slot, elem_size);
@@ -1982,11 +1947,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     // Materialize count to a register then save to stack slot
                     const count_reg = try self.ensureInGeneralReg(count_loc);
                     const count_slot = self.codegen.allocStackSlot(8);
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.strRegMemSoff(.w64, count_reg, .FP, count_slot);
-                    } else {
-                        try self.codegen.emit.movMemReg(.w64, .RBP, count_slot, count_reg);
-                    }
+                    try self.emitStore(.w64, frame_ptr, count_slot, count_reg);
                     self.codegen.freeGeneral(count_reg);
 
                     // Ensure element is on the stack
@@ -2013,11 +1974,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     const loop_counter_slot = self.codegen.allocStackSlot(8);
                     const temp_init = try self.allocTempGeneral();
                     try self.codegen.emitLoadImm(temp_init, 0);
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.strRegMemSoff(.w64, temp_init, .FP, loop_counter_slot);
-                    } else {
-                        try self.codegen.emit.movMemReg(.w64, .RBP, loop_counter_slot, temp_init);
-                    }
+                    try self.emitStore(.w64, frame_ptr, loop_counter_slot, temp_init);
                     self.codegen.freeGeneral(temp_init);
 
                     // Loop start: load counter, compare with count, branch if done
@@ -2025,13 +1982,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
                     const ctr_reg2 = try self.allocTempGeneral();
                     const cnt_reg2 = try self.allocTempGeneral();
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.ldrRegMemSoff(.w64, ctr_reg2, .FP, loop_counter_slot);
-                        try self.codegen.emit.ldrRegMemSoff(.w64, cnt_reg2, .FP, count_slot);
-                    } else {
-                        try self.codegen.emit.movRegMem(.w64, ctr_reg2, .RBP, loop_counter_slot);
-                        try self.codegen.emit.movRegMem(.w64, cnt_reg2, .RBP, count_slot);
-                    }
+                    try self.emitLoad(.w64, ctr_reg2, frame_ptr, loop_counter_slot);
+                    try self.emitLoad(.w64, cnt_reg2, frame_ptr, count_slot);
                     try self.codegen.emit.cmpRegReg(.w64, ctr_reg2, cnt_reg2);
                     self.codegen.freeGeneral(cnt_reg2);
 
@@ -2067,21 +2019,12 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
                     // Copy tmp_result back to result_offset
                     const cp = try self.allocTempGeneral();
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.ldrRegMemSoff(.w64, cp, .FP, tmp_result);
-                        try self.codegen.emit.strRegMemSoff(.w64, cp, .FP, result_offset);
-                        try self.codegen.emit.ldrRegMemSoff(.w64, cp, .FP, tmp_result + 8);
-                        try self.codegen.emit.strRegMemSoff(.w64, cp, .FP, result_offset + 8);
-                        try self.codegen.emit.ldrRegMemSoff(.w64, cp, .FP, tmp_result + 16);
-                        try self.codegen.emit.strRegMemSoff(.w64, cp, .FP, result_offset + 16);
-                    } else {
-                        try self.codegen.emit.movRegMem(.w64, cp, .RBP, tmp_result);
-                        try self.codegen.emit.movMemReg(.w64, .RBP, result_offset, cp);
-                        try self.codegen.emit.movRegMem(.w64, cp, .RBP, tmp_result + 8);
-                        try self.codegen.emit.movMemReg(.w64, .RBP, result_offset + 8, cp);
-                        try self.codegen.emit.movRegMem(.w64, cp, .RBP, tmp_result + 16);
-                        try self.codegen.emit.movMemReg(.w64, .RBP, result_offset + 16, cp);
-                    }
+                    try self.emitLoad(.w64, cp, frame_ptr, tmp_result);
+                    try self.emitStore(.w64, frame_ptr, result_offset, cp);
+                    try self.emitLoad(.w64, cp, frame_ptr, tmp_result + 8);
+                    try self.emitStore(.w64, frame_ptr, result_offset + 8, cp);
+                    try self.emitLoad(.w64, cp, frame_ptr, tmp_result + 16);
+                    try self.emitStore(.w64, frame_ptr, result_offset + 16, cp);
                     self.codegen.freeGeneral(cp);
 
                     // Jump back to loop start
@@ -3460,11 +3403,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
             // Load list length from the struct (offset 8)
             const len_reg = try self.allocTempGeneral();
-            if (comptime target.toCpuArch() == .aarch64) {
-                try self.codegen.emit.ldrRegMemSoff(.w64, len_reg, .FP, list_off + 8);
-            } else {
-                try self.codegen.emit.movRegMem(.w64, len_reg, .RBP, list_off + 8);
-            }
+            try self.emitLoad(.w64, len_reg, frame_ptr, list_off + 8);
 
             // Compute start and len based on mode
             const start_slot = self.codegen.allocStackSlot(8);
@@ -3489,33 +3428,19 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         try self.codegen.emit.subRegReg(.w64, diff_reg, n_reg);
                     }
                     // For simplicity: if n > len, we want 0. The C listSublist handles out-of-bounds gracefully.
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.strRegMemSoff(.w64, n_reg, .FP, start_slot);
-                        try self.codegen.emit.strRegMemSoff(.w64, diff_reg, .FP, len_slot);
-                    } else {
-                        try self.codegen.emit.movMemReg(.w64, .RBP, start_slot, n_reg);
-                        try self.codegen.emit.movMemReg(.w64, .RBP, len_slot, diff_reg);
-                    }
+                    try self.emitStore(.w64, frame_ptr, start_slot, n_reg);
+                    try self.emitStore(.w64, frame_ptr, len_slot, diff_reg);
                     self.codegen.freeGeneral(diff_reg);
                 },
                 .drop_last => {
                     // start = 0, len = max(list_len - n, 0)
                     const diff_reg = try self.allocTempGeneral();
                     try self.codegen.emit.movRegReg(.w64, diff_reg, len_reg);
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.subRegRegReg(.w64, diff_reg, diff_reg, n_reg);
-                    } else {
-                        try self.codegen.emit.subRegReg(.w64, diff_reg, n_reg);
-                    }
+                    try self.emitSubRegs(.w64, diff_reg, diff_reg, n_reg);
                     const zero_reg = try self.allocTempGeneral();
                     try self.codegen.emitLoadImm(zero_reg, 0);
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.strRegMemSoff(.w64, zero_reg, .FP, start_slot);
-                        try self.codegen.emit.strRegMemSoff(.w64, diff_reg, .FP, len_slot);
-                    } else {
-                        try self.codegen.emit.movMemReg(.w64, .RBP, start_slot, zero_reg);
-                        try self.codegen.emit.movMemReg(.w64, .RBP, len_slot, diff_reg);
-                    }
+                    try self.emitStore(.w64, frame_ptr, start_slot, zero_reg);
+                    try self.emitStore(.w64, frame_ptr, len_slot, diff_reg);
                     self.codegen.freeGeneral(zero_reg);
                     self.codegen.freeGeneral(diff_reg);
                 },
@@ -3524,13 +3449,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     // listSublist handles this correctly even if n > list_len
                     const zero_reg = try self.allocTempGeneral();
                     try self.codegen.emitLoadImm(zero_reg, 0);
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.strRegMemSoff(.w64, zero_reg, .FP, start_slot);
-                        try self.codegen.emit.strRegMemSoff(.w64, n_reg, .FP, len_slot);
-                    } else {
-                        try self.codegen.emit.movMemReg(.w64, .RBP, start_slot, zero_reg);
-                        try self.codegen.emit.movMemReg(.w64, .RBP, len_slot, n_reg);
-                    }
+                    try self.emitStore(.w64, frame_ptr, start_slot, zero_reg);
+                    try self.emitStore(.w64, frame_ptr, len_slot, n_reg);
                     self.codegen.freeGeneral(zero_reg);
                 },
                 .take_last => {
@@ -3538,18 +3458,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     // But we want the LAST n elements, so len = min(n, list_len)
                     const diff_reg = try self.allocTempGeneral();
                     try self.codegen.emit.movRegReg(.w64, diff_reg, len_reg);
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.subRegRegReg(.w64, diff_reg, diff_reg, n_reg);
-                    } else {
-                        try self.codegen.emit.subRegReg(.w64, diff_reg, n_reg);
-                    }
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.strRegMemSoff(.w64, diff_reg, .FP, start_slot);
-                        try self.codegen.emit.strRegMemSoff(.w64, n_reg, .FP, len_slot);
-                    } else {
-                        try self.codegen.emit.movMemReg(.w64, .RBP, start_slot, diff_reg);
-                        try self.codegen.emit.movMemReg(.w64, .RBP, len_slot, n_reg);
-                    }
+                    try self.emitSubRegs(.w64, diff_reg, diff_reg, n_reg);
+                    try self.emitStore(.w64, frame_ptr, start_slot, diff_reg);
+                    try self.emitStore(.w64, frame_ptr, len_slot, n_reg);
                     self.codegen.freeGeneral(diff_reg);
                 },
             }
@@ -3598,11 +3509,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
             // Load list pointer
             const ptr_reg = try self.allocTempGeneral();
-            if (comptime target.toCpuArch() == .aarch64) {
-                try self.codegen.emit.ldrRegMemSoff(.w64, ptr_reg, .FP, list_base);
-            } else {
-                try self.codegen.emit.movRegMem(.w64, ptr_reg, .RBP, list_base);
-            }
+            try self.emitLoad(.w64, ptr_reg, frame_ptr, list_base);
 
             // Element address = ptr + index * elem_size
             const byte_offset: u32 = @intCast(index * elem_size);
@@ -3612,13 +3519,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             const temp_reg = try self.allocTempGeneral();
 
             if (elem_size <= 8) {
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, ptr_reg, @intCast(byte_offset));
-                    try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, elem_slot);
-                } else {
-                    try self.codegen.emit.movRegMem(.w64, temp_reg, ptr_reg, @intCast(byte_offset));
-                    try self.codegen.emit.movMemReg(.w64, .RBP, elem_slot, temp_reg);
-                }
+                try self.emitLoad(.w64, temp_reg, ptr_reg, @intCast(byte_offset));
+                try self.emitStore(.w64, frame_ptr, elem_slot, temp_reg);
             } else {
                 try self.copyChunked(temp_reg, ptr_reg, @intCast(byte_offset), frame_ptr, elem_slot, elem_size);
             }
@@ -3653,13 +3555,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             // Load list pointer and length
             const ptr_reg = try self.allocTempGeneral();
             const len_reg = try self.allocTempGeneral();
-            if (comptime target.toCpuArch() == .aarch64) {
-                try self.codegen.emit.ldrRegMemSoff(.w64, ptr_reg, .FP, list_base);
-                try self.codegen.emit.ldrRegMemSoff(.w64, len_reg, .FP, list_base + 8);
-            } else {
-                try self.codegen.emit.movRegMem(.w64, ptr_reg, .RBP, list_base);
-                try self.codegen.emit.movRegMem(.w64, len_reg, .RBP, list_base + 8);
-            }
+            try self.emitLoad(.w64, ptr_reg, frame_ptr, list_base);
+            try self.emitLoad(.w64, len_reg, frame_ptr, list_base + 8);
 
             // index = len - 1
             if (comptime target.toCpuArch() == .aarch64) {
@@ -3676,19 +3573,11 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             if (elem_size != 1) {
                 const size_reg = try self.allocTempGeneral();
                 try self.codegen.emitLoadImm(size_reg, elem_size);
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emit.mulRegRegReg(.w64, addr_reg, addr_reg, size_reg);
-                } else {
-                    try self.codegen.emit.imulRegReg(.w64, addr_reg, size_reg);
-                }
+                try self.emitMulRegs(.w64, addr_reg, addr_reg, size_reg);
                 self.codegen.freeGeneral(size_reg);
             }
 
-            if (comptime target.toCpuArch() == .aarch64) {
-                try self.codegen.emit.addRegRegReg(.w64, addr_reg, addr_reg, ptr_reg);
-            } else {
-                try self.codegen.emit.addRegReg(.w64, addr_reg, ptr_reg);
-            }
+            try self.emitAddRegs(.w64, addr_reg, addr_reg, ptr_reg);
             self.codegen.freeGeneral(ptr_reg);
 
             // Copy element to stack
@@ -3696,13 +3585,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             const temp_reg = try self.allocTempGeneral();
 
             if (elem_size <= 8) {
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, addr_reg, 0);
-                    try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, elem_slot);
-                } else {
-                    try self.codegen.emit.movRegMem(.w64, temp_reg, addr_reg, 0);
-                    try self.codegen.emit.movMemReg(.w64, .RBP, elem_slot, temp_reg);
-                }
+                try self.emitLoad(.w64, temp_reg, addr_reg, 0);
+                try self.emitStore(.w64, frame_ptr, elem_slot, temp_reg);
             } else {
                 try self.copyChunked(temp_reg, addr_reg, 0, frame_ptr, elem_slot, elem_size);
             }
@@ -3795,13 +3679,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 const fns_ptr_reg = try self.allocTempGeneral();
                 const fn_offset: i32 = @intCast(hc.index * 8);
 
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emit.ldrRegMemSoff(.w64, fns_ptr_reg, roc_ops_reg, 64);
-                    try self.codegen.emit.ldrRegMemSoff(.w64, fn_ptr_reg, fns_ptr_reg, fn_offset);
-                } else {
-                    try self.codegen.emit.movRegMem(.w64, fns_ptr_reg, roc_ops_reg, 64);
-                    try self.codegen.emit.movRegMem(.w64, fn_ptr_reg, fns_ptr_reg, fn_offset);
-                }
+                try self.emitLoad(.w64, fns_ptr_reg, roc_ops_reg, 64);
+                try self.emitLoad(.w64, fn_ptr_reg, fns_ptr_reg, fn_offset);
                 self.codegen.freeGeneral(fns_ptr_reg);
 
                 // hosted_fn(roc_ops, ret_ptr, args_ptr) — 3 args via CallBuilder
@@ -3835,19 +3714,11 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 .immediate_i64 => |val| {
                     const temp = try self.allocTempGeneral();
                     try self.codegen.emitLoadImm(temp, val);
-                    if (arch == .aarch64 or arch == .aarch64_be) {
-                        try self.codegen.emit.strRegMemSoff(.w64, temp, .FP, dest_offset);
-                    } else {
-                        try self.codegen.emit.movMemReg(.w64, .RBP, dest_offset, temp);
-                    }
+                    try self.emitStore(.w64, frame_ptr, dest_offset, temp);
                     self.codegen.freeGeneral(temp);
                 },
                 .general_reg => |reg| {
-                    if (arch == .aarch64 or arch == .aarch64_be) {
-                        try self.codegen.emit.strRegMemSoff(.w64, reg, .FP, dest_offset);
-                    } else {
-                        try self.codegen.emit.movMemReg(.w64, .RBP, dest_offset, reg);
-                    }
+                    try self.emitStore(.w64, frame_ptr, dest_offset, reg);
                 },
                 .stack => |s| {
                     const src_offset = s.offset;
@@ -3877,13 +3748,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             while (copied + 8 <= size) : (copied += 8) {
                 const src_off: i32 = src_offset + @as(i32, @intCast(copied));
                 const dest_off: i32 = dest_offset + @as(i32, @intCast(copied));
-                if (arch == .aarch64 or arch == .aarch64_be) {
-                    try self.codegen.emit.ldrRegMemSoff(.w64, temp, .FP, src_off);
-                    try self.codegen.emit.strRegMemSoff(.w64, temp, .FP, dest_off);
-                } else {
-                    try self.codegen.emit.movRegMem(.w64, temp, .RBP, src_off);
-                    try self.codegen.emit.movMemReg(.w64, .RBP, dest_off, temp);
-                }
+                try self.emitLoad(.w64, temp, frame_ptr, src_off);
+                try self.emitStore(.w64, frame_ptr, dest_off, temp);
             }
 
             // Handle remaining bytes (1-7)
@@ -3893,13 +3759,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 const dest_off: i32 = dest_offset + @as(i32, @intCast(copied));
 
                 if (remaining >= 4) {
-                    if (arch == .aarch64 or arch == .aarch64_be) {
-                        try self.codegen.emit.ldrRegMemSoff(.w32, temp, .FP, src_off);
-                        try self.codegen.emit.strRegMemSoff(.w32, temp, .FP, dest_off);
-                    } else {
-                        try self.codegen.emit.movRegMem(.w32, temp, .RBP, src_off);
-                        try self.codegen.emit.movMemReg(.w32, .RBP, dest_off, temp);
-                    }
+                    try self.emitLoad(.w32, temp, frame_ptr, src_off);
+                    try self.emitStore(.w32, frame_ptr, dest_off, temp);
                     copied += 4;
                 }
 
@@ -3953,13 +3814,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             {
                 const ptr_reg = try self.allocTempGeneral();
                 const len_reg = try self.allocTempGeneral();
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emit.ldrRegMemSoff(.w64, ptr_reg, .FP, list_base);
-                    try self.codegen.emit.ldrRegMemSoff(.w64, len_reg, .FP, list_base + 8);
-                } else {
-                    try self.codegen.emit.movRegMem(.w64, ptr_reg, .RBP, list_base);
-                    try self.codegen.emit.movRegMem(.w64, len_reg, .RBP, list_base + 8);
-                }
+                try self.emitLoad(.w64, ptr_reg, frame_ptr, list_base);
+                try self.emitLoad(.w64, len_reg, frame_ptr, list_base + 8);
                 try self.codegen.emitStoreStack(.w64, ptr_slot, ptr_reg);
                 try self.codegen.emitStoreStack(.w64, len_slot, len_reg);
                 self.codegen.freeGeneral(ptr_reg);
@@ -4003,11 +3859,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 try self.codegen.emitLoadStack(.w64, ptr_reg, ptr_slot);
                 try self.codegen.emitLoadStack(.w64, off_reg, offset_slot);
                 // addr_reg = ptr + byte_offset
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emit.addRegRegReg(.w64, ptr_reg, ptr_reg, off_reg);
-                } else {
-                    try self.codegen.emit.addRegReg(.w64, ptr_reg, off_reg);
-                }
+                try self.emitAddRegs(.w64, ptr_reg, ptr_reg, off_reg);
                 self.codegen.freeGeneral(off_reg);
 
                 // Copy elem_size bytes from ptr_reg to elem_slot (8-byte chunks)
@@ -4086,11 +3938,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 else => unreachable,
             };
             const len_reg = try self.allocTempGeneral();
-            if (comptime target.toCpuArch() == .aarch64) {
-                try self.codegen.emit.ldrRegMemSoff(.w64, len_reg, .FP, list_base + 8);
-            } else {
-                try self.codegen.emit.movRegMem(.w64, len_reg, .RBP, list_base + 8);
-            }
+            try self.emitLoad(.w64, len_reg, frame_ptr, list_base + 8);
             const result_reg = try self.allocTempGeneral();
             try self.emitCmpImm(len_reg, 0);
             if (comptime target.toCpuArch() == .aarch64) {
@@ -4141,13 +3989,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             if (elem_size_align.size == 0) {
                 // ZST: just set the length
                 const len_reg = try self.allocTempGeneral();
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emit.ldrRegMemSoff(.w64, len_reg, .FP, list_off + 8);
-                    try self.codegen.emit.strRegMemSoff(.w64, len_reg, .FP, result_offset + 8);
-                } else {
-                    try self.codegen.emit.movRegMem(.w64, len_reg, .RBP, list_off + 8);
-                    try self.codegen.emit.movMemReg(.w64, .RBP, result_offset + 8, len_reg);
-                }
+                try self.emitLoad(.w64, len_reg, frame_ptr, list_off + 8);
+                try self.emitStore(.w64, frame_ptr, result_offset + 8, len_reg);
                 self.codegen.freeGeneral(len_reg);
             } else {
                 // Save src ptr, src len, dst ptr
@@ -4157,41 +4000,23 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 const ctr_slot = self.codegen.allocStackSlot(8);
 
                 const tr = try self.allocTempGeneral();
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emit.ldrRegMemSoff(.w64, tr, .FP, list_off);
-                    try self.codegen.emit.strRegMemSoff(.w64, tr, .FP, src_ptr_slot);
-                    try self.codegen.emit.ldrRegMemSoff(.w64, tr, .FP, list_off + 8);
-                    try self.codegen.emit.strRegMemSoff(.w64, tr, .FP, src_len_slot);
-                    try self.codegen.emit.ldrRegMemSoff(.w64, tr, .FP, result_offset);
-                    try self.codegen.emit.strRegMemSoff(.w64, tr, .FP, dst_ptr_slot);
-                } else {
-                    try self.codegen.emit.movRegMem(.w64, tr, .RBP, list_off);
-                    try self.codegen.emit.movMemReg(.w64, .RBP, src_ptr_slot, tr);
-                    try self.codegen.emit.movRegMem(.w64, tr, .RBP, list_off + 8);
-                    try self.codegen.emit.movMemReg(.w64, .RBP, src_len_slot, tr);
-                    try self.codegen.emit.movRegMem(.w64, tr, .RBP, result_offset);
-                    try self.codegen.emit.movMemReg(.w64, .RBP, dst_ptr_slot, tr);
-                }
+                try self.emitLoad(.w64, tr, frame_ptr, list_off);
+                try self.emitStore(.w64, frame_ptr, src_ptr_slot, tr);
+                try self.emitLoad(.w64, tr, frame_ptr, list_off + 8);
+                try self.emitStore(.w64, frame_ptr, src_len_slot, tr);
+                try self.emitLoad(.w64, tr, frame_ptr, result_offset);
+                try self.emitStore(.w64, frame_ptr, dst_ptr_slot, tr);
                 // Init counter = 0
                 try self.codegen.emitLoadImm(tr, 0);
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emit.strRegMemSoff(.w64, tr, .FP, ctr_slot);
-                } else {
-                    try self.codegen.emit.movMemReg(.w64, .RBP, ctr_slot, tr);
-                }
+                try self.emitStore(.w64, frame_ptr, ctr_slot, tr);
                 self.codegen.freeGeneral(tr);
 
                 // Loop
                 const loop_start2 = self.codegen.currentOffset();
                 const ci = try self.allocTempGeneral();
                 const li = try self.allocTempGeneral();
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emit.ldrRegMemSoff(.w64, ci, .FP, ctr_slot);
-                    try self.codegen.emit.ldrRegMemSoff(.w64, li, .FP, src_len_slot);
-                } else {
-                    try self.codegen.emit.movRegMem(.w64, ci, .RBP, ctr_slot);
-                    try self.codegen.emit.movRegMem(.w64, li, .RBP, src_len_slot);
-                }
+                try self.emitLoad(.w64, ci, frame_ptr, ctr_slot);
+                try self.emitLoad(.w64, li, frame_ptr, src_len_slot);
                 try self.codegen.emit.cmpRegReg(.w64, ci, li);
                 self.codegen.freeGeneral(li);
                 const exit_patch2 = try self.codegen.emitCondJump(condGreaterOrEqual());
@@ -4223,13 +4048,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 }
                 self.codegen.freeGeneral(si);
                 const sp_reg = try self.allocTempGeneral();
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emit.ldrRegMemSoff(.w64, sp_reg, .FP, src_ptr_slot);
-                    try self.codegen.emit.addRegRegReg(.w64, src_addr, src_addr, sp_reg);
-                } else {
-                    try self.codegen.emit.movRegMem(.w64, sp_reg, .RBP, src_ptr_slot);
-                    try self.codegen.emit.addRegReg(.w64, src_addr, sp_reg);
-                }
+                try self.emitLoad(.w64, sp_reg, frame_ptr, src_ptr_slot);
+                try self.emitAddRegs(.w64, src_addr, src_addr, sp_reg);
                 self.codegen.freeGeneral(sp_reg);
 
                 // dst_addr = dst_ptr + i * elem_size
@@ -4242,26 +4062,16 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 }
                 self.codegen.freeGeneral(esz_reg);
                 const dp_reg = try self.allocTempGeneral();
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emit.ldrRegMemSoff(.w64, dp_reg, .FP, dst_ptr_slot);
-                    try self.codegen.emit.addRegRegReg(.w64, dst_addr, dst_addr, dp_reg);
-                } else {
-                    try self.codegen.emit.movRegMem(.w64, dp_reg, .RBP, dst_ptr_slot);
-                    try self.codegen.emit.addRegReg(.w64, dst_addr, dp_reg);
-                }
+                try self.emitLoad(.w64, dp_reg, frame_ptr, dst_ptr_slot);
+                try self.emitAddRegs(.w64, dst_addr, dst_addr, dp_reg);
                 self.codegen.freeGeneral(dp_reg);
 
                 // Copy elem_size bytes from src_addr to dst_addr
                 const copy_tmp = try self.allocTempGeneral();
                 var off: u32 = 0;
                 while (off < elem_size_align.size) : (off += 8) {
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.ldrRegMemSoff(.w64, copy_tmp, src_addr, @intCast(off));
-                        try self.codegen.emit.strRegMemSoff(.w64, copy_tmp, dst_addr, @intCast(off));
-                    } else {
-                        try self.codegen.emit.movRegMem(.w64, copy_tmp, src_addr, @intCast(off));
-                        try self.codegen.emit.movMemReg(.w64, dst_addr, @intCast(off), copy_tmp);
-                    }
+                    try self.emitLoad(.w64, copy_tmp, src_addr, @intCast(off));
+                    try self.emitStore(.w64, dst_addr, @intCast(off), copy_tmp);
                 }
                 self.codegen.freeGeneral(copy_tmp);
                 self.codegen.freeGeneral(src_addr);
@@ -4283,13 +4093,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
                 // Set result length = src length
                 const fl = try self.allocTempGeneral();
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emit.ldrRegMemSoff(.w64, fl, .FP, src_len_slot);
-                    try self.codegen.emit.strRegMemSoff(.w64, fl, .FP, result_offset + 8);
-                } else {
-                    try self.codegen.emit.movRegMem(.w64, fl, .RBP, src_len_slot);
-                    try self.codegen.emit.movMemReg(.w64, .RBP, result_offset + 8, fl);
-                }
+                try self.emitLoad(.w64, fl, frame_ptr, src_len_slot);
+                try self.emitStore(.w64, frame_ptr, result_offset + 8, fl);
                 self.codegen.freeGeneral(fl);
             }
 
@@ -5855,19 +5660,11 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 // Load LHS element
                 switch (lhs_loc) {
                     .stack_str => |base_offset| {
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emit.ldrRegMemSoff(.w64, temp_lhs, .FP, base_offset + offset);
-                        } else {
-                            try self.codegen.emit.movRegMem(.w64, temp_lhs, .RBP, base_offset + offset);
-                        }
+                        try self.emitLoad(.w64, temp_lhs, frame_ptr, base_offset + offset);
                     },
                     .stack => |s| {
                         const base_offset = s.offset;
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emit.ldrRegMemSoff(.w64, temp_lhs, .FP, base_offset + offset);
-                        } else {
-                            try self.codegen.emit.movRegMem(.w64, temp_lhs, .RBP, base_offset + offset);
-                        }
+                        try self.emitLoad(.w64, temp_lhs, frame_ptr, base_offset + offset);
                     },
                     else => {
                         // For single-element, the value IS the element
@@ -5881,19 +5678,11 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 // Load RHS element
                 switch (rhs_loc) {
                     .stack_str => |base_offset| {
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emit.ldrRegMemSoff(.w64, temp_rhs, .FP, base_offset + offset);
-                        } else {
-                            try self.codegen.emit.movRegMem(.w64, temp_rhs, .RBP, base_offset + offset);
-                        }
+                        try self.emitLoad(.w64, temp_rhs, frame_ptr, base_offset + offset);
                     },
                     .stack => |s| {
                         const base_offset = s.offset;
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emit.ldrRegMemSoff(.w64, temp_rhs, .FP, base_offset + offset);
-                        } else {
-                            try self.codegen.emit.movRegMem(.w64, temp_rhs, .RBP, base_offset + offset);
-                        }
+                        try self.emitLoad(.w64, temp_rhs, frame_ptr, base_offset + offset);
                     },
                     else => {
                         // For single-element, the value IS the element
@@ -6012,19 +5801,11 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             switch (lhs_loc) {
                 .stack => |s| {
                     const base_offset = s.offset;
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.ldrRegMemSoff(.w64, lhs_ptr_reg, .FP, base_offset);
-                    } else {
-                        try self.codegen.emit.movRegMem(.w64, lhs_ptr_reg, .RBP, base_offset);
-                    }
+                    try self.emitLoad(.w64, lhs_ptr_reg, frame_ptr, base_offset);
                 },
                 .list_stack => |list_info| {
                     // Load ptr from the list struct
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.ldrRegMemSoff(.w64, lhs_ptr_reg, .FP, list_info.struct_offset);
-                    } else {
-                        try self.codegen.emit.movRegMem(.w64, lhs_ptr_reg, .RBP, list_info.struct_offset);
-                    }
+                    try self.emitLoad(.w64, lhs_ptr_reg, frame_ptr, list_info.struct_offset);
                 },
                 else => unreachable,
             }
@@ -6034,19 +5815,11 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             switch (rhs_loc) {
                 .stack => |s| {
                     const base_offset = s.offset;
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.ldrRegMemSoff(.w64, rhs_ptr_reg, .FP, base_offset);
-                    } else {
-                        try self.codegen.emit.movRegMem(.w64, rhs_ptr_reg, .RBP, base_offset);
-                    }
+                    try self.emitLoad(.w64, rhs_ptr_reg, frame_ptr, base_offset);
                 },
                 .list_stack => |list_info| {
                     // Load ptr from the list struct
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.ldrRegMemSoff(.w64, rhs_ptr_reg, .FP, list_info.struct_offset);
-                    } else {
-                        try self.codegen.emit.movRegMem(.w64, rhs_ptr_reg, .RBP, list_info.struct_offset);
-                    }
+                    try self.emitLoad(.w64, rhs_ptr_reg, frame_ptr, list_info.struct_offset);
                 },
                 else => unreachable,
             }
@@ -6062,24 +5835,14 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     // For nested lists, we need to compare the inner list contents,
                     // not just pointers. Inner lists are stored as (ptr, len) pairs.
                     // Load inner list pointers
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.ldrRegMemSoff(.w64, temp_lhs, lhs_ptr_reg, offset);
-                        try self.codegen.emit.ldrRegMemSoff(.w64, temp_rhs, rhs_ptr_reg, offset);
-                    } else {
-                        try self.codegen.emit.movRegMem(.w64, temp_lhs, lhs_ptr_reg, offset);
-                        try self.codegen.emit.movRegMem(.w64, temp_rhs, rhs_ptr_reg, offset);
-                    }
+                    try self.emitLoad(.w64, temp_lhs, lhs_ptr_reg, offset);
+                    try self.emitLoad(.w64, temp_rhs, rhs_ptr_reg, offset);
 
                     // Load inner list lengths
                     const inner_len_lhs = try self.allocTempGeneral();
                     const inner_len_rhs = try self.allocTempGeneral();
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.ldrRegMemSoff(.w64, inner_len_lhs, lhs_ptr_reg, offset + 8);
-                        try self.codegen.emit.ldrRegMemSoff(.w64, inner_len_rhs, rhs_ptr_reg, offset + 8);
-                    } else {
-                        try self.codegen.emit.movRegMem(.w64, inner_len_lhs, lhs_ptr_reg, offset + 8);
-                        try self.codegen.emit.movRegMem(.w64, inner_len_rhs, rhs_ptr_reg, offset + 8);
-                    }
+                    try self.emitLoad(.w64, inner_len_lhs, lhs_ptr_reg, offset + 8);
+                    try self.emitLoad(.w64, inner_len_rhs, rhs_ptr_reg, offset + 8);
 
                     // Compare lengths first
                     if (comptime target.toCpuArch() == .aarch64) {
@@ -6147,18 +5910,10 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     const offset: i32 = @as(i32, @intCast(i)) * elem_size;
 
                     // Load lhs element: [lhs_ptr + offset]
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.ldrRegMemSoff(.w64, temp_lhs, lhs_ptr_reg, offset);
-                    } else {
-                        try self.codegen.emit.movRegMem(.w64, temp_lhs, lhs_ptr_reg, offset);
-                    }
+                    try self.emitLoad(.w64, temp_lhs, lhs_ptr_reg, offset);
 
                     // Load rhs element: [rhs_ptr + offset]
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.ldrRegMemSoff(.w64, temp_rhs, rhs_ptr_reg, offset);
-                    } else {
-                        try self.codegen.emit.movRegMem(.w64, temp_rhs, rhs_ptr_reg, offset);
-                    }
+                    try self.emitLoad(.w64, temp_rhs, rhs_ptr_reg, offset);
 
                     // Compare elements: if not equal, set result to 0
                     if (comptime target.toCpuArch() == .aarch64) {
@@ -6427,22 +6182,14 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 .stack => |s| s.offset,
                 .general_reg => |reg| blk: {
                     const slot = self.codegen.allocStackSlot(@intCast(record_size));
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.strRegMemSoff(.w64, reg, .FP, slot);
-                    } else {
-                        try self.codegen.emit.movMemReg(.w64, .RBP, slot, reg);
-                    }
+                    try self.emitStore(.w64, frame_ptr, slot, reg);
                     break :blk slot;
                 },
                 .immediate_i64 => |val| blk: {
                     const slot = self.codegen.allocStackSlot(@intCast(record_size));
                     const temp = try self.allocTempGeneral();
                     try self.codegen.emitLoadImm(temp, val);
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.strRegMemSoff(.w64, temp, .FP, slot);
-                    } else {
-                        try self.codegen.emit.movMemReg(.w64, .RBP, slot, temp);
-                    }
+                    try self.emitStore(.w64, frame_ptr, slot, temp);
                     self.codegen.freeGeneral(temp);
                     break :blk slot;
                 },
@@ -7462,11 +7209,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
                         // Load list length from stack (offset 8 from struct base)
                         const len_reg = try self.allocTempGeneral();
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emit.ldrRegMemSoff(.w64, len_reg, .FP, base_offset + 8);
-                        } else {
-                            try self.codegen.emit.movRegMem(.w64, len_reg, .RBP, base_offset + 8);
-                        }
+                        try self.emitLoad(.w64, len_reg, frame_ptr, base_offset + 8);
 
                         // Compare length with expected
                         const expected_len = @as(i32, @intCast(prefix_patterns.len));
@@ -7493,11 +7236,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
                         // Load the data pointer from the list struct (at base_offset)
                         const list_ptr_reg = try self.allocTempGeneral();
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emit.ldrRegMemSoff(.w64, list_ptr_reg, .FP, base_offset);
-                        } else {
-                            try self.codegen.emit.movRegMem(.w64, list_ptr_reg, .RBP, base_offset);
-                        }
+                        try self.emitLoad(.w64, list_ptr_reg, frame_ptr, base_offset);
 
                         // Bind each prefix element by copying from heap to stack
                         for (prefix_patterns, 0..) |elem_pattern_id, elem_idx| {
@@ -7506,13 +7245,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             const temp_reg = try self.allocTempGeneral();
 
                             if (elem_size <= 8) {
-                                if (comptime target.toCpuArch() == .aarch64) {
-                                    try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, list_ptr_reg, elem_offset_in_list);
-                                    try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, elem_slot);
-                                } else {
-                                    try self.codegen.emit.movRegMem(.w64, temp_reg, list_ptr_reg, elem_offset_in_list);
-                                    try self.codegen.emit.movMemReg(.w64, .RBP, elem_slot, temp_reg);
-                                }
+                                try self.emitLoad(.w64, temp_reg, list_ptr_reg, elem_offset_in_list);
+                                try self.emitStore(.w64, frame_ptr, elem_slot, temp_reg);
                             } else {
                                 // For larger elements, copy 8 bytes at a time
                                 try self.copyChunked(temp_reg, list_ptr_reg, elem_offset_in_list, frame_ptr, elem_slot, elem_size);
@@ -7547,20 +7281,12 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             }
 
                             // Store rest pointer at rest_slot + 0
-                            if (comptime target.toCpuArch() == .aarch64) {
-                                try self.codegen.emit.strRegMemSoff(.w64, rest_ptr_reg, .FP, rest_slot);
-                            } else {
-                                try self.codegen.emit.movMemReg(.w64, .RBP, rest_slot, rest_ptr_reg);
-                            }
+                            try self.emitStore(.w64, frame_ptr, rest_slot, rest_ptr_reg);
                             self.codegen.freeGeneral(rest_ptr_reg);
 
                             // Load original length from base_offset + 8
                             const rest_len_reg = try self.allocTempGeneral();
-                            if (comptime target.toCpuArch() == .aarch64) {
-                                try self.codegen.emit.ldrRegMemSoff(.w64, rest_len_reg, .FP, base_offset + 8);
-                            } else {
-                                try self.codegen.emit.movRegMem(.w64, rest_len_reg, .RBP, base_offset + 8);
-                            }
+                            try self.emitLoad(.w64, rest_len_reg, frame_ptr, base_offset + 8);
 
                             // Calculate rest length: original_length - prefix_count
                             if (prefix_count > 0) {
@@ -7572,18 +7298,10 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             }
 
                             // Store rest length at rest_slot + 8
-                            if (comptime target.toCpuArch() == .aarch64) {
-                                try self.codegen.emit.strRegMemSoff(.w64, rest_len_reg, .FP, rest_slot + 8);
-                            } else {
-                                try self.codegen.emit.movMemReg(.w64, .RBP, rest_slot + 8, rest_len_reg);
-                            }
+                            try self.emitStore(.w64, frame_ptr, rest_slot + 8, rest_len_reg);
 
                             // Store capacity = rest length at rest_slot + 16
-                            if (comptime target.toCpuArch() == .aarch64) {
-                                try self.codegen.emit.strRegMemSoff(.w64, rest_len_reg, .FP, rest_slot + 16);
-                            } else {
-                                try self.codegen.emit.movMemReg(.w64, .RBP, rest_slot + 16, rest_len_reg);
-                            }
+                            try self.emitStore(.w64, frame_ptr, rest_slot + 16, rest_len_reg);
                             self.codegen.freeGeneral(rest_len_reg);
 
                             // Bind the rest pattern to the new list slot
@@ -7769,15 +7487,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             const zero_reg = try self.allocTempGeneral();
             try self.codegen.emitLoadImm(zero_reg, 0);
 
-            if (comptime target.toCpuArch() == .aarch64) {
-                try self.codegen.emit.strRegMemSoff(.w64, zero_reg, .FP, list_struct_offset);
-                try self.codegen.emit.strRegMemSoff(.w64, zero_reg, .FP, list_struct_offset + 8);
-                try self.codegen.emit.strRegMemSoff(.w64, zero_reg, .FP, list_struct_offset + 16);
-            } else {
-                try self.codegen.emit.movMemReg(.w64, .RBP, list_struct_offset, zero_reg);
-                try self.codegen.emit.movMemReg(.w64, .RBP, list_struct_offset + 8, zero_reg);
-                try self.codegen.emit.movMemReg(.w64, .RBP, list_struct_offset + 16, zero_reg);
-            }
+            try self.emitStore(.w64, frame_ptr, list_struct_offset, zero_reg);
+            try self.emitStore(.w64, frame_ptr, list_struct_offset + 8, zero_reg);
+            try self.emitStore(.w64, frame_ptr, list_struct_offset + 16, zero_reg);
             self.codegen.freeGeneral(zero_reg);
 
             return .{ .list_stack = .{
@@ -7796,15 +7508,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 const zero_reg = try self.allocTempGeneral();
                 try self.codegen.emitLoadImm(zero_reg, 0);
 
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emit.strRegMemSoff(.w64, zero_reg, .FP, list_struct_offset);
-                    try self.codegen.emit.strRegMemSoff(.w64, zero_reg, .FP, list_struct_offset + 8);
-                    try self.codegen.emit.strRegMemSoff(.w64, zero_reg, .FP, list_struct_offset + 16);
-                } else {
-                    try self.codegen.emit.movMemReg(.w64, .RBP, list_struct_offset, zero_reg);
-                    try self.codegen.emit.movMemReg(.w64, .RBP, list_struct_offset + 8, zero_reg);
-                    try self.codegen.emit.movMemReg(.w64, .RBP, list_struct_offset + 16, zero_reg);
-                }
+                try self.emitStore(.w64, frame_ptr, list_struct_offset, zero_reg);
+                try self.emitStore(.w64, frame_ptr, list_struct_offset + 8, zero_reg);
+                try self.emitStore(.w64, frame_ptr, list_struct_offset + 16, zero_reg);
                 self.codegen.freeGeneral(zero_reg);
 
                 return .{ .list_stack = .{
@@ -7858,11 +7564,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
                 // Load heap pointer from stack slot
                 const heap_ptr = try self.allocTempGeneral();
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emit.ldrRegMemSoff(.w64, heap_ptr, .FP, heap_ptr_slot);
-                } else {
-                    try self.codegen.emit.movRegMem(.w64, heap_ptr, .RBP, heap_ptr_slot);
-                }
+                try self.emitLoad(.w64, heap_ptr, frame_ptr, heap_ptr_slot);
 
                 // Store element to heap based on its actual location type
                 // We must handle different location types differently because the actual
@@ -7888,13 +7590,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         while (copied < roc_list_size) : (copied += target_ptr_size) {
                             const chunk_src = list_info.struct_offset + @as(i32, @intCast(copied));
                             const chunk_dst = elem_heap_offset + @as(i32, @intCast(copied));
-                            if (comptime target.toCpuArch() == .aarch64) {
-                                try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, chunk_src);
-                                try self.codegen.emit.strRegMemSoff(.w64, temp_reg, heap_ptr, chunk_dst);
-                            } else {
-                                try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, chunk_src);
-                                try self.codegen.emit.movMemReg(.w64, heap_ptr, chunk_dst, temp_reg);
-                            }
+                            try self.emitLoad(.w64, temp_reg, frame_ptr, chunk_src);
+                            try self.emitStore(.w64, heap_ptr, chunk_dst, temp_reg);
                         }
                         self.codegen.freeGeneral(temp_reg);
                     },
@@ -7906,19 +7603,11 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
                         // Store low 8 bytes
                         try self.codegen.emitLoadImm(temp_reg, @bitCast(low));
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emit.strRegMemSoff(.w64, temp_reg, heap_ptr, elem_heap_offset);
-                        } else {
-                            try self.codegen.emit.movMemReg(.w64, heap_ptr, elem_heap_offset, temp_reg);
-                        }
+                        try self.emitStore(.w64, heap_ptr, elem_heap_offset, temp_reg);
 
                         // Store high 8 bytes
                         try self.codegen.emitLoadImm(temp_reg, @bitCast(high));
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emit.strRegMemSoff(.w64, temp_reg, heap_ptr, elem_heap_offset + 8);
-                        } else {
-                            try self.codegen.emit.movMemReg(.w64, heap_ptr, elem_heap_offset + 8, temp_reg);
-                        }
+                        try self.emitStore(.w64, heap_ptr, elem_heap_offset + 8, temp_reg);
 
                         self.codegen.freeGeneral(temp_reg);
                     },
@@ -7927,22 +7616,12 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         const temp_reg = try self.allocTempGeneral();
 
                         // Copy low 8 bytes
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, src_offset);
-                            try self.codegen.emit.strRegMemSoff(.w64, temp_reg, heap_ptr, elem_heap_offset);
-                        } else {
-                            try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, src_offset);
-                            try self.codegen.emit.movMemReg(.w64, heap_ptr, elem_heap_offset, temp_reg);
-                        }
+                        try self.emitLoad(.w64, temp_reg, frame_ptr, src_offset);
+                        try self.emitStore(.w64, heap_ptr, elem_heap_offset, temp_reg);
 
                         // Copy high 8 bytes
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, src_offset + 8);
-                            try self.codegen.emit.strRegMemSoff(.w64, temp_reg, heap_ptr, elem_heap_offset + 8);
-                        } else {
-                            try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, src_offset + 8);
-                            try self.codegen.emit.movMemReg(.w64, heap_ptr, elem_heap_offset + 8, temp_reg);
-                        }
+                        try self.emitLoad(.w64, temp_reg, frame_ptr, src_offset + 8);
+                        try self.emitStore(.w64, heap_ptr, elem_heap_offset + 8, temp_reg);
 
                         self.codegen.freeGeneral(temp_reg);
                     },
@@ -7950,11 +7629,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         // For other immediates and register values:
                         // Store 8 bytes from the register, then zero-pad to elem_size if needed
                         const elem_reg = try self.ensureInGeneralReg(elem_loc);
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emit.strRegMemSoff(.w64, elem_reg, heap_ptr, elem_heap_offset);
-                        } else {
-                            try self.codegen.emit.movMemReg(.w64, heap_ptr, elem_heap_offset, elem_reg);
-                        }
+                        try self.emitStore(.w64, heap_ptr, elem_heap_offset, elem_reg);
                         self.codegen.freeGeneral(elem_reg);
 
                         // Zero-pad remaining bytes if elem_size > 8
@@ -7964,11 +7639,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             var padded: u32 = 8;
                             while (padded < elem_size) : (padded += 8) {
                                 const pad_offset = elem_heap_offset + @as(i32, @intCast(padded));
-                                if (comptime target.toCpuArch() == .aarch64) {
-                                    try self.codegen.emit.strRegMemSoff(.w64, zero_reg, heap_ptr, pad_offset);
-                                } else {
-                                    try self.codegen.emit.movMemReg(.w64, heap_ptr, pad_offset, zero_reg);
-                                }
+                                try self.emitStore(.w64, heap_ptr, pad_offset, zero_reg);
                             }
                             self.codegen.freeGeneral(zero_reg);
                         }
@@ -7986,23 +7657,13 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             const ptr_reg = try self.allocTempGeneral();
             const len_reg = try self.allocTempGeneral();
 
-            if (comptime target.toCpuArch() == .aarch64) {
-                try self.codegen.emit.ldrRegMemSoff(.w64, ptr_reg, .FP, heap_ptr_slot);
-            } else {
-                try self.codegen.emit.movRegMem(.w64, ptr_reg, .RBP, heap_ptr_slot);
-            }
+            try self.emitLoad(.w64, ptr_reg, frame_ptr, heap_ptr_slot);
             try self.codegen.emitLoadImm(len_reg, @intCast(num_elems));
 
             // Store list struct
-            if (comptime target.toCpuArch() == .aarch64) {
-                try self.codegen.emit.strRegMemSoff(.w64, ptr_reg, .FP, list_struct_offset);
-                try self.codegen.emit.strRegMemSoff(.w64, len_reg, .FP, list_struct_offset + 8);
-                try self.codegen.emit.strRegMemSoff(.w64, len_reg, .FP, list_struct_offset + 16);
-            } else {
-                try self.codegen.emit.movMemReg(.w64, .RBP, list_struct_offset, ptr_reg);
-                try self.codegen.emit.movMemReg(.w64, .RBP, list_struct_offset + 8, len_reg);
-                try self.codegen.emit.movMemReg(.w64, .RBP, list_struct_offset + 16, len_reg);
-            }
+            try self.emitStore(.w64, frame_ptr, list_struct_offset, ptr_reg);
+            try self.emitStore(.w64, frame_ptr, list_struct_offset + 8, len_reg);
+            try self.emitStore(.w64, frame_ptr, list_struct_offset + 16, len_reg);
 
             self.codegen.freeGeneral(ptr_reg);
             self.codegen.freeGeneral(len_reg);
@@ -8664,6 +8325,57 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             self.codegen.freeGeneral(reg);
         }
 
+        /// Load from base+offset into register (wraps ldrRegMemSoff / movRegMem)
+        fn emitLoad(self: *Self, comptime width: anytype, dst: GeneralReg, base_reg: GeneralReg, offset: i32) !void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                try self.codegen.emit.ldrRegMemSoff(width, dst, base_reg, offset);
+            } else {
+                try self.codegen.emit.movRegMem(width, dst, base_reg, offset);
+            }
+        }
+
+        /// Store register to base+offset (wraps strRegMemSoff / movMemReg)
+        fn emitStore(self: *Self, comptime width: anytype, base_reg: GeneralReg, offset: i32, src: GeneralReg) !void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                try self.codegen.emit.strRegMemSoff(width, src, base_reg, offset);
+            } else {
+                try self.codegen.emit.movMemReg(width, base_reg, offset, src);
+            }
+        }
+
+        /// dst = src1 + src2 (wraps addRegRegReg / addRegReg)
+        /// On x86_64, dst must equal src1 (2-operand form).
+        fn emitAddRegs(self: *Self, comptime width: anytype, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
+            std.debug.assert(arch == .aarch64 or arch == .aarch64_be or dst == src1);
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                try self.codegen.emit.addRegRegReg(width, dst, src1, src2);
+            } else {
+                try self.codegen.emit.addRegReg(width, dst, src2);
+            }
+        }
+
+        /// dst = src1 * src2 (wraps mulRegRegReg / imulRegReg)
+        /// On x86_64, dst must equal src1 (2-operand form).
+        fn emitMulRegs(self: *Self, comptime width: anytype, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
+            std.debug.assert(arch == .aarch64 or arch == .aarch64_be or dst == src1);
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                try self.codegen.emit.mulRegRegReg(width, dst, src1, src2);
+            } else {
+                try self.codegen.emit.imulRegReg(width, dst, src2);
+            }
+        }
+
+        /// dst = src1 - src2 (wraps subRegRegReg / subRegReg)
+        /// On x86_64, dst must equal src1 (2-operand form).
+        fn emitSubRegs(self: *Self, comptime width: anytype, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
+            std.debug.assert(arch == .aarch64 or arch == .aarch64_be or dst == src1);
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                try self.codegen.emit.subRegRegReg(width, dst, src1, src2);
+            } else {
+                try self.codegen.emit.subRegReg(width, dst, src2);
+            }
+        }
+
         /// Copy `size` bytes from src_base+src_offset to dst_base+dst_offset using 8-byte chunks.
         /// For sizes <= 8, does a single 8-byte load/store.
         /// For sizes > 8 that are not multiples of 8, re-copies the final 8 bytes at an
@@ -8671,26 +8383,16 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
         fn copyChunked(self: *Self, temp_reg: GeneralReg, src_base: GeneralReg, src_offset: i32, dst_base: GeneralReg, dst_offset: i32, size: u32) Allocator.Error!void {
             std.debug.assert(size > 0);
             if (size <= 8) {
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, src_base, src_offset);
-                    try self.codegen.emit.strRegMemSoff(.w64, temp_reg, dst_base, dst_offset);
-                } else {
-                    try self.codegen.emit.movRegMem(.w64, temp_reg, src_base, src_offset);
-                    try self.codegen.emit.movMemReg(.w64, dst_base, dst_offset, temp_reg);
-                }
+                try self.emitLoad(.w64, temp_reg, src_base, src_offset);
+                try self.emitStore(.w64, dst_base, dst_offset, temp_reg);
                 return;
             }
             var copied: u32 = 0;
             while (copied + 8 <= size) : (copied += 8) {
                 const s = src_offset + @as(i32, @intCast(copied));
                 const d = dst_offset + @as(i32, @intCast(copied));
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, src_base, s);
-                    try self.codegen.emit.strRegMemSoff(.w64, temp_reg, dst_base, d);
-                } else {
-                    try self.codegen.emit.movRegMem(.w64, temp_reg, src_base, s);
-                    try self.codegen.emit.movMemReg(.w64, dst_base, d, temp_reg);
-                }
+                try self.emitLoad(.w64, temp_reg, src_base, s);
+                try self.emitStore(.w64, dst_base, d, temp_reg);
             }
             // Handle tail: if size is not a multiple of 8, re-copy the last 8 bytes
             // at an overlapping offset. This is safe because size > 8.
@@ -8698,13 +8400,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 const tail = @as(i32, @intCast(size - 8));
                 const s = src_offset + tail;
                 const d = dst_offset + tail;
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, src_base, s);
-                    try self.codegen.emit.strRegMemSoff(.w64, temp_reg, dst_base, d);
-                } else {
-                    try self.codegen.emit.movRegMem(.w64, temp_reg, src_base, s);
-                    try self.codegen.emit.movMemReg(.w64, dst_base, d, temp_reg);
-                }
+                try self.emitLoad(.w64, temp_reg, src_base, s);
+                try self.emitStore(.w64, dst_base, d, temp_reg);
             }
         }
 
@@ -8804,11 +8501,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 // Copy string bytes to heap memory
                 // Load heap pointer, then copy bytes
                 const heap_ptr = try self.allocTempGeneral();
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emit.ldrRegMemSoff(.w64, heap_ptr, .FP, heap_ptr_slot);
-                } else {
-                    try self.codegen.emit.movRegMem(.w64, heap_ptr, .RBP, heap_ptr_slot);
-                }
+                try self.emitLoad(.w64, heap_ptr, frame_ptr, heap_ptr_slot);
 
                 // Copy string data in 8-byte chunks, then remaining bytes
                 var remaining: usize = str_bytes.len;
@@ -8818,11 +8511,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 while (remaining >= 8) {
                     const chunk: u64 = @bitCast(str_bytes[str_offset..][0..8].*);
                     try self.codegen.emitLoadImm(temp_reg, @bitCast(chunk));
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.strRegMemSoff(.w64, temp_reg, heap_ptr, @intCast(str_offset));
-                    } else {
-                        try self.codegen.emit.movMemReg(.w64, heap_ptr, @intCast(str_offset), temp_reg);
-                    }
+                    try self.emitStore(.w64, heap_ptr, @intCast(str_offset), temp_reg);
                     str_offset += 8;
                     remaining -= 8;
                 }
@@ -8835,11 +8524,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     }
                     try self.codegen.emitLoadImm(temp_reg, @bitCast(last_chunk));
                     // Store partial - for simplicity, store as full 8 bytes (heap has space)
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.strRegMemSoff(.w64, temp_reg, heap_ptr, @intCast(str_offset));
-                    } else {
-                        try self.codegen.emit.movMemReg(.w64, heap_ptr, @intCast(str_offset), temp_reg);
-                    }
+                    try self.emitStore(.w64, heap_ptr, @intCast(str_offset), temp_reg);
                 }
 
                 self.codegen.freeGeneral(temp_reg);
@@ -8848,11 +8533,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 // Construct RocStr struct on stack: {pointer, length, capacity}
                 // Reload heap pointer for struct construction
                 const ptr_reg = try self.allocTempGeneral();
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emit.ldrRegMemSoff(.w64, ptr_reg, .FP, heap_ptr_slot);
-                } else {
-                    try self.codegen.emit.movRegMem(.w64, ptr_reg, .RBP, heap_ptr_slot);
-                }
+                try self.emitLoad(.w64, ptr_reg, frame_ptr, heap_ptr_slot);
 
                 // Store pointer (first 8 bytes)
                 try self.codegen.emitStoreStack(.w64, base_offset, ptr_reg);
@@ -8967,11 +8648,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 }
                 // Initialize idx to 0
                 try self.codegen.emitLoadImm(temp, 0);
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emit.strRegMemSoff(.w64, temp, .FP, idx_slot);
-                } else {
-                    try self.codegen.emit.movMemReg(.w64, .RBP, idx_slot, temp);
-                }
+                try self.emitStore(.w64, frame_ptr, idx_slot, temp);
                 self.codegen.freeGeneral(temp);
             }
 
@@ -8982,13 +8659,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             {
                 const idx_reg = try self.allocTempGeneral();
                 const len_reg = try self.allocTempGeneral();
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emit.ldrRegMemSoff(.w64, idx_reg, .FP, idx_slot);
-                    try self.codegen.emit.ldrRegMemSoff(.w64, len_reg, .FP, len_slot);
-                } else {
-                    try self.codegen.emit.movRegMem(.w64, idx_reg, .RBP, idx_slot);
-                    try self.codegen.emit.movRegMem(.w64, len_reg, .RBP, len_slot);
-                }
+                try self.emitLoad(.w64, idx_reg, frame_ptr, idx_slot);
+                try self.emitLoad(.w64, len_reg, frame_ptr, len_slot);
                 try self.emitCmpReg(idx_reg, len_reg);
                 self.codegen.freeGeneral(idx_reg);
                 self.codegen.freeGeneral(len_reg);
@@ -9004,13 +8676,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 const idx_reg = try self.allocTempGeneral();
                 const addr_reg = try self.allocTempGeneral();
 
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emit.ldrRegMemSoff(.w64, ptr_reg, .FP, ptr_slot);
-                    try self.codegen.emit.ldrRegMemSoff(.w64, idx_reg, .FP, idx_slot);
-                } else {
-                    try self.codegen.emit.movRegMem(.w64, ptr_reg, .RBP, ptr_slot);
-                    try self.codegen.emit.movRegMem(.w64, idx_reg, .RBP, idx_slot);
-                }
+                try self.emitLoad(.w64, ptr_reg, frame_ptr, ptr_slot);
+                try self.emitLoad(.w64, idx_reg, frame_ptr, idx_slot);
 
                 try self.codegen.emit.movRegReg(.w64, addr_reg, idx_reg);
 
@@ -9018,31 +8685,18 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 if (elem_size != 1) {
                     const size_reg = try self.allocTempGeneral();
                     try self.codegen.emitLoadImm(size_reg, elem_size);
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.mulRegRegReg(.w64, addr_reg, addr_reg, size_reg);
-                    } else {
-                        try self.codegen.emit.imulRegReg(.w64, addr_reg, size_reg);
-                    }
+                    try self.emitMulRegs(.w64, addr_reg, addr_reg, size_reg);
                     self.codegen.freeGeneral(size_reg);
                 }
 
                 // Add base pointer
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emit.addRegRegReg(.w64, addr_reg, addr_reg, ptr_reg);
-                } else {
-                    try self.codegen.emit.addRegReg(.w64, addr_reg, ptr_reg);
-                }
+                try self.emitAddRegs(.w64, addr_reg, addr_reg, ptr_reg);
 
                 // Load element to stack slot
                 const temp_reg = try self.allocTempGeneral();
                 if (elem_size <= 8) {
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, addr_reg, 0);
-                        try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, elem_slot);
-                    } else {
-                        try self.codegen.emit.movRegMem(.w64, temp_reg, addr_reg, 0);
-                        try self.codegen.emit.movMemReg(.w64, .RBP, elem_slot, temp_reg);
-                    }
+                    try self.emitLoad(.w64, temp_reg, addr_reg, 0);
+                    try self.emitStore(.w64, frame_ptr, elem_slot, temp_reg);
                 } else {
                     // For larger elements, copy in 8-byte chunks
                     try self.copyChunked(temp_reg, addr_reg, 0, frame_ptr, elem_slot, elem_size);
@@ -9113,11 +8767,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 .stack => |s| blk: {
                     const off = s.offset;
                     const reg = try self.allocTempGeneral();
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.ldrRegMemSoff(.w64, reg, .FP, off);
-                    } else {
-                        try self.codegen.emit.movRegMem(.w64, reg, .RBP, off);
-                    }
+                    try self.emitLoad(.w64, reg, frame_ptr, off);
                     break :blk reg;
                 },
                 .general_reg => |r| blk: {
@@ -9258,11 +8908,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 // Load roc_crashed fn pointer from RocOps offset 48
                 // Use a register that won't conflict with CallBuilder's SCRATCH_REG
                 const fn_ptr_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X10 else .RAX;
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emit.ldrRegMemSoff(.w64, fn_ptr_reg, roc_ops_reg, 48);
-                } else {
-                    try self.codegen.emit.movRegMem(.w64, fn_ptr_reg, roc_ops_reg, 48);
-                }
+                try self.emitLoad(.w64, fn_ptr_reg, roc_ops_reg, 48);
 
                 // Use CallBuilder for args and call
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
@@ -9309,23 +8955,14 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             const zero_reg = try self.allocTempGeneral();
             try self.codegen.emitLoadImm(zero_reg, 0);
 
-            if (comptime target.toCpuArch() == .aarch64) {
-                try self.codegen.emit.strRegMemSoff(.w64, zero_reg, .FP, str_slot);
-                try self.codegen.emit.strRegMemSoff(.w64, zero_reg, .FP, str_slot + 8);
-            } else {
-                try self.codegen.emit.movMemReg(.w64, .RBP, str_slot, zero_reg);
-                try self.codegen.emit.movMemReg(.w64, .RBP, str_slot + 8, zero_reg);
-            }
+            try self.emitStore(.w64, frame_ptr, str_slot, zero_reg);
+            try self.emitStore(.w64, frame_ptr, str_slot + 8, zero_reg);
 
             // Byte 23 = 0x80 (small string flag, length 0)
             // In little-endian, bytes 16-23 as u64: 0x80 << 56 = 0x8000000000000000
             const small_str_flag: i64 = @bitCast(@as(u64, 0x80) << 56);
             try self.codegen.emitLoadImm(zero_reg, small_str_flag);
-            if (comptime target.toCpuArch() == .aarch64) {
-                try self.codegen.emit.strRegMemSoff(.w64, zero_reg, .FP, str_slot + 16);
-            } else {
-                try self.codegen.emit.movMemReg(.w64, .RBP, str_slot + 16, zero_reg);
-            }
+            try self.emitStore(.w64, frame_ptr, str_slot + 16, zero_reg);
 
             self.codegen.freeGeneral(zero_reg);
             return .{ .stack_str = str_slot };
@@ -9541,11 +9178,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 };
 
                 const reg = try self.allocTempGeneral();
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emit.ldrRegMemSoff(.w64, reg, .FP, base_offset + @as(i32, @intCast(disc_offset)));
-                } else {
-                    try self.codegen.emit.movRegMem(.w64, reg, .RBP, base_offset + @as(i32, @intCast(disc_offset)));
-                }
+                try self.emitLoad(.w64, reg, frame_ptr, base_offset + @as(i32, @intCast(disc_offset)));
                 break :blk reg;
             } else if (union_layout.tag == .scalar or union_layout.tag == .zst) blk: {
                 // For scalar layouts (e.g., Bool, enums with no payloads),
@@ -9567,11 +9200,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     const tu_data = ls.getTagUnionData(inner_layout.data.tag_union.idx);
                     const disc_offset = tu_data.discriminant_offset;
                     const disc_reg = try self.allocTempGeneral();
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.ldrRegMemSoff(.w64, disc_reg, box_ptr_reg, @intCast(disc_offset));
-                    } else {
-                        try self.codegen.emit.movRegMem(.w64, disc_reg, box_ptr_reg, @intCast(disc_offset));
-                    }
+                    try self.emitLoad(.w64, disc_reg, box_ptr_reg, @intCast(disc_offset));
                     self.codegen.freeGeneral(box_ptr_reg);
                     break :blk disc_reg;
                 } else {
@@ -9716,13 +9345,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     var copied: u32 = 0;
                     while (copied < payload_size) {
                         const temp_reg = try self.allocTempGeneral();
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, box_ptr_reg, @intCast(copied));
-                            try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, dest_offset + @as(i32, @intCast(copied)));
-                        } else {
-                            try self.codegen.emit.movRegMem(.w64, temp_reg, box_ptr_reg, @intCast(copied));
-                            try self.codegen.emit.movMemReg(.w64, .RBP, dest_offset + @as(i32, @intCast(copied)), temp_reg);
-                        }
+                        try self.emitLoad(.w64, temp_reg, box_ptr_reg, @intCast(copied));
+                        try self.emitStore(.w64, frame_ptr, dest_offset + @as(i32, @intCast(copied)), temp_reg);
                         self.codegen.freeGeneral(temp_reg);
                         copied += 8;
                     }
@@ -9746,27 +9370,15 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             switch (loc) {
                 .immediate_i64 => |val| {
                     try self.codegen.emitLoadImm(temp_reg, @bitCast(val));
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, slot);
-                    } else {
-                        try self.codegen.emit.movMemReg(.w64, .RBP, slot, temp_reg);
-                    }
+                    try self.emitStore(.w64, frame_ptr, slot, temp_reg);
                 },
                 .immediate_i128 => |val| {
                     // Store low 64 bits
                     try self.codegen.emitLoadImm(temp_reg, @bitCast(@as(i64, @truncate(val))));
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, slot);
-                    } else {
-                        try self.codegen.emit.movMemReg(.w64, .RBP, slot, temp_reg);
-                    }
+                    try self.emitStore(.w64, frame_ptr, slot, temp_reg);
                     // Store high 64 bits
                     try self.codegen.emitLoadImm(temp_reg, @bitCast(@as(i64, @truncate(val >> 64))));
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, slot + 8);
-                    } else {
-                        try self.codegen.emit.movMemReg(.w64, .RBP, slot + 8, temp_reg);
-                    }
+                    try self.emitStore(.w64, frame_ptr, slot + 8, temp_reg);
                 },
                 .stack => |s| {
                     const off = s.offset;
@@ -9775,36 +9387,20 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     var copied: u32 = 0;
                     while (copied < slot_size) {
                         const chunk_off: i32 = @intCast(copied);
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, off + chunk_off);
-                            try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, slot + chunk_off);
-                        } else {
-                            try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, off + chunk_off);
-                            try self.codegen.emit.movMemReg(.w64, .RBP, slot + chunk_off, temp_reg);
-                        }
+                        try self.emitLoad(.w64, temp_reg, frame_ptr, off + chunk_off);
+                        try self.emitStore(.w64, frame_ptr, slot + chunk_off, temp_reg);
                         copied += 8;
                     }
                 },
                 .stack_i128 => |off| {
                     // Copy 16 bytes (two 8-byte chunks)
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, off);
-                        try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, slot);
-                        try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, off + 8);
-                        try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, slot + 8);
-                    } else {
-                        try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, off);
-                        try self.codegen.emit.movMemReg(.w64, .RBP, slot, temp_reg);
-                        try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, off + 8);
-                        try self.codegen.emit.movMemReg(.w64, .RBP, slot + 8, temp_reg);
-                    }
+                    try self.emitLoad(.w64, temp_reg, frame_ptr, off);
+                    try self.emitStore(.w64, frame_ptr, slot, temp_reg);
+                    try self.emitLoad(.w64, temp_reg, frame_ptr, off + 8);
+                    try self.emitStore(.w64, frame_ptr, slot + 8, temp_reg);
                 },
                 .general_reg => |reg| {
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.strRegMemSoff(.w64, reg, .FP, slot);
-                    } else {
-                        try self.codegen.emit.movMemReg(.w64, .RBP, slot, reg);
-                    }
+                    try self.emitStore(.w64, frame_ptr, slot, reg);
                 },
                 // Lambda and closure values should be called/dispatched first, not stored directly.
                 // The caller must handle these by extracting the actual return layout and calling.
@@ -9820,13 +9416,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             .list_stack => |ls_info| ls_info.struct_offset + @as(i32, @intCast(offset)),
                             else => break,
                         };
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, src_off);
-                            try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, slot + @as(i32, @intCast(offset)));
-                        } else {
-                            try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, src_off);
-                            try self.codegen.emit.movMemReg(.w64, .RBP, slot + @as(i32, @intCast(offset)), temp_reg);
-                        }
+                        try self.emitLoad(.w64, temp_reg, frame_ptr, src_off);
+                        try self.emitStore(.w64, frame_ptr, slot + @as(i32, @intCast(offset)), temp_reg);
                     }
                 },
             }
@@ -10118,11 +9709,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
                     // Load list pointer to a register
                     const list_ptr_reg = try self.allocTempGeneral();
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.ldrRegMemSoff(.w64, list_ptr_reg, .FP, base_offset);
-                    } else {
-                        try self.codegen.emit.movRegMem(.w64, list_ptr_reg, .RBP, base_offset);
-                    }
+                    try self.emitLoad(.w64, list_ptr_reg, frame_ptr, base_offset);
 
                     // Bind each prefix element
                     for (prefix_patterns, 0..) |elem_pattern_id, i| {
@@ -10135,13 +9722,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
                         if (elem_size <= 8) {
                             // Load element from list[i] to temp
-                            if (comptime target.toCpuArch() == .aarch64) {
-                                try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, list_ptr_reg, elem_offset_in_list);
-                                try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, elem_slot);
-                            } else {
-                                try self.codegen.emit.movRegMem(.w64, temp_reg, list_ptr_reg, elem_offset_in_list);
-                                try self.codegen.emit.movMemReg(.w64, .RBP, elem_slot, temp_reg);
-                            }
+                            try self.emitLoad(.w64, temp_reg, list_ptr_reg, elem_offset_in_list);
+                            try self.emitStore(.w64, frame_ptr, elem_slot, temp_reg);
                         } else {
                             try self.copyChunked(temp_reg, list_ptr_reg, elem_offset_in_list, frame_ptr, elem_slot, elem_size);
                         }
@@ -10182,20 +9764,12 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         }
 
                         // Store rest pointer at rest_slot + 0
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emit.strRegMemSoff(.w64, rest_ptr_reg, .FP, rest_slot);
-                        } else {
-                            try self.codegen.emit.movMemReg(.w64, .RBP, rest_slot, rest_ptr_reg);
-                        }
+                        try self.emitStore(.w64, frame_ptr, rest_slot, rest_ptr_reg);
                         self.codegen.freeGeneral(rest_ptr_reg);
 
                         // Load original length from base_offset + 8
                         const len_reg = try self.allocTempGeneral();
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emit.ldrRegMemSoff(.w64, len_reg, .FP, base_offset + 8);
-                        } else {
-                            try self.codegen.emit.movRegMem(.w64, len_reg, .RBP, base_offset + 8);
-                        }
+                        try self.emitLoad(.w64, len_reg, frame_ptr, base_offset + 8);
 
                         // Calculate rest length: original_length - prefix_count
                         if (prefix_count > 0) {
@@ -10207,18 +9781,10 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         }
 
                         // Store rest length at rest_slot + 8
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emit.strRegMemSoff(.w64, len_reg, .FP, rest_slot + 8);
-                        } else {
-                            try self.codegen.emit.movMemReg(.w64, .RBP, rest_slot + 8, len_reg);
-                        }
+                        try self.emitStore(.w64, frame_ptr, rest_slot + 8, len_reg);
 
                         // For capacity, use the same length (this is a slice view, not a copy)
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emit.strRegMemSoff(.w64, len_reg, .FP, rest_slot + 16);
-                        } else {
-                            try self.codegen.emit.movMemReg(.w64, .RBP, rest_slot + 16, len_reg);
-                        }
+                        try self.emitStore(.w64, frame_ptr, rest_slot + 16, len_reg);
                         self.codegen.freeGeneral(len_reg);
 
                         // Bind the rest pattern to the new list slot
@@ -11525,15 +11091,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         const reg0 = self.getArgumentRegister(reg_idx);
                         const reg1 = self.getArgumentRegister(reg_idx + 1);
                         const reg2 = self.getArgumentRegister(reg_idx + 2);
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emit.ldrRegMemSoff(.w64, reg0, .FP, offset);
-                            try self.codegen.emit.ldrRegMemSoff(.w64, reg1, .FP, offset + 8);
-                            try self.codegen.emit.ldrRegMemSoff(.w64, reg2, .FP, offset + 16);
-                        } else {
-                            try self.codegen.emit.movRegMem(.w64, reg0, .RBP, offset);
-                            try self.codegen.emit.movRegMem(.w64, reg1, .RBP, offset + 8);
-                            try self.codegen.emit.movRegMem(.w64, reg2, .RBP, offset + 16);
-                        }
+                        try self.emitLoad(.w64, reg0, frame_ptr, offset);
+                        try self.emitLoad(.w64, reg1, frame_ptr, offset + 8);
+                        try self.emitLoad(.w64, reg2, frame_ptr, offset + 16);
                         reg_idx += 3;
                     } else if (info.num_regs > 1) {
                         // Multi-register struct (record > 8 bytes)
@@ -11877,11 +11437,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 .closure_value => |cv| cv.stack_offset,
                 .general_reg => |reg| blk: {
                     const slot = self.codegen.allocStackSlot(@intCast(size));
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.strRegMemSoff(.w64, reg, .FP, slot);
-                    } else {
-                        try self.codegen.emit.movMemReg(.w64, .RBP, slot, reg);
-                    }
+                    try self.emitStore(.w64, frame_ptr, slot, reg);
                     self.codegen.freeGeneral(reg);
                     break :blk slot;
                 },
@@ -11889,11 +11445,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     const slot = self.codegen.allocStackSlot(8);
                     const temp = try self.allocTempGeneral();
                     try self.codegen.emitLoadImm(temp, val);
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.strRegMemSoff(.w64, temp, .FP, slot);
-                    } else {
-                        try self.codegen.emit.movMemReg(.w64, .RBP, slot, temp);
-                    }
+                    try self.emitStore(.w64, frame_ptr, slot, temp);
                     self.codegen.freeGeneral(temp);
                     break :blk slot;
                 },
@@ -11904,17 +11456,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     const low: u64 = @truncate(@as(u128, @bitCast(val)));
                     const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
                     try self.codegen.emitLoadImm(temp, @bitCast(low));
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.strRegMemSoff(.w64, temp, .FP, slot);
-                    } else {
-                        try self.codegen.emit.movMemReg(.w64, .RBP, slot, temp);
-                    }
+                    try self.emitStore(.w64, frame_ptr, slot, temp);
                     try self.codegen.emitLoadImm(temp, @bitCast(high));
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.strRegMemSoff(.w64, temp, .FP, slot + 8);
-                    } else {
-                        try self.codegen.emit.movMemReg(.w64, .RBP, slot + 8, temp);
-                    }
+                    try self.emitStore(.w64, frame_ptr, slot + 8, temp);
                     self.codegen.freeGeneral(temp);
                     break :blk slot;
                 },
@@ -12067,18 +11611,10 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                     const buf_offset: i32 = @as(i32, @intCast(copied));
 
                                     // Load from stack
-                                    if (comptime target.toCpuArch() == .aarch64) {
-                                        try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, stack_offset);
-                                    } else {
-                                        try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, stack_offset);
-                                    }
+                                    try self.emitLoad(.w64, temp_reg, frame_ptr, stack_offset);
 
                                     // Store to result buffer
-                                    if (comptime target.toCpuArch() == .aarch64) {
-                                        try self.codegen.emit.strRegMemSoff(.w64, temp_reg, saved_ptr_reg, buf_offset);
-                                    } else {
-                                        try self.codegen.emit.movMemReg(.w64, saved_ptr_reg, buf_offset, temp_reg);
-                                    }
+                                    try self.emitStore(.w64, saved_ptr_reg, buf_offset, temp_reg);
 
                                     copied += 8;
                                 }
@@ -12094,13 +11630,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             const stack_offset = base_offset + @as(i32, @intCast(i)) * 8;
                             const buf_offset: i32 = @as(i32, @intCast(i)) * 8;
 
-                            if (comptime target.toCpuArch() == .aarch64) {
-                                try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, stack_offset);
-                                try self.codegen.emit.strRegMemSoff(.w64, temp_reg, saved_ptr_reg, buf_offset);
-                            } else {
-                                try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, stack_offset);
-                                try self.codegen.emit.movMemReg(.w64, saved_ptr_reg, buf_offset, temp_reg);
-                            }
+                            try self.emitLoad(.w64, temp_reg, frame_ptr, stack_offset);
+                            try self.emitStore(.w64, saved_ptr_reg, buf_offset, temp_reg);
                         }
                         self.codegen.freeGeneral(temp_reg);
                         return;
@@ -12227,21 +11758,12 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             const temp_reg = try self.allocTempGeneral();
 
                             // Copy all 24 bytes (3 x 8-byte words)
-                            if (comptime target.toCpuArch() == .aarch64) {
-                                try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, stack_offset);
-                                try self.codegen.emit.strRegMemSoff(.w64, temp_reg, saved_ptr_reg, 0);
-                                try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, stack_offset + 8);
-                                try self.codegen.emit.strRegMemSoff(.w64, temp_reg, saved_ptr_reg, 8);
-                                try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, stack_offset + 16);
-                                try self.codegen.emit.strRegMemSoff(.w64, temp_reg, saved_ptr_reg, 16);
-                            } else {
-                                try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, stack_offset);
-                                try self.codegen.emit.movMemReg(.w64, saved_ptr_reg, 0, temp_reg);
-                                try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, stack_offset + 8);
-                                try self.codegen.emit.movMemReg(.w64, saved_ptr_reg, 8, temp_reg);
-                                try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, stack_offset + 16);
-                                try self.codegen.emit.movMemReg(.w64, saved_ptr_reg, 16, temp_reg);
-                            }
+                            try self.emitLoad(.w64, temp_reg, frame_ptr, stack_offset);
+                            try self.emitStore(.w64, saved_ptr_reg, 0, temp_reg);
+                            try self.emitLoad(.w64, temp_reg, frame_ptr, stack_offset + 8);
+                            try self.emitStore(.w64, saved_ptr_reg, 8, temp_reg);
+                            try self.emitLoad(.w64, temp_reg, frame_ptr, stack_offset + 16);
+                            try self.emitStore(.w64, saved_ptr_reg, 16, temp_reg);
 
                             self.codegen.freeGeneral(temp_reg);
                         },
@@ -12251,21 +11773,12 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             const temp_reg = try self.allocTempGeneral();
 
                             // Copy all 24 bytes (3 x 8-byte words)
-                            if (comptime target.toCpuArch() == .aarch64) {
-                                try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, stack_offset);
-                                try self.codegen.emit.strRegMemSoff(.w64, temp_reg, saved_ptr_reg, 0);
-                                try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, stack_offset + 8);
-                                try self.codegen.emit.strRegMemSoff(.w64, temp_reg, saved_ptr_reg, 8);
-                                try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, stack_offset + 16);
-                                try self.codegen.emit.strRegMemSoff(.w64, temp_reg, saved_ptr_reg, 16);
-                            } else {
-                                try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, stack_offset);
-                                try self.codegen.emit.movMemReg(.w64, saved_ptr_reg, 0, temp_reg);
-                                try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, stack_offset + 8);
-                                try self.codegen.emit.movMemReg(.w64, saved_ptr_reg, 8, temp_reg);
-                                try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, stack_offset + 16);
-                                try self.codegen.emit.movMemReg(.w64, saved_ptr_reg, 16, temp_reg);
-                            }
+                            try self.emitLoad(.w64, temp_reg, frame_ptr, stack_offset);
+                            try self.emitStore(.w64, saved_ptr_reg, 0, temp_reg);
+                            try self.emitLoad(.w64, temp_reg, frame_ptr, stack_offset + 8);
+                            try self.emitStore(.w64, saved_ptr_reg, 8, temp_reg);
+                            try self.emitLoad(.w64, temp_reg, frame_ptr, stack_offset + 16);
+                            try self.emitStore(.w64, saved_ptr_reg, 16, temp_reg);
 
                             self.codegen.freeGeneral(temp_reg);
                         },
@@ -13141,13 +12654,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             var ri: u8 = 0;
             while (ri < num_regs) : (ri += 1) {
                 const off: i32 = @as(i32, ri) * 8;
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, caller_offset + off);
-                    try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, local_offset + off);
-                } else {
-                    try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, caller_offset + off);
-                    try self.codegen.emit.movMemReg(.w64, .RBP, local_offset + off, temp_reg);
-                }
+                try self.emitLoad(.w64, temp_reg, frame_ptr, caller_offset + off);
+                try self.emitStore(.w64, frame_ptr, local_offset + off, temp_reg);
             }
         }
 
@@ -13243,13 +12751,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             var ri: u8 = 0;
                             while (ri < num_regs) : (ri += 1) {
                                 const off: i32 = @as(i32, ri) * 8;
-                                if (comptime target.toCpuArch() == .aarch64) {
-                                    try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, ptr_reg, off);
-                                    try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, local_stack_offset + off);
-                                } else {
-                                    try self.codegen.emit.movRegMem(.w64, temp_reg, ptr_reg, off);
-                                    try self.codegen.emit.movMemReg(.w64, .RBP, local_stack_offset + off, temp_reg);
-                                }
+                                try self.emitLoad(.w64, temp_reg, ptr_reg, off);
+                                try self.emitStore(.w64, frame_ptr, local_stack_offset + off, temp_reg);
                             }
 
                             // Set up symbol location based on type
@@ -13387,13 +12890,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             var ri: u8 = 0;
                             while (ri < num_regs) : (ri += 1) {
                                 const off: i32 = @as(i32, ri) * 8;
-                                if (comptime target.toCpuArch() == .aarch64) {
-                                    try self.codegen.emit.ldrRegMemSoff(.w64, temp_r, ptr_reg, off);
-                                    try self.codegen.emit.strRegMemSoff(.w64, temp_r, .FP, stack_offset + off);
-                                } else {
-                                    try self.codegen.emit.movRegMem(.w64, temp_r, ptr_reg, off);
-                                    try self.codegen.emit.movMemReg(.w64, .RBP, stack_offset + off, temp_r);
-                                }
+                                try self.emitLoad(.w64, temp_r, ptr_reg, off);
+                                try self.emitStore(.w64, frame_ptr, stack_offset + off, temp_r);
                             }
                             reg_idx += 1;
                             try self.bindPattern(pattern_id, .{ .stack = .{ .offset = stack_offset } });
@@ -13425,13 +12923,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             var ri: u8 = 0;
                             while (ri < 3) : (ri += 1) {
                                 const off: i32 = @as(i32, ri) * 8;
-                                if (comptime target.toCpuArch() == .aarch64) {
-                                    try self.codegen.emit.ldrRegMemSoff(.w64, temp_r, ptr_reg, off);
-                                    try self.codegen.emit.strRegMemSoff(.w64, temp_r, .FP, stack_offset + off);
-                                } else {
-                                    try self.codegen.emit.movRegMem(.w64, temp_r, ptr_reg, off);
-                                    try self.codegen.emit.movMemReg(.w64, .RBP, stack_offset + off, temp_r);
-                                }
+                                try self.emitLoad(.w64, temp_r, ptr_reg, off);
+                                try self.emitStore(.w64, frame_ptr, stack_offset + off, temp_r);
                             }
                             reg_idx += 1;
                             try self.bindPattern(pattern_id, .{ .stack = .{ .offset = stack_offset } });
@@ -13470,13 +12963,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             var ri: u8 = 0;
                             while (ri < num_regs) : (ri += 1) {
                                 const off: i32 = @as(i32, ri) * 8;
-                                if (comptime target.toCpuArch() == .aarch64) {
-                                    try self.codegen.emit.ldrRegMemSoff(.w64, temp_r, ptr_reg, off);
-                                    try self.codegen.emit.strRegMemSoff(.w64, temp_r, .FP, stack_offset + off);
-                                } else {
-                                    try self.codegen.emit.movRegMem(.w64, temp_r, ptr_reg, off);
-                                    try self.codegen.emit.movMemReg(.w64, .RBP, stack_offset + off, temp_r);
-                                }
+                                try self.emitLoad(.w64, temp_r, ptr_reg, off);
+                                try self.emitStore(.w64, frame_ptr, stack_offset + off, temp_r);
                             }
                             reg_idx += 1;
                             try self.bindPattern(pattern_id, .{ .stack = .{ .offset = stack_offset } });
@@ -13524,11 +13012,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 }
             } else {
                 // roc_ops was passed on stack - load it
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emit.ldrRegMemSoff(.w64, roc_ops_save_reg, .FP, stack_arg_offset);
-                } else {
-                    try self.codegen.emit.movRegMem(.w64, roc_ops_save_reg, .RBP, stack_arg_offset);
-                }
+                try self.emitLoad(.w64, roc_ops_save_reg, frame_ptr, stack_arg_offset);
             }
 
             // Set roc_ops_reg for use by the lambda body when calling builtins
@@ -13640,24 +13124,15 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
             // Load the return pointer from the saved stack slot
             const ptr_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X9 else .R11;
-            if (comptime target.toCpuArch() == .aarch64) {
-                try self.codegen.emit.ldrRegMemSoff(.w64, ptr_reg, .FP, ret_ptr_stack_slot);
-            } else {
-                try self.codegen.emit.movRegMem(.w64, ptr_reg, .RBP, ret_ptr_stack_slot);
-            }
+            try self.emitLoad(.w64, ptr_reg, frame_ptr, ret_ptr_stack_slot);
 
             // Copy data in 8-byte chunks from local stack to return buffer
             const temp_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X10 else .RAX;
             const num_words = (ret_size + 7) / 8;
             for (0..num_words) |w| {
                 const off: i32 = @intCast(w * 8);
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, result_offset + off);
-                    try self.codegen.emit.strRegMemSoff(.w64, temp_reg, ptr_reg, off);
-                } else {
-                    try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, result_offset + off);
-                    try self.codegen.emit.movMemReg(.w64, ptr_reg, off, temp_reg);
-                }
+                try self.emitLoad(.w64, temp_reg, frame_ptr, result_offset + off);
+                try self.emitStore(.w64, ptr_reg, off, temp_reg);
             }
         }
 
@@ -13948,15 +13423,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         const reg0 = self.getArgumentRegister(reg_idx);
                         const reg1 = self.getArgumentRegister(reg_idx + 1);
                         const reg2 = self.getArgumentRegister(reg_idx + 2);
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emit.ldrRegMemSoff(.w64, reg0, .FP, offset);
-                            try self.codegen.emit.ldrRegMemSoff(.w64, reg1, .FP, offset + 8);
-                            try self.codegen.emit.ldrRegMemSoff(.w64, reg2, .FP, offset + 16);
-                        } else {
-                            try self.codegen.emit.movRegMem(.w64, reg0, .RBP, offset);
-                            try self.codegen.emit.movRegMem(.w64, reg1, .RBP, offset + 8);
-                            try self.codegen.emit.movRegMem(.w64, reg2, .RBP, offset + 16);
-                        }
+                        try self.emitLoad(.w64, reg0, frame_ptr, offset);
+                        try self.emitLoad(.w64, reg1, frame_ptr, offset + 8);
+                        try self.emitLoad(.w64, reg2, frame_ptr, offset + 16);
                         reg_idx += 3;
                     } else if (info.num_regs > 1) {
                         // Multi-register struct (record > 8 bytes)
@@ -14325,15 +13794,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         const reg0 = self.getArgumentRegister(reg_idx);
                         const reg1 = self.getArgumentRegister(reg_idx + 1);
                         const reg2 = self.getArgumentRegister(reg_idx + 2);
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emit.ldrRegMemSoff(.w64, reg0, .FP, offset);
-                            try self.codegen.emit.ldrRegMemSoff(.w64, reg1, .FP, offset + 8);
-                            try self.codegen.emit.ldrRegMemSoff(.w64, reg2, .FP, offset + 16);
-                        } else {
-                            try self.codegen.emit.movRegMem(.w64, reg0, .RBP, offset);
-                            try self.codegen.emit.movRegMem(.w64, reg1, .RBP, offset + 8);
-                            try self.codegen.emit.movRegMem(.w64, reg2, .RBP, offset + 16);
-                        }
+                        try self.emitLoad(.w64, reg0, frame_ptr, offset);
+                        try self.emitLoad(.w64, reg1, frame_ptr, offset + 8);
+                        try self.emitLoad(.w64, reg2, frame_ptr, offset + 16);
                         reg_idx += 3;
                     } else if (info.num_regs > 1) {
                         const offset: i32 = switch (arg_loc) {
@@ -15126,38 +14589,22 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
                     // Copy from src stack to dst stack (24 bytes)
                     const temp_reg = try self.allocTempGeneral();
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, src_offset);
-                        try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, dst_offset);
-                        try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, src_offset + 8);
-                        try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, dst_offset + 8);
-                        try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, src_offset + 16);
-                        try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, dst_offset + 16);
-                    } else {
-                        try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, src_offset);
-                        try self.codegen.emit.movMemReg(.w64, .RBP, dst_offset, temp_reg);
-                        try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, src_offset + 8);
-                        try self.codegen.emit.movMemReg(.w64, .RBP, dst_offset + 8, temp_reg);
-                        try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, src_offset + 16);
-                        try self.codegen.emit.movMemReg(.w64, .RBP, dst_offset + 16, temp_reg);
-                    }
+                    try self.emitLoad(.w64, temp_reg, frame_ptr, src_offset);
+                    try self.emitStore(.w64, frame_ptr, dst_offset, temp_reg);
+                    try self.emitLoad(.w64, temp_reg, frame_ptr, src_offset + 8);
+                    try self.emitStore(.w64, frame_ptr, dst_offset + 8, temp_reg);
+                    try self.emitLoad(.w64, temp_reg, frame_ptr, src_offset + 16);
+                    try self.emitStore(.w64, frame_ptr, dst_offset + 16, temp_reg);
                     self.codegen.freeGeneral(temp_reg);
                 } else if (dst_loc == .stack_i128) {
                     // Copy 16 bytes (i128)
                     switch (loc) {
                         .stack_i128 => |src_offset| {
                             const temp_reg = try self.allocTempGeneral();
-                            if (comptime target.toCpuArch() == .aarch64) {
-                                try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, src_offset);
-                                try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, dst_offset);
-                                try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, src_offset + 8);
-                                try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, dst_offset + 8);
-                            } else {
-                                try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, src_offset);
-                                try self.codegen.emit.movMemReg(.w64, .RBP, dst_offset, temp_reg);
-                                try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, src_offset + 8);
-                                try self.codegen.emit.movMemReg(.w64, .RBP, dst_offset + 8, temp_reg);
-                            }
+                            try self.emitLoad(.w64, temp_reg, frame_ptr, src_offset);
+                            try self.emitStore(.w64, frame_ptr, dst_offset, temp_reg);
+                            try self.emitLoad(.w64, temp_reg, frame_ptr, src_offset + 8);
+                            try self.emitStore(.w64, frame_ptr, dst_offset + 8, temp_reg);
                             self.codegen.freeGeneral(temp_reg);
                         },
                         .immediate_i128 => |val| {
@@ -15175,11 +14622,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 } else {
                     // Copy 8 bytes (normal value)
                     const src_reg = try self.ensureInGeneralReg(loc);
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.strRegMemSoff(.w64, src_reg, .FP, dst_offset);
-                    } else {
-                        try self.codegen.emit.movMemReg(.w64, .RBP, dst_offset, src_reg);
-                    }
+                    try self.emitStore(.w64, frame_ptr, dst_offset, src_reg);
                 }
             }
         }
@@ -15576,11 +15019,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         };
 
                         const len_reg = try self.allocTempGeneral();
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emit.ldrRegMemSoff(.w64, len_reg, .FP, base_offset + 8);
-                        } else {
-                            try self.codegen.emit.movRegMem(.w64, len_reg, .RBP, base_offset + 8);
-                        }
+                        try self.emitLoad(.w64, len_reg, frame_ptr, base_offset + 8);
 
                         const expected_len = @as(i32, @intCast(prefix_patterns.len));
                         try self.emitCmpImm(len_reg, expected_len);
@@ -15601,11 +15040,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         const elem_size = elem_size_align.size;
 
                         const list_ptr_reg = try self.allocTempGeneral();
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emit.ldrRegMemSoff(.w64, list_ptr_reg, .FP, base_offset);
-                        } else {
-                            try self.codegen.emit.movRegMem(.w64, list_ptr_reg, .RBP, base_offset);
-                        }
+                        try self.emitLoad(.w64, list_ptr_reg, frame_ptr, base_offset);
 
                         for (prefix_patterns, 0..) |elem_pattern_id, elem_idx| {
                             const elem_offset_in_list = @as(i32, @intCast(elem_idx * elem_size));
@@ -15613,13 +15048,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             const temp_reg = try self.allocTempGeneral();
 
                             if (elem_size <= 8) {
-                                if (comptime target.toCpuArch() == .aarch64) {
-                                    try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, list_ptr_reg, elem_offset_in_list);
-                                    try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, elem_slot);
-                                } else {
-                                    try self.codegen.emit.movRegMem(.w64, temp_reg, list_ptr_reg, elem_offset_in_list);
-                                    try self.codegen.emit.movMemReg(.w64, .RBP, elem_slot, temp_reg);
-                                }
+                                try self.emitLoad(.w64, temp_reg, list_ptr_reg, elem_offset_in_list);
+                                try self.emitStore(.w64, frame_ptr, elem_slot, temp_reg);
                             } else {
                                 try self.copyChunked(temp_reg, list_ptr_reg, elem_offset_in_list, frame_ptr, elem_slot, elem_size);
                             }
@@ -15650,19 +15080,11 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                 }
                             }
 
-                            if (comptime target.toCpuArch() == .aarch64) {
-                                try self.codegen.emit.strRegMemSoff(.w64, rest_ptr_reg, .FP, rest_slot);
-                            } else {
-                                try self.codegen.emit.movMemReg(.w64, .RBP, rest_slot, rest_ptr_reg);
-                            }
+                            try self.emitStore(.w64, frame_ptr, rest_slot, rest_ptr_reg);
                             self.codegen.freeGeneral(rest_ptr_reg);
 
                             const rest_len_reg = try self.allocTempGeneral();
-                            if (comptime target.toCpuArch() == .aarch64) {
-                                try self.codegen.emit.ldrRegMemSoff(.w64, rest_len_reg, .FP, base_offset + 8);
-                            } else {
-                                try self.codegen.emit.movRegMem(.w64, rest_len_reg, .RBP, base_offset + 8);
-                            }
+                            try self.emitLoad(.w64, rest_len_reg, frame_ptr, base_offset + 8);
 
                             if (prefix_count > 0) {
                                 if (comptime target.toCpuArch() == .aarch64) {
@@ -15672,17 +15094,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                 }
                             }
 
-                            if (comptime target.toCpuArch() == .aarch64) {
-                                try self.codegen.emit.strRegMemSoff(.w64, rest_len_reg, .FP, rest_slot + 8);
-                            } else {
-                                try self.codegen.emit.movMemReg(.w64, .RBP, rest_slot + 8, rest_len_reg);
-                            }
+                            try self.emitStore(.w64, frame_ptr, rest_slot + 8, rest_len_reg);
 
-                            if (comptime target.toCpuArch() == .aarch64) {
-                                try self.codegen.emit.strRegMemSoff(.w64, rest_len_reg, .FP, rest_slot + 16);
-                            } else {
-                                try self.codegen.emit.movMemReg(.w64, .RBP, rest_slot + 16, rest_len_reg);
-                            }
+                            try self.emitStore(.w64, frame_ptr, rest_slot + 16, rest_len_reg);
                             self.codegen.freeGeneral(rest_len_reg);
 
                             try self.bindPattern(list_pattern.rest, .{ .list_stack = .{
@@ -15864,18 +15278,10 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             switch (value_loc) {
                 .stack => |s| {
                     const offset = s.offset;
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.ldrRegMemSoff(.w64, ptr_reg, .FP, offset);
-                    } else {
-                        try self.codegen.emit.movRegMem(.w64, ptr_reg, .RBP, offset);
-                    }
+                    try self.emitLoad(.w64, ptr_reg, frame_ptr, offset);
                 },
                 .list_stack => |info| {
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.ldrRegMemSoff(.w64, ptr_reg, .FP, info.struct_offset);
-                    } else {
-                        try self.codegen.emit.movRegMem(.w64, ptr_reg, .RBP, info.struct_offset);
-                    }
+                    try self.emitLoad(.w64, ptr_reg, frame_ptr, info.struct_offset);
                 },
                 else => return, // Can't incref non-stack values
             }
@@ -15900,18 +15306,10 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             switch (value_loc) {
                 .stack => |s| {
                     const offset = s.offset;
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.ldrRegMemSoff(.w64, ptr_reg, .FP, offset);
-                    } else {
-                        try self.codegen.emit.movRegMem(.w64, ptr_reg, .RBP, offset);
-                    }
+                    try self.emitLoad(.w64, ptr_reg, frame_ptr, offset);
                 },
                 .list_stack => |info| {
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.ldrRegMemSoff(.w64, ptr_reg, .FP, info.struct_offset);
-                    } else {
-                        try self.codegen.emit.movRegMem(.w64, ptr_reg, .RBP, info.struct_offset);
-                    }
+                    try self.emitLoad(.w64, ptr_reg, frame_ptr, info.struct_offset);
                 },
                 else => return,
             }
@@ -15937,18 +15335,10 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             switch (value_loc) {
                 .stack => |s| {
                     const offset = s.offset;
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.ldrRegMemSoff(.w64, ptr_reg, .FP, offset);
-                    } else {
-                        try self.codegen.emit.movRegMem(.w64, ptr_reg, .RBP, offset);
-                    }
+                    try self.emitLoad(.w64, ptr_reg, frame_ptr, offset);
                 },
                 .list_stack => |info| {
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.ldrRegMemSoff(.w64, ptr_reg, .FP, info.struct_offset);
-                    } else {
-                        try self.codegen.emit.movRegMem(.w64, ptr_reg, .RBP, info.struct_offset);
-                    }
+                    try self.emitLoad(.w64, ptr_reg, frame_ptr, info.struct_offset);
                 },
                 else => return,
             }
@@ -15981,11 +15371,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             const cap_reg = try self.allocTempGeneral();
             defer self.codegen.freeGeneral(cap_reg);
 
-            if (comptime target.toCpuArch() == .aarch64) {
-                try self.codegen.emit.ldrRegMemSoff(.w64, cap_reg, .FP, base_offset + 16);
-            } else {
-                try self.codegen.emit.movRegMem(.w64, cap_reg, .RBP, base_offset + 16);
-            }
+            try self.emitLoad(.w64, cap_reg, frame_ptr, base_offset + 16);
 
             // Check if small string (high bit set = negative)
             // If negative, skip the incref
@@ -16007,11 +15393,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             const ptr_reg = try self.allocTempGeneral();
             defer self.codegen.freeGeneral(ptr_reg);
 
-            if (comptime target.toCpuArch() == .aarch64) {
-                try self.codegen.emit.ldrRegMemSoff(.w64, ptr_reg, .FP, base_offset);
-            } else {
-                try self.codegen.emit.movRegMem(.w64, ptr_reg, .RBP, base_offset);
-            }
+            try self.emitLoad(.w64, ptr_reg, frame_ptr, base_offset);
 
             // Call increfDataPtrC(ptr, count, roc_ops)
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
@@ -16039,11 +15421,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             const cap_reg = try self.allocTempGeneral();
             defer self.codegen.freeGeneral(cap_reg);
 
-            if (comptime target.toCpuArch() == .aarch64) {
-                try self.codegen.emit.ldrRegMemSoff(.w64, cap_reg, .FP, base_offset + 16);
-            } else {
-                try self.codegen.emit.movRegMem(.w64, cap_reg, .RBP, base_offset + 16);
-            }
+            try self.emitLoad(.w64, cap_reg, frame_ptr, base_offset + 16);
 
             // Check if small string (high bit set = negative)
             const skip_patch = blk: {
@@ -16062,11 +15440,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             const ptr_reg = try self.allocTempGeneral();
             defer self.codegen.freeGeneral(ptr_reg);
 
-            if (comptime target.toCpuArch() == .aarch64) {
-                try self.codegen.emit.ldrRegMemSoff(.w64, ptr_reg, .FP, base_offset);
-            } else {
-                try self.codegen.emit.movRegMem(.w64, ptr_reg, .RBP, base_offset);
-            }
+            try self.emitLoad(.w64, ptr_reg, frame_ptr, base_offset);
 
             // Call decrefDataPtrC(ptr, alignment, elements_refcounted, roc_ops)
             // Strings have 1-byte alignment for the data
@@ -16096,11 +15470,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             const cap_reg = try self.allocTempGeneral();
             defer self.codegen.freeGeneral(cap_reg);
 
-            if (comptime target.toCpuArch() == .aarch64) {
-                try self.codegen.emit.ldrRegMemSoff(.w64, cap_reg, .FP, base_offset + 16);
-            } else {
-                try self.codegen.emit.movRegMem(.w64, cap_reg, .RBP, base_offset + 16);
-            }
+            try self.emitLoad(.w64, cap_reg, frame_ptr, base_offset + 16);
 
             // Check if small string (high bit set = negative)
             const skip_patch = blk: {
@@ -16119,11 +15489,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             const ptr_reg = try self.allocTempGeneral();
             defer self.codegen.freeGeneral(ptr_reg);
 
-            if (comptime target.toCpuArch() == .aarch64) {
-                try self.codegen.emit.ldrRegMemSoff(.w64, ptr_reg, .FP, base_offset);
-            } else {
-                try self.codegen.emit.movRegMem(.w64, ptr_reg, .RBP, base_offset);
-            }
+            try self.emitLoad(.w64, ptr_reg, frame_ptr, base_offset);
 
             // Call freeDataPtrC(ptr, alignment, elements_refcounted, roc_ops)
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
@@ -16149,11 +15515,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             switch (value_loc) {
                 .stack => |s| {
                     const offset = s.offset;
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.ldrRegMemSoff(.w64, ptr_reg, .FP, offset);
-                    } else {
-                        try self.codegen.emit.movRegMem(.w64, ptr_reg, .RBP, offset);
-                    }
+                    try self.emitLoad(.w64, ptr_reg, frame_ptr, offset);
                 },
                 .general_reg => |r| {
                     if (comptime target.toCpuArch() == .aarch64) {
@@ -16184,11 +15546,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             switch (value_loc) {
                 .stack => |s| {
                     const offset = s.offset;
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.ldrRegMemSoff(.w64, ptr_reg, .FP, offset);
-                    } else {
-                        try self.codegen.emit.movRegMem(.w64, ptr_reg, .RBP, offset);
-                    }
+                    try self.emitLoad(.w64, ptr_reg, frame_ptr, offset);
                 },
                 .general_reg => |r| {
                     if (comptime target.toCpuArch() == .aarch64) {
@@ -16221,11 +15579,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             switch (value_loc) {
                 .stack => |s| {
                     const offset = s.offset;
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.ldrRegMemSoff(.w64, ptr_reg, .FP, offset);
-                    } else {
-                        try self.codegen.emit.movRegMem(.w64, ptr_reg, .RBP, offset);
-                    }
+                    try self.emitLoad(.w64, ptr_reg, frame_ptr, offset);
                 },
                 .general_reg => |r| {
                     if (comptime target.toCpuArch() == .aarch64) {
