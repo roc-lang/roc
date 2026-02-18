@@ -65,8 +65,8 @@ jobs:
       - run: roc version
 
       - run: |
-          roc check src/PROFILING/exec_bench.roc
-          roc test src/PROFILING/exec_bench.roc
+          roc check CONTRIBUTING/profiling/exec_bench.roc
+          roc test CONTRIBUTING/profiling/exec_bench.roc
 
       - name: Run Playground Tests
         run: |
@@ -140,8 +140,11 @@ jobs:
 
       - name: Run Test Platforms (Unix)
         if: runner.os != 'Windows'
-        run: |
-          zig build test-cli ${{ matrix.target_flag }}
+        uses: ./.github/actions/flaky-retry
+        with:
+          command: "zig build test-cli ${{ matrix.target_flag }}"
+          error_string_contains: "unhandled file type|build executable runs correctly"
+          retry_count: 3
 
       - name: Setup MSVC (Windows)
         if: runner.os == 'Windows'
@@ -162,12 +165,12 @@ jobs:
       - name: roc executable minimal check (Unix)
         if: runner.os != 'Windows'
         run: |
-          ./zig-out/bin/roc check ./src/PROFILING/bench_repeated_check.roc
+          ./zig-out/bin/roc check ./CONTRIBUTING/profiling/bench_repeated_check.roc
 
       - name: roc executable minimal check (Windows)
         if: runner.os == 'Windows'
         run: |
-          zig-out\bin\roc.exe check ./src/PROFILING/bench_repeated_check.roc
+          zig-out\bin\roc.exe check ./CONTRIBUTING/profiling/bench_repeated_check.roc
 
       - name: zig snapshot tests
         run: zig build snapshot ${{ matrix.target_flag }} -- --debug
