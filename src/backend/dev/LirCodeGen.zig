@@ -12771,18 +12771,20 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     self.codegen.freeGeneral(reg);
                 },
                 .general_reg => |reg| {
-                    // Only have low 64 bits in register - this is a bug indicator,
-                    // but handle gracefully by storing low and zeroing high
+                    // Only have low 64 bits in register — sign-extend to i128
+                    // by arithmetic-shifting right by 63 to fill high word.
+                    const sign_reg = try self.allocTempGeneral();
                     if (comptime target.toCpuArch() == .aarch64) {
                         try self.codegen.emit.strRegMemUoff(.w64, reg, ptr_reg, 0);
-                        try self.codegen.emit.strRegMemUoff(.w64, .ZRSP, ptr_reg, 1);
+                        try self.codegen.emit.asrRegRegImm(.w64, sign_reg, reg, 63);
+                        try self.codegen.emit.strRegMemUoff(.w64, sign_reg, ptr_reg, 1);
                     } else {
                         try self.codegen.emit.movMemReg(.w64, ptr_reg, 0, reg);
-                        const zero_reg = try self.allocTempGeneral();
-                        try self.codegen.emitLoadImm(zero_reg, 0);
-                        try self.codegen.emit.movMemReg(.w64, ptr_reg, 8, zero_reg);
-                        self.codegen.freeGeneral(zero_reg);
+                        try self.emitMovRegReg(sign_reg, reg);
+                        try self.codegen.emit.sarRegImm8(.w64, sign_reg, 63);
+                        try self.codegen.emit.movMemReg(.w64, ptr_reg, 8, sign_reg);
                     }
+                    self.codegen.freeGeneral(sign_reg);
                 },
                 else => {
                     unreachable;
