@@ -2335,6 +2335,27 @@ fn compareFieldByLayout(
                 }
                 self.body.append(self.allocator, Op.call) catch return error.OutOfMemory;
                 WasmModule.leb128WriteU32(self.allocator, &self.body, import_idx) catch return error.OutOfMemory;
+            } else if (ls.getLayout(elem_layout).tag == .list) {
+                // List of lists - use specialized host function with inner element size
+                const inner_elem_layout = ls.getLayout(elem_layout).data.list;
+                const inner_elem_size = self.layoutByteSize(inner_elem_layout);
+                const import_idx = self.list_list_eq_import orelse unreachable;
+                try self.emitLocalGet(lhs_local);
+                if (field_offset > 0) {
+                    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(field_offset)) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+                }
+                try self.emitLocalGet(rhs_local);
+                if (field_offset > 0) {
+                    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(field_offset)) catch return error.OutOfMemory;
+                    self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+                }
+                self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(inner_elem_size)) catch return error.OutOfMemory;
+                self.body.append(self.allocator, Op.call) catch return error.OutOfMemory;
+                WasmModule.leb128WriteU32(self.allocator, &self.body, import_idx) catch return error.OutOfMemory;
             } else {
                 const import_idx = self.list_eq_import orelse unreachable;
                 const elem_size = self.layoutByteSize(elem_layout);
