@@ -1951,7 +1951,7 @@ fn atan() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn asin() {
-    assert_evals_to!("Num.asin 0.5f64", 0.5235987755982989, f64);
+    assert_evals_to!("Num.asin 0.5f64", std::f64::consts::FRAC_PI_6, f64);
     assert_evals_to!(
         "Num.asin 0.5dec",
         RocDec::from_str("0.523598775598298944").unwrap(),
@@ -1962,7 +1962,7 @@ fn asin() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn acos() {
-    assert_evals_to!("Num.acos 0.5f64", 1.0471975511965979, f64);
+    assert_evals_to!("Num.acos 0.5f64", std::f64::consts::FRAC_PI_3, f64);
     assert_evals_to!(
         "Num.acos 0.5dec",
         RocDec::from_str("1.047197551196597888").unwrap(),
