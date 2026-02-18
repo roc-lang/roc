@@ -306,11 +306,22 @@ fn lowerExpr(self: *Self, mir_expr_id: MIR.ExprId) Allocator.Error!LirExprId {
 }
 
 fn lowerInt(self: *Self, int_data: anytype, _: Monotype.Idx, region: Region) Allocator.Error!LirExprId {
-    const val = int_data.value.toI128();
-    if (val >= std.math.minInt(i64) and val <= std.math.maxInt(i64)) {
-        return self.lir_store.addExpr(.{ .i64_literal = @intCast(val) }, region);
+    switch (int_data.value.kind) {
+        .u128 => {
+            const val: u128 = @bitCast(int_data.value.bytes);
+            if (val <= std.math.maxInt(i64)) {
+                return self.lir_store.addExpr(.{ .i64_literal = @intCast(val) }, region);
+            }
+            return self.lir_store.addExpr(.{ .i128_literal = @bitCast(val) }, region);
+        },
+        .i128 => {
+            const val = int_data.value.toI128();
+            if (val >= std.math.minInt(i64) and val <= std.math.maxInt(i64)) {
+                return self.lir_store.addExpr(.{ .i64_literal = @intCast(val) }, region);
+            }
+            return self.lir_store.addExpr(.{ .i128_literal = val }, region);
+        },
     }
-    return self.lir_store.addExpr(.{ .i128_literal = val }, region);
 }
 
 fn lowerList(self: *Self, list_data: anytype, mono_idx: Monotype.Idx, region: Region) Allocator.Error!LirExprId {
