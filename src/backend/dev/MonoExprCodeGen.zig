@@ -2053,13 +2053,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         else => unreachable,
                     };
                     const shift_amount: u8 = 64 - src_bits;
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.lslRegRegImm(.w64, src_reg, src_reg, @intCast(shift_amount));
-                        try self.codegen.emit.asrRegRegImm(.w64, src_reg, src_reg, @intCast(shift_amount));
-                    } else {
-                        try self.codegen.emit.shlRegImm8(.w64, src_reg, shift_amount);
-                        try self.codegen.emit.sarRegImm8(.w64, src_reg, shift_amount);
-                    }
+                    try self.emitShlImm(.w64, src_reg, src_reg, shift_amount);
+                    try self.emitAsrImm(.w64, src_reg, src_reg, shift_amount);
                     return .{ .general_reg = src_reg };
                 },
 
@@ -2088,13 +2083,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         else => unreachable,
                     };
                     const shift_amount: u8 = 64 - src_bits;
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.lslRegRegImm(.w64, src_reg, src_reg, @intCast(shift_amount));
-                        try self.codegen.emit.lsrRegRegImm(.w64, src_reg, src_reg, @intCast(shift_amount));
-                    } else {
-                        try self.codegen.emit.shlRegImm8(.w64, src_reg, shift_amount);
-                        try self.codegen.emit.shrRegImm8(.w64, src_reg, shift_amount);
-                    }
+                    try self.emitShlImm(.w64, src_reg, src_reg, shift_amount);
+                    try self.emitLsrImm(.w64, src_reg, src_reg, shift_amount);
                     return .{ .general_reg = src_reg };
                 },
 
@@ -2151,13 +2141,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     };
                     if (dst_bits < 64) {
                         const shift_amount: u8 = 64 - dst_bits;
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emit.lslRegRegImm(.w64, src_reg, src_reg, @intCast(shift_amount));
-                            try self.codegen.emit.lsrRegRegImm(.w64, src_reg, src_reg, @intCast(shift_amount));
-                        } else {
-                            try self.codegen.emit.shlRegImm8(.w64, src_reg, shift_amount);
-                            try self.codegen.emit.shrRegImm8(.w64, src_reg, shift_amount);
-                        }
+                        try self.emitShlImm(.w64, src_reg, src_reg, shift_amount);
+                        try self.emitLsrImm(.w64, src_reg, src_reg, shift_amount);
                     }
                     // 64-bit wrapping is a no-op (reinterpret bits)
                     return .{ .general_reg = src_reg };
@@ -2190,13 +2175,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     };
                     if (src_bits < 64) {
                         const shift_amount: u8 = 64 - src_bits;
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emit.lslRegRegImm(.w64, src_reg, src_reg, @intCast(shift_amount));
-                            try self.codegen.emit.asrRegRegImm(.w64, src_reg, src_reg, @intCast(shift_amount));
-                        } else {
-                            try self.codegen.emit.shlRegImm8(.w64, src_reg, shift_amount);
-                            try self.codegen.emit.sarRegImm8(.w64, src_reg, shift_amount);
-                        }
+                        try self.emitShlImm(.w64, src_reg, src_reg, shift_amount);
+                        try self.emitAsrImm(.w64, src_reg, src_reg, shift_amount);
                     }
 
                     // Convert signed i64 to f64
@@ -2232,13 +2212,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         else => unreachable,
                     };
                     const shift_amount: u8 = 64 - src_bits;
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.lslRegRegImm(.w64, src_reg, src_reg, @intCast(shift_amount));
-                        try self.codegen.emit.lsrRegRegImm(.w64, src_reg, src_reg, @intCast(shift_amount));
-                    } else {
-                        try self.codegen.emit.shlRegImm8(.w64, src_reg, shift_amount);
-                        try self.codegen.emit.shrRegImm8(.w64, src_reg, shift_amount);
-                    }
+                    try self.emitShlImm(.w64, src_reg, src_reg, shift_amount);
+                    try self.emitLsrImm(.w64, src_reg, src_reg, shift_amount);
 
                     // Convert (now fits in positive i64) to f64
                     const freg = self.codegen.allocFloat() orelse unreachable;
@@ -2367,13 +2342,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     if (dst_bits < 64) {
                         // Sign-extend to normalize the value in the register
                         const shift_amount: u8 = 64 - dst_bits;
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emit.lslRegRegImm(.w64, dst_reg, dst_reg, @intCast(shift_amount));
-                            try self.codegen.emit.asrRegRegImm(.w64, dst_reg, dst_reg, @intCast(shift_amount));
-                        } else {
-                            try self.codegen.emit.shlRegImm8(.w64, dst_reg, shift_amount);
-                            try self.codegen.emit.sarRegImm8(.w64, dst_reg, shift_amount);
-                        }
+                        try self.emitShlImm(.w64, dst_reg, dst_reg, shift_amount);
+                        try self.emitAsrImm(.w64, dst_reg, dst_reg, shift_amount);
                     }
                     return .{ .general_reg = dst_reg };
                 },
@@ -2414,13 +2384,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     };
                     if (dst_bits < 64) {
                         const shift_amount: u8 = 64 - dst_bits;
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emit.lslRegRegImm(.w64, dst_reg, dst_reg, @intCast(shift_amount));
-                            try self.codegen.emit.lsrRegRegImm(.w64, dst_reg, dst_reg, @intCast(shift_amount));
-                        } else {
-                            try self.codegen.emit.shlRegImm8(.w64, dst_reg, shift_amount);
-                            try self.codegen.emit.shrRegImm8(.w64, dst_reg, shift_amount);
-                        }
+                        try self.emitShlImm(.w64, dst_reg, dst_reg, shift_amount);
+                        try self.emitLsrImm(.w64, dst_reg, dst_reg, shift_amount);
                     }
                     return .{ .general_reg = dst_reg };
                 },
@@ -2474,21 +2439,11 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     if (src_bits < 64) {
                         const shift_amount: u8 = 64 - src_bits;
                         if (is_signed) {
-                            if (comptime target.toCpuArch() == .aarch64) {
-                                try self.codegen.emit.lslRegRegImm(.w64, src_reg, src_reg, @intCast(shift_amount));
-                                try self.codegen.emit.asrRegRegImm(.w64, src_reg, src_reg, @intCast(shift_amount));
-                            } else {
-                                try self.codegen.emit.shlRegImm8(.w64, src_reg, shift_amount);
-                                try self.codegen.emit.sarRegImm8(.w64, src_reg, shift_amount);
-                            }
+                            try self.emitShlImm(.w64, src_reg, src_reg, shift_amount);
+                            try self.emitAsrImm(.w64, src_reg, src_reg, shift_amount);
                         } else {
-                            if (comptime target.toCpuArch() == .aarch64) {
-                                try self.codegen.emit.lslRegRegImm(.w64, src_reg, src_reg, @intCast(shift_amount));
-                                try self.codegen.emit.lsrRegRegImm(.w64, src_reg, src_reg, @intCast(shift_amount));
-                            } else {
-                                try self.codegen.emit.shlRegImm8(.w64, src_reg, shift_amount);
-                                try self.codegen.emit.shrRegImm8(.w64, src_reg, shift_amount);
-                            }
+                            try self.emitShlImm(.w64, src_reg, src_reg, shift_amount);
+                            try self.emitLsrImm(.w64, src_reg, src_reg, shift_amount);
                         }
                     }
 
@@ -2560,13 +2515,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
                     if (dst_bits < 64) {
                         const shift_amount: u8 = 64 - dst_bits;
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emit.lslRegRegImm(.w64, parts.low, parts.low, @intCast(shift_amount));
-                            try self.codegen.emit.lsrRegRegImm(.w64, parts.low, parts.low, @intCast(shift_amount));
-                        } else {
-                            try self.codegen.emit.shlRegImm8(.w64, parts.low, shift_amount);
-                            try self.codegen.emit.shrRegImm8(.w64, parts.low, shift_amount);
-                        }
+                        try self.emitShlImm(.w64, parts.low, parts.low, shift_amount);
+                        try self.emitLsrImm(.w64, parts.low, parts.low, shift_amount);
                     }
                     return .{ .general_reg = parts.low };
                 },
@@ -2593,13 +2543,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     };
                     if (src_bits < 64) {
                         const shift_amount: u8 = 64 - src_bits;
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emit.lslRegRegImm(.w64, src_reg, src_reg, @intCast(shift_amount));
-                            try self.codegen.emit.lsrRegRegImm(.w64, src_reg, src_reg, @intCast(shift_amount));
-                        } else {
-                            try self.codegen.emit.shlRegImm8(.w64, src_reg, shift_amount);
-                            try self.codegen.emit.shrRegImm8(.w64, src_reg, shift_amount);
-                        }
+                        try self.emitShlImm(.w64, src_reg, src_reg, shift_amount);
+                        try self.emitLsrImm(.w64, src_reg, src_reg, shift_amount);
                     }
 
                     // Call roc_builtins_u64_to_dec(out_low, out_high, u64) -> void
@@ -2625,13 +2570,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     };
                     if (src_bits < 64) {
                         const shift_amount: u8 = 64 - src_bits;
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emit.lslRegRegImm(.w64, src_reg, src_reg, @intCast(shift_amount));
-                            try self.codegen.emit.asrRegRegImm(.w64, src_reg, src_reg, @intCast(shift_amount));
-                        } else {
-                            try self.codegen.emit.shlRegImm8(.w64, src_reg, shift_amount);
-                            try self.codegen.emit.sarRegImm8(.w64, src_reg, shift_amount);
-                        }
+                        try self.emitShlImm(.w64, src_reg, src_reg, shift_amount);
+                        try self.emitAsrImm(.w64, src_reg, src_reg, shift_amount);
                     }
 
                     // Call roc_builtins_i64_to_dec(out_low, out_high, i64) -> void
@@ -2676,13 +2616,8 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     };
                     if (dst_bits < 64) {
                         const shift_amount: u8 = 64 - dst_bits;
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emit.lslRegRegImm(.w64, result_reg, result_reg, @intCast(shift_amount));
-                            try self.codegen.emit.lsrRegRegImm(.w64, result_reg, result_reg, @intCast(shift_amount));
-                        } else {
-                            try self.codegen.emit.shlRegImm8(.w64, result_reg, shift_amount);
-                            try self.codegen.emit.shrRegImm8(.w64, result_reg, shift_amount);
-                        }
+                        try self.emitShlImm(.w64, result_reg, result_reg, shift_amount);
+                        try self.emitLsrImm(.w64, result_reg, result_reg, shift_amount);
                     }
                     return .{ .general_reg = result_reg };
                 },
@@ -4872,22 +4807,12 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     const shift_amount: u8 = 64 - info.src_bits;
                     if (info.src_signed) {
                         // Sign-extend
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emit.lslRegRegImm(.w64, src_reg, src_reg, @intCast(shift_amount));
-                            try self.codegen.emit.asrRegRegImm(.w64, src_reg, src_reg, @intCast(shift_amount));
-                        } else {
-                            try self.codegen.emit.shlRegImm8(.w64, src_reg, shift_amount);
-                            try self.codegen.emit.sarRegImm8(.w64, src_reg, shift_amount);
-                        }
+                        try self.emitShlImm(.w64, src_reg, src_reg, shift_amount);
+                        try self.emitAsrImm(.w64, src_reg, src_reg, shift_amount);
                     } else {
                         // Zero-extend
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emit.lslRegRegImm(.w64, src_reg, src_reg, @intCast(shift_amount));
-                            try self.codegen.emit.lsrRegRegImm(.w64, src_reg, src_reg, @intCast(shift_amount));
-                        } else {
-                            try self.codegen.emit.shlRegImm8(.w64, src_reg, shift_amount);
-                            try self.codegen.emit.shrRegImm8(.w64, src_reg, shift_amount);
-                        }
+                        try self.emitShlImm(.w64, src_reg, src_reg, shift_amount);
+                        try self.emitLsrImm(.w64, src_reg, src_reg, shift_amount);
                     }
                 }
 
@@ -7201,12 +7126,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                     try self.codegen.emit.movRegReg(.w64, rest_ptr_reg, list_ptr_reg);
                                 }
                             } else {
-                                if (comptime target.toCpuArch() == .aarch64) {
-                                    try self.codegen.emit.addRegRegImm12(.w64, rest_ptr_reg, list_ptr_reg, @intCast(prefix_byte_offset));
-                                } else {
-                                    try self.codegen.emit.movRegReg(.w64, rest_ptr_reg, list_ptr_reg);
-                                    try self.codegen.emit.addRegImm32(.w64, rest_ptr_reg, @intCast(prefix_byte_offset));
-                                }
+                                try self.emitAddImm(rest_ptr_reg, list_ptr_reg, @intCast(prefix_byte_offset));
                             }
 
                             // Store rest pointer at rest_slot + 0
@@ -9737,12 +9657,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                             }
                         } else {
                             // Add offset to pointer: rest_ptr = list_ptr + prefix_byte_offset
-                            if (comptime target.toCpuArch() == .aarch64) {
-                                try self.codegen.emit.addRegRegImm12(.w64, rest_ptr_reg, list_ptr_reg, @intCast(prefix_byte_offset));
-                            } else {
-                                try self.codegen.emit.movRegReg(.w64, rest_ptr_reg, list_ptr_reg);
-                                try self.codegen.emit.addRegImm32(.w64, rest_ptr_reg, @intCast(prefix_byte_offset));
-                            }
+                            try self.emitAddImm(rest_ptr_reg, list_ptr_reg, @intCast(prefix_byte_offset));
                         }
 
                         // Store rest pointer at rest_slot + 0
@@ -15001,12 +14916,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                                     try self.codegen.emit.movRegReg(.w64, rest_ptr_reg, list_ptr_reg);
                                 }
                             } else {
-                                if (comptime target.toCpuArch() == .aarch64) {
-                                    try self.codegen.emit.addRegRegImm12(.w64, rest_ptr_reg, list_ptr_reg, @intCast(prefix_byte_offset));
-                                } else {
-                                    try self.codegen.emit.movRegReg(.w64, rest_ptr_reg, list_ptr_reg);
-                                    try self.codegen.emit.addRegImm32(.w64, rest_ptr_reg, @intCast(prefix_byte_offset));
-                                }
+                                try self.emitAddImm(rest_ptr_reg, list_ptr_reg, @intCast(prefix_byte_offset));
                             }
 
                             try self.emitStore(.w64, frame_ptr, rest_slot, rest_ptr_reg);
