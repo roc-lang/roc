@@ -169,6 +169,7 @@ pub const RcInsertPass = struct {
                 for (branches) |branch| {
                     try self.registerPatternSymbolInto(branch.pattern, target);
                     local.clearRetainingCapacity();
+                    try self.countUsesInto(branch.guard, &local);
                     try self.countUsesInto(branch.body, &local);
                     var it = local.keyIterator();
                     while (it.next()) |key| try symbols_in_any_branch.put(key.*, {});
@@ -642,6 +643,7 @@ pub const RcInsertPass = struct {
 
         for (branches) |branch| {
             var local = try self.countUsesLocal(branch.body);
+            try self.countUsesInto(branch.guard, &local);
             var it = local.keyIterator();
             while (it.next()) |key| {
                 const k = key.*;
@@ -659,10 +661,11 @@ pub const RcInsertPass = struct {
 
         for (branches, 0..) |branch, i| {
             const processed_body = try self.processExpr(branch.body);
+            const processed_guard = try self.processExpr(branch.guard);
             const new_body = try self.wrapBranchWithRcOps(processed_body, &branch_use_maps.items[i], &symbols_in_any_branch, result_layout, region);
             try new_branches.append(self.allocator, .{
                 .pattern = branch.pattern,
-                .guard = branch.guard,
+                .guard = processed_guard,
                 .body = new_body,
             });
         }
@@ -1134,6 +1137,9 @@ fn countRcOps(store: *const LirExprStore, expr_id: LirExprId) RcOpCounts {
         .match_expr => |w| {
             const branches = store.getMatchBranches(w.branches);
             for (branches) |branch| {
+                const guard_sub = countRcOps(store, branch.guard);
+                increfs += guard_sub.increfs;
+                decrefs += guard_sub.decrefs;
                 const sub = countRcOps(store, branch.body);
                 increfs += sub.increfs;
                 decrefs += sub.decrefs;
@@ -1826,4 +1832,61 @@ test "RC for_loop: unused refcounted elem gets decref" {
     const rc = countRcOps(&env.lir_store, result);
     try std.testing.expect(rc.decrefs >= 1);
     try std.testing.expectEqual(@as(u32, 0), rc.increfs);
+}
+
+test "RC match guard: symbol used only in guard gets proper RC ops" {
+    // { s = "hello"; match cond is _ if s -> 1, _ -> 2 }
+    // s is used in the guard of branch 0 but not in the body of either branch.
+    // Branch 0: guard uses s (1 use) => no extra action needed.
+    // Branch 1: 0 uses => decref.
+    const allocator = std.testing.allocator;
+
+    var env = try testInit();
+    try testInitLayoutStore(&env);
+    defer testDeinit(&env);
+
+    const str_layout: LayoutIdx = .str;
+    const i64_layout: LayoutIdx = .i64;
+    const sym_s = makeSymbol(1);
+    const sym_cond = makeSymbol(2);
+
+    const cond_expr = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_cond, .layout_idx = i64_layout } }, Region.zero());
+    const guard_lookup_s = try env.lir_store.addExpr(.{ .lookup = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
+    const int_1 = try env.lir_store.addExpr(.{ .i64_literal = 1 }, Region.zero());
+    const int_2 = try env.lir_store.addExpr(.{ .i64_literal = 2 }, Region.zero());
+
+    const wild_pat1 = try env.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = i64_layout } }, Region.zero());
+    const wild_pat2 = try env.lir_store.addPattern(.{ .wildcard = .{ .layout_idx = i64_layout } }, Region.zero());
+
+    const match_branches = try env.lir_store.addMatchBranches(&.{
+        .{ .pattern = wild_pat1, .guard = guard_lookup_s, .body = int_1 },
+        .{ .pattern = wild_pat2, .guard = LirExprId.none, .body = int_2 },
+    });
+
+    const match_expr = try env.lir_store.addExpr(.{ .match_expr = .{
+        .value = cond_expr,
+        .value_layout = i64_layout,
+        .branches = match_branches,
+        .result_layout = i64_layout,
+    } }, Region.zero());
+
+    const str_lit = try env.lir_store.addExpr(.{ .str_literal = base.StringLiteral.Idx.none }, Region.zero());
+    const pat_s = try env.lir_store.addPattern(.{ .bind = .{ .symbol = sym_s, .layout_idx = str_layout } }, Region.zero());
+    const stmts = try env.lir_store.addStmts(&.{.{ .decl = .{ .pattern = pat_s, .expr = str_lit } }});
+
+    const block_expr = try env.lir_store.addExpr(.{ .block = .{
+        .stmts = stmts,
+        .final_expr = match_expr,
+        .result_layout = i64_layout,
+    } }, Region.zero());
+
+    var pass = RcInsertPass.init(allocator, &env.lir_store, &env.layout_store);
+    defer pass.deinit();
+
+    const result = try pass.insertRcOps(block_expr);
+
+    // s is used in one branch (via guard), unused in the other => decref in unused branch
+    const rc = countRcOps(&env.lir_store, result);
+    try std.testing.expectEqual(@as(u32, 0), rc.increfs);
+    try std.testing.expectEqual(@as(u32, 1), rc.decrefs);
 }
