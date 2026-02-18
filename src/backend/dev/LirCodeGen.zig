@@ -1178,7 +1178,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .float_to_str => .str,
                 .dec_to_str => .str,
                 .str_escape_and_quote => .str,
-                .discriminant_switch => .str,
+                .discriminant_switch => null,
                 // For other expressions, no layout available
                 else => null,
             };
