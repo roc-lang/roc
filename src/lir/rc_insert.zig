@@ -181,11 +181,32 @@ pub const RcInsertPass = struct {
                 }
             },
             .lambda => |lam| {
+                // Lambda bodies are a separate scope. Count uses locally, then
+                // attribute 1 use per captured (non-param) symbol to the outer scope.
+                var local = std.AutoHashMap(u64, u32).init(self.allocator);
+                defer local.deinit();
+
                 const params = self.store.getPatternSpan(lam.params);
                 for (params) |pat_id| {
-                    try self.registerPatternSymbolInto(pat_id, target);
+                    try self.registerPatternSymbolInto(pat_id, &local);
                 }
-                try self.countUsesInto(lam.body, target);
+                try self.countUsesInto(lam.body, &local);
+
+                // Collect param-bound symbols so we can exclude them
+                var param_syms = std.AutoHashMap(u64, void).init(self.allocator);
+                defer param_syms.deinit();
+                for (params) |pat_id| {
+                    try self.collectPatternSymbols(pat_id, &param_syms);
+                }
+
+                // For each non-param symbol used in the body, attribute 1 use to outer
+                var it = local.keyIterator();
+                while (it.next()) |key| {
+                    if (!param_syms.contains(key.*)) {
+                        const gop = try target.getOrPut(key.*);
+                        if (gop.found_existing) gop.value_ptr.* += 1 else gop.value_ptr.* = 1;
+                    }
+                }
             },
             .closure => |clo| {
                 try self.countUsesInto(clo.lambda, target);
