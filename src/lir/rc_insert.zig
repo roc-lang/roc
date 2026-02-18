@@ -360,6 +360,9 @@ pub const RcInsertPass = struct {
                     try self.registerPatternSymbolInto(pre_pat, target);
                 }
                 try self.registerPatternSymbolInto(l.rest, target);
+                for (self.store.getPatternSpan(l.suffix)) |suf_pat| {
+                    try self.registerPatternSymbolInto(suf_pat, target);
+                }
             },
             .wildcard, .int_literal, .float_literal, .str_literal => {},
         }
@@ -859,6 +862,9 @@ pub const RcInsertPass = struct {
                     try self.collectPatternSymbols(pre_pat, set);
                 }
                 try self.collectPatternSymbols(l.rest, set);
+                for (self.store.getPatternSpan(l.suffix)) |suf_pat| {
+                    try self.collectPatternSymbols(suf_pat, set);
+                }
             },
             .wildcard, .int_literal, .float_literal, .str_literal => {},
         }

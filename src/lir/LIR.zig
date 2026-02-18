@@ -1099,13 +1099,15 @@ pub const LirPattern = union(enum) {
         elems: LirPatternSpan,
     },
 
-    /// Destructure a list with known prefix and optional rest
+    /// Destructure a list with known prefix, optional rest, and suffix
     list: struct {
         elem_layout: layout.Idx,
-        /// Patterns for known prefix elements
+        /// Patterns for known prefix elements (before ..)
         prefix: LirPatternSpan,
         /// Pattern for remaining elements (as a list), or none
         rest: LirPatternId,
+        /// Patterns for known suffix elements (after ..)
+        suffix: LirPatternSpan,
     },
 
     /// As-pattern: bind and also match inner pattern

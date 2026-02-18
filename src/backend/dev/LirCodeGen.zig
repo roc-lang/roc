@@ -7491,7 +7491,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         // Note: Even for list_stack, elements are on the heap accessed via the pointer
 
                         const prefix_patterns = self.store.getPatternSpan(list_pattern.prefix);
-                        const is_exact_match = list_pattern.rest.isNone();
+                        const suffix_patterns = self.store.getPatternSpan(list_pattern.suffix);
+                        const is_exact_match = list_pattern.rest.isNone() and suffix_patterns.len == 0;
 
                         // Get base offset of the list struct (works for both .stack and .list_stack)
                         const base_offset: i32 = switch (value_loc) {
@@ -7509,8 +7510,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             try self.codegen.emit.movRegMem(.w64, len_reg, .RBP, base_offset + 8);
                         }
 
-                        // Compare length with expected
-                        const expected_len = @as(i32, @intCast(prefix_patterns.len));
+                        // Compare length with expected (prefix + suffix)
+                        const expected_len = @as(i32, @intCast(prefix_patterns.len + suffix_patterns.len));
                         try self.emitCmpImm(len_reg, expected_len);
                         self.codegen.freeGeneral(len_reg);
 
@@ -7522,7 +7523,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 // Exact match: jump if len != expected
                                 next_patch = try self.emitJumpIfNotEqual();
                             } else {
-                                // Rest pattern: jump if len < expected (need at least prefix_len elements)
+                                // Rest/suffix pattern: jump if len < expected (need at least prefix+suffix elements)
                                 next_patch = try self.emitJumpIfLessThan();
                             }
                         }
@@ -7574,11 +7575,89 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             try self.bindPattern(elem_pattern_id, self.stackLocationForLayout(list_pattern.elem_layout, elem_slot));
                         }
 
-                        // Handle rest pattern (e.g. [first, .. as rest])
+                        // Bind suffix elements (from the end of the list)
+                        if (suffix_patterns.len > 0) {
+                            // We need the actual list length to compute suffix offsets
+                            const suf_len_reg = try self.allocTempGeneral();
+                            if (comptime target.toCpuArch() == .aarch64) {
+                                try self.codegen.emit.ldrRegMemSoff(.w64, suf_len_reg, .FP, base_offset + 8);
+                            } else {
+                                try self.codegen.emit.movRegMem(.w64, suf_len_reg, .RBP, base_offset + 8);
+                            }
+
+                            // suffix_start_idx = len - suffix_len
+                            // Compute base pointer for suffix: list_ptr + (len - suffix_len) * elem_size
+                            const suffix_count = @as(u32, @intCast(suffix_patterns.len));
+                            const suf_ptr_reg = try self.allocTempGeneral();
+
+                            // suf_ptr = list_ptr + (len - suffix_len) * elem_size
+                            if (comptime target.toCpuArch() == .aarch64) {
+                                try self.codegen.emit.subRegRegImm12(.w64, suf_len_reg, suf_len_reg, @intCast(suffix_count));
+                                if (elem_size == 1) {
+                                    try self.codegen.emit.addRegRegReg(.w64, suf_ptr_reg, list_ptr_reg, suf_len_reg);
+                                } else {
+                                    const imm_reg = try self.allocTempGeneral();
+                                    try self.codegen.emitLoadImm(imm_reg, @intCast(elem_size));
+                                    try self.codegen.emit.mulRegRegReg(.w64, suf_len_reg, suf_len_reg, imm_reg);
+                                    try self.codegen.emit.addRegRegReg(.w64, suf_ptr_reg, list_ptr_reg, suf_len_reg);
+                                    self.codegen.freeGeneral(imm_reg);
+                                }
+                            } else {
+                                try self.codegen.emit.subRegImm32(.w64, suf_len_reg, @intCast(suffix_count));
+                                if (elem_size > 1) {
+                                    // Multiply offset by elem_size: load elem_size, then imul
+                                    const imm_reg = try self.allocTempGeneral();
+                                    try self.codegen.emitLoadImm(imm_reg, @intCast(elem_size));
+                                    try self.codegen.emit.imulRegReg(.w64, suf_len_reg, imm_reg);
+                                    self.codegen.freeGeneral(imm_reg);
+                                }
+                                try self.codegen.emit.movRegReg(.w64, suf_ptr_reg, list_ptr_reg);
+                                try self.codegen.emit.addRegReg(.w64, suf_ptr_reg, suf_len_reg);
+                            }
+                            self.codegen.freeGeneral(suf_len_reg);
+
+                            // Bind each suffix element
+                            for (suffix_patterns, 0..) |suf_pattern_id, suf_idx| {
+                                const suf_offset = @as(i32, @intCast(suf_idx * elem_size));
+                                const suf_slot = self.codegen.allocStackSlot(@intCast(elem_size));
+                                const temp_reg = try self.allocTempGeneral();
+
+                                if (elem_size <= 8) {
+                                    if (comptime target.toCpuArch() == .aarch64) {
+                                        try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, suf_ptr_reg, suf_offset);
+                                        try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, suf_slot);
+                                    } else {
+                                        try self.codegen.emit.movRegMem(.w64, temp_reg, suf_ptr_reg, suf_offset);
+                                        try self.codegen.emit.movMemReg(.w64, .RBP, suf_slot, temp_reg);
+                                    }
+                                } else {
+                                    var copied: u32 = 0;
+                                    while (copied < elem_size) : (copied += 8) {
+                                        const src_off = suf_offset + @as(i32, @intCast(copied));
+                                        const dst_off = suf_slot + @as(i32, @intCast(copied));
+                                        if (comptime target.toCpuArch() == .aarch64) {
+                                            try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, suf_ptr_reg, src_off);
+                                            try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, dst_off);
+                                        } else {
+                                            try self.codegen.emit.movRegMem(.w64, temp_reg, suf_ptr_reg, src_off);
+                                            try self.codegen.emit.movMemReg(.w64, .RBP, dst_off, temp_reg);
+                                        }
+                                    }
+                                }
+
+                                self.codegen.freeGeneral(temp_reg);
+                                try self.bindPattern(suf_pattern_id, self.stackLocationForLayout(list_pattern.elem_layout, suf_slot));
+                            }
+
+                            self.codegen.freeGeneral(suf_ptr_reg);
+                        }
+
+                        // Handle rest pattern (e.g. [first, .. as rest, last])
                         if (!list_pattern.rest.isNone()) {
                             const rest_slot = self.codegen.allocStackSlot(roc_str_size);
 
                             const prefix_count = @as(u32, @intCast(prefix_patterns.len));
+                            const suffix_count = @as(u32, @intCast(suffix_patterns.len));
                             const prefix_byte_offset = prefix_count * @as(u32, @intCast(elem_size));
 
                             // Calculate rest pointer: original_ptr + prefix_len * elem_size
@@ -7614,12 +7693,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 try self.codegen.emit.movRegMem(.w64, rest_len_reg, .RBP, base_offset + 8);
                             }
 
-                            // Calculate rest length: original_length - prefix_count
-                            if (prefix_count > 0) {
+                            // Calculate rest length: original_length - prefix_count - suffix_count
+                            const total_fixed = prefix_count + suffix_count;
+                            if (total_fixed > 0) {
                                 if (comptime target.toCpuArch() == .aarch64) {
-                                    try self.codegen.emit.subRegRegImm12(.w64, rest_len_reg, rest_len_reg, @intCast(prefix_count));
+                                    try self.codegen.emit.subRegRegImm12(.w64, rest_len_reg, rest_len_reg, @intCast(total_fixed));
                                 } else {
-                                    try self.codegen.emit.subRegImm32(.w64, rest_len_reg, @intCast(prefix_count));
+                                    try self.codegen.emit.subRegImm32(.w64, rest_len_reg, @intCast(total_fixed));
                                 }
                             }
 
@@ -10232,13 +10312,88 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try self.bindPattern(elem_pattern_id, elem_loc);
                     }
 
-                    // Handle rest pattern (the remaining list after prefix)
+                    // Bind suffix elements (from the end of the list)
+                    const suffix_patterns = self.store.getPatternSpan(lst.suffix);
+                    if (suffix_patterns.len > 0) {
+                        // We need the list length to compute suffix offsets
+                        const suf_len_reg = try self.allocTempGeneral();
+                        if (comptime target.toCpuArch() == .aarch64) {
+                            try self.codegen.emit.ldrRegMemSoff(.w64, suf_len_reg, .FP, base_offset + 8);
+                        } else {
+                            try self.codegen.emit.movRegMem(.w64, suf_len_reg, .RBP, base_offset + 8);
+                        }
+
+                        const suffix_count = @as(u32, @intCast(suffix_patterns.len));
+                        const suf_ptr_reg = try self.allocTempGeneral();
+
+                        // suf_ptr = list_ptr + (len - suffix_count) * elem_size
+                        if (comptime target.toCpuArch() == .aarch64) {
+                            try self.codegen.emit.subRegRegImm12(.w64, suf_len_reg, suf_len_reg, @intCast(suffix_count));
+                            if (elem_size == 1) {
+                                try self.codegen.emit.addRegRegReg(.w64, suf_ptr_reg, list_ptr_reg, suf_len_reg);
+                            } else {
+                                const imm_reg = try self.allocTempGeneral();
+                                try self.codegen.emitLoadImm(imm_reg, @intCast(elem_size));
+                                try self.codegen.emit.mulRegRegReg(.w64, suf_len_reg, suf_len_reg, imm_reg);
+                                try self.codegen.emit.addRegRegReg(.w64, suf_ptr_reg, list_ptr_reg, suf_len_reg);
+                                self.codegen.freeGeneral(imm_reg);
+                            }
+                        } else {
+                            try self.codegen.emit.subRegImm32(.w64, suf_len_reg, @intCast(suffix_count));
+                            if (elem_size > 1) {
+                                const imm_reg = try self.allocTempGeneral();
+                                try self.codegen.emitLoadImm(imm_reg, @intCast(elem_size));
+                                try self.codegen.emit.imulRegReg(.w64, suf_len_reg, imm_reg);
+                                self.codegen.freeGeneral(imm_reg);
+                            }
+                            try self.codegen.emit.movRegReg(.w64, suf_ptr_reg, list_ptr_reg);
+                            try self.codegen.emit.addRegReg(.w64, suf_ptr_reg, suf_len_reg);
+                        }
+                        self.codegen.freeGeneral(suf_len_reg);
+
+                        for (suffix_patterns, 0..) |suf_pattern_id, suf_idx| {
+                            const suf_offset = @as(i32, @intCast(suf_idx * elem_size));
+                            const suf_slot = self.codegen.allocStackSlot(@intCast(elem_size));
+                            const temp_reg = try self.allocTempGeneral();
+
+                            if (elem_size <= 8) {
+                                if (comptime target.toCpuArch() == .aarch64) {
+                                    try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, suf_ptr_reg, suf_offset);
+                                    try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, suf_slot);
+                                } else {
+                                    try self.codegen.emit.movRegMem(.w64, temp_reg, suf_ptr_reg, suf_offset);
+                                    try self.codegen.emit.movMemReg(.w64, .RBP, suf_slot, temp_reg);
+                                }
+                            } else {
+                                var copied: u32 = 0;
+                                while (copied < elem_size) : (copied += 8) {
+                                    const src_off = suf_offset + @as(i32, @intCast(copied));
+                                    const dst_off = suf_slot + @as(i32, @intCast(copied));
+                                    if (comptime target.toCpuArch() == .aarch64) {
+                                        try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, suf_ptr_reg, src_off);
+                                        try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, dst_off);
+                                    } else {
+                                        try self.codegen.emit.movRegMem(.w64, temp_reg, suf_ptr_reg, src_off);
+                                        try self.codegen.emit.movMemReg(.w64, .RBP, dst_off, temp_reg);
+                                    }
+                                }
+                            }
+
+                            self.codegen.freeGeneral(temp_reg);
+                            try self.bindPattern(suf_pattern_id, self.stackLocationForLayout(lst.elem_layout, suf_slot));
+                        }
+
+                        self.codegen.freeGeneral(suf_ptr_reg);
+                    }
+
+                    // Handle rest pattern (the remaining list after prefix, before suffix)
                     if (!lst.rest.isNone()) {
                         // Create a new RocList for the remaining elements
                         // RocList layout: bytes (ptr), length (usize), capacity_or_alloc_ptr (usize)
                         const rest_slot = self.codegen.allocStackSlot(roc_str_size);
 
                         const prefix_count = @as(u32, @intCast(prefix_patterns.len));
+                        const suffix_count_rest = @as(u32, @intCast(suffix_patterns.len));
                         const prefix_byte_offset = prefix_count * elem_size;
 
                         // Calculate rest pointer: original_ptr + prefix_len * elem_size
@@ -10276,12 +10431,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             try self.codegen.emit.movRegMem(.w64, len_reg, .RBP, base_offset + 8);
                         }
 
-                        // Calculate rest length: original_length - prefix_count
-                        if (prefix_count > 0) {
+                        // Calculate rest length: original_length - prefix_count - suffix_count
+                        const total_fixed = prefix_count + suffix_count_rest;
+                        if (total_fixed > 0) {
                             if (comptime target.toCpuArch() == .aarch64) {
-                                try self.codegen.emit.subRegRegImm12(.w64, len_reg, len_reg, @intCast(prefix_count));
+                                try self.codegen.emit.subRegRegImm12(.w64, len_reg, len_reg, @intCast(total_fixed));
                             } else {
-                                try self.codegen.emit.subRegImm32(.w64, len_reg, @intCast(prefix_count));
+                                try self.codegen.emit.subRegImm32(.w64, len_reg, @intCast(total_fixed));
                             }
                         }
 

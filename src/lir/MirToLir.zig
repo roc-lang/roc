@@ -926,16 +926,33 @@ fn lowerPattern(self: *Self, mir_pat_id: MIR.PatternId) Allocator.Error!LirPatte
                 .list => |l| try self.layoutFromMonotype(l.elem),
                 else => unreachable,
             };
-            const lir_prefix = try self.lowerPatternSpan(self.mir_store.getPatternSpan(ld.patterns));
+            const all_patterns = self.mir_store.getPatternSpan(ld.patterns);
             const rest_pat = if (ld.rest_pattern.isNone())
                 LirPatternId.none
             else
                 try self.lowerPattern(ld.rest_pattern);
-            break :blk self.lir_store.addPattern(.{ .list = .{
-                .elem_layout = elem_layout,
-                .prefix = lir_prefix,
-                .rest = rest_pat,
-            } }, region);
+
+            // Split patterns into prefix (before ..) and suffix (after ..)
+            if (ld.rest_index.isNone()) {
+                // No rest pattern: all patterns are prefix
+                const lir_prefix = try self.lowerPatternSpan(all_patterns);
+                break :blk self.lir_store.addPattern(.{ .list = .{
+                    .elem_layout = elem_layout,
+                    .prefix = lir_prefix,
+                    .rest = rest_pat,
+                    .suffix = LirPatternSpan.empty(),
+                } }, region);
+            } else {
+                const rest_idx: u32 = @intFromEnum(ld.rest_index);
+                const lir_prefix = try self.lowerPatternSpan(all_patterns[0..rest_idx]);
+                const lir_suffix = try self.lowerPatternSpan(all_patterns[rest_idx..]);
+                break :blk self.lir_store.addPattern(.{ .list = .{
+                    .elem_layout = elem_layout,
+                    .prefix = lir_prefix,
+                    .rest = rest_pat,
+                    .suffix = lir_suffix,
+                } }, region);
+            }
         },
         .as_pattern => |ap| blk: {
             const layout_idx = try self.layoutFromMonotype(mono_idx);
