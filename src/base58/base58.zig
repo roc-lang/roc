@@ -32,7 +32,7 @@ const hash_bytes = 32;
 pub const base58_hash_bytes = 44;
 
 pub fn encode(src: [hash_bytes]u8, dest: *[base58_hash_bytes]u8) []u8 {
-    var value: u256 = std.mem.bytesToValue(u256, &src);
+    var value: u256 = std.mem.readInt(u256, &src, .big);
     var write_idx: usize = base58_hash_bytes;
 
     if (value == 0) {
@@ -62,7 +62,9 @@ pub fn decode(src: []const u8) error{InvalidBase58}![hash_bytes]u8 {
             return error.InvalidBase58;
         }
     }
-    return std.mem.toBytes(result);
+    var result_bytes: [hash_bytes]u8 = undefined;
+    std.mem.writeInt(u256, &result_bytes, result, .big);
+    return result_bytes;
 }
 
 // Tools used:
@@ -82,7 +84,8 @@ const known_values = [_]struct { u256, []const u8 }{
 test "encode known values" {
     for (known_values) |case| {
         const input, const expected_output = case;
-        const input_bytes = std.mem.toBytes(input);
+        var input_bytes: [hash_bytes]u8 = undefined;
+        std.mem.writeInt(u256, &input_bytes, input, .big);
         var buffer: [base58_hash_bytes]u8 = undefined;
         const encoded = encode(input_bytes, &buffer);
 
@@ -94,7 +97,7 @@ test "decode known values" {
     for (known_values) |case| {
         const expected_output, const input = case;
         const decoded_bytes = try decode(input);
-        const decoded = std.mem.bytesToValue(u256, &decoded_bytes);
+        const decoded = std.mem.readInt(u256, &decoded_bytes, .big);
 
         try std.testing.expectEqual(expected_output, decoded);
     }

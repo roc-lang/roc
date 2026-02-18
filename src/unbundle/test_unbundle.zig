@@ -109,7 +109,7 @@ test "validateBase58Hash - valid and invalid hashes" {
     hasher.final(&hash);
 
     var base58_buf: [44]u8 = undefined;
-    const base58_hash = base58.encode(&hash, &base58_buf);
+    const base58_hash = base58.encode(hash, &base58_buf);
 
     // Valid base58 hash should decode correctly
     const decoded = try unbundle.validateBase58Hash(base58_hash);
