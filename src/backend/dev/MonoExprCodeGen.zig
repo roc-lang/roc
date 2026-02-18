@@ -703,6 +703,22 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
         /// - object_file: Generating relocatable object files, use symbol references for builtins
         generation_mode: GenerationMode = .native_execution,
 
+        /// Scratch buffer for argument info during call generation
+        scratch_arg_infos: base.Scratch(ArgInfo),
+
+        /// Scratch buffer for pass-by-pointer flags during call generation
+        scratch_pass_by_ptr: base.Scratch(bool),
+
+        /// Scratch buffer for parameter register counts during lambda param binding
+        scratch_param_num_regs: base.Scratch(u8),
+
+        /// Pre-computed argument info to avoid generating expressions twice
+        const ArgInfo = struct {
+            loc: ValueLocation,
+            layout_idx: ?layout.Idx,
+            num_regs: u8,
+        };
+
         /// Info about a mutable variable's fixed stack slot
         pub const MutableVarInfo = struct {
             /// The fixed stack slot offset (from frame pointer)
@@ -879,7 +895,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             store: *const MonoExprStore,
             layout_store_opt: ?*const LayoutStore,
             static_interner: ?*StaticDataInterner,
-        ) Self {
+        ) Allocator.Error!Self {
             return .{
                 .allocator = allocator,
                 .cc = CallingConvention.forTarget(target),
@@ -902,6 +918,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 .internal_call_patches = std.ArrayList(InternalCallPatch).empty,
                 .internal_addr_patches = std.ArrayList(InternalAddrPatch).empty,
                 .early_return_patches = std.ArrayList(usize).empty,
+                .scratch_arg_infos = try base.Scratch(ArgInfo).init(allocator),
+                .scratch_pass_by_ptr = try base.Scratch(bool).init(allocator),
+                .scratch_param_num_regs = try base.Scratch(u8).init(allocator),
             };
         }
 
@@ -925,6 +944,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             self.internal_call_patches.deinit(self.allocator);
             self.internal_addr_patches.deinit(self.allocator);
             self.early_return_patches.deinit(self.allocator);
+            self.scratch_arg_infos.deinit();
+            self.scratch_pass_by_ptr.deinit();
+            self.scratch_param_num_regs.deinit();
         }
 
         /// Reset the code generator for generating a new expression
@@ -11465,35 +11487,28 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             // When registers are exhausted, spill remaining arguments to the stack.
             const args = self.store.getExprSpan(args_span);
 
-            // Pre-computed argument info to avoid generating expressions twice
-            const ArgInfo = struct {
-                loc: ValueLocation,
-                layout_idx: ?layout.Idx,
-                num_regs: u8, // Number of registers this argument needs
-            };
-
             // First pass: Generate all argument expressions and calculate register needs
-            var arg_infos: [16]ArgInfo = undefined;
+            const arg_infos_start = self.scratch_arg_infos.top();
+            defer self.scratch_arg_infos.clearFrom(arg_infos_start);
+
             var total_regs_needed: u8 = 0;
 
-            for (args, 0..) |arg_id, i| {
-                if (i >= 16) break;
+            for (args) |arg_id| {
                 const arg_loc = try self.generateExpr(arg_id);
                 const arg_layout = self.getExprLayout(arg_id);
 
                 // Calculate how many registers this argument needs
                 const num_regs: u8 = self.calcArgRegCount(arg_loc, arg_layout);
-                arg_infos[i] = .{ .loc = arg_loc, .layout_idx = arg_layout, .num_regs = num_regs };
+                try self.scratch_arg_infos.append(.{ .loc = arg_loc, .layout_idx = arg_layout, .num_regs = num_regs });
                 total_regs_needed += num_regs;
             }
+            const arg_infos = self.scratch_arg_infos.sliceFromStart(arg_infos_start);
 
             // Calculate stack spill size (for arguments that don't fit in registers)
             var stack_spill_size: i32 = 0;
             {
                 var reg_count: u8 = 0;
-                for (0..args.len) |i| {
-                    if (i >= 16) break;
-                    const info = arg_infos[i];
+                for (arg_infos) |info| {
                     if (reg_count + info.num_regs <= max_arg_regs) {
                         reg_count += info.num_regs;
                     } else {
@@ -11519,9 +11534,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             var reg_idx: u8 = 0;
             var stack_arg_offset: i32 = 0; // Offset from RSP for stack arguments
 
-            for (args, 0..) |_, i| {
-                if (i >= 16) break;
-                const info = arg_infos[i];
+            for (arg_infos) |info| {
                 const arg_loc = info.loc;
                 const arg_layout = info.layout_idx;
 
@@ -13195,12 +13208,19 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
             // Pre-scan: determine which params are passed by pointer.
             // This must match the logic in generateCallToLambda.
-            var param_pass_by_ptr: [16]bool = .{false} ** 16;
+            const pbp_start = self.scratch_pass_by_ptr.top();
+            defer self.scratch_pass_by_ptr.clearFrom(pbp_start);
+            for (0..pattern_ids.len) |_| try self.scratch_pass_by_ptr.append(false);
+            const param_pass_by_ptr = self.scratch_pass_by_ptr.sliceFromStart(pbp_start);
+
             {
-                var param_num_regs: [16]u8 = .{1} ** 16;
+                const pnr_start = self.scratch_param_num_regs.top();
+                defer self.scratch_param_num_regs.clearFrom(pnr_start);
+                for (0..pattern_ids.len) |_| try self.scratch_param_num_regs.append(1);
+                const param_num_regs = self.scratch_param_num_regs.sliceFromStart(pnr_start);
+
                 var pre_reg_count: u8 = initial_reg_idx;
                 for (pattern_ids, 0..) |pid, pi| {
-                    if (pi >= 16) break;
                     const pat = self.store.getPattern(pid);
                     const nr: u8 = switch (pat) {
                         .bind => |b| self.calcParamRegCount(b.layout_idx),
@@ -13239,11 +13259,10 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     var found = false;
                     var best_idx: usize = 0;
                     var best_regs: u8 = 0;
-                    for (0..pattern_ids.len) |pi| {
-                        if (pi >= 16) break;
-                        if (!param_pass_by_ptr[pi] and param_num_regs[pi] > 1 and param_num_regs[pi] > best_regs) {
+                    for (param_num_regs, 0..) |pnr, pi| {
+                        if (!param_pass_by_ptr[pi] and pnr > 1 and pnr > best_regs) {
                             best_idx = pi;
-                            best_regs = param_num_regs[pi];
+                            best_regs = pnr;
                             found = true;
                         }
                     }
@@ -13265,7 +13284,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         const num_regs = self.calcParamRegCount(bind.layout_idx);
 
                         // Check if this param is passed by pointer (pre-computed)
-                        if (param_idx < 16 and param_pass_by_ptr[param_idx]) {
+                        if (param_pass_by_ptr[param_idx]) {
                             // Multi-register arg: caller passed a pointer (1 register).
                             // Use a hardcoded temp register to avoid allocTempGeneral returning
                             // the same register as the argument register (e.g. X0).
@@ -13395,7 +13414,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         // Skip this argument - use the layout to determine how many
                         // registers it occupies (important for correct roc_ops placement)
                         const num_regs = self.calcParamRegCount(wc.layout_idx);
-                        if (param_idx < 16 and param_pass_by_ptr[param_idx]) {
+                        if (param_pass_by_ptr[param_idx]) {
                             reg_idx += 1; // passed by pointer, skip 1 register
                         } else if (reg_idx + num_regs <= max_arg_regs) {
                             reg_idx += num_regs;
@@ -13411,7 +13430,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         const size = ls.layoutSizeAlign(record_layout).size;
                         const num_regs: u8 = @max(1, @as(u8, @intCast((size + 7) / 8)));
 
-                        if (param_idx < 16 and param_pass_by_ptr[param_idx]) {
+                        if (param_pass_by_ptr[param_idx]) {
                             // Passed by pointer: copy from pointer to local stack.
                             // Use hardcoded temp to avoid clobbering the arg register.
                             const temp_r: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X9 else .R11;
@@ -13450,7 +13469,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     },
                     .list => {
                         // List destructuring: lists are 24 bytes (ptr, len, capacity) = 3 registers
-                        if (param_idx < 16 and param_pass_by_ptr[param_idx]) {
+                        if (param_pass_by_ptr[param_idx]) {
                             // Passed by pointer. Use hardcoded temp to avoid clobbering arg register.
                             const temp_r: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X9 else .R11;
                             const stack_offset = self.codegen.allocStackSlot(roc_list_size);
@@ -13494,7 +13513,7 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                         const size = ls.layoutSizeAlign(tuple_layout).size;
                         const num_regs: u8 = @max(1, @as(u8, @intCast((size + 7) / 8)));
 
-                        if (param_idx < 16 and param_pass_by_ptr[param_idx]) {
+                        if (param_pass_by_ptr[param_idx]) {
                             // Passed by pointer: copy from pointer to local stack.
                             // Use hardcoded temp to avoid clobbering the arg register.
                             const temp_r: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X9 else .R11;
@@ -13788,14 +13807,10 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             const args = self.store.getExprSpan(args_span);
 
             // Pass 1: Generate all argument expressions and calculate register needs
-            const ArgInfo = struct {
-                loc: ValueLocation,
-                layout_idx: ?layout.Idx,
-                num_regs: u8,
-            };
-            var arg_infos: [16]ArgInfo = undefined;
-            for (args, 0..) |arg_id, i| {
-                if (i >= 16) break;
+            const arg_infos_start = self.scratch_arg_infos.top();
+            defer self.scratch_arg_infos.clearFrom(arg_infos_start);
+
+            for (args) |arg_id| {
                 var arg_loc = try self.generateExpr(arg_id);
                 // When a closure_value is passed as an argument to a higher-order function,
                 // the callee will call it through a function pointer (BLR/CALL reg).
@@ -13820,8 +13835,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 }
                 const arg_layout = self.getExprLayout(arg_id);
                 const num_regs = self.calcArgRegCount(arg_loc, arg_layout);
-                arg_infos[i] = .{ .loc = arg_loc, .layout_idx = arg_layout, .num_regs = num_regs };
+                try self.scratch_arg_infos.append(.{ .loc = arg_loc, .layout_idx = arg_layout, .num_regs = num_regs });
             }
+            const arg_infos = self.scratch_arg_infos.sliceFromStart(arg_infos_start);
 
             // Check if return type exceeds register limit and needs return-by-pointer.
             // If so, the first argument register carries a hidden pointer to a caller-
@@ -13840,15 +13856,18 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             // unknowable at body-gen time, so we pass large args by pointer instead.
             // We convert overflowing multi-reg args first, then convert more
             // (largest first, scanning backwards) if roc_ops would still spill.
-            var pass_by_ptr: [16]bool = .{false} ** 16;
+            const pbp_start = self.scratch_pass_by_ptr.top();
+            defer self.scratch_pass_by_ptr.clearFrom(pbp_start);
+            for (0..args.len) |_| try self.scratch_pass_by_ptr.append(false);
+            const pass_by_ptr = self.scratch_pass_by_ptr.sliceFromStart(pbp_start);
+
             var stack_spill_size: i32 = 0;
             {
                 // If needs_ret_ptr, the hidden pointer consumes one register slot
                 var reg_count: u8 = if (needs_ret_ptr) 1 else 0;
                 // First pass: convert overflowing multi-reg args to pointer
-                for (0..args.len) |i| {
-                    if (i >= 16) break;
-                    const nr = arg_infos[i].num_regs;
+                for (arg_infos, 0..) |ai, i| {
+                    const nr = ai.num_regs;
                     if (reg_count + nr <= max_arg_regs) {
                         reg_count += nr;
                     } else if (nr > 1) {
@@ -13869,11 +13888,10 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     var found = false;
                     var best_idx: usize = 0;
                     var best_regs: u8 = 0;
-                    for (0..args.len) |i| {
-                        if (i >= 16) break;
-                        if (!pass_by_ptr[i] and arg_infos[i].num_regs > 1 and arg_infos[i].num_regs > best_regs) {
+                    for (arg_infos, 0..) |ai, i| {
+                        if (!pass_by_ptr[i] and ai.num_regs > 1 and ai.num_regs > best_regs) {
                             best_idx = i;
-                            best_regs = arg_infos[i].num_regs;
+                            best_regs = ai.num_regs;
                             found = true;
                         }
                     }
@@ -13916,14 +13934,12 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 reg_idx = 1;
             }
 
-            for (0..args.len) |i| {
-                if (i >= 16) break;
-                const info = arg_infos[i];
+            for (arg_infos, pass_by_ptr) |info, pbp| {
                 const arg_loc = info.loc;
                 const arg_layout = info.layout_idx;
 
                 // Check if this argument is passed by pointer (pre-computed above)
-                if (pass_by_ptr[i]) {
+                if (pbp) {
                     // Multi-register arg: pass by pointer
                     const arg_size: u32 = @as(u32, info.num_regs) * 8;
                     const arg_offset = try self.ensureOnStack(arg_loc, arg_size);
@@ -14214,14 +14230,10 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
             }
 
             // Generate all argument expressions
-            const ArgInfo = struct {
-                loc: ValueLocation,
-                layout_idx: ?layout.Idx,
-                num_regs: u8,
-            };
-            var arg_infos: [16]ArgInfo = undefined;
-            for (args, 0..) |arg_id, i| {
-                if (i >= 16) break;
+            const arg_infos_start = self.scratch_arg_infos.top();
+            defer self.scratch_arg_infos.clearFrom(arg_infos_start);
+
+            for (args) |arg_id| {
                 var arg_loc = try self.generateExpr(arg_id);
                 // Convert closure_value to lambda_code for higher-order function args
                 if (arg_loc == .closure_value) {
@@ -14243,8 +14255,9 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 }
                 const arg_layout = self.getExprLayout(arg_id);
                 const num_regs = self.calcArgRegCount(arg_loc, arg_layout);
-                arg_infos[i] = .{ .loc = arg_loc, .layout_idx = arg_layout, .num_regs = num_regs };
+                try self.scratch_arg_infos.append(.{ .loc = arg_loc, .layout_idx = arg_layout, .num_regs = num_regs });
             }
+            const arg_infos = self.scratch_arg_infos.sliceFromStart(arg_infos_start);
 
             // Check if return type needs return-by-pointer (same as generateCallToLambda)
             const needs_ret_ptr = self.needsInternalReturnByPointer(ret_layout);
@@ -14258,13 +14271,16 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
 
             // Pre-compute pass_by_ptr (same algorithm as generateCallToLambda)
             // to ensure caller and callee agree on the calling convention.
-            var pass_by_ptr: [16]bool = .{false} ** 16;
+            const pbp_start = self.scratch_pass_by_ptr.top();
+            defer self.scratch_pass_by_ptr.clearFrom(pbp_start);
+            for (0..args.len) |_| try self.scratch_pass_by_ptr.append(false);
+            const pass_by_ptr = self.scratch_pass_by_ptr.sliceFromStart(pbp_start);
+
             var stack_spill_size: i32 = 0;
             {
                 var reg_count: u8 = if (needs_ret_ptr) 1 else 0;
-                for (0..args.len) |i| {
-                    if (i >= 16) break;
-                    const nr = arg_infos[i].num_regs;
+                for (arg_infos, 0..) |ai, i| {
+                    const nr = ai.num_regs;
                     if (reg_count + nr <= max_arg_regs) {
                         reg_count += nr;
                     } else if (nr > 1) {
@@ -14284,11 +14300,10 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                     var found = false;
                     var best_idx: usize = 0;
                     var best_regs: u8 = 0;
-                    for (0..args.len) |i| {
-                        if (i >= 16) break;
-                        if (!pass_by_ptr[i] and arg_infos[i].num_regs > 1 and arg_infos[i].num_regs > best_regs) {
+                    for (arg_infos, 0..) |ai, i| {
+                        if (!pass_by_ptr[i] and ai.num_regs > 1 and ai.num_regs > best_regs) {
                             best_idx = i;
-                            best_regs = arg_infos[i].num_regs;
+                            best_regs = ai.num_regs;
                             found = true;
                         }
                     }
@@ -14329,13 +14344,11 @@ pub fn MonoExprCodeGen(comptime target: RocTarget) type {
                 reg_idx = 1;
             }
 
-            for (0..args.len) |i| {
-                if (i >= 16) break;
-                const info = arg_infos[i];
+            for (arg_infos, pass_by_ptr) |info, pbp| {
                 const arg_loc = info.loc;
 
                 // Check if this argument is passed by pointer (pre-computed above)
-                if (pass_by_ptr[i]) {
+                if (pbp) {
                     const arg_size: u32 = @as(u32, info.num_regs) * 8;
                     const arg_offset = try self.ensureOnStack(arg_loc, arg_size);
                     const arg_reg = self.getArgumentRegister(reg_idx);
@@ -16805,7 +16818,7 @@ test "code generator initialization" {
     var store = MonoExprStore.init(allocator);
     defer store.deinit();
 
-    var codegen = HostMonoExprCodeGen.init(allocator, &store, null, null);
+    var codegen = try HostMonoExprCodeGen.init(allocator, &store, null, null);
     defer codegen.deinit();
 }
 
@@ -16821,7 +16834,7 @@ test "generate i64 literal" {
     // Add an i64 literal
     const expr_id = try store.addExpr(.{ .i64_literal = 42 }, base.Region.zero());
 
-    var codegen = HostMonoExprCodeGen.init(allocator, &store, null, null);
+    var codegen = try HostMonoExprCodeGen.init(allocator, &store, null, null);
     defer codegen.deinit();
 
     const result = try codegen.generateCode(expr_id, .i64, 1);
@@ -16842,7 +16855,7 @@ test "generate bool literal" {
 
     const expr_id = try store.addExpr(.{ .bool_literal = true }, base.Region.zero());
 
-    var codegen = HostMonoExprCodeGen.init(allocator, &store, null, null);
+    var codegen = try HostMonoExprCodeGen.init(allocator, &store, null, null);
     defer codegen.deinit();
 
     const result = try codegen.generateCode(expr_id, .bool, 1);
@@ -16870,7 +16883,7 @@ test "generate addition" {
         .result_layout = .i64,
     } }, base.Region.zero());
 
-    var codegen = HostMonoExprCodeGen.init(allocator, &store, null, null);
+    var codegen = try HostMonoExprCodeGen.init(allocator, &store, null, null);
     defer codegen.deinit();
 
     const result = try codegen.generateCode(add_id, .i64, 1);
