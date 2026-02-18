@@ -3084,6 +3084,13 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             const str_var = try self.freshStr(env, expr_region);
             _ = try self.unify(expr_var, str_var, env);
         },
+        .e_bytes_literal => |_| {
+            // Create List(U8) type
+            const u8_content = try self.mkNumberTypeContent("U8", env);
+            const u8_var = try self.freshFromContent(u8_content, env, expr_region);
+            const list_content = try self.mkListContent(u8_var, env);
+            try self.unifyWith(expr_var, list_content, env);
+        },
         .e_str => |str| {
             // Iterate over the string segments, checking each one
             const segment_expr_idx_slice = self.cir.store.sliceExpr(str.span);

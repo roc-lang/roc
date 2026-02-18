@@ -210,6 +210,8 @@ pub fn lowerExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!MIR.ExprId
 
         // --- Strings ---
         .e_str_segment => |seg| try self.store.addExpr(self.allocator, .{ .str = seg.literal }, monotype, region),
+        // bytes_literal (List(U8) file import) - not yet supported in MIR/LLVM backend
+        .e_bytes_literal => try self.store.addExpr(self.allocator, .{ .runtime_err_anno_only = {} }, monotype, region),
         .e_str => |str_expr| {
             const span = module_env.store.sliceExpr(str_expr.span);
             if (span.len == 0) {

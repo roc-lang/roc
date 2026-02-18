@@ -243,6 +243,7 @@ pub const RcInsertPass = struct {
             .f32_literal,
             .dec_literal,
             .str_literal,
+            .bytes_literal,
             .bool_literal,
             .empty_list,
             .empty_record,

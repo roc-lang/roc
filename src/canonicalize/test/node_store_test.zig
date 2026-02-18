@@ -946,6 +946,27 @@ test "NodeStore round trip - Diagnostics" {
         },
     });
 
+    try diagnostics.append(gpa, CIR.Diagnostic{
+        .file_import_not_found = .{
+            .path = rand_idx(StringLiteral.Idx),
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
+        .file_import_io_error = .{
+            .path = rand_idx(StringLiteral.Idx),
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
+        .file_import_not_utf8 = .{
+            .path = rand_idx(StringLiteral.Idx),
+            .region = rand_region(),
+        },
+    });
+
     // Test the round-trip for all diagnostics
     for (diagnostics.items) |diagnostic| {
         const idx = try store.addDiagnostic(diagnostic);

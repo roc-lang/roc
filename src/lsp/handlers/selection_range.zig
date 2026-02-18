@@ -318,7 +318,7 @@ fn collectContainingRegionsFromStatement(
         .@"return" => |r| {
             try collectContainingRegionsFromExpr(allocator, ast, r.expr, target_offset, regions);
         },
-        .@"break", .import, .type_anno, .type_decl, .malformed => {},
+        .@"break", .import, .file_import, .type_anno, .type_decl, .malformed => {},
     }
 }
 
@@ -338,6 +338,7 @@ fn getStatementRegion(stmt: AST.Statement) ?TokenizedRegion {
         .import => |i| i.region,
         .type_decl => |t| t.region,
         .malformed => |m| m.region,
+        .file_import => |fi| fi.region,
         .type_anno => null, // Type annotations don't have a simple region
     };
 }

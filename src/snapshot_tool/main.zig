@@ -1124,6 +1124,7 @@ fn processSnapshotContent(
                 config.builtin_indices,
                 imported_envs_for_file,
                 &module_envs_for_file.?,
+                std.fs.path.dirname(output_path),
             );
             // For app modules, numeric defaults were deferred by canonicalizeAndTypeCheckModule.
             // Since snapshot tests don't have platform requirements, finalize them here.

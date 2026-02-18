@@ -136,6 +136,8 @@ defining_pattern: ?Pattern.Idx = null,
 /// The expression index of the enclosing lambda, if any.
 /// Used to track which lambda a return expression belongs to.
 enclosing_lambda: ?Expr.Idx = null,
+/// Directory containing the source file, used to resolve file imports.
+source_dir: ?[]const u8 = null,
 const Ident = base.Ident;
 const Region = base.Region;
 // ModuleEnv is already imported at the top
@@ -1993,6 +1995,27 @@ pub fn canonicalizeFile(
                     }
                 }
             },
+            .file_import => |fi| {
+                // Introduce the file import name for forward/recursive references
+                const name_ident = self.parse_ir.tokens.resolveIdentifier(fi.name_tok) orelse continue;
+                const region = self.parse_ir.tokenizedRegionToRegion(fi.region);
+                const placeholder_pattern = Pattern{
+                    .assign = .{ .ident = name_ident },
+                };
+                const placeholder_pattern_idx = try self.env.addPattern(placeholder_pattern, region);
+                switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, name_ident, placeholder_pattern_idx, false, true)) {
+                    .success => {},
+                    .shadowing_warning => |shadowed_pattern_idx| {
+                        const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
+                        try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
+                            .ident = name_ident,
+                            .region = region,
+                            .original_region = original_region,
+                        } });
+                    },
+                    .top_level_var_error, .var_across_function_boundary, .var_reassignment_ok => unreachable,
+                }
+            },
             else => {
                 // Skip non-type-declaration statements in first pass
             },
@@ -2646,6 +2669,9 @@ pub fn canonicalizeFile(
                         try self.env.setExposedNodeIndexById(name_ident, def_idx_u16);
                     }
                 }
+            },
+            .file_import => |fi| {
+                try self.canonicalizeFileImport(fi);
             },
             .malformed => {
                 // We won't touch this since it's already a parse error.
@@ -3523,6 +3549,103 @@ fn canonicalizeImportStatement(
         try self.importUnaliased(module_name, cir_exposes, import_region, is_package_qualified)
     else
         try self.importAliased(module_name, import_stmt.alias_tok, cir_exposes, import_region, is_package_qualified);
+}
+
+/// Canonicalize a file import statement: `import "path" as name : Type`
+fn canonicalizeFileImport(self: *Self, fi: @TypeOf(@as(AST.Statement, undefined).file_import)) std.mem.Allocator.Error!void {
+    const region = self.parse_ir.tokenizedRegionToRegion(fi.region);
+    const name_ident = self.parse_ir.tokens.resolveIdentifier(fi.name_tok) orelse return;
+
+    // Resolve the file path from the StringPart token text
+    const path_text = self.parse_ir.resolve(fi.path_tok);
+
+    // Build the full file path relative to source_dir
+    const full_path = if (self.source_dir) |dir|
+        std.fs.path.join(self.env.gpa, &.{ dir, path_text }) catch return error.OutOfMemory
+    else
+        self.env.gpa.dupe(u8, path_text) catch return error.OutOfMemory;
+    defer self.env.gpa.free(full_path);
+
+    // Read the file
+    const file_contents = std.fs.cwd().readFileAlloc(self.env.gpa, full_path, std.math.maxInt(u32)) catch |err| {
+        const path_string = try self.env.insertString(path_text);
+        const diag: Diagnostic = switch (err) {
+            error.FileNotFound => .{ .file_import_not_found = .{
+                .path = path_string,
+                .region = region,
+            } },
+            else => .{ .file_import_io_error = .{
+                .path = path_string,
+                .region = region,
+            } },
+        };
+        // Create a runtime error expression for the def (this also pushes the diagnostic)
+        const err_expr = try self.env.pushMalformed(Expr.Idx, diag);
+        try self.createFileImportDef(name_ident, err_expr, region);
+        return;
+    };
+    defer self.env.gpa.free(file_contents);
+
+    // Create the expression based on type
+    const expr_idx = if (!fi.is_bytes) blk: {
+        // Str: validate UTF-8
+        if (!std.unicode.utf8ValidateSlice(file_contents)) {
+            const path_string = try self.env.insertString(path_text);
+            const err_expr = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .file_import_not_utf8 = .{
+                .path = path_string,
+                .region = region,
+            } });
+            break :blk err_expr;
+        }
+        const string_idx = try self.env.insertString(file_contents);
+        break :blk try self.env.addExpr(Expr{ .e_str_segment = .{
+            .literal = string_idx,
+        } }, region);
+    } else blk: {
+        // List(U8): store raw bytes
+        const string_idx = try self.env.insertString(file_contents);
+        break :blk try self.env.addExpr(Expr{ .e_bytes_literal = .{
+            .literal = string_idx,
+        } }, region);
+    };
+
+    try self.createFileImportDef(name_ident, expr_idx, region);
+}
+
+/// Helper to create a def for a file import binding
+fn createFileImportDef(self: *Self, name_ident: base.Ident.Idx, expr_idx: Expr.Idx, region: Region) std.mem.Allocator.Error!void {
+    // Look up the placeholder pattern created in first pass
+    const pattern_idx = if (self.scopeContains(.ident, name_ident)) |existing|
+        existing
+    else blk: {
+        // Not in scope yet (e.g., inside a block), create pattern and introduce
+        const pattern = Pattern{
+            .assign = .{ .ident = name_ident },
+        };
+        const new_pattern_idx = try self.env.addPattern(pattern, region);
+        switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, name_ident, new_pattern_idx, false, true)) {
+            .success => {},
+            .shadowing_warning => |shadowed_pattern_idx| {
+                const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
+                try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
+                    .ident = name_ident,
+                    .region = region,
+                    .original_region = original_region,
+                } });
+            },
+            else => {},
+        }
+        break :blk new_pattern_idx;
+    };
+
+    // Create the def
+    const def_idx = try self.env.addDef(.{
+        .pattern = pattern_idx,
+        .expr = expr_idx,
+        .annotation = null,
+        .kind = .let,
+    }, region);
+    try self.env.store.addScratchDef(def_idx);
 }
 
 /// Resolve the module alias name from either explicit alias or module name
@@ -11216,6 +11339,9 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
             }, region);
 
             mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = DataSpan.empty() };
+        },
+        .file_import => |fi| {
+            try self.canonicalizeFileImport(fi);
         },
         .malformed => |_| {
             // Stmt was malformed, parse reports this error, so do nothing here

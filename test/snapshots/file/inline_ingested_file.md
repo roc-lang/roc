@@ -11,55 +11,19 @@ import Json
 foo = Json.parse(data)
 ~~~
 # EXPECTED
-PARSE ERROR - inline_ingested_file.md:1:8:1:9
-PARSE ERROR - inline_ingested_file.md:1:9:1:19
-PARSE ERROR - inline_ingested_file.md:1:19:1:20
-PARSE ERROR - inline_ingested_file.md:1:21:1:23
+FILE NOT FOUND - inline_ingested_file.md:1:1:1:34
 MODULE NOT FOUND - inline_ingested_file.md:2:1:2:12
 UNDEFINED VARIABLE - inline_ingested_file.md:4:7:4:17
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `incomplete_import`
-This is an unexpected parsing error. Please check your syntax.
+**FILE NOT FOUND**
+The file **users.json** was not found.
 
-**inline_ingested_file.md:1:8:1:9:**
+Make sure the file exists relative to your source file:
+**inline_ingested_file.md:1:1:1:34:**
 ```roc
 import "users.json" as data : Str
 ```
-       ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**inline_ingested_file.md:1:9:1:19:**
-```roc
-import "users.json" as data : Str
-```
-        ^^^^^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**inline_ingested_file.md:1:19:1:20:**
-```roc
-import "users.json" as data : Str
-```
-                  ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**inline_ingested_file.md:1:21:1:23:**
-```roc
-import "users.json" as data : Str
-```
-                    ^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 **MODULE NOT FOUND**
@@ -96,12 +60,10 @@ EndOfFile,
 (file
 	(type-module)
 	(statements
-		(s-malformed (tag "incomplete_import"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-type-anno (name "data")
-			(ty (name "Str")))
+		(s-file-import
+			(path "users.json")
+			(name "data")
+			(type "Str"))
 		(s-import (raw "Json"))
 		(s-decl
 			(p-ident (raw "foo"))
@@ -111,19 +73,14 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-data : Str
-import Json
-
-foo = Json.parse(data)
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
 (can-ir
 	(d-let
 		(p-assign (ident "data"))
-		(e-anno-only)
-		(annotation
-			(ty-lookup (name "Str") (builtin))))
+		(e-runtime-error (tag "file_import_not_found")))
 	(d-let
 		(p-assign (ident "foo"))
 		(e-call
@@ -137,9 +94,9 @@ foo = Json.parse(data)
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Str"))
+		(patt (type "Error"))
 		(patt (type "Error")))
 	(expressions
-		(expr (type "Str"))
+		(expr (type "Error"))
 		(expr (type "Error"))))
 ~~~

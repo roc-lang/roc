@@ -2107,6 +2107,12 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             const mono_idx = self.store.insertString(str_text) catch return error.OutOfMemory;
             break :blk .{ .str_literal = mono_idx };
         },
+        .e_bytes_literal => |bytes| blk: {
+            // Copy the bytes from the module to the mono store
+            const bytes_data = module_env.common.getString(bytes.literal);
+            const mono_idx = self.store.insertString(bytes_data) catch return error.OutOfMemory;
+            break :blk .{ .bytes_literal = mono_idx };
+        },
         .e_str => |str| blk: {
             // For now, handle simple strings - interpolation needs more work
             const segments = module_env.store.sliceExpr(str.span);

@@ -113,6 +113,12 @@ pub const Tag = enum {
     /// * extra_data format(if aliased == 1): [alias upper_ident node index, [exposed node index]{num_exposes}]
     /// * extra_data format(if aliased == 0): [[exposed node index]{num_exposes}]
     import,
+    /// A file import statement
+    /// Example: `import "README.md" as readme : Str`
+    /// * main_token - StringPart token (file path)
+    /// * lhs - LowerIdent token (name)
+    /// * rhs - UpperIdent token | (is_bytes << 31)
+    file_import,
     /// A Type declaration for aliases
     /// Example: `Color := { red : U8, green: U8, blue: U8 }`
     /// Example: `Color := [Red, Green, Blue]`
