@@ -596,6 +596,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// The target this LirCodeGen was instantiated for
         pub const roc_target = target;
 
+        /// Frame pointer register for the target architecture
+        const frame_ptr: GeneralReg = if (arch == .x86_64) .RBP else .FP;
+
         /// CallBuilder type alias for this architecture's emit type
         const Builder = CallingConventionMod.CallBuilder(@TypeOf(@as(CodeGen, undefined).emit));
 
@@ -1763,16 +1766,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                             // Copy element into payload area of tag union (at result_slot + 0)
                             const temp_reg = try self.allocTempGeneral();
-                            var copied: u32 = 0;
-                            while (copied < elem_size) : (copied += 8) {
-                                if (comptime target.toCpuArch() == .aarch64) {
-                                    try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, addr_reg, @intCast(copied));
-                                    try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, result_slot + @as(i32, @intCast(copied)));
-                                } else {
-                                    try self.codegen.emit.movRegMem(.w64, temp_reg, addr_reg, @intCast(copied));
-                                    try self.codegen.emit.movMemReg(.w64, .RBP, result_slot + @as(i32, @intCast(copied)), temp_reg);
-                                }
-                            }
+                            try self.copyChunked(temp_reg, addr_reg, 0, frame_ptr, result_slot, elem_size);
                             self.codegen.freeGeneral(temp_reg);
                             self.codegen.freeGeneral(addr_reg);
                         }
@@ -1839,16 +1833,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         }
                     } else {
                         // For larger elements, copy in 8-byte chunks
-                        var copied: u32 = 0;
-                        while (copied < elem_size) : (copied += 8) {
-                            if (comptime target.toCpuArch() == .aarch64) {
-                                try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, addr_reg, @intCast(copied));
-                                try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, elem_slot + @as(i32, @intCast(copied)));
-                            } else {
-                                try self.codegen.emit.movRegMem(.w64, temp_reg, addr_reg, @intCast(copied));
-                                try self.codegen.emit.movMemReg(.w64, .RBP, elem_slot + @as(i32, @intCast(copied)), temp_reg);
-                            }
-                        }
+                        try self.copyChunked(temp_reg, addr_reg, 0, frame_ptr, elem_slot, elem_size);
                     }
 
                     self.codegen.freeGeneral(temp_reg);
@@ -3655,16 +3640,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.codegen.emit.movMemReg(.w64, .RBP, elem_slot, temp_reg);
                 }
             } else {
-                var copied: u32 = 0;
-                while (copied < elem_size) : (copied += 8) {
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, ptr_reg, @intCast(byte_offset + copied));
-                        try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, elem_slot + @as(i32, @intCast(copied)));
-                    } else {
-                        try self.codegen.emit.movRegMem(.w64, temp_reg, ptr_reg, @intCast(byte_offset + copied));
-                        try self.codegen.emit.movMemReg(.w64, .RBP, elem_slot + @as(i32, @intCast(copied)), temp_reg);
-                    }
-                }
+                try self.copyChunked(temp_reg, ptr_reg, @intCast(byte_offset), frame_ptr, elem_slot, elem_size);
             }
             self.codegen.freeGeneral(temp_reg);
             self.codegen.freeGeneral(ptr_reg);
@@ -3748,16 +3724,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.codegen.emit.movMemReg(.w64, .RBP, elem_slot, temp_reg);
                 }
             } else {
-                var copied: u32 = 0;
-                while (copied < elem_size) : (copied += 8) {
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, addr_reg, @intCast(copied));
-                        try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, elem_slot + @as(i32, @intCast(copied)));
-                    } else {
-                        try self.codegen.emit.movRegMem(.w64, temp_reg, addr_reg, @intCast(copied));
-                        try self.codegen.emit.movMemReg(.w64, .RBP, elem_slot + @as(i32, @intCast(copied)), temp_reg);
-                    }
-                }
+                try self.copyChunked(temp_reg, addr_reg, 0, frame_ptr, elem_slot, elem_size);
             }
             self.codegen.freeGeneral(temp_reg);
             self.codegen.freeGeneral(addr_reg);
@@ -4065,16 +4032,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 // Copy elem_size bytes from ptr_reg to elem_slot (8-byte chunks)
                 const tmp = try self.allocTempGeneral();
-                var copied: u32 = 0;
-                while (copied < elem_size) : (copied += 8) {
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emit.ldrRegMemSoff(.w64, tmp, ptr_reg, @intCast(copied));
-                        try self.codegen.emit.strRegMemSoff(.w64, tmp, .FP, elem_slot + @as(i32, @intCast(copied)));
-                    } else {
-                        try self.codegen.emit.movRegMem(.w64, tmp, ptr_reg, @intCast(copied));
-                        try self.codegen.emit.movMemReg(.w64, .RBP, elem_slot + @as(i32, @intCast(copied)), tmp);
-                    }
-                }
+                try self.copyChunked(tmp, ptr_reg, 0, frame_ptr, elem_slot, elem_size);
                 self.codegen.freeGeneral(tmp);
                 self.codegen.freeGeneral(ptr_reg);
             }
@@ -7579,18 +7537,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 }
                             } else {
                                 // For larger elements, copy 8 bytes at a time
-                                var copied: u32 = 0;
-                                while (copied < elem_size) : (copied += 8) {
-                                    const src_off = elem_offset_in_list + @as(i32, @intCast(copied));
-                                    const dst_off = elem_slot + @as(i32, @intCast(copied));
-                                    if (comptime target.toCpuArch() == .aarch64) {
-                                        try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, list_ptr_reg, src_off);
-                                        try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, dst_off);
-                                    } else {
-                                        try self.codegen.emit.movRegMem(.w64, temp_reg, list_ptr_reg, src_off);
-                                        try self.codegen.emit.movMemReg(.w64, .RBP, dst_off, temp_reg);
-                                    }
-                                }
+                                try self.copyChunked(temp_reg, list_ptr_reg, elem_offset_in_list, frame_ptr, elem_slot, elem_size);
                             }
 
                             self.codegen.freeGeneral(temp_reg);
@@ -7653,18 +7600,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                         try self.codegen.emit.movMemReg(.w64, .RBP, suf_slot, temp_reg);
                                     }
                                 } else {
-                                    var copied: u32 = 0;
-                                    while (copied < elem_size) : (copied += 8) {
-                                        const src_off = suf_offset + @as(i32, @intCast(copied));
-                                        const dst_off = suf_slot + @as(i32, @intCast(copied));
-                                        if (comptime target.toCpuArch() == .aarch64) {
-                                            try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, suf_ptr_reg, src_off);
-                                            try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, dst_off);
-                                        } else {
-                                            try self.codegen.emit.movRegMem(.w64, temp_reg, suf_ptr_reg, src_off);
-                                            try self.codegen.emit.movMemReg(.w64, .RBP, dst_off, temp_reg);
-                                        }
-                                    }
+                                    try self.copyChunked(temp_reg, suf_ptr_reg, suf_offset, frame_ptr, suf_slot, elem_size);
                                 }
 
                                 self.codegen.freeGeneral(temp_reg);
@@ -8025,36 +7961,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .stack_str => |src_offset| {
                         // Copy elem_size bytes from stack to heap in 8-byte chunks
                         const temp_reg = try self.allocTempGeneral();
-                        var copied: u32 = 0;
-                        while (copied < elem_size) : (copied += 8) {
-                            const chunk_src = src_offset + @as(i32, @intCast(copied));
-                            const chunk_dst = elem_heap_offset + @as(i32, @intCast(copied));
-                            if (comptime target.toCpuArch() == .aarch64) {
-                                try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, chunk_src);
-                                try self.codegen.emit.strRegMemSoff(.w64, temp_reg, heap_ptr, chunk_dst);
-                            } else {
-                                try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, chunk_src);
-                                try self.codegen.emit.movMemReg(.w64, heap_ptr, chunk_dst, temp_reg);
-                            }
-                        }
+                        try self.copyChunked(temp_reg, frame_ptr, src_offset, heap_ptr, elem_heap_offset, elem_size);
                         self.codegen.freeGeneral(temp_reg);
                     },
                     .stack => |s| {
                         const src_offset = s.offset;
                         // Copy elem_size bytes from stack to heap in 8-byte chunks
                         const temp_reg = try self.allocTempGeneral();
-                        var copied: u32 = 0;
-                        while (copied < elem_size) : (copied += 8) {
-                            const chunk_src = src_offset + @as(i32, @intCast(copied));
-                            const chunk_dst = elem_heap_offset + @as(i32, @intCast(copied));
-                            if (comptime target.toCpuArch() == .aarch64) {
-                                try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, chunk_src);
-                                try self.codegen.emit.strRegMemSoff(.w64, temp_reg, heap_ptr, chunk_dst);
-                            } else {
-                                try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, chunk_src);
-                                try self.codegen.emit.movMemReg(.w64, heap_ptr, chunk_dst, temp_reg);
-                            }
-                        }
+                        try self.copyChunked(temp_reg, frame_ptr, src_offset, heap_ptr, elem_heap_offset, elem_size);
                         self.codegen.freeGeneral(temp_reg);
                     },
                     .list_stack => |list_info| {
@@ -8840,6 +8754,50 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.freeGeneral(reg);
         }
 
+        /// Copy `size` bytes from src_base+src_offset to dst_base+dst_offset using 8-byte chunks.
+        /// For sizes <= 8, does a single 8-byte load/store.
+        /// For sizes > 8 that are not multiples of 8, re-copies the final 8 bytes at an
+        /// overlapping offset to avoid over-reading the source.
+        fn copyChunked(self: *Self, temp_reg: GeneralReg, src_base: GeneralReg, src_offset: i32, dst_base: GeneralReg, dst_offset: i32, size: u32) Allocator.Error!void {
+            std.debug.assert(size > 0);
+            if (size <= 8) {
+                if (comptime target.toCpuArch() == .aarch64) {
+                    try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, src_base, src_offset);
+                    try self.codegen.emit.strRegMemSoff(.w64, temp_reg, dst_base, dst_offset);
+                } else {
+                    try self.codegen.emit.movRegMem(.w64, temp_reg, src_base, src_offset);
+                    try self.codegen.emit.movMemReg(.w64, dst_base, dst_offset, temp_reg);
+                }
+                return;
+            }
+            var copied: u32 = 0;
+            while (copied + 8 <= size) : (copied += 8) {
+                const s = src_offset + @as(i32, @intCast(copied));
+                const d = dst_offset + @as(i32, @intCast(copied));
+                if (comptime target.toCpuArch() == .aarch64) {
+                    try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, src_base, s);
+                    try self.codegen.emit.strRegMemSoff(.w64, temp_reg, dst_base, d);
+                } else {
+                    try self.codegen.emit.movRegMem(.w64, temp_reg, src_base, s);
+                    try self.codegen.emit.movMemReg(.w64, dst_base, d, temp_reg);
+                }
+            }
+            // Handle tail: if size is not a multiple of 8, re-copy the last 8 bytes
+            // at an overlapping offset. This is safe because size > 8.
+            if (copied < size) {
+                const tail = @as(i32, @intCast(size - 8));
+                const s = src_offset + tail;
+                const d = dst_offset + tail;
+                if (comptime target.toCpuArch() == .aarch64) {
+                    try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, src_base, s);
+                    try self.codegen.emit.strRegMemSoff(.w64, temp_reg, dst_base, d);
+                } else {
+                    try self.codegen.emit.movRegMem(.w64, temp_reg, src_base, s);
+                    try self.codegen.emit.movMemReg(.w64, dst_base, d, temp_reg);
+                }
+            }
+        }
+
         /// Zero out a stack area
         fn zeroStackArea(self: *Self, offset: i32, size: u32) Allocator.Error!void {
             const reg = try self.allocTempGeneral();
@@ -9177,16 +9135,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                 } else {
                     // For larger elements, copy in 8-byte chunks
-                    var copied: u32 = 0;
-                    while (copied < elem_size) : (copied += 8) {
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, addr_reg, @intCast(copied));
-                            try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, elem_slot + @as(i32, @intCast(copied)));
-                        } else {
-                            try self.codegen.emit.movRegMem(.w64, temp_reg, addr_reg, @intCast(copied));
-                            try self.codegen.emit.movMemReg(.w64, .RBP, elem_slot + @as(i32, @intCast(copied)), temp_reg);
-                        }
-                    }
+                    try self.copyChunked(temp_reg, addr_reg, 0, frame_ptr, elem_slot, elem_size);
                 }
                 self.codegen.freeGeneral(temp_reg);
                 self.codegen.freeGeneral(addr_reg);
@@ -10322,18 +10271,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             }
                         } else {
                             // For larger elements, copy 8 bytes at a time
-                            var copied: u32 = 0;
-                            while (copied < elem_size) : (copied += 8) {
-                                const src_off = elem_offset_in_list + @as(i32, @intCast(copied));
-                                const dst_off = elem_slot + @as(i32, @intCast(copied));
-                                if (comptime target.toCpuArch() == .aarch64) {
-                                    try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, list_ptr_reg, src_off);
-                                    try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, dst_off);
-                                } else {
-                                    try self.codegen.emit.movRegMem(.w64, temp_reg, list_ptr_reg, src_off);
-                                    try self.codegen.emit.movMemReg(.w64, .RBP, dst_off, temp_reg);
-                                }
-                            }
+                            try self.copyChunked(temp_reg, list_ptr_reg, elem_offset_in_list, frame_ptr, elem_slot, elem_size);
                         }
 
                         self.codegen.freeGeneral(temp_reg);
@@ -10396,18 +10334,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                     try self.codegen.emit.movMemReg(.w64, .RBP, suf_slot, temp_reg);
                                 }
                             } else {
-                                var copied: u32 = 0;
-                                while (copied < elem_size) : (copied += 8) {
-                                    const src_off = suf_offset + @as(i32, @intCast(copied));
-                                    const dst_off = suf_slot + @as(i32, @intCast(copied));
-                                    if (comptime target.toCpuArch() == .aarch64) {
-                                        try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, suf_ptr_reg, src_off);
-                                        try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, dst_off);
-                                    } else {
-                                        try self.codegen.emit.movRegMem(.w64, temp_reg, suf_ptr_reg, src_off);
-                                        try self.codegen.emit.movMemReg(.w64, .RBP, dst_off, temp_reg);
-                                    }
-                                }
+                                try self.copyChunked(temp_reg, suf_ptr_reg, suf_offset, frame_ptr, suf_slot, elem_size);
                             }
 
                             self.codegen.freeGeneral(temp_reg);
@@ -15892,18 +15819,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                     try self.codegen.emit.movMemReg(.w64, .RBP, elem_slot, temp_reg);
                                 }
                             } else {
-                                var copied: u32 = 0;
-                                while (copied < elem_size) : (copied += 8) {
-                                    const src_off = elem_offset_in_list + @as(i32, @intCast(copied));
-                                    const dst_off = elem_slot + @as(i32, @intCast(copied));
-                                    if (comptime target.toCpuArch() == .aarch64) {
-                                        try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, list_ptr_reg, src_off);
-                                        try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, dst_off);
-                                    } else {
-                                        try self.codegen.emit.movRegMem(.w64, temp_reg, list_ptr_reg, src_off);
-                                        try self.codegen.emit.movMemReg(.w64, .RBP, dst_off, temp_reg);
-                                    }
-                                }
+                                try self.copyChunked(temp_reg, list_ptr_reg, elem_offset_in_list, frame_ptr, elem_slot, elem_size);
                             }
 
                             self.codegen.freeGeneral(temp_reg);
