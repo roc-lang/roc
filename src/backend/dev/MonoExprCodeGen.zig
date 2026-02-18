@@ -15565,7 +15565,7 @@ pub const UnsupportedArchCodeGen = struct {
         _: *const MonoExprStore,
         _: ?*const LayoutStore,
         _: ?*StaticDataInterner,
-    ) Self {
+    ) Allocator.Error!Self {
         return .{ .allocator = allocator };
     }
 

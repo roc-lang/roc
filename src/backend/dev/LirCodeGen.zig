@@ -15740,7 +15740,7 @@ pub const UnsupportedArchCodeGen = struct {
         _: *const LirExprStore,
         _: ?*const LayoutStore,
         _: ?*StaticDataInterner,
-    ) Self {
+    ) Allocator.Error!Self {
         return .{ .allocator = allocator };
     }
 
