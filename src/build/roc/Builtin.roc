@@ -78,7 +78,7 @@ Builtin :: [].{
 		## Non-ASCII characters are left unmodified. For example:
 		##
 		## ```roc
-		## expect Str.with_ascii_lowercased("CAFÉ") == "cafÉ"
+		## expect Str.with_ascii_lowercased("CALFÉ") == "calfÉ"
 		## ```
 		##
 		## This function is useful for things like [command-line flags](https://en.wikipedia.org/wiki/Command-line_interface#Command-line_option)
