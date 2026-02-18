@@ -704,7 +704,7 @@ fn lowLevelToBinop(op: CIR.Expr.LowLevel) ?LirExpr.BinOp {
         .num_is_lt => .lt,
         .num_is_lte => .lte,
         .num_div_trunc_by => .div_trunc,
-        .num_rem_by => .mod,
+        .num_rem_by => .rem,
         else => null,
     };
 }

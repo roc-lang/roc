@@ -650,7 +650,8 @@ pub const MonoExpr = union(enum) {
         mul,
         div,
         div_trunc, // Truncating division (integer division)
-        mod,
+        rem, // Remainder (truncates toward zero, like C's %)
+
 
         // Comparison
         eq,

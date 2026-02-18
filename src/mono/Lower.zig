@@ -4521,7 +4521,7 @@ fn cirBinopToMonoBinop(op: CIR.Expr.Binop.Op) MonoExpr.BinOp {
         .sub => .sub,
         .mul => .mul,
         .div => .div,
-        .rem => .mod,
+        .rem => .rem,
         .eq => .eq,
         .ne => .neq,
         .lt => .lt,
