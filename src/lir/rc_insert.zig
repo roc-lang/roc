@@ -182,7 +182,9 @@ pub const RcInsertPass = struct {
             },
             .lambda => |lam| {
                 // Lambda bodies are a separate scope. Count uses locally, then
-                // attribute 1 use per captured (non-param) symbol to the outer scope.
+                // attribute 1 use per captured symbol to the outer scope, and
+                // ensure body-local symbols are in self.symbol_use_counts so
+                // processBlock can emit RC ops for them.
                 var local = std.AutoHashMap(u64, u32).init(self.allocator);
                 defer local.deinit();
 
@@ -192,19 +194,20 @@ pub const RcInsertPass = struct {
                 }
                 try self.countUsesInto(lam.body, &local);
 
-                // Collect param-bound symbols so we can exclude them
-                var param_syms = std.AutoHashMap(u64, void).init(self.allocator);
-                defer param_syms.deinit();
-                for (params) |pat_id| {
-                    try self.collectPatternSymbols(pat_id, &param_syms);
-                }
-
-                // For each non-param symbol used in the body, attribute 1 use to outer
-                var it = local.keyIterator();
-                while (it.next()) |key| {
-                    if (!param_syms.contains(key.*)) {
-                        const gop = try target.getOrPut(key.*);
+                var it = local.iterator();
+                while (it.next()) |entry| {
+                    const key = entry.key_ptr.*;
+                    if (target.contains(key)) {
+                        // Symbol exists in outer scope — it's a capture.
+                        // Attribute exactly 1 use to the outer scope.
+                        const gop = try target.getOrPut(key);
                         if (gop.found_existing) gop.value_ptr.* += 1 else gop.value_ptr.* = 1;
+                    }
+                    // Always ensure body symbols are in self.symbol_use_counts
+                    // so processBlock can emit RC ops for body-local bindings.
+                    const global_gop = try self.symbol_use_counts.getOrPut(key);
+                    if (!global_gop.found_existing) {
+                        global_gop.value_ptr.* = entry.value_ptr.*;
                     }
                 }
             },
@@ -296,9 +299,22 @@ pub const RcInsertPass = struct {
             },
             .discriminant_switch => |ds| {
                 try self.countUsesInto(ds.value, target);
+                // Branches are mutually exclusive — use per-branch counting
                 const branches = self.store.getExprSpan(ds.branches);
+                var local = std.AutoHashMap(u64, u32).init(self.allocator);
+                defer local.deinit();
+                var symbols_in_any_branch = std.AutoHashMap(u64, void).init(self.allocator);
+                defer symbols_in_any_branch.deinit();
                 for (branches) |br_id| {
-                    try self.countUsesInto(br_id, target);
+                    local.clearRetainingCapacity();
+                    try self.countUsesInto(br_id, &local);
+                    var it = local.keyIterator();
+                    while (it.next()) |key| try symbols_in_any_branch.put(key.*, {});
+                }
+                var it = symbols_in_any_branch.keyIterator();
+                while (it.next()) |key| {
+                    const gop = try target.getOrPut(key.*);
+                    if (gop.found_existing) gop.value_ptr.* += 1 else gop.value_ptr.* = 1;
                 }
             },
             .tag_payload_access => |tpa| {
@@ -411,6 +427,7 @@ pub const RcInsertPass = struct {
             .closure => |clo| self.processClosure(clo, region, expr_id),
             .for_loop => |fl| self.processForLoop(fl, region, expr_id),
             .while_loop => |wl| self.processWhileLoop(wl, region, expr_id),
+            .discriminant_switch => |ds| self.processDiscriminantSwitch(ds, region),
             // For all other expressions, return as-is.
             // RC operations are inserted at block boundaries, not inside
             // individual expressions.
@@ -448,7 +465,6 @@ pub const RcInsertPass = struct {
             .float_to_str,
             .dec_to_str,
             .str_escape_and_quote,
-            .discriminant_switch,
             .tag_payload_access,
             .hosted_call,
             .incref,
@@ -700,6 +716,54 @@ pub const RcInsertPass = struct {
             .value_layout = value_layout,
             .branches = new_branch_span,
             .result_layout = result_layout,
+        } }, region);
+    }
+
+    /// Process a discriminant_switch expression as branching control flow.
+    /// Each branch is mutually exclusive, so symbols used in any branch
+    /// get per-branch RC adjustments (same pattern as if_then_else/match).
+    fn processDiscriminantSwitch(self: *RcInsertPass, ds: anytype, region: Region) Allocator.Error!LirExprId {
+        const branches = self.store.getExprSpan(ds.branches);
+
+        // Collect per-branch local use counts and union of all refcounted symbols
+        var branch_use_maps = std.ArrayList(std.AutoHashMap(u64, u32)).empty;
+        defer {
+            for (branch_use_maps.items) |*m| m.deinit();
+            branch_use_maps.deinit(self.allocator);
+        }
+        var symbols_in_any_branch = std.AutoHashMap(u64, void).init(self.allocator);
+        defer symbols_in_any_branch.deinit();
+
+        for (branches) |br_id| {
+            var local = try self.countUsesLocal(br_id);
+            var it = local.keyIterator();
+            while (it.next()) |key| {
+                const k = key.*;
+                if (self.symbol_layouts.get(k)) |lay| {
+                    if (self.layoutNeedsRc(lay)) try symbols_in_any_branch.put(k, {});
+                }
+            }
+            try branch_use_maps.append(self.allocator, local);
+        }
+
+        // Process each branch and wrap with per-branch RC ops
+        var new_branches = std.ArrayList(LirExprId).empty;
+        defer new_branches.deinit(self.allocator);
+
+        // discriminant_switch result layout — used for str_inspekt, always str
+        const result_layout: LayoutIdx = .str;
+
+        for (branches, 0..) |br_id, i| {
+            const processed = try self.processExpr(br_id);
+            const wrapped = try self.wrapBranchWithRcOps(processed, &branch_use_maps.items[i], &symbols_in_any_branch, result_layout, region);
+            try new_branches.append(self.allocator, wrapped);
+        }
+
+        const new_branches_span = try self.store.addExprSpan(new_branches.items);
+        return self.store.addExpr(.{ .discriminant_switch = .{
+            .value = ds.value,
+            .union_layout = ds.union_layout,
+            .branches = new_branches_span,
         } }, region);
     }
 
