@@ -8014,54 +8014,28 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .immediate_i64 => |val| {
                     const reg = try self.allocTempGeneral();
                     try self.codegen.emitLoadImm(reg, val);
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        switch (size) {
-                            1 => try self.codegen.emitStoreStackByte(dest_offset, reg),
-                            2 => try self.codegen.emitStoreStackHalfword(dest_offset, reg),
-                            4 => try self.codegen.emitStoreStack(.w32, dest_offset, reg),
-                            8 => try self.codegen.emitStoreStack(.w64, dest_offset, reg),
-                            16 => {
-                                // i64 being stored as Dec (i128) - sign extend
-                                try self.codegen.emitStoreStack(.w64, dest_offset, reg);
-                                // Store sign extension in high part
-                                const high: i64 = if (val < 0) -1 else 0;
-                                try self.codegen.emitLoadImm(reg, high);
-                                try self.codegen.emitStoreStack(.w64, dest_offset + 8, reg);
-                            },
-                            roc_list_size => {
-                                // Empty list (immediate 0) being stored as a roc_list_size-byte list struct
-                                // An empty list has ptr=0, len=0, capacity=0 (all zeros)
-                                std.debug.assert(val == 0);
-                                try self.codegen.emitStoreStack(.w64, dest_offset, reg);
-                                try self.codegen.emitStoreStack(.w64, dest_offset + target_ptr_size, reg);
-                                try self.codegen.emitStoreStack(.w64, dest_offset + 2 * target_ptr_size, reg);
-                            },
-                            else => unreachable,
-                        }
-                    } else {
-                        switch (size) {
-                            1 => try self.codegen.emitStoreStack(.w8, dest_offset, reg),
-                            2 => try self.codegen.emitStoreStack(.w16, dest_offset, reg),
-                            4 => try self.codegen.emitStoreStack(.w32, dest_offset, reg),
-                            8 => try self.codegen.emitStoreStack(.w64, dest_offset, reg),
-                            16 => {
-                                // i64 being stored as Dec (i128) - sign extend
-                                try self.codegen.emitStoreStack(.w64, dest_offset, reg);
-                                // Store sign extension in high part
-                                const high: i64 = if (val < 0) -1 else 0;
-                                try self.codegen.emitLoadImm(reg, high);
-                                try self.codegen.emitStoreStack(.w64, dest_offset + 8, reg);
-                            },
-                            roc_list_size => {
-                                // Empty list (immediate 0) being stored as a roc_list_size-byte list struct
-                                // An empty list has ptr=0, len=0, capacity=0 (all zeros)
-                                std.debug.assert(val == 0);
-                                try self.codegen.emitStoreStack(.w64, dest_offset, reg);
-                                try self.codegen.emitStoreStack(.w64, dest_offset + target_ptr_size, reg);
-                                try self.codegen.emitStoreStack(.w64, dest_offset + 2 * target_ptr_size, reg);
-                            },
-                            else => unreachable,
-                        }
+                    switch (size) {
+                        1 => try self.emitStoreStackW8(dest_offset, reg),
+                        2 => try self.emitStoreStackW16(dest_offset, reg),
+                        4 => try self.codegen.emitStoreStack(.w32, dest_offset, reg),
+                        8 => try self.codegen.emitStoreStack(.w64, dest_offset, reg),
+                        16 => {
+                            // i64 being stored as Dec (i128) - sign extend
+                            try self.codegen.emitStoreStack(.w64, dest_offset, reg);
+                            // Store sign extension in high part
+                            const high: i64 = if (val < 0) -1 else 0;
+                            try self.codegen.emitLoadImm(reg, high);
+                            try self.codegen.emitStoreStack(.w64, dest_offset + 8, reg);
+                        },
+                        roc_list_size => {
+                            // Empty list (immediate 0) being stored as a roc_list_size-byte list struct
+                            // An empty list has ptr=0, len=0, capacity=0 (all zeros)
+                            std.debug.assert(val == 0);
+                            try self.codegen.emitStoreStack(.w64, dest_offset, reg);
+                            try self.codegen.emitStoreStack(.w64, dest_offset + target_ptr_size, reg);
+                            try self.codegen.emitStoreStack(.w64, dest_offset + 2 * target_ptr_size, reg);
+                        },
+                        else => unreachable,
                     }
                     self.codegen.freeGeneral(reg);
                     return;
@@ -8095,20 +8069,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 .general_reg => |reg| {
                     if (size <= 8) {
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            switch (size) {
-                                1 => try self.codegen.emitStoreStackByte(dest_offset, reg),
-                                2 => try self.codegen.emitStoreStackHalfword(dest_offset, reg),
-                                4 => try self.codegen.emitStoreStack(.w32, dest_offset, reg),
-                                else => try self.codegen.emitStoreStack(.w64, dest_offset, reg),
-                            }
-                        } else {
-                            switch (size) {
-                                1 => try self.codegen.emitStoreStack(.w8, dest_offset, reg),
-                                2 => try self.codegen.emitStoreStack(.w16, dest_offset, reg),
-                                4 => try self.codegen.emitStoreStack(.w32, dest_offset, reg),
-                                else => try self.codegen.emitStoreStack(.w64, dest_offset, reg),
-                            }
+                        switch (size) {
+                            1 => try self.emitStoreStackW8(dest_offset, reg),
+                            2 => try self.emitStoreStackW16(dest_offset, reg),
+                            4 => try self.codegen.emitStoreStack(.w32, dest_offset, reg),
+                            else => try self.codegen.emitStoreStack(.w64, dest_offset, reg),
                         }
                     } else {
                         // Large values (> 8 bytes) shouldn't normally be in a general_reg.
@@ -8167,23 +8132,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 copied += 4;
             }
             if (size - copied >= 2) {
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emitLoadStackHalfword(reg, src_offset + @as(i32, @intCast(copied)));
-                    try self.codegen.emitStoreStackHalfword(dest_offset + @as(i32, @intCast(copied)), reg);
-                } else {
-                    try self.codegen.emitLoadStack(.w16, reg, src_offset + @as(i32, @intCast(copied)));
-                    try self.codegen.emitStoreStack(.w16, dest_offset + @as(i32, @intCast(copied)), reg);
-                }
+                try self.emitLoadStackW16(reg, src_offset + @as(i32, @intCast(copied)));
+
+                try self.emitStoreStackW16(dest_offset + @as(i32, @intCast(copied)), reg);
                 copied += 2;
             }
             if (size - copied >= 1) {
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emitLoadStackByte(reg, src_offset + @as(i32, @intCast(copied)));
-                    try self.codegen.emitStoreStackByte(dest_offset + @as(i32, @intCast(copied)), reg);
-                } else {
-                    try self.codegen.emitLoadStack(.w8, reg, src_offset + @as(i32, @intCast(copied)));
-                    try self.codegen.emitStoreStack(.w8, dest_offset + @as(i32, @intCast(copied)), reg);
-                }
+                try self.emitLoadStackW8(reg, src_offset + @as(i32, @intCast(copied)));
+
+                try self.emitStoreStackW8(dest_offset + @as(i32, @intCast(copied)), reg);
             }
             self.codegen.freeGeneral(reg);
         }
@@ -8326,6 +8283,44 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
+        /// Store byte (8-bit) to stack slot (wraps emitStoreStackByte / emitStoreStack(.w8))
+        fn emitStoreStackW8(self: *Self, offset: i32, src: GeneralReg) !void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                try self.codegen.emitStoreStackByte(offset, src);
+            } else {
+                try self.codegen.emitStoreStack(.w8, offset, src);
+            }
+        }
+
+        /// Store halfword (16-bit) to stack slot (wraps emitStoreStackHalfword / emitStoreStack(.w16))
+        fn emitStoreStackW16(self: *Self, offset: i32, src: GeneralReg) !void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                try self.codegen.emitStoreStackHalfword(offset, src);
+            } else {
+                try self.codegen.emitStoreStack(.w16, offset, src);
+            }
+        }
+
+        /// Load byte (zero-extended to 64-bit) from stack slot
+        /// (wraps emitLoadStackByte / movzxBRegMem)
+        fn emitLoadStackW8(self: *Self, dst: GeneralReg, offset: i32) !void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                try self.codegen.emitLoadStackByte(dst, offset);
+            } else {
+                try self.codegen.emit.movzxBRegMem(dst, frame_ptr, offset);
+            }
+        }
+
+        /// Load halfword (zero-extended to 64-bit) from stack slot
+        /// (wraps emitLoadStackHalfword / movzxWRegMem)
+        fn emitLoadStackW16(self: *Self, dst: GeneralReg, offset: i32) !void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                try self.codegen.emitLoadStackHalfword(dst, offset);
+            } else {
+                try self.codegen.emit.movzxWRegMem(dst, frame_ptr, offset);
+            }
+        }
+
         /// Set register to 1 if condition is true, 0 otherwise (wraps cset / setcc+mask)
         fn emitSetCond(self: *Self, dst: GeneralReg, cond: Condition) !void {
             if (comptime arch == .aarch64 or arch == .aarch64_be) {
@@ -8408,20 +8403,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 remaining -= 4;
             }
             if (remaining >= 2) {
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emitStoreStackHalfword(current_offset, reg);
-                } else {
-                    try self.codegen.emitStoreStack(.w16, current_offset, reg);
-                }
+                try self.emitStoreStackW16(current_offset, reg);
                 current_offset += 2;
                 remaining -= 2;
             }
             if (remaining >= 1) {
-                if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.emitStoreStackByte(current_offset, reg);
-                } else {
-                    try self.codegen.emitStoreStack(.w8, current_offset, reg);
-                }
+                try self.emitStoreStackW8(current_offset, reg);
             }
 
             self.codegen.freeGeneral(reg);
@@ -9919,20 +9906,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// a Bool/U8/U16/U32 was stored with a narrow write.
         fn emitSizedLoadStack(self: *Self, reg: GeneralReg, offset: i32, size: ValueSize) Allocator.Error!void {
             switch (size) {
-                .byte => {
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emitLoadStackByte(reg, offset);
-                    } else {
-                        try self.codegen.emit.movzxBRegMem(reg, .RBP, offset);
-                    }
-                },
-                .word => {
-                    if (comptime target.toCpuArch() == .aarch64) {
-                        try self.codegen.emitLoadStackHalfword(reg, offset);
-                    } else {
-                        try self.codegen.emit.movzxWRegMem(reg, .RBP, offset);
-                    }
-                },
+                .byte => try self.emitLoadStackW8(reg, offset),
+                .word => try self.emitLoadStackW16(reg, offset),
                 .dword => try self.codegen.emitLoadStack(.w32, reg, offset),
                 .qword => try self.codegen.emitLoadStack(.w64, reg, offset),
             }
