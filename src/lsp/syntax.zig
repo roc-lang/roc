@@ -1997,7 +1997,11 @@ pub const SyntaxChecker = struct {
         var items = std.ArrayList(completion_handler.CompletionItem){};
         errdefer {
             for (items.items) |item| {
+                self.allocator.free(item.label);
                 if (item.detail) |d| self.allocator.free(d);
+                if (item.documentation) |doc| self.allocator.free(doc);
+                if (item.sortText) |sort_text| self.allocator.free(sort_text);
+                if (item.insertText) |insert_text| self.allocator.free(insert_text);
             }
             items.deinit(self.allocator);
         }

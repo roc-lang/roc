@@ -56,23 +56,34 @@ pub const CompletionBuilder = struct {
     pub fn addItem(self: *CompletionBuilder, item: CompletionItem) !bool {
         // Check for duplicates
         if (self.seen_labels.contains(item.label)) {
-            // Avoid leaking owned fields on duplicate rejection.
-            // The caller expects the builder to take ownership of any allocated
-            // strings that accompany the item (e.g., detail strings).
-            self.freeOwnedFields(item);
+            // Avoid leaking owned optional fields on duplicate rejection.
+            // Label ownership is centralized below (we duplicate labels only for
+            // accepted items), so duplicate callers can pass borrowed labels.
+            self.freeOwnedOptionalFields(item);
             return false;
         }
 
         try self.seen_labels.put(item.label, {});
-        try self.items.append(self.allocator, item);
+
+        // Keep label lifetime simple and consistent: every retained completion
+        // owns its label memory regardless of where it came from.
+        const owned_label = try self.allocator.dupe(u8, item.label);
+        errdefer self.allocator.free(owned_label);
+
+        var stored_item = item;
+        stored_item.label = owned_label;
+
+        // If appending fails, clean up all fields this builder owns.
+        errdefer self.freeOwnedFields(stored_item);
+        try self.items.append(self.allocator, stored_item);
         return true;
     }
 
-    /// Free any owned fields on a completion item that wasn't retained.
+    /// Free optional owned fields on a completion item that wasn't retained.
     ///
     /// We only free fields that are known to be owned by the builder. If new
     /// owned fields are added to CompletionItem in the future, update this list.
-    fn freeOwnedFields(self: *CompletionBuilder, item: CompletionItem) void {
+    fn freeOwnedOptionalFields(self: *CompletionBuilder, item: CompletionItem) void {
         if (item.detail) |detail| {
             self.allocator.free(detail);
         }
@@ -85,6 +96,12 @@ pub const CompletionBuilder = struct {
         if (item.sortText) |sort_text| {
             self.allocator.free(sort_text);
         }
+    }
+
+    /// Free all fields owned by a retained completion item.
+    fn freeOwnedFields(self: *CompletionBuilder, item: CompletionItem) void {
+        self.allocator.free(item.label);
+        self.freeOwnedOptionalFields(item);
     }
 
     // =========================================================================
@@ -664,7 +681,9 @@ pub const CompletionBuilder = struct {
                                     tw.reset();
                                 }
 
-                                const label = std.fmt.allocPrint(self.allocator, "{d}", .{i}) catch continue;
+                                // Use a stack buffer; addItem duplicates accepted labels.
+                                var label_buf: [32]u8 = undefined;
+                                const label = std.fmt.bufPrint(&label_buf, "{d}", .{i}) catch continue;
                                 _ = try self.addItem(.{
                                     .label = label,
                                     .kind = @intFromEnum(CompletionItemKind.field),
@@ -977,7 +996,7 @@ pub const CompletionBuilder = struct {
 
             if (type_ident_opt) |type_ident| {
                 const type_name = module_env.getIdentText(type_ident);
-                std.debug.print("addMethodsFromTypeVar: type_ident={} name={s}\n", .{ type_ident, type_name });
+                std.debug.print("addMethodsFromTypeVar: type_ident={any} name={s}\n", .{ type_ident, type_name });
 
                 // Route builtin type methods through the builtin module env to ensure
                 // completions include real Builtin.roc backing data.
@@ -1035,10 +1054,6 @@ pub const CompletionBuilder = struct {
 
             if (method_name.len == 0) continue;
 
-            // Add the method completion
-            const label = try self.allocator.dupe(u8, method_name);
-            errdefer self.allocator.free(label);
-
             // Try to get detail from the constraint's function type
             var detail: ?[]const u8 = null;
             var type_writer = module_env.initTypeWriter() catch null;
@@ -1054,7 +1069,7 @@ pub const CompletionBuilder = struct {
             }
 
             _ = try self.addItem(.{
-                .label = label,
+                .label = method_name,
                 .kind = @intFromEnum(CompletionItemKind.method),
                 .detail = detail,
             });

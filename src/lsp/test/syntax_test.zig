@@ -92,6 +92,7 @@ const TestHarness = struct {
     /// Free completion items returned by `getCompletions`.
     fn freeCompletions(self: *TestHarness, items: []const CompletionItem) void {
         for (items) |item| {
+            self.allocator.free(item.label);
             if (item.detail) |d| self.allocator.free(d);
             if (item.documentation) |doc| self.allocator.free(doc);
             if (item.sortText) |s| self.allocator.free(s);

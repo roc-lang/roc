@@ -138,6 +138,7 @@ pub fn handler(comptime ServerType: type) type {
                 defer {
                     // Free allocated completion item fields owned by the builder.
                     for (result.items) |item| {
+                        self.allocator.free(item.label);
                         if (item.detail) |d| self.allocator.free(d);
                         if (item.documentation) |documentation| self.allocator.free(documentation);
                         if (item.sortText) |sort_text| self.allocator.free(sort_text);
