@@ -667,7 +667,6 @@ pub const LirExpr = union(enum) {
         div_trunc, // Truncating division (integer division)
         rem, // Remainder (truncates toward zero, like C's %)
 
-
         // Comparison
         eq,
         neq,

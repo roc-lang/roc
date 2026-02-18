@@ -309,10 +309,6 @@ pub const RcInsertPass = struct {
     }
 
     /// Register a pattern's bound symbol with its layout (into self.symbol_use_counts).
-    fn registerPatternSymbol(self: *RcInsertPass, pat_id: MonoPatternId) Allocator.Error!void {
-        try self.registerPatternSymbolInto(pat_id, &self.symbol_use_counts);
-    }
-
     /// Register a pattern's bound symbol with its layout into a given target map.
     fn registerPatternSymbolInto(self: *RcInsertPass, pat_id: MonoPatternId, target: *std.AutoHashMap(u64, u32)) Allocator.Error!void {
         if (pat_id.isNone()) return;
