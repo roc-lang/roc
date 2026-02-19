@@ -821,7 +821,8 @@ pub const RcInsertPass = struct {
         var new_branches = std.ArrayList(LirExprId).empty;
         defer new_branches.deinit(self.allocator);
 
-        // discriminant_switch result layout — used for str_inspekt, always str
+        // discriminant_switch is only used for str_inspekt, which always returns str.
+        // If this changes, add result_layout to the discriminant_switch LIR node.
         const result_layout: LayoutIdx = .str;
 
         for (branches, 0..) |br_id, i| {
