@@ -13421,19 +13421,62 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// registers (X2-X7) that were already loaded with arg[0]'s data.
         ///
         /// When registers are exhausted, spills remaining arguments to the stack.
+        /// Call target for lambda calls: either a direct code offset or an
+        /// indirect function pointer (for higher-order function arguments).
+        const CallTarget = union(enum) {
+            direct: usize,
+            indirect: ValueLocation,
+        };
+
         fn generateCallToLambda(self: *Self, code_offset: usize, args_span: anytype, ret_layout: layout.Idx) Allocator.Error!ValueLocation {
+            return self.generateLambdaOrIndirectCall(.{ .direct = code_offset }, args_span, ret_layout);
+        }
+
+        fn generateIndirectCall(self: *Self, fn_ptr_loc: ValueLocation, args_span: anytype, ret_layout: layout.Idx) Allocator.Error!ValueLocation {
+            return self.generateLambdaOrIndirectCall(.{ .indirect = fn_ptr_loc }, args_span, ret_layout);
+        }
+
+        /// Unified implementation for direct lambda calls and indirect (function pointer) calls.
+        /// Both follow the same calling convention: args in registers with pass-by-pointer
+        /// for overflowing multi-reg args, roc_ops as the final argument.
+        fn generateLambdaOrIndirectCall(self: *Self, call_target: CallTarget, args_span: anytype, ret_layout: layout.Idx) Allocator.Error!ValueLocation {
             const args = self.store.getExprSpan(args_span);
 
-            // Pass 1: Generate all argument expressions and calculate register needs
+            // For indirect calls, save the function pointer before arg setup
+            // since arg register loading might clobber it.
+            var fn_ptr_stack: i32 = 0;
+            if (call_target == .indirect) {
+                fn_ptr_stack = self.codegen.allocStackSlot(8);
+                switch (call_target.indirect) {
+                    .general_reg => |reg| {
+                        try self.codegen.emitStoreStack(.w64, fn_ptr_stack, reg);
+                    },
+                    .stack => |s| {
+                        const temp = try self.allocTempGeneral();
+                        try self.codegen.emitLoadStack(.w64, temp, s.offset);
+                        try self.codegen.emitStoreStack(.w64, fn_ptr_stack, temp);
+                        self.codegen.freeGeneral(temp);
+                    },
+                    .immediate_i64 => |val| {
+                        const temp = try self.allocTempGeneral();
+                        try self.codegen.emitLoadImm(temp, @bitCast(val));
+                        try self.codegen.emitStoreStack(.w64, fn_ptr_stack, temp);
+                        self.codegen.freeGeneral(temp);
+                    },
+                    else => unreachable,
+                }
+            }
+
+            // Pass 1: Generate all argument expressions and calculate register needs.
+            // When a closure_value is passed as an argument to a higher-order function,
+            // the callee will call it through a function pointer (BLR/CALL reg).
+            // We compile the lambda as a proc and pass the code address,
+            // not the raw closure data (tag bytes, captures, etc).
             const arg_infos_start = self.scratch_arg_infos.top();
             defer self.scratch_arg_infos.clearFrom(arg_infos_start);
 
             for (args) |arg_id| {
                 var arg_loc = try self.generateExpr(arg_id);
-                // When a closure_value is passed as an argument to a higher-order function,
-                // the callee will call it through a function pointer (BLR/CALL reg).
-                // We need to compile the lambda as a proc and pass the code address,
-                // not the raw closure data (tag bytes, captures, etc).
                 if (arg_loc == .closure_value) {
                     const cv = arg_loc.closure_value;
                     const lambda_expr = self.store.getExpr(cv.lambda);
@@ -13474,137 +13517,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // unknowable at body-gen time, so we pass large args by pointer instead.
             // We convert overflowing multi-reg args first, then convert more
             // (largest first, scanning backwards) if roc_ops would still spill.
-            const pbp_start = self.scratch_pass_by_ptr.top();
-            defer self.scratch_pass_by_ptr.clearFrom(pbp_start);
-            for (0..args.len) |_| try self.scratch_pass_by_ptr.append(false);
-            const pass_by_ptr = self.scratch_pass_by_ptr.sliceFromStart(pbp_start);
-
-            {
-                // If needs_ret_ptr, the hidden pointer consumes one register slot
-                var reg_count: u8 = if (needs_ret_ptr) 1 else 0;
-                // First pass: convert overflowing multi-reg args to pointer
-                for (arg_infos, 0..) |ai, i| {
-                    const nr = ai.num_regs;
-                    if (reg_count + nr <= max_arg_regs) {
-                        reg_count += nr;
-                    } else if (nr > 1) {
-                        pass_by_ptr[i] = true;
-                        if (reg_count + 1 <= max_arg_regs) {
-                            reg_count += 1;
-                        } else {
-                            reg_count = max_arg_regs;
-                        }
-                    } else {
-                        reg_count = max_arg_regs;
-                    }
-                }
-                // If roc_ops still doesn't fit, convert more inline multi-reg args to pointers
-                while (reg_count + 1 > max_arg_regs) {
-                    var found = false;
-                    var best_idx: usize = 0;
-                    var best_regs: u8 = 0;
-                    for (arg_infos, 0..) |ai, i| {
-                        if (!pass_by_ptr[i] and ai.num_regs > 1 and ai.num_regs > best_regs) {
-                            best_idx = i;
-                            best_regs = ai.num_regs;
-                            found = true;
-                        }
-                    }
-                    if (!found) break; // No more convertible args
-                    pass_by_ptr[best_idx] = true;
-                    reg_count -= (best_regs - 1); // Freed regs: was best_regs, now 1
-                }
-            }
-
-            // Place arguments using shared helper
-            const stack_spill_size = try self.placeCallArguments(arg_infos, .{
-                .needs_ret_ptr = needs_ret_ptr,
-                .ret_buffer_offset = ret_buffer_offset,
-                .pass_by_ptr = pass_by_ptr,
-                .emit_roc_ops = true,
-            });
-
-            // Emit call to the procedure
-            try self.emitCallToOffset(code_offset);
-
-            // Clean up stack space for spilled arguments
-            if (stack_spill_size > 0) {
-                try self.emitAddStackPtr(stack_spill_size);
-            }
-
-            return self.saveCallReturnValue(ret_layout, needs_ret_ptr, ret_buffer_offset);
-        }
-
-        /// Generate an indirect call through a function pointer value.
-        /// The fn_ptr_loc contains the absolute runtime address of the target function.
-        /// This is used when a lambda is passed as a parameter to a higher-order function.
-        fn generateIndirectCall(self: *Self, fn_ptr_loc: ValueLocation, args_span: anytype, ret_layout: layout.Idx) Allocator.Error!ValueLocation {
-            const args = self.store.getExprSpan(args_span);
-
-            // Save the function pointer to a callee-saved temp before arg setup,
-            // since arg register loading might clobber it.
-            const fn_ptr_stack = self.codegen.allocStackSlot(8);
-            switch (fn_ptr_loc) {
-                .general_reg => |reg| {
-                    try self.codegen.emitStoreStack(.w64, fn_ptr_stack, reg);
-                },
-                .stack => |s| {
-                    const temp = try self.allocTempGeneral();
-                    try self.codegen.emitLoadStack(.w64, temp, s.offset);
-                    try self.codegen.emitStoreStack(.w64, fn_ptr_stack, temp);
-                    self.codegen.freeGeneral(temp);
-                },
-                .immediate_i64 => |val| {
-                    const temp = try self.allocTempGeneral();
-                    try self.codegen.emitLoadImm(temp, @bitCast(val));
-                    try self.codegen.emitStoreStack(.w64, fn_ptr_stack, temp);
-                    self.codegen.freeGeneral(temp);
-                },
-                else => unreachable,
-            }
-
-            // Generate all argument expressions
-            const arg_infos_start = self.scratch_arg_infos.top();
-            defer self.scratch_arg_infos.clearFrom(arg_infos_start);
-
-            for (args) |arg_id| {
-                var arg_loc = try self.generateExpr(arg_id);
-                // Convert closure_value to lambda_code for higher-order function args
-                if (arg_loc == .closure_value) {
-                    const cv = arg_loc.closure_value;
-                    const lambda_expr = self.store.getExpr(cv.lambda);
-                    const lambda = switch (lambda_expr) {
-                        .lambda => |l| l,
-                        .closure => |c| blk: {
-                            const inner = self.store.getExpr(c.lambda);
-                            break :blk inner.lambda;
-                        },
-                        else => unreachable,
-                    };
-                    const cv_code_offset = try self.compileLambdaAsProc(cv.lambda, lambda);
-                    arg_loc = .{ .lambda_code = .{
-                        .code_offset = cv_code_offset,
-                        .ret_layout = lambda.ret_layout,
-                    } };
-                }
-                const arg_layout = self.getExprLayout(arg_id);
-                const num_regs = self.calcArgRegCount(arg_loc, arg_layout);
-                try self.scratch_arg_infos.append(.{ .loc = arg_loc, .layout_idx = arg_layout, .num_regs = num_regs });
-            }
-            const arg_infos = self.scratch_arg_infos.sliceFromStart(arg_infos_start);
-
-            // Check if return type needs return-by-pointer (same as generateCallToLambda)
-            const needs_ret_ptr = self.needsInternalReturnByPointer(ret_layout);
-            var ret_buffer_offset: i32 = 0;
-            if (needs_ret_ptr) {
-                const ls = self.layout_store orelse unreachable;
-                const ret_layout_val = ls.getLayout(ret_layout);
-                const ret_size = ls.layoutSizeAlign(ret_layout_val).size;
-                ret_buffer_offset = self.codegen.allocStackSlot(ret_size);
-            }
-
-            // Pre-compute pass_by_ptr (same algorithm as generateCallToLambda)
-            // to ensure caller and callee agree on the calling convention.
             const pbp_start = self.scratch_pass_by_ptr.top();
             defer self.scratch_pass_by_ptr.clearFrom(pbp_start);
             for (0..args.len) |_| try self.scratch_pass_by_ptr.append(false);
@@ -13652,19 +13564,25 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .emit_roc_ops = true,
             });
 
-            // Load function pointer from saved stack slot and call indirectly.
-            // Use a dedicated scratch register that can never be an argument register,
-            // since the argument registers (X0-X7 / RDI,RSI,RDX,RCX,R8,R9) are
-            // already loaded with call arguments at this point.
-            if (comptime target.toCpuArch() == .aarch64) {
-                try self.codegen.emitLoadStack(.w64, .IP0, fn_ptr_stack);
-                try self.codegen.emit.blrReg(.IP0);
-            } else {
-                try self.codegen.emitLoadStack(.w64, .R10, fn_ptr_stack);
-                try self.codegen.emit.callReg(.R10);
+            // Emit call instruction
+            switch (call_target) {
+                .direct => |code_offset| try self.emitCallToOffset(code_offset),
+                .indirect => {
+                    // Load function pointer from saved stack slot and call indirectly.
+                    // Use a dedicated scratch register that can never be an argument register,
+                    // since the argument registers (X0-X7 / RDI,RSI,RDX,RCX,R8,R9) are
+                    // already loaded with call arguments at this point.
+                    if (comptime target.toCpuArch() == .aarch64) {
+                        try self.codegen.emitLoadStack(.w64, .IP0, fn_ptr_stack);
+                        try self.codegen.emit.blrReg(.IP0);
+                    } else {
+                        try self.codegen.emitLoadStack(.w64, .R10, fn_ptr_stack);
+                        try self.codegen.emit.callReg(.R10);
+                    }
+                },
             }
 
-            // Clean up stack spill
+            // Clean up stack space for spilled arguments
             if (stack_spill_size > 0) {
                 try self.emitAddStackPtr(stack_spill_size);
             }
