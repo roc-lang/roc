@@ -5713,7 +5713,7 @@ fn generateCFMatchBranches(self: *Self, branches: []const mono.MonoIR.CFMatchBra
             self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
             self.cf_depth -= 1;
         },
-        .record, .tuple, .list, .as_pattern, .zero_arg_tag => {
+        .record, .tuple, .list, .as_pattern => {
             // These pattern types should not appear in CFStmt match_stmt.
             // CFStmt match_stmt is used for tail-recursive matches, which only
             // match on discriminants, integer literals, wildcards, and binds.
