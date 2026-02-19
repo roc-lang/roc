@@ -442,7 +442,17 @@ pub const RcInsertPass = struct {
             .tuple_access,
             .zero_arg_tag,
             .tag,
-            .early_return,
+            .early_return => |ret| {
+                // Process the return expression for RC ops.
+                // TODO: full early_return cleanup (decref live symbols not consumed
+                // by the return expr) requires live_rc_symbols tracking like the LIR path.
+                const new_expr = try self.processExpr(ret.expr);
+                if (new_expr == ret.expr) return expr_id;
+                return self.store.addExpr(.{ .early_return = .{
+                    .expr = new_expr,
+                    .ret_layout = ret.ret_layout,
+                } }, region);
+            },
             .binop,
             .unary_minus,
             .unary_not,
