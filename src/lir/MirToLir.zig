@@ -441,6 +441,12 @@ fn lowerMatch(self: *Self, match_data: anytype, mono_idx: Monotype.Idx, region: 
         const branch_patterns = self.mir_store.getBranchPatterns(branch.patterns);
         if (branch_patterns.len == 0) continue;
 
+        // OR-patterns: a single MIR branch may have multiple patterns.
+        // We lower the body once and share the LIR body ID across all
+        // resulting LIR branches. This is safe because RC insertion runs
+        // at the MIR level (rc_insert.zig processMatch), where each MIR
+        // branch gets its own RC wrapper — so by this point, RC ops are
+        // already embedded in the body expression.
         const lir_body = try self.lowerExpr(branch.body);
         const guard = if (branch.guard.isNone())
             LirExprId.none

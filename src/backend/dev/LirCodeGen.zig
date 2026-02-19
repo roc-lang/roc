@@ -5758,6 +5758,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.compareFieldByLayout(lhs_base, rhs_base, payload_layout_idx, payload_size, result_reg);
 
                     // Jump to end
+                    std.debug.assert(end_patch_count < end_patches.len);
                     end_patches[end_patch_count] = try self.codegen.emitJump();
                     end_patch_count += 1;
 
@@ -8495,7 +8496,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .w32 => @as(u5, 2),
                     else => @compileError("Use strhRegMem/strbRegMem for .w16/.w8"),
                 };
-                try self.codegen.emit.strRegMemUoff(width, src, ptr_reg, @intCast(@as(u32, @intCast(byte_offset)) >> shift));
+                const unsigned_offset: u32 = @intCast(byte_offset);
+                std.debug.assert(@rem(unsigned_offset, @as(u32, 1) << shift) == 0);
+                try self.codegen.emit.strRegMemUoff(width, src, ptr_reg, @intCast(unsigned_offset >> shift));
             } else {
                 try self.codegen.emit.movMemReg(width, ptr_reg, byte_offset, src);
             }
