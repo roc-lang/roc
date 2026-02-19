@@ -19,15 +19,15 @@ main! = || {
         Stdout.line!("3.14 > 0.0: False")
     }
 
-    if a == 3.14 {
-        Stdout.line!("3.14 == 3.14: True")
-    } else {
-        Stdout.line!("3.14 == 3.14: False")
-    }
-
     if b < a {
         Stdout.line!("0.0 < 3.14: True")
     } else {
         Stdout.line!("0.0 < 3.14: False")
+    }
+
+    if a >= 3.14 {
+        Stdout.line!("3.14 >= 3.14: True")
+    } else {
+        Stdout.line!("3.14 >= 3.14: False")
     }
 }

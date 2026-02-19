@@ -324,7 +324,7 @@ pub const io_spec_tests = [_]TestSpec{
     },
     .{
         .roc_file = "test/fx/float_comparison.roc",
-        .io_spec = "1>3.14 > 0.0: True|1>3.14 == 3.14: True|1>0.0 < 3.14: True",
+        .io_spec = "1>3.14 > 0.0: True|1>0.0 < 3.14: True|1>3.14 >= 3.14: True",
         .description = "Regression test: F64 comparisons use float instructions, not integer bit-pattern",
     },
     .{
